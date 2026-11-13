@@ -44,7 +44,7 @@ class VectorSummaryRequest(BaseModel):
     """Capture a grouped polygon summary and its approximate boundary tolerance.
 
     Attributes:
-        vector: Original source selection and attribute names.
+        vector: Original source selection and grouping field.
         summaries: Ordered field/statistic pairs, each producing its own column.
             Repeated fields share their original values and all pairs share geometry.
         boundary_tolerance_m: Approximate overview detail in metres, converted to
@@ -80,7 +80,7 @@ class VectorSummaryPolicy(BaseModel):
 
     Missing grouping values form one group. Missing and non-finite numeric
     values do not contribute; a group with no finite values receives a null result.
-    The captured invocation records the statistic chosen for this run.
+    The captured invocation records the requested field/statistic pairs.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

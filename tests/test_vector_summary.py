@@ -8,6 +8,8 @@ from sys import float_info
 from typing import Any
 
 import fiona
+import numpy as np
+from numpy.typing import NDArray
 import pytest
 from shapely import get_num_coordinates, union_all
 from shapely.errors import GEOSException
@@ -296,7 +298,7 @@ def test_many_field_statistic_pairs_share_original_reads_and_geometry(
         with reader(*args, **kwargs) as records:
             yield records
 
-    def record_group_merge(polygons: list[Any]) -> Any:
+    def record_group_merge(polygons: NDArray[np.object_]) -> BaseGeometry:
         """Count native dissolves and return their real geometry.
 
         Args:
