@@ -36,9 +36,10 @@ class VectorSummaryRequest(BaseModel):
         vector: Original source selection and attribute names.
         statistic: Reduction over each group's finite original values. Standard
             deviation uses the population formula and is zero for one value.
-        boundary_tolerance_m: Approximate simplification distance using a local
-            equirectangular scale per group, or zero to retain the dissolved boundary.
-            Simplification affects geometry only, never attribute statistics.
+        boundary_tolerance_m: Approximate overview detail in metres, converted to
+            WGS84 degrees for triangle-area simplification, or zero to retain detail.
+            This is not a maximum displacement. Invalid overview geometry retains
+            the detailed dissolved boundary. Statistics always use original values.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

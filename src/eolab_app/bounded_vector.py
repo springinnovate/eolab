@@ -1,7 +1,7 @@
 """Streaming polygon source reads with bounded per-feature geometry allocation."""
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import math
 from time import monotonic
@@ -24,10 +24,7 @@ from rasterio.warp import transform
 from rasterio.windows import Window
 from shapely.geometry import shape
 
-from eolab_app.bounded_geometry import (
-    GeometryValidationError,
-    _iter_geometry_coordinates,
-)
+from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
@@ -158,6 +155,9 @@ def polygon_records(
     filter, projection, cancellation and per-feature work limits. The caller
     owns validation of the selected attributes' domain meaning. A supervised
     caller can supply its own finite time budget; ordinary reads keep the default.
+    Filtered GeoPackages scan attributes first and fetch geometry by the native
+    feature ID only for matches. Other drivers keep sequential geometry reads;
+    GeoPackage's indexed feature lookup avoids making those reads quadratic.
 
     Args:
         resolved: Authorized source and compiled attribute predicate.
@@ -188,7 +188,8 @@ def polygon_records(
         raise ValueError("Vector read timeout must be a positive finite number")
     deadline = None if timeout_seconds is None else monotonic() + timeout_seconds
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
-        with _source_collection(resolved) as dataset:
+        with ExitStack() as sources:
+            dataset = sources.enter_context(_source_collection(resolved))
             if set(property_names) - set(dataset.schema.get("properties", {})):
                 raise GeometryValidationError(
                     "A requested attribute field is missing from the source"
@@ -199,6 +200,18 @@ def polygon_records(
             if not dataset.crs:
                 raise GeometryValidationError(
                     "The catalog vector has no coordinate reference system"
+                )
+            candidates = dataset
+            if resolved.driver == "GPKG" and resolved.selection.filter.active:
+                filter_fields = tuple(
+                    dict.fromkeys(
+                        rule.field for rule in resolved.selection.filter.rules
+                    )
+                )
+                candidates = sources.enter_context(
+                    _source_collection(
+                        resolved, ignore_geometry=True, include_fields=filter_fields
+                    )
                 )
 
             def iterate() -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
@@ -215,7 +228,7 @@ def polygon_records(
                     options["where"] = resolved.where
                 if bbox is not None:
                     options["bbox"] = bbox
-                for count, feature in enumerate(dataset.filter(**options), 1):
+                for count, feature in enumerate(candidates.filter(**options), 1):
                     require_active_raster_read(cancellation_requested)
                     if max_features is not None and count > max_features:
                         raise GeometryValidationError(
@@ -229,21 +242,20 @@ def polygon_records(
                         resolved.selection.filter, feature.properties
                     ):
                         continue
+                    if candidates is not dataset:
+                        feature = dataset.get(feature.id)
+                        if feature is None:
+                            raise SelectionUnavailableError(
+                                "A selected polygon could not be read from its source."
+                            )
                     if feature.geometry is None:
                         raise GeometryValidationError(
                             "Sampling requires non-null polygons"
                         )
                     raw = to_dict(feature.geometry)
-                    for positions, _ in enumerate(
-                        _iter_geometry_coordinates(raw, validate_wgs84_bounds=False), 1
-                    ):
-                        if (
-                            max_feature_coordinates is not None
-                            and positions > max_feature_coordinates
-                        ):
-                            raise GeometryValidationError(
-                                "A source feature exceeds the bounded coordinate buffer"
-                            )
+                    _validate_native_polygon_coordinates(
+                        raw, max_feature_coordinates, validate_wgs84_bounds=False
+                    )
                     geometry = to_dict(
                         transform_geom(
                             dataset.crs, "EPSG:4326", raw, antimeridian_cutting=False
@@ -256,21 +268,77 @@ def polygon_records(
                         raise GeometryValidationError(
                             "Sampling requires valid polygons; repair the source first"
                         )
-                    for positions, _ in enumerate(
-                        _iter_geometry_coordinates(geometry), 1
-                    ):
-                        if (
-                            max_feature_coordinates is not None
-                            and positions > max_feature_coordinates
-                        ):
-                            raise GeometryValidationError(
-                                "A transformed feature exceeds the bounded coordinate buffer"
-                            )
+                    _validate_native_polygon_coordinates(
+                        geometry, max_feature_coordinates, validate_wgs84_bounds=True
+                    )
                     yield geometry, {
                         name: feature.properties[name] for name in property_names
                     }
 
             yield iterate()
+
+
+def _validate_native_polygon_coordinates(
+    geometry: dict[str, Any],
+    max_coordinates: int | None,
+    *,
+    validate_wgs84_bounds: bool,
+) -> None:
+    """Validate Fiona polygon rings without visiting every scalar in Python.
+
+    Fiona has already decoded Polygon/MultiPolygon coordinate nesting into native
+    numeric ring arrays. Unlike arbitrary user GeoJSON, this boundary does not
+    need recursive sequence/type discovery. NumPy checks every ordinate, including
+    Z, while retaining the reader's coordinate ceiling and canonical WGS84 bounds.
+
+    Args:
+        geometry: Polygon geometry decoded or transformed by Fiona.
+        max_coordinates: Per-feature coordinate ceiling, or None for unlimited work.
+        validate_wgs84_bounds: Require canonical longitude/latitude after projection.
+
+    Raises:
+        GeometryValidationError: For nonpolygons, malformed or nonfinite coordinates,
+            noncanonical WGS84 positions, or an exceeded coordinate ceiling.
+    """
+    if geometry["type"] == "Polygon":
+        polygons = [geometry["coordinates"]]
+    elif geometry["type"] == "MultiPolygon":
+        polygons = geometry["coordinates"]
+    else:
+        raise GeometryValidationError(
+            "Sampling requires valid polygons; repair the source first"
+        )
+    count = 0
+    for polygon in polygons:
+        for ring in polygon:
+            count += len(ring)
+            if max_coordinates is not None and count > max_coordinates:
+                kind = "transformed" if validate_wgs84_bounds else "source"
+                raise GeometryValidationError(
+                    f"A {kind} feature exceeds the bounded coordinate buffer"
+                )
+            try:
+                coordinates = np.asarray(ring)
+                finite = np.isfinite(coordinates).all()
+            except (TypeError, ValueError) as error:
+                raise GeometryValidationError(
+                    "Selection has malformed coordinates"
+                ) from error
+            if coordinates.size == 0:
+                continue
+            if coordinates.ndim != 2 or coordinates.shape[1] < 2 or not finite:
+                raise GeometryValidationError(
+                    "Selection coordinates must contain finite positions"
+                )
+            if validate_wgs84_bounds and (
+                (coordinates[:, 0] < -180).any()
+                or (coordinates[:, 0] > 180).any()
+                or (coordinates[:, 1] < -90).any()
+                or (coordinates[:, 1] > 90).any()
+            ):
+                raise GeometryValidationError(
+                    "Selection geometry is outside canonical WGS 84 bounds"
+                )
 
 
 def count_selected_features(

@@ -9,7 +9,10 @@ from typing import Any
 
 import fiona
 import pytest
-from shapely.geometry import Point, box, mapping, shape
+from shapely import get_num_coordinates, union_all
+from shapely.errors import GEOSException
+from shapely.geometry import MultiPolygon, Point, Polygon, box, mapping, shape
+from shapely.geometry.base import BaseGeometry
 
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
@@ -91,6 +94,7 @@ def summary_source(
     numeric_type: str = "float",
     candidate: VectorFilter | None = None,
     statistic: VectorSummaryStatistic = "sum",
+    geometries: list[BaseGeometry] | None = None,
 ) -> tuple[ResolvedCatalogSelection, VectorSummarySpec]:
     """Write source rows and their immutable selection without any rendering component.
 
@@ -102,6 +106,7 @@ def summary_source(
         numeric_type: Fiona source type for the value column.
         candidate: Optional exact selection predicate.
         statistic: Reduction captured in the operation request.
+        geometries: Optional original polygon boundaries, one per row.
 
     Returns:
         Original source descriptor and exact-boundary summary specification.
@@ -114,7 +119,7 @@ def summary_source(
         layer="areas",
         crs="EPSG:4326",
         schema={
-            "geometry": "Polygon",
+            "geometry": "Unknown" if geometries is not None else "Polygon",
             "properties": {group_name: "str", value_name: numeric_type},
         },
         GEOMETRY_NAME="source_geometry",
@@ -125,7 +130,11 @@ def summary_source(
                 value = float(value)
             dataset.write(
                 {
-                    "geometry": mapping(box(index * 2, 0, index * 2 + 1, 1)),
+                    "geometry": mapping(
+                        geometries[index]
+                        if geometries is not None
+                        else box(index * 2, 0, index * 2 + 1, 1)
+                    ),
                     "properties": {group_name: group, value_name: value},
                 }
             )
@@ -469,6 +478,196 @@ def test_boundary_detail_reduces_vertices_without_changing_totals(
     assert total == 7 and result.is_valid
     assert len(result.geoms[0].exterior.coords) < len(geometry.exterior.coords)
     assert result.area > geometry.area * 0.8
+
+
+@pytest.mark.parametrize("tolerance", [0, 1, 1000])
+def test_touching_hole_remains_valid_without_coordinate_scaling(
+    tmp_path: Path, tolerance: float
+) -> None:
+    """Keep a valid point-touching hole that an affine round trip invalidates.
+
+    Args:
+        tmp_path: Real source and output directory.
+        tolerance: Exact or simplified boundary detail requested by the user.
+    """
+    original = Polygon(
+        [(-125, 32), (-124, 36), (-125, 36), (-125, 32)],
+        [[(-124.5, 34), (-124.75, 35), (-124.75, 34), (-124.5, 34)]],
+    )
+    source, spec = summary_source(tmp_path, [("A", 7)], geometries=[original])
+    spec = spec.model_copy(
+        update={
+            "inputs": spec.inputs.model_copy(update={"boundary_tolerance_m": tolerance})
+        }
+    )
+    calculate_vector_summary(source, spec, tmp_path)
+    value, result = read_summary(tmp_path / "result.gpkg")["A"]
+    assert value == 7
+    assert result.is_valid and result.equals(original)
+    assert len(result.geoms[0].interiors) == 1
+
+
+@pytest.mark.parametrize(
+    "statistic,expected",
+    [("sum", 12), ("mean", 6), ("min", 2), ("max", 10), ("stdev", 4)],
+)
+@pytest.mark.parametrize("tolerance", [0, 1000])
+def test_overview_preserves_overlapping_parts_and_original_statistics(
+    tmp_path: Path,
+    statistic: VectorSummaryStatistic,
+    expected: float,
+    tolerance: float,
+) -> None:
+    """Dissolve overlapping features and retain every original value at either detail.
+
+    Args:
+        tmp_path: Real source and output directory.
+        statistic: Requested reduction, independent of boundary processing.
+        expected: Exact result from the two finite original values.
+        tolerance: Exact original boundaries or a coarser overview.
+    """
+    originals = [Point(x, 20).buffer(0.1, quad_segs=128) for x in (0, 0.1, 2)]
+    source, spec = summary_source(
+        tmp_path,
+        [("A", 2), ("A", 10), ("A", None)],
+        statistic=statistic,
+        geometries=originals,
+    )
+    spec = spec.model_copy(
+        update={
+            "inputs": spec.inputs.model_copy(update={"boundary_tolerance_m": tolerance})
+        }
+    )
+    artifact = calculate_vector_summary(source, spec, tmp_path)
+    value, result = read_summary(tmp_path / "result.gpkg")["A"]
+    assert value == expected
+    assert result.is_valid and len(result.geoms) == 2
+    assert artifact.input_feature_count == 3 and artifact.missing_value_count == 1
+    if tolerance == 0:
+        assert result.equals(union_all(originals))
+    else:
+        assert get_num_coordinates(result) < sum(
+            get_num_coordinates(p) for p in originals
+        )
+
+
+@pytest.mark.parametrize("failure", ["invalid", "exception", "missing_part"])
+def test_failed_native_simplification_retains_original_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    """Keep the known-valid original when the native simplifier returns invalid rings.
+
+    Args:
+        tmp_path: Real source and output directory.
+        monkeypatch: Inject an invalid result at the native-library boundary.
+        caplog: Capture the diagnostic explaining retained boundary detail.
+        failure: Invalid topology, a native exception, or a missing polygon component.
+    """
+    original = MultiPolygon([Point(x, 20).buffer(0.1, quad_segs=128) for x in (0, 2)])
+    source, spec = summary_source(tmp_path, [("A", 7)], geometries=[original])
+
+    def failed_simplification(geometry: BaseGeometry, tolerance: float) -> BaseGeometry:
+        """Inject a failed native overview while keeping the real original union.
+
+        Args:
+            geometry: Valid dissolved group geometry.
+            tolerance: Requested angular boundary detail.
+
+        Returns:
+            A malformed or incomplete overview result.
+
+        Raises:
+            GEOSException: When the native simplifier is configured to fail.
+        """
+        if failure == "exception":
+            raise GEOSException("Native simplification failed")
+        if failure == "missing_part":
+            return geometry.geoms[0]
+        return Polygon([(0, 0), (1, 1), (0, 1), (1, 0), (0, 0)])
+
+    monkeypatch.setattr(
+        "eolab_app.processing.vector_summary.coverage_simplify", failed_simplification
+    )
+    spec = spec.model_copy(
+        update={"inputs": spec.inputs.model_copy(update={"boundary_tolerance_m": 1000})}
+    )
+    calculate_vector_summary(source, spec, tmp_path)
+    value, result = read_summary(tmp_path / "result.gpkg")["A"]
+    assert value == 7 and result.is_valid and result.equals(original)
+    assert "Retained detailed boundary for vector summary group 'A'" in caplog.text
+
+
+def test_overview_preserves_small_disconnected_parts_and_holes(tmp_path: Path) -> None:
+    """Keep small islands and interior holes instead of collapsing them to a grid.
+
+    Args:
+        tmp_path: Real source and output directory.
+    """
+    outer = Point(0, 20).buffer(0.1, quad_segs=64)
+    hole = Point(0, 20).buffer(0.001, quad_segs=32)
+    original = MultiPolygon(
+        [
+            Polygon(outer.exterior.coords, [hole.exterior.coords]),
+            Point(2, 20).buffer(1e-7, quad_segs=16),
+        ]
+    )
+    source, spec = summary_source(tmp_path, [("A", 7)], geometries=[original])
+    spec = spec.model_copy(
+        update={"inputs": spec.inputs.model_copy(update={"boundary_tolerance_m": 1000})}
+    )
+    calculate_vector_summary(source, spec, tmp_path)
+    value, result = read_summary(tmp_path / "result.gpkg")["A"]
+    assert value == 7 and result.is_valid and len(result.geoms) == 2
+    assert all(part.area > 0 for part in result.geoms)
+    assert sum(len(part.interiors) for part in result.geoms) == 1
+    assert get_num_coordinates(result) < get_num_coordinates(original)
+
+
+@pytest.mark.parametrize("failure", ["exception", "invalid", "empty"])
+def test_failed_native_union_reports_group_geometry_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    """Reject an unusable exact native union with a diagnostic naming the group.
+
+    Args:
+        tmp_path: Real source and output directory.
+        monkeypatch: Inject a failure at the native dissolve boundary.
+        caplog: Capture the original grouping value in the diagnostic.
+        failure: Native exception, invalid polygon, or empty output.
+    """
+    source, spec = summary_source(tmp_path, [("A", 7)])
+
+    def failed_union(polygons: Any) -> BaseGeometry:
+        """Return unusable native output or raise the requested GEOS failure.
+
+        Args:
+            polygons: Original polygon parts passed to the native union.
+
+        Returns:
+            Invalid or empty geometry from the simulated native boundary.
+
+        Raises:
+            GEOSException: When the native union is configured to fail.
+        """
+        if failure == "exception":
+            raise GEOSException("Native union failed")
+        if failure == "empty":
+            return Polygon()
+        return Polygon([(0, 0), (1, 1), (0, 1), (1, 0), (0, 0)])
+
+    monkeypatch.setattr(
+        "eolab_app.processing.vector_summary.disjoint_subset_union_all", failed_union
+    )
+    with pytest.raises(ProcessingError) as error:
+        calculate_vector_summary(source, spec, tmp_path)
+    assert error.value.code == "invalid_vector_summary_geometry"
+    assert "Vector summary group 'A'" in caplog.text
 
 
 @pytest.mark.parametrize("case", ["field", "type", "empty", "overflow"])
