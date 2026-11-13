@@ -327,7 +327,10 @@ OPERATIONS = MappingProxyType(
             ](
                 id=VECTOR_SUMMARY_OPERATION,
                 inputs=(("vector", "vector"),),
-                parameters=(("boundary_tolerance_m", "number"),),
+                parameters=(
+                    ("statistic", "choice"),
+                    ("boundary_tolerance_m", "number"),
+                ),
                 output=OperationOutput(
                     "summary",
                     "vector",
@@ -363,7 +366,7 @@ OPERATIONS = MappingProxyType(
                     ("reading_vector_features", "Reading polygon attributes"),
                     (
                         "merging_vector_groups",
-                        "Merging polygons and writing group totals",
+                        "Merging polygons and writing group statistics",
                     ),
                 ),
             ),

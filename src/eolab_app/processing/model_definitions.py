@@ -31,6 +31,7 @@ Version = Annotated[
     Field(strict=True, pattern=r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"),
 ]
 Label = Annotated[str, Field(strict=True, min_length=1, max_length=80)]
+ChoiceValue = Annotated[str, Field(strict=True, min_length=1, max_length=128)]
 Number = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 
 
@@ -176,6 +177,51 @@ class NumericParameter(ModelSchema):
             raise ValueError("Value is below the declared bound")
 
 
+class ParameterChoice(ModelSchema):
+    """Name one recipe-defined value offered by a dropdown setting.
+
+    Attributes:
+        value: Stable string passed to the operation and recorded with the run.
+        label: User-facing description shown in setup and saved-run details.
+    """
+
+    value: ChoiceValue
+    label: Label
+
+
+class ChoiceParameter(ModelSchema):
+    """Restrict a model setting to the named values declared by its recipe.
+
+    Attributes:
+        type: The literal string "choice", selecting a dropdown control.
+        label: User-facing name of the setting.
+        choices: Immutable, ordered choices with distinct stored values.
+        default: Choice used when the submission omits this setting.
+    """
+
+    type: Literal["choice"]
+    label: Label
+    choices: Annotated[tuple[ParameterChoice, ...], Field(min_length=1)]
+    default: ChoiceValue
+
+    @model_validator(mode="after")
+    def check_choices(self) -> Self:
+        """Require distinct choices and a default belonging to the declared list.
+
+        Returns:
+            This validated setting, also used to check captured run values.
+
+        Raises:
+            ValueError: If choices repeat a value or omit the default value.
+        """
+        values = [choice.value for choice in self.choices]
+        if len(set(values)) != len(values):
+            raise ValueError("Choice values must be distinct")
+        if self.default not in values:
+            raise ValueError("Choose one of the declared values")
+        return self
+
+
 class SummaryExpressionParameter(ModelSchema):
     """A raster-summary formula setting, such as ``sum(a)`` or ``mean(a)``.
 
@@ -209,7 +255,8 @@ class SummaryExpressionParameter(ModelSchema):
 
 
 Parameter = Annotated[
-    NumericParameter | SummaryExpressionParameter, Field(discriminator="type")
+    NumericParameter | ChoiceParameter | SummaryExpressionParameter,
+    Field(discriminator="type"),
 ]
 
 

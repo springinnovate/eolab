@@ -1,10 +1,12 @@
-"""Sum original polygon attributes by group and publish dissolved overview geometry."""
+"""Summarize original polygon attributes by group and publish dissolved overview geometry."""
 
 from dataclasses import asdict, dataclass, field
+from fractions import Fraction
 import hashlib
 import json
 import math
 from pathlib import Path
+import statistics
 from typing import Literal
 
 import fiona
@@ -26,6 +28,7 @@ from eolab_app.processing.vector_summary_models import (
     VectorSummaryArtifact,
     VectorSummaryInput,
     VectorSummarySpec,
+    VectorSummaryStatistic,
 )
 
 
@@ -99,7 +102,7 @@ def _read_summary_schema(
             )
         if value_type not in {"int", "int32", "int64", "float"}:
             raise ProcessingError(
-                "invalid_vector_summary_fields", "Choose a numeric field to sum."
+                "invalid_vector_summary_fields", "Choose a numeric field to summarize."
             )
         return group_type, value_type != "float"
 
@@ -112,7 +115,7 @@ def _simplify_group_boundary(
     A local equirectangular scale converts longitude and latitude to distances.
     This remains finite for wide groups and preserves disconnected parts; its
     distance accuracy decreases as a group spans more latitudes. The operation
-    is intended for overview geometry, not measurements or changes to totals.
+    is intended for overview geometry, not measurements or changes to statistics.
 
     Args:
         geometry: Valid dissolved WGS84 Polygon or MultiPolygon.
@@ -138,51 +141,77 @@ def _simplify_group_boundary(
     )
 
 
-def _sum_group_values(values: list[int | float], integer: bool) -> int | float | None:
-    """Sum finite source values accurately and check the output format's numeric range.
+def _summarize_group_values(
+    values: list[int | float], statistic: VectorSummaryStatistic, integer_output: bool
+) -> int | float | None:
+    """Reduce finite original values without rounding integer inputs prematurely.
+
+    Mean and population standard deviation use the standard library's exact
+    intermediate arithmetic, preserving small differences between large integers
+    and avoiding overflow from squared finite floats. Floating sums use math.fsum;
+    if its intermediate total overflows, exact fractions distinguish a finite
+    cancelled sum from a result outside the output column's range.
 
     Args:
         values: Original finite values in one group, excluding missing attributes.
-        integer: Whether the original schema and output column use signed integers.
+        statistic: Sum, arithmetic mean, maximum, minimum or population deviation.
+        integer_output: Whether the GeoPackage column preserves integer-source
+            sum/min/max as signed integers rather than converting to a float.
 
     Returns:
-        An exact integer total, an accurately rounded floating total, or None when
-        every source value was missing.
+        An integer for integer-source sum/min/max, a float for other results, or
+        None when every source value was missing. One value has zero deviation.
 
     Raises:
-        ProcessingError: If the total cannot be represented by its GeoPackage column.
+        ProcessingError: If the result cannot be represented by its GeoPackage column.
     """
     if not values:
         return None
     try:
-        total = sum(values) if integer else math.fsum(values)
+        if statistic == "sum":
+            if integer_output:
+                result = sum(values)
+            else:
+                try:
+                    result = math.fsum(values)
+                except OverflowError:
+                    result = float(sum(Fraction(value) for value in values))
+        elif statistic == "mean":
+            result = statistics.mean(values)
+        elif statistic == "min":
+            result = min(values)
+        elif statistic == "max":
+            result = max(values)
+        else:
+            result = statistics.pstdev(values)
     except OverflowError as error:
         raise ProcessingError(
             "vector_summary_overflow",
-            "A group total is too large for a numeric vector field.",
+            "A group result is too large for a numeric vector field.",
         ) from error
-    if (integer and not -(2**63) <= total < 2**63) or not math.isfinite(total):
+    if (integer_output and not -(2**63) <= result < 2**63) or not math.isfinite(result):
         raise ProcessingError(
             "vector_summary_overflow",
-            "A group total is too large for a numeric vector field.",
+            "A group result is too large for a numeric vector field.",
         )
-    return total
+    return result if integer_output else float(result)
 
 
 def calculate_vector_summary(
     source: ResolvedCatalogSelection, spec: VectorSummarySpec, directory: Path
 ) -> VectorSummaryArtifact:
-    """Write one dissolved polygon feature and numeric total per original field value.
+    """Write one dissolved feature and selected statistic per original grouping value.
 
     Missing groups become one null group. Null and non-finite numeric values do
-    not contribute; an all-missing group receives a null total. Integer sums stay
-    integers, floating sums use math.fsum, and boundary simplification never
-    changes which original values contribute. Native execution is supervised by
-    Processing, with no application-imposed work, memory or time ceiling.
+    not contribute; an all-missing group receives a null result. Integer sums,
+    minima and maxima stay integers; mean and population deviation use floats.
+    Boundary simplification never changes which original values contribute.
+    Processing supervises native execution without application-imposed work,
+    memory or time ceilings.
 
     Args:
         source: Authorized original polygons and captured exact predicate.
-        spec: Admitted field choices and boundary tolerance.
+        spec: Admitted field choices, statistic and boundary tolerance.
         directory: Worker-owned attempt directory for result and provenance files.
 
     Returns:
@@ -197,10 +226,14 @@ def calculate_vector_summary(
     """
     inputs = spec.inputs.vector
     group_type, integer_values = _read_summary_schema(source, inputs)
-    summary_field = _unique_field_name(f"sum_{inputs.valueField}", {inputs.groupField})
+    statistic = spec.inputs.statistic
+    summary_field = _unique_field_name(
+        f"{statistic}_{inputs.valueField}", {inputs.groupField}
+    )
+    integer_output = integer_values and statistic in {"sum", "min", "max"}
     fields = {
         inputs.groupField: group_type,
-        summary_field: "int64" if integer_values else "float",
+        summary_field: "int64" if integer_output else "float",
     }
     geometry_field = _unique_field_name("geom", set(fields))
     identifier_field = _unique_field_name("fid", {*fields, geometry_field})
@@ -248,7 +281,7 @@ def calculate_vector_summary(
         FID=identifier_field,
     ) as destination:
         for completed, (key, group) in enumerate(groups.items(), 1):
-            total = _sum_group_values(group.values, integer_values)
+            value = _summarize_group_values(group.values, statistic, integer_output)
             merged = _simplify_group_boundary(
                 union_all(group.polygons), spec.inputs.boundary_tolerance_m
             )
@@ -266,7 +299,7 @@ def calculate_vector_summary(
             destination.write(
                 {
                     "geometry": mapping(merged),
-                    "properties": {inputs.groupField: key, summary_field: total},
+                    "properties": {inputs.groupField: key, summary_field: value},
                 }
             )
             write_progress(

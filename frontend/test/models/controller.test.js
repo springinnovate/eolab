@@ -982,6 +982,49 @@ test("Runs history controls load result inputs while preserving unfinished setup
     h.controller.destroy();
 });
 
+test("choice parameter defaults, submission and duplication preserve configured string values", async t => {
+    const recipe = {...model, id: "configured-choice-example", parameters: {...model.parameters,
+        detail: {type: "choice", label: "Output detail", choices: [{value: "1", label: "Quick overview"}, {value: "2", label: "Detailed output"}], default: "1"}}};
+    const view = new ModelsView(new SummaryControlDocument()), requests = [];
+    let saved;
+    const h = fixture({discoverModels: async () => [recipe], getJob: async () => job({model: recipe}),
+        submitModelRun: async request => {
+            requests.push(structuredClone(request));
+            saved = {...structuredClone(request), model: {...recipe, definition: recipe}};
+            return job({model: recipe});
+        }, readModelInvocation: async () => structuredClone(saved)}, view);
+    t.after(() => h.controller.destroy());
+    await h.controller.loadLibrary(); h.controller.chooseModel(recipe);
+    assert.equal(captureModelSubmission(h.controller.state.draft, "choice-default").parameters.detail, "1");
+    const control = view.setup.parameters.detail;
+    control.value = "2"; control.dispatchEvent(new Event("change"));
+    await h.controller.submit();
+    assert.equal(h.controller.state.error, "");
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].parameters, {summary: "sum(a)", detail: "2"});
+    assert.ok(view.run.inputsBody.querySelectorAll("dd").some(value => value.textContent === "Detailed output"));
+    await h.controller.duplicateRun();
+    assert.equal(view.setup.parameters.detail.value, "2");
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "choice-repeat").parameters, requests[0].parameters);
+    view.setup.parameters.detail.value = "1"; view.setup.parameters.detail.dispatchEvent(new Event("change"));
+    assert.equal(h.controller.state.invocation.parameters.detail, "2");
+    assert.equal(requests.length, 1, "Duplicating and editing must not submit another run");
+});
+
+test("choice capture rejects missing, undeclared and nonstring values", () => {
+    const recipe = {...model, parameters: {mode: {type: "choice", label: "Output mode",
+        choices: [{value: "1", label: "Overview"}, {value: "full", label: "Full detail"}], default: "1"}}};
+    const draft = createModelDraft(recipe, {rasters: [raster], area}, "choice-validation");
+    for (const value of [undefined, null, "", "unknown", 1, false, {}, ["1"]]) {
+        draft.parameters.mode = value;
+        assert.throws(() => captureModelSubmission(draft, "choice-invalid"), /Choose an available option for Output mode/);
+    }
+    draft.parameters.mode = "full";
+    const captured = captureModelSubmission(draft, "choice-valid");
+    draft.parameters.mode = "1";
+    assert.deepEqual(captured.parameters, {mode: "full"});
+});
+
 test("duplicate uses the saved recipe and inputs without submitting or changing its source run", async () => {
     const h = fixture(); await h.controller.loadLibrary(); await h.controller.showRun(job().jobId);
     await h.controller.duplicateRun();
