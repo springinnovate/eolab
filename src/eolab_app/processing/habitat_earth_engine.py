@@ -47,6 +47,9 @@ from eolab_app.processing.habitat_tile_downloads import (
 )
 from eolab_app.processing.raster_preparation import RasterGrid, calculate_raster_grid
 
+# Interactive Earth Engine computations can take five minutes; allow another
+# minute for network transfer before the SDK retries a stalled socket operation.
+_HTTP_SOCKET_TIMEOUT_SECONDS = 360
 _PROVIDER_ERRORS = (OSError, GoogleAuthError, HttpError, HttpLib2Error, ee.EEException)
 _PROVIDER_SECRETS = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)"
@@ -84,7 +87,12 @@ class _HabitatEarthEngineTransport:
         headers: dict[str, str] | None = None,
         **options: object,
     ) -> tuple[Response, bytes]:
-        """Send one SDK request and expose tile throttling before SDK retries.
+        """Send a socket-bounded request and expose tile throttling before SDK retries.
+
+        The six-minute socket timeout also covers credential refresh. The official
+        SDK owns bounded retries with backoff for transient network/server failures;
+        the tile scheduler separately owns HTTP 429 retries. This is not a deadline
+        for the overall preparation or calculation.
 
         Args:
             uri: URL produced by the official Earth Engine client.
@@ -103,7 +111,7 @@ class _HabitatEarthEngineTransport:
         """
         connection = getattr(self._thread, "connection", None)
         if connection is None:
-            connection = Http()
+            connection = Http(timeout=_HTTP_SOCKET_TIMEOUT_SECONDS)
             if self._credentials is not None:
                 # Clone mutable token state and match the SDK's project billing behavior.
                 connection = AuthorizedHttp(
@@ -117,7 +125,8 @@ class _HabitatEarthEngineTransport:
                 uri, method, body=body, headers=headers, **options
             )
         except HTTPException as error:
-            # Preserve SDK connection retries when the HTTP response is truncated.
+            # An incomplete body can leave the socket unusable for the SDK retry.
+            connection.close()
             raise ConnectionError(
                 "The Earth Engine HTTP response was incomplete."
             ) from error
