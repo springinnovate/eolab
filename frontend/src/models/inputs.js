@@ -212,6 +212,32 @@ export function selectedDrawnPolygonLayer(draft, input) {
     return draft.drawnPolygonLayers.find(layer => layer.key === input.drawnPolygonKey);
 }
 
+/** Capture vector-summary fields and the selected source's accepted predicate.
+ * Selection uses admitted source metadata and does not scan features before a run.
+ * A duplicated run may retain its original selection; the server reauthorizes it.
+ * @param {Object} state Polygon choices, selected fields and all/filtered scope.
+ * @param {Array<{key:string,label:string,filter:Object,scalarFields:Array<{name:string,type:string}>,numericFields:Array<{name:string,type:string}>,selection:Object,allSelection:Object}>} state.vectors Composition-provided source identities, accepted filters and eligible field metadata.
+ * @param {string} state.vectorKey Chosen map-layer key, or an empty string for a duplicated run's source.
+ * @param {"all"|"filtered"} state.featureScope Whether to use the source's complete or filtered selection.
+ * @param {string} state.groupField Attribute whose equal values form groups.
+ * @param {string} state.valueField Numeric attribute to sum within each group.
+ * @param {Object|null} state.capturedSelection Original invocation's immutable source, layer and filter, when duplicated.
+ * @param {string} state.selectionError User-facing reason the source is unavailable, or an empty string.
+ * @return {{selection:Object,groupField:string,valueField:string}} Detached operation input.
+ * @throws {Error} If the layer or selected attributes are unavailable.
+ */
+export function captureVectorSummary(state) {
+    const source = state.vectors.find(value => value.key === state.vectorKey);
+    if (!source && !state.capturedSelection) throw new Error("Choose a polygon layer to summarize.");
+    if (!state.groupField || !state.valueField) throw new Error("Choose a grouping field and a numeric field to sum.");
+    if (source && (!source.scalarFields.some(field => field.name === state.groupField) ||
+        !source.numericFields.some(field => field.name === state.valueField))) {
+        throw new Error("Choose fields available in this polygon layer.");
+    }
+    const selection = source ? state.featureScope === "all" ? source.allSelection : source.selection : state.capturedSelection;
+    return structuredClone({selection, groupField: state.groupField, valueField: state.valueField});
+}
+
 /** Create independent setup state for each declared raster and spatial input.
  * The selectedArea input is the sampling area used by raster histograms.
  * Models with a starting mask require the user to choose that mask explicitly.
@@ -241,6 +267,9 @@ export function createModelDraft(model, context, id) {
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
                 sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.",
             };
+        } else if (input.type === "vector_summary") {
+            inputs[name] = {vectorKey: "", vectors: structuredClone(context.vectors ?? []), featureScope: "filtered",
+                groupField: "", valueField: "", capturedSelection: null, selectionError: ""};
         } else if (input.type === "habitat_stack") {
             inputs[name] = {kind: "earthEngine", year: null, configuration: null, loading: false, error: "",
                 predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
@@ -293,6 +322,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         const state = draft.inputs[name];
         if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
             inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
+        else if (input.type === "vector_summary") inputs[name] = captureVectorSummary(state);
         else if (input.type === "habitat_stack") inputs[name] = captureHabitatStack(state, draft.sources);
         else if (input.type === "raster_preparation") inputs[name] = captureRasterPreparation(state, draft);
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);

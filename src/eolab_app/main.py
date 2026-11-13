@@ -23,6 +23,7 @@ from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from eolab_app.routes.vector_artifacts import create_artifact_vector_router
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
@@ -130,6 +131,7 @@ from eolab_jobs.client import JobsClient
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
 from eolab_app.vector.uploaded_sources import UploadedVectorSourceResolver
+from eolab_app.vector.artifact_sources import ArtifactVectorSourceResolver
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 
 
@@ -246,6 +248,7 @@ def create_app(
         areas=vector_selection_reader,
     )
     source_files = create_model_source_files(processing_service)
+    artifact_vectors = ArtifactVectorSourceResolver(source_files)
     raster_sources = RasterSourceAccess(raster_source_authorizer, source_files)
     processing_session_ttl = max(
         7 * 86_400,
@@ -357,6 +360,16 @@ def create_app(
                     await raster_publication.authorize_layers(layer_names, owner)
                     or private
                 )
+            if any(
+                published_vectors.get_artifact_reference(name) for name in layer_names
+            ):
+                owner = get_processing_session_owner_hash(
+                    request, Response(), processing_session_ttl
+                )
+                private = (
+                    await vector_publication.authorize_artifact_layers(layer_names, owner)
+                    or private
+                )
             return private
         except (SourceFileError, VectorUploadError) as error:
             raise HTTPException(
@@ -374,23 +387,42 @@ def create_app(
             raise
 
     @asynccontextmanager
-    async def use_map_layers(layer_names: tuple[str, ...]) -> AsyncIterator[None]:
-        """Keep temporal layers published until the upstream request finishes.
+    async def use_map_layers(
+        layer_names: tuple[str, ...], request: Request
+    ) -> AsyncIterator[None]:
+        """Keep temporal publications and generated vector files until upstream reading stops.
 
         Args:
             layer_names: Authorized layer identities requested by a rendering route.
+            request: HTTP ownership credentials, checked again after queueing.
 
         Yields:
             None while the route may read the layers through GeoServer.
 
         Raises:
-            HTTPException: If an explicit refresh revoked a queued temporal layer.
+            HTTPException: If refresh, expiry or source ownership rejects a queued read.
         """
         try:
-            async with raster_publication.use_layers(layer_names):
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(
+                    raster_publication.use_layers(layer_names)
+                )
+                if any(
+                    published_vectors.get_artifact_reference(name) for name in layer_names
+                ):
+                    owner = get_processing_session_owner_hash(
+                        request, Response(), processing_session_ttl
+                    )
+                    await stack.enter_async_context(
+                        vector_publication.use_artifact_layers(layer_names, owner)
+                    )
                 yield
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
+        except SourceFileError as error:
+            raise HTTPException(
+                error.status, str(error), headers={"Cache-Control": "private, no-store"}
+            ) from error
 
     async def reconcile_output_publications() -> None:
         """Retry obsolete model-result and temporal display cleanup.
@@ -403,12 +435,15 @@ def create_app(
         """
         while True:
             await asyncio.sleep(30)
-            try:
-                await raster_publication.cleanup()
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "Temporary raster publication cleanup will retry."
-                )
+            for cleanup in (
+                raster_publication.cleanup, vector_publication.cleanup_artifact_layers
+            ):
+                try:
+                    await cleanup()
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "Temporary publication cleanup will retry."
+                    )
 
     async def release_finished_upload_inputs() -> None:
         """Remove retained uploads after their Processing jobs have stopped.
@@ -455,6 +490,8 @@ def create_app(
         vector_publisher,
         published_vectors,
         field_reader=vector_field_reader,
+        artifact_sources=artifact_vectors,
+        source_available=processing_service.model_artifact_is_available,
     )
     vector_styles = VectorStyleService(
         vector_catalog,
@@ -537,6 +574,14 @@ def create_app(
     )
     application.include_router(create_annotation_sessions_router(annotation_sessions))
     application.include_router(create_vector_uploads_router(vector_uploads))
+    application.include_router(
+        create_artifact_vector_router(
+            artifact_vectors, vector_publication, vector_styles,
+            lambda request, response: get_processing_session_owner_hash(
+                request, response, processing_session_ttl
+            ),
+        )
+    )
     application.include_router(
         create_uploaded_vector_router(
             UploadedVectorSourceResolver(vector_uploads),
@@ -672,6 +717,7 @@ def create_app(
                 temporary_raster_source(name) is not None
                 or is_temporal_raster_layer(name)
                 or published_vectors.get_upload_id(name) is not None
+                or published_vectors.get_artifact_reference(name) is not None
             ),
         )
     )

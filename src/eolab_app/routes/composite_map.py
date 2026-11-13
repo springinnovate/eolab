@@ -378,7 +378,7 @@ def create_composite_map_router(
         Callable[[tuple[str, ...], Request], Awaitable[bool]] | None
     ) = None,
     use_layers: (
-        Callable[[tuple[str, ...]], AbstractAsyncContextManager[None]] | None
+        Callable[[tuple[str, ...], Request], AbstractAsyncContextManager[None]] | None
     ) = None,
 ) -> APIRouter:
     """Create the plan-registration and composite tile delivery boundary.
@@ -391,7 +391,8 @@ def create_composite_map_router(
         render_queue: GetMap capacity shared with the direct WMS route.
         maximum_tile_cache_bytes: Maximum process-local composite response bytes.
         authorize_layers: Current-session authorization before plan or tile delivery.
-        use_layers: Prepare and retain layer resources during an upstream render.
+        use_layers: Retain layer resources using the originating request's ownership
+            credentials until the upstream render finishes.
             Cached tiles do not acquire resources; queued work acquires them on dispatch.
 
     Returns:
@@ -496,7 +497,7 @@ def create_composite_map_router(
                 HTTPException: If layer resources can no longer be prepared.
             """
             layer_names = tuple(layer.layer_name for layer in plan.request.layers)
-            async with use_layers(layer_names) if use_layers else nullcontext():
+            async with use_layers(layer_names, request) if use_layers else nullcontext():
                 if plan.rendering_buffer or any(value is not None for value in plan.interpolations):
                     form = build_get_map_form(
                         plan.sld_document, bbox, width, height,

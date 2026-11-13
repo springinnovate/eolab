@@ -502,7 +502,7 @@ def record_model_preparation(
     prepared: PreparedJobPlan,
     limits: ProcessingLimits,
 ) -> PreparedJobPlan:
-    """Record the calculation grid and settings in a model job's execution details.
+    """Record a model's calculation settings and its raster grid when applicable.
 
     Args:
         row: The worker's current job record, including the recipe and inputs saved at submission.
@@ -529,10 +529,15 @@ def record_model_preparation(
     if invocation.model.definition.steps[0].operation != spec.operation:
         raise ValueError("Prepared operation does not match the saved recipe")
     execution = metadata["execution"]
+    grid = (
+        {"grid": spec.grid.model_dump(mode="json")}
+        if operation.requires_raster_grid
+        else {}
+    )
     execution.update(
         {
             "state": "prepared",
-            "grid": spec.grid.model_dump(mode="json"),
+            **grid,
             "limits": {
                 "resultTtlSeconds": limits.result_ttl_seconds,
             },
@@ -548,7 +553,7 @@ def record_model_preparation(
         specification=wrapper.model_copy(update={"calculation": spec}).model_dump(
             mode="json", by_alias=True
         ),
-        summary={**row["summary"], "grid": spec.grid.model_dump(mode="json")},
+        summary={**row["summary"], **grid},
         retained_metadata=metadata,
     )
 

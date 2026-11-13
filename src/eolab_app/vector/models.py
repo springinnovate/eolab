@@ -104,7 +104,7 @@ class ResolvedVectorSource:
 class VectorLayer:
     """A vector file and the metadata needed to display and style its selected layer.
 
-    Catalog or upload lookup supplies these values after checking source access.
+    The catalog, upload or result owner supplies these values after checking access.
     The original file stays immutable; this object does not prevent deletion.
 
     Attributes:
@@ -122,6 +122,32 @@ class VectorLayer:
     feature_count: int
     bbox: tuple[float, float, float, float]
     geometry_kind: VectorGeometryKind
+
+
+class ArtifactVectorDescription(BaseModel):
+    """Describe one browser-owned result for the ordinary vector map controls.
+
+    Attributes:
+        kind: The literal string "runArtifact", identifying the source lifecycle.
+        job_id: Opaque owning run ID; never a filesystem location.
+        artifact_id: Opaque immutable file ID within the run.
+        layer_name: Exact native layer inside the result GeoPackage.
+        fields: Original attribute names and native field types.
+        feature_count: Number of original result features.
+        bbox: Original layer extent in WGS84 longitude/latitude order.
+        geometry_kind: Point, line or polygon family used by ordinary styling.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["runArtifact"] = "runArtifact"
+    job_id: str = Field(alias="jobId")
+    artifact_id: str = Field(alias="artifactId")
+    layer_name: str = Field(alias="layerName")
+    fields: dict[str, str]
+    feature_count: int = Field(alias="featureCount")
+    bbox: tuple[float, float, float, float]
+    geometry_kind: VectorGeometryKind = Field(alias="geometryKind")
 
 
 @dataclass(frozen=True)

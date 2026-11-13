@@ -532,8 +532,20 @@ class ModelRasterOutcome(ModelSchema):
     validPixels: Annotated[int, Field(ge=0)]
 
 
+class ModelVectorOutcome(ModelSchema):
+    """Grouped vector file integrity, total-column name and input counts in Run YAML."""
+
+    filename: Annotated[str, Field(min_length=1, max_length=1024)]
+    bytes: Annotated[int, Field(ge=0)]
+    sha256: Digest
+    featureCount: Annotated[int, Field(ge=1)]
+    summaryField: Annotated[str, Field(min_length=1)]
+    inputFeatureCount: Annotated[int, Field(ge=1)]
+    missingValueCount: Annotated[int, Field(ge=0)]
+
+
 class ModelOutcome(ModelSchema):
-    """A finished run's final status, error, summary values or raster file metadata.
+    """A finished run's status, error, summary values or raster/vector file metadata.
 
     This record remains available after result files expire, until the run's
     metadata expires or the user deletes the run. The artifact list includes
@@ -544,15 +556,16 @@ class ModelOutcome(ModelSchema):
     error: JobFailureResponse | None
     statistics: list[AggregateValue] | None
     raster: ModelRasterOutcome | None = None
+    vector: ModelVectorOutcome | None = None
     artifacts: list[ModelArtifactRecord] | None = None
 
 
 class ModelExecution(ModelSchema):
-    """Software, inputs, calculation grid, settings and results recorded for a run.
+    """Software, input identities, operation settings and results recorded for a run.
 
     Admission records the software and source metadata. Preparation adds the
-    executed grid directly to this record, along with numerical policy and
-    result retention; completion adds the outcome. The grid describes the
+    numerical policy and result retention; raster operations also record their
+    executed grid. Completion adds the outcome. The grid describes the
     calculation, not necessarily an input raster's original grid. Temporal
     sources record variable metadata without archive checksums. The sources
     mapping is empty only when the operation declares no primary raster.
@@ -610,18 +623,22 @@ class ModelExecution(ModelSchema):
 
     @model_validator(mode="after")
     def check_preparation(self) -> "ModelExecution":
-        """Check that a prepared run includes its grid and calculation settings.
+        """Require prepared settings and a raster grid when the operation declares one.
 
         Returns:
             This execution record after checking its preparation details.
 
         Raises:
-            ValueError: If a prepared record lacks retention, numerical settings or a grid.
+            ValueError: If preparation lacks retention, policy or its required raster grid.
         """
-        if self.state == "prepared" and (
-            self.limits is None or self.numericalPolicy is None or self.grid is None
-        ):
-            raise ValueError("Prepared execution must include its grid and policy")
+        if self.state == "prepared":
+            operation = get_model_operation(next(iter(self.operations.values())).id)
+            if (
+                self.limits is None
+                or self.numericalPolicy is None
+                or (operation.requires_raster_grid and self.grid is None)
+            ):
+                raise ValueError("Prepared execution must include its grid and policy")
         return self
 
 

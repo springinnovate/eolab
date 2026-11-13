@@ -52,10 +52,10 @@ def test_registry_requires_matching_primary_source_declarations(
 
 
 @pytest.mark.parametrize("explicit_type", [False, True])
-def test_registry_rejects_a_vector_primary_result(
+def test_registry_rejects_an_unsupported_geojson_primary_result(
     monkeypatch: pytest.MonkeyPatch, explicit_type: bool
 ) -> None:
-    """Reject a vector primary result even when its recipe matches the operation.
+    """Reject a GeoJSON primary result while ordinary GeoPackage vectors are supported.
 
     Args:
         monkeypatch: Isolated trusted-operation registration.

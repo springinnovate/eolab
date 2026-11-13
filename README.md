@@ -454,6 +454,16 @@ environmental models. Choose a tool to select its inputs and analysis area.
 Select **Run tool** and follow progress in **Runs** while continuing to use the
 map. Closing the panel does not cancel work; use **Cancel run** to stop it.
 
+**Vector summary** sums a numeric field for each distinct value of a grouping
+field and merges that group's polygons. Add a Catalog or uploaded polygon layer
+to the map, then choose its fields and whether to include all features or the
+layer's filter. For example, sum `total_es` by `state_name`. **Boundary detail**
+sets approximate outline simplification in metres; use zero for detailed merged
+boundaries. It does not change the totals. Missing numeric values are skipped;
+a group with no numeric values has a missing total. Download the GeoPackage or
+show it on the map with the ordinary vector styling, filtering and inspection
+controls.
+
 Download completed results or choose **Show on map** where offered. Some raster
 inputs also accept results from earlier runs. **Duplicate with changes** lets
 you repeat a run with different choices. Runs belong to your browser session

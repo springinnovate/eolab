@@ -1,6 +1,8 @@
 """Application workflow coordinating authoritative vector publication."""
 
 import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 import math
 from collections import OrderedDict
 from threading import Event
@@ -32,6 +34,11 @@ from eolab_app.vector.sources import (
     PublishedVectorRegistry,
 )
 from eolab_app.vector.styles import default_vector_style
+from eolab_app.vector.artifact_sources import (
+    ArtifactVectorSourceResolver,
+    parse_artifact_vector_name,
+)
+from eolab_app.source_files import SourceFileError, finish_source_task
 
 
 class VectorPublicationService:
@@ -47,6 +54,8 @@ class VectorPublicationService:
         *,
         filter_count_queue_capacity: int = 32,
         filter_count_queue_wait_seconds: float = 30,
+        artifact_sources: ArtifactVectorSourceResolver | None = None,
+        source_available: Callable[[str, str], Awaitable[bool]] | None = None,
     ) -> None:
         """Create a serialized vector publication use case.
 
@@ -60,6 +69,8 @@ class VectorPublicationService:
                 the two active readers. Cached counts do not wait.
             filter_count_queue_wait_seconds: Maximum wait for a reader, separate
                 from the existing 21-second counting deadline.
+            artifact_sources: Neutral owned-file access for generated vector layers.
+            source_available: Source-owner lifetime check for publication cleanup.
 
         Raises:
             ValueError: If the queue capacity is negative or its wait is not
@@ -83,6 +94,9 @@ class VectorPublicationService:
         self._filter_count_queue_wait_seconds = filter_count_queue_wait_seconds
         self._waiting_filter_counts = 0
         self._filter_counts: OrderedDict[str, VectorFilterCount] = OrderedDict()
+        self._artifact_sources = artifact_sources
+        self._source_available = source_available
+        self._artifact_readers: dict[tuple[str, str], int] = {}
 
     async def publish(self, request: CatalogVectorRequest) -> PublishedVector:
         """Resolve and idempotently publish one approved exact vector layer.
@@ -105,7 +119,7 @@ class VectorPublicationService:
         )
 
     async def publish_layer(self, layer: VectorLayer) -> PublishedVector:
-        """Display an authorized catalog or uploaded vector through GeoServer.
+        """Display an authorized catalog, uploaded or generated vector through GeoServer.
 
         Args:
             layer: Original file and metadata supplied by its source owner.
@@ -118,12 +132,18 @@ class VectorPublicationService:
         """
         async with self._publish_lock:
             source = layer.source
+            options = (
+                {"advertised": False}
+                if parse_artifact_vector_name(layer.resource_name)
+                else {}
+            )
             style_name = await self._publisher.publish(
                 layer.resource_name,
                 source.source_format,
                 source.source_path,
                 source.layer_name,
                 layer.geometry_kind,
+                **options,
             )
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{layer.resource_name}"
             self._vector_registry.authorize(layer_name, source, style_name)
@@ -134,6 +154,112 @@ class VectorPublicationService:
                 styleName=style_name,
                 style=default_vector_style(layer.geometry_kind),
             )
+
+    async def authorize_artifact_layers(
+        self, names: tuple[str, ...], owner: str
+    ) -> bool:
+        """Check result ownership before ordinary WMS or cached composite delivery.
+
+        Args:
+            names: Requested original or filtered vector publication names.
+            owner: Current browser identity established by the HTTP boundary.
+
+        Returns:
+            Whether any requested layer is a private generated vector.
+
+        Raises:
+            SourceFileError: If source ownership, expiry or availability rejects access.
+        """
+        private = False
+        for name in names:
+            reference = self._vector_registry.get_artifact_reference(name)
+            if reference is not None:
+                private = True
+                if self._artifact_sources is None:
+                    raise SourceFileError("This vector result is unavailable.", 404)
+                await self._artifact_sources.files.resolve(owner, *reference)
+        return private
+
+    @asynccontextmanager
+    async def use_artifact_layers(
+        self, names: tuple[str, ...], owner: str
+    ) -> AsyncIterator[None]:
+        """Protect generated files and GeoServer layers until upstream reading stops.
+
+        Args:
+            names: Already authorized original or filtered layer names.
+            owner: Browser identity, checked again when a queued render starts.
+
+        Yields:
+            Control while original files and their publications remain available.
+
+        Raises:
+            SourceFileError: If expiry or ownership rejects the queued read.
+        """
+        references = set(
+            filter(
+                None,
+                (self._vector_registry.get_artifact_reference(name) for name in names),
+            )
+        )
+        if not references:
+            yield
+            return
+        if self._artifact_sources is None:
+            raise SourceFileError("This vector result is unavailable.", 404)
+        retained: list[tuple[str, str]] = []
+        try:
+            async with AsyncExitStack() as stack:
+                async with self._publish_lock:
+                    for reference in references:
+                        await stack.enter_async_context(
+                            self._artifact_sources.files.open(owner, *reference)
+                        )
+                        self._artifact_readers[reference] = (
+                            self._artifact_readers.get(reference, 0) + 1
+                        )
+                        retained.append(reference)
+                yield
+        finally:
+            async with self._publish_lock:
+                for reference in retained:
+                    remaining = self._artifact_readers[reference] - 1
+                    if remaining:
+                        self._artifact_readers[reference] = remaining
+                    else:
+                        self._artifact_readers.pop(reference)
+
+    async def cleanup_artifact_layers(self) -> None:
+        """Remove expired vector publications and cached metadata, including restart leftovers.
+
+        Original file deletion remains with its source owner. Active upstream reads
+        retain their GeoServer publication; unavailable infrastructure is retried later.
+
+        Raises:
+            Exception: If discovery, lifetime checks or GeoServer removal fails.
+        """
+        if self._artifact_sources is None or self._source_available is None:
+            return
+        async with self._publish_lock:
+            names = await self._publisher.temporary_layers()
+            published = {
+                parse_artifact_vector_name(name): name
+                for name in names
+                if parse_artifact_vector_name(name)
+            }
+            references = set(published) | set(
+                self._artifact_sources.list_cached_references()
+            )
+            for reference in references:
+                if self._artifact_readers.get(
+                    reference
+                ) or await self._source_available(*reference):
+                    continue
+                name = published.get(reference)
+                if name is not None:
+                    self._vector_registry.revoke(f"{GEOSERVER_WORKSPACE_NAME}:{name}")
+                    await self._publisher.remove(name)
+                self._artifact_sources.forget_metadata(*reference)
 
     async def _get_catalog_filter_layer(
         self, request: CatalogVectorFilterRequest
@@ -254,6 +380,10 @@ class VectorPublicationService:
     ) -> VectorFilterCount:
         """Count matching features through the existing bounded field reader and queue.
 
+        Timeout and cancellation signal the native reader, then wait for its
+        thread to stop before returning. Source owners may release their file
+        leases only after this method exits.
+
         Args:
             layer: Authorized original source and metadata.
             candidate: Structurally validated filter requested by the browser.
@@ -265,7 +395,7 @@ class VectorPublicationService:
             VectorConflictError: If source access or attribute validation fails.
             VectorFilterCountCapacityError: If the waiting queue is full.
             VectorFilterCountQueueTimeoutError: If waiting exceeds its deadline.
-            asyncio.CancelledError: If the caller stops waiting for the count.
+            asyncio.CancelledError: After the cancelled reader has stopped.
         """
         validated_filter, published_layer_name = self._validate_layer_filter(
             layer, candidate
@@ -314,6 +444,7 @@ class VectorPublicationService:
             return VectorFilterCount()
         finally:
             cancel_event.set()
+            await finish_source_task(task)
         if result.complete and result.total != total:
             raise VectorConflictError(
                 "The feature count read from the file disagrees with the layer metadata"
