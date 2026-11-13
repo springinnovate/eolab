@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from eolab_app.processing import model_definitions as definitions
 from eolab_app.processing import model_operations as operations
 from eolab_app.processing.model_definitions import (
+    ChoiceParameter,
     ModelDefinition,
     ModelInput,
     ModelRegistry,
@@ -185,6 +186,251 @@ def vector_request(
     )
 
 
+@pytest.fixture
+def vector_rows_definition(vector_definition: ModelDefinition) -> ModelDefinition:
+    """Configure repeatable pickers on the neutral fixture's original vector input.
+
+    Args:
+        vector_definition: Registered fixture with no built-in algorithm dependency.
+
+    Returns:
+        A recipe with a numeric attribute and a choice setting in each row.
+    """
+    document = vector_definition.to_document()
+    document["inputs"]["polygons"]["rows"] = {
+        "label": "Measurements",
+        "itemLabel": "Measurement",
+        "fields": {"measure": {"label": "Attribute", "kind": "numeric"}},
+        "parameters": {
+            "method": {
+                "type": "choice",
+                "label": "Adjustment",
+                "choices": [
+                    {"value": "retain", "label": "Original values"},
+                    {"value": "normalize", "label": "Normalized values"},
+                ],
+                "default": "retain",
+            }
+        },
+    }
+    return ModelDefinition.model_validate(document)
+
+
+def vector_rows_request(definition: ModelDefinition, rows: Any) -> ModelRunRequest:
+    """Create a public vector request with valid or intentionally malformed rows.
+
+    Args:
+        definition: Recipe used for request identity and picker configuration.
+        rows: Captured row payload to test at the model admission boundary.
+
+    Returns:
+        A parsed request whose row configuration has not yet been checked.
+    """
+    body = vector_request(
+        definition, {"identifier": "code", "weight": "population"}
+    ).model_dump(mode="json")
+    body["inputs"]["polygons"]["rows"] = rows
+    return ModelRunRequest.model_validate(body)
+
+
+def test_row_recipe_round_trip_preserves_choices_identity_and_immutability(
+    vector_rows_definition: ModelDefinition,
+) -> None:
+    """Keep row declarations and ordered options immutable in exported recipes.
+
+    Args:
+        vector_rows_definition: Neutral recipe with repeatable field and choice pickers.
+    """
+    definition = vector_rows_definition
+    reloaded = ModelDefinition.model_validate(
+        parse_yaml(export_yaml(definition.to_document()))
+    )
+    assert reloaded.digest == definition.digest
+    rows = reloaded.inputs["polygons"].rows
+    assert rows is not None
+    choice = rows.parameters["method"]
+    assert isinstance(choice, ChoiceParameter)
+    assert tuple(item.value for item in choice.choices) == ("retain", "normalize")
+    assert choice.default == "retain"
+    with pytest.raises(ValidationError):
+        choice.choices[0].value = "changed"
+    with pytest.raises(TypeError):
+        rows.fields["other"] = rows.fields["measure"]
+    with pytest.raises(TypeError):
+        rows.parameters["other"] = choice
+    changed = definition.to_document()
+    changed["inputs"]["polygons"]["rows"]["parameters"]["method"]["choices"][0][
+        "label"
+    ] = "Unadjusted values"
+    assert ModelDefinition.model_validate(changed).digest != definition.digest
+
+
+@pytest.mark.parametrize("row_count", [1, 40])
+def test_configured_rows_bind_in_order_and_round_trip(
+    vector_rows_definition: ModelDefinition, row_count: int
+) -> None:
+    """Capture every configured row in order without a row-count ceiling.
+
+    Args:
+        vector_rows_definition: Neutral fixture declaring one field and one choice.
+        row_count: A single row or more rows than ordinary parameter-count limits.
+    """
+    rows = [
+        {
+            "fields": {"measure": f"attribute_{index}"},
+            "parameters": {"method": "normalize" if index % 2 else "retain"},
+        }
+        for index in range(row_count)
+    ]
+    request = vector_rows_request(vector_rows_definition, rows)
+    calculation, invocation = build_model_calculation_request(
+        request, ModelRegistry((vector_rows_definition,))
+    )
+    assert calculation.model_dump(mode="json")["rows"] == rows
+    assert invocation.inputs == request.inputs
+    assert (
+        ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
+        == invocation
+    )
+    saved = invocation.model_dump(mode="json", by_alias=True)
+    saved["inputs"]["polygons"]["rows"][0]["parameters"]["method"] = "unknown"
+    with pytest.raises(ValidationError, match="declared row values"):
+        ModelInvocation.model_validate(saved)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        None,
+        [],
+        [{"fields": {}, "parameters": {"method": "retain"}}],
+        [
+            {
+                "fields": {"measure": "amount", "other": "area"},
+                "parameters": {"method": "retain"},
+            }
+        ],
+        [{"fields": {"measure": ""}, "parameters": {"method": "retain"}}],
+        [{"fields": {"measure": 12}, "parameters": {"method": "retain"}}],
+        [{"fields": {"measure": "amount"}, "parameters": {}}],
+        [
+            {
+                "fields": {"measure": "amount"},
+                "parameters": {"method": "retain", "other": "retain"},
+            }
+        ],
+        [{"fields": {"measure": "amount"}, "parameters": {"method": "unknown"}}],
+        [{"fields": {"measure": "amount"}, "parameters": {"method": 2}}],
+        [{"fields": {"measure": "amount"}, "parameters": {"method": None}}],
+        [
+            {
+                "fields": {"measure": "amount"},
+                "parameters": {"method": "retain"},
+                "rows": [],
+            }
+        ],
+    ],
+)
+def test_admission_rejects_invalid_vector_rows(
+    vector_rows_definition: ModelDefinition, rows: Any
+) -> None:
+    """Reject missing bindings, unsupported choices and nested rows before work starts.
+
+    Args:
+        vector_rows_definition: Recipe declaring exact row field and parameter roles.
+        rows: Malformed row bindings supplied by a public client.
+    """
+    with pytest.raises(ProcessingError) as error:
+        build_model_calculation_request(
+            vector_rows_request(vector_rows_definition, rows),
+            ModelRegistry((vector_rows_definition,)),
+        )
+    assert error.value.code == "invalid_model_inputs"
+
+
+def test_configured_rows_are_required_and_unconfigured_rows_are_forbidden(
+    vector_definition: ModelDefinition, vector_rows_definition: ModelDefinition
+) -> None:
+    """Require rows only when enabled and preserve the ordinary vector wire shape.
+
+    Args:
+        vector_definition: Ordinary vector fixture without repeated pickers.
+        vector_rows_definition: Same operation with required repeated pickers.
+    """
+    ordinary = vector_request(
+        vector_definition, {"identifier": "code", "weight": "population"}
+    )
+    calculation, _ = build_model_calculation_request(
+        ordinary, ModelRegistry((vector_definition,))
+    )
+    assert "rows" not in calculation.model_dump(mode="json")
+    with pytest.raises(ProcessingError, match="invalid"):
+        build_model_calculation_request(
+            vector_request(
+                vector_rows_definition, {"identifier": "code", "weight": "population"}
+            ),
+            ModelRegistry((vector_rows_definition,)),
+        )
+    for rows in (None, [{"fields": {}, "parameters": {}}]):
+        with pytest.raises(ProcessingError, match="invalid"):
+            build_model_calculation_request(
+                vector_rows_request(vector_definition, rows),
+                ModelRegistry((vector_definition,)),
+            )
+
+
+def test_rows_can_configure_attributes_without_choices(
+    vector_rows_definition: ModelDefinition,
+) -> None:
+    """Permit field-only repeated inputs while keeping parameters explicit on the wire.
+
+    Args:
+        vector_rows_definition: Neutral fixture whose row choices are removed here.
+    """
+    document = vector_rows_definition.to_document()
+    document["inputs"]["polygons"]["rows"]["parameters"] = {}
+    definition = ModelDefinition.model_validate(document)
+    rows = [{"fields": {"measure": "amount"}, "parameters": {}}]
+    calculation, _ = build_model_calculation_request(
+        vector_rows_request(definition, rows), ModelRegistry((definition,))
+    )
+    assert calculation.model_dump(mode="json")["rows"] == rows
+    assert definition.to_document()["inputs"]["polygons"]["rows"]["parameters"] == {}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"fields": {}},
+        {"rows": {}},
+        {
+            "parameters": {
+                "method": {
+                    "type": "number",
+                    "label": "Size",
+                    "unit": "m",
+                    "minimum": 0,
+                    "default": 1,
+                }
+            }
+        },
+    ],
+)
+def test_recipe_rejects_invalid_row_configuration(
+    vector_rows_definition: ModelDefinition, change: dict[str, Any]
+) -> None:
+    """Limit repeatable configuration to attributes and existing choice parameters.
+
+    Args:
+        vector_rows_definition: Valid neutral recipe supplying the surrounding contract.
+        change: Empty field declarations, nested rows or an unsupported parameter type.
+    """
+    document = vector_rows_definition.to_document()
+    document["inputs"]["polygons"]["rows"].update(change)
+    with pytest.raises(ValidationError):
+        ModelDefinition.model_validate(document)
+
+
 @pytest.mark.parametrize("roles", [("identifier", "weight"), ("zone", "score"), ()])
 def test_configured_field_roles_bind_and_round_trip(
     vector_definition: ModelDefinition, roles: tuple[str, ...]
@@ -271,6 +517,7 @@ def test_admission_rejects_missing_extra_or_invalid_field_choices(
     [
         {"type": "raster", "fields": {}},
         {"type": "raster", "geometry": "polygon"},
+        {"type": "raster", "rows": None},
         {"geometry": "point"},
         {"fields": {"value": {"label": "Value", "kind": "geometry"}}},
     ],

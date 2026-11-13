@@ -218,7 +218,8 @@ class ModelInvocation(ModelSchema):
         """Check the saved inputs and parameters against the saved model definition.
 
         Returns:
-            This invocation after validating its inputs and formulas.
+            This invocation after validating inputs, configured vector rows,
+            parameter choices and formulas against the captured recipe.
 
         Raises:
             ValueError: If a saved input or parameter is missing,
@@ -243,6 +244,26 @@ class ModelInvocation(ModelSchema):
                 selection = VectorFieldSelection.model_validate(self.inputs[name])
                 if set(selection.fields) != set(role.fields):
                     raise ValueError("Selected vector fields do not match the recipe")
+                if role.rows is None:
+                    if "rows" in selection.model_fields_set:
+                        raise ValueError("The vector input does not configure rows")
+                else:
+                    if selection.rows is None:
+                        raise ValueError("The vector input requires at least one row")
+                    for row in selection.rows:
+                        if set(row.fields) != set(role.rows.fields) or set(
+                            row.parameters
+                        ) != set(role.rows.parameters):
+                            raise ValueError(
+                                "Selected vector rows do not match the recipe"
+                            )
+                        for parameter_name, parameter in role.rows.parameters.items():
+                            if row.parameters[parameter_name] not in {
+                                choice.value for choice in parameter.choices
+                            }:
+                                raise ValueError(
+                                    "Choose one of the declared row values"
+                                )
             elif role.type not in adapters:
                 raise ValueError("Unsupported captured input type")
             if role.type in adapters:

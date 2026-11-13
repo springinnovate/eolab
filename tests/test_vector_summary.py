@@ -20,6 +20,7 @@ from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.vector_summary import calculate_vector_summary
 from eolab_app.processing.vector_summary_models import (
     VectorSummaryInput,
+    VectorSummaryCalculation,
     VectorSummaryRequest,
     VectorSummarySpec,
     VectorSummaryStatistic,
@@ -30,13 +31,13 @@ from eolab_app.processing.vector_summary_models import (
     "capture_kind", ["configured", "missing_role", "extra_role", "old_shape"]
 )
 def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
-    """Bind the installed recipe's generic vector capture and default statistic.
+    """Bind the installed recipe's fixed grouping field and repeated summary rows.
 
     Args:
         capture_kind: Valid configured roles, malformed roles or the removed input shape.
     """
     registry = ModelRegistry.load_installed()
-    definition = registry.get("vector-summary", "1.1.0")
+    definition = registry.get("vector-summary", "2.0.0")
     selected = {
         "selection": {
             "collectionId": "eolab-mounted-vectors",
@@ -45,10 +46,11 @@ def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
             "layerName": "areas",
             "filter": {"enabled": False, "match": "all", "rules": []},
         },
-        "fields": {"group": "state_name", "value": "total_es"},
+        "fields": {"group": "state_name"},
+        "rows": [{"fields": {"value": "total_es"}, "parameters": {"statistic": "sum"}}],
     }
     if capture_kind == "missing_role":
-        selected["fields"].pop("value")
+        selected["rows"][0]["fields"].pop("value")
     elif capture_kind == "extra_role":
         selected["fields"]["weight"] = "population"
     elif capture_kind == "old_shape":
@@ -76,8 +78,9 @@ def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
     calculation, invocation = build_model_calculation_request(request, registry)
     assert isinstance(calculation, VectorSummaryRequest)
     assert calculation.vector.groupField == "state_name"
-    assert calculation.vector.valueField == "total_es"
-    assert calculation.statistic == "sum"
+    assert calculation.summaries == (
+        VectorSummaryCalculation(field="total_es", statistic="sum"),
+    )
     assert calculation.boundary_tolerance_m == 1000
     assert invocation.inputs == {"vector": selected}
 
@@ -139,10 +142,10 @@ def summary_source(
     source = ResolvedCatalogSelection(selection, path, "GPKG", None)
     return source, VectorSummarySpec(
         inputs=VectorSummaryRequest(
-            vector=VectorSummaryInput(
-                selection=selection, groupField=group_name, valueField=value_name
+            vector=VectorSummaryInput(selection=selection, groupField=group_name),
+            summaries=(
+                VectorSummaryCalculation(field=value_name, statistic=statistic),
             ),
-            statistic=statistic,
             boundary_tolerance_m=0,
         )
     )
@@ -197,7 +200,7 @@ def test_groups_preserve_exact_values_nulls_and_disconnected_parts(
     assert len(values["A"][1].geoms) == 3
     assert values["A"][1].area == 3
     assert artifact.feature_count == 3 and artifact.input_feature_count == 6
-    assert artifact.missing_value_count == 2
+    assert artifact.columns[0].missing_value_count == 2
 
 
 def test_integer_sums_preserve_values_above_float_precision(tmp_path: Path) -> None:
@@ -211,6 +214,128 @@ def test_integer_sums_preserve_values_above_float_precision(tmp_path: Path) -> N
     )
     calculate_vector_summary(source, spec, tmp_path)
     assert read_summary(tmp_path / "result.gpkg")["A"][0] == 2**53 + 1
+
+
+def test_many_field_statistic_pairs_share_original_reads_and_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Produce independent columns from one source stream and one merge per group.
+
+    Args:
+        tmp_path: Original and output GeoPackages on isolated storage.
+        monkeypatch: Count real native reader and union boundary calls.
+    """
+    from contextlib import contextmanager
+    from collections.abc import Iterator
+    from eolab_app.processing import vector_summary
+
+    source, spec = summary_source(tmp_path, [("A", 2), ("A", 4), ("B", None)])
+    # A second source field has a different missing-value pattern.
+    path = tmp_path / "multiple.gpkg"
+    with fiona.open(
+        path,
+        "w",
+        driver="GPKG",
+        layer="areas",
+        crs="EPSG:4326",
+        schema={
+            "geometry": "Polygon",
+            "properties": {"state_name": "str", "total_es": "int64", "weight": "float"},
+        },
+    ) as dataset:
+        for index, (group, value, weight) in enumerate(
+            [("A", 2**53, 1.5), ("A", 1, 2.5), ("B", None, 8.5)]
+        ):
+            dataset.write(
+                {
+                    "geometry": mapping(box(index * 2, 0, index * 2 + 1, 1)),
+                    "properties": {
+                        "state_name": group,
+                        "total_es": value,
+                        "weight": weight,
+                    },
+                }
+            )
+    source = replace(source, path=path)
+    calculations = (
+        VectorSummaryCalculation(field="total_es", statistic="sum"),
+        VectorSummaryCalculation(field="total_es", statistic="mean"),
+        VectorSummaryCalculation(field="weight", statistic="mean"),
+        VectorSummaryCalculation(field="weight", statistic="stdev"),
+        VectorSummaryCalculation(field="total_es", statistic="sum"),
+    )
+    spec = spec.model_copy(
+        update={"inputs": spec.inputs.model_copy(update={"summaries": calculations})}
+    )
+    reader = vector_summary.polygon_records
+    dissolve = vector_summary.union_all
+    reads: list[tuple[str, ...]] = []
+    merges: list[int] = []
+
+    @contextmanager
+    def record_source_reads(*args: Any, **kwargs: Any) -> Iterator[Any]:
+        """Count source openings while preserving the real reader's context lifecycle.
+
+        Args:
+            *args: Original reader arguments including requested fields.
+            **kwargs: Original unlimited Processing read settings.
+
+        Yields:
+            The real source record iterator.
+        """
+        reads.append(args[1])
+        with reader(*args, **kwargs) as records:
+            yield records
+
+    def record_group_merge(polygons: list[Any]) -> Any:
+        """Count native dissolves and return their real geometry.
+
+        Args:
+            polygons: Original polygons in one group.
+
+        Returns:
+            The native union geometry.
+        """
+        merges.append(len(polygons))
+        return dissolve(polygons)
+
+    monkeypatch.setattr(vector_summary, "polygon_records", record_source_reads)
+    monkeypatch.setattr(vector_summary, "union_all", record_group_merge)
+    artifact = calculate_vector_summary(source, spec, tmp_path)
+    assert reads == [("state_name", "total_es", "weight")]
+    assert merges == [2, 1]
+    assert [column.output_field for column in artifact.columns] == [
+        "sum_total_es",
+        "mean_total_es",
+        "mean_weight",
+        "stdev_weight",
+        "sum_total_es_2",
+    ]
+    assert [column.missing_value_count for column in artifact.columns] == [
+        1,
+        1,
+        0,
+        0,
+        1,
+    ]
+    assert (
+        artifact.summary_field == "sum_total_es" and artifact.missing_value_count == 1
+    )
+    with fiona.open(tmp_path / "result.gpkg", layer="summary") as result:
+        features = {feature.properties["state_name"]: feature for feature in result}
+        assert dict(features["A"].properties) == {
+            "state_name": "A",
+            "sum_total_es": 2**53 + 1,
+            "mean_total_es": (2**53 + 1) / 2,
+            "mean_weight": 2,
+            "stdev_weight": 0.5,
+            "sum_total_es_2": 2**53 + 1,
+        }
+        assert features["B"].properties["sum_total_es"] is None
+        assert features["B"].properties["mean_weight"] == 8.5
+        assert len(shape(features["A"].geometry).geoms) == 2
+        assert result.schema["properties"]["sum_total_es"] == "int"
+        assert result.schema["properties"]["mean_weight"] == "float"
 
 
 @pytest.mark.parametrize(
@@ -247,10 +372,15 @@ def test_group_statistics_exclude_missing_values_without_removing_geometry(
     assert values["missing"][0] is None
     assert values[None][0] == (0 if statistic == "stdev" else 8)
     assert len(values["A"][1].geoms) == 6 and values["A"][1].area == 6
-    assert artifact.summary_field == f"{statistic}_total_es"
-    assert artifact.input_feature_count == 8 and artifact.missing_value_count == 5
+    assert artifact.columns[0].output_field == f"{statistic}_total_es"
+    assert (
+        artifact.input_feature_count == 8
+        and artifact.columns[0].missing_value_count == 5
+    )
     provenance = json.loads((tmp_path / "provenance.json").read_text())
-    assert provenance["inputs"]["statistic"] == statistic
+    assert provenance["inputs"]["summaries"] == [
+        {"field": "total_es", "statistic": statistic}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -367,7 +497,7 @@ def test_statistic_column_collision_preserves_group_field(
         tmp_path, [("A", 2)], group_name=group_name, statistic=statistic
     )
     artifact = calculate_vector_summary(source, spec, tmp_path)
-    assert artifact.summary_field == f"{statistic}_total_es_2"
+    assert artifact.columns[0].output_field == f"{statistic}_total_es_2"
     assert read_summary(tmp_path / "result.gpkg")["A"][0] == (
         0 if statistic == "stdev" else 2
     )
@@ -394,7 +524,7 @@ def test_output_column_collisions_preserve_group_and_sum(
     """
     source, spec = summary_source(tmp_path, [("A", 2)], group_name=group_name)
     artifact = calculate_vector_summary(source, spec, tmp_path)
-    assert artifact.summary_field == expected
+    assert artifact.columns[0].output_field == expected
     with fiona.open(tmp_path / "result.gpkg", layer="summary") as result:
         assert tuple(result.schema["properties"]) == (group_name, expected)
         assert next(iter(result)).properties[group_name] == "A"
@@ -408,7 +538,7 @@ def test_long_sum_column_remains_usable_by_ordinary_vector_apis(tmp_path: Path) 
     """
     source, spec = summary_source(tmp_path, [("A", 2)], value_name="x" * 256)
     artifact = calculate_vector_summary(source, spec, tmp_path)
-    assert len(artifact.summary_field) == 256
+    assert len(artifact.columns[0].output_field) == 256
     assert read_summary(tmp_path / "result.gpkg")["A"][0] == 2
 
 
@@ -492,8 +622,8 @@ def test_invalid_summary_inputs_fail_locally(tmp_path: Path, case: str) -> None:
             update={
                 "inputs": spec.inputs.model_copy(
                     update={
-                        "vector": spec.inputs.vector.model_copy(
-                            update={"valueField": "absent"}
+                        "summaries": (
+                            VectorSummaryCalculation(field="absent", statistic="sum"),
                         )
                     }
                 )

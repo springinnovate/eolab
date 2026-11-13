@@ -9,6 +9,7 @@ from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_summary_models import (
     OPERATION,
     QueuedVectorSummary,
+    VectorSummaryCalculation,
     VectorSummaryInput,
     VectorSummaryRequest,
     VectorSummarySpec,
@@ -18,18 +19,17 @@ from eolab_app.processing.vector_summary_models import (
 def bind_vector_summary(
     inputs: dict[str, Any], parameters: dict[str, Any], request_id: str, label: str
 ) -> VectorSummaryRequest:
-    """Bind a recipe's polygon fields, statistic and boundary detail to a summary request.
+    """Bind repeated field/statistic choices and one source to a summary request.
 
     Args:
-        inputs: Captured source and configured group/value roles under "vector".
-            The installed recipe and generic vector input contract validate those roles.
-        parameters: Selected "statistic" and approximate simplification distance
-            under "boundary_tolerance_m".
+        inputs: Captured source, fixed group field and ordered rows under "vector".
+            The installed recipe and generic vector contract validate every row.
+        parameters: Approximate simplification distance under "boundary_tolerance_m".
         request_id: Ordinary model submission retry identifier, owned by admission.
         label: Ordinary model run name, owned by the surrounding model request.
 
     Returns:
-        Validated field choices, statistic and boundary tolerance without filesystem paths.
+        Validated calculations and boundary tolerance without filesystem paths.
 
     Raises:
         ValidationError: If a selection, field name, statistic or tolerance is invalid.
@@ -39,7 +39,12 @@ def bind_vector_summary(
         vector=VectorSummaryInput(
             selection=selected["selection"],
             groupField=selected["fields"]["group"],
-            valueField=selected["fields"]["value"],
+        ),
+        summaries=tuple(
+            VectorSummaryCalculation(
+                field=row["fields"]["value"], statistic=row["parameters"]["statistic"]
+            )
+            for row in selected["rows"]
         ),
         **parameters,
     )
@@ -126,7 +131,7 @@ def describe_vector_summary_result(
         policy: Retained numerical settings, when still available.
 
     Returns:
-        Native layer name, output feature count and the generated numeric column name.
+        Native layer name, feature count and the first requested statistic for styling.
     """
     return {
         "layerName": "summary",
@@ -136,13 +141,14 @@ def describe_vector_summary_result(
 
 
 def describe_vector_summary_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
-    """Return vector file and grouping facts for the retained Run YAML.
+    """Return vector file and primary-column facts for the retained Run YAML.
 
     Args:
         artifact: Published file metadata returned by the registered summary worker.
 
     Returns:
-        Ordinary vector metadata and the operation's separately typed grouping details.
+        Ordinary vector metadata and first-column grouping details. All requested
+        pairs are captured in the invocation; full column diagnostics are in provenance.
     """
     return {
         "statistics": None,

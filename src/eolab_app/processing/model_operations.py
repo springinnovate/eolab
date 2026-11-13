@@ -327,10 +327,7 @@ OPERATIONS = MappingProxyType(
             ](
                 id=VECTOR_SUMMARY_OPERATION,
                 inputs=(("vector", "vector"),),
-                parameters=(
-                    ("statistic", "choice"),
-                    ("boundary_tolerance_m", "number"),
-                ),
+                parameters=(("boundary_tolerance_m", "number"),),
                 output=OperationOutput(
                     "summary",
                     "vector",

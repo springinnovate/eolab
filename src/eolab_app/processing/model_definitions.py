@@ -66,13 +66,14 @@ class ModelInput(ModelSchema):
     input in model setup. A recipe describes the input here; each run supplies
     the actual catalog dataset, published raster result or area. Vector inputs may
     declare named attribute pickers; their role names have meaning only to the
-    selected operation. Omitting fields makes a source-only chooser.
+    selected operation. Omitting fields and rows makes a source-only chooser.
 
     Attributes:
         type: Registered input type, including the literal string "vector".
         label: User-facing input name.
         geometry: Optional polygon restriction for a vector chooser.
         fields: Required vector attributes, keyed by recipe-defined role names.
+        rows: Optional repeatable attribute and choice pickers for the same source.
     """
 
     type: Name
@@ -82,6 +83,9 @@ class ModelInput(ModelSchema):
     )
     fields: Mapping[Name, VectorFieldDefinition] = Field(
         default_factory=dict, validate_default=True, exclude_if=lambda value: not value
+    )
+    rows: "VectorInputRows | None" = Field(
+        default=None, exclude_if=lambda value: value is None
     )
 
     @field_validator("fields", mode="after")
@@ -121,12 +125,14 @@ class ModelInput(ModelSchema):
             This input after checking which settings its type permits.
 
         Raises:
-            ValueError: If another input type declares geometry or field pickers.
+            ValueError: If another input type declares vector picker settings.
         """
         if self.type != "vector" and self.model_fields_set.intersection(
-            {"geometry", "fields"}
+            {"geometry", "fields", "rows"}
         ):
-            raise ValueError("Only vector inputs may configure geometry and fields")
+            raise ValueError(
+                "Only vector inputs may configure geometry, fields or rows"
+            )
         return self
 
 
@@ -220,6 +226,51 @@ class ChoiceParameter(ModelSchema):
         if self.default not in values:
             raise ValueError("Choose one of the declared values")
         return self
+
+
+class VectorInputRows(ModelSchema):
+    """Configure repeatable attribute and choice pickers for one vector source.
+
+    Each captured row must supply the declared field roles and choice parameters.
+    At least one row is required when this configuration is present. Row count has
+    no configured maximum, and rows cannot contain another repeatable input.
+
+    Attributes:
+        label: User-facing name for the collection of rows.
+        itemLabel: User-facing name for one row, used by add and remove controls.
+        fields: At least one source-attribute picker, keyed by operation-defined role.
+        parameters: Choice settings belonging to each row, or an empty mapping.
+    """
+
+    label: Label
+    itemLabel: Label
+    fields: Mapping[Name, VectorFieldDefinition] = Field(min_length=1)
+    parameters: Mapping[Name, ChoiceParameter]
+
+    @field_validator("fields", "parameters", mode="after")
+    @classmethod
+    def freeze_declarations(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Keep the row's recipe-owned picker declarations immutable.
+
+        Args:
+            value: Validated attribute or choice declarations keyed by role.
+
+        Returns:
+            A read-only copy preserving declaration order.
+        """
+        return MappingProxyType(dict(value))
+
+    @field_serializer("fields", "parameters")
+    def serialize_declarations(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        """Include row picker declarations in exported recipe JSON and YAML.
+
+        Args:
+            value: Immutable attribute or choice declarations for each row.
+
+        Returns:
+            JSON-compatible definitions keyed by their original role names.
+        """
+        return {name: item.model_dump(mode="json") for name, item in value.items()}
 
 
 class SummaryExpressionParameter(ModelSchema):
