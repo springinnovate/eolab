@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
     categoryValueKey,
+    formatCategoryValue,
     formatNumericRange,
     normalizeVectorCategorySummary,
     normalizeVectorNumericClassification,
@@ -122,6 +123,33 @@ test("graduated styles normalize server ranges, palettes, and legends", () => {
     );
 });
 
+test("normalized graduated rules retain open bounds and compact numeric labels", () => {
+    for (const [rules, labels] of [
+        [[{ minimum: null, maximum: null, color: "#123456" }], ["All values"]],
+        [[
+            { minimum: null, maximum: -1000000, color: "#123456" },
+            { minimum: -1000000, maximum: 0.0001, color: "#abcdef" },
+            { minimum: 0.0001, maximum: null, color: "#fedcba" },
+        ], ["≤ -1.000e+6", "> -1.000e+6 to ≤ 1.000e-4", "> 1.000e-4"]],
+    ]) {
+        const style = normalizeVectorStyle({
+            geometryKind: "line",
+            strokeColor: "#000000",
+            strokeOpacity: 0.5,
+            strokeWidth: 2,
+            graduated: { field: "score", method: "equal-interval", classCount: 3, palette: "blues", rules },
+        });
+        assert.deepEqual(style.graduated.rules.map(formatNumericRange), labels);
+        assert.deepEqual(vectorStyleLegend(style), {
+            kind: "graduated",
+            label: "score",
+            entries: labels.map((label, index) => ({ label, color: rules[index].color,
+                symbol: { shape: "line", fill: null, fillOpacity: 0, stroke: rules[index].color,
+                    strokeOpacity: 0.5, strokeWidth: 2, pointSize: null } })),
+        });
+    }
+});
+
 test("categorical styles preserve explicit value types and qualitative colors", () => {
     const style = normalizeVectorStyle({
         geometryKind: "polygon",
@@ -136,6 +164,11 @@ test("categorical styles preserve explicit value types and qualitative colors", 
             rules: [
                 { value: { kind: "integer", value: 1 }, color: "#D60000" },
                 { value: { kind: "number", value: 1 }, color: "#018700" },
+                { value: { kind: "string", value: "1" }, color: "#00acc6" },
+                { value: { kind: "boolean", value: true }, color: "#e6a500" },
+                { value: { kind: "boolean", value: false }, color: "#8c3bff" },
+                { value: { kind: "string", value: "  forest  " }, color: "#ff7ed1" },
+                { value: { kind: "string", value: "" }, color: "#000000" },
             ],
             otherColor: "#9CA3AF",
             missingColor: "#D1D5DB",
@@ -147,6 +180,7 @@ test("categorical styles preserve explicit value types and qualitative colors", 
         categoryValueKey(style.categorical.rules[0].value),
         categoryValueKey(style.categorical.rules[1].value),
     );
+    assert.equal(new Set(style.categorical.rules.map(rule => categoryValueKey(rule.value))).size, 7);
     assert.notEqual(qualitativeCategoryColor(0), qualitativeCategoryColor(1));
     assert.notEqual(qualitativeCategoryColor(0), qualitativeCategoryColor(0, 1));
     assert.deepEqual(vectorStyleLegend(style), {
@@ -155,6 +189,11 @@ test("categorical styles preserve explicit value types and qualitative colors", 
         entries: [
             { label: "1", color: "#d60000" },
             { label: "1", color: "#018700" },
+            { label: "1", color: "#00acc6" },
+            { label: "True", color: "#e6a500" },
+            { label: "False", color: "#8c3bff" },
+            { label: "  forest  ", color: "#ff7ed1" },
+            { label: "", color: "#000000" },
             { label: "Other", color: "#9ca3af" },
             { label: "No value", color: "#d1d5db" },
         ].map(entry => ({ ...entry, symbol: { shape: "polygon", fill: entry.color, fillOpacity: 0.38,
@@ -165,10 +204,10 @@ test("categorical styles preserve explicit value types and qualitative colors", 
 test("classified line keys color the stroke and point keys retain their outline", () => {
     const categorical = { field: "name", limit: 1, rules: [{ value: { kind: "string", value: "A" }, color: "#ff00ff" }] };
     const base = { strokeColor: "#123456", strokeWidth: 3, strokeOpacity: 0.5, categorical };
-    const line = vectorStyleLegend({ ...base, geometryKind: "line" }).entries[0].symbol;
+    const line = vectorStyleLegend(normalizeVectorStyle({ ...base, geometryKind: "line" })).entries[0].symbol;
     assert.equal(line.fill, null);
     assert.equal(line.stroke, "#ff00ff");
-    const point = vectorStyleLegend({ ...base, geometryKind: "point", fillColor: "#ffffff", fillOpacity: 0.2, pointSize: 12 }).entries[0].symbol;
+    const point = vectorStyleLegend(normalizeVectorStyle({ ...base, geometryKind: "point", fillColor: "#ffffff", fillOpacity: 0.2, pointSize: 12 })).entries[0].symbol;
     assert.equal(point.fill, "#ff00ff");
     assert.equal(point.stroke, "#123456");
     assert.equal(point.fillOpacity, 0.2);
@@ -192,6 +231,9 @@ test("category summaries advertise bounded complete values and eligible fields",
     });
 
     assert.equal(summary.values[0].value.kind, "string");
+    assert.equal(formatCategoryValue(summary.values[0].value), "high");
+    const repeatedSummary = normalizeVectorCategorySummary(JSON.parse(JSON.stringify(summary)));
+    assert.equal(categoryValueKey(summary.values[0].value), categoryValueKey(repeatedSummary.values[0].value));
     assert.deepEqual(vectorCategoricalFields([
         { name: "risk", type: "str:40" },
         { name: "score", type: "float" },

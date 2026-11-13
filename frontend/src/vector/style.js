@@ -389,13 +389,14 @@ export function sequentialPaletteColors(palette, classCount) {
 }
 
 /**
- * Format one open-ended numeric class for controls and neutral legends.
+ * Format one normalized numeric range for controls and neutral legends.
  *
- * @param {{minimum:number|null,maximum:number|null}} candidate Numeric class.
+ * @param {Readonly<{minimum:number|null,maximum:number|null}>} range Range from
+ * normalizeVectorNumericClassification or a normalized vector style's graduated
+ * rules. Null bounds are open-ended; numeric bounds are finite and ordered.
  * @return {string} Compact inclusive/exclusive range label.
  */
-export function formatNumericRange(candidate) {
-    const range = normalizeNumericRange({ ...candidate, count: 0 }, true);
+export function formatNumericRange(range) {
     if (range.minimum === null && range.maximum === null) return "All values";
     if (range.minimum === null) return `≤ ${formatNumber(range.maximum)}`;
     if (range.maximum === null) return `> ${formatNumber(range.minimum)}`;
@@ -424,37 +425,38 @@ export function qualitativeCategoryColor(index, generation = 0) {
 /**
  * Build a stable type-aware identity for one normalized category value.
  *
- * @param {Object} candidate Explicitly typed category value.
+ * @param {Readonly<VectorCategoryValue>} value Category value admitted by
+ * normalizeVectorCategorical or normalizeVectorCategorySummary.
  * @return {string} Stable browser map key.
  */
-export function categoryValueKey(candidate) {
-    const value = normalizeCategoryValue(candidate);
+export function categoryValueKey(value) {
     return JSON.stringify([value.kind, value.value]);
 }
 
 /**
- * Format one typed category value without losing boolean or numeric meaning.
+ * Format one normalized category value without losing boolean or numeric meaning.
  *
- * @param {Object} candidate Explicitly typed category value.
+ * @param {Readonly<VectorCategoryValue>} value Category value admitted by
+ * normalizeVectorCategorical or normalizeVectorCategorySummary.
  * @return {string} User-facing value label.
  */
-export function formatCategoryValue(candidate) {
-    const value = normalizeCategoryValue(candidate);
+export function formatCategoryValue(value) {
     if (value.kind === "boolean") return value.value ? "True" : "False";
     return String(value.value);
 }
 
 /**
- * Build the neutral legend presentation from current vector style.
+ * Build geometry symbols and legend labels from a normalized vector style.
  *
- * @param {Object} candidate Complete vector style state.
- * @return {Object}
+ * @param {ReturnType<typeof normalizeVectorStyle>} style Complete style state
+ * admitted by normalizeVectorStyle, including normalized category and range rules.
+ * @return {{kind:"fixed",label:string,symbol:ReturnType<typeof vectorLegendSymbol>}|
+ * {kind:"graduated"|"categories",label:string,entries:ReadonlyArray<Readonly<{
+ * label:string,color:string,symbol:ReturnType<typeof vectorLegendSymbol>}>>}}
  * Geometry symbols and class labels for the map-layer legend. Class colors
  * replace line strokes or polygon/point fills, matching vector rendering.
- * @throws {TypeError|RangeError} If the style is invalid.
  */
-export function vectorStyleLegend(candidate) {
-    const style = normalizeVectorStyle(candidate);
+export function vectorStyleLegend(style) {
     if (style.graduated !== null) {
         const entries = style.graduated.rules.map((rule) => Object.freeze({
             label: formatNumericRange(rule),
