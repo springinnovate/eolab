@@ -36,6 +36,9 @@ def write_progress(
 ) -> None:
     """Atomically expose bounded native-kernel progress to its supervisor.
 
+    Callers must keep the complete serialized snapshot within the progress
+    reader's 1024-byte limit, including any operation-owned details.
+
     Args:
         directory: Confined private attempt directory.
         phase: Operation-owned named phase.

@@ -386,7 +386,7 @@ def test_ready_partial_preparation_exposes_report_and_can_retry(
 def test_preparation_reports_tile_progress_and_restart_requires_explicit_retry(
     preparation_boundary: Any, store: PostgresJobStore
 ) -> None:
-    """Expose measured tile work and keep restart recovery an explicit new job.
+    """Persist download measurements across heartbeats and restart before explicit retry.
 
     Args:
         preparation_boundary: Real protected status and retry endpoints.
@@ -405,12 +405,29 @@ def test_preparation_reports_tile_progress_and_restart_requires_explicit_retry(
     }
     assert store.heartbeat(claimed["id"], claimed["attempt_id"], progress)
     running = client.get(base).json()
+    assert running["progress"] == {**progress, "details": None}
+    progress = {
+        **progress,
+        "completed": 2,
+        "details": {
+            "cachedTiles": 1,
+            "downloadedTiles": 1,
+            "failedTiles": 1,
+            "downloadedBytes": 987654,
+            "elapsedSeconds": 125.5,
+            "observedAt": "2026-11-13T20:00:00Z",
+            "lastDownloadAt": "2026-11-13T19:59:50Z",
+        },
+    }
+    assert store.heartbeat(claimed["id"], claimed["attempt_id"], progress)
+    running = client.get(base).json()
     assert running["progress"] == progress
     assert running["metadataExpiresAt"] is None
     assert running["inputs"]["name"] == "Montana preparation"
     assert store.interrupt_unfinished_jobs_on_restart() == 1
     interrupted = client.get(base).json()
     assert interrupted["status"] == "interrupted"
+    assert interrupted["progress"] == progress
     assert interrupted["metadataExpiresAt"] is not None
     assert store.claim_next_job() is None
     response = client.post(
