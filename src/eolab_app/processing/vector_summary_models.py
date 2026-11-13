@@ -73,6 +73,21 @@ class VectorSummaryPolicy(BaseModel):
     )
 
 
+class VectorSummaryDetails(BaseModel):
+    """Retain grouping diagnostics separately from ordinary vector file metadata.
+
+    Attributes:
+        summaryField: Generated sum column, including any collision-avoidance suffix.
+        inputFeatureCount: Original features included after applying the captured filter.
+        missingValueCount: Included features without a finite numeric value to sum.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    summaryField: FIELD_NAME
+    inputFeatureCount: Annotated[int, Field(strict=True, ge=1)]
+    missingValueCount: Annotated[int, Field(strict=True, ge=0)]
+
+
 @dataclass(frozen=True)
 class VectorSummaryArtifact(Artifact):
     """Publish a grouped GeoPackage through the existing artifact lifecycle.

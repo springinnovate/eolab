@@ -22,7 +22,7 @@ const VECTOR_ITEM = Object.freeze({
 test("generated vectors use run-owned metadata, rendering, values and extent endpoints", async () => {
     const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32)};
     const base = `/api/vector-rendering/artifacts/${source.jobId}/${source.artifactId}`;
-    const metadata = {...source, layerName: "summary", geometryKind: "polygon", fields: {state_name: "str", sum_total_es: "float"},
+    const metadata = {...source, layerName: "processed", geometryKind: "polygon", fields: {region_name: "str", score: "float"},
         featureCount: 2, bbox: [0, 0, 1, 1]};
     assert.deepEqual(await describeVectorArtifact(source, undefined, async (url, options) => {
         assert.equal(url, base); assert.equal(options.credentials, "same-origin"); assert.equal(options.cache, "no-store");

@@ -595,7 +595,7 @@ def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None
         "definitionSha256": definition.digest,
     }
     body["inputs"]["area"] = area
-    with pytest.raises(ProcessingError, match="area"):
+    with pytest.raises(ProcessingError, match="inputs"):
         build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
 
 

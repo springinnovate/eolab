@@ -269,7 +269,7 @@ def build_model_calculation_request(
     except (ValidationError, ValueError) as error:
         raise ProcessingError(
             "invalid_model_inputs",
-            "The model's raster, area or parameters are invalid.",
+            "The model's inputs or parameters are invalid.",
         ) from error
     return calculation, invocation
 

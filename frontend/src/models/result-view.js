@@ -43,7 +43,7 @@ function rasterCards(result, element) {
 
 /** Build statistics cards from validated scalar rows and their recipe label.
  * @param {Object} result Statistics output.
- * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
+ * @param {Function} element Owning view's DOM element factory.
  * @return {HTMLElement[]} Output heading and scalar cards.
  */
 function statisticsCards(result, element) {
@@ -89,17 +89,16 @@ function timeSeriesCards(result, element) {
     return [card];
 }
 
-/** Describe the grouped vector file before its ordinary map and download actions.
+/** Describe a vector file before its ordinary map and download actions.
  * @param {Object} result Validated vector output metadata.
- * @param {Function} element Owning view's DOM element factory.
+ * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
  * @return {HTMLElement[]} One primary result card.
  */
 function vectorCards(result, element) {
     const card = element("article", "", "models-result");
     card.append(element("h5", result.displayName ?? result.label, "models-name"),
         element("span", `${result.featureCount.toLocaleString()} features`));
-    if (result.summaryField) card.append(element("span", `Total field: ${result.summaryField}`));
-    if (!result.featureCount) card.append(element("p", "No features matched the selected filter.", "models-help"));
+    if (!result.featureCount) card.append(element("p", "This result contains no features.", "models-help"));
     return [card];
 }
 

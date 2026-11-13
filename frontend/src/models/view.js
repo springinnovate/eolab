@@ -7,7 +7,7 @@ import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, 
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
 import { RasterGridView } from "./raster-grid-view.js";
-import { VectorSummaryView } from "./vector-summary-view.js";
+import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { describeTemporalInterval, describeTemporalReduction, describeTemporalResult } from "./temporal-inputs.js";
 
 const RESAMPLING_LABELS = {nearest: "Nearest neighbor", bilinear: "Bilinear interpolation", cubic: "Cubic interpolation",
@@ -257,12 +257,14 @@ export class ModelsView {
         if (temporal) fields.append(temporal.sourceRoot);
         const inputs = {};
         for (const [name, input] of Object.entries(draft.model.inputs)) {
-            if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
-            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
-            else if (input.type === "vector_summary") {
-                inputs[name] = new VectorSummaryView({element: this.element.bind(this), field: this.field.bind(this), options: this.options.bind(this)}, this.handlers, name, input);
+            const handler = getModelInputHandler(input.type);
+            if (handler) {
+                inputs[name] = handler.buildView({element: this.element.bind(this), field: this.field.bind(this),
+                    options: this.options.bind(this), describeFilter: describeModelFilter}, this.handlers, name, input);
                 fields.append(inputs[name].root);
             }
+            else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
+            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
             else if (input.type === "habitat_stack") {
                 inputs[name] = new HabitatStackView({element: this.element.bind(this), field: this.field.bind(this),
                     button: this.button.bind(this), options: this.options.bind(this), document: this.document,
@@ -455,14 +457,14 @@ export class ModelsView {
         if (this.document.activeElement !== setupControls.label) setupControls.label.value = draft.label;
         let inputsReady = !temporalError;
         for (const [name, input] of Object.entries(draft.model.inputs)) {
-            if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
+            if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
+            else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
-            else if (input.type === "vector_summary") inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
             else if (input.type === "habitat_stack") inputsReady = setupControls.inputs[name].render(draft, state) && inputsReady;
             else if (input.type === "raster_preparation") inputsReady = setupControls.inputs[name].render(draft.inputs[name], draft) && inputsReady;
         }
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "raster_preparation", "temporal_interval", "temporal_reduction", "area_statistic", "vector_summary"].includes(input.type));
+        const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
         setupControls.run.disabled = state.submitting || Boolean(state.pending) || !inputsReady || !supported;
         setupControls.run.textContent = state.submitting ? "Submitting…" : runLabel;
         setupControls.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
@@ -641,7 +643,8 @@ export class ModelsView {
                     }
                     continue;
                 }
-                const description = input.type === "vector_summary" ? `Sum ${value.valueField} by ${value.groupField} · ${describeModelFilter(value.selection.filter)}` :
+                const handler = getModelInputHandler(input.type);
+                const description = handler ? handler.describe(value, input, {describeFilter: describeModelFilter}) :
                     input.type === "optional_raster" ? value ? describeModelRaster(value, state.runs) : "None" :
                     input.type === "habitat_references" ? value.kind === "raster" ? `${describeModelRaster(value.source, state.runs)} · cells equal to 1` :
                         describeModelArea(value.kind === "vector" ? {kind: "catalogSelection", selection: value.selection} : value) :

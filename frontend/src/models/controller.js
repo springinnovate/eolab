@@ -3,6 +3,7 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getRasterPreparationSources, getHabitatEarthEngineInput } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
+import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
@@ -123,8 +124,7 @@ export class ModelsController {
         this.state.loading = true; this.render();
         try {
             this.state.library = (await this.api.discoverModels()).filter(model =>
-                Object.values(model.inputs).every(input =>
-                    ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "raster_preparation", "temporal_interval", "temporal_reduction", "area_statistic", "vector_summary"].includes(input.type)));
+                Object.values(model.inputs).every(input => supportsModelInput(input.type)));
         }
         catch (error) { this.state.error = `Data tools unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -613,7 +613,9 @@ export class ModelsController {
             }
         }
         for (const [name, input] of Object.entries(draft.inputs)) {
-            const type = draft.model.inputs[name].type;
+            const definition = draft.model.inputs[name], type = definition.type;
+            const handler = getModelInputHandler(type);
+            if (handler) { handler.refresh(input, definition, context); continue; }
             if (["raster", "catalog_raster", "optional_raster"].includes(type)) {
                 input.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.";
                 if (type !== "catalog_raster") input.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
@@ -621,14 +623,6 @@ export class ModelsController {
                 continue;
             }
             if (["habitat_stack", "raster_preparation"].includes(type)) continue;
-            if (type === "vector_summary") {
-                input.vectors = structuredClone(context.vectors ?? []);
-                if (input.vectorKey && !input.vectors.some(source => source.key === input.vectorKey)) {
-                    input.vectorKey = ""; input.groupField = ""; input.valueField = "";
-                    input.selectionError = "Add the polygon layer to Map layers, or choose another layer.";
-                }
-                continue;
-            }
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
             const selected = input.vectors.find(source => source.key === input.vectorKey);
@@ -976,12 +970,11 @@ export class ModelsController {
         draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
         for (const [name, definition] of Object.entries(model.inputs)) {
             const input = draft.inputs[name];
-            if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
+            const handler = getModelInputHandler(definition.type);
+            if (handler) handler.restore(input, saved.inputs[name], definition);
+            else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
                 input.raster = structuredClone(saved.inputs[name]);
                 input.sourceReason = "Copied from the original run; choose another raster to change it.";
-            } else if (definition.type === "vector_summary") {
-                const value = saved.inputs[name];
-                Object.assign(input, {capturedSelection: structuredClone(value.selection), groupField: value.groupField, valueField: value.valueField});
             } else if (definition.type === "habitat_stack") {
                 const value = saved.inputs[name];
                 if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year});

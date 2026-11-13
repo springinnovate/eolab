@@ -30,19 +30,19 @@ function fixture(overrides = {}) {
 
 test("GeoPackage outputs delegate to ordinary vector layers with run lifetime and restorable filters", async () => {
     const calls = [], removed = [];
-    const h = fixture({describeVector: async source => ({...source, layerName: "summary", featureCount: 2,
-        fields: {state_code: "int", sum_total_es: "float"}, bbox: [0, 0, 1, 1], geometryKind: "polygon"}),
+    const h = fixture({describeVector: async source => ({...source, layerName: "processed", featureCount: 2,
+        fields: {region_code: "int", score: "float"}, bbox: [0, 0, 1, 1], geometryKind: "polygon"}),
         addVector: async (source, lifecycle, presentation) => { calls.push({source, lifecycle, presentation}); return {}; },
         removeLayer: key => { removed.push(key); calls.find(call => call.presentation.key === key).lifecycle.removed(); }});
     h.file.mediaType = "application/geopackage+sqlite3";
-    h.run.result = {name: h.file.name, summaryField: "sum_total_es"};
+    h.run.result = {name: h.file.name, defaultNumericField: "score"};
     await h.owner.show(h.run, h.file);
     assert.equal(calls.length, 1); assert.equal(h.calls.reads, 0);
-    assert.equal(calls[0].source.defaultNumericField, "sum_total_es");
+    assert.equal(calls[0].source.defaultNumericField, "score");
     assert.equal(calls[0].presentation.group.id, h.run.jobId);
     assert.equal(h.owner.layers.get(calls[0].presentation.key).ordinary, true);
-    const filter = {enabled: true, match: "all", rules: [{field: "sum_total_es", operator: "gt", value: 10}]};
-    const appearance = {kind: "vector", definition: {graduated: {field: "sum_total_es"}}};
+    const filter = {enabled: true, match: "all", rules: [{field: "score", operator: "gt", value: 10}]};
+    const appearance = {kind: "vector", definition: {graduated: {field: "score"}}};
     const snapshot = {key: calls[0].presentation.key, visible: false, opacity: 0.5, local: calls[0].lifecycle.copy(appearance, filter)};
     h.owner.removeLayer(snapshot.key);
     await h.owner.restore(snapshot, () => true);
@@ -51,6 +51,21 @@ test("GeoPackage outputs delegate to ordinary vector layers with run lifetime an
     assert.equal(calls[1].presentation.visible, false);
     h.owner.updateRun({...h.run, status: "deleted", updatedAt: "2099-01-02T00:00:00Z"});
     assert.equal(h.owner.layers.size, 0); assert.equal(removed.length, 2);
+});
+
+test("point and straight-line output bounds use the ordinary vector owner", async () => {
+    for (const [geometryKind, bbox] of [["point", [1, 2, 1, 2]], ["line", [1, 2, 3, 2]], ["line", [1, 2, 1, 4]]]) {
+        const attached = [];
+        const h = fixture({describeVector: async source => ({...source, layerName: "processed", featureCount: 1,
+            fields: {score: "float"}, bbox, geometryKind}),
+        addVector: async source => { attached.push(source); return {}; }});
+        h.file.mediaType = "application/geopackage+sqlite3";
+        await h.owner.show(h.run, h.file);
+        assert.equal(attached.length, 1);
+        assert.deepEqual(attached[0].bbox, bbox);
+        assert.equal(attached[0].geometryKind, geometryKind);
+        assert.equal(h.calls.reads, 0);
+    }
 });
 
 test("outputs are opt-in, keep run identities, and remove without deleting any run file", async () => {
