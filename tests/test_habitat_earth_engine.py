@@ -2,13 +2,16 @@
 
 from collections.abc import Callable, Iterator
 from dataclasses import replace
-from functools import partial
 from importlib.resources import files
 import io
 import json
 import multiprocessing
 from multiprocessing.synchronize import Barrier, Event
 from pathlib import Path
+from threading import Barrier as ThreadBarrier
+from threading import Event as ThreadEvent
+from threading import Lock
+from threading import get_ident
 from typing import Any
 from unittest.mock import Mock
 
@@ -35,6 +38,7 @@ from eolab_app.processing.habitat_earth_engine import (
     load_habitat_stack,
 )
 from eolab_app.processing import habitat_earth_engine
+from eolab_app.processing import habitat_tile_downloads
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 from eolab_app.settings import load_processing_worker_settings
 
@@ -119,18 +123,25 @@ def working_directory(tmp_path: Path) -> Path:
     return directory
 
 
+_PixelResponse = tuple[dict[str, str], bytes | str]
+
+
 def _use_offline_earth_engine(
     monkeypatch: pytest.MonkeyPatch,
-    responses: list[tuple[dict[str, str], bytes | str]],
+    responses: list[_PixelResponse] | Callable[[float, float], _PixelResponse],
     *,
     before_pixel_response: Callable[[], None] | None = None,
+    transports: list[tuple[int, Mock]] | None = None,
 ) -> Mock:
     """Feed discovery metadata and pixel responses to the official HTTP client.
 
     Args:
         monkeypatch: Restore client initialization and credential loading afterward.
-        responses: HTTP status headers and bodies for pixel requests.
+        responses: Canned replies or a function accepting the requested tile origin.
+            With multiple canned replies, successful tiles are matched by grid
+            origin so concurrent requests can arrive in either order.
         before_pixel_response: Coordinate concurrent downloads before returning pixels.
+        transports: Record created HTTP connections and their owning thread IDs.
 
     Returns:
         Spy recording HTTP requests handled by the in-memory transport.
@@ -140,15 +151,23 @@ def _use_offline_earth_engine(
         encoding="utf-8"
     )
     algorithms = metadata.joinpath("algorithms.json").read_text(encoding="utf-8")
-    transport = HttpMockSequence(
+    metadata_transport = HttpMockSequence(
         [
             ({"status": "200"}, discovery),
             ({"status": "200"}, discovery),
             ({"status": "200"}, algorithms),
-            *responses,
         ]
     )
-    send_request = transport.request
+    replies = [] if callable(responses) else list(responses)
+    positioned = {}
+    if len(replies) > 1:
+        for reply in replies[:]:
+            headers, payload = reply
+            if headers["status"] == "200" and isinstance(payload, bytes):
+                with MemoryFile(payload) as memory, memory.open() as dataset:
+                    positioned[dataset.transform.c, dataset.transform.f] = reply
+                replies.remove(reply)
+    lock = Lock()
 
     def request(uri: str, *args: Any, **kwargs: Any) -> tuple[Response, bytes | str]:
         """Return the controlled HTTP response, coordinating concurrent downloads.
@@ -161,18 +180,53 @@ def _use_offline_earth_engine(
         Returns:
             HTTP response metadata and body from the in-memory transport.
         """
-        response = send_request(uri, *args, **kwargs)
-        if before_pixel_response is not None and "image:computePixels" in uri:
+        if "image:computePixels" not in uri:
+            with lock:
+                return metadata_transport.request(uri, *args, **kwargs)
+        affine = json.loads(kwargs["body"])["grid"]["affineTransform"]
+        origin = (affine["translateX"], affine["translateY"])
+        if callable(responses):
+            headers, body = responses(*origin)
+        else:
+            with lock:
+                reply = positioned.pop(origin, None)
+                headers, body = replies.pop(0) if reply is None else reply
+        if before_pixel_response is not None:
             before_pixel_response()
-        return response
+        return Response(headers), body.encode() if isinstance(body, str) else body
 
     requests = Mock(wraps=request)
-    transport.request = requests
+
+    def create_transport() -> Mock:
+        """Use the offline request handler in a fresh, thread-owned transport.
+
+        Returns:
+            One HTTP connection with the same request and close API as Http.
+        """
+        owner = get_ident()
+
+        def owned_request(*args: Any, **kwargs: Any) -> tuple[Response, bytes | str]:
+            """Reject using a connection from another request thread.
+
+            Args:
+                *args: HTTP request URI and method.
+                **kwargs: HTTP request options.
+
+            Returns:
+                Fixture HTTP status and response body.
+            """
+            assert get_ident() == owner
+            return requests(*args, **kwargs)
+
+        connection = Mock(spec=["request", "close"])
+        connection.request.side_effect = owned_request
+        if transports is not None:
+            transports.append((owner, connection))
+        return connection
+
     ee.Reset()
     monkeypatch.setattr(ee, "ServiceAccountCredentials", Mock(return_value=None))
-    monkeypatch.setattr(
-        ee, "Initialize", partial(ee.Initialize, http_transport=transport)
-    )
+    monkeypatch.setattr(habitat_earth_engine, "Http", create_transport)
     monkeypatch.setattr(
         "urllib.request.urlopen", lambda *args, **kwargs: io.BytesIO(b"{}")
     )
@@ -672,6 +726,297 @@ def test_provider_failure_preserves_safe_reason_and_continues_to_next_tile(
     repeated = get_habitat_tiles(area, stack, settings, **options)
     assert repeated.missing_tiles == 0 and repeated.failures == ()
     assert [path.parent.name for path in repeated.tiles] == ["0_-1", "1_-1"]
+
+
+def test_successful_tiles_increase_download_concurrency_without_reordering_cache_paths(
+    tmp_path: Path,
+    working_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: RasterStackConfiguration,
+) -> None:
+    """Overlap tile requests after clean successes and retain their grid order.
+
+    Args:
+        tmp_path: Parent of the cache and credential fixtures.
+        working_directory: Private acquisition staging directory.
+        monkeypatch: Serve coordinate-matched tiles through the offline SDK.
+        stack: Scientific definitions on the two-pixel fixture grid.
+    """
+    concurrent_requests = ThreadBarrier(2, timeout=5)
+    fourth_published = ThreadEvent()
+    cache = tmp_path / "cache"
+    pixels = {7 + 20 * index: _tile_bytes(7 + 20 * index, 31) for index in range(4)}
+    progress = Mock()
+
+    def respond(left: float, top: float) -> _PixelResponse:
+        """Keep the two later HTTP requests open until both are in flight.
+
+        Args:
+            left: Tile's western coordinate.
+            top: Tile's northern coordinate.
+
+        Returns:
+            Successful HTTP response containing the matching fixture tile.
+        """
+        assert top == 31
+        if left >= 47:
+            concurrent_requests.wait()
+        if left == 47:
+            assert fourth_published.wait(timeout=5)
+        return {"status": "200"}, pixels[left]
+
+    def record_progress(done: int, total: int) -> None:
+        """Allow the third response after the fourth tile is safely cached.
+
+        Args:
+            done: Number of available tiles.
+            total: Number of tiles needed by the acquisition.
+        """
+        progress(done, total)
+        if (cache / stack.raster_configuration_sha256 / "3_-1" / "tile.tif").exists():
+            fourth_published.set()
+
+    transports: list[tuple[int, Mock]] = []
+    requests = _use_offline_earth_engine(monkeypatch, respond, transports=transports)
+    tiles = get_habitat_tiles(
+        box(7, 11, 87, 31),
+        stack,
+        HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
+        cache_directory=cache,
+        working_directory=working_directory,
+        progress=record_progress,
+        check_cancelled=Mock(),
+    )
+    assert [path.parent.name for path in tiles.tiles] == [f"{i}_-1" for i in range(4)]
+    assert not tiles.failures
+    assert [call.args for call in progress.call_args_list] == [
+        (done, 4) for done in range(5)
+    ]
+    assert (
+        sum("image:computePixels" in call.args[0] for call in requests.call_args_list)
+        == 4
+    )
+    assert len({owner for owner, _ in transports if owner != get_ident()}) == 2
+    for _, connection in transports:
+        connection.close.assert_called_once_with()
+    assert list(working_directory.iterdir()) == []
+
+
+def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
+    tmp_path: Path,
+    working_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: RasterStackConfiguration,
+) -> None:
+    """Honor the provider cooldown and finish the throttled tile on retry.
+
+    Args:
+        tmp_path: Parent of the cache and credential fixtures.
+        working_directory: Private acquisition staging directory.
+        monkeypatch: Return one 429 through the SDK and advance the scheduler clock.
+        stack: Scientific definitions on the two-pixel fixture grid.
+    """
+    now = 100.0
+    received: list[tuple[float, float]] = []
+    initial_pair = ThreadBarrier(2, timeout=5)
+    cache = tmp_path / "cache"
+    pixels = {7 + 20 * index: _tile_bytes(7 + 20 * index, 31) for index in range(5)}
+    lock = Lock()
+
+    def respond(left: float, top: float) -> _PixelResponse:
+        """Throttle the first attempt for one tile in the parallel window.
+
+        Args:
+            left: Tile's western coordinate.
+            top: Tile's northern coordinate.
+
+        Returns:
+            The 429 response or the fixture pixels for the requested tile.
+        """
+        assert top == 31
+        with lock:
+            first = not any(origin == left for origin, _ in received)
+            received.append((left, now))
+        if first and left in (47, 67):
+            initial_pair.wait()
+        if first and left == 47:
+            return (
+                {"status": "429", "retry-after": "7"},
+                b'{"error":{"code":429,"message":"Too many requests"}}',
+            )
+        if left == 87:
+            assert (
+                cache / stack.raster_configuration_sha256 / "2_-1" / "tile.tif"
+            ).exists()
+        return {"status": "200"}, pixels[left]
+
+    def advance_clock(seconds: float) -> None:
+        """Advance the scheduler's clock without a wall-clock wait.
+
+        Args:
+            seconds: Requested scheduler sleep.
+        """
+        nonlocal now
+        now += seconds
+
+    _use_offline_earth_engine(monkeypatch, respond)
+    monkeypatch.setattr(habitat_tile_downloads, "monotonic", lambda: now)
+    monkeypatch.setattr(habitat_tile_downloads, "sleep", advance_clock)
+    tiles = get_habitat_tiles(
+        box(7, 11, 107, 31),
+        stack,
+        HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
+        cache_directory=cache,
+        working_directory=working_directory,
+        progress=Mock(),
+        check_cancelled=Mock(),
+    )
+    assert {left for left, observed in received[:4] if observed == 100} == {
+        7,
+        27,
+        47,
+        67,
+    }
+    assert received[4:] == [(47, 107), (87, 107)]
+    assert tiles.missing_tiles == 0
+    assert not tiles.failures
+
+
+@pytest.mark.parametrize("has_next", [True, False], ids=["next-tile", "last-tile"])
+def test_persistent_rate_limit_waits_only_before_additional_requests(
+    tmp_path: Path,
+    working_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: RasterStackConfiguration,
+    has_next: bool,
+) -> None:
+    """Back off on persistent 429s until the tile exhausts its retry budget.
+
+    Args:
+        tmp_path: Parent of the cache and credential fixtures.
+        working_directory: Private acquisition staging directory.
+        monkeypatch: Return persistent 429s and advance the scheduler clock.
+        stack: Scientific definitions on the two-pixel fixture grid.
+        has_next: Whether another uncached tile remains after the failure.
+    """
+    now = 100.0
+    received: list[tuple[float, float]] = []
+    second_tile = _tile_bytes(27, 31)
+
+    def respond(left: float, top: float) -> _PixelResponse:
+        """Fail one tile on every request and return the neighboring tile.
+
+        Args:
+            left: Tile's western coordinate.
+            top: Tile's northern coordinate.
+
+        Returns:
+            The 429 response or the fixture pixels for the second tile.
+        """
+        assert top == 31
+        received.append((left, now))
+        if left == 7:
+            return (
+                {"status": "429"},
+                b'{"error":{"code":429,"message":"Too many requests"}}',
+            )
+        return {"status": "200"}, second_tile
+
+    def advance_clock(seconds: float) -> None:
+        """Advance simulated time when the scheduler sleeps.
+
+        Args:
+            seconds: Requested scheduler sleep duration.
+        """
+        nonlocal now
+        now += seconds
+
+    _use_offline_earth_engine(monkeypatch, respond)
+    monkeypatch.setattr(habitat_tile_downloads, "monotonic", lambda: now)
+    monkeypatch.setattr(habitat_tile_downloads, "sleep", advance_clock)
+    monkeypatch.setattr(habitat_tile_downloads, "uniform", lambda start, end: start)
+    tiles = get_habitat_tiles(
+        box(7, 11, 47 if has_next else 27, 31),
+        stack,
+        HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
+        cache_directory=tmp_path / "cache",
+        working_directory=working_directory,
+        progress=Mock(),
+        check_cancelled=Mock(),
+    )
+    assert received[:4] == [(7, time) for time in (100, 101, 103, 107)]
+    assert received[4:] == ([(27, 115)] if has_next else [])
+    assert now == (115 if has_next else 107)
+    (failure,) = tiles.failures
+    assert failure.code == "earth_engine_rate_limited"
+    assert (failure.column, failure.row, failure.httpStatus) == (0, -1, 429)
+    assert [path.parent.name for path in tiles.tiles] == (["1_-1"] if has_next else [])
+    assert list(working_directory.iterdir()) == []
+
+
+def test_cancellation_during_cooldown_preserves_cached_tiles(
+    tmp_path: Path,
+    working_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: RasterStackConfiguration,
+) -> None:
+    """Cancel waiting work without issuing another request or losing a saved tile.
+
+    Args:
+        tmp_path: Parent of the cache and credential fixtures.
+        working_directory: Private acquisition staging directory.
+        monkeypatch: Use a 429 response to enter cooldown.
+        stack: Scientific definitions on the two-pixel fixture grid.
+    """
+    requests = _use_offline_earth_engine(
+        monkeypatch,
+        [
+            ({"status": "200"}, _tile_bytes(7, 31)),
+            (
+                {"status": "429"},
+                b'{"error":{"code":429,"message":"Too many requests"}}',
+            ),
+        ],
+    )
+    cooling_down = False
+
+    def start_cooldown(retry_after: float, backoff: float) -> float:
+        """Make cancellation pending as soon as the scheduler computes a delay.
+
+        Args:
+            retry_after: Earth Engine's requested delay in seconds.
+            backoff: Current local delay in seconds.
+
+        Returns:
+            Cooldown duration the cancellation callback should interrupt.
+        """
+        nonlocal cooling_down
+        cooling_down = True
+        return 0.1
+
+    def check_cancelled() -> None:
+        """Cancel the acquisition when the scheduler enters cooldown."""
+        if cooling_down:
+            raise RasterReadCancelled()
+
+    monkeypatch.setattr(habitat_tile_downloads, "_throttle_delay", start_cooldown)
+    cache = tmp_path / "cache"
+    with pytest.raises(RasterReadCancelled):
+        get_habitat_tiles(
+            box(7, 11, 47, 31),
+            stack,
+            HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
+            cache_directory=cache,
+            working_directory=working_directory,
+            progress=Mock(),
+            check_cancelled=check_cancelled,
+        )
+    assert (
+        sum("image:computePixels" in call.args[0] for call in requests.call_args_list)
+        == 2
+    )
+    assert [path.parent.name for path in cache.rglob("tile.tif")] == ["0_-1"]
+    assert list(working_directory.iterdir()) == []
 
 
 @pytest.mark.parametrize(
