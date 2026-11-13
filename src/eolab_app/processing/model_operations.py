@@ -30,6 +30,16 @@ from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservat
 from eolab_app.processing import temporal_operation as temporal
 from eolab_app.processing import temporal_series_operation as series
 from eolab_app.processing import temporal_stack_operation as stack
+from eolab_app.processing import vector_summary_operation as vector_summary
+from eolab_app.processing.vector_summary import vector_summary_process_target
+from eolab_app.processing.vector_summary_models import (
+    OPERATION as VECTOR_SUMMARY_OPERATION,
+    QueuedVectorSummary,
+    VectorSummaryDetails,
+    VectorSummaryPolicy,
+    VectorSummaryRequest,
+    VectorSummarySpec,
+)
 from eolab_app.processing.temporal_stack_models import (
     QueuedTemporalStack,
     TemporalStackMetrics,
@@ -311,6 +321,51 @@ OPERATIONS = MappingProxyType(
                 outcome=habitat_bulk.describe_habitat_bulk_preparation_outcome,
                 primary_input=None,
                 execution_inputs=habitat_bulk.prepare_habitat_bulk_preparation_execution,
+            ),
+            ModelOperation[
+                VectorSummaryRequest, QueuedVectorSummary, VectorSummarySpec
+            ](
+                id=VECTOR_SUMMARY_OPERATION,
+                inputs=(("vector", "vector"),),
+                parameters=(("boundary_tolerance_m", "number"),),
+                output=OperationOutput(
+                    "summary",
+                    "vector",
+                    "map",
+                    "application/geopackage+sqlite3",
+                    "Vector summary",
+                ),
+                execution_profile="vector-summary",
+                queued_type=QueuedVectorSummary,
+                prepared_type=VectorSummarySpec,
+                policy_type=VectorSummaryPolicy,
+                bind=vector_summary.bind_vector_summary,
+                source=None,
+                polygon_inputs=lambda request: {},
+                vector_selections=lambda request: {"vector": request.vector.selection},
+                queue=vector_summary.build_vector_summary_submission,
+                prepare=vector_summary.prepare_vector_summary,
+                execution=lambda spec, context: (
+                    vector_summary_process_target,
+                    "summarize",
+                    None,
+                ),
+                policy=lambda spec: VectorSummaryPolicy(
+                    boundaryToleranceMeters=spec.inputs.boundary_tolerance_m
+                ),
+                result=vector_summary.describe_vector_summary_result,
+                outcome=vector_summary.describe_vector_summary_outcome,
+                outcome_details_type=VectorSummaryDetails,
+                primary_input=None,
+                requires_raster_grid=False,
+                execution_inputs=vector_summary.prepare_vector_summary_execution,
+                progress_descriptions=(
+                    ("reading_vector_features", "Reading polygon attributes"),
+                    (
+                        "merging_vector_groups",
+                        "Merging polygons and writing group totals",
+                    ),
+                ),
             ),
             ModelOperation[
                 HabitatInputPreparationRequest,

@@ -1,0 +1,41 @@
+schema: eolab.model/v1
+id: vector-summary
+version: "1.0.0"
+title: Vector summary
+description: >-
+  Sum a numeric field for each distinct group and merge its polygons into an overview layer.
+  Boundary detail changes outlines only; use 0 to retain detailed merged boundaries.
+  Totals use every included value.
+inputs:
+  vector:
+    type: vector
+    label: Polygon layer
+    geometry: polygon
+    fields:
+      group:
+        label: Group by
+        kind: scalar
+      value:
+        label: Field to sum
+        kind: numeric
+parameters:
+  boundary_tolerance_m:
+    type: number
+    label: Boundary detail
+    unit: approximate metres
+    minimum: 0
+    default: 1000
+steps:
+  - id: calculate
+    operation: vector.summary.v1
+    inputs:
+      vector: {input: vector}
+    parameters:
+      boundary_tolerance_m: {parameter: boundary_tolerance_m}
+outputs:
+  summary:
+    source: calculate.summary
+    role: result
+    presentation: map
+    saveEligible: true
+executionProfile: vector-summary
