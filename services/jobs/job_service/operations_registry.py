@@ -30,7 +30,12 @@ from eolab_app.vector.selection_operation import (
 
 @dataclass(frozen=True)
 class InstalledOperation:
-    """Code-installed input/result validators and one executable algorithm."""
+    """Code-installed schemas and an algorithm returning its constructed result model.
+
+    The child runner passes validated input_model instances to execute, which
+    returns a validated result_model instance ready for serialization. The parent
+    validates decoded subprocess output against result_model before publishing it.
+    """
 
     name: str
     description: str
