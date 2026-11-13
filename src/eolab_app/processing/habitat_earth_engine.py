@@ -589,7 +589,8 @@ def _describe_provider_failure(
     Returns:
         Stable error category, a sanitized provider reason or local explanation,
         and the HTTP status when available. Request URLs, credentials, account
-        addresses and local paths are excluded.
+        addresses and local paths are excluded. Empty-image selection failures
+        have their own category without inferring which source or period is absent.
     """
     if isinstance(error, GoogleAuthError):
         return "earth_engine_access_denied", "Earth Engine authorization failed.", None
@@ -636,6 +637,15 @@ def _describe_provider_failure(
         code, fallback = (
             "earth_engine_service_error",
             "Earth Engine could not process the request.",
+        )
+    elif (
+        status in (None, 400)
+        and "Image.select:" in message
+        and "was applied to an Image with no bands" in message
+    ):
+        code, fallback = (
+            "earth_engine_empty_image",
+            "A source calculation returned no image data.",
         )
     else:
         code, fallback = (

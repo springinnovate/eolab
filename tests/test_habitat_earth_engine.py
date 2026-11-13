@@ -674,6 +674,79 @@ def test_provider_failure_preserves_safe_reason_and_continues_to_next_tile(
     assert [path.parent.name for path in repeated.tiles] == ["0_-1", "1_-1"]
 
 
+@pytest.mark.parametrize(
+    ("status", "reason", "expected_code"),
+    [
+        (
+            status,
+            f"reduce.sum: Error in map(ID=0): Image.select: Band pattern '{band}' "
+            "was applied to an Image with no bands. See https://example.org/private",
+            code,
+        )
+        for status, band, code in (
+            (400, "snow_sum", "earth_engine_empty_image"),
+            (400, "snow_count", "earth_engine_empty_image"),
+            (400, "another_source", "earth_engine_empty_image"),
+            (403, "snow_count", "earth_engine_access_denied"),
+        )
+    ]
+    + [
+        (
+            400,
+            "Image.select: Band pattern 'snow_count' did not match any bands. "
+            "Available bands: [snow_depth]",
+            "earth_engine_request_failed",
+        ),
+    ],
+)
+def test_empty_image_failures_keep_details_and_continue_preparation(
+    tmp_path: Path,
+    working_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: RasterStackConfiguration,
+    status: int,
+    reason: str,
+    expected_code: str,
+) -> None:
+    """Distinguish absent images from other failures without losing tile coverage.
+
+    Args:
+        tmp_path: Persistent cache and credentials fixture paths.
+        working_directory: Private attempt staging beside the cache.
+        monkeypatch: Install provider responses through the official HTTP client.
+        stack: Scientific settings for the two adjacent requested tiles.
+        status: Provider status for the first tile.
+        reason: Provider explanation, optionally containing a private request URL.
+        expected_code: Public category retaining HTTP authorization precedence.
+    """
+    _use_offline_earth_engine(
+        monkeypatch,
+        [
+            (
+                {"status": str(status)},
+                json.dumps({"error": {"code": status, "message": reason}}),
+            ),
+            ({"status": "200"}, _tile_bytes(27, 31)),
+        ],
+    )
+    acquisition = get_habitat_tiles(
+        box(7, 11, 47, 31),
+        stack,
+        HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
+        cache_directory=tmp_path / "cache",
+        working_directory=working_directory,
+        progress=Mock(),
+        check_cancelled=Mock(),
+    )
+    (failure,) = acquisition.failures
+    assert failure.code == expected_code
+    assert failure.httpStatus == status
+    assert failure.detail == reason.replace("https://example.org/private", "[redacted]")
+    assert acquisition.required_tiles == 2 and acquisition.missing_tiles == 1
+    assert [path.parent.name for path in acquisition.tiles] == ["1_-1"]
+    assert list(working_directory.iterdir()) == []
+
+
 def test_authentication_errors_do_not_expose_credentials(
     tmp_path: Path,
     working_directory: Path,
