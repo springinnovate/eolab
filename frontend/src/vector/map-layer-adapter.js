@@ -29,19 +29,22 @@ import {
 /**
  * Source identity, attributes and geometry needed by vector consumers.
  * @typedef {Object} VectorSourceDescription
- * @property {Readonly<{uploadId:string}|{collectionId:string,itemId:string}>} source Original source identity.
+ * @property {import("./api.js").VectorFieldValueSource} source Original source identity.
+ * @property {Object|null} selection Source/layer identity for calculation inputs, excluding its predicate; null when unsupported.
  * @property {ReturnType<typeof vectorLabelFields>} fields Frozen non-geometry fields.
+ * @property {ReturnType<typeof vectorCategoricalFields>} scalarFields Fields supporting scalar grouping.
+ * @property {ReturnType<typeof vectorNumericFields>} numericFields Fields supporting numeric calculations.
  * @property {"point"|"line"|"polygon"} geometryKind Normalized geometry family.
  * @property {string|null} primaryGeometry Catalog geometry field, when declared.
  */
 
 /**
  * Return the original attribute names and types used by vector style and filter controls.
- * @param {import("./api.js").VectorSource} source Catalog Item or admitted upload.
+ * @param {import("./api.js").VectorSource} source Catalog Item, admitted upload or owned run result.
  * @return {ReturnType<typeof vectorLabelFields>} Frozen non-geometry field options.
  */
 function getVectorSourceFields(source) {
-    return source.kind === "upload"
+    return source.kind === "upload" || source.kind === "runArtifact"
         ? Object.freeze(Object.entries(source.fields).map(([name, type]) => Object.freeze({ name, type })))
         : vectorLabelFields(source);
 }
@@ -277,23 +280,25 @@ export function createVectorMapLayerAdapter({
          *
          * Existing retained records never call this initializer. Saved styles
          * are applied by the existing detached restoration lifecycle afterwards.
+         * A source's defaultNumericField selects its initial numeric coloring.
          * Optional appearance failures retain the authorized fixed publication.
          *
-         * @param {import("./api.js").VectorSource} source Catalog Item or admitted upload.
+         * @param {import("./api.js").VectorSource} source Catalog Item, admitted upload or owned run result.
          * @return {Promise<Object>} Publication with applied defaults and any notice.
          * @throws {Error} If the underlying publication fails.
          */
         async publish(source) {
             const publication = await publish(source);
             const fields = getVectorSourceFields(source);
-            const numericField = defaultVectorNumericField(fields);
-            let candidate = deriveDefaultVectorStyle(publication.style, fields);
+            const defaultFields = source.defaultNumericField ? fields.filter(field => field.name === source.defaultNumericField) : fields;
+            const numericField = defaultVectorNumericField(defaultFields);
+            let candidate = deriveDefaultVectorStyle(publication.style, defaultFields);
             let defaultStyleNotice = "";
             if (numericField !== null) {
                 try {
                     const summary = await classify(source, numericField,
                         VECTOR_NUMERIC_DEFAULTS.method, VECTOR_NUMERIC_DEFAULTS.classCount);
-                    candidate = deriveDefaultVectorStyle(publication.style, fields, summary);
+                    candidate = deriveDefaultVectorStyle(publication.style, defaultFields, summary);
                 } catch {
                     defaultStyleNotice = "Automatic numeric coloring was unavailable. " +
                         "Choose Color by in Style to try again or use another field.";
@@ -320,11 +325,11 @@ export function createVectorMapLayerAdapter({
         /**
          * Build a stable user-facing label.
          *
-         * @param {import("./api.js").VectorSource} source Catalog Item or admitted upload.
-         * @return {string} Upload name, catalog title or stable catalog identifier.
+         * @param {import("./api.js").VectorSource} source Catalog Item or private source with its composed display name.
+         * @return {string} Private source name, catalog title or stable catalog identifier.
          */
         label(source) {
-            if (source.kind === "upload") return source.name;
+            if (source.kind === "upload" || source.kind === "runArtifact") return source.name;
             const { filename, context } = buildCatalogResultPresentation(source, "Vector");
             return context?.startsWith("Layer: ")
                 ? `${filename} — ${context.slice(7)}` : filename;
@@ -334,15 +339,16 @@ export function createVectorMapLayerAdapter({
          *
          * @param {Object} context Neutral retained-layer context.
          * @param {Object} [context.item] Catalog Item supplied by catalog addition.
-         * @param {{upload:import("./api.js").UploadedVectorSource,restore?:Object}} [context.source]
-         * Uploaded source and optional filter/count captured for immediate removal Undo.
+         * @param {{upload?:import("./api.js").UploadedVectorSource,vector?:import("./api.js").RunArtifactVectorSource,restore?:Object,lifecycle?:Object}} [context.source]
+         * Private source, restored filter/count and source-owner lifecycle callbacks.
          * @param {Object} context.publication Published layer and current appearance.
          * @return {Object} Vector-owned source, filter, appearance and request state.
          */
         createState({ item, source, publication }) {
-            const vectorSource = item ?? source.upload;
+            const vectorSource = item ?? source.vector ?? source.upload;
             return {
                 source: vectorSource,
+                lifecycle: source?.lifecycle ?? null,
                 filter: structuredClone(source?.restore?.filter ?? EMPTY_VECTOR_FILTER),
                 filterCount: structuredClone(source?.restore?.filterCount ?? null),
                 filterCounting: false,
@@ -366,13 +372,19 @@ export function createVectorMapLayerAdapter({
          * @return {VectorSourceDescription} Current source metadata.
          */
         describeSource(record) {
+            const value = record.state.source;
+            const identity = value.kind === "runArtifact" ? {kind: "runArtifact", jobId: value.jobId, artifactId: value.artifactId}
+                : value.kind === "upload" ? {uploadId: value.id} : {collectionId: value.collection, itemId: value.id};
+            const binding = value.properties?.["eolab:vector_source"];
             return {
-                source: Object.freeze(record.state.source.kind === "upload"
-                    ? { uploadId: record.state.source.id }
-                    : { collectionId: record.state.source.collection, itemId: record.state.source.id }),
+                source: Object.freeze(identity),
+                selection: value.kind === "runArtifact" ? null : value.kind === "upload" ? {...identity, layerName: value.layer_name}
+                    : binding ? {...identity, assetKey: binding.asset_key, layerName: binding.layer_name} : null,
                 fields: record.state.labelFields,
+                scalarFields: vectorCategoricalFields(record.state.labelFields),
+                numericFields: vectorNumericFields(record.state.labelFields),
                 geometryKind: record.state.style.geometryKind,
-                primaryGeometry: record.state.source.kind === "upload" ? null
+                primaryGeometry: record.state.source.kind === "upload" || record.state.source.kind === "runArtifact" ? null
                     : record.state.source.properties?.["table:primary_geometry"] ?? null,
             };
         },
@@ -558,11 +570,13 @@ export function createVectorMapLayerAdapter({
         },
         /**
          * Cancel removed-layer work so late responses cannot revive its state.
+         * Notify the source owner that its display has been removed.
          * @param {Object} record Removed vector record.
          * @return {void}
          */
         removed(record) {
             this.discardStaged(record);
+            record.state.lifecycle?.removed?.();
         },
         /**
          * Cancel filter requests for a detached layer whose preparation failed or became obsolete.
@@ -576,11 +590,13 @@ export function createVectorMapLayerAdapter({
             record.state.filterCountAbort?.abort();
         },
         /**
-         * Capture an uploaded layer's source and display so removal can be undone without uploading again.
-         * @param {Object} record Browser-owned uploaded vector layer.
-         * @return {Object} Detached upload metadata, authorized publication, filter and count.
+         * Capture a private vector's display for removal Undo or another independent view.
+         * Generated results delegate source restoration to their lifecycle owner.
+         * @param {Object} record Browser-owned upload or generated vector layer.
+         * @return {Object} Source-owner restoration data, or detached upload metadata, publication, filter and count.
          */
         copyLayerForUndo(record) {
+            if (record.state.lifecycle?.copy) return record.state.lifecycle.copy(this.exportSavedState(record), this.exportFilterState(record));
             return structuredClone({
                 kind: "uploaded-vector",
                 upload: record.state.source,
@@ -683,7 +699,7 @@ export function createVectorMapLayerAdapter({
         snapshot(record) {
             return {
                 datasetKind: "vector",
-                canInfo: record.state.source.kind !== "upload",
+                canInfo: Boolean(record.state.lifecycle?.info) || !["upload", "runArtifact"].includes(record.state.source.kind),
                 canFilter: true,
                 filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
                 filterStatus: vectorFilterStatus(record.state),
@@ -717,6 +733,11 @@ export function createVectorMapLayerAdapter({
             leafletMap.fitBounds(vectorMapBounds(record.publication.bbox),
                 { maxZoom: 14, padding: [24, 24] });
         },
+        /** Open the private source owner's details through its composed callback.
+         * @param {Object} record Retained vector with optional source lifecycle.
+         * @return {void}
+         */
+        info(record) { record.state.lifecycle?.info?.(); },
         /**
          * Report a tile failure through application composition.
          *

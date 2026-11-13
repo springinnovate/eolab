@@ -56,7 +56,7 @@ def test_registry_requires_matching_primary_source_declarations(
 def test_registry_rejects_an_unsupported_primary_result(
     monkeypatch: pytest.MonkeyPatch, explicit_type: bool, output_kind: str
 ) -> None:
-    """Keep vector and administrator report operations outside executable Model YAML.
+    """Reject unsupported vector formats and administrator reports in Model YAML.
 
     Args:
         monkeypatch: Isolated trusted-operation registration.
@@ -595,7 +595,7 @@ def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None
         "definitionSha256": definition.digest,
     }
     body["inputs"]["area"] = area
-    with pytest.raises(ProcessingError, match="area"):
+    with pytest.raises(ProcessingError, match="inputs"):
         build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
 
 

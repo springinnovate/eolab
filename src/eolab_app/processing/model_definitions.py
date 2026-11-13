@@ -45,16 +45,88 @@ class ModelSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class VectorFieldDefinition(ModelSchema):
+    """Describe one required attribute picker in a vector model input.
+
+    Attributes:
+        label: User-facing purpose of the chosen source attribute.
+        kind: Numeric attributes only, or scalar string/numeric/boolean attributes.
+            The source's admitted metadata supplies the available choices.
+    """
+
+    label: Label
+    kind: Literal["scalar", "numeric"]
+
+
 class ModelInput(ModelSchema):
     """A dataset or analysis area that the user must choose before running a model.
 
     The type determines which inputs the model accepts, and the label names the
     input in model setup. A recipe describes the input here; each run supplies
-    the actual catalog dataset, published raster result or area.
+    the actual catalog dataset, published raster result or area. Vector inputs may
+    declare named attribute pickers; their role names have meaning only to the
+    selected operation. Omitting fields makes a source-only chooser.
+
+    Attributes:
+        type: Registered input type, including the literal string "vector".
+        label: User-facing input name.
+        geometry: Optional polygon restriction for a vector chooser.
+        fields: Required vector attributes, keyed by recipe-defined role names.
     """
 
     type: Name
     label: Label
+    geometry: Literal["polygon"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    fields: Mapping[Name, VectorFieldDefinition] = Field(
+        default_factory=dict, validate_default=True, exclude_if=lambda value: not value
+    )
+
+    @field_validator("fields", mode="after")
+    @classmethod
+    def freeze_fields(
+        cls, value: Mapping[str, VectorFieldDefinition]
+    ) -> Mapping[str, VectorFieldDefinition]:
+        """Keep the captured recipe's field declarations immutable.
+
+        Args:
+            value: Validated role names and attribute picker definitions.
+
+        Returns:
+            A read-only mapping with the same declarations.
+        """
+        return MappingProxyType(dict(value))
+
+    @field_serializer("fields")
+    def serialize_fields(
+        self, value: Mapping[str, VectorFieldDefinition]
+    ) -> dict[str, Any]:
+        """Include configured role labels and kinds in recipe JSON and YAML.
+
+        Args:
+            value: Immutable field declarations for this input.
+
+        Returns:
+            JSON-compatible declarations with their original role names.
+        """
+        return {name: field.model_dump(mode="json") for name, field in value.items()}
+
+    @model_validator(mode="after")
+    def check_vector_configuration(self) -> Self:
+        """Reject vector picker settings on other registered input types.
+
+        Returns:
+            This input after checking which settings its type permits.
+
+        Raises:
+            ValueError: If another input type declares geometry or field pickers.
+        """
+        if self.type != "vector" and self.model_fields_set.intersection(
+            {"geometry", "fields"}
+        ):
+            raise ValueError("Only vector inputs may configure geometry and fields")
+        return self
 
 
 class NumericParameter(ModelSchema):
@@ -415,7 +487,11 @@ def validate_operation(definition: ModelDefinition) -> None:
                 for name, item in step.parameters.items()
             }
             == dict(contract.parameters)
-            and contract.output.kind in ("raster", "statistics", "timeSeries")
+            and contract.output.kind in ("raster", "statistics", "timeSeries", "vector")
+            and (
+                contract.output.kind != "vector"
+                or contract.output.media_type == "application/geopackage+sqlite3"
+            )
             and contract.output.name in requested
             and len(set(requested)) == len(requested)
             and "provenance" not in definition.outputs

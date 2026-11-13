@@ -41,6 +41,7 @@ from eolab_app.vector.models import (
 )
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 from eolab_app.vector_uploads import VectorUpload, VectorUploadStore
+from eolab_app.vector.artifact_sources import parse_artifact_vector_name
 
 
 def resolve_uploaded_vector(
@@ -387,6 +388,40 @@ class PublishedVectorRegistry:
             layer_name = view[0]
         match = re.fullmatch(r"(?:eolab:)?upload_([a-f0-9]{32})", layer_name)
         return UUID(hex=match[1]) if match else None
+
+    def get_artifact_reference(self, layer_name: str) -> tuple[str, str] | None:
+        """Identify the run file behind an ordinary or filtered result layer.
+
+        Args:
+            layer_name: Qualified WMS layer or unqualified datastore name.
+
+        Returns:
+            Opaque run/file IDs, or None for another vector source.
+
+        Raises:
+            PublishedLayerChangedError: If a filtered display identity expired.
+        """
+        if layer_name.startswith("eolab:filtered-"):
+            with self._filter_lock:
+                view = self._filters.get(layer_name)
+            if view is None:
+                raise PublishedLayerChangedError(
+                    "The vector filter expired; reapply it or reload the map"
+                )
+            layer_name = view[0]
+        return parse_artifact_vector_name(layer_name)
+
+    def revoke(self, layer_name: str) -> None:
+        """Withdraw a publication and its filtered aliases after source expiry.
+
+        Args:
+            layer_name: Qualified original GeoServer layer identity.
+        """
+        self._sources.pop(layer_name, None)
+        with self._filter_lock:
+            for alias, view in tuple(self._filters.items()):
+                if view[0] == layer_name:
+                    self._filters.pop(alias)
 
     def authorize(
         self,

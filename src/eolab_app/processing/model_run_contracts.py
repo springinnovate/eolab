@@ -10,6 +10,7 @@ from pydantic import (
     JsonValue,
     SerializeAsAny,
     TypeAdapter,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -42,6 +43,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_result_contracts import ModelResult, RasterResultGrid
+from eolab_app.processing.vector_input_models import VectorFieldSelection
 from eolab_app.processing.artifact_manifest import (
     FileId,
     OutputName,
@@ -237,9 +239,14 @@ class ModelInvocation(ModelSchema):
             **dict(operation.input_adapters),
         }
         for name, role in definition.inputs.items():
-            if role.type not in adapters:
+            if role.type == "vector":
+                selection = VectorFieldSelection.model_validate(self.inputs[name])
+                if set(selection.fields) != set(role.fields):
+                    raise ValueError("Selected vector fields do not match the recipe")
+            elif role.type not in adapters:
                 raise ValueError("Unsupported captured input type")
-            adapters[role.type].validate_python(self.inputs[name])
+            if role.type in adapters:
+                adapters[role.type].validate_python(self.inputs[name])
         for name, parameter in definition.parameters.items():
             type(parameter).model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}
@@ -532,27 +539,43 @@ class ModelRasterOutcome(ModelSchema):
     validPixels: Annotated[int, Field(ge=0)]
 
 
+class ModelVectorOutcome(ModelSchema):
+    """Vector file integrity, layer name and feature count retained in Run YAML."""
+
+    filename: Annotated[str, Field(min_length=1, max_length=1024)]
+    bytes: Annotated[int, Field(ge=0)]
+    sha256: Digest
+    layerName: Annotated[str, Field(min_length=1)]
+    featureCount: Annotated[int, Field(ge=1)]
+
+
 class ModelOutcome(ModelSchema):
-    """A finished run's final status, error, summary values or raster file metadata.
+    """A finished run's status, error, summary values or raster/vector file metadata.
 
     This record remains available after result files expire, until the run's
     metadata expires or the user deletes the run. The artifact list includes
-    every retained collection member without a fixed file-count ceiling.
+    every retained collection member without a fixed file-count ceiling. Optional
+    details are validated by the operation recorded in the surrounding execution,
+    so new scientific diagnostics do not add fields to this common contract.
     """
 
     status: Literal["ready", "failed", "cancelled", "interrupted"]
     error: JobFailureResponse | None
     statistics: list[AggregateValue] | None
     raster: ModelRasterOutcome | None = None
+    vector: ModelVectorOutcome | None = None
     artifacts: list[ModelArtifactRecord] | None = None
+    details: SerializeAsAny[BaseModel] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ModelExecution(ModelSchema):
-    """Software, inputs, calculation grid, settings and results recorded for a run.
+    """Software, input identities, operation settings and results recorded for a run.
 
     Admission records the software and source metadata. Preparation adds the
-    executed grid directly to this record, along with numerical policy and
-    result retention; completion adds the outcome. The grid describes the
+    numerical policy and result retention; raster operations also record their
+    executed grid. Completion adds the outcome. The grid describes the
     calculation, not necessarily an input raster's original grid. Temporal
     sources record variable metadata without archive checksums. The sources
     mapping is empty only when the operation declares no primary raster.
@@ -571,6 +594,43 @@ class ModelExecution(ModelSchema):
     limits: ModelExecutionLimits | None = None
     numericalPolicy: SerializeAsAny[BaseModel] | None = None
     outcome: ModelOutcome | None = None
+
+    @field_validator("outcome", mode="before")
+    @classmethod
+    def parse_outcome_details(cls, value: Any, info: ValidationInfo) -> Any:
+        """Validate retained scientific details with their operation-owned schema.
+
+        Args:
+            value: An outcome loaded from retained metadata or Run YAML.
+            info: Previously validated execution fields, including its operation.
+
+        Returns:
+            The outcome with typed details, ready for common outcome validation.
+            Outcomes without details pass through unchanged.
+
+        Raises:
+            ValueError: If details have no recorded operation or registered schema.
+            ValidationError: If details violate the registered operation schema.
+            ProcessingError: If the recorded operation is unavailable.
+        """
+        if isinstance(value, ModelOutcome):
+            details = value.details
+        elif isinstance(value, dict):
+            details = value.get("details")
+        else:
+            return value
+        if details is None:
+            return value
+        operations = info.data.get("operations")
+        if not operations:
+            raise ValueError("Outcome details require one recorded operation")
+        operation = get_model_operation(next(iter(operations.values())).id)
+        if operation.outcome_details_type is None:
+            raise ValueError("The recorded operation does not declare outcome details")
+        parsed = operation.outcome_details_type.model_validate(details)
+        if isinstance(value, ModelOutcome):
+            return value.model_copy(update={"details": parsed})
+        return {**value, "details": parsed}
 
     @model_validator(mode="before")
     @classmethod
@@ -610,18 +670,22 @@ class ModelExecution(ModelSchema):
 
     @model_validator(mode="after")
     def check_preparation(self) -> "ModelExecution":
-        """Check that a prepared run includes its grid and calculation settings.
+        """Require prepared settings and a raster grid when the operation declares one.
 
         Returns:
             This execution record after checking its preparation details.
 
         Raises:
-            ValueError: If a prepared record lacks retention, numerical settings or a grid.
+            ValueError: If preparation lacks retention, policy or its required raster grid.
         """
-        if self.state == "prepared" and (
-            self.limits is None or self.numericalPolicy is None or self.grid is None
-        ):
-            raise ValueError("Prepared execution must include its grid and policy")
+        if self.state == "prepared":
+            operation = get_model_operation(next(iter(self.operations.values())).id)
+            if (
+                self.limits is None
+                or self.numericalPolicy is None
+                or (operation.requires_raster_grid and self.grid is None)
+            ):
+                raise ValueError("Prepared execution must include its grid and policy")
         return self
 
 

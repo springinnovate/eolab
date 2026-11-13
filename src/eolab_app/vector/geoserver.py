@@ -26,7 +26,6 @@ from eolab_app.vector.models import (
 )
 from eolab_app.vector.styles import vector_style_name
 
-
 GEOSERVER_VECTOR_STYLE_NAMES: dict[VectorGeometryKind, str] = {
     "point": "vector-point",
     "line": "vector-line",
@@ -161,6 +160,8 @@ class GeoServerVectorPublisher:
         source_path: Path,
         layer_name: str,
         geometry_kind: VectorGeometryKind,
+        *,
+        advertised: bool = True,
     ) -> str:
         """Create or reuse a GeoServer vector layer and apply its default style.
 
@@ -170,6 +171,7 @@ class GeoServerVectorPublisher:
             source_path: Canonical mounted source file.
             layer_name: Exact native layer selected by the catalog Item.
             geometry_kind: Point, line, or polygon style family.
+            advertised: Whether public capabilities may list the result layer.
 
         Returns:
             Initialized unqualified default style name.
@@ -211,11 +213,71 @@ class GeoServerVectorPublisher:
             )
         await self._require_native_layer_identity(resource_name, layer_name)
         await self._assign_vector_style(resource_name, style_name)
+        if not advertised:
+            await self._gateway.request(
+                "hide private vector publication",
+                "PUT",
+                f"{geoserver_layer_path(resource_name)}.json",
+                accepted_statuses=frozenset({200}),
+                json={"layer": {"advertised": False}},
+            )
         await self._tile_cache.configure(
             resource_name,
             allow_style_environment=False,
         )
         return style_name
+
+    async def temporary_layers(self) -> tuple[str, ...]:
+        """Discover generated-vector datastores for restart-safe expiry cleanup.
+
+        Returns:
+            Reserved result datastore names, including incomplete publications.
+
+        Raises:
+            VectorPublicationError: If the GeoServer request fails.
+            ValueError: If datastore discovery returns malformed metadata.
+        """
+        response = await self._gateway.request(
+            "list temporary vector publications",
+            "GET",
+            f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/datastores.json",
+            accepted_statuses=frozenset({200, 404}),
+        )
+        if response.status_code == 404:
+            return ()
+        stores = response.json().get("dataStores", {}) or {}
+        entries = stores.get("dataStore", [])
+        if not isinstance(entries, list) or any(
+            not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+            for entry in entries
+        ):
+            raise ValueError("GeoServer returned invalid vector datastore metadata")
+        return tuple(
+            entry["name"]
+            for entry in entries
+            if entry["name"].startswith("vector_result_")
+        )
+
+    async def remove(self, resource_name: str) -> None:
+        """Remove one result datastore and tile cache while preserving original files.
+
+        Args:
+            resource_name: Reserved generated-vector datastore name.
+
+        Raises:
+            ValueError: If the name is outside the generated-vector namespace.
+            VectorPublicationError: If cleanup must be retried.
+        """
+        if not re.fullmatch(r"vector_result_[a-f0-9]{32}_[a-f0-9]{32}", resource_name):
+            raise ValueError("Only generated vector publications may expire")
+        await self._tile_cache.remove(resource_name)
+        await self._gateway.request(
+            "remove expired vector publication",
+            "DELETE",
+            self._datastore_url(resource_name),
+            accepted_statuses=frozenset({200, 404}),
+            params={"recurse": "true"},
+        )
 
     async def prepare_style(
         self,

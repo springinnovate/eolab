@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
 from eolab_app.vector_uploads import VectorUploadError
+from eolab_app.source_files import SourceFileError
 
 from eolab_app.vector.errors import (
     VectorAssetError,
@@ -45,8 +46,13 @@ class PrivateVectorRoute(APIRoute):
             """
             try:
                 response = await handler(request)
-            except (VectorUploadError, VectorFeatureError, HTTPException) as error:
-                if isinstance(error, VectorUploadError):
+            except (
+                VectorUploadError,
+                SourceFileError,
+                VectorFeatureError,
+                HTTPException,
+            ) as error:
+                if isinstance(error, (VectorUploadError, SourceFileError)):
                     failure = HTTPException(error.status, str(error))
                 elif isinstance(error, VectorFeatureError):
                     failure = vector_http_exception(error)

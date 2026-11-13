@@ -236,7 +236,7 @@ def create_wms_proxy_router(
     ) = None,
     hidden_layer: Callable[[str], bool] | None = None,
     use_layers: (
-        Callable[[tuple[str, ...]], AbstractAsyncContextManager[None]] | None
+        Callable[[tuple[str, ...], Request], AbstractAsyncContextManager[None]] | None
     ) = None,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
@@ -249,7 +249,8 @@ def create_wms_proxy_router(
         render_queue: GetMap capacity shared with composite map tiles.
         authorize_layers: Current-session source-access check supplied by composition.
         hidden_layer: Identifies private publications omitted from public capabilities.
-        use_layers: Prepare and retain layer resources for an upstream request.
+        use_layers: Retain layer resources using the originating request's ownership
+            credentials until the upstream read finishes.
             Called inside the render queue so resources outlive browser cancellation.
 
     Returns:
@@ -384,7 +385,7 @@ def create_wms_proxy_router(
                         httpx2.RequestError: If GeoServer cannot be reached.
                         HTTPException: If layer resources can no longer be prepared.
                     """
-                    async with use_layers(layer_names) if use_layers else nullcontext():
+                    async with use_layers(layer_names, request) if use_layers else nullcontext():
                         if any(name.lower() == "sld_body" for name, _ in query_entries):
                             return await geoserver_client.post(
                                 internal_wms_url,
@@ -409,7 +410,7 @@ def create_wms_proxy_router(
                     result.headers["Cache-Control"] = "private, no-store"
                 return result
             else:
-                async with use_layers(layer_names) if use_layers else nullcontext():
+                async with use_layers(layer_names, request) if use_layers else nullcontext():
                     if any(name.lower() == "sld_body" for name, _ in query_entries):
                         geoserver_response = await geoserver_client.post(
                             internal_wms_url, data=dict(query_entries), headers=forwarded_headers,

@@ -1,6 +1,7 @@
 /** Build model drafts from available source identities and explicit analysis areas. */
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
+import { getModelInputHandler } from "./input-handlers.js";
 
 /** @typedef {{key:string,label:string,polygons:Array<{type:"Polygon",coordinates:number[][][]}>,total:number}} DrawnPolygonLayer */
 
@@ -235,7 +236,9 @@ export function createModelDraft(model, context, id) {
     const statisticType = Object.values(model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type))?.type;
     const inputs = {};
     for (const [name, input] of Object.entries(model.inputs)) {
-        if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) {
+        const handler = getModelInputHandler(input.type);
+        if (handler) inputs[name] = handler.createDraft(input, context);
+        else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) {
             inputs[name] = {
                 ...preparation,
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
@@ -291,7 +294,9 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         const state = draft.inputs[name];
-        if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
+        const handler = getModelInputHandler(input.type);
+        if (handler) inputs[name] = handler.capture(state, input);
+        else if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
             inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
         else if (input.type === "habitat_stack") inputs[name] = captureHabitatStack(state, draft.sources);
         else if (input.type === "raster_preparation") inputs[name] = captureRasterPreparation(state, draft);

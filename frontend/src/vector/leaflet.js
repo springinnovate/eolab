@@ -35,6 +35,7 @@ export function vectorMapBounds(bbox) {
 
 /**
  * Create one WMS tile layer that posts its appearance with each tile request.
+ * Private upload and run-result requests retain their session authorization.
  * The returned layer provides reloadTile(image) for retrying its POST request.
  * Retain both sides of crossing extents.
  * Render through the map's maximum zoom of 22 instead of Leaflet's default 18.
@@ -101,7 +102,7 @@ export function createVectorWmsLayer(
         try {
             const response = await fetch(url.slice(0, separator), {
                 method: "POST",
-                headers: { "X-EOLab-Uploads": "1" },
+                headers: { "X-EOLab-Uploads": "1", "X-EOLab-Processing": "1" },
                 body: new URLSearchParams(url.slice(separator + 1)),
                 signal: controller.signal,
             });
