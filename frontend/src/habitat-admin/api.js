@@ -113,6 +113,17 @@ function readPreparation(value, expectedId = null) {
         !(progress.unit === undefined || progress.unit === null || !bulk && progress.unit === "tiles")) {
         throw new TypeError("Invalid preparation progress");
     }
+    const details = progress.details ?? null;
+    if (details !== null && (bulk ||
+        !["cachedTiles", "downloadedTiles", "failedTiles", "downloadedBytes"].every(
+            key => Number.isSafeInteger(details[key]) && details[key] >= 0) ||
+        !Number.isFinite(details.elapsedSeconds) || details.elapsedSeconds < 0 ||
+        typeof details.observedAt !== "string" || !Number.isFinite(Date.parse(details.observedAt)) ||
+        !(details.lastDownloadAt === null || typeof details.lastDownloadAt === "string" && Number.isFinite(Date.parse(details.lastDownloadAt))) ||
+        completed === null || total === null || details.cachedTiles + details.downloadedTiles !== completed ||
+        completed + details.failedTiles > total || (details.downloadedTiles === 0) !== (details.lastDownloadAt === null))) {
+        throw new TypeError("Invalid preparation download measurements");
+    }
     if (value.error !== null && (!value.error || typeof value.error.code !== "string" ||
         typeof value.error.detail !== "string")) throw new TypeError("Invalid preparation failure");
     const base = `${PREPARATIONS}/${value.jobId}`;
@@ -130,7 +141,7 @@ function readPreparation(value, expectedId = null) {
             ![result.tileCount, result.requiredTileCount, result.failedTileCount].every(count => Number.isSafeInteger(count) && count >= 0) ||
             result.requiredTileCount !== result.tileCount + result.failedTileCount) throw new TypeError("Invalid preparation report counts");
     }
-    return {...value, inputs, progress: {...progress, completed, total, unit: progress.unit ?? null}};
+    return {...value, inputs, progress: {...progress, completed, total, unit: progress.unit ?? null, details}};
 }
 
 /**

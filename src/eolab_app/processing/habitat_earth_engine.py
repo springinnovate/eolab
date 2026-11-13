@@ -3,6 +3,7 @@
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import errno
 from functools import partial
 from http.client import HTTPException
@@ -11,11 +12,11 @@ import os
 import re
 import stat
 from importlib.resources import as_file, files
-from itertools import chain
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock, local
 from typing import Literal
+from time import monotonic
 from urllib.parse import urlsplit
 
 from affine import Affine
@@ -851,6 +852,34 @@ def _publish_tile(directory: Path, entry: Path) -> None:
             raise
 
 
+@dataclass(frozen=True)
+class HabitatTileProgress:
+    """Measure reusable tiles and downloads completed by this acquisition attempt.
+
+    Attributes:
+        completed: Reusable tiles, including cache hits and successful downloads.
+        total: All tiles selected for the area.
+        cached_tiles: Tiles reused without downloading, including concurrent cache hits.
+        downloaded_tiles: Valid downloads published or reused after a publication race.
+        failed_tiles: Tile requests with terminal provider failures in this attempt.
+        downloaded_bytes: Response bytes of successful, validated tile downloads.
+        elapsed_seconds: Monotonic seconds since starting missing-tile acquisition.
+            Zero when every tile was already cached.
+        observed_at: UTC timestamp of this snapshot, for aging a running rate.
+        last_download_at: UTC time of the last validated download, or None before one.
+    """
+
+    completed: int
+    total: int
+    cached_tiles: int
+    downloaded_tiles: int
+    failed_tiles: int
+    downloaded_bytes: int
+    elapsed_seconds: float
+    observed_at: str
+    last_download_at: str | None
+
+
 def get_habitat_tiles(
     area: BaseGeometry,
     configuration: RasterStackConfiguration,
@@ -858,7 +887,7 @@ def get_habitat_tiles(
     *,
     cache_directory: Path,
     working_directory: Path,
-    progress: Callable[[int, int], None],
+    progress: Callable[[HabitatTileProgress], None],
     check_cancelled: Callable[[], None],
 ) -> HabitatTiles:
     """Reuse completed Habitat tiles and adapt download concurrency for missing tiles.
@@ -883,7 +912,8 @@ def get_habitat_tiles(
             Administrators may clear it only while no calculations use it.
         working_directory: Existing private attempt directory on the same
             filesystem as the cache, allowing atomic directory publication.
-        progress: Receive completed and total tile counts, including cache hits.
+        progress: Receive immutable tile counts and download measurements. Cache
+            reuse and terminal failures never count toward download throughput.
         check_cancelled: Raise to cancel between requests or before publication.
             The native supervisor handles cancellation during a blocking request.
 
@@ -904,37 +934,49 @@ def get_habitat_tiles(
     grids = _select_tile_grids(area, configuration.grid)
     bands = _get_habitat_model_bands(configuration)
     check_cancelled()
-    progress(0, len(grids))
     stack_directory = cache_directory / configuration.raster_configuration_sha256
     stack_directory.mkdir(parents=True, exist_ok=True)
     paths: dict[int, Path] = {}
     failures: dict[int, HabitatTileFailure] = {}
 
-    def missing_tiles() -> Iterator[HabitatTileDownload]:
-        """Count cache hits in selection order and yield uncached tiles.
+    pending: list[HabitatTileDownload] = []
+    for index, grid in enumerate(grids):
+        check_cancelled()
+        entry = _get_tile_cache_directory(grid, configuration.grid, stack_directory)
+        if entry.exists():
+            paths[index] = entry / "tile.tif"
+        else:
+            pending.append(HabitatTileDownload(index, grid, entry))
+    cached_tiles = len(paths)
+    downloaded_tiles = downloaded_bytes = 0
+    last_download_at: str | None = None
+    started = monotonic()
 
-        Yields:
-            Selected tiles that still need an Earth Engine request.
-        """
-        for index, grid in enumerate(grids):
-            check_cancelled()
-            entry = _get_tile_cache_directory(grid, configuration.grid, stack_directory)
-            if entry.exists():
-                paths[index] = entry / "tile.tif"
-                progress(len(paths), len(grids))
-            else:
-                yield HabitatTileDownload(index, grid, entry)
+    def report_progress() -> None:
+        """Publish this attempt's counts and observed successful download sizes."""
+        progress(
+            HabitatTileProgress(
+                completed=len(paths),
+                total=len(grids),
+                cached_tiles=cached_tiles,
+                downloaded_tiles=downloaded_tiles,
+                failed_tiles=len(failures),
+                downloaded_bytes=downloaded_bytes,
+                elapsed_seconds=monotonic() - started if pending else 0.0,
+                observed_at=datetime.now(timezone.utc).isoformat(),
+                last_download_at=last_download_at,
+            )
+        )
 
-    missing = missing_tiles()
-    first = next(missing, None)
-    if first is not None:
+    report_progress()
+    if pending:
         _publish_cache_configuration(configuration, stack_directory, working_directory)
         names = tuple(bands)
         with (
             _build_habitat_image(configuration, settings) as image,
             closing(
                 download_habitat_tiles(
-                    chain((first,), missing),
+                    iter(pending),
                     partial(_fetch_habitat_tile, image, names),
                     check_cancelled,
                 )
@@ -967,8 +1009,13 @@ def get_habitat_tiles(
                             _name_downloaded_bands(path, tile.grid, names)
                             check_cancelled()
                             _publish_tile(directory, tile.entry)
+                        downloaded_tiles += 1
+                        downloaded_bytes += len(result)
+                        last_download_at = datetime.now(timezone.utc).isoformat()
+                    else:
+                        cached_tiles += 1
                     paths[tile.index] = tile.entry / "tile.tif"
-                progress(len(paths), len(grids))
+                report_progress()
     check_cancelled()
     return HabitatTiles(
         tuple(paths[index] for index in sorted(paths)),

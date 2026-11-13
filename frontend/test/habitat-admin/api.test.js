@@ -30,7 +30,7 @@ function job(changes = {}) {
         createdAt: "2026-11-03T08:00:00Z", updatedAt: "2026-11-03T08:00:00Z",
         expiresAt: "2026-11-04T08:00:00Z", metadataExpiresAt: null,
         inputs: {name: command.name, selection, year: 2018, configurationSha256: DIGEST},
-        progress: {phase: null, completed: null, total: null, unit: null}, error: null, result: null,
+        progress: {phase: null, completed: null, total: null, unit: null, details: null}, error: null, result: null,
         ...changes};
 }
 
@@ -323,5 +323,19 @@ test("inventory validates known and unknown configuration rows and returns only 
         [{...known, storedBytes: Number.MAX_SAFE_INTEGER + 1}], [{...known, year: "2018"}], [{...known, configurationSha256: "../private"}]]) {
         const invalid = new HabitatAdminApi(async () => response({configurations}));
         await assert.rejects(invalid.inventory(), error => error instanceof HabitatAdminRequestError && error.status === 200);
+    }
+});
+
+
+test("download measurements cross the HTTP boundary as one consistent snapshot", async () => {
+    const details = {cachedTiles: 68, downloadedTiles: 5, failedTiles: 1, downloadedBytes: 5e6,
+        elapsedSeconds: 120, observedAt: "2026-11-13T20:00:00Z", lastDownloadAt: "2026-11-13T19:59:59Z"};
+    const snapshot = job({progress: {phase: "fetching_habitat_tiles", completed: 73, total: 96, unit: "tiles", details}});
+    const received = await new HabitatAdminApi(async () => response(snapshot)).get(ID);
+    assert.deepEqual(received.progress.details, details);
+    for (const changes of [{cachedTiles: 70}, {failedTiles: 24}, {downloadedBytes: -1},
+        {elapsedSeconds: -1}, {observedAt: "yesterday"}, {lastDownloadAt: null}]) {
+        const malformed = {...snapshot, progress: {...snapshot.progress, details: {...details, ...changes}}};
+        await assert.rejects(new HabitatAdminApi(async () => response(malformed)).get(ID), HabitatAdminRequestError);
     }
 });

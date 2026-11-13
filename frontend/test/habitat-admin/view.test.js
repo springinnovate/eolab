@@ -423,3 +423,46 @@ test("cache-wide inventory has an explicit refresh and preserves separate config
     assert.equal(h.state.coverageRows.length, 0); assert.equal(h.state.jobs.length, 0);
     h.view.destroy();
 });
+
+
+test("download activity distinguishes cached and failed tiles and ages a stalled rate", t => {
+    const h = fixture(), observed = "2026-11-13T20:00:00Z";
+    t.mock.method(Date, "now", () => Date.parse(observed));
+    const current = job({progress: {phase: "fetching_habitat_tiles", completed: 73, total: 96, unit: "tiles",
+        details: {cachedTiles: 68, downloadedTiles: 5, failedTiles: 1, downloadedBytes: 5e6,
+            elapsedSeconds: 120, observedAt: observed, lastDownloadAt: observed}}});
+    h.state.jobs = [current]; h.view.render(h.state);
+    const card = h.view.cards.get(`job:${current.jobId}`);
+    assert.match(card.activity.textContent, /68 reused from cache · 5 downloaded during this preparation · 22 awaiting download · 1 failed/);
+    assert.match(card.activity.textContent, /Average 2.5 downloaded tiles\/min so far/);
+    assert.match(card.activity.textContent, /About 22 MB awaiting download, estimated from 5 downloaded tiles/);
+    card.cancel.focus();
+    Date.now.mock.mockImplementation(() => Date.parse(observed) + 600000);
+    current.updatedAt = new Date(Date.now()).toISOString(); h.view.render(h.state);
+    assert.match(card.activity.textContent, /10 minutes ago/);
+    assert.match(card.activity.textContent, /Average 0.4 downloaded tiles\/min so far/);
+    assert.equal(h.document.activeElement, card.cancel);
+    current.status = "cancelled"; h.view.render(h.state);
+    assert.match(card.activity.textContent, /Average 2.5 downloaded tiles\/min at last progress update/);
+    h.state.historyError = "Connection lost"; h.view.render(h.state);
+    assert.match(h.view.historyStatus.textContent, /Displayed progress may be out of date/);
+    h.view.destroy();
+});
+
+test("download activity avoids invented estimates before any download or for bulk checks", () => {
+    const h = fixture(), current = job({progress: {phase: "fetching_habitat_tiles", completed: 6, total: 6, unit: "tiles",
+        details: {cachedTiles: 6, downloadedTiles: 0, failedTiles: 0, downloadedBytes: 0,
+            elapsedSeconds: 0, observedAt: "2026-11-13T20:00:00Z", lastDownloadAt: null}}});
+    h.state.jobs = [current]; h.view.render(h.state);
+    const card = h.view.cards.get(`job:${current.jobId}`);
+    assert.match(card.activity.textContent, /No download was needed/);
+    assert.doesNotMatch(card.activity.textContent, /tiles\/min|MB|Last tile/);
+    current.progress.total = 8; h.view.render(h.state);
+    assert.match(card.activity.textContent, /2 awaiting download.*No downloads completed yet/);
+    current.progress.details.failedTiles = 2; h.view.render(h.state);
+    assert.match(card.activity.textContent, /2 failed.*No downloads completed/);
+    assert.doesNotMatch(card.activity.textContent, /No download was needed/);
+    current.operation = "habitat.retry-missing-inputs.v1"; h.view.render(h.state);
+    assert.equal(card.activity.hidden, true);
+    h.view.destroy();
+});
