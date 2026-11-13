@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { AnnotationLayerControls } from "../../src/annotations/layer-controls.js";
+import { AnnotationModel } from "../../src/annotations/model.js";
 import { MapLayerStackView } from "../../src/map-layers/layer-stack-view.js";
 
 /** Minimal DOM element used by the raster layer-stack view tests. */
@@ -53,6 +55,21 @@ class FakeLayerStackElement extends EventTarget {
 
   /** @param {FakeLayerStackElement|null} node Possible descendant. @return {boolean} Whether this subtree contains it. */
   contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+
+  /**
+   * Find the first descendant matching a tag name.
+   * @param {string} tagName HTML tag name.
+   * @return {FakeLayerStackElement|null} Matching element, if present.
+   */
+  querySelector(tagName) {
+    for (const child of this.children) {
+      if (!(child instanceof FakeLayerStackElement)) continue;
+      if (child.tagName === tagName.toUpperCase()) return child;
+      const match = child.querySelector(tagName);
+      if (match) return match;
+    }
+    return null;
+  }
 
   /** Number of child elements, as exposed by the browser DOM. @return {number} Child count. */
   get childElementCount() { return this.children.length; }
@@ -1361,6 +1378,34 @@ test("layer provenance precedes its title and its primary action retains focus",
   assert.ok(row.children.includes(primaryControl));
   draw.focus(); view.render([layer], null);
   assert.equal(documentContext.activeElement, draw);
+});
+
+test("polygon cards offer Download directly and retain its focus without opening Edit", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const intents = [];
+  const controls = new AnnotationLayerControls(doc, new AnnotationModel().createLayer(), {
+    open: () => intents.push("edit"),
+    exportGeoJSON: () => intents.push("download"),
+    add() {}, share() {}, filter() {},
+  });
+  const layer = {
+    ...LAYERS[0], item: null, datasetKind: "annotation", capabilities: {},
+    detailsControl: controls.edit, primaryControl: controls.cardActions,
+  };
+  view.render([layer], null);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  const [download] = elementsByClass(row, "secondary-button").filter(button => button.textContent === "Download");
+  assert.equal(download.getAttribute("aria-haspopup"), "dialog");
+  assert.equal(elementsByClass(controls.root, "secondary-button").some(
+    button => /Download|Export GeoJSON/.test(button.textContent),
+  ), false);
+
+  download.focus();
+  download.dispatchEvent(new Event("click"));
+  assert.deepEqual(intents, ["download"]);
+  view.render([{ ...layer, typeLabel: "Shared layer" }], null);
+  assert.equal(doc.activeElement, download);
 });
 
 test("both legend presentations share all colors, selection, ordering and disclosure state", async () => {

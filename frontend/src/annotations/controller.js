@@ -384,7 +384,7 @@ export class AnnotationController {
     }
 
     /**
-     * Attach a local annotation layer using the shared layer-list lifecycle.
+     * Add a local or shared annotation layer and its retained controls to the map and editor.
      * @param {import("./model.js").AnnotationLayer} layer Validated annotation data.
      * @return {void}
      */
@@ -418,7 +418,7 @@ export class AnnotationController {
             createLayer: () => rendering,
             snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared layer" : "Local layer",
                 legend: this.layerLegend(layer),
-                canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
+                canFilter: true, detailsControl: controls.edit, primaryControl: controls.cardActions, stylePanelId: "annotations-panel",
                 filterActive: layer.filter.enabled && !!layer.filter.rules.length,
                 filterStatus: this.clearedFilterLayerIds.has(layer.id) ? "Saved filter cleared—all polygons included" : (layer.filter.enabled && layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(this.displayLayer(layer)).length} of ${this.displayLayer(layer).polygons.length} polygons match` : null }),
