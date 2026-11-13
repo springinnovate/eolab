@@ -110,6 +110,8 @@ def mask_invalid_raster_values(
 
     Returns:
         Original values with the combined boolean mask, without copying values.
+        Every unmasked value is finite, differs from NoData and has valid
+        embedded-mask coverage when supplied. Masked values are unchanged.
     """
     valid_pixel_mask = numpy.isfinite(values)
     if nodata is not None:

@@ -120,8 +120,9 @@ def read_exact_source_window(
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
-        Complete masked source window at native resolution. Each intersecting
-        native block is read once without resampling or a boundless read.
+        Complete source window at native resolution with all nonfinite, NoData
+        and invalid cells masked. Each intersecting native block is read once
+        without resampling or a boundless read.
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.

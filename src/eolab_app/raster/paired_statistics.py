@@ -462,11 +462,6 @@ def read_raster_paired_statistics(
         numpy.ma.array(numpy.ma.getdata(y_sample), mask=invalid_pair_mask).compressed(),
         dtype=numpy.float64,
     )
-    finite_pair_mask = numpy.logical_and(
-        numpy.isfinite(x_values), numpy.isfinite(y_values)
-    )
-    x_values = x_values[finite_pair_mask]
-    y_values = y_values[finite_pair_mask]
     if x_values.size == 0:
         raise NoValidRasterSamplesError
 
