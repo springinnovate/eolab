@@ -260,6 +260,14 @@ test("vector category summary sends identity and field then validates limits", a
         itemId: VECTOR_ITEM.id,
         field: "risk",
     });
+    for (const invalid of [
+        { field: "other" }, { maximumLimit: 51 }, { values: [{}] },
+    ]) {
+        await assert.rejects(summarizeVectorCategories(
+            VECTOR_ITEM, "risk",
+            async () => new Response(JSON.stringify({ ...summary, ...invalid })),
+        ), VectorRenderingRequestError);
+    }
 });
 
 test("vector numeric classification sends bounded options and rejects invalid HTTP responses", async () => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { VectorStyleControls } from "../../src/vector/style-controls.js";
+import { classifyVectorNumbers, summarizeVectorCategories } from "../../src/vector/api.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 
 /**
@@ -329,7 +330,7 @@ test("vector controls start labels off, suggest a name field, and allow labels o
     const style = deriveDefaultVectorStyle({
         geometryKind: "polygon", fillColor: "#2b83ba", fillOpacity: 0.7,
         strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 0.75,
-    }, [{ name: "name", type: "str" }]);
+    });
     const target = { ...fixture.target("polygon", style), notice: "Numeric coloring unavailable." };
     fixture.controls.show(target);
     assert.equal(fixture.controls.labelEnabled.checked, false);
@@ -474,6 +475,106 @@ test("same-layer refresh preserves an in-flight category discovery", async () =>
     assert.equal(fixture.clock.pendingCount(), 1);
     fixture.controls.destroy();
 });
+
+for (const mode of ["categories", "graduated"]) {
+    const category = mode === "categories";
+    const operation = category ? "summarize" : "classify";
+    const api = category ? summarizeVectorCategories : classifyVectorNumbers;
+    const summaryProperty = category ? "categorySummary" : "graduatedSummary";
+    const fieldProperty = category ? "categoryField" : "graduatedField";
+    const statusProperty = category ? "categoryStatus" : "graduatedStatus";
+
+    test(`${mode} controls consume frozen API results and surface boundary errors`, async () => {
+        const fixture = styleFixture();
+        const target = fixture.target("polygon", csvPolygonStyle());
+        const wireResult = category ? await target.summarize("name")
+            : await target.classify("value", "percentile-interval", 5);
+        let result;
+        target[operation] = async (...args) => {
+            result = await api({ collection: "vectors", id: "measurements" }, ...args,
+                async () => new Response(JSON.stringify(wireResult)));
+            return result;
+        };
+        fixture.controls.show(target);
+        fixture.controls.mode.value = mode;
+        fixture.controls.mode.dispatchEvent(new Event("change"));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(Object.isFrozen(result), true);
+        assert.equal(Object.isFrozen(category ? result.values : result.classes), true);
+        assert.equal(fixture.controls[summaryProperty], result);
+        await settleStyle(fixture);
+        assert.equal(fixture.applied.length, 1);
+        assert.equal(fixture.applied[0][category ? "categorical" : "graduated"].field, wireResult.field);
+
+        wireResult.field = "unexpected";
+        fixture.controls[fieldProperty].dispatchEvent(new Event("change"));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await settleStyle(fixture);
+        assert.equal(fixture.controls[summaryProperty], null);
+        assert.match(fixture.controls[statusProperty].textContent, /invalid response/);
+        assert.equal(fixture.applied.length, 1);
+        fixture.controls.destroy();
+    });
+
+    test(`${mode} controls discard replies after target, mode, close or control changes`, async t => {
+        const changes = ["target", "mode", "close", "field"];
+        if (!category) changes.push("method", "count");
+        for (const change of changes) {
+            await t.test(change, async () => {
+                const fixture = styleFixture();
+                const target = fixture.target("polygon", csvPolygonStyle());
+                const response = category ? await target.summarize("name")
+                    : await target.classify("value", "percentile-interval", 5);
+                let finish;
+                target[operation] = (...args) => api(
+                    { collection: "vectors", id: "measurements" }, ...args,
+                    () => new Promise(resolve => { finish = () => resolve(new Response(JSON.stringify(response))); }),
+                );
+                fixture.controls.show(target);
+                fixture.controls.mode.value = mode;
+                fixture.controls.mode.dispatchEvent(new Event("change"));
+                if (change === "target") fixture.controls.show({ ...target, key: "other" });
+                else if (change === "close") fixture.controls.hide();
+                else if (change === "mode") {
+                    fixture.controls.mode.value = "single";
+                    fixture.controls.mode.dispatchEvent(new Event("change"));
+                } else if (change === "field") fixture.controls[fieldProperty].value = "other";
+                else if (change === "method") fixture.controls.graduatedMethod.value = "quantile";
+                else fixture.controls.graduatedClassCount.value = "4";
+                finish();
+                await new Promise(resolve => setTimeout(resolve, 0));
+                assert.equal(fixture.controls[summaryProperty], null);
+                fixture.controls.destroy();
+            });
+        }
+    });
+
+    test(`${mode} controls keep the newest reply when equivalent requests finish out of order`, async () => {
+        const fixture = styleFixture();
+        const target = fixture.target("polygon", csvPolygonStyle());
+        const response = category ? await target.summarize("name")
+            : await target.classify("value", "percentile-interval", 5);
+        const pending = [];
+        target[operation] = (...args) => api(
+            { collection: "vectors", id: "measurements" }, ...args,
+            () => new Promise(resolve => { pending.push(resolve); }),
+        );
+        fixture.controls.show(target);
+        fixture.controls.mode.value = mode;
+        fixture.controls.mode.dispatchEvent(new Event("change"));
+        fixture.controls[fieldProperty].dispatchEvent(new Event("change"));
+        assert.equal(pending.length, 2);
+        pending[1](new Response(JSON.stringify({ ...response, nullCount: 0 })));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const newest = fixture.controls[summaryProperty];
+        assert.equal(newest.nullCount, 0);
+        pending[0](new Response(JSON.stringify(response)));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(fixture.controls[summaryProperty], newest);
+        assert.equal(fixture.controls[category ? "categoryLoading" : "graduatedLoading"], false);
+        fixture.controls.destroy();
+    });
+}
 
 test("graduated controls classify, palette, and optionally style missing values", async () => {
     const fixture = styleFixture();

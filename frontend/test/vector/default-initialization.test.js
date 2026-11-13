@@ -4,6 +4,7 @@ import { MapLayerController } from "../../src/map-layers/controller.js";
 import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { createVectorMapLayerAdapter } from "../../src/vector/map-layer-adapter.js";
 import { VECTOR_LABEL_DEFAULTS } from "../../src/vector/defaults.js";
+import { classifyVectorNumbers } from "../../src/vector/api.js";
 
 const ITEM = {
     collection: "eolab-mounted-vectors", id: "named-measurements",
@@ -59,9 +60,19 @@ function fixture(overrides = {}) {
             return { geometryKind: "polygon", layerName: "eolab:measurements",
                 styleName: "vector-polygon", style: STYLE, bbox: [0, 0, 1, 1] };
         },
+        /**
+         * Classify the requested field through the real HTTP response boundary.
+         * @param {Object} item Catalog vector source.
+         * @param {string} field Requested numeric field.
+         * @param {string} method Requested classification method.
+         * @param {number} classCount Requested number of classes.
+         * @return {ReturnType<typeof classifyVectorNumbers>} Validated frozen result.
+         * @throws {Error} If the response does not match the request contract.
+         */
         async classify(item, field, method, classCount) {
             calls.push(["classify", item, field, method, classCount]);
-            return SUMMARY;
+            return classifyVectorNumbers(item, field, method, classCount,
+                async () => new Response(JSON.stringify(SUMMARY)));
         },
         async style(item, candidate) {
             calls.push(["style", item, candidate]);
@@ -132,6 +143,18 @@ test("failed automatic styles fall back to authorized fixed WMS without hiding t
     assert.equal(result.styleName, "vector-polygon");
     assert.equal(f.map.attached.size, 1);
     assert.match(f.controller.getRecord(getCatalogItemKey(ITEM)).state.defaultStyleNotice, /could not be applied/);
+});
+
+test("invalid HTTP classifications retain a solid default and explain the optional failure", async () => {
+    const f = fixture({ classify: (item, field, method, classCount) =>
+        classifyVectorNumbers(item, field, method, classCount,
+            async () => new Response(JSON.stringify({ ...SUMMARY, field: "other" }))) });
+    const result = await f.controller.show(ITEM, f.adapter);
+    assert.equal(result.style.graduated, null);
+    assert.equal(result.style.label, null);
+    assert.equal(f.map.attached.size, 1);
+    assert.match(f.controller.getRecord(getCatalogItemKey(ITEM)).state.defaultStyleNotice,
+        /Automatic numeric coloring was unavailable/);
 });
 
 test("saved appearance takes precedence before a staged vector reaches the map", async () => {

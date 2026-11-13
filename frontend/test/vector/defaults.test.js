@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { classifyVectorNumbers } from "../../src/vector/api.js";
 import {
     defaultVectorLabelField,
     defaultVectorNumericField,
@@ -61,20 +62,19 @@ test("annual numeric defaults prefer the latest year regardless of Catalog field
     assert.equal(defaultVectorNumericField([...annual].reverse()), "R2024");
 });
 
-test("new vector styles leave labels off even when a name field exists", () => {
+test("new polygon, point and line styles leave labels off", () => {
     for (const geometryKind of ["polygon", "point", "line"]) {
         const symbol = geometryKind === "line"
             ? { geometryKind, strokeColor: "#2b83ba", strokeOpacity: 1, strokeWidth: 2 }
             : { ...initial, geometryKind, ...(geometryKind === "point" ? { pointSize: 9 } : {}) };
-        const styled = deriveDefaultVectorStyle(symbol, fields);
+        const styled = deriveDefaultVectorStyle(symbol);
         assert.equal(styled.label, null);
         assert.equal(styled.strokeWidth, symbol.strokeWidth);
         assert.equal(styled.graduated, null);
     }
-    assert.equal(deriveDefaultVectorStyle(initial, []).label, null);
 });
 
-test("default numeric colors consume explicit matching classes including constants and nulls", () => {
+test("default numeric colors consume API-validated constants with and without nulls", async () => {
     const summary = {
         field: "score", fieldType: "float", method: "percentile-interval",
         requestedClassCount: 5, actualClassCount: 1,
@@ -84,11 +84,15 @@ test("default numeric colors consume explicit matching classes including constan
         unsupportedValueCount: 0, complete: true,
         defaultClassCount: 5, minimumClassCount: 2, maximumClassCount: 9,
     };
-    const styled = deriveDefaultVectorStyle(initial, fields, summary);
-    assert.deepEqual(styled.graduated.rules, [{ minimum: null, maximum: null, color: "#ffffbf" }]);
-    assert.equal(styled.graduated.missingColor, "#d1d5db");
-    assert.equal(styled.label, null);
-    for (const mismatch of [{ field: "area" }, { method: "quantile" }, { requestedClassCount: 4 }]) {
-        assert.throws(() => deriveDefaultVectorStyle(initial, fields, { ...summary, ...mismatch }), /does not match/);
+    for (const nullCount of [0, 1]) {
+        const classification = await classifyVectorNumbers(
+            { collection: "vectors", id: "measurements" },
+            "score", "percentile-interval", 5,
+            async () => new Response(JSON.stringify({ ...summary, nullCount })),
+        );
+        const styled = deriveDefaultVectorStyle(initial, classification);
+        assert.deepEqual(styled.graduated.rules, [{ minimum: null, maximum: null, color: "#ffffbf" }]);
+        assert.equal(styled.graduated.missingColor, nullCount > 0 ? "#d1d5db" : null);
+        assert.equal(styled.label, null);
     }
 });
