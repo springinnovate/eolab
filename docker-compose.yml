@@ -233,6 +233,7 @@ services:
     cap_drop:
       - ALL
     volumes:
+      - processing-data:/processing-data:ro
       - vector-uploads:/vector-uploads:ro
       - type: bind
         source: ${EOLAB_SCAN_MOUNT_PATH}

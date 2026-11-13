@@ -100,6 +100,24 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
+def test_jobs_reads_generated_results_from_the_shared_read_only_volume() -> None:
+    """Give extent workers original result files without write or database access."""
+    services = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]
+    jobs = services["jobs"]
+
+    assert "processing-data:/processing-data:ro" in jobs["volumes"]
+    assert "processing-data:/processing-data:ro" in services["app"]["volumes"]
+    assert "processing-data:/processing-data" in (
+        services["processing-worker"]["volumes"]
+    )
+    assert jobs["read_only"] is True
+    assert "ports" not in jobs
+    assert not any(
+        "PGPASSWORD" in value or "DATABASE_URL" in value
+        for value in jobs["environment"]
+    )
+
+
 def test_raster_capacity_is_deployer_configurable() -> None:
     """Expose safe defaults while allowing explicit deployment overrides."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")

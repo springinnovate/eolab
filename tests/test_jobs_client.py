@@ -95,6 +95,257 @@ def test_cleanup_outage_is_bounded(
     assert TOKEN not in caplog.text
 
 
+def test_required_cleanup_survives_outage_and_repeated_cancellation() -> None:
+    """Keep caller resources retained beyond five seconds until native exit is confirmed."""
+
+    async def scenario() -> None:
+        """Interrupt an admitted run repeatedly while cancellation delivery is unavailable."""
+        job_id = str(uuid4())
+        admitted, outage_seen = asyncio.Event(), asyncio.Event()
+        restored, cancelling, exited = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        deleted = asyncio.Event()
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            """Model unavailable cancellation followed by a separately confirmed exit.
+
+            Args:
+                request: Client lifecycle request.
+
+            Returns:
+                Authoritative state or terminal deletion acknowledgement.
+
+            Raises:
+                httpx2.ConnectError: While cancellation transport is unavailable.
+            """
+            if request.method == "POST" and request.url.path == "/api/jobs":
+                admitted.set()
+            elif request.url.path.endswith("/cancel"):
+                if not restored.is_set():
+                    outage_seen.set()
+                    raise httpx2.ConnectError("unavailable", request=request)
+                cancelling.set()
+            elif request.method == "DELETE":
+                assert exited.is_set()
+                deleted.set()
+                return httpx2.Response(204)
+            status = (
+                "cancelled"
+                if exited.is_set()
+                else "cancelling" if cancelling.is_set() else "running"
+            )
+            return httpx2.Response(200, json={"jobId": job_id, "status": status})
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+            task = asyncio.create_task(
+                JobsClient(http, TOKEN).run(
+                    PAYLOAD,
+                    timeout_seconds=10,
+                    delete_on_completion=True,
+                    require_terminal_cleanup=True,
+                )
+            )
+            await asyncio.wait_for(admitted.wait(), 1)
+            task.cancel()
+            await asyncio.wait_for(outage_seen.wait(), 1)
+            await asyncio.sleep(5.1)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            restored.set()
+            await asyncio.wait_for(cancelling.wait(), 3)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            exited.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+            assert deleted.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_required_cleanup_recovers_uncertain_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recover the same request after a lost reply without trusting later auth failures.
+
+    Args:
+        monkeypatch: Shortens retry backoff without changing terminal confirmation.
+    """
+    monkeypatch.setattr("eolab_jobs.client.CLEANUP_RETRY_MAX_SECONDS", 0.02)
+
+    async def scenario() -> None:
+        """Keep an uncertain submission alive until recovery permits native cancellation."""
+        job_id = str(uuid4())
+        lost, recovery_rejected = asyncio.Event(), asyncio.Event()
+        recovery_allowed, cancelling, exited = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
+        submissions: list[tuple[bytes, str]] = []
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            """Lose accepted admission, reject recovery temporarily, then confirm exit.
+
+            Args:
+                request: Frozen admission or lifecycle request.
+
+            Returns:
+                Recovered state, transient authorization error or terminal deletion.
+
+            Raises:
+                httpx2.ReadError: For the original accepted admission's lost reply.
+            """
+            if request.method == "POST" and request.url.path == "/api/jobs":
+                submissions.append(
+                    (request.content, request.headers["Idempotency-Key"])
+                )
+                if len(submissions) == 1:
+                    lost.set()
+                    raise httpx2.ReadError("lost admission reply", request=request)
+                if not recovery_allowed.is_set():
+                    recovery_rejected.set()
+                    return httpx2.Response(401)
+            elif request.url.path.endswith("/cancel"):
+                cancelling.set()
+            elif request.method == "DELETE":
+                assert exited.is_set()
+                return httpx2.Response(204)
+            return httpx2.Response(
+                200,
+                json={
+                    "jobId": job_id,
+                    "status": "cancelled" if exited.is_set() else "running",
+                },
+            )
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+            task = asyncio.create_task(
+                JobsClient(http, TOKEN).run(
+                    PAYLOAD,
+                    timeout_seconds=10,
+                    delete_on_completion=True,
+                    require_terminal_cleanup=True,
+                )
+            )
+            await asyncio.wait_for(lost.wait(), 1)
+            await asyncio.wait_for(recovery_rejected.wait(), 1)
+            assert not task.done()
+            recovery_allowed.set()
+            await asyncio.wait_for(cancelling.wait(), 1)
+            assert not task.done()
+            exited.set()
+            with pytest.raises(httpx2.ReadError, match="lost admission"):
+                await asyncio.wait_for(task, 2)
+            assert len(submissions) >= 3
+            assert len(set(submissions)) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+def test_required_cleanup_stops_after_rejection_or_known_absence(
+    admitted: bool,
+) -> None:
+    """A rejected admission or absent known job cannot keep using caller resources.
+
+    Args:
+        admitted: Confirm a job first, then report its absence during cancellation.
+    """
+
+    async def scenario() -> None:
+        """Confirm cleanup completes through authoritative HTTP outcomes."""
+        job_id = str(uuid4())
+        calls: list[str] = []
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            """Reject admission or return a known job that has already disappeared.
+
+            Args:
+                request: Admission or lifecycle request.
+
+            Returns:
+                Rejection, running state, or authoritative missing-job response.
+            """
+            calls.append(request.url.path)
+            if not admitted:
+                return httpx2.Response(422)
+            if request.url.path.endswith("/cancel"):
+                return httpx2.Response(404)
+            return httpx2.Response(200, json={"jobId": job_id, "status": "running"})
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+            with pytest.raises(TimeoutError if admitted else httpx2.HTTPStatusError):
+                await asyncio.wait_for(
+                    JobsClient(http, TOKEN).run(
+                        PAYLOAD,
+                        timeout_seconds=0.02,
+                        delete_on_completion=True,
+                        require_terminal_cleanup=True,
+                    ),
+                    1,
+                )
+            assert calls[-1] == (
+                f"/api/jobs/{job_id}/cancel" if admitted else "/api/jobs"
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost_reply", [False, True])
+def test_required_cleanup_accepts_explicit_capacity_rejection(lost_reply: bool) -> None:
+    """An authoritative full-queue response proves no identical request is active.
+
+    Args:
+        lost_reply: Lose the first response before observing the capacity rejection.
+    """
+
+    async def scenario() -> None:
+        """Return the real Jobs capacity envelope instead of an ambiguous proxy error."""
+        calls = 0
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            """Reject admission with the service's stable capacity error contract.
+
+            Args:
+                request: Original admission or identical-key recovery.
+
+            Returns:
+                Full-queue rejection before work is admitted.
+
+            Raises:
+                httpx2.ReadError: When the initial response is intentionally lost.
+            """
+            nonlocal calls
+            calls += 1
+            if lost_reply and calls == 1:
+                raise httpx2.ReadError("lost admission reply", request=request)
+            return httpx2.Response(
+                503,
+                json={"error": {"code": "capacity", "message": "Queue is full"}},
+            )
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+            with pytest.raises(
+                httpx2.ReadError if lost_reply else httpx2.HTTPStatusError
+            ):
+                await asyncio.wait_for(
+                    JobsClient(http, TOKEN).run(
+                        PAYLOAD,
+                        timeout_seconds=1,
+                        delete_on_completion=True,
+                        require_terminal_cleanup=True,
+                    ),
+                    2,
+                )
+            assert calls == (2 if lost_reply else 1)
+
+    asyncio.run(scenario())
+
+
 @asynccontextmanager
 async def diagnostic_client() -> AsyncIterator[tuple[JobsClient, httpx2.AsyncClient]]:
     """Run the actual HTTP lifecycle and native executor with isolated callers.

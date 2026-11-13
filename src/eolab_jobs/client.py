@@ -15,10 +15,34 @@ JOBS_URL = "http://jobs:8080/api/jobs"
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 512 * 1024
 CLEANUP_SECONDS = 5
+CLEANUP_RETRY_MAX_SECONDS = 2
 # Poll every 100 ms so short outline jobs can appear promptly in the viewer.
 POLL_SECONDS = 0.1
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "timed_out", "expired"})
 logger = logging.getLogger(__name__)
+
+
+def _admission_was_rejected(error: httpx2.HTTPStatusError, *, uncertain: bool) -> bool:
+    """Identify an admission response proving this request has no active job.
+
+    Args:
+        error: Error from the original submission or its identical-key recovery.
+        uncertain: Whether an earlier reply was lost. Later authorization failures
+            cannot rule out earlier admission; a capacity rejection can because
+            the Jobs service checks existing idempotency keys before capacity.
+
+    Returns:
+        Whether cleanup can stop without retaining caller resources.
+    """
+    status = error.response.status_code
+    if not uncertain and 400 <= status < 500 and status != 408:
+        return True
+    if status == 503:
+        try:
+            return error.response.json()["error"]["code"] == "capacity"
+        except (ValueError, KeyError, TypeError):
+            pass
+    return False
 
 
 class JobSnapshot(BaseModel):
@@ -122,12 +146,20 @@ class JobsClient:
             content=body,
             follow_redirects=False,
         ) as response:
-            response.raise_for_status()
             content = bytearray()
             async for chunk in response.aiter_bytes():
                 if len(content) + len(chunk) > MAX_RESPONSE_BYTES:
                     raise ValueError("Oversized Jobs response")
                 content.extend(chunk)
+            if not response.is_success:
+                # Keep the bounded error body available after closing the stream so
+                # admission cleanup can distinguish queue rejection from an outage.
+                httpx2.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=bytes(content),
+                    request=response.request,
+                ).raise_for_status()
             result = json.loads(content) if content else {}
             if not isinstance(result, dict):
                 raise ValueError("Invalid Jobs response")
@@ -294,6 +326,67 @@ class JobsClient:
             snapshot = await self.status(snapshot.jobId)
         return snapshot
 
+    async def _cleanup_until_terminal(
+        self,
+        submission: asyncio.Task[JobSnapshot],
+        snapshot: JobSnapshot | None,
+        body: bytes,
+        key: str,
+        delete_on_completion: bool,
+    ) -> None:
+        """Confirm native work has stopped before a caller releases its resources.
+
+        Recover uncertain admission using the original request and retry unavailable
+        cancellation or observation with capped backoff. A known job's absence or
+        terminal state ends retention; failure to delete terminal metadata does not
+        prolong it. An outage can leave this cleanup waiting indefinitely.
+
+        Args:
+            submission: Original admission task, protected from caller cancellation.
+            snapshot: Last known job state, or None before admission is confirmed.
+            body: Frozen original submission bytes for idempotent recovery.
+            key: Original submission's idempotency key.
+            delete_on_completion: Whether to attempt deletion after terminal state.
+        """
+        if snapshot is None:
+            try:
+                snapshot = await submission
+            except httpx2.HTTPStatusError as error:
+                if _admission_was_rejected(error, uncertain=False):
+                    return
+            except (httpx2.HTTPError, ValueError):
+                pass
+
+        delay = POLL_SECONDS
+        while snapshot is None or snapshot.status not in TERMINAL:
+            try:
+                async with asyncio.timeout(CLEANUP_SECONDS):
+                    if snapshot is None:
+                        snapshot = await self._submit(body, key)
+                    if snapshot.status not in TERMINAL:
+                        snapshot = await self.cancel(snapshot.jobId)
+                        snapshot = await self._wait(snapshot)
+            except httpx2.HTTPStatusError as error:
+                if snapshot is not None and error.response.status_code == 404:
+                    return
+                if snapshot is None and _admission_was_rejected(error, uncertain=True):
+                    return
+            except (httpx2.HTTPError, ValueError, TimeoutError):
+                pass
+            else:
+                break
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, CLEANUP_RETRY_MAX_SECONDS)
+
+        if delete_on_completion:
+            try:
+                async with asyncio.timeout(CLEANUP_SECONDS):
+                    await self.delete(snapshot.jobId)
+            except (httpx2.HTTPError, ValueError, TimeoutError):
+                logger.warning(
+                    "Jobs terminal deletion unavailable; retention remains active"
+                )
+
     async def run(
         self,
         payload: dict[str, JsonValue],
@@ -301,17 +394,22 @@ class JobsClient:
         timeout_seconds: float,
         delete_on_completion: bool,
         idempotency_key: str | None = None,
+        require_terminal_cleanup: bool = False,
     ) -> JobResult:
         """Submit a job, wait for its result and cancel it if the caller stops waiting.
 
         Args:
             payload: Submission fields, frozen before the first await.
-            timeout_seconds: Total client wait budget, excluding bounded cleanup.
+            timeout_seconds: Total client wait budget, excluding cleanup.
             delete_on_completion: True deletes terminal records; false retains
                 them, including failed/cancelled jobs, until explicit deletion
                 or server expiry. Abandoned work is cancelled in either mode.
                 Use submit() for detached work.
             idempotency_key: Stable retry key, or a new UUID when omitted.
+            require_terminal_cleanup: True waits through service outages and repeated
+                cancellation until admitted work is terminal or confirmed absent.
+                Use when releasing caller-owned resources while work may still run
+                would be unsafe. False keeps the existing five-second cleanup budget.
 
         Returns:
             Inline result and job UUID; domain validation remains caller-owned.
@@ -322,7 +420,7 @@ class JobsClient:
             ValueError: For invalid bounds, JSON or protocol responses.
             TypeError: For non-JSON input.
             TimeoutError: When the client wait budget expires.
-            asyncio.CancelledError: After bounded cleanup on caller cancellation.
+            asyncio.CancelledError: After the requested cleanup on caller cancellation.
         """
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("Run deadline must be finite and positive")
@@ -345,6 +443,11 @@ class JobsClient:
                 """Recover uncertain admission and settle this owned request."""
                 nonlocal snapshot
                 try:
+                    if require_terminal_cleanup:
+                        await self._cleanup_until_terminal(
+                            submission, snapshot, body, key, delete_on_completion
+                        )
+                        return
                     async with asyncio.timeout(CLEANUP_SECONDS):
                         if snapshot is None:
                             try:
@@ -366,8 +469,12 @@ class JobsClient:
                     await asyncio.gather(submission, return_exceptions=True)
 
             cleanup_task = asyncio.create_task(cleanup())
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError:
-                await cleanup_task
-                raise
+            interrupted = False
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    interrupted = True
+            await cleanup_task
+            if interrupted:
+                raise asyncio.CancelledError

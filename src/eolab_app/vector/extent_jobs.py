@@ -7,7 +7,10 @@ import httpx2
 from eolab_jobs.client import JobFailed, JobsClient
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.vector.extent_operation import SelectionExtentResult
+from eolab_app.vector.extent_operation import (
+    ArtifactExtentSelection,
+    SelectionExtentResult,
+)
 
 
 class ExtentJobs:
@@ -37,20 +40,66 @@ class ExtentJobs:
             VectorConflictError: For read failures or Jobs overload.
             asyncio.CancelledError: After Jobs cancels and cleans up abandoned work.
         """
+        return await self._measure(
+            {
+                "selection": selection.model_dump(mode="json", by_alias=True),
+                "uploadOwner": upload_owner,
+            }
+        )
+
+    async def measure_artifact(
+        self, selection: ArtifactExtentSelection, read_lease: str
+    ) -> dict[str, Any]:
+        """Measure a run artifact while retaining its lease until native work stops.
+
+        Args:
+            selection: Opaque run/file identities and the selected attribute filter.
+            read_lease: Existing source-owner capability held by the calling request.
+
+        Returns:
+            Matching count and WGS84 bounds, including an empty successful result.
+
+        Raises:
+            VectorConflictError: For unavailable sources, native failures or Jobs overload.
+            asyncio.CancelledError: Only after Jobs confirms native work has stopped.
+        """
+        return await self._measure(
+            {
+                "selection": selection.model_dump(mode="json"),
+                "readLease": read_lease,
+            },
+            require_terminal_cleanup=True,
+        )
+
+    async def _measure(
+        self, inputs: dict[str, Any], *, require_terminal_cleanup: bool = False
+    ) -> dict[str, Any]:
+        """Execute the registered extent operation with its established queue budgets.
+
+        Args:
+            inputs: Captured source descriptor and its server-only read credential.
+            require_terminal_cleanup: Keep cancellation pending until Jobs confirms exit,
+                so a caller holding a deletable result file can safely release it.
+
+        Returns:
+            Validated matching count and projected bounds.
+
+        Raises:
+            VectorConflictError: If Jobs or the original source cannot supply an extent.
+            asyncio.CancelledError: After the selected cancellation cleanup completes.
+        """
         try:
             result = await self.jobs.run(
                 {
                     "operation": "vector.selection-extent.v1",
-                    "inputs": {
-                        "selection": selection.model_dump(mode="json", by_alias=True),
-                        "uploadOwner": upload_owner,
-                    },
+                    "inputs": inputs,
                     "priority": 0,
                     "executionTimeoutSeconds": 15,
                     "queueTimeoutSeconds": 30,
                 },
                 timeout_seconds=60,
                 delete_on_completion=True,
+                require_terminal_cleanup=require_terminal_cleanup,
             )
             measured = SelectionExtentResult.model_validate(result.value)
         except JobFailed as error:

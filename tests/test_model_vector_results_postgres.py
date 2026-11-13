@@ -276,3 +276,89 @@ def test_vector_model_output_download_and_retained_typed_details(
         RunDocument.model_validate(after_expiry).execution.outcome.details,
         ObservationDetails,
     )
+
+
+def test_internal_source_lookup_requires_live_transfer_for_its_run(
+    vector_result_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Bind internal file lookup to the existing owned transfer and result lifetime.
+
+    Args:
+        vector_result_boundary: Real native vector publication and HTTP composition.
+        store: PostgreSQL authority used to acquire, release and expire read access.
+    """
+    client, worker, body = vector_result_boundary
+    job = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    artifact_id = next(
+        file["artifactId"]
+        for file in ready["artifacts"]["files"]
+        if file["mediaType"] == "application/geopackage+sqlite3"
+    )
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    row, lease = store.acquire_transfer(job["jobId"], owner)
+    endpoint = f"/api/processing/source-files/{job['jobId']}/{artifact_id}"
+    credentials = {"Authorization": f"Bearer {lease}"}
+    try:
+        assert client.get(endpoint).status_code == 401
+        assert (
+            client.get(
+                endpoint, headers={"Authorization": "Bearer " + "0" * 32}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                f"/api/processing/source-files/{'0' * 32}/{artifact_id}",
+                headers=credentials,
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                f"/api/processing/source-files/{job['jobId']}/{'0' * 32}",
+                headers=credentials,
+            ).status_code
+            == 404
+        )
+        with TestClient(client.app, base_url="https://testserver") as worker_client:
+            response = worker_client.get(endpoint, headers=credentials)
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "relativePath": f"results/{row['attempt_id']}/result.gpkg",
+            "mediaType": "application/geopackage+sqlite3",
+        }
+        assert "no-store" in response.headers["cache-control"]
+        assert "set-cookie" not in response.headers
+        with psycopg.connect(store.conninfo) as connection:
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM processing.transfers"
+                ).fetchone()[0]
+                == 1
+            )
+        assert store.transfer_heartbeat(lease, release=True)
+        assert client.get(endpoint, headers=credentials).status_code == 404
+        _, lease = store.acquire_transfer(job["jobId"], owner)
+        credentials = {"Authorization": f"Bearer {lease}"}
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute(
+                "UPDATE processing.transfers SET expires_at=now()-interval '1 second' WHERE id=%s",
+                (lease,),
+            )
+        assert client.get(endpoint, headers=credentials).status_code == 404
+        _, lease = store.acquire_transfer(job["jobId"], owner)
+        credentials = {"Authorization": f"Bearer {lease}"}
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute(
+                "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+                (row["job_id"],),
+            )
+        assert client.get(endpoint, headers=credentials).status_code == 404
+        client.portal.call(worker.cleanup)
+        assert (
+            worker.artifacts.root / "results" / row["attempt_id"] / "result.gpkg"
+        ).exists()
+    finally:
+        store.transfer_heartbeat(lease, release=True)
