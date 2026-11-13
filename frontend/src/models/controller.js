@@ -124,7 +124,7 @@ export class ModelsController {
         try {
             this.state.library = (await this.api.discoverModels()).filter(model =>
                 Object.values(model.inputs).every(input =>
-                    ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "raster_preparation", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type)));
+                    ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "raster_preparation", "temporal_interval", "temporal_reduction", "area_statistic", "vector_summary"].includes(input.type)));
         }
         catch (error) { this.state.error = `Data tools unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -621,6 +621,14 @@ export class ModelsController {
                 continue;
             }
             if (["habitat_stack", "raster_preparation"].includes(type)) continue;
+            if (type === "vector_summary") {
+                input.vectors = structuredClone(context.vectors ?? []);
+                if (input.vectorKey && !input.vectors.some(source => source.key === input.vectorKey)) {
+                    input.vectorKey = ""; input.groupField = ""; input.valueField = "";
+                    input.selectionError = "Add the polygon layer to Map layers, or choose another layer.";
+                }
+                continue;
+            }
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
             const selected = input.vectors.find(source => source.key === input.vectorKey);
@@ -971,6 +979,9 @@ export class ModelsController {
             if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
                 input.raster = structuredClone(saved.inputs[name]);
                 input.sourceReason = "Copied from the original run; choose another raster to change it.";
+            } else if (definition.type === "vector_summary") {
+                const value = saved.inputs[name];
+                Object.assign(input, {capturedSelection: structuredClone(value.selection), groupField: value.groupField, valueField: value.valueField});
             } else if (definition.type === "habitat_stack") {
                 const value = saved.inputs[name];
                 if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year});

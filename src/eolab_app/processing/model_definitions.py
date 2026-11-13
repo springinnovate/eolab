@@ -415,7 +415,11 @@ def validate_operation(definition: ModelDefinition) -> None:
                 for name, item in step.parameters.items()
             }
             == dict(contract.parameters)
-            and contract.output.kind in ("raster", "statistics", "timeSeries")
+            and contract.output.kind in ("raster", "statistics", "timeSeries", "vector")
+            and (
+                contract.output.kind != "vector"
+                or contract.output.media_type == "application/geopackage+sqlite3"
+            )
             and contract.output.name in requested
             and len(set(requested)) == len(requested)
             and "provenance" not in definition.outputs

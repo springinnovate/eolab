@@ -826,6 +826,7 @@ async function initializeCatalog(
         api: processingApi,
         onRunObserved: job => processingJobs.accept(job),
         addRaster: (source, lifecycle, presentation) => rasterVisualization.showSource(source, lifecycle, presentation),
+        addVector: (source, lifecycle, presentation) => addGeneratedVector(source, lifecycle, presentation),
         addLayer: (source, adapter) => mapLayerController.addLocal(source, adapter),
         updateLayer: (key, presentation) => mapLayerController.updateLocalPresentation(key, presentation),
         removeLayer: key => mapLayerController.removeKey(key),
@@ -1024,6 +1025,36 @@ async function initializeCatalog(
         vectorMapLayerAdapter.added(record);
         mapLayerStackView.announceStatus(`${upload.name} added to map.`);
     }
+    /** Display a generated vector through the same adapter as catalog layers and uploads.
+     * The run owner supplies lifecycle actions; this composition function connects them.
+     * @param {import("./vector/api.js").RunArtifactVectorSource} source Authorized original file metadata.
+     * @param {Object} lifecycle Run detail, removal and restoration callbacks.
+     * @param {Object} presentation Layer identity, appearance, filter and current-request check.
+     * @return {Promise<Object|null>} Retained vector record, or null after cancellation.
+     * @throws {Error} If publication, restoration or map construction fails.
+     */
+    async function addGeneratedVector(source, lifecycle, presentation) {
+        const publication = await vectorMapLayerAdapter.publish(source);
+        if (!presentation.isCurrent()) return null;
+        const record = mapLayerController.addLocal({...presentation, vector: source, publication, lifecycle,
+            visible: false, canAddView: true}, vectorMapLayerAdapter);
+        const isCurrent = () => presentation.isCurrent() && mapLayerController.getRecord(presentation.key) === record;
+        try {
+            if (presentation.appearance) await vectorMapLayerAdapter.restoreRemovedStyle(record, presentation.appearance);
+            if (!isCurrent()) return null;
+            if (presentation.filter) await vectorMapLayerAdapter.applyFilterState(record, presentation.filter);
+            if (!isCurrent()) return null;
+            mapLayerController.setVisible(presentation.key, presentation.visible);
+            vectorMapLayerAdapter.added(record);
+            onRenderingWorkspaceRequested();
+            return record;
+        } catch (error) {
+            if (mapLayerController.getRecord(presentation.key) === record) mapLayerController.removeKey(presentation.key);
+            throw error;
+        } finally {
+            if (!presentation.isCurrent() && mapLayerController.getRecord(presentation.key) === record) mapLayerController.removeKey(presentation.key);
+        }
+    }
     /** Restore an upload view using its captured appearance and immutable source.
      * The WMS endpoint authorizes each request for the restored layer.
      * @param {import("./map-layers/controller.js").RemovedMapLayer} snapshot Removed upload and presentation.
@@ -1133,9 +1164,10 @@ async function initializeCatalog(
         .filter(record => record.adapter === vectorMapLayerAdapter)
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
-            return source.geometryKind === "polygon" ? [{
+            return source.geometryKind === "polygon" && source.source.kind !== "runArtifact" ? [{
                 key: record.entry.key, label: record.entry.label, item: source.source,
-                fields: source.fields, filter: record.adapter.exportFilterState(record),
+                fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
+                selection: source.selection, filter: record.adapter.exportFilterState(record),
             }] : [];
         });
     /** List retained source layers and committed drawings for the polygon pickers.
@@ -1210,7 +1242,9 @@ async function initializeCatalog(
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields})),
+                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields,
+                    scalarFields: target.scalarFields, numericFields: target.numericFields,
+                    selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
                 drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({
                     key: target.key, label: target.label, total: target.polygons.length,
                     polygons: annotationSummaryPolygons(target.polygons, target.filter),
@@ -1331,7 +1365,7 @@ async function initializeCatalog(
         onFilterRequested: (key) => vectorFilterControls.open(key),
         getVectorStyleTarget: (key) => {
             const preview = outputLayers.layers.get(key);
-            if (preview?.kind === "vector") return {key, style: preview.appearance, fields: [], canFilter: false,
+            if (preview?.kind === "vector" && !preview.ordinary) return {key, style: preview.appearance, fields: [], canFilter: false,
                 notice: "Style this result preview. The downloaded file stays unchanged.",
                 apply: async style => outputLayers.applyAppearance(key, style)};
             const record = mapLayerController.getRecord(key);
@@ -1415,6 +1449,7 @@ async function initializeCatalog(
         },
         exportUpload: record => {
             if (record.adapter !== vectorMapLayerAdapter || record.entry.item !== null) return null;
+            if (!record.adapter.describeSource(record).source.uploadId) return null;
             return {
                 uploadId: record.adapter.describeSource(record).source.uploadId,
                 visible: record.entry.visible, opacity: record.entry.opacity,

@@ -5,6 +5,7 @@ import {
     assessCatalogVector,
     classifyVectorNumbers,
     countVectorFilter,
+    describeVectorArtifact,
     getVectorFieldValues,
     getVectorFilterExtent,
     publishVector,
@@ -16,6 +17,36 @@ import {
 const VECTOR_ITEM = Object.freeze({
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
+});
+
+test("generated vectors use run-owned metadata, rendering, values and extent endpoints", async () => {
+    const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32)};
+    const base = `/api/vector-rendering/artifacts/${source.jobId}/${source.artifactId}`;
+    const metadata = {...source, layerName: "summary", geometryKind: "polygon", fields: {state_name: "str", sum_total_es: "float"},
+        featureCount: 2, bbox: [0, 0, 1, 1]};
+    assert.deepEqual(await describeVectorArtifact(source, undefined, async (url, options) => {
+        assert.equal(url, base); assert.equal(options.credentials, "same-origin"); assert.equal(options.cache, "no-store");
+        return Response.json(metadata);
+    }), metadata);
+    await publishVector({...metadata, name: "Totals", path: "must-not-send"}, async (url, options) => {
+        assert.equal(url, `${base}/layers`); assert.deepEqual(JSON.parse(options.body), {});
+        assert.equal(options.headers["X-EOLab-Processing"], "1");
+        return Response.json({layerName: "eolab:result", bbox: metadata.bbox, geometryKind: "polygon",
+            styleName: "vector-polygon", style: {geometryKind: "polygon"}});
+    });
+    const query = {field: "state_name", search: "Ca", offset: 0};
+    await getVectorFieldValues(source, query, undefined, async (url, options) => {
+        assert.equal(new URL(url, "https://test").pathname, `${base}/field-values`);
+        assert.equal(options.method, "GET"); assert.equal(options.body, undefined);
+        return Response.json({field: query.field, values: ["California"], nextOffset: null, truncated: false});
+    });
+    await getVectorFilterExtent(source, {enabled: false, match: "all", rules: []}, undefined, async (url, options) => {
+        assert.equal(url, `${base}/extent`); assert.deepEqual(Object.keys(JSON.parse(options.body)), ["filter"]);
+        assert.equal(options.headers["X-EOLab-Processing"], "1");
+        return Response.json({matched: 2, bbox: [0, 0, 1, 1]});
+    });
+    await assert.rejects(describeVectorArtifact(source, undefined, async () => Response.json({...metadata, artifactId: "c".repeat(32)})), /invalid vector/);
+    await assert.rejects(describeVectorArtifact(source, undefined, async () => Response.json({detail: "This result expired."}, {status: 404})), /expired/);
 });
 
 test("prepared field values send only Catalog identity and matching page, preserving exact strings", async () => {

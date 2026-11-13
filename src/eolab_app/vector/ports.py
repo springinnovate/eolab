@@ -91,6 +91,8 @@ class VectorPublisher(Protocol):
         source_path: Path,
         layer_name: str,
         geometry_kind: VectorGeometryKind,
+        *,
+        advertised: bool = True,
     ) -> str:
         """Converge and style one exact mounted vector layer.
 
@@ -100,12 +102,35 @@ class VectorPublisher(Protocol):
             source_path: Canonical mounted container or file path.
             layer_name: Exact native layer selected by the Item.
             geometry_kind: Default point, line, or polygon style class.
+            advertised: Whether public capabilities may list this layer.
 
         Returns:
             Unqualified initialized style name assigned to the layer.
 
         Raises:
             VectorPublicationError: If GeoServer cannot converge the layer.
+        """
+        ...
+
+    async def temporary_layers(self) -> tuple[str, ...]:
+        """List generated-vector datastore names, including interrupted publications.
+
+        Returns:
+            Reserved result publication names without source paths.
+
+        Raises:
+            VectorPublicationError: If GeoServer discovery fails.
+        """
+        ...
+
+    async def remove(self, resource_name: str) -> None:
+        """Remove a result publication and cached tiles without deleting source files.
+
+        Args:
+            resource_name: Reserved generated-vector datastore identity.
+
+        Raises:
+            VectorPublicationError: If unpublication must be retried.
         """
         ...
 

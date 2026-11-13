@@ -127,7 +127,7 @@ def temporal_rendering(
             tracker,
             queue,
             hidden_layer=is_temporal_raster_layer,
-            use_layers=publication.use_layers,
+            use_layers=lambda names, request: publication.use_layers(names),
         )
     )
     app.include_router(
@@ -137,7 +137,7 @@ def temporal_rendering(
             "http://geoserver/geoserver",
             tracker,
             queue,
-            use_layers=publication.use_layers,
+            use_layers=lambda names, request: publication.use_layers(names),
         )
     )
     with TestClient(app) as client:

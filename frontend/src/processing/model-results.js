@@ -80,10 +80,24 @@ function validateStatisticsResult(result) {
         throw new Error("Processing returned invalid cache metadata.");
 }
 
+/** Check the layer identity and feature count of a generated vector file.
+ * @param {Object} result Vector result from the Processing API.
+ * @return {void}
+ * @throws {Error} If the layer, count or summary field is invalid.
+ */
+function validateVectorResult(result) {
+    if (typeof result.layerName !== "string" || !result.layerName ||
+        !Number.isSafeInteger(result.featureCount) || result.featureCount < 0 ||
+        result.summaryField !== undefined && (typeof result.summaryField !== "string" || !result.summaryField)) {
+        throw new Error("Processing returned invalid vector result details.");
+    }
+}
+
 const RESULT_TYPES = new Map([
     ["raster", {mediaType: "image/tiff", presentation: "map", validate: validateRasterResult}],
     ["statistics", {mediaType: "text/csv", presentation: "table", validate: validateStatisticsResult}],
     ["timeSeries", {mediaType: "text/csv", presentation: "download", validate: validateTimeSeriesResult}],
+    ["vector", {mediaType: "application/geopackage+sqlite3", presentation: "map", validate: validateVectorResult}],
 ]);
 
 /** Check a model result's file metadata and details for its declared output type.

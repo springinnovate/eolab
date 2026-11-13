@@ -22,6 +22,7 @@ const FIELDS = [
  */
 function createFixture({ geometryKind = "polygon", properties = {
     "table:primary_geometry": "geometry",
+    "eolab:vector_source": { asset_key: "data", layer_name: "parcels" },
     "table:columns": [{ name: "geometry", type: "geometry" }, ...FIELDS],
 }, onFilterChange = () => {} } = {}) {
     const calls = [], requests = [], counts = [], updates = [], notifications = [];
@@ -99,7 +100,9 @@ test("source descriptions expose usable immutable fields for each geometry witho
     for (const geometryKind of ["point", "line", "polygon"]) {
         const { adapter, record, calls } = createFixture({ geometryKind });
         const source = adapter.describeSource(record);
-        assert.deepEqual(source, { source: { collectionId: "vectors", itemId: "parcels" }, fields: FIELDS, geometryKind, primaryGeometry: "geometry" });
+        assert.deepEqual(source, { source: { collectionId: "vectors", itemId: "parcels" },
+            selection: { collectionId: "vectors", itemId: "parcels", assetKey: "data", layerName: "parcels" },
+            fields: FIELDS, scalarFields: FIELDS, numericFields: [FIELDS[0]], geometryKind, primaryGeometry: "geometry" });
         assert.ok(Object.isFrozen(source.source));
         assert.ok(Object.isFrozen(source.fields));
         assert.ok(source.fields.every(Object.isFrozen));
@@ -117,7 +120,7 @@ test("source descriptions preserve missing geometry metadata and empty field cho
     const { adapter, record, calls } = createFixture({ properties: {} });
     assert.deepEqual(adapter.describeSource(record), {
         source: { collectionId: "vectors", itemId: "parcels" },
-        fields: [], geometryKind: "polygon", primaryGeometry: null,
+        selection: null, fields: [], scalarFields: [], numericFields: [], geometryKind: "polygon", primaryGeometry: null,
     });
     assert.deepEqual(calls, []);
 });

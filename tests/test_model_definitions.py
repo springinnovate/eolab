@@ -56,7 +56,7 @@ def test_registry_requires_matching_primary_source_declarations(
 def test_registry_rejects_an_unsupported_primary_result(
     monkeypatch: pytest.MonkeyPatch, explicit_type: bool, output_kind: str
 ) -> None:
-    """Keep vector and administrator report operations outside executable Model YAML.
+    """Reject unsupported vector formats and administrator reports in Model YAML.
 
     Args:
         monkeypatch: Isolated trusted-operation registration.

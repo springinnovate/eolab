@@ -120,6 +120,7 @@ export function buildVectorFeatureInfoUrl({
 
 /**
  * Post this map's appearance and retrieve one bounded GeoJSON FeatureCollection.
+ * Private upload and run-result requests retain their session authorization.
  *
  * @param {Object} configuration Request configuration accepted by the URL builder.
  * @param {AbortSignal} configuration.signal Cancellation signal.
@@ -140,7 +141,7 @@ export async function fetchVectorFeatureInfo(
             {
                 method: "POST",
                 body: new URLSearchParams(url.slice(separator + 1)),
-                headers: { Accept: "application/json", "X-EOLab-Uploads": "1" },
+                headers: { Accept: "application/json", "X-EOLab-Uploads": "1", "X-EOLab-Processing": "1" },
                 signal: configuration.signal,
             }
         );

@@ -7,14 +7,14 @@ import {
 
 /**
  * Path-free identity supplied by vector source selection.
- * @typedef {{collectionId:string,itemId:string}|{uploadId:string}} VectorFieldValueSource
+ * @typedef {{collectionId:string,itemId:string}|{uploadId:string}|{kind:"runArtifact",jobId:string,artifactId:string}} VectorFieldValueSource
  */
 
 /**
  * Read one page of prepared string values without opening the original source.
- * Upload requests use the current browser's private ownership cookie. Nulls are
+ * Private sources use the current browser's ownership cookie. Nulls are
  * excluded by the endpoint; empty strings and whitespace are preserved exactly.
- * @param {VectorFieldValueSource} source Catalog identity or owned upload ID.
+ * @param {VectorFieldValueSource} source Catalog, upload or owned run-result identity.
  * @param {{field:string,search:string,offset:number}} query Field and matching page.
  * @param {AbortSignal} signal Cancellation when the editor or query changes.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
@@ -25,15 +25,16 @@ import {
 export async function getVectorFieldValues(source, query, signal, fetchImplementation = globalThis.fetch) {
     const page = { field: query.field, search: query.search, offset: query.offset, limit: 50 };
     const uploaded = "uploadId" in source;
-    const url = uploaded
+    const artifact = source.kind === "runArtifact";
+    const url = artifact ? `/api/vector-rendering/artifacts/${encodeURIComponent(source.jobId)}/${encodeURIComponent(source.artifactId)}/field-values?${new URLSearchParams(page)}` : uploaded
         ? `/api/vector-uploads/${encodeURIComponent(source.uploadId)}/field-values?${new URLSearchParams(page)}`
         : "/api/catalog/vector-field-values";
     let response;
     try {
         response = await fetchImplementation(url, {
-            method: uploaded ? "GET" : "POST", signal, credentials: "same-origin", cache: "no-store",
-            headers: { Accept: "application/json", ...(!uploaded ? { "Content-Type": "application/json" } : {}) },
-            ...(!uploaded ? { body: JSON.stringify({ collectionId: source.collectionId, itemId: source.itemId, ...page }) } : {}),
+            method: uploaded || artifact ? "GET" : "POST", signal, credentials: "same-origin", cache: "no-store",
+            headers: { Accept: "application/json", ...(!uploaded && !artifact ? { "Content-Type": "application/json" } : {}) },
+            ...(!uploaded && !artifact ? { body: JSON.stringify({ collectionId: source.collectionId, itemId: source.itemId, ...page }) } : {}),
         });
     } catch (error) {
         if (error.name === "AbortError") throw error;
@@ -57,7 +58,7 @@ export async function getVectorFieldValues(source, query, signal, fetchImplement
 
 /**
  * Read the complete accepted filter's original-source extent independently of rendering.
- * @param {VectorFieldValueSource} source Path-free Catalog or owned upload identity.
+ * @param {VectorFieldValueSource} source Path-free Catalog, upload or owned run-result identity.
  * @param {ReturnType<typeof import("./filter.js").normalizeVectorFilter>} filter Complete accepted predicate.
  * @param {AbortSignal} signal Cancellation when the view, predicate or map changes.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
@@ -67,13 +68,14 @@ export async function getVectorFieldValues(source, query, signal, fetchImplement
  */
 export async function getVectorFilterExtent(source, filter, signal, fetchImplementation = globalThis.fetch) {
     const uploaded = "uploadId" in source;
+    const artifact = source.kind === "runArtifact";
     let response;
     try {
-        response = await fetchImplementation("/api/vector-sampling/extent", {
+        response = await fetchImplementation(artifact ? `/api/vector-rendering/artifacts/${encodeURIComponent(source.jobId)}/${encodeURIComponent(source.artifactId)}/extent` : "/api/vector-sampling/extent", {
             method: "POST", signal, credentials: "same-origin", cache: "no-store",
             headers: { Accept: "application/json", "Content-Type": "application/json",
-                ...(uploaded ? {"X-EOLab-Uploads": "1"} : {}) },
-            body: JSON.stringify({ ...(uploaded ? {uploadId: source.uploadId}
+                ...(uploaded ? {"X-EOLab-Uploads": "1"} : artifact ? {"X-EOLab-Processing": "1"} : {}) },
+            body: JSON.stringify({ ...(artifact ? {} : uploaded ? {uploadId: source.uploadId}
                 : {collectionId: source.collectionId, itemId: source.itemId}), filter }),
         });
     } catch (error) {
@@ -98,9 +100,46 @@ export async function getVectorFilterExtent(source, filter, signal, fetchImpleme
  */
 
 /**
- * Catalog identity or admitted upload metadata used by vector rendering.
- * @typedef {{collection:string,id:string,properties?:Object}|UploadedVectorSource} VectorSource
+ * Catalog identity or private source metadata used by vector rendering.
+ * @typedef {{collection:string,id:string,properties?:Object}|UploadedVectorSource|RunArtifactVectorSource} VectorSource
  */
+
+/** Metadata for a generated vector read through its run owner's access boundary.
+ * @typedef {Object} RunArtifactVectorSource
+ * @property {"runArtifact"} kind Source reference family.
+ * @property {string} jobId Owning run identifier.
+ * @property {string} artifactId Published file identifier.
+ * @property {string} layerName Native vector layer name.
+ * @property {Object<string,string>} fields Original attribute names and types.
+ * @property {number} featureCount Number of output features.
+ * @property {number[]|null} bbox WGS84 bounds, or null for an empty result.
+ * @property {"point"|"line"|"polygon"} geometryKind Source geometry family.
+ * @property {string} [name] Display name supplied by the owning run.
+ * @property {string} [defaultNumericField] Numeric column preferred for initial coloring.
+ */
+
+/** Read an owned vector result's metadata for the ordinary vector layer pipeline.
+ * @param {{jobId:string,artifactId:string}} source Opaque run and file identity.
+ * @param {AbortSignal} [signal] Cancel an obsolete display request.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<RunArtifactVectorSource>} Validated, path-free source metadata.
+ * @throws {Error} If access fails or metadata is invalid.
+ * @throws {DOMException} If the request is aborted.
+ */
+export async function describeVectorArtifact(source, signal, fetchImplementation = globalThis.fetch) {
+    const response = await fetchImplementation(`/api/vector-rendering/artifacts/${encodeURIComponent(source.jobId)}/${encodeURIComponent(source.artifactId)}`,
+        {signal, credentials: "same-origin", cache: "no-store", headers: {Accept: "application/json"}});
+    if (!response.ok) throw await vectorRenderingError(response, "result metadata");
+    const result = await response.json();
+    if (result?.kind !== "runArtifact" || result.jobId !== source.jobId || result.artifactId !== source.artifactId ||
+        typeof result.layerName !== "string" || !result.layerName || !["point", "line", "polygon"].includes(result.geometryKind) ||
+        !Number.isSafeInteger(result.featureCount) || result.featureCount < 0 || !result.fields || typeof result.fields !== "object" ||
+        Array.isArray(result.fields) || Object.entries(result.fields).some(([name, type]) => !name || typeof type !== "string") ||
+        !(result.bbox === null || Array.isArray(result.bbox) && result.bbox.length === 4 && result.bbox.every(Number.isFinite))) {
+        throw new Error("The server returned invalid vector result metadata.");
+    }
+    return result;
+}
 
 const VECTOR_FAILURE_CATEGORIES = new Set([
     "reader_rejection",
@@ -162,9 +201,9 @@ async function vectorRenderingError(response, action) {
 }
 
 /**
- * Send a catalog identity or upload UUID to its vector rendering endpoint.
+ * Send an opaque source identity to its vector rendering endpoint.
  *
- * @param {VectorSource} source Catalog Item or admitted upload.
+ * @param {VectorSource} source Catalog Item, admitted upload or owned run result.
  * @param {"assessments"|"layers"|"styles"|"category-summaries"|
  * "numeric-classifications"|"filters"|"filter-counts"} action
  * Rendering action path.
@@ -184,7 +223,8 @@ async function postVectorAction(
     signal = undefined,
 ) {
     const uploaded = source.kind === "upload";
-    const endpoint = uploaded ? `uploads/${source.id}/${action}` : action;
+    const artifact = source.kind === "runArtifact";
+    const endpoint = artifact ? `artifacts/${encodeURIComponent(source.jobId)}/${encodeURIComponent(source.artifactId)}/${action}` : uploaded ? `uploads/${source.id}/${action}` : action;
     let response;
     try {
         response = await fetchImplementation(`/api/vector-rendering/${endpoint}`, {
@@ -194,9 +234,10 @@ async function postVectorAction(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 ...(uploaded ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(artifact ? { "X-EOLab-Processing": "1" } : {}),
             },
             body: JSON.stringify({
-                ...(uploaded ? {} : { collectionId: source.collection, itemId: source.id }),
+                ...(uploaded || artifact ? {} : { collectionId: source.collection, itemId: source.id }),
                 ...additionalBody,
             }),
         });
