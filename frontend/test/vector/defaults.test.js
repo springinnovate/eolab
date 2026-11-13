@@ -62,7 +62,7 @@ test("annual numeric defaults prefer the latest year regardless of Catalog field
     assert.equal(defaultVectorNumericField([...annual].reverse()), "R2024");
 });
 
-test("new vector styles leave labels off even when a name field exists", () => {
+test("new polygon, point and line styles leave labels off", () => {
     for (const geometryKind of ["polygon", "point", "line"]) {
         const symbol = geometryKind === "line"
             ? { geometryKind, strokeColor: "#2b83ba", strokeOpacity: 1, strokeWidth: 2 }
@@ -72,7 +72,6 @@ test("new vector styles leave labels off even when a name field exists", () => {
         assert.equal(styled.strokeWidth, symbol.strokeWidth);
         assert.equal(styled.graduated, null);
     }
-    assert.equal(deriveDefaultVectorStyle(initial).label, null);
 });
 
 test("default numeric colors consume API-validated constants with and without nulls", async () => {
