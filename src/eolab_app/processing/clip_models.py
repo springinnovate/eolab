@@ -2,12 +2,13 @@
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ModelWrapValidatorHandler,
     model_validator,
     model_serializer,
     SerializerFunctionWrapHandler,
@@ -56,9 +57,21 @@ class ClipInputs(BaseModel):
     samplingBox: Wgs84SamplingBox | None = None
     catalogSelection: VectorSelection | None = None
 
-    @model_validator(mode="after")
-    def validate_clip_inputs(self) -> "ClipInputs":
-        """Require one raster reference and one explicit geographic clip area.
+    @model_validator(mode="wrap")
+    @classmethod
+    def validate_clip_inputs(
+        cls, value: Any, handler: ModelWrapValidatorHandler[Self]
+    ) -> Self:
+        """Validate new clip inputs and reuse already validated request instances.
+
+        Raw and persisted inputs require one raster reference and one explicit
+        geographic area. Internal callers may reuse a validated request without
+        repeating these checks; they must not mutate its inputs or construct it
+        with Pydantic's unchecked construction/copy methods.
+
+        Args:
+            value: Raw input or an already validated clip request.
+            handler: Pydantic's field validation and model construction handler.
 
         Returns:
             Validated request.
@@ -66,23 +79,28 @@ class ClipInputs(BaseModel):
         Raises:
             ValueError: If source identities conflict or the area is absent or ambiguous.
         """
-        if self.source is None:
-            CatalogRasterRequest(collectionId=self.collection_id, itemId=self.item_id)
-        elif self.collection_id is not None or self.item_id is not None:
+        request = handler(value)
+        if request is value:
+            return request
+        if request.source is None:
+            CatalogRasterRequest(
+                collectionId=request.collection_id, itemId=request.item_id
+            )
+        elif request.collection_id is not None or request.item_id is not None:
             raise ValueError("Choose one raster source")
         if (
             sum(
                 value is not None
                 for value in (
-                    self.selectedBounds,
-                    self.samplingBox,
-                    self.catalogSelection,
+                    request.selectedBounds,
+                    request.samplingBox,
+                    request.catalogSelection,
                 )
             )
             != 1
         ):
             raise ValueError("Choose exactly one map area or vector selection")
-        return self
+        return request
 
 
 class ClipJobRequest(ClipInputs):
