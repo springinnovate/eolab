@@ -52,14 +52,16 @@ def test_registry_requires_matching_primary_source_declarations(
 
 
 @pytest.mark.parametrize("explicit_type", [False, True])
-def test_registry_rejects_an_unsupported_geojson_primary_result(
-    monkeypatch: pytest.MonkeyPatch, explicit_type: bool
+@pytest.mark.parametrize("output_kind", ["vector", "report"])
+def test_registry_rejects_an_unsupported_primary_result(
+    monkeypatch: pytest.MonkeyPatch, explicit_type: bool, output_kind: str
 ) -> None:
-    """Reject a GeoJSON primary result while ordinary GeoPackage vectors are supported.
+    """Reject unsupported vector formats and administrator reports in Model YAML.
 
     Args:
         monkeypatch: Isolated trusted-operation registration.
         explicit_type: Whether YAML declares the type or uses the operation's default.
+        output_kind: Registered primary result without a public model-run contract.
     """
     document = ModelRegistry.load_installed().get("raster-clip", "1.1.0").to_document()
     original = operation_registry.get_model_operation("raster.clip.v1")
@@ -68,7 +70,7 @@ def test_registry_rejects_an_unsupported_geojson_primary_result(
         original.id: replace(
             original,
             output=OperationOutput(
-                "features", "vector", "map", "application/geo+json", "Clipped features"
+                "features", output_kind, "download", "application/json", "Result"
             ),
         ),
     }
@@ -77,16 +79,31 @@ def test_registry_rejects_an_unsupported_geojson_primary_result(
         "features": {
             "source": "clip.features",
             "role": "result",
-            "presentation": "map",
+            "presentation": "download",
             "saveEligible": False,
         }
     }
     if explicit_type:
-        document["outputs"]["features"]["type"] = "vector"
+        document["outputs"]["features"]["type"] = output_kind
+    if explicit_type and output_kind == "report":
+        with pytest.raises(ValidationError):
+            ModelDefinition.model_validate(document)
+        return
     model = ModelDefinition.model_validate(document)
     with pytest.raises(ProcessingError) as error:
         ModelRegistry((model,))
     assert error.value.code == "unsupported_model_operation"
+
+
+def test_bulk_preparation_cannot_bind_from_a_public_model_recipe() -> None:
+    """Reject recipe binding to the operation that may submit admin-owned child jobs."""
+    operation = operation_registry.get_model_operation(
+        "habitat.retry-missing-inputs.v1"
+    )
+    with pytest.raises(ProcessingError) as error:
+        operation.bind({}, {}, "public-model-request", "Attempted bulk preparation")
+    assert error.value.code == "administration_required"
+    assert error.value.status == 403
 
 
 def test_recipe_can_retain_a_registered_geojson_output(

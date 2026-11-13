@@ -74,8 +74,14 @@ from eolab_app.processing.downstream_models import (
 from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.processing import habitat_operation as habitat
 from eolab_app.processing import habitat_preparation as habitat_inputs
+from eolab_app.processing import habitat_bulk_preparation as habitat_bulk
 from eolab_app.processing.habitat_preparation_models import (
+    BULK_OPERATION as HABITAT_BULK_PREPARATION_OPERATION,
     OPERATION as HABITAT_INPUT_PREPARATION_OPERATION,
+    HabitatBulkPreparationInputs,
+    HabitatBulkPreparationSpec,
+    HabitatBulkPreparationSummary,
+    QueuedHabitatBulkPreparation,
     HabitatInputPreparationInputs,
     HabitatInputPreparationRequest,
     HabitatInputPreparationSpec,
@@ -271,6 +277,48 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
+            ModelOperation[
+                HabitatBulkPreparationInputs,
+                QueuedHabitatBulkPreparation,
+                HabitatBulkPreparationSpec,
+            ](
+                id=HABITAT_BULK_PREPARATION_OPERATION,
+                inputs=(),
+                parameters=(),
+                output=OperationOutput(
+                    "report",
+                    "report",
+                    "download",
+                    "application/json",
+                    "Ecosystem Condition bulk preparation report",
+                ),
+                execution_profile="habitat-condition",
+                queued_type=QueuedHabitatBulkPreparation,
+                prepared_type=HabitatBulkPreparationSpec,
+                policy_type=HabitatBulkPreparationSummary,
+                bind=habitat_bulk.bind_habitat_bulk_preparation,
+                source=None,
+                polygon_inputs=lambda request: {},
+                vector_selections=lambda request: {},
+                queue=lambda request, polygons: habitat_bulk.build_habitat_bulk_preparation_submission(
+                    request
+                ),
+                prepare=habitat_bulk.prepare_habitat_bulk_preparation,
+                execution=lambda spec, context: (
+                    habitat_bulk.habitat_bulk_preparation_process_target,
+                    "report",
+                    None,
+                ),
+                policy=lambda spec: HabitatBulkPreparationSummary(
+                    areaCount=spec.report.areaCount
+                ),
+                result=lambda summary, artifact, policy: habitat_bulk.describe_habitat_bulk_preparation_outcome(
+                    artifact
+                ),
+                outcome=habitat_bulk.describe_habitat_bulk_preparation_outcome,
+                primary_input=None,
+                execution_inputs=habitat_bulk.prepare_habitat_bulk_preparation_execution,
+            ),
             ModelOperation[
                 VectorSummaryRequest, QueuedVectorSummary, VectorSummarySpec
             ](

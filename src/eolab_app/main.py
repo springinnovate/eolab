@@ -78,6 +78,7 @@ from eolab_app.routes.habitat import create_habitat_router
 from eolab_app.routes.habitat_preparation import create_habitat_preparation_router
 from eolab_app.processing.habitat_preparation_models import (
     OPERATION as HABITAT_INPUT_PREPARATION_OPERATION,
+    BULK_OPERATION as HABITAT_BULK_PREPARATION_OPERATION,
 )
 from eolab_app.routes.habitat_admin import create_habitat_admin_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
@@ -845,6 +846,7 @@ async def run_processing_worker() -> None:
                             settings.processing_data_path / "habitat-cache"
                         ),
                         HABITAT_INPUT_PREPARATION_OPERATION: settings.habitat_earth_engine,
+                        HABITAT_BULK_PREPARATION_OPERATION: settings.habitat_earth_engine,
                     },
                 )
                 workers.create_task(

@@ -357,7 +357,10 @@ administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
 **Retry all missing inputs** checks all areas and years still saved in preparation
 history against current inputs, reuses cached tiles, and skips matching work
-already in progress.
+already in progress. Once the request is accepted, checks and preparation continue
+after you leave the page. Return to preparation history for the check report and
+individual download progress; stopping a check leaves already queued preparations
+running.
 Partial coverage still needs enough usable data and reference sites to fit the
 model; missing pixels are never treated as zero.
 
@@ -414,11 +417,13 @@ you want to retain.
 
 To sample histograms or calculate raster statistics using a drawing, save it,
 then choose its layer under **Sample area → Polygon layer**. The calculation uses
-the saved polygons that match the layer's filter. **Export GeoJSON** downloads
-all saved polygons in the layer, including those hidden by its filter, so you
-can keep a copy outside EOLab. Download filenames include the layer name, a short
-layer identifier and the export date and time in UTC. Downloads from a published
-map also include its URL name, helping you distinguish maps and saved copies.
+the saved polygons that match the layer's filter.
+
+To keep a GeoJSON copy, choose **Download** on the polygon layer card in
+**Map layers**. The file includes all saved polygons in the layer, including
+those hidden by its filter. The suggested filename includes the layer name,
+a short layer identifier and the export date and time in UTC. Downloads from
+a published map also include its URL name.
 Edit the suggested filename in the download dialog, then choose **Download**,
 or **Cancel** to leave without downloading. The `.geojson` extension is added if omitted.
 Map links omit private local polygons. Share

@@ -1,6 +1,7 @@
 """Prepare Habitat's shared Earth Engine inputs through ordinary Processing jobs."""
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -52,6 +53,30 @@ class HabitatPreparationSources:
 
     area: ResolvedCatalogSelection
     runtime: HabitatEarthEngineRuntime
+
+
+def get_retained_habitat_preparation_inputs(
+    row: dict[str, Any],
+) -> HabitatInputPreparationInputs | None:
+    """Read a preparation's saved inputs while its metadata remains available.
+
+    Args:
+        row: Authorized persisted job record, including retained metadata.
+
+    Returns:
+        Validated path-free inputs, or None after their metadata lifetime ends.
+        The physical summary never extends access beyond that lifetime.
+
+    Raises:
+        ValueError: If persisted preparation metadata violates its schema.
+    """
+    metadata = row.get("retained_metadata")
+    expires_at = row.get("metadata_expires_at")
+    if metadata is None or (
+        expires_at is not None and expires_at <= datetime.now(timezone.utc)
+    ):
+        return None
+    return HabitatInputPreparationSpec.model_validate(metadata).inputs
 
 
 def bind_habitat_input_preparation(

@@ -1,13 +1,13 @@
-/** Retained editing controls displayed in the annotation panel. */
+/** Retained controls for a polygon layer's map card and editor. */
 import { matchingAnnotationPolygons } from "./model.js";
 
-/** Present one local annotation layer and forward edits to its owner. */
+/** Present a local or shared annotation layer and forward actions to its owner. */
 export class AnnotationLayerControls {
     /**
-     * Build stable layer controls; notes and names are always plain text.
+     * Build stable controls for the map card and editor. Render names and notes as plain text.
      * @param {Document} document Browser document.
      * @param {import("./model.js").AnnotationLayer} layer Annotation data.
-     * @param {Object} actions Editing intents handled by the layer owner.
+     * @param {Object} actions Map card and editor actions handled by the layer owner.
      * @param {()=>void} actions.open Reveal this layer in the annotation panel.
      * @param {()=>void} actions.add Start drawing a polygon.
      * @param {(id:string,field?:"name"|"note")=>void} actions.edit Edit a polygon, optionally focusing its name or notes.
@@ -15,7 +15,7 @@ export class AnnotationLayerControls {
      * @param {(id:string)=>void} actions.removePolygon Delete a polygon with Undo.
      * @param {(rebuild?:boolean)=>void} actions.change Save changed fields and update the map.
      * @param {(opacity:number)=>void} actions.opacity Set the whole layer's opacity.
-     * @param {()=>void} actions.exportGeoJSON Download the saved polygons.
+     * @param {()=>void} actions.exportGeoJSON Open the filename dialog to download saved polygons.
      * @param {()=>void} actions.share Share this layer in a session.
      * @param {(color:string)=>void} actions.color Save your shared polygon color.
      * @param {()=>void} actions.renameContributor Open your shared-layer name for editing.
@@ -47,20 +47,22 @@ export class AnnotationLayerControls {
         drawIcon.className = "annotation-draw-icon";
         drawIcon.setAttribute("aria-hidden", "true");
         this.draw.prepend(drawIcon);
-        this.drawing = document.createElement("div"); this.drawing.className = "annotation-drawing-action";
+        const download = this.button("Download", actions.exportGeoJSON);
+        download.classList.add("annotation-download-button");
+        download.setAttribute("aria-haspopup", "dialog");
+        download.title = "Download all saved polygons as GeoJSON, including polygons hidden by the filter.";
+        this.cardActions = document.createElement("div");
+        this.cardActions.className = "annotation-card-actions";
         this.members = this.details("Contributors"); this.members.className = "shared-annotation-members"; this.members.hidden = true;
         this.memberList = document.createElement("ul"); this.members.append(this.memberList);
         this.renameContributor = this.button("Change your name", () => actions.renameContributor());
         this.renameContributor.hidden = true;
         this.members.append(this.renameContributor);
         this.sharedStatus = document.createElement("span"); this.sharedStatus.className = "shared-annotation-status"; this.sharedStatus.setAttribute("role", "status");
-        this.drawing.append(this.draw, this.members, this.sharedStatus);
+        this.cardActions.append(this.draw, download, this.members, this.sharedStatus);
         this.share = this.button("Share layer", actions.share);
         this.share.title = "Create a shared layer so other contributors can see and add polygons.";
         buttons.append(this.share);
-        const exportButton = this.button("Export GeoJSON", actions.exportGeoJSON);
-        exportButton.title = "Download all saved polygons, names and notes in this layer, including filtered-out polygons. Save unfinished edits first to include them.";
-        buttons.append(exportButton);
         this.root.append(buttons);
         this.appearance = this.details("Layer style");
         this.sharedAppearance = document.createElement("fieldset");
@@ -277,7 +279,7 @@ export class AnnotationLayerControls {
         colorInput.parentElement.title = "Shared with everyone. Changes the fill of all your polygons in this layer. Other appearance controls affect only your map.";
         this.members.hidden = false;
         this.renameContributor.hidden = !data.contributors.some(person => person.own);
-        if (this.share.parentElement !== this.drawing) this.drawing.insertBefore(this.share, this.members);
+        if (this.share.parentElement !== this.cardActions) this.cardActions.insertBefore(this.share, this.members);
         this.share.title = data.code ? `Copy share code: ${data.code}` : "Copy this layer's sharing code";
         this.name.querySelector("input").disabled = true;
         this.sharedStatus.textContent = data.status;

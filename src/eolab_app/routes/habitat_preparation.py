@@ -7,12 +7,15 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.responses import JSONResponse
 
 from eolab_app.catalog_selection import SelectionUnavailableError
 from eolab_app.processing.habitat_preparation_models import (
     OPERATION,
+    BULK_OPERATION,
+    HabitatBulkPreparationRequest,
+    HabitatBulkPreparationSummary,
     HabitatInputPreparationInputs,
     HabitatInputPreparationRequest,
     PreparationRequestId,
@@ -80,15 +83,57 @@ class HabitatPreparationJob(JobResponse):
     result: HabitatPreparationReport | None
 
 
+class HabitatBulkPreparationReport(JobResultResponse):
+    """Describe completed bulk checks and admissions, not finished tile downloads.
+
+    Attributes:
+        areaCount: Distinct saved areas and years checked by this bulk request.
+        queuedCount: Individual preparations accepted into the ordinary queue.
+        cachedCount: Areas with complete current cached tile coverage.
+        activeCount: Areas skipped because a matching preparation was active.
+        failedCount: Areas whose coverage check or admission failed.
+    """
+
+    areaCount: int
+    queuedCount: int
+    cachedCount: int
+    activeCount: int
+    failedCount: int
+
+
+class HabitatBulkPreparationJob(JobResponse):
+    """Expose a durable bulk request through the normal preparation history.
+
+    Attributes:
+        operation: Bulk retry discriminator, distinct from individual downloads.
+        inputs: Captured scope size until metadata expiry; never source paths.
+        metadataExpiresAt: Saved-summary expiry, or None while the job is active.
+        progress: Existing worker lifecycle progress while checks run.
+        result: Summary and downloadable per-area outcomes after checks finish.
+    """
+
+    operation: Literal["habitat.retry-missing-inputs.v1"] = BULK_OPERATION
+    inputs: HabitatBulkPreparationSummary | None
+    metadataExpiresAt: datetime | None
+    progress: HabitatPreparationProgress
+    result: HabitatBulkPreparationReport | None
+
+
+HabitatPreparationHistoryJob = Annotated[
+    HabitatPreparationJob | HabitatBulkPreparationJob, Field(discriminator="operation")
+]
+"""An individual download or bulk check identified by its operation."""
+
+
 class HabitatPreparationList(BaseModel):
     """Return one page of administrator preparation history.
 
     Attributes:
-        jobs: Matching jobs, newest first; excludes other operations and browser owners.
+        jobs: Individual and bulk jobs, newest first; excludes other operations and owners.
         nextCursor: Token for older retained jobs, or None at the end of history.
     """
 
-    jobs: list[HabitatPreparationJob]
+    jobs: list[HabitatPreparationHistoryJob]
     nextCursor: str | None
 
 
@@ -185,6 +230,27 @@ def create_habitat_preparation_router(
         """
         return await service.submit_habitat_input_preparation(body)
 
+    @router.post(
+        "/retry-all", status_code=202, response_model=HabitatBulkPreparationJob
+    )
+    async def submit_bulk_preparation(
+        body: HabitatBulkPreparationRequest,
+    ) -> dict[str, object]:
+        """Accept a durable check and retry of every retained saved area and year.
+
+        Args:
+            body: Stable command identifier used to recover a lost response.
+
+        Returns:
+            Bulk job receipt. Checks and queued downloads continue after the
+            browser leaves; individual outcomes appear in preparation history.
+
+        Raises:
+            ProcessingError: If recovery conflicts or durable admission fails.
+            ValueError: If saved preparation metadata cannot be read.
+        """
+        return await service.submit_habitat_bulk_preparation(body)
+
     @router.get("", response_model=HabitatPreparationList)
     async def list_preparations(
         limit: int = Query(50, ge=1, le=100), cursor: str | None = Query(None)
@@ -203,9 +269,9 @@ def create_habitat_preparation_router(
         """
         return await service.list_habitat_input_preparations(limit, cursor)
 
-    @router.get("/{job_id}", response_model=HabitatPreparationJob)
+    @router.get("/{job_id}", response_model=HabitatPreparationHistoryJob)
     async def get_preparation(job_id: PreparationJobId) -> dict[str, object]:
-        """Read a preparation's current tile progress, state and report availability.
+        """Read an individual or bulk preparation's status and report availability.
 
         Args:
             job_id: Preparation handle returned when the work was accepted.
@@ -219,16 +285,17 @@ def create_habitat_preparation_router(
         return await service.get_habitat_input_preparation(job_id)
 
     @router.post(
-        "/{job_id}/cancel", status_code=202, response_model=HabitatPreparationJob
+        "/{job_id}/cancel", status_code=202, response_model=HabitatPreparationHistoryJob
     )
     async def cancel_preparation(job_id: PreparationJobId) -> dict[str, object]:
-        """Request cancellation while preserving all completed shared input tiles.
+        """Stop a preparation while preserving cached tiles and already queued children.
 
         Args:
             job_id: Preparation handle to stop through the existing worker lifecycle.
 
         Returns:
-            Updated state, including cancelling until running native work exits.
+            Updated state, including cancelling until native work exits. Cancelling
+            bulk checks leaves any individual preparations already queued intact.
 
         Raises:
             ProcessingError: If this preparation is unavailable or cancellation fails.
