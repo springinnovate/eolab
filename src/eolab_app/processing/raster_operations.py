@@ -23,7 +23,6 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.clip_models import (
     ClipArea,
-    ClipInputs,
     ClipJobRequest,
     ClipSpec,
     UnpreparedClip,
@@ -521,9 +520,7 @@ def build_clip_submission(request: ClipJobRequest, polygons: None) -> PreparedJo
         Queued clip plan with its ordinary sharing identity and no native reads.
         Model admission removes the sharing identity before storage.
     """
-    inputs = ClipInputs.model_validate(
-        request.model_dump(exclude={"requestId"}, by_alias=True)
-    )
+    inputs = request
     queued = UnpreparedClip(request=inputs)
     bounds = inputs.selectedBounds
     return PreparedJobPlan(

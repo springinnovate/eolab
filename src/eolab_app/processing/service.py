@@ -28,7 +28,7 @@ from eolab_app.raster.source_models import (
     TemporalIntervalSelection,
     TemporalVariableMetadata,
 )
-from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest
+from eolab_app.processing.clip_models import ClipJobRequest
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     AggregateJobRequest,
@@ -1273,7 +1273,9 @@ class ProcessingService:
 
         Args:
             owner: Current browser-session hash.
-            request: Raster or exact temporal observation, explicit area and retry key.
+            request: Validated raster or exact temporal observation, explicit area
+                and retry key. Direct callers must construct ClipJobRequest through
+                its normal validation, just as the HTTP boundary does.
             upload_owner: Browser identity authorizing an uploaded clipping area.
 
         Returns:
@@ -1282,12 +1284,10 @@ class ProcessingService:
         Raises:
             ProcessingError: If the retry changes inputs or admission is full.
         """
-        inputs = ClipInputs.model_validate(
-            request.model_dump(exclude={"requestId"}, by_alias=True)
-        )
         request_hash = hashlib.sha256(
             json.dumps(
-                inputs.model_dump(mode="json", by_alias=True), sort_keys=True
+                request.model_dump(mode="json", by_alias=True, exclude={"requestId"}),
+                sort_keys=True,
             ).encode()
         ).hexdigest()
         operation = get_model_operation("raster.clip.v1")

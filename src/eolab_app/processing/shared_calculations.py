@@ -20,7 +20,7 @@ def identify_shared_calculation(
     authorization policy for every browser. The worker authorizes them before
     producing any result. Polygon uploads must already be owned and loaded by
     the submitting caller; only their validated content hash affects identity.
-    Submission retry identifiers are excluded when a calculation request is
+    Submission retry identifiers are excluded when a clip or summary request is
     reused directly, so they cannot split otherwise identical shared work.
 
     Args:
@@ -34,8 +34,8 @@ def identify_shared_calculation(
         ValueError: If inputs cannot be serialized as finite JSON.
     """
     request = inputs.request.model_dump(mode="json", by_alias=True)
+    request.pop("requestId", None)
     if isinstance(inputs, UnpreparedCalculation):
-        request.pop("requestId", None)
         alias = next(iter(inputs.request.sources))
         request["calculations"] = [
             asdict(compile_expression(item.expression, alias))
