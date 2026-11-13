@@ -197,8 +197,11 @@ def _use_offline_earth_engine(
 
     requests = Mock(wraps=request)
 
-    def create_transport() -> Mock:
+    def create_transport(*, timeout: float) -> Mock:
         """Use the offline request handler in a fresh, thread-owned transport.
+
+        Args:
+            timeout: Socket timeout selected by the acquisition transport.
 
         Returns:
             One HTTP connection with the same request and close API as Http.
@@ -218,7 +221,7 @@ def _use_offline_earth_engine(
             assert get_ident() == owner
             return requests(*args, **kwargs)
 
-        connection = Mock(spec=["request", "close"])
+        connection = Mock(spec=["request", "close", "timeout"], timeout=timeout)
         connection.request.side_effect = owned_request
         if transports is not None:
             transports.append((owner, connection))
