@@ -13,7 +13,7 @@ MAX_RESULT_BYTES = 512 * 1024
 
 
 def main() -> None:
-    """Validate the process boundary and emit one bounded JSON reply.
+    """Validate child inputs and serialize the operation's typed result.
 
     Inputs arrive as UTF-8 JSON bytes on binary stdin; json.loads decodes the bytes
     into Python values. The extra byte detects oversized messages before parsing.
@@ -28,7 +28,7 @@ def main() -> None:
         request = json.loads(payload)
         operation = OPERATIONS[request["operation"]]
         inputs = operation.input_model.model_validate(request["inputs"])
-        result = operation.result_model.model_validate(operation.execute(inputs))
+        result = operation.execute(inputs)
         reply = {"ok": True, "value": result.model_dump(mode="json")}
         encoded = json.dumps(reply, allow_nan=False).encode()
         if len(encoded) > MAX_RESULT_BYTES:
