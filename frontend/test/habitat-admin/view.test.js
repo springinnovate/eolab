@@ -266,31 +266,54 @@ test("a large failure log previews the first fifty rows and retains the full rep
     h.view.destroy();
 });
 
-test("retry all names its complete history scope and presents progress, recovery and per-area check errors", () => {
+test("bulk receipt and recovery wording make it clear when the administrator can leave", () => {
     const h = fixture();
     assert.equal(h.view.retryAll.textContent, "Retry all missing inputs");
     assert.equal(h.view.retryAll.getAttribute("aria-describedby"), h.view.retryAllHelp.id);
-    assert.match(h.view.retryAllHelp.textContent, /all areas and years still saved in preparation history.*current model inputs/);
-    assert.equal(h.view.retryAllStatus.getAttribute("role"), "status");
-    assert.equal(h.view.retryAllErrors.hidden, true);
+    assert.match(h.view.retryAllHelp.textContent, /Once accepted.*continue after you leave/);
     click(h.view.retryAll); assert.deepEqual(h.actions.at(-1), ["retryAll"]);
-    h.state.submitting = h.state.retryAllRunning = true; h.state.retryAllStatus = "Checking saved inputs for Northern area · 2018…";
+    const submission = {key: "bulk-request", kind: "retryAll", name: "Retry all missing inputs", year: null, status: "submitting"};
+    h.state.submissions = [submission]; h.state.submitting = true; h.view.render(h.state);
+    assert.equal(h.view.retryAll.disabled, true); assert.equal(h.view.retryAll.textContent, "Sending retry request…");
+    assert.equal(h.view.prepare.textContent, "Prepare inputs"); assert.doesNotMatch(h.view.retryAllStatus.textContent, /accepted|Recover submission/);
+    submission.status = "uncertain"; h.state.submitting = false; h.view.render(h.state);
+    assert.match(h.view.retryAllStatus.textContent, /Use Recover submission in Requested preparations/);
+    assert.equal(h.view.cards.get("submission:bulk-request").recover.disabled, false);
+    const receipt = job({operation: "habitat.retry-missing-inputs.v1", inputs: {areaCount: 4}, status: "queued"});
+    submission.status = "accepted"; submission.jobId = receipt.jobId; h.state.jobs = [receipt]; h.view.render(h.state);
+    assert.equal(h.view.cards.get("submission:bulk-request").title.textContent, "Retry all missing inputs");
+    assert.match(h.view.cards.get("submission:bulk-request").detail.textContent, /Request accepted.*continue after you leave/);
+    assert.match(h.view.retryAllStatus.textContent, /server has accepted.*You can leave/);
+    assert.equal(h.view.retryAll.disabled, true);
+    const card = h.view.cards.get(`job:${receipt.jobId}`);
+    assert.equal(card.title.textContent, "Retry all missing inputs"); assert.equal(card.detail.textContent, "Queued for checking");
+    assert.equal(card.cancel.textContent, "Stop checking"); assert.equal(card.cancel.getAttribute("aria-label"), "Stop checking saved areas and years");
+    assert.match(card.bulkNote.textContent, /Stopping these checks leaves any preparations already queued running/);
+    assert.equal(card.retry.hidden, true); click(card.cancel); assert.deepEqual(h.actions.at(-1), ["cancel", receipt.jobId]);
+    h.view.destroy();
+});
+
+test("completed bulk checks show separate download progress and retained per-area failures", () => {
+    const h = fixture(), receipt = job({operation: "habitat.retry-missing-inputs.v1", inputs: {areaCount: 5}, status: "ready",
+        result: {url: "/bulk-report", provenanceUrl: "/bulk-provenance", areaCount: 5, queuedCount: 2, cachedCount: 1, activeCount: 1, failedCount: 1}});
+    const child = job({jobId: "b".repeat(32)});
+    h.state.jobs = [receipt, child]; h.view.render(h.state);
+    const card = h.view.cards.get(`job:${receipt.jobId}`);
+    assert.equal(card.detail.textContent, "Checks completed · 2 preparations queued · 1 already cached · 1 already being prepared · 1 failed");
+    assert.match(card.bulkNote.textContent, /run separately.*download progress/);
+    assert.equal(h.view.retryAll.disabled, false, "completed checks allow a fresh request while ordinary preparations run");
+    assert.equal(card.cancel.hidden, true); assert.equal(card.retry.hidden, true);
+    assert.equal(h.view.cards.get(`job:${child.jobId}`).cancel.textContent, "Cancel");
+    assert.equal(card.log.hidden, false); assert.equal(card.logSummary.textContent, "View area failure log");
+    card.log.open = true; card.log.dispatchEvent(new Event("toggle"));
+    assert.deepEqual(h.actions.at(-1), ["openFailureLog", receipt.jobId]);
+    h.state.failureLogs.set(receipt.jobId, {failures: [{name: "North", year: 2018, detail: "<script>source unavailable</script>"}]});
     h.view.render(h.state);
-    assert.equal(h.view.retryAll.disabled, true); assert.equal(h.view.retryAll.textContent, "Retrying missing inputs…");
-    assert.equal(h.view.prepare.textContent, "Prepare inputs"); assert.equal(h.view.prepare.disabled, true);
-    assert.equal(h.view.retryAllStatus.textContent, h.state.retryAllStatus);
-    h.state.submitting = h.state.retryAllRunning = false;
-    h.state.retryAllErrors = [{name: "Northern area", year: 2018, detail: "<script>source unavailable</script>"}];
-    h.state.retryAllStatus = "All saved areas and years checked. 0 queued · 0 already cached · 0 already being prepared · 1 could not be checked.";
-    h.view.render(h.state);
-    assert.equal(h.view.retryAllErrors.hidden, false);
-    assert.equal(h.view.retryAllErrors.children[0].textContent, "Northern area · 2018: <script>source unavailable</script>");
-    assert.equal(h.view.retryAllErrors.children[0].children.length, 0);
-    h.state.submissions = [{key: "pending", status: "submitting", name: "South", year: 2018}]; h.state.submitting = true; h.view.render(h.state);
-    assert.equal(h.view.retryAll.disabled, true); assert.doesNotMatch(h.view.retryAllStatus.textContent, /Recover submission/);
-    h.state.submissions[0].status = "uncertain"; h.state.submitting = false; h.view.render(h.state);
-    assert.equal(h.view.retryAll.disabled, true); assert.match(h.view.retryAllStatus.textContent, /Use Recover submission in Requested preparations/);
-    assert.equal(h.view.cards.get("submission:pending").recover.disabled, false);
+    assert.deepEqual(card.logRows.children[0].children.map(node => node.textContent), ["North · 2018", "<script>source unavailable</script>"]);
+    assert.equal(card.logRows.children[0].children[1].children.length, 0);
+    assert.equal(card.report.href, "/bulk-report"); assert.equal(card.report.getAttribute("aria-label"), "Download saved-area check report");
+    receipt.expiresAt = "2000-01-01T00:00:00Z"; h.view.render(h.state);
+    assert.equal(card.log.hidden, true); assert.equal(card.report.hidden, true); assert.equal(card.detail.textContent, "Check report expired");
     h.view.destroy();
 });
 

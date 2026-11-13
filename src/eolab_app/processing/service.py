@@ -51,12 +51,20 @@ from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
     describe_habitat_input_preparation_outcome,
+    get_retained_habitat_preparation_inputs,
+)
+from eolab_app.processing.habitat_bulk_preparation import (
+    build_habitat_bulk_preparation_submission,
+    describe_habitat_bulk_preparation_outcome,
 )
 from eolab_app.processing.habitat_preparation_models import (
     OPERATION as HABITAT_PREPARATION_OPERATION,
-    HabitatInputPreparationInputs,
+    BULK_OPERATION as HABITAT_BULK_PREPARATION_OPERATION,
+    HABITAT_PREPARATION_OWNER,
+    HabitatBulkPreparationInputs,
+    HabitatBulkPreparationMetadata,
+    HabitatBulkPreparationRequest,
     HabitatInputPreparationRequest,
-    HabitatInputPreparationSpec,
 )
 from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
@@ -89,48 +97,42 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 
-HABITAT_PREPARATION_OWNER = "administration:habitat-input-preparation:v1"
-"""Server-controlled job scope outside the hexadecimal browser-owner namespace."""
-
-
-def get_retained_habitat_preparation_inputs(
-    row: dict[str, Any],
-) -> HabitatInputPreparationInputs | None:
-    """Read a preparation's saved inputs while its metadata remains available.
-
-    Args:
-        row: Authorized persisted job record, including retained metadata.
-
-    Returns:
-        Validated path-free inputs, or None after their metadata lifetime ends.
-        The physical summary never extends access beyond that lifetime.
-
-    Raises:
-        ValueError: If persisted preparation metadata violates its schema.
-    """
-    metadata = row.get("retained_metadata")
-    expires_at = row.get("metadata_expires_at")
-    if metadata is None or (
-        expires_at is not None and expires_at <= datetime.now(timezone.utc)
-    ):
-        return None
-    return HabitatInputPreparationSpec.model_validate(metadata).inputs
+HABITAT_PREPARATION_OPERATIONS = (
+    HABITAT_PREPARATION_OPERATION,
+    HABITAT_BULK_PREPARATION_OPERATION,
+)
+"""Individual and bulk jobs visible through Habitat administration."""
 
 
 def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
-    """Describe an authorized preparation job and its retained report.
+    """Describe an authorized individual or bulk preparation and its retained report.
 
     Args:
         row: Job record already authorized to the fixed administrator scope.
 
     Returns:
-        Lifecycle, measured tile progress and unexpired inputs/report links,
+        Lifecycle, operation-specific summary and unexpired inputs/report links,
         excluding private paths, worker settings and the internal owner scope.
 
     Raises:
         ValueError: If persisted preparation inputs violate their schema.
     """
-    inputs = get_retained_habitat_preparation_inputs(row)
+    operation = row["operation"]
+    if operation == HABITAT_BULK_PREPARATION_OPERATION:
+        metadata = row.get("retained_metadata")
+        metadata_expiry = row.get("metadata_expires_at")
+        inputs = (
+            HabitatBulkPreparationMetadata.model_validate(metadata).inputs
+            if metadata is not None
+            and (
+                metadata_expiry is None or metadata_expiry > datetime.now(timezone.utc)
+            )
+            else None
+        )
+        describe_outcome = describe_habitat_bulk_preparation_outcome
+    else:
+        inputs = get_retained_habitat_preparation_inputs(row)
+        describe_outcome = describe_habitat_input_preparation_outcome
     status = row["status"]
     if status == "ready" and row["expires_at"] <= datetime.now(timezone.utc):
         status = "expired"
@@ -138,7 +140,7 @@ def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
     base = f"/api/admin/habitat/input-preparations/{row['id']}"
     return {
         "jobId": row["id"],
-        "operation": HABITAT_PREPARATION_OPERATION,
+        "operation": operation,
         "status": status,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
@@ -158,7 +160,7 @@ def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
                 "filename": artifact["filename"],
                 "bytes": artifact["size"],
                 "sha256": artifact["sha256"],
-                **describe_habitat_input_preparation_outcome(artifact),
+                **describe_outcome(artifact),
             }
             if status == "ready" and artifact is not None
             else None
@@ -166,12 +168,12 @@ def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def require_operation(row: dict[str, Any], operation: str) -> None:
-    """Reject a submission retry that names a different calculation operation.
+def require_operation(row: dict[str, Any], operation: str | tuple[str, ...]) -> None:
+    """Reject a job whose operation is not supported by the requesting endpoint.
 
     Args:
         row: Authorized job row.
-        operation: Explicit operation supported by the submitting endpoint.
+        operation: One supported operation or the endpoint's allowed operations.
 
     Raises:
         ProcessingError: When the supplied job belongs to a different operation.
@@ -182,7 +184,7 @@ def require_operation(row: dict[str, Any], operation: str) -> None:
         or (row.get("spec") or {}).get("operation")
         or "raster.clip.v1"
     )
-    if actual != operation:
+    if actual not in ((operation,) if isinstance(operation, str) else operation):
         raise ProcessingError(
             "operation_mismatch",
             "This job belongs to a different processing operation.",
@@ -201,7 +203,7 @@ def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
     """
     if row.get("operation") == MODEL_OPERATION:
         return serialize_model_job(row)
-    if row.get("operation") == HABITAT_PREPARATION_OPERATION:
+    if row.get("operation") in HABITAT_PREPARATION_OPERATIONS:
         return serialize_habitat_input_preparation(row)
     identifier = row["id"]
     spec = row.get("spec") or {}
@@ -443,6 +445,94 @@ class ProcessingService:
             return existing
         return await self._admit_habitat_input_preparation(request, request_hash)
 
+    async def submit_habitat_bulk_preparation(
+        self, request: HabitatBulkPreparationRequest
+    ) -> dict[str, Any]:
+        """Queue a durable check and retry of all retained Habitat areas and years.
+
+        Capture only saved Catalog descriptors here. The ordinary worker checks
+        current coverage and authorizes each source before submitting individual
+        preparations, independently of the browser that requested the bulk job.
+
+        Args:
+            request: Stable administrator command identifier.
+
+        Returns:
+            Accepted bulk job, or the original receipt for this request ID. A
+            recovered command keeps its original scope even if history changed.
+
+        Raises:
+            ProcessingError: If this identifier belongs to another command, or
+                history or durable admission is unavailable.
+            ValueError: If retained preparation metadata violates its contract.
+        """
+        request_hash = hashlib.sha256(
+            encode_canonical_json({"operation": HABITAT_BULK_PREPARATION_OPERATION})
+        ).hexdigest()
+        existing = await asyncio.to_thread(
+            self.jobs.find_request, HABITAT_PREPARATION_OWNER, request.requestId
+        )
+        if existing is not None:
+            require_operation(existing, HABITAT_BULK_PREPARATION_OPERATION)
+            if existing["request_hash"] != request_hash:
+                raise ProcessingError(
+                    "request_conflict",
+                    "That request ID already belongs to a different bulk preparation.",
+                    409,
+                )
+            return serialize_habitat_input_preparation(existing)
+
+        areas: dict[bytes, HabitatInputPreparationRequest] = {}
+        before = None
+        while True:
+            rows = await asyncio.to_thread(
+                self.jobs.list_session_jobs_page,
+                HABITAT_PREPARATION_OWNER,
+                (HABITAT_PREPARATION_OPERATION,),
+                100,
+                before,
+            )
+            for row in rows:
+                inputs = get_retained_habitat_preparation_inputs(row)
+                if inputs is None:
+                    continue
+                identity = {
+                    "selection": inputs.selection.model_dump(
+                        mode="json", by_alias=True
+                    ),
+                    "year": inputs.year,
+                }
+                key = encode_canonical_json(identity)
+                if key not in areas:
+                    child_request_id = hashlib.sha256(
+                        encode_canonical_json(
+                            {"requestId": request.requestId, **identity}
+                        )
+                    ).hexdigest()
+                    areas[key] = HabitatInputPreparationRequest(
+                        requestId=child_request_id,
+                        name=inputs.name,
+                        selection=inputs.selection,
+                        year=inputs.year,
+                    )
+            if len(rows) < 100:
+                break
+            before = (rows[-1]["created_at"], rows[-1]["id"])
+
+        prepared = build_habitat_bulk_preparation_submission(
+            HabitatBulkPreparationInputs(
+                requestId=request.requestId, areas=tuple(areas.values())
+            )
+        )
+        row = await asyncio.to_thread(
+            self.jobs.submit,
+            HABITAT_PREPARATION_OWNER,
+            request.requestId,
+            prepared,
+            request_hash,
+        )
+        return serialize_habitat_input_preparation(row)
+
     async def list_habitat_input_preparations(
         self, limit: int, cursor: str | None
     ) -> dict[str, Any]:
@@ -453,7 +543,7 @@ class ProcessingService:
             cursor: Previous nextCursor value, or None for the newest jobs.
 
         Returns:
-            Operation-filtered job statuses and a continuation cursor. No browser
+            Individual and bulk statuses and a continuation cursor. No browser
             owner's jobs or other administrator operations can appear here.
 
         Raises:
@@ -472,7 +562,7 @@ class ProcessingService:
         rows = await asyncio.to_thread(
             self.jobs.list_session_jobs_page,
             HABITAT_PREPARATION_OWNER,
-            (HABITAT_PREPARATION_OPERATION,),
+            HABITAT_PREPARATION_OPERATIONS,
             limit + 1,
             before,
         )
@@ -484,7 +574,7 @@ class ProcessingService:
         }
 
     async def get_habitat_input_preparation(self, identifier: str) -> dict[str, Any]:
-        """Read one Habitat preparation belonging to the server's admin scope.
+        """Read one individual or bulk Habitat job in the server's admin scope.
 
         Args:
             identifier: Public preparation handle returned at admission.
@@ -498,11 +588,11 @@ class ProcessingService:
         row = await asyncio.to_thread(
             self.jobs.get, identifier, HABITAT_PREPARATION_OWNER
         )
-        require_operation(row, HABITAT_PREPARATION_OPERATION)
+        require_operation(row, HABITAT_PREPARATION_OPERATIONS)
         return serialize_habitat_input_preparation(row)
 
     async def cancel_habitat_input_preparation(self, identifier: str) -> dict[str, Any]:
-        """Ask the existing worker to stop one admin-owned Habitat preparation.
+        """Stop an individual preparation or further checks in a bulk preparation.
 
         Args:
             identifier: Public preparation handle returned at admission.
@@ -510,6 +600,7 @@ class ProcessingService:
         Returns:
             Updated state; running work remains cancelling until native exit.
             Already published cache tiles remain available to later calculations.
+            Stopping a bulk job does not cancel individual jobs it already queued.
 
         Raises:
             ProcessingError: If the job is unavailable, of another operation or
@@ -518,7 +609,7 @@ class ProcessingService:
         row = await asyncio.to_thread(
             self.jobs.get, identifier, HABITAT_PREPARATION_OWNER
         )
-        require_operation(row, HABITAT_PREPARATION_OPERATION)
+        require_operation(row, HABITAT_PREPARATION_OPERATIONS)
         return serialize_habitat_input_preparation(
             await asyncio.to_thread(
                 self.jobs.cancel, identifier, HABITAT_PREPARATION_OWNER
@@ -590,7 +681,7 @@ class ProcessingService:
     async def download_habitat_input_preparation(
         self, identifier: str, provenance: bool = False
     ) -> ArtifactDownload:
-        """Lease an admin-owned preparation report through ordinary result delivery.
+        """Lease an individual or bulk preparation report through result delivery.
 
         Args:
             identifier: Public preparation handle.
@@ -607,7 +698,7 @@ class ProcessingService:
         row = await asyncio.to_thread(
             self.jobs.get, identifier, HABITAT_PREPARATION_OWNER
         )
-        require_operation(row, HABITAT_PREPARATION_OPERATION)
+        require_operation(row, HABITAT_PREPARATION_OPERATIONS)
         artifact = await self.download(
             HABITAT_PREPARATION_OWNER, identifier, provenance
         )
