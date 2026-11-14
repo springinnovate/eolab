@@ -362,7 +362,10 @@ class CatalogDescriptor(ContractModel):
     instead select distinct layers in one container. ``metadata.title`` is required
     for an Item. Nonspatial Items require explicit temporal metadata; spatial sources may retain their
     existing reader's date contract. The existing temporal ``dataset.yaml`` is
-    a separate contract and is not interpreted by this model.
+    a separate contract and is not interpreted by this model. Spatial primary
+    Asset keys retain the reader contract: ``shp`` for Shapefiles, ``archive``
+    for zipped Shapefiles, and ``data`` for other supported spatial formats.
+    Nonspatial Asset keys are author-defined.
     """
 
     schema_version: Literal["eolab/item/v1"] = Field(alias="schema")
@@ -405,6 +408,15 @@ class CatalogDescriptor(ContractModel):
             raise ValueError(
                 "Raster Items use geotiff; vector Items use an existing vector format"
             )
+        if self.source is not None:
+            primary_key = {
+                "shapefile": "shp",
+                "zipped-shapefile": "archive",
+            }.get(self.source.format, "data")
+            if self.primary_asset != primary_key:
+                raise ValueError(
+                    f"The {self.source.format} reader requires primary_asset: {primary_key}"
+                )
         if isinstance(self.temporal, ModifiedTime) and not isinstance(
             self.assets[self.primary_asset], LocalAsset
         ):

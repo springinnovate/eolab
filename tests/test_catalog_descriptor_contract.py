@@ -354,3 +354,33 @@ def test_contract_import_is_independent_of_native_and_application_modules() -> N
     subprocess.run(
         [sys.executable, "-B", "-c", code], check=True, capture_output=True, text=True
     )
+
+
+@pytest.mark.parametrize(
+    ("kind", "source", "expected"),
+    [
+        ("raster", {"format": "geotiff"}, "data"),
+        ("vector", {"format": "geopackage"}, "data"),
+        ("vector", {"format": "shapefile"}, "shp"),
+        ("vector", {"format": "zipped-shapefile"}, "archive"),
+    ],
+)
+def test_spatial_primary_asset_keeps_existing_reader_identity(
+    kind: str, source: dict[str, str], expected: str
+) -> None:
+    """Reject authoring keys that would change existing spatial source identity.
+
+    Args:
+        kind: Spatial dataset kind.
+        source: Existing reader selection.
+        expected: Canonical primary Asset key required by that reader.
+    """
+    document = descriptor_document()
+    primary = document["assets"].pop("data")
+    document.update(kind=kind, source=source, primary_asset="custom")
+    document["assets"]["custom"] = primary
+    with pytest.raises(ValidationError, match="requires primary_asset"):
+        CatalogDescriptor.model_validate(document)
+    document["assets"][expected] = document["assets"].pop("custom")
+    document["primary_asset"] = expected
+    assert CatalogDescriptor.model_validate(document).primary_asset == expected
