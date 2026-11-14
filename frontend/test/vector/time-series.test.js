@@ -137,6 +137,51 @@ test("every inspection result is a distinct naturally ordered point", () => {
   );
 });
 
+test("mixed scalar X values use one natural order and preserve ties and omission", () => {
+  for (const values of [
+    [-10, -2, "-5"], [-10, "-5", -2], [-2, -10, "-5"],
+    [-2, "-5", -10], ["-5", -10, -2], ["-5", -2, -10],
+  ]) {
+    const sample = values.map((x, index) => ({
+      ...observations()[0], featureId: index, properties: { x, y: 1 },
+    }));
+    sample.push({ ...sample[0], featureId: "missing", properties: { x: "omitted", y: null } });
+    for (const direction of ["ascending", "descending"]) {
+      const series = buildVectorTimeSeriesSeries(sample, { xField: "x", yField: "y", direction });
+      assert.deepEqual(series.points.map(point => point.xValue),
+        direction === "ascending" ? [-2, "-5", -10] : [-10, "-5", -2]);
+      assert.equal(series.omitted, 1);
+    }
+  }
+  const sample = [2, "2", false, true].map((x, featureId) => ({
+    ...observations()[0], featureId, properties: { x, y: 1 },
+  }));
+  for (const direction of ["ascending", "descending"]) {
+    const series = buildVectorTimeSeriesSeries(sample, { xField: "x", yField: "y", direction });
+    const equalKeys = series.points.filter(point => point.xLabel === "2");
+    assert.deepEqual(equalKeys.map(point => point.featureId), [0, 1]);
+    assert.deepEqual(equalKeys.map(point => point.xValue), [2, "2"]);
+    assert.deepEqual(series.points.filter(point => typeof point.xValue === "boolean")
+      .map(point => point.xLabel), direction === "ascending" ? ["False", "True"] : ["True", "False"]);
+  }
+});
+
+test("controller draws mixed scalar points and table rows in the same natural order", () => {
+  const h = fixture();
+  h.controller.setSample({ state: "ready", message: "Ready", observations:
+    [-10, -2, "-5"].map((x, featureId) => ({
+      ...observations()[0], featureId, properties: { x, y: 1 },
+    })),
+  });
+  h.documentContext.querySelector("#vector-time-series-x").value = "x";
+  const y = h.documentContext.querySelector("#vector-time-series-y");
+  y.value = "y";
+  y.dispatchEvent(new Event("change"));
+  const table = h.documentContext.querySelector("#vector-time-series-table-body");
+  assert.deepEqual(table.children.map(row => row.children[2].textContent), ["-2", "-5", "-10"]);
+  assert.deepEqual(h.controller.pointElements.map(entry => entry.point.xValue), [-2, "-5", -10]);
+});
+
 test("series presentation identifies its field, features, and source layers", () => {
   const series = buildVectorTimeSeriesSeries(observations(), {
     xField: VECTOR_TIME_SERIES_LAYER_LABEL,
