@@ -450,10 +450,7 @@ export class HabitatAdminView {
             card.error.textContent = row.error || ""; card.error.hidden = !row.error;
             card.recover.hidden = row.status !== "uncertain"; card.recover.disabled = this.busy;
         });
-        this.historyStatus.textContent = state.historyError ? `Could not refresh preparation status. ${state.historyComplete ? "Displayed progress may be out of date." : "History is incomplete; more saved areas may exist."} ${state.historyError}` :
-            state.historyLoading ? state.historyComplete ? "Refreshing preparation status…" : `Loading all saved preparations… ${state.historyReadCount} read so far. More areas may appear.` :
-                !state.historyComplete ? "History is incomplete. Refresh saved preparations to finish loading." :
-                    `${state.areaRows.length} saved area/year entries. Status refreshed ${timeLabel(state.historyCheckedAt)}. Current cache coverage requires a separate check.`;
+        this.renderHistoryProgress(state);
         const pending = state.submissions.some(row => ["uncertain", "submitting"].includes(row.status));
         const bulkActive = state.jobs.some(job => job.operation === RETRY_ALL_OPERATION && ACTIVE_PREPARATION_STATES.has(job.status));
         this.retryAll.disabled = this.busy || pending || bulkActive;
@@ -463,8 +460,20 @@ export class HabitatAdminView {
             : bulkActive ? "Checking saved areas and years. Any preparations queued run separately in Area and year status. You can leave this page."
             : bulkSubmission?.status === "accepted" ? "Request accepted. Check results appear below; download progress appears in Area and year status." : "";
         this.retryAllStatus.hidden = !this.retryAllStatus.textContent;
-        this.refresh.disabled = Boolean(state.historyLoading);
         this.renderStatusTable(state);
+    }
+
+    /** Update history loading feedback without revisiting job cards or form controls.
+     * @param {{historyError:string,historyComplete:boolean,historyLoading:boolean,historyReadCount:number,historyCheckedAt:string|null,areaRows:Object[]}} state Controller-owned history progress and last reconciled area rows.
+     * @return {void}
+     */
+    renderHistoryProgress(state) {
+        this.historyStatus.textContent = state.historyError ? `Could not refresh preparation status. ${state.historyComplete ? "Displayed progress may be out of date." : "History is incomplete; more saved areas may exist."} ${state.historyError}` :
+            state.historyLoading ? state.historyComplete ? "Refreshing preparation status…" : `Loading all saved preparations… ${state.historyReadCount} read so far. More areas may appear.` :
+                !state.historyComplete ? "History is incomplete. Refresh saved preparations to finish loading." :
+                    `${state.areaRows.length} saved area/year entries. Status refreshed ${timeLabel(state.historyCheckedAt)}. Current cache coverage requires a separate check.`;
+        this.refresh.disabled = Boolean(state.historyLoading);
+        this.tableScroll.setAttribute("aria-busy", String(state.historyLoading));
     }
 
     /** Build one stable table row with independent coverage and earlier-attempt controls.
@@ -491,7 +500,6 @@ export class HabitatAdminView {
      * @return {void}
      */
     renderStatusTable(state) {
-        this.tableScroll.setAttribute("aria-busy", String(state.historyLoading));
         this.tableScroll.hidden = !state.areaRows.length;
         this.renderCards("status", this.history, state.areaRows, row => row.key, row => this.statusRow(row), (card, row) => {
             card.title.textContent = `${row.name} · ${row.year}`;

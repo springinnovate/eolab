@@ -66,11 +66,12 @@ function fixture(overrides = {}, values = new Map()) {
         cancel: async id => { cancelled.push(id); return job({ jobId: id, status: "cancelled", updatedAt: "2026-01-01T00:01:00Z" }); },
         retry: async (id, requestId) => { retried.push({ id, requestId }); return job({ jobId: "c".repeat(32) }); },
         retryAll: async requestId => { bulkRequests.push(requestId); return bulkJob(); }, ...overrides };
-    let handlers; const renders = [];
-    const view = { bind: value => { handlers = value; }, render: state => renders.push(structuredClone(state)), destroy() {} };
+    let handlers; const renders = [], progress = [];
+    const view = { bind: value => { handlers = value; }, render: state => renders.push(structuredClone(state)),
+        renderHistoryProgress: state => progress.push({loading: state.historyLoading, count: state.historyReadCount}), destroy() {} };
     const controller = new HabitatAdminController({ api, view, documentContext: document, windowContext: window, clock,
         newId: () => (++nextId).toString(16).padStart(32, "0") });
-    return { controller, api, document, window, storage, values, timers, submitted, retried, bulkRequests, checked, listed, fetched, cancelled, renders, handlers };
+    return { controller, api, document, window, storage, values, timers, submitted, retried, bulkRequests, checked, listed, fetched, cancelled, renders, progress, handlers };
 }
 
 /** Load metadata and capture the fixture Catalog area without checking it.
@@ -439,6 +440,38 @@ test("an incomplete initial traversal remains labelled incomplete and retries ev
     assert.deepEqual(cursors, [null, "older", null, "older"]);
     assert.equal(h.controller.state.historyComplete, true); assert.equal(h.controller.state.jobs.length, 2);
     assert.equal(h.controller.state.historyError, "");
+});
+
+test("history rendering work grows with retained jobs without rescanning every page prefix", async t => {
+    for (const count of [100, 200, 400]) {
+        const jobs = Array.from({length: count}, (_, index) => historyJob(index + 1, {status: "ready"})).reverse();
+        const h = fixture({list: async ({cursor}) => {
+            const offset = Number(cursor ?? 0);
+            return {jobs: jobs.slice(offset, offset + 50), nextCursor: offset + 50 < count ? String(offset + 50) : null};
+        }});
+        t.after(() => h.controller.destroy()); await h.controller.start();
+        const presentedJobs = h.renders.reduce((sum, state) => sum + state.jobs.length, 0);
+        assert.ok(presentedJobs <= 2 * count, `${count} jobs required ${presentedJobs} row presentations`);
+        assert.deepEqual(h.controller.state.jobs.map(value => value.jobId), jobs.map(value => value.jobId));
+        assert.equal(h.controller.state.historyComplete, true);
+        assert.equal(h.progress.at(-1).count, count);
+    }
+});
+
+test("later pages update progress and a subsequent failure presents every received attempt", async t => {
+    const tail = deferred(), jobs = Array.from({length: 100}, (_, index) => historyJob(index + 1)).reverse();
+    const h = fixture({list: async ({cursor}) => {
+        if (cursor === "100") return tail.promise;
+        const offset = Number(cursor ?? 0);
+        return {jobs: jobs.slice(offset, offset + 50), nextCursor: String(offset + 50)};
+    }});
+    t.after(() => h.controller.destroy()); const loading = h.controller.start(); await flush();
+    assert.deepEqual(h.progress.at(-1), {loading: true, count: 100});
+    assert.equal(h.renders.at(-1).jobs.length, 50);
+    tail.reject(new Error("Later page failed")); await loading;
+    assert.equal(h.renders.at(-1).jobs.length, 100);
+    assert.equal(h.controller.state.historyComplete, false);
+    assert.match(h.renders.at(-1).historyError, /Later page failed/);
 });
 
 test("visibility changes stop reads/timers and immediately refresh on return", async t => {

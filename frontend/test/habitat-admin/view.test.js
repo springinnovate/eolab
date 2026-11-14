@@ -34,7 +34,7 @@ function fixture() {
     view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "checkSavedArea", "cancel", "retry", "retryAll", "refreshInventory", "openFailureLog", "closeFailureLog"]
         .map(name => [name, (...args) => actions.push([name, ...args])])));
     const renderView = view.render.bind(view);
-    const presenter = new HabitatAdminController({api: {}, view: {bind() {}, render() {}},
+    const presenter = new HabitatAdminController({api: {}, view: {bind() {}, render() {}, renderHistoryProgress() {}},
         documentContext: null, windowContext: null, storage: null});
     view.render = snapshot => {
         if (snapshot.areaRows) return renderView(snapshot);
@@ -345,6 +345,22 @@ test("a newer attempt keeps one area row and moves focused older work into a clo
     h.state.jobs = [newer]; h.view.render(h.state);
     assert.equal(h.view.cards.has(`job:${older.jobId}`), false); assert.equal(h.document.activeElement, h.view.refresh);
     const before = h.actions.length; click(olderCard.cancel); assert.equal(h.actions.length, before);
+    h.view.destroy();
+});
+
+test("history progress updates preserve cards, open disclosures and focused controls", () => {
+    const h = fixture(), latest = job(), older = job({jobId: "b".repeat(32), createdAt: "2026-11-02T08:00:00Z"});
+    h.state.jobs = [latest, older]; h.view.render(h.state);
+    const row = [...h.view.cards.entries()].find(([key]) => key.startsWith("status:"))[1];
+    const card = h.view.cards.get(`job:${older.jobId}`);
+    row.previous.open = true; card.cancel.focus();
+    h.view.renderStatusTable = () => assert.fail("Loading counts must not revisit history cards");
+    h.view.renderHistoryProgress({...h.state, historyLoading: true, historyComplete: false, historyReadCount: 100});
+    assert.match(h.view.historyStatus.textContent, /100 read so far/);
+    assert.equal(h.view.refresh.disabled, true);
+    assert.equal(h.view.tableScroll.getAttribute("aria-busy"), "true");
+    assert.equal(row.previous.open, true); assert.equal(h.document.activeElement, card.cancel);
+    assert.equal(h.view.cards.get(`job:${older.jobId}`), card);
     h.view.destroy();
 });
 
