@@ -528,5 +528,27 @@ Validate an authoring document with
 it. Export the current JSON schema with
 `python -m eolab_app.catalog.descriptor_contract`. The examples' public Item JSON
 shows how annotations and publication references are shared with catalog clients
-without exposing local source paths. Descriptor validation does not import files
-into a running workspace.
+without exposing local source paths.
+
+Place descriptors beside their sources, then scan the configured data directory
+from **Status**. The scanner resolves all descriptor associations before ordinary
+file admission. Spatial sources use the existing format readers and retain their
+catalog identities. A standalone nonspatial descriptor creates a searchable Item
+without a map footprint; its payload is not parsed. Supporting files become
+Assets of the described Item and may be shared by several descriptors. Local
+attachments are accessed by catalog identity, within the configured source mount.
+
+Use an explicit instant, interval, or disclosed file-modification time for
+nonspatial Items. Container descriptors apply common metadata to every native
+layer unless an exact layer/member is selected; overrides replace only supplied
+metadata fields. Existing temporal `dataset.yaml` directories keep their separate
+observation and refresh workflow.
+
+Rescan after editing a descriptor. Invalid or unreadable descriptors, including
+missing referenced Assets, report scan errors and retain the last admitted Item
+until corrected. Removing a descriptor retires its standalone nonspatial Item or
+restores ordinary spatial metadata. Scan all affected descriptor directories
+together when changing source ownership. An unreadable new descriptor can protect
+only its same-name source until its associations can be decoded; already admitted
+associations remain protected across partial scans. Keep payloads unchanged during
+calculations, following the ordinary source lifecycle.

@@ -11,6 +11,8 @@ from eolab_app.catalog.handlers import (
     create_default_dataset_handler_registry,
 )
 from eolab_app.catalog.models import DatasetCandidate, DatasetMetadataResult
+from eolab_app.catalog.descriptor_contract import NONSPATIAL_COLLECTION_ID
+
 MetadataExecutorFactory = Callable[[int], Executor]
 
 
@@ -180,10 +182,12 @@ def build_dataset_metadata(
     try:
         items = active_handlers.build_items(source_root, dataset_candidate)
         for item in items:
-            if item["geometry"] is None:
+            if (
+                item["geometry"] is None
+                and item["collection"] != NONSPATIAL_COLLECTION_ID
+            ):
                 raise ValueError(
-                    "Dataset has no spatial footprint; pgSTAC requires Item "
-                    "geometry"
+                    "Spatial dataset has no footprint; only explicitly described nonspatial Items may omit geometry"
                 )
         error_message = None
     except Exception as error:

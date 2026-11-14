@@ -11,7 +11,7 @@ from urllib.parse import unquote, urlsplit
 from eolab_app.catalog.collections import SCAN_COLLECTION_IDENTIFIERS
 from eolab_app.catalog.models import CatalogItemSource, ReconciliationStatus
 from eolab_app.catalog.ports import CatalogDatabase
-
+from eolab_app.catalog.descriptors import source_path_from_relative
 
 DEFAULT_RECONCILIATION_PAGE_SIZE = 500
 DEFAULT_RECONCILIATION_CONCURRENCY = 8
@@ -50,11 +50,19 @@ class MissingItemReconciler:
         self.concurrency = concurrency
         self.spool_memory_bytes = spool_memory_bytes
 
-    async def reconcile(self, status: ReconciliationStatus) -> int:
+    async def reconcile(
+        self,
+        status: ReconciliationStatus,
+        *,
+        protected_paths: tuple[Path, ...] = (),
+        source_paths: tuple[Path, ...] = (),
+    ) -> int:
         """Verify source Assets and delete only proven stale Items.
 
         Args:
             status: Mutable reconciliation progress owned by the active scan.
+            protected_paths: Failed descriptor/directory paths whose records remain.
+            source_paths: Current scan directories; other descriptor records remain.
 
         Returns:
             Number of catalog Items removed. Any verification or deletion
@@ -79,14 +87,18 @@ class MissingItemReconciler:
                         item_page,
                         self.concurrency,
                     ):
-                        availability = await asyncio.gather(*(
-                            asyncio.to_thread(
-                                catalog_item_is_missing,
-                                item,
-                                self.source_root,
+                        availability = await asyncio.gather(
+                            *(
+                                asyncio.to_thread(
+                                    catalog_item_is_missing,
+                                    item,
+                                    self.source_root,
+                                    protected_paths,
+                                    source_paths,
+                                )
+                                for item in item_group
                             )
-                            for item in item_group
-                        ))
+                        )
                         for item, is_missing in zip(
                             item_group,
                             availability,
@@ -124,12 +136,16 @@ class MissingItemReconciler:
 def catalog_item_is_missing(
     item: CatalogItemSource,
     source_root: Path,
+    protected_paths: tuple[Path, ...] = (),
+    source_paths: tuple[Path, ...] = (),
 ) -> bool:
     """Check whether any required Asset is absent from the mounted source.
 
     Args:
         item: Catalog Item source locations to inspect.
         source_root: Root of the mounted source tree.
+        protected_paths: Failed descriptor/directory paths retained this scan.
+        source_paths: Current scan directories; no scope restriction when empty.
 
     Returns:
         Whether at least one required source Asset is missing.
@@ -138,6 +154,27 @@ def catalog_item_is_missing(
         ValueError: If an Asset location is outside the mounted source.
         OSError: If an Asset exists but is not a mounted file.
     """
+    if item.descriptor is not None:
+        descriptor_path = source_path_from_relative(
+            source_root, item.descriptor.relative_path
+        )
+        if any(
+            descriptor_path.is_relative_to(path.resolve()) for path in protected_paths
+        ):
+            return False
+        if source_paths and not any(
+            descriptor_path.is_relative_to(path.resolve()) for path in source_paths
+        ):
+            return False
+        try:
+            descriptor_path.stat()
+        except FileNotFoundError:
+            if item.descriptor.kind == "nonspatial":
+                return True
+        else:
+            # Admission owns replacement errors. An existing descriptor retains
+            # its last good record until a complete replacement is published.
+            return False
     resolved_source_root = source_root.resolve()
     mount_uri = urlsplit(resolved_source_root.as_uri())
     mount_uri_path = unquote(mount_uri.path).rstrip("/")
@@ -161,9 +198,10 @@ def catalog_item_is_missing(
         except FileNotFoundError:
             is_missing = True
             continue
-        if (
-            not source_path.is_relative_to(resolved_source_root)
-            or not source_path.is_file()
+        if not source_path.is_relative_to(resolved_source_root) or not (
+            source_path.is_dir()
+            if item.item_id.startswith("file-geodatabase-")
+            else source_path.is_file()
         ):
             raise OSError(
                 f"{item.collection}/{item.item_id} source Asset is not a mounted file"

@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from eolab_app.catalog.descriptor_contract import NONSPATIAL_COLLECTION_ID
 from eolab_app.catalog.geotiff import MOUNTED_GEOTIFF_COLLECTION_ID
 
 
@@ -62,7 +63,26 @@ TEMPORAL_COLLECTION: dict[str, Any] = {
     "links": [],
 }
 
-SCAN_COLLECTIONS = (GEOTIFF_COLLECTION, SHAPEFILE_COLLECTION, TEMPORAL_COLLECTION)
+NONSPATIAL_COLLECTION: dict[str, Any] = {
+    "type": "Collection",
+    "stac_version": "1.0.0",
+    "id": NONSPATIAL_COLLECTION_ID,
+    "title": "Described supporting datasets",
+    "description": "Standalone datasets with explicit metadata and no asserted geographic footprint.",
+    "license": "other",
+    "extent": {
+        "spatial": {"bbox": [[-180, -90, 180, 90]]},
+        "temporal": {"interval": [[None, None]]},
+    },
+    "links": [],
+}
+
+SCAN_COLLECTIONS = (
+    GEOTIFF_COLLECTION,
+    SHAPEFILE_COLLECTION,
+    TEMPORAL_COLLECTION,
+    NONSPATIAL_COLLECTION,
+)
 SCAN_COLLECTION_IDENTIFIERS = tuple(
     collection["id"] for collection in SCAN_COLLECTIONS
 )

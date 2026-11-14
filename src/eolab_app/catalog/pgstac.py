@@ -5,12 +5,16 @@ from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
 import psycopg
+from pydantic import TypeAdapter
 
 from eolab_app.catalog.collections import (
     MOUNTED_GEOTIFF_COLLECTION_ID,
     TEMPORAL_COLLECTION_ID,
 )
-from eolab_app.catalog.models import CatalogItemSource
+from eolab_app.catalog.models import CatalogItemSource, DescriptorSource
+from eolab_app.catalog.descriptors import DESCRIPTOR_SOURCE_KEY
+from eolab_app.catalog.asset_access import get_asset_source_href
+from eolab_app.catalog.descriptor_contract import NONSPATIAL_COLLECTION_ID
 from eolab_app.vector_field_values import (
     CatalogVectorFieldValueQuery,
     VectorFieldValuePage,
@@ -21,6 +25,64 @@ from eolab_app.vector_field_values import (
 
 class PgStacCatalogDatabase:
     """Implement catalog database operations through libpq."""
+
+    async def get_catalog_asset(
+        self,
+        collection_id: str,
+        item_id: str,
+        asset_key: str,
+    ) -> dict[str, Any] | None:
+        """Return one authoritative Asset selected entirely by catalog identity.
+
+        Args:
+            collection_id: Owning Collection identifier.
+            item_id: Item identifier within the Collection.
+            asset_key: Named Asset key within the Item.
+
+        Returns:
+            Stored Asset metadata, or None when the Item/Asset does not exist.
+
+        Raises:
+            psycopg.Error: If the catalog query fails.
+        """
+        async with await psycopg.AsyncConnection.connect() as connection:
+            cursor = await connection.execute(
+                "SELECT content->'assets'->%s FROM pgstac.items WHERE collection=%s AND id=%s",
+                (asset_key, collection_id, item_id),
+            )
+            row = await cursor.fetchone()
+        return row[0] if row is not None else None
+
+    async def descriptor_sources(
+        self,
+        collection_identifiers: tuple[str, ...],
+    ) -> tuple[DescriptorSource, ...]:
+        """Read prior sidecar ownership so invalid edits cannot expose bare sources.
+
+        Args:
+            collection_identifiers: Scanner-owned Collections to inventory.
+
+        Returns:
+            Validated private descriptor records, without opening source files.
+
+        Raises:
+            psycopg.Error: If the catalog query fails.
+            ValueError: If persisted ownership violates its stored contract.
+        """
+        async with await psycopg.AsyncConnection.connect() as connection:
+            cursor = await connection.execute(
+                "SELECT DISTINCT content->'assets'->%s FROM pgstac.items "
+                "WHERE collection=ANY(%s) AND content->'assets' ? %s",
+                (
+                    DESCRIPTOR_SOURCE_KEY,
+                    list(collection_identifiers),
+                    DESCRIPTOR_SOURCE_KEY,
+                ),
+            )
+            return tuple(
+                TypeAdapter(DescriptorSource).validate_python(row[0])
+                async for row in cursor
+            )
 
     async def get_vector_field_values(
         self, query: CatalogVectorFieldValueQuery
@@ -310,10 +372,23 @@ def catalog_item_source(
     Raises:
         ValueError: If a required source Asset is missing.
     """
-    if collection == TEMPORAL_COLLECTION_ID:
+    descriptor = (
+        TypeAdapter(DescriptorSource).validate_python(assets[DESCRIPTOR_SOURCE_KEY])
+        if DESCRIPTOR_SOURCE_KEY in assets
+        else None
+    )
+    if collection == NONSPATIAL_COLLECTION_ID:
+        if descriptor is None:
+            raise ValueError("Nonspatial Item has no descriptor ownership")
+        required_asset_keys = (
+            (descriptor.primary_asset_key,)
+            if descriptor.primary_relative_path is not None
+            else ()
+        )
+    elif collection == TEMPORAL_COLLECTION_ID:
         required_asset_keys = ("eolab:temporal-source",)
     elif collection == MOUNTED_GEOTIFF_COLLECTION_ID or item_id.startswith(
-        ("geopackage-", "geojson-")
+        ("geopackage-", "geojson-", "file-geodatabase-")
     ):
         required_asset_keys = ("data",)
     elif item_id.startswith("zipped-shapefile-"):
@@ -321,9 +396,13 @@ def catalog_item_source(
     else:
         required_asset_keys = ("shp", "shx", "dbf", "prj")
     try:
-        asset_hrefs = tuple(assets[key]["href"] for key in required_asset_keys)
+        asset_hrefs = tuple(
+            get_asset_source_href(assets[key]) for key in required_asset_keys
+        )
+        if any(href is None for href in asset_hrefs):
+            raise ValueError("Catalog Item has malformed private source metadata")
     except KeyError as error:
         raise ValueError(
             f"{collection}/{item_id} is missing required source Assets"
         ) from error
-    return CatalogItemSource(collection, item_id, asset_hrefs)
+    return CatalogItemSource(collection, item_id, asset_hrefs, descriptor)

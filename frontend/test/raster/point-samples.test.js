@@ -5,6 +5,7 @@ import { RasterPointSamplesController } from "../../src/raster/point-samples.js"
 import {
   formatRasterPixelValue,
   getRasterDisplayName,
+  getRasterDisplayStem,
 } from "../../src/raster/value-format.js";
 import { MOUNTED_GEOTIFF_ITEM } from "../../test-support/raster/fixtures.js";
 
@@ -205,4 +206,15 @@ test("point-value helpers format values and decode the Catalog basename", () => 
     getRasterDisplayName(MOUNTED_GEOTIFF_ITEM),
     "annual temperature.tif",
   );
+});
+
+
+test("described raster labels use curated titles with catalog identity URLs", () => {
+  const item = {
+    ...MOUNTED_GEOTIFF_ITEM,
+    properties: { "eolab:metadata": { version: 1, title: "Forest recovery v1.2" } },
+    assets: { data: { href: "/api/catalog/asset?collection=rasters&item=forest&asset=data" } },
+  };
+  assert.equal(getRasterDisplayName(item), "Forest recovery v1.2");
+  assert.equal(getRasterDisplayStem(item), "Forest recovery v1.2");
 });
