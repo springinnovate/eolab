@@ -172,6 +172,27 @@ test("raster creation leads matching tools without changing discovery order or s
     assert.deepEqual(h.actions, [["Choose", period]]);
 });
 
+test("tool cards show output names while full descriptions remain searchable and visible in setup", () => {
+    const h = fixture();
+    const recipe = {...model, description: "Valid pixels have equal weight; missing values are excluded.",
+        outputs: {summary_result: {...model.outputs.statistics, label: "Summary statistic"},
+            "valid-pixel_count": {...model.outputs.statistics, label: null}}};
+    Object.assign(h.state, {page: "library", library: [recipe], query: "EQUAL WEIGHT",
+        draft: createModelDraft(recipe, {rasters: [raster], area}, "compact-card")});
+    h.view.render(h.state);
+    const cards = h.view.elements["library-items"].children;
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].children.length, 2);
+    assert.equal(cards[0].children[0].children[0].textContent, recipe.title);
+    assert.equal(cards[0].children[1].textContent, "Outputs: Summary statistic · valid pixel count");
+    cards[0].children[0].children[0].dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["Choose", recipe]);
+
+    h.state.page = "setup"; h.view.render(h.state);
+    assert.equal(h.view.elements.setup.hidden, false);
+    assert.equal(h.view.setup.fields.children[0].textContent, recipe.description);
+});
+
 test("run renewal and deletion have explicit scope, confirmation and busy feedback", () => {
     const h = fixture(), artifacts = fileManifest();
     const ready = job({name: "Downstream beneficiaries for the full watershed and coastal communities",
