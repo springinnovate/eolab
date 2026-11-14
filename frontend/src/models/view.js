@@ -6,6 +6,7 @@ import { renderModelResult, updateModelFileActions, describeAreaStatistic } from
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, getHabitatEarthEngineInput, selectedDrawnPolygonLayer } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
+import { HabitatAreaView } from "./habitat-area-view.js";
 import { RasterGridView } from "./raster-grid-view.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { describeTemporalInterval, describeTemporalReduction, describeTemporalResult } from "./temporal-inputs.js";
@@ -240,6 +241,7 @@ export class ModelsView {
 
     /** Construct editable inputs and recipe parameters, retaining their DOM identities.
      * Choice parameters use the recipe's option labels and preserve their string values.
+     * Habitat gets separate saved-area controls so changing modes retains manual choices.
      * @param {Object} draft New draft with validated recipe settings and current parameter values.
      * @return {void}
      */
@@ -265,7 +267,14 @@ export class ModelsView {
                 fields.append(inputs[name].root);
             }
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
-            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
+            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
+                inputs[name] = this.buildSpatialInput(fields, name, input);
+                if (input.type === "summary_area" && draft.habitatArea) {
+                    inputs[name].preparedArea = new HabitatAreaView({element: this.element.bind(this), field: this.field.bind(this),
+                        button: this.button.bind(this), options: this.options.bind(this)}, this.handlers, name, input.label);
+                    fields.append(inputs[name].preparedArea.root);
+                }
+            }
             else if (input.type === "habitat_stack") {
                 inputs[name] = new HabitatStackView({element: this.element.bind(this), field: this.field.bind(this),
                     button: this.button.bind(this), options: this.options.bind(this), document: this.document,
@@ -345,7 +354,8 @@ export class ModelsView {
         return optional && !value.raster || Boolean(value.raster) && value.raster.available !== false;
     }
 
-    /** List eligible spatial sources and show the selected source's controls or drawn polygon count.
+    /** Present saved-area coverage for Earth Engine or ordinary spatial choices for other inputs.
+     * Hidden area controls are disabled so they cannot prevent the active form from submitting.
      * @param {Object} controls Stable controls for this spatial input.
      * @param {{type:string,label:string}} input Declared area, mask or reference input.
      * @param {Object} value This input's area, filter and selection feedback.
@@ -354,6 +364,14 @@ export class ModelsView {
      */
     renderSpatialInput(controls, input, value, state) {
         const draft = state.draft;
+        if (controls.preparedArea) {
+            const prepared = Boolean(getHabitatEarthEngineInput(draft));
+            controls.group.hidden = prepared;
+            controls.source.disabled = prepared;
+            controls.preparedArea.root.hidden = !prepared;
+            controls.preparedArea.source.disabled = !prepared;
+            if (prepared) return controls.preparedArea.render(draft);
+        }
         const references = input.type === "habitat_references";
         const usesRasterOrVector = input.type === "mask_source" || references;
         const drawn = value.areaMode === "drawnPolygons";

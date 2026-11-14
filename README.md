@@ -343,9 +343,10 @@ environment and habitat responses at the reference sites inside that area, then
 compares observed responses elsewhere with those expected under reference
 conditions.
 
-Choose a layer under **Drawn polygons** for **Analysis area**, **Reference
-sites**, or both. Each input can use a different layer. The tool uses saved
-polygons that match the layer's filter when you run it.
+Choose a layer under **Drawn polygons** for **Reference sites**. With custom
+raster inputs, drawn polygons are also available for **Analysis area**, and each
+input can use a different layer. The tool uses saved polygons that match the
+layer's filter when you run it.
 
 ![The top of the Ecosystem Condition setup card, showing Earth Engine inputs and assessment year 2018](docs/images/eolab-model-habitat-condition.jpg)
 
@@ -362,15 +363,19 @@ reference sites and input data.
 The default **Original model inputs (Google Earth Engine)** configuration uses
 the [NHI Terrestrial Integrity Modeling](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
 inputs prepared by an administrator for your selected **Assessment year**.
+Choose a **Prepared analysis area** from the saved administrator areas. Setup
+checks cached inputs for that area and year before you run. Partial coverage is
+allowed with a warning; areas without prepared tiles produce NoData. If no tiles
+are available, ask an administrator to prepare the area and year. Reference sites
+remain a separate choice. Saved area definitions remain available after their
+preparation reports expire.
+
 Open **Select predictor datasets** or **Select observed response datasets** to
 turn datasets on or off for your run. All start selected; SRTM landforms remains
 required, and at least one observed response must stay selected. A dataset used
 in both groups can be selected independently for each role. Dataset information
-links remain available beside the choices. Runs reuse available cached tiles and
-report gaps; areas without prepared inputs remain NoData. If no inputs are
-prepared, ask your administrator to prepare them and provide a geospatial file
-defining your area of interest. Choose **Choose raster layers** to supply your
-own stack.
+links remain available beside the choices. Choose **Choose raster layers** to
+supply your own stack and use the ordinary analysis-area choices.
 
 Administrators can open **Manage cached inputs** in Habitat setup, or the Habitat
 section of `/admin-eolab`, to choose named Catalog polygon areas and assessment
@@ -379,6 +384,10 @@ queues downloads without running the model. Preparation continues after closing
 the page and attempts remaining tiles when a tile download fails. Return to
 administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
+Submitting preparation also saves the exact Catalog layer and feature filter as
+a model area. Existing areas with retained preparation details are imported when
+the worker starts. If older preparation details have already expired, choose the
+original area and submit preparation again; existing cached tiles are reused.
 The area/year table shows the latest preparation for each saved area and year,
 with older attempts collapsed. Check a row's cached inputs for a timestamped
 coverage snapshot; a completed preparation or expired report does not establish

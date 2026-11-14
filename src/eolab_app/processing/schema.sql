@@ -273,3 +273,13 @@ INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;
 -- Tokens remain server-only and are not included in the subscribed_jobs view.
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS input_uploads jsonb NOT NULL DEFAULT '{}'::jsonb;
 INSERT INTO processing.schema_version VALUES (21) ON CONFLICT DO NOTHING;
+
+-- Administrator preparation areas outlive jobs, reports and cache availability.
+-- Only path-free Catalog selection metadata is persisted; no polygons or files.
+CREATE TABLE IF NOT EXISTS processing.habitat_prepared_areas (
+    id text PRIMARY KEY CHECK (id ~ '^[a-f0-9]{64}$'),
+    name text NOT NULL CHECK (length(name) BETWEEN 1 AND 80 AND name ~ '\S'),
+    selection jsonb NOT NULL CHECK (jsonb_typeof(selection) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO processing.schema_version VALUES (22) ON CONFLICT DO NOTHING;

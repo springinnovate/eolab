@@ -9,6 +9,7 @@ SUITES = (
     "test_vector_summary_postgres.py",
     "test_habitat_bulk_preparation_jobs.py",
     "test_habitat_preparation_jobs.py",
+    "test_habitat_prepared_areas_postgres.py",
     "test_vector_field_values_postgres.py",
     "test_temporal_processing_postgres.py",
     "test_temporal_series_processing_postgres.py",

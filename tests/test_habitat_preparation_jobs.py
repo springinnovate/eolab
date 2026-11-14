@@ -32,6 +32,7 @@ from eolab_app.processing.habitat_preparation_models import (
     HabitatInputPreparationRequest,
 )
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.habitat_prepared_areas import PostgresHabitatPreparedAreas
 from eolab_app.processing.models import PreparedJobPlan
 from eolab_app.processing.service import HABITAT_PREPARATION_OWNER, ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
@@ -70,13 +71,24 @@ def preparation_boundary(
     areas = VectorSamplingService(catalog, catalog)
     artifacts = LocalJobArtifacts(tmp_path / "processing", (source.path,))
     artifacts.initialize()
-    service = ProcessingService(store, artifacts, areas=areas)
+    prepared_areas = PostgresHabitatPreparedAreas(store.conninfo)
+    prepared_areas.open()
+    service = ProcessingService(
+        store,
+        artifacts,
+        areas=areas,
+        habitat_prepared_areas=prepared_areas,
+        habitat_cache_directory=tmp_path / "processing" / "habitat-cache",
+    )
     app = FastAPI()
     app.include_router(create_habitat_preparation_router(service, PASSWORD))
     app.include_router(create_processing_router(service))
-    with TestClient(app, base_url="https://testserver") as client:
-        client.auth = ("admin", PASSWORD)
-        yield client, service, source, artifacts
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            client.auth = ("admin", PASSWORD)
+            yield client, service, source, artifacts
+    finally:
+        prepared_areas.close()
 
 
 def _body(
@@ -128,6 +140,10 @@ def test_preparation_admission_recovers_before_source_and_stack_reads(
     client, service, source, _ = preparation_boundary
     body = _body(source)
     accepted = _submit(client, body)
+    saved_area = service.habitat_prepared_areas.find(source.selection)
+    assert saved_area is not None
+    assert saved_area.name == body["name"]
+    assert saved_area.selection == source.selection
     assert "set-cookie" not in client.get(BASE).headers
     monkeypatch.setattr(
         service.areas,

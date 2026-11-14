@@ -330,8 +330,8 @@ def calculate_habitat(
                 raise ProcessingError(
                     "habitat_inputs_not_prepared",
                     "No Ecosystem Condition inputs are prepared for this area and year. "
-                    "Ask your administrator to prepare them and provide a geospatial "
-                    "file defining your area of interest (AOI).",
+                    "Ask an administrator to prepare the saved area and year, "
+                    "then try running the model again.",
                     409,
                 )
             input_coverage = HabitatCacheCoverage(

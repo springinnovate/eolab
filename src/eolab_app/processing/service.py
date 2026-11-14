@@ -6,7 +6,7 @@ import json
 import math
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
@@ -52,6 +52,11 @@ from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
     describe_habitat_input_preparation_outcome,
     get_retained_habitat_preparation_inputs,
+)
+from eolab_app.processing.habitat_models import HabitatRequest
+from eolab_app.processing.habitat_prepared_areas import (
+    HabitatPreparedAreaStore,
+    validate_habitat_prepared_area,
 )
 from eolab_app.processing.habitat_bulk_preparation import (
     build_habitat_bulk_preparation_submission,
@@ -290,6 +295,8 @@ class ProcessingService:
         model_authorizer: RasterSourceAuthorizer | None = None,
         uploads: VectorUploadStore | None = None,
         areas: CatalogSelectionReader | None = None,
+        habitat_prepared_areas: HabitatPreparedAreaStore | None = None,
+        habitat_cache_directory: Path | None = None,
     ) -> None:
         """Configure job storage, source access and the installed model library.
 
@@ -306,6 +313,10 @@ class ProcessingService:
                 inputs at admission. Existing raster endpoints retain their behavior.
             uploads: Original GeoPackages and retained links for accepted jobs.
             areas: Existing reader authorizing Catalog and uploaded vector selections.
+            habitat_prepared_areas: Durable administrator-defined Habitat areas,
+                required for input preparation and Earth Engine model admission.
+            habitat_cache_directory: Existing persistent input cache inspected
+                before admitting an Earth Engine run; no downloads occur here.
 
         Raises:
             ValueError: If the submission observation budget is negative or non-finite.
@@ -324,6 +335,9 @@ class ProcessingService:
         self.model_authorizer = model_authorizer
         self.uploads = uploads
         self.areas = areas
+        self.habitat_prepared_areas = habitat_prepared_areas
+        self.habitat_cache_directory = habitat_cache_directory
+        self._habitat_admission_lock = asyncio.Lock()
         self._upload_admission_lock = asyncio.Lock()
 
     async def _recover_habitat_preparation_request(
@@ -362,7 +376,7 @@ class ProcessingService:
         request_hash: str,
         expected_configuration_sha256: str | None = None,
     ) -> dict[str, Any]:
-        """Authorize one Catalog AOI and queue preparation under the admin scope.
+        """Authorize and save a Catalog area, then queue its input preparation.
 
         Args:
             request: Validated area, year, name and submission identifier.
@@ -374,8 +388,8 @@ class ProcessingService:
             Newly accepted preparation or an atomic, unchanged concurrent retry.
 
         Raises:
-            ProcessingError: If the scientific configuration or job storage is
-                unavailable, the year is unsupported, or request inputs conflict.
+            ProcessingError: If scientific configuration, saved-area or job storage
+                is unavailable, the year is unsupported, or request inputs conflict.
             SelectionUnavailableError: If Catalog authorization rejects the area.
         """
         if self.areas is None:
@@ -406,6 +420,15 @@ class ProcessingService:
                 409,
             )
         await self.areas.resolve_for_sampling(request.selection)
+        if self.habitat_prepared_areas is None:
+            raise ProcessingError(
+                "habitat_prepared_areas_unavailable",
+                "Saved preparation areas are temporarily unavailable. Try again later.",
+                503,
+            )
+        await asyncio.to_thread(
+            self.habitat_prepared_areas.register, request.name, request.selection
+        )
         row = await asyncio.to_thread(
             self.jobs.submit,
             HABITAT_PREPARATION_OWNER,
@@ -717,6 +740,8 @@ class ProcessingService:
         and copies each owned polygon input by role before queueing work.
         Repeating the same request ID and inputs returns the original run even
         if its model or source is no longer installed.
+        Earth Engine runs require a registered preparation area and at least one
+        currently cached input tile; partial coverage remains permitted.
 
         Args:
             owner: Hash of the requesting browser's Processing session cookie.
@@ -748,6 +773,14 @@ class ProcessingService:
         calculation, invocation = build_model_calculation_request(
             request, self.model_registry
         )
+        if isinstance(calculation, HabitatRequest):
+            await validate_habitat_prepared_area(
+                calculation,
+                self.habitat_prepared_areas,
+                self.areas,
+                self.habitat_cache_directory,
+                coverage_lock=self._habitat_admission_lock,
+            )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         source = operation.source(calculation) if operation.source is not None else None
         polygons: dict[str, AggregateArea] = {}
