@@ -361,6 +361,10 @@ test("Catalog selection delegates progressive presentation without feature coupl
     mainSource.indexOf("function selectCatalogItem"),
     mainSource.indexOf("function appendCatalogPage"),
   );
+  const appendPage = mainSource.slice(
+    mainSource.indexOf("function appendCatalogPage"),
+    mainSource.indexOf("async function prefetchNextCatalogPage"),
+  );
 
   assert.match(clearSelection, /catalogPaneControls\.showResults\(\)/);
   assert.match(
@@ -375,4 +379,6 @@ test("Catalog selection delegates progressive presentation without feature coupl
     controllerSource,
     /Leaflet|leaflet|raster|renderer|statistics|fetch\(/,
   );
+  assert.doesNotMatch(appendPage, /leafletMap\.|L\.geoJSON/);
+  assert.match(appendPage, /onZoom: item => catalogMapActions\.zoom\(item\)/);
 });

@@ -1793,7 +1793,7 @@ async function initializeCatalog(
     }
 
     /**
-     * Appends one successful Item Search page to the active result stream.
+     * Append one successful Item Search page without changing the map viewport.
      *
      * @param {Object} itemCollection STAC ItemCollection response.
      * @param {boolean} isInitialPage Whether this starts a new result stream.
@@ -1815,11 +1815,6 @@ async function initializeCatalog(
             );
             catalogMessageElement.textContent = `${resultCountLabel} available.`;
             catalogSummaryElement.textContent = resultCountLabel;
-
-            const pageBounds = L.geoJSON(itemCollection).getBounds();
-            if (pageBounds.isValid()) {
-                leafletMap.fitBounds(pageBounds.pad(0.15), { maxZoom: 8 });
-            }
         }
 
         for (const item of itemCollection.features) {
