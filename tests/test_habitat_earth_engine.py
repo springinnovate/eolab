@@ -27,6 +27,7 @@ from rasterio.crs import CRS
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from shapely.geometry import MultiPolygon, box
+from shapely.geometry.base import BaseGeometry
 
 from eolab_app.processing.habitat_earth_engine import (
     HabitatCacheCoverage,
@@ -277,6 +278,71 @@ def _tile_bytes(left: float, top: float, *, last_value: float = 3) -> bytes:
                 )
             )
         return memory.read()
+
+
+@pytest.mark.parametrize(
+    "area, expected",
+    [
+        (box(7, 11, 47, 51), [(7, 51), (27, 51), (7, 31), (27, 31)]),
+        (
+            box(7, 11, 67, 71),
+            [
+                (7, 71),
+                (27, 71),
+                (47, 71),
+                (7, 51),
+                (27, 51),
+                (47, 51),
+                (7, 31),
+                (27, 31),
+                (47, 31),
+            ],
+        ),
+        (
+            box(7, 11, 67, 71).difference(box(27, 31, 47, 51)),
+            [
+                (7, 71),
+                (27, 71),
+                (47, 71),
+                (7, 51),
+                (47, 51),
+                (7, 31),
+                (27, 31),
+                (47, 31),
+            ],
+        ),
+        (MultiPolygon([box(7, 31, 27, 51), box(27, 11, 47, 31)]), [(7, 51), (27, 31)]),
+        (
+            box(26.99999, 30.99999, 27.00001, 31.00001),
+            [(7, 51), (27, 51), (7, 31), (27, 31)],
+        ),
+    ],
+    ids=[
+        "aligned",
+        "strict-interior",
+        "hole",
+        "disconnected-touching",
+        "thin-boundary-overlap",
+    ],
+)
+def test_tile_selection_preserves_positive_area_and_grid_order(
+    stack: RasterStackConfiguration,
+    area: BaseGeometry,
+    expected: list[tuple[int, int]],
+) -> None:
+    """Keep exact grid identities for interiors, holes and boundary contacts.
+
+    Args:
+        stack: Scientific configuration on the small acquisition grid.
+        area: Valid projected geometry with known positive-area tile overlaps.
+        expected: Tile upper-left coordinates in north-to-south row order.
+    """
+    tiles = habitat_earth_engine._select_tile_grids(area, stack.grid)
+    assert [(tile.transform.c, tile.transform.f) for tile in tiles] == expected
+    assert all(
+        tile.width == tile.height == stack.grid.tile_size_pixels for tile in tiles
+    )
+    assert all(tile.crs == CRS.from_string(stack.grid.crs) for tile in tiles)
 
 
 def test_inspect_missing_cache_counts_only_tiles_intersecting_the_aoi(
