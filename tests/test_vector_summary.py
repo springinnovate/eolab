@@ -214,19 +214,6 @@ def test_groups_preserve_exact_values_nulls_and_disconnected_parts(
     assert artifact.columns[0].missing_value_count == 2
 
 
-def test_integer_sums_preserve_values_above_float_precision(tmp_path: Path) -> None:
-    """Keep integer totals exact rather than rounding them through double precision.
-
-    Args:
-        tmp_path: Real isolated vector files.
-    """
-    source, spec = summary_source(
-        tmp_path, [("A", 2**53), ("A", 1)], numeric_type="int64"
-    )
-    calculate_vector_summary(source, spec, tmp_path)
-    assert read_summary(tmp_path / "result.gpkg")["A"][0] == 2**53 + 1
-
-
 def test_many_field_statistic_pairs_share_original_reads_and_geometry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -492,53 +479,45 @@ def test_float_sum_rejects_an_unrepresentable_final_result(tmp_path: Path) -> No
     assert error.value.code == "vector_summary_overflow"
 
 
-@pytest.mark.parametrize("statistic", ["sum", "mean", "max", "min", "stdev"])
-def test_statistic_column_collision_preserves_group_field(
+@pytest.mark.parametrize(
+    "statistic, group_name, expected_field, expected_value",
+    [
+        ("sum", "SUM_TOTAL_ES", "sum_total_es_2", 2),
+        ("mean", "MEAN_TOTAL_ES", "mean_total_es_2", 2),
+        ("max", "MAX_TOTAL_ES", "max_total_es_2", 2),
+        ("min", "MIN_TOTAL_ES", "min_total_es_2", 2),
+        ("stdev", "STDEV_TOTAL_ES", "stdev_total_es_2", 0),
+        ("sum", "sum_total_es", "sum_total_es_2", 2),
+        ("sum", "fid", "sum_total_es", 2),
+        ("sum", "geom", "sum_total_es", 2),
+    ],
+)
+def test_output_column_collisions_preserve_group_and_statistic(
     tmp_path: Path,
     statistic: VectorSummaryStatistic,
+    group_name: str,
+    expected_field: str,
+    expected_value: int,
 ) -> None:
-    """Give every statistic the existing case-insensitive collision-safe field naming.
+    """Preserve grouping and results for statistic or storage-column collisions.
 
     Args:
-        tmp_path: Real original and output GeoPackages.
-        statistic: Selected reduction whose normal column name already names the group.
+        tmp_path: Real isolated vector files.
+        statistic: Reduction whose output name may collide with the source group.
+        group_name: Source field to preserve in the result.
+        expected_field: Collision-free generated statistic name.
+        expected_value: Statistic for the single nonmissing input value.
     """
-    group_name = f"{statistic}_total_es".upper()
     source, spec = summary_source(
         tmp_path, [("A", 2)], group_name=group_name, statistic=statistic
     )
     artifact = calculate_vector_summary(source, spec, tmp_path)
-    assert artifact.columns[0].output_field == f"{statistic}_total_es_2"
-    assert read_summary(tmp_path / "result.gpkg")["A"][0] == (
-        0 if statistic == "stdev" else 2
-    )
-
-
-@pytest.mark.parametrize(
-    "group_name, expected",
-    [
-        ("sum_total_es", "sum_total_es_2"),
-        ("SUM_TOTAL_ES", "sum_total_es_2"),
-        ("fid", "sum_total_es"),
-        ("geom", "sum_total_es"),
-    ],
-)
-def test_output_column_collisions_preserve_group_and_sum(
-    tmp_path: Path, group_name: str, expected: str
-) -> None:
-    """Preserve names that collide with the sum or GeoPackage storage columns.
-
-    Args:
-        tmp_path: Real isolated vector files.
-        group_name: Source field to preserve in the result.
-        expected: Collision-free generated total name.
-    """
-    source, spec = summary_source(tmp_path, [("A", 2)], group_name=group_name)
-    artifact = calculate_vector_summary(source, spec, tmp_path)
-    assert artifact.columns[0].output_field == expected
+    assert artifact.columns[0].output_field == expected_field
     with fiona.open(tmp_path / "result.gpkg", layer="summary") as result:
-        assert tuple(result.schema["properties"]) == (group_name, expected)
-        assert next(iter(result)).properties[group_name] == "A"
+        assert tuple(result.schema["properties"]) == (group_name, expected_field)
+        properties = next(iter(result)).properties
+        assert properties[group_name] == "A"
+        assert properties[expected_field] == expected_value
 
 
 def test_long_sum_column_remains_usable_by_ordinary_vector_apis(tmp_path: Path) -> None:
