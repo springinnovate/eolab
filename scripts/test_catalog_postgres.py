@@ -250,7 +250,6 @@ def run_suite(image: str, database_image: str, migration_image: str) -> int:
             "-p",
             "no:cacheprovider",
             "-v",
-            "-x",
             "-ra",
             "--tb=short",
             "--junitxml=/results/catalog-results.xml",

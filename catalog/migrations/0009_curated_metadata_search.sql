@@ -74,9 +74,14 @@ AS $function$
         FROM jsonb_each(COALESCE(item_content->'assets', '{}'::jsonb)) AS assets(key, asset)
         WHERE key NOT IN ('eolab:temporal-source', 'eolab:vector-field-values',
                           'eolab:asset-source', 'eolab:descriptor-source')
+    ), combined_values AS (
+        -- Walk one JSON value per Item. Calling the set-returning scalar helper
+        -- for every selected field multiplies planner estimates and triggers
+        -- repeated JIT compilation during ordinary bulk ingestion.
+        SELECT jsonb_agg(value) AS value FROM selected_values
     ), scalar_values AS (
         SELECT DISTINCT scalar
-        FROM selected_values, pgstac.eolab_metadata_scalar_text(value) AS scalar
+        FROM combined_values, pgstac.eolab_metadata_scalar_text(value) AS scalar
     )
     -- pgSTAC also applies a queryable wrapper to the literal operand of a
     -- direct comparison. Preserve that JSON string instead of treating it as
