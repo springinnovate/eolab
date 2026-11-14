@@ -371,8 +371,8 @@ def test_combined_nonspatial_curated_search_and_replacement(
             {
                 "op": "like",
                 "args": [
-                    {"property": "eolab_metadata_text"},
-                    "%attached census details%",
+                    {"op": "casei", "args": [{"property": "eolab_metadata_text"}]},
+                    {"op": "casei", "args": ["%attached census details%"]},
                 ],
             },
             {
