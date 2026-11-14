@@ -6,6 +6,10 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from eolab_app.processing.habitat_earth_engine import load_habitat_stack
+from eolab_app.processing.habitat_models import (
+    get_habitat_dataset_roles,
+    get_required_habitat_predictor_datasets,
+)
 from eolab_app.raster.source_models import ProjectedRasterGrid
 
 HABITAT_DATASET_LINKS: dict[str, tuple[str, str]] = {
@@ -88,14 +92,18 @@ class HabitatDatasetSource(BaseModel):
     """Describe a linked dataset used by the configured Habitat input bands.
 
     Attributes:
+        id: Stable configured dataset alias used in submitted selections.
         label: Human-readable dataset name shown in model setup.
         url: Catalog page describing the configured Earth Engine source.
         roles: Predictor and/or response roles derived from the configured bands.
+        requiredRoles: Roles in which this source must remain selected.
     """
 
+    id: str
     label: str
     url: str
     roles: list[Literal["predictor", "response"]]
+    requiredRoles: list[Literal["predictor", "response"]]
 
 
 class HabitatEarthEngineOptions(BaseModel):
@@ -139,20 +147,18 @@ def create_habitat_router() -> APIRouter:
         """
         configuration = load_habitat_stack()
         grid = configuration.grid
-        dataset_roles: dict[str, set[str]] = {}
-        for band in configuration.bands:
-            if band.role in ("predictor", "response"):
-                for key in band.source_dataset_keys:
-                    dataset_id = configuration.datasets[key]
-                    dataset_roles.setdefault(dataset_id, set()).add(band.role)
+        dataset_roles = get_habitat_dataset_roles(configuration)
+        required_predictors = get_required_habitat_predictor_datasets(configuration)
         datasets: list[HabitatDatasetSource] = []
-        for dataset_id, roles in dataset_roles.items():
-            label, url = HABITAT_DATASET_LINKS[dataset_id]
+        for key, roles in dataset_roles.items():
+            label, url = HABITAT_DATASET_LINKS[configuration.datasets[key]]
             datasets.append(
                 HabitatDatasetSource(
+                    id=key,
                     label=label,
                     url=url,
-                    roles=[role for role in ("predictor", "response") if role in roles],
+                    roles=list(roles),
+                    requiredRoles=["predictor"] if key in required_predictors else [],
                 )
             )
         return HabitatEarthEngineOptions(

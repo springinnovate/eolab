@@ -289,7 +289,9 @@ def calculate_habitat(
 
     Args:
         sources: Authorized raster/vector inputs and the private prepared-input cache.
-        prepared: Captured stack, AOI, output grid, resampling and scientific settings.
+        prepared: Captured stack, selected dataset roles, AOI, output grid,
+            resampling and scientific settings. Cached inputs retain their full
+            acquisition identity; only selected bands are prepared and fitted.
         directory: Private attempt directory owned and cleaned by Processing.
         limits: Existing Processing settings used by temporary polygon rasterization.
 
@@ -339,14 +341,27 @@ def calculate_habitat(
                 cached_tiles=len(tiles.tiles),
                 missing_tiles=tiles.missing_tiles,
             )
-            views = resources.enter_context(
-                prepare_habitat_band_views(tiles, directory)
-            )
+            stack = cast(HabitatEarthEngineStack, request.stack)
             predictor_names = tuple(
-                name for name, band in tiles.bands.items() if band.role == "predictor"
+                name
+                for name, band in tiles.bands.items()
+                if band.role == "predictor"
+                and all(
+                    key in stack.predictorDatasets for key in band.source_dataset_keys
+                )
             )
             response_names = tuple(
-                name for name, band in tiles.bands.items() if band.role == "response"
+                name
+                for name, band in tiles.bands.items()
+                if band.role == "response"
+                and all(
+                    key in stack.responseDatasets for key in band.source_dataset_keys
+                )
+            )
+            views = resources.enter_context(
+                prepare_habitat_band_views(
+                    tiles, directory, predictor_names + response_names
+                )
             )
             categorical_predictor = next(
                 name

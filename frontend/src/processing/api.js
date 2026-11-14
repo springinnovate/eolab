@@ -430,8 +430,8 @@ export class ProcessingApiClient {
         return response.models.map(validateAvailableModel);
     }
 
-    /** Read Habitat's source years, acquisition grid and linked input datasets.
-     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:Array<{label:string,url:string,roles:Array<"predictor"|"response">}>}>} Source choices without connection credentials.
+    /** Read Habitat's years, acquisition grid and selectable input datasets.
+     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:Array<{id:string,label:string,url:string,roles:Array<"predictor"|"response">,requiredRoles:Array<"predictor"|"response">}>}>} Stable dataset aliases, source links and required roles without connection credentials.
      * @throws {Error} If the configuration request fails.
      */
     async getHabitatEarthEngineOptions() {

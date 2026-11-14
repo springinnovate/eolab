@@ -33,9 +33,10 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2019,
     grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}, datasets: [
-        {label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"]},
-        {label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"]},
-        {label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"]},
+        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"], requiredRoles: []},
+        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"], requiredRoles: []},
+        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"], requiredRoles: []},
+        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"], requiredRoles: ["predictor"]},
     ]};
 
 /** Change a rendered form field through its actual event handler.
@@ -46,6 +47,15 @@ const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2
  */
 function edit(control, value, event = "change") {
     control.value = value; control.dispatchEvent(new Event(event));
+}
+
+/** Toggle a dataset through the actual checkbox handler.
+ * @param {HTMLInputElement} checkbox Dataset choice.
+ * @param {boolean} checked Whether to use this dataset for its displayed role.
+ * @return {void}
+ */
+function toggleDataset(checkbox, checked) {
+    checkbox.checked = checked; checkbox.dispatchEvent(new Event("change"));
 }
 
 /** Open Habitat setup with real Models components and explicit API boundaries.
@@ -130,7 +140,7 @@ function chooseStack(harness) {
     edit(controls.categorical, "habitat_type");
 }
 
-test("Habitat starts with the original GEE configuration and linked datasets grouped by their roles", async () => {
+test("Habitat starts with all datasets selected in collapsed role groups", async () => {
     const h = await fixture(), stack = h.view.setup.inputs.stack;
     const chooser = h.view.elements["library-items"].querySelectorAll("button").find(button => button.textContent === "Ecosystem Condition");
     assert.equal(chooser.getAttribute("aria-label"), "Set up Ecosystem Condition");
@@ -149,10 +159,21 @@ test("Habitat starts with the original GEE configuration and linked datasets gro
     assert.equal(administration.href, "/admin-eolab/habitat");
     assert.equal(administration.target, "_blank");
     assert.equal(administration.rel, "noopener noreferrer");
-    for (const [role, list] of Object.entries(stack.datasetLists)) {
-        assert.deepEqual(list.children.map(item => ({label: item.children[0].textContent, url: item.children[0].href})),
-            earthEngineOptions.datasets.filter(dataset => dataset.roles.includes(role)).map(({label, url}) => ({label, url})));
+    for (const [role, group] of Object.entries(stack.datasetGroups)) {
+        const datasets = earthEngineOptions.datasets.filter(dataset => dataset.roles.includes(role));
+        assert.equal(group.root.open, false);
+        assert.equal(group.summary.textContent, `${group.title} · ${datasets.length} of ${datasets.length} selected`);
+        for (const dataset of datasets) {
+            const controls = group.controls.get(dataset.id);
+            assert.equal(controls.checkbox.checked, true);
+            assert.equal(controls.checkbox.disabled, dataset.requiredRoles.includes(role));
+            assert.equal(controls.label.textContent, dataset.label);
+            assert.equal(controls.link.href, dataset.url);
+            assert.equal(controls.link.getAttribute("aria-label"), `Source information for ${dataset.label}`);
+            assert.notEqual(controls.link.parentElement, controls.checkbox.parentElement, "Source links are outside the checkbox label");
+        }
     }
+    assert.equal(stack.datasetGroups.predictor.controls.get("srtm_landforms").required.hidden, false);
     assert.deepEqual(h.controller.state.draft.inputs.area.area.selectedBounds, h.context.area.selectedBounds);
     assert.equal(h.requests.length, 0, "Opening the default configuration does not submit a calculation");
     h.controller.destroy();
@@ -454,7 +475,7 @@ test("Habitat preserves custom grid choices through late and failed metadata loo
     h.controller.destroy();
 });
 
-test("Earth Engine runs need no map rasters and duplicate the year, explicit area and reference filter", async () => {
+test("Earth Engine runs capture and duplicate dataset choices, year, area and reference filter", async () => {
     const h = await fixture();
     h.context.rasters = []; h.controller.refreshMapLayers();
     h.context.viewportBounds = {west: -109, south: 46, east: -107, north: 48};
@@ -467,23 +488,86 @@ test("Earth Engine runs need no map rasters and duplicate the year, explicit are
     assert.equal(h.view.setup.inputs.area.source.value, "viewport");
     assert.equal(h.view.setup.inputs.area.source.children.some(option => option.value === "whole"), false);
     await chooseVector(h, "references", h.context.vectors[1], "South");
+    toggleDataset(stack.datasetGroups.predictor.controls.get("era5_daily").checkbox, false);
+    toggleDataset(stack.datasetGroups.response.controls.get("modis_phenology").checkbox, false);
     edit(stack.year, "2017");
     assert.equal(h.view.setup.run.disabled, false);
     await h.controller.submit();
     const expected = h.requests[0].inputs;
-    assert.deepEqual(expected.stack, {kind: "earthEngine", year: 2017});
+    assert.deepEqual(expected.stack, {kind: "earthEngine", year: 2017,
+        predictorDatasets: ["modis_phenology", "srtm_landforms"], responseDatasets: ["landsat_ndvi"]});
     assert.deepEqual(expected.area, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
     assert.deepEqual(expected.preparation, {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], resampling: {}});
     const summary = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
     assert.ok(summary.includes("Original model inputs from Earth Engine · Assessment year 2017"));
+    assert.ok(summary.includes("Predictor datasets")); assert.ok(summary.includes("2 selected"));
+    assert.ok(summary.includes("Observed response datasets")); assert.ok(summary.includes("1 selected"));
     await h.controller.duplicateRun();
     h.context.viewportBounds.west = -110; h.controller.refreshMapArea();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "duplicate-auto").inputs, expected);
     assert.equal(h.view.setup.inputs.stack.source.value, "earthEngine");
     assert.equal(h.view.setup.inputs.stack.year.value, "2017");
+    assert.equal(h.view.setup.inputs.stack.datasetGroups.predictor.controls.get("era5_daily").checkbox.checked, false);
+    assert.equal(h.view.setup.inputs.stack.datasetGroups.response.controls.get("modis_phenology").checkbox.checked, false);
     h.controller.state.draft.inputs.area.area = {kind: "wholeRaster"};
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "missing-area"), /Choose an analysis area/);
     h.controller.destroy();
+});
+
+test("dataset roles remain independent and keep focus and disclosure state through refreshes", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    const stack = h.view.setup.inputs.stack, predictors = stack.datasetGroups.predictor, responses = stack.datasetGroups.response;
+    const checkbox = predictors.controls.get("modis_phenology").checkbox;
+    predictors.root.open = true; checkbox.focus();
+    toggleDataset(checkbox, false);
+    assert.equal(h.doc.activeElement, checkbox);
+    assert.equal(predictors.root.open, true); assert.equal(responses.root.open, false);
+    assert.equal(responses.controls.get("modis_phenology").checkbox.checked, true);
+    assert.equal(predictors.summary.textContent, "Select predictor datasets · 2 of 3 selected");
+    edit(stack.year, "2019");
+    edit(stack.source, "manual"); edit(stack.source, "earthEngine");
+    await h.controller.loadHabitatOptions(h.controller.state.draft, "stack");
+    assert.equal(predictors.controls.get("modis_phenology").checkbox, checkbox);
+    assert.equal(h.doc.activeElement, checkbox); assert.equal(checkbox.checked, false);
+    assert.equal(predictors.root.open, true); assert.equal(responses.root.open, false);
+    toggleDataset(checkbox, true);
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "all-datasets").inputs.stack,
+    {kind: "earthEngine", year: 2019, predictorDatasets: ["era5_daily", "modis_phenology", "srtm_landforms"],
+        responseDatasets: ["modis_phenology", "landsat_ndvi"]});
+});
+
+test("saved API runs with omitted dataset choices display and duplicate the configured defaults", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    h.api.readModelInvocation = async () => {
+        const saved = structuredClone(h.requests[0]);
+        delete saved.inputs.stack.predictorDatasets; delete saved.inputs.stack.responseDatasets;
+        return {...saved, model: {...habitat, definition: habitat}};
+    };
+    await h.controller.submit();
+    assert.equal(h.controller.state.error, "");
+    const summary = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    assert.equal(summary.filter(text => text === "All configured datasets").length, 2);
+    await h.controller.duplicateRun();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "default-api-datasets").inputs.stack,
+        {kind: "earthEngine", year: 2018, predictorDatasets: ["era5_daily", "modis_phenology", "srtm_landforms"],
+            responseDatasets: ["modis_phenology", "landsat_ndvi"]});
+});
+
+test("an empty response selection stays empty on refresh and prevents submission with useful guidance", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    const stack = h.view.setup.inputs.stack;
+    for (const controls of stack.datasetGroups.response.controls.values()) toggleDataset(controls.checkbox, false);
+    await h.controller.loadHabitatOptions(h.controller.state.draft, "stack");
+    assert.deepEqual(h.controller.state.draft.inputs.stack.responseDatasets, []);
+    assert.equal(h.view.setup.run.disabled, true);
+    assert.equal(stack.status.textContent, "Select at least one observed response dataset.");
+    assert.equal(stack.datasetGroups.response.summary.textContent, "Select observed response datasets · 0 of 2 selected");
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "empty-responses"), /at least one observed response dataset/);
+    toggleDataset(stack.datasetGroups.response.controls.get("landsat_ndvi").checkbox, true);
+    assert.equal(h.view.setup.run.disabled, false);
 });
 
 test("Earth Engine grid stays first with raster masks and preserves custom choices through duplication", async () => {
