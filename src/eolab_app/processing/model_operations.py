@@ -156,6 +156,13 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         prepared_type: Persisted execution schema after preparation.
         policy_type: Schema validating recorded numerical implementation facts.
         bind: Translate recipe-bound arguments into the existing request contract.
+        before_queue: Optional operation-owned submission check or recording step.
+            Admission invokes it after accepted-request recovery and before job
+            persistence, with the validated request and only this operation's
+            composition-supplied dependencies (or None). It may raise ProcessingError
+            or be cancelled; native work must finish cleanup before cancellation
+            releases an operation-owned concurrency gate. Shared admission continues
+            to own ordinary session/source authorization and queued-job persistence.
         source: Extract the primary Catalog or owned run-file reference. None
             declares that the operation needs no pre-existing primary raster;
             primary_input must also be None.
@@ -254,6 +261,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
     input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
     progress_descriptions: tuple[tuple[str, str], ...] = ()
+    before_queue: Callable[[Request, object | None], Awaitable[None]] | None = None
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
@@ -387,6 +395,7 @@ OPERATIONS = MappingProxyType(
                 prepared_type=HabitatInputPreparationSpec,
                 policy_type=HabitatInputPreparationInputs,
                 bind=habitat_inputs.bind_habitat_input_preparation,
+                before_queue=habitat_inputs.record_habitat_preparation_selection,
                 source=None,
                 polygon_inputs=lambda request: {},
                 vector_selections=lambda request: {"area": request.selection},
@@ -446,6 +455,7 @@ OPERATIONS = MappingProxyType(
                 prepared_type=HabitatCalculationInputs,
                 policy_type=HabitatSettings,
                 bind=habitat.bind_habitat,
+                before_queue=habitat.validate_habitat_submission,
                 source=None,
                 polygon_inputs=habitat.get_habitat_polygon_inputs,
                 vector_selections=habitat.get_habitat_vector_selections,

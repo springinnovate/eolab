@@ -42,9 +42,11 @@ from eolab_app.polygon_areas import (
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.habitat_preparation_selections import (
+    HabitatSubmissionDependencies,
     PostgresHabitatPreparationSelections,
     import_retained_habitat_preparation_selections,
 )
+from eolab_app.processing.habitat_models import OPERATION as HABITAT_CONDITION_OPERATION
 from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.native_processes import create_native_process
@@ -243,6 +245,11 @@ def create_app(
     processing_events = PostgresJobEvents()
     processing_store = PostgresJobStore(processing_limits)
     habitat_preparation_selections = PostgresHabitatPreparationSelections()
+    habitat_submission_dependencies = HabitatSubmissionDependencies(
+        habitat_preparation_selections,
+        vector_selection_reader,
+        app_global_configuration.processing_data_path / "habitat-cache",
+    )
     processing_service = ProcessingService(
         processing_store,
         LocalJobArtifacts(
@@ -253,9 +260,10 @@ def create_app(
         model_authorizer=raster_source_authorizer,
         uploads=vector_uploads,
         areas=vector_selection_reader,
-        habitat_preparation_selections=habitat_preparation_selections,
-        habitat_cache_directory=app_global_configuration.processing_data_path
-        / "habitat-cache",
+        operation_submission_dependencies={
+            HABITAT_CONDITION_OPERATION: habitat_submission_dependencies,
+            HABITAT_INPUT_PREPARATION_OPERATION: habitat_submission_dependencies,
+        },
     )
     source_files = create_model_source_files(processing_service)
     artifact_vectors = ArtifactVectorSourceResolver(source_files)

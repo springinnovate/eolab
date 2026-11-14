@@ -28,11 +28,13 @@ from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
 )
 from eolab_app.processing.habitat_preparation_models import (
+    OPERATION,
     HabitatInputPreparationArtifact,
     HabitatInputPreparationRequest,
 )
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.habitat_preparation_selections import (
+    HabitatSubmissionDependencies,
     PostgresHabitatPreparationSelections,
 )
 from eolab_app.processing.models import PreparedJobPlan
@@ -79,8 +81,13 @@ def preparation_boundary(
         store,
         artifacts,
         areas=areas,
-        habitat_preparation_selections=preparation_selections,
-        habitat_cache_directory=tmp_path / "processing" / "habitat-cache",
+        operation_submission_dependencies={
+            OPERATION: HabitatSubmissionDependencies(
+                preparation_selections,
+                areas,
+                tmp_path / "processing" / "habitat-cache",
+            )
+        },
     )
     app = FastAPI()
     app.include_router(create_habitat_preparation_router(service, PASSWORD))
@@ -142,8 +149,13 @@ def test_preparation_admission_recovers_before_source_and_stack_reads(
     client, service, source, _ = preparation_boundary
     body = _body(source)
     accepted = _submit(client, body)
-    assert service.habitat_preparation_selections.contains(source.selection)
-    assert service.habitat_preparation_selections.list() == (source.selection,)
+    preparation_selections = PostgresHabitatPreparationSelections(store.conninfo)
+    preparation_selections.open()
+    try:
+        assert preparation_selections.contains(source.selection)
+        assert preparation_selections.list() == (source.selection,)
+    finally:
+        preparation_selections.close()
     assert "set-cookie" not in client.get(BASE).headers
     monkeypatch.setattr(
         service.areas,

@@ -1,6 +1,7 @@
 """Prepare Habitat's shared Earth Engine inputs through ordinary Processing jobs."""
 
 from dataclasses import asdict, dataclass
+import asyncio
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -39,7 +40,38 @@ from eolab_app.processing.habitat_preparation_models import (
     QueuedHabitatInputPreparation,
 )
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_app.processing.habitat_preparation_selections import (
+    HabitatSubmissionDependencies,
+)
 from eolab_app.processing.operation_context import OperationContext
+
+
+async def record_habitat_preparation_selection(
+    request: HabitatInputPreparationRequest, dependencies: object | None
+) -> None:
+    """Remember the authorized Catalog selection before its preparation is queued.
+
+    The administrator admission boundary has already authorized this source.
+    Recording means preparation was requested, not that downloads succeeded;
+    model admission independently checks current coverage. Duplicate requests
+    retain the same Catalog descriptor without creating a new area identity.
+
+    Args:
+        request: Validated preparation request with an authorized Catalog selection.
+        dependencies: Composition's HabitatSubmissionDependencies for this operation,
+            or None when preparation storage is not configured.
+
+    Raises:
+        ProcessingError: If preparation references are not configured or unavailable.
+    """
+    resources = cast(HabitatSubmissionDependencies | None, dependencies)
+    if resources is None:
+        raise ProcessingError(
+            "habitat_preparation_selections_unavailable",
+            "Prepared Catalog selections are temporarily unavailable. Try again later.",
+            503,
+        )
+    await asyncio.to_thread(resources.preparation_selections.record, request.selection)
 
 
 @dataclass(frozen=True)

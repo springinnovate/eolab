@@ -431,11 +431,12 @@ export class ProcessingApiClient {
     }
 
     /** Read Habitat's years, acquisition grid and selectable input datasets.
+     * @param {AbortSignal} [signal] Cancel choices for an abandoned model draft.
      * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:Array<{id:string,label:string,url:string,roles:Array<"predictor"|"response">,requiredRoles:Array<"predictor"|"response">}>}>} Stable dataset aliases, source links and required roles without connection credentials.
      * @throws {Error} If the configuration request fails.
      */
-    async getHabitatEarthEngineOptions() {
-        return this.request("/models/habitat-condition/earth-engine-options");
+    async getHabitatEarthEngineOptions(signal) {
+        return this.request("/models/habitat-condition/earth-engine-options", "GET", undefined, signal);
     }
 
     /** List existing Catalog selections used for Earth Engine input preparation.

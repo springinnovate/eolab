@@ -1,11 +1,13 @@
 /** Present Catalog preparation selections and their current coverage in Habitat setup. */
-import { captureHabitatPreparationSelection, describeModelFilter, modelSourceKey } from "./inputs.js";
 import { vectorSelectionsEqual } from "../selected-area.js";
 
 /** Keep Catalog preparation choices separate from manual area and reference controls. */
 export class HabitatPreparationSelectionView {
     /** Create stable selection, coverage and retry controls with existing form helpers.
      * @param {Object} helpers Existing Models element/field/options/button helpers.
+     * @param {(draft:Object)=>Object} helpers.captureSelection Capture the chosen prepared Catalog features.
+     * @param {(filter:Object)=>string} helpers.describeFilter Describe the exact feature predicate.
+     * @param {(source:Object)=>string} helpers.sourceKey Identify the Catalog Item for display titles.
      * @param {(tag:string,text?:string,className?:string)=>HTMLElement} helpers.element Create text-only elements.
      * @param {(id:string,caption:string,input:HTMLElement)=>HTMLLabelElement} helpers.field Label a control.
      * @param {(select:HTMLSelectElement,choices:Object[],selected:string)=>void} helpers.options Update select choices.
@@ -14,8 +16,8 @@ export class HabitatPreparationSelectionView {
      * @param {string} name Recipe input name for unique accessible IDs.
      * @param {string} label Analysis-area label supplied by the recipe.
      */
-    constructor({element, field, options, button}, handlers, name, label) {
-        this.options = options; this.selections = [];
+    constructor({element, field, options, button, captureSelection, describeFilter, sourceKey}, handlers, name, label) {
+        Object.assign(this, {options, captureSelection, describeFilter, sourceKey}); this.selections = [];
         this.root = element("div", "", "models-spatial-input");
         this.source = element("select"); this.source.required = true;
         this.source.addEventListener("change", () => handlers.onHabitatPreparationSelection(
@@ -37,11 +39,11 @@ export class HabitatPreparationSelectionView {
      * @return {boolean} Whether a selected Catalog descriptor has any prepared input tiles.
      */
     render(draft) {
-        const value = draft.habitatPreparationSelections;
+        const value = draft.setupState;
         this.selections = value.selections;
         const selectedIndex = value.selections.findIndex(selection => vectorSelectionsEqual(selection, value.selectedSelection));
-        const labels = value.selections.map(selection => (value.titles[modelSourceKey(selection)] ?? selection.itemId) +
-            " · " + selection.layerName + " · " + describeModelFilter(selection.filter));
+        const labels = value.selections.map(selection => (value.titles[this.sourceKey(selection)] ?? selection.itemId) +
+            " · " + selection.layerName + " · " + this.describeFilter(selection.filter));
         this.options(this.source, [{value: "", label: "Choose Catalog features with prepared inputs…"},
             ...labels.map((label, index) => ({value: String(index), label}))], selectedIndex < 0 ? "" : String(selectedIndex));
         this.selectionDetails.textContent = selectedIndex < 0 ? "" : labels[selectedIndex];
@@ -52,7 +54,7 @@ export class HabitatPreparationSelectionView {
         this.retry.hidden = selectedIndex < 0 || value.loading || Boolean(value.error);
         this.retry.disabled = value.coverageLoading;
         let error = "";
-        try { captureHabitatPreparationSelection(draft); } catch (problem) { error = problem.message; }
+        try { this.captureSelection(draft); } catch (problem) { error = problem.message; }
         const coverage = value.coverage;
         this.status.textContent = error || (coverage.missingTiles
             ? "Prepared inputs cover " + coverage.cachedTiles + " of " + coverage.requiredTiles + " tiles. You can run, but results will be missing where inputs are unavailable."

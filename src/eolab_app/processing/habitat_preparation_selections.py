@@ -1,14 +1,16 @@
-"""Remember Catalog selections requested for Habitat input preparation.
+"""Track Habitat preparation selections and check their eligibility for model runs.
 
 These references outlive preparation jobs, but do not assert current cache
 coverage. Catalog selections retain their existing source, layer and filter
 identity; this module creates no separate named area or public identifier.
+Habitat owns the source/cache dependencies and native-read gate used at submission.
 """
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Protocol, TYPE_CHECKING
 
@@ -69,6 +71,28 @@ class HabitatPreparationSelections(Protocol):
             ProcessingError: If persistence is unavailable or stored data is invalid.
         """
         ...
+
+
+@dataclass(frozen=True)
+class HabitatSubmissionDependencies:
+    """Supply Habitat's submission checks with their own source and cache access.
+
+    Composition binds this object only to Habitat operations. The shared
+    Processing service neither interprets these values nor owns the native-read
+    gate. Its lifetime spans submissions so cancellation cannot release a native
+    coverage slot before the previous reader has stopped.
+
+    Attributes:
+        preparation_selections: Durable references to administrator preparations.
+        selections: Existing original-source authorization and polygon reader.
+        cache_directory: Server-controlled Earth Engine input cache.
+        coverage_lock: Serialize Habitat admission reads without a work/time ceiling.
+    """
+
+    preparation_selections: HabitatPreparationSelections
+    selections: CatalogSelectionReader
+    cache_directory: Path
+    coverage_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class PostgresHabitatPreparationSelections:
@@ -285,11 +309,7 @@ async def get_habitat_preparation_coverage(
 
 async def validate_habitat_preparation_selection(
     request: HabitatRequest,
-    store: HabitatPreparationSelections | None,
-    selections: CatalogSelectionReader | None,
-    cache_directory: Path | None,
-    *,
-    coverage_lock: asyncio.Lock,
+    dependencies: HabitatSubmissionDependencies | None,
 ) -> None:
     """Require a preparation selection with nonzero current coverage for Earth Engine runs.
 
@@ -300,10 +320,8 @@ async def validate_habitat_preparation_selection(
 
     Args:
         request: Validated model calculation inputs.
-        store: Preparation-reference store, or None when unconfigured.
-        selections: Original-source authorization reader, or None when unconfigured.
-        cache_directory: Server-controlled input cache, or None when unconfigured.
-        coverage_lock: Service-owned gate for native admission reads, without a work limit.
+        dependencies: Habitat-owned source, preparation references, cache and native
+            read gate; None when composition has not configured the operation.
 
     Raises:
         ProcessingError: If Earth Engine inputs lack an eligible Catalog selection,
@@ -320,14 +338,20 @@ async def validate_habitat_preparation_selection(
             "Choose a Catalog selection listed for prepared inputs when using Original model inputs.",
             422,
         )
-    async with coverage_lock:
+    if dependencies is None:
+        raise ProcessingError(
+            "habitat_preparation_selections_unavailable",
+            "Prepared Catalog selections are temporarily unavailable. Try again later.",
+            503,
+        )
+    async with dependencies.coverage_lock:
         try:
             coverage = await get_habitat_preparation_coverage(
                 request.catalogSelection,
                 request.stack.year,
-                store,
-                selections,
-                cache_directory,
+                dependencies.preparation_selections,
+                dependencies.selections,
+                dependencies.cache_directory,
             )
         except SelectionUnavailableError as error:
             raise ProcessingError("selection_unavailable", error.detail, 409) from error

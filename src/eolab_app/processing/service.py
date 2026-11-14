@@ -6,7 +6,8 @@ import json
 import math
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path, PurePath
+from pathlib import PurePath
+from collections.abc import Mapping
 from typing import Any
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
@@ -52,11 +53,6 @@ from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
     describe_habitat_input_preparation_outcome,
     get_retained_habitat_preparation_inputs,
-)
-from eolab_app.processing.habitat_models import HabitatRequest
-from eolab_app.processing.habitat_preparation_selections import (
-    HabitatPreparationSelections,
-    validate_habitat_preparation_selection,
 )
 from eolab_app.processing.habitat_bulk_preparation import (
     build_habitat_bulk_preparation_submission,
@@ -295,8 +291,7 @@ class ProcessingService:
         model_authorizer: RasterSourceAuthorizer | None = None,
         uploads: VectorUploadStore | None = None,
         areas: CatalogSelectionReader | None = None,
-        habitat_preparation_selections: HabitatPreparationSelections | None = None,
-        habitat_cache_directory: Path | None = None,
+        operation_submission_dependencies: Mapping[str, object] | None = None,
     ) -> None:
         """Configure job storage, source access and the installed model library.
 
@@ -313,10 +308,10 @@ class ProcessingService:
                 inputs at admission. Existing raster endpoints retain their behavior.
             uploads: Original GeoPackages and retained links for accepted jobs.
             areas: Existing reader authorizing Catalog and uploaded vector selections.
-            habitat_preparation_selections: Catalog selections submitted for Habitat
-                preparation, retained independently of job/report expiration.
-            habitat_cache_directory: Existing persistent input cache inspected
-                before admitting an Earth Engine run; no downloads occur here.
+            operation_submission_dependencies: Server-only dependencies keyed by
+                installed operation ID. Only that operation's before_queue callback
+                interprets its value; these bindings are never persisted or exposed
+                in model requests. An absent binding is passed to the callback as None.
 
         Raises:
             ValueError: If the submission observation budget is negative or non-finite.
@@ -335,9 +330,9 @@ class ProcessingService:
         self.model_authorizer = model_authorizer
         self.uploads = uploads
         self.areas = areas
-        self.habitat_preparation_selections = habitat_preparation_selections
-        self.habitat_cache_directory = habitat_cache_directory
-        self._habitat_admission_lock = asyncio.Lock()
+        self.operation_submission_dependencies = dict(
+            operation_submission_dependencies or {}
+        )
         self._upload_admission_lock = asyncio.Lock()
 
     async def _recover_habitat_preparation_request(
@@ -421,15 +416,11 @@ class ProcessingService:
                 409,
             )
         await self.areas.resolve_for_sampling(request.selection)
-        if self.habitat_preparation_selections is None:
-            raise ProcessingError(
-                "habitat_preparation_selections_unavailable",
-                "Prepared Catalog selections are temporarily unavailable. Try again later.",
-                503,
+        operation = get_model_operation(HABITAT_PREPARATION_OPERATION)
+        if operation.before_queue is not None:
+            await operation.before_queue(
+                request, self.operation_submission_dependencies.get(operation.id)
             )
-        await asyncio.to_thread(
-            self.habitat_preparation_selections.record, request.selection
-        )
         row = await asyncio.to_thread(
             self.jobs.submit,
             HABITAT_PREPARATION_OWNER,
@@ -741,8 +732,8 @@ class ProcessingService:
         and copies each owned polygon input by role before queueing work.
         Repeating the same request ID and inputs returns the original run even
         if its model or source is no longer installed.
-        Earth Engine runs require a recorded Catalog selection and at least one
-        currently cached input tile; partial coverage remains permitted.
+        Operation-owned submission checks run only for new requests, before any
+        job is queued. The operation receives only its configured dependencies.
 
         Args:
             owner: Hash of the requesting browser's Processing session cookie.
@@ -774,15 +765,11 @@ class ProcessingService:
         calculation, invocation = build_model_calculation_request(
             request, self.model_registry
         )
-        if isinstance(calculation, HabitatRequest):
-            await validate_habitat_preparation_selection(
-                calculation,
-                self.habitat_preparation_selections,
-                self.areas,
-                self.habitat_cache_directory,
-                coverage_lock=self._habitat_admission_lock,
-            )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
+        if operation.before_queue is not None:
+            await operation.before_queue(
+                calculation, self.operation_submission_dependencies.get(operation.id)
+            )
         source = operation.source(calculation) if operation.source is not None else None
         polygons: dict[str, AggregateArea] = {}
         polygons_by_reference: dict[PolygonAreaReference, AggregateArea] = {}

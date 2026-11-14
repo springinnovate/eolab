@@ -22,9 +22,14 @@ from eolab_app.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 from eolab_app.processing import habitat_cache
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.habitat_earth_engine import HabitatCacheCoverage
-from eolab_app.processing.habitat_models import HabitatEarthEngineStack, QueuedHabitat
+from eolab_app.processing.habitat_models import (
+    OPERATION,
+    HabitatEarthEngineStack,
+    QueuedHabitat,
+)
 from eolab_app.processing.habitat_preparation_selections import (
     HabitatPreparationSelections,
+    HabitatSubmissionDependencies,
 )
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
@@ -262,8 +267,11 @@ def admission_boundary(
         model_registry=ModelRegistry.load_installed(),
         model_authorizer=raster_authorizer,
         areas=selections,
-        habitat_preparation_selections=preparation_selections,
-        habitat_cache_directory=cache_directory,
+        operation_submission_dependencies={
+            OPERATION: HabitatSubmissionDependencies(
+                preparation_selections, selections, cache_directory
+            )
+        },
     )
     return AdmissionBoundary(
         service,
@@ -478,6 +486,26 @@ def test_model_http_reports_unavailable_prepared_source_without_queueing(
     boundary.jobs.submit.assert_not_called()
 
 
+def test_earth_engine_submission_fails_closed_without_operation_dependencies(
+    admission_boundary: AdmissionBoundary,
+) -> None:
+    """Keep the registered Habitat check active when its server binding is absent.
+
+    Args:
+        admission_boundary: Real service and operation registry with recording readers.
+    """
+    boundary = admission_boundary
+    boundary.service.operation_submission_dependencies.clear()
+    request = _request(boundary.service.model_registry)
+    with pytest.raises(ProcessingError) as error:
+        asyncio.run(boundary.service.submit_model_run(OWNER, request))
+    assert error.value.code == "habitat_preparation_selections_unavailable"
+    assert error.value.status == 503
+    boundary.preparation_selections.contains.assert_not_called()
+    boundary.coverage.assert_not_awaited()
+    boundary.jobs.submit.assert_not_called()
+
+
 def test_manual_rasters_keep_arbitrary_areas_without_preparation_dependencies(
     admission_boundary: AdmissionBoundary,
 ) -> None:
@@ -487,8 +515,7 @@ def test_manual_rasters_keep_arbitrary_areas_without_preparation_dependencies(
         admission_boundary: Service whose prepared-area dependencies are unavailable.
     """
     boundary = admission_boundary
-    boundary.service.habitat_preparation_selections = None
-    boundary.service.habitat_cache_directory = None
+    boundary.service.operation_submission_dependencies.clear()
     boundary.service.areas = None
     boundary.coverage.side_effect = AssertionError("manual mode must not inspect cache")
     request = _manual_request(boundary.service.model_registry)

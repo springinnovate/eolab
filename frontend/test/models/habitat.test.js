@@ -203,7 +203,7 @@ for (const area of [undefined, {kind: "wholeRaster"}]) test(`Habitat retains a s
     const viewportBounds = {west: -109, south: 46, east: -107, north: 48};
     const draft = createModelDraft(habitat, {area, viewportBounds}, "default-area");
     assert.equal(draft.inputs.stack.kind, "earthEngine");
-    assert.equal(draft.habitatPreparationSelections.selectedSelection, null);
+    assert.equal(draft.setupState.selectedSelection, null);
     assert.equal(draft.inputs.area.areaMode, "viewport");
     assert.deepEqual(draft.inputs.area.area, {kind: "selectedArea", selectedBounds: viewportBounds});
 });
@@ -558,7 +558,7 @@ test("dataset roles remain independent and keep focus and disclosure state throu
     assert.equal(predictors.summary.textContent, "Select predictor datasets · 2 of 3 selected");
     edit(stack.year, "2019");
     edit(stack.source, "manual"); edit(stack.source, "earthEngine");
-    await h.controller.loadHabitatOptions(h.controller.state.draft, "stack");
+    h.view.setup.inputs.stack.retry.dispatchEvent(new Event("click")); await settle();
     assert.equal(predictors.controls.get("modis_phenology").checkbox, checkbox);
     assert.equal(h.doc.activeElement, checkbox); assert.equal(checkbox.checked, false);
     assert.equal(predictors.root.open, true); assert.equal(responses.root.open, false);
@@ -593,7 +593,7 @@ test("an empty response selection stays empty on refresh and prevents submission
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const stack = h.view.setup.inputs.stack;
     for (const controls of stack.datasetGroups.response.controls.values()) toggleDataset(controls.checkbox, false);
-    await h.controller.loadHabitatOptions(h.controller.state.draft, "stack");
+    h.view.setup.inputs.stack.retry.dispatchEvent(new Event("click")); await settle();
     assert.deepEqual(h.controller.state.draft.inputs.stack.responseDatasets, []);
     assert.equal(h.view.setup.run.disabled, true);
     assert.equal(stack.status.textContent, "Select at least one observed response dataset.");
@@ -669,8 +669,8 @@ test("Earth Engine configuration errors can be retried without blocking manual s
 
 test("Late Habitat options preserve a chosen custom stack and cannot replace another model draft", async () => {
     const h = await fixture();
-    let complete;
-    h.api.getHabitatEarthEngineOptions = () => new Promise(resolve => { complete = resolve; });
+    let complete, requestedSignal;
+    h.api.getHabitatEarthEngineOptions = signal => new Promise(resolve => { complete = resolve; requestedSignal = signal; });
     h.controller.chooseModel(habitat);
     chooseStack(h);
     const predictors = structuredClone(h.controller.state.draft.inputs.stack.predictors);
@@ -681,6 +681,7 @@ test("Late Habitat options preserve a chosen custom stack and cannot replace ano
     h.controller.chooseModel(habitat);
     const abandoned = h.controller.state.draft;
     h.controller.chooseModel(model);
+    assert.equal(requestedSignal.aborted, true, "replacing the draft cancels the model-owned options request");
     const current = h.controller.state.draft;
     complete(structuredClone(earthEngineOptions)); await settle();
     assert.equal(h.controller.state.draft, current);
@@ -908,7 +909,7 @@ test("Earth Engine preparation selections are independent of Map layers, manual 
     assert.equal(controls.preparationSelection.root.hidden, true);
     assert.equal(controls.source.disabled, false);
     assert.equal(h.controller.state.draft.inputs.area.area, null, "Removing the manual source retains its existing unavailability behavior");
-    assert.deepEqual(h.controller.state.draft.habitatPreparationSelections.selectedSelection, preparationSelections[1]);
+    assert.deepEqual(h.controller.state.draft.setupState.selectedSelection, preparationSelections[1]);
 });
 
 for (const cachedTiles of [0, 2, 4]) test("preparation selection with " + cachedTiles + " cached tiles has explicit readiness", async t => {
@@ -941,7 +942,7 @@ test("coverage requests cancel stale years and areas, and retry failures without
     assert.equal(pending[0].signal.aborted, true);
     pending[1].resolve({year: 2017, requiredTiles: 4, cachedTiles: 0, missingTiles: 4}); await settle();
     pending[0].resolve({year: 2018, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}); await settle();
-    assert.equal(h.controller.state.draft.habitatPreparationSelections.coverage.year, 2017);
+    assert.equal(h.controller.state.draft.setupState.coverage.year, 2017);
     assert.equal(h.view.setup.run.disabled, true);
     await choosePreparationSelection(h, 1);
     pending[2].reject(new Error("Connection interrupted")); await settle();
@@ -955,7 +956,7 @@ test("coverage requests cancel stale years and areas, and retry failures without
     edit(h.view.setup.inputs.stack.source, "manual");
     assert.equal(pending[4].signal.aborted, true);
     pending[4].resolve({year: 2017, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}); await settle();
-    assert.equal(h.controller.state.draft.habitatPreparationSelections.coverage, null);
+    assert.equal(h.controller.state.draft.setupState.coverage, null);
 });
 
 test("preparation-selection loading failures and empty lists can be retried without blocking manual setup", async t => {
@@ -989,11 +990,11 @@ test("late preparation-selection replies cannot restore an abandoned model or de
     assert.equal(pending[0].signal.aborted, true);
     pending[0].resolve({selections: structuredClone(preparationSelections)}); await settle();
     assert.equal(h.controller.state.draft.model.id, model.id);
-    assert.equal(abandoned.habitatPreparationSelections.loaded, false);
+    assert.equal(abandoned.setupState.loaded, false);
     h.controller.chooseModel(habitat);
     h.controller.destroy(); assert.equal(pending[1].signal.aborted, true);
     pending[1].resolve({selections: structuredClone(preparationSelections)}); await settle();
-    assert.equal(h.controller.state.draft.habitatPreparationSelections.loaded, false);
+    assert.equal(h.controller.state.draft.setupState.loaded, false);
 });
 
 test("duplicate matches the full saved selection regardless of object-key order and never substitutes another area", async t => {
@@ -1007,17 +1008,17 @@ test("duplicate matches the full saved selection regardless of object-key order 
         layerName: chosen.layerName, assetKey: chosen.assetKey, itemId: chosen.itemId, collectionId: chosen.collectionId};
     h.api.readModelInvocation = async () => ({...structuredClone(original), model: {...habitat, definition: habitat}});
     await h.controller.duplicateRun();
-    assert.deepEqual(h.controller.state.draft.habitatPreparationSelections.selectedSelection, preparationSelections[1]);
+    assert.deepEqual(h.controller.state.draft.setupState.selectedSelection, preparationSelections[1]);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "ordered").inputs.area.selection, preparationSelections[1]);
     h.api.getHabitatPreparationSelections = async () => ({selections: [structuredClone(preparationSelections[0])]});
     await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.habitatPreparationSelections.selectedSelection, null);
+    assert.equal(h.controller.state.draft.setupState.selectedSelection, null);
     assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /original Catalog selection is not available/);
     assert.equal(h.view.setup.run.disabled, true);
     await choosePreparationSelection(h); assert.equal(h.view.setup.run.disabled, false);
     original.inputs.area = {kind: "selectedArea", selectedBounds: {west: 1, south: 1, east: 2, north: 2}};
     await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.habitatPreparationSelections.selectedSelection, null);
+    assert.equal(h.controller.state.draft.setupState.selectedSelection, null);
     assert.equal(h.view.setup.run.disabled, true);
     assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /original Catalog selection is not available/);
 });
@@ -1052,7 +1053,7 @@ test("an abandoned duplicate cannot cancel the next draft's preparation-selectio
     assert.equal(pending[0].signal.aborted, false);
     pending[0].resolve({selections: structuredClone(preparationSelections)}); await settle();
     assert.equal(h.controller.state.draft, current);
-    assert.equal(current.habitatPreparationSelections.loaded, true);
+    assert.equal(current.setupState.loaded, true);
 });
 
 
@@ -1108,7 +1109,7 @@ test("failed or stale Catalog title reads never block or rename a later preparat
     assert.match(h.view.setup.inputs.area.preparationSelection.selectionDetails.textContent, /^watersheds/);
     let finish, signal;
     h.api.getCatalogItem = (_source, requestSignal) => new Promise(resolve => { finish = resolve; signal = requestSignal; });
-    await h.controller.loadHabitatPreparationSelections(h.controller.state.draft);
+    h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
     h.controller.chooseModel(model);
     assert.equal(signal.aborted, true);
     finish({id: selection.itemId, properties: {title: "Stale title"}}); await settle();
@@ -1120,12 +1121,12 @@ test("preparation refresh matches descriptors across option reorder without sele
     await choosePreparationSelection(h, 1);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     h.api.getHabitatPreparationSelections = async () => ({selections: structuredClone(preparationSelections).reverse()});
-    await h.controller.loadHabitatPreparationSelections(h.controller.state.draft);
+    h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
     assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "0");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "reordered").inputs.area.selection, preparationSelections[1]);
     h.api.getHabitatPreparationSelections = async () => ({selections: [structuredClone(preparationSelections[0])]});
-    await h.controller.loadHabitatPreparationSelections(h.controller.state.draft);
+    h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
     assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "");
-    assert.equal(h.controller.state.draft.habitatPreparationSelections.selectedSelection, null);
+    assert.equal(h.controller.state.draft.setupState.selectedSelection, null);
     assert.equal(h.view.setup.run.disabled, true);
 });
