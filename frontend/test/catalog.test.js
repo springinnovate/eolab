@@ -37,7 +37,15 @@ const expectedSubstringProperties = [
   "description",
   "eolab_datetime_text",
   "eolab_end_datetime_text",
+  "eolab_metadata_text",
 ];
+const observationTimeFilter = {
+  op: "or",
+  args: [
+    { op: "isnull", args: [{ property: "eolab_time_basis" }] },
+    { op: "<>", args: [{ property: "eolab_time_basis" }, "source-modified"] },
+  ],
+};
 const rasterTypeFilter = {
   op: "=",
   args: [
@@ -158,6 +166,7 @@ test("buildCatalogSearch filters mounted raster, vector and temporal Items", () 
         args: [
           expectedSubstringFilter("barley"),
           rasterTypeFilter,
+          observationTimeFilter,
         ],
       },
       datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
@@ -167,13 +176,13 @@ test("buildCatalogSearch filters mounted raster, vector and temporal Items", () 
 
 test("buildCatalogSearch builds inclusive UTC day and date-range searches", () => {
   assert.deepEqual(buildCatalogSearch("date:2025-01-15"), {
-    filter: null,
+    filter: observationTimeFilter,
     datetime: "2025-01-15T00:00:00Z/2025-01-15T23:59:59.999999Z",
   });
   assert.deepEqual(
     buildCatalogSearch("ESA date:2024-02-29..2025-01-15"),
     {
-      filter: expectedSubstringFilter("ESA"),
+      filter: { op: "and", args: [expectedSubstringFilter("ESA"), observationTimeFilter] },
       datetime: "2024-02-29T00:00:00Z/2025-01-15T23:59:59.999999Z",
     },
   );
@@ -181,23 +190,23 @@ test("buildCatalogSearch builds inclusive UTC day and date-range searches", () =
 
 test("buildCatalogSearch expands shortened calendar date periods", () => {
   assert.deepEqual(buildCatalogSearch("date:2020"), {
-    filter: null,
+    filter: observationTimeFilter,
     datetime: "2020-01-01T00:00:00Z/2020-12-31T23:59:59.999999Z",
   });
   assert.deepEqual(buildCatalogSearch("date:2020-01"), {
-    filter: null,
+    filter: observationTimeFilter,
     datetime: "2020-01-01T00:00:00Z/2020-01-31T23:59:59.999999Z",
   });
   assert.deepEqual(buildCatalogSearch("date:2024-02"), {
-    filter: null,
+    filter: observationTimeFilter,
     datetime: "2024-02-01T00:00:00Z/2024-02-29T23:59:59.999999Z",
   });
   assert.deepEqual(buildCatalogSearch("date:2020-01..2020-03"), {
-    filter: null,
+    filter: observationTimeFilter,
     datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
   });
   assert.deepEqual(buildCatalogSearch("date:2020..2020-03-15"), {
-    filter: null,
+    filter: observationTimeFilter,
     datetime: "2020-01-01T00:00:00Z/2020-03-15T23:59:59.999999Z",
   });
 });
@@ -281,7 +290,7 @@ test("Catalog search help presents raster, vector and temporal type filters", ()
 
   assert.match(
     catalogMarkup,
-    /type:raster, type:vector, type:temporal, or date:YYYY-MM-DD/,
+    /type:raster,\s+type:vector, type:temporal, type:nonspatial/,
   );
   assert.match(
     catalogMarkup,
@@ -451,7 +460,7 @@ test("CatalogSearchClient combines STAC datetime with text", async () => {
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     limit: 20,
     "filter-lang": "cql2-json",
-    filter: expectedSubstringFilter("barley"),
+    filter: { op: "and", args: [expectedSubstringFilter("barley"), observationTimeFilter] },
     datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
   });
 });

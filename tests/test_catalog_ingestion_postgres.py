@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import os
+import json
 from pathlib import Path
 import time
 from typing import Any, Iterator
 from uuid import uuid4
+from urllib.parse import parse_qs, urlsplit
 
 import psycopg
 from psycopg import sql
@@ -752,3 +755,477 @@ def test_queued_maintenance_still_publishes_concurrent_items(
                 initial,
                 deferred_constraints=True,
             )
+
+
+def curated_search_item(collection_id: str, item_id: str) -> dict[str, Any]:
+    """Return the contract producer's spatial Item in a disposable collection.
+
+    Args:
+        collection_id: Test-owned collection created by the guarded fixture.
+        item_id: Unique identity for this test's copy of the published fixture.
+
+    Returns:
+        The canonical raster Item with its real footprint and complete public
+        Item/Asset annotation envelopes. No nonspatial geometry is fabricated.
+    """
+    fixture = Path(__file__).parent / "fixtures/catalog_descriptors/public-items.json"
+    document = json.loads(fixture.read_text(encoding="utf-8"))[0]["item"]
+    document["id"] = item_id
+    document["collection"] = collection_id
+    return document
+
+
+def curated_text_filter(text: str) -> dict[str, Any]:
+    """Build the browser's case-insensitive literal predicate for curated text.
+
+    Args:
+        text: Literal search value, including any percent or underscore characters.
+
+    Returns:
+        Standard CQL2 predicate over the registered curated-text queryable.
+    """
+    literal = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return {
+        "op": "like",
+        "args": [
+            {"op": "casei", "args": [{"property": "eolab_metadata_text"}]},
+            {"op": "casei", "args": [f"%{literal}%"]},
+        ],
+    }
+
+
+def search_curated_items(
+    database: CatalogDatabase,
+    collection_id: str,
+    predicate: dict[str, Any],
+    *,
+    limit: int = 20,
+    token: str | None = None,
+    datetime_range: str | None = None,
+) -> dict[str, Any]:
+    """Execute actual pgSTAC search with exact counts in a disposable collection.
+
+    Args:
+        database: Guarded database containing application migrations.
+        collection_id: Test-owned collection to isolate matching Items.
+        predicate: Standard CQL2 filter emitted by Catalog search.
+        limit: Requested page size.
+        token: Optional opaque token returned by the preceding search.
+        datetime_range: Optional standard STAC observation interval.
+
+    Returns:
+        Hydrated STAC ItemCollection with actual matching count and paging links.
+
+    Raises:
+        psycopg.Error: If the real search/queryable contract is rejected.
+    """
+    request: dict[str, Any] = {
+        "collections": [collection_id],
+        "filter-lang": "cql2-json",
+        "filter": predicate,
+        "limit": limit,
+        "conf": {"context": "on"},
+    }
+    if token is not None:
+        request["token"] = token
+    if datetime_range is not None:
+        request["datetime"] = datetime_range
+    with psycopg.connect(database.dsn, autocommit=True) as connection:
+        connection.execute("SET search_path TO pgstac, public")
+        connection.execute("SET pgstac.context = 'on'")
+        return connection.execute(
+            "SELECT pgstac.search(%s)", (Jsonb(request),)
+        ).fetchone()[0]
+
+
+def test_curated_item_and_asset_search_uses_public_values_once(
+    catalog_database: CatalogDatabase,
+) -> None:
+    """Find supplied fields and Asset-only notes without indexing private metadata.
+
+    Args:
+        catalog_database: Guarded pgSTAC database with the curated search migration.
+    """
+    with collection(catalog_database) as identifier:
+        document = curated_search_item(identifier, "curated")
+        document["assets"]["observations"]["eolab:metadata"]["annotations"]["notes"] = [
+            "Unique supporting note: 50%_confidence"
+        ]
+        document["assets"]["observations"]["eolab:metadata"]["risks"] = [
+            "Coastal inundation outlook"
+        ]
+        document["assets"]["second-table"] = deepcopy(
+            document["assets"]["observations"]
+        )
+        document["properties"]["eolab:private_path"] = "hidden-location-needle"
+        document["assets"]["data"]["href"] = "file:///hidden-href-needle"
+        document["properties"]["eolab:metadata"]["publications"][0][
+            "id"
+        ] = "internal-id-needle"
+        for private_key in (
+            "eolab:temporal-source",
+            "eolab:vector-field-values",
+            "eolab:asset-source",
+            "eolab:descriptor-source",
+        ):
+            document["assets"][private_key] = {
+                "title": "private-title-needle",
+                "description": "private-description-needle",
+                "eolab:metadata": {
+                    "version": 1,
+                    "annotations": {"notes": "private-envelope-needle"},
+                    "categories": ["private-label-needle"],
+                },
+            }
+            document["properties"]["eolab:metadata"]["annotations"][private_key] = {
+                "notes": "public-nested-needle"
+            }
+            document["assets"]["observations"]["eolab:metadata"]["annotations"][
+                "notes"
+            ].append({"nested": [{private_key: "public-array-needle"}]})
+            document["properties"]["eolab:metadata"]["publications"][0].setdefault(
+                "annotations", {}
+            )[private_key] = "public-publication-needle"
+        assert ingest(catalog_database, "curated", [document]).error is None
+        for term in (
+            "10.1234/example-flood-dataset",
+            "A. Researcher",
+            "Compare observed",
+            "partial_or_processed",
+            "paper-009",
+            "Coastal inundation outlook",
+            "metres",
+            "supporting note",
+            "50%_confidence",
+            "public-nested-needle",
+            "public-array-needle",
+            "public-publication-needle",
+        ):
+            result = search_curated_items(
+                catalog_database, identifier, curated_text_filter(term)
+            )
+            assert [item["id"] for item in result["features"]] == ["curated"], term
+            assert result["numberMatched"] == 1
+        assert (
+            search_curated_items(
+                catalog_database,
+                identifier,
+                {
+                    "op": "like",
+                    "args": [{"property": "eolab_metadata_text"}, "%metres%"],
+                },
+            )["numberMatched"]
+            == 1
+        )
+        for term in (
+            "hidden-location-needle",
+            "hidden-href-needle",
+            "internal-id-needle",
+            "missing_note",
+            "private-title-needle",
+            "private-description-needle",
+            "private-envelope-needle",
+            "private-label-needle",
+        ):
+            assert (
+                search_curated_items(
+                    catalog_database, identifier, curated_text_filter(term)
+                )["numberMatched"]
+                == 0
+            ), term
+        assert (
+            search_curated_items(
+                catalog_database,
+                identifier,
+                {
+                    "op": "a_contains",
+                    "args": [
+                        {"property": "eolab_categories"},
+                        ["private-label-needle"],
+                    ],
+                },
+            )["numberMatched"]
+            == 0
+        )
+        with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
+            text = connection.execute(
+                "SELECT pgstac.eolab_item_metadata_text(%s)", (Jsonb(document),)
+            ).fetchone()[0]
+            assert {"0", "false", "true"}.issubset(text.splitlines())
+            assert "null" not in text.splitlines()
+
+
+def test_curated_category_and_text_combine_across_assets_and_keep_pagination(
+    catalog_database: CatalogDatabase,
+) -> None:
+    """Combine an exact category with supplied annotation text across parent Assets.
+
+    Args:
+        catalog_database: Guarded database containing category and text queryables.
+    """
+    with collection(catalog_database) as identifier:
+        documents = [
+            curated_search_item(identifier, f"curated-{index}") for index in range(3)
+        ]
+        for document in documents:
+            document["assets"]["observations"]["eolab:metadata"]["categories"] = [
+                "Coastal protection"
+            ]
+            document["assets"]["publication"]["eolab:metadata"]["statuses"] = [
+                "Reviewed"
+            ]
+        assert ingest(catalog_database, "labels", documents).error is None
+        predicate = {
+            "op": "and",
+            "args": [
+                {
+                    "op": "a_contains",
+                    "args": [{"property": "eolab_categories"}, ["coastal protection"]],
+                },
+                curated_text_filter("paper-009"),
+                curated_text_filter("flood"),
+                curated_text_filter("reviewed"),
+            ],
+        }
+        first = search_curated_items(catalog_database, identifier, predicate, limit=2)
+        assert first["numberMatched"] == 3
+        assert len(first["features"]) == 2
+        next_link = next(link for link in first["links"] if link["rel"] == "next")
+        token = parse_qs(urlsplit(next_link["href"]).query)["token"][0]
+        second = search_curated_items(
+            catalog_database, identifier, predicate, limit=2, token=token
+        )
+        assert second["numberMatched"] == 3
+        assert len(second["features"]) == 1
+        assert len({item["id"] for item in first["features"] + second["features"]}) == 3
+        assert (
+            search_curated_items(
+                catalog_database,
+                identifier,
+                {
+                    "op": "a_contains",
+                    "args": [{"property": "eolab_categories"}, ["coastal"]],
+                },
+            )["numberMatched"]
+            == 0
+        )
+
+
+def test_curated_replacement_and_removal_do_not_leave_stale_matches(
+    catalog_database: CatalogDatabase,
+) -> None:
+    """Maintain projected search when ordinary publication replaces or removes data.
+
+    Args:
+        catalog_database: Guarded database containing the expression indexes.
+    """
+    with collection(catalog_database) as identifier:
+        document = curated_search_item(identifier, "changing")
+        assert ingest(catalog_database, "initial", [document]).error is None
+        assert (
+            search_curated_items(
+                catalog_database, identifier, curated_text_filter("metres")
+            )["numberMatched"]
+            == 1
+        )
+        document["assets"].pop("observations")
+        document["properties"]["eolab:metadata"]["annotations"] = {
+            "notes": "Replacement finding"
+        }
+        assert ingest(catalog_database, "replacement", [document]).error is None
+        with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
+            # The existing scanner invalidates authoritative count caches after publication.
+            connection.execute("DELETE FROM pgstac.search_wheres")
+        for old in ("metres", "partial_or_processed"):
+            assert (
+                search_curated_items(
+                    catalog_database, identifier, curated_text_filter(old)
+                )["numberMatched"]
+                == 0
+            )
+        assert (
+            search_curated_items(
+                catalog_database, identifier, curated_text_filter("Replacement finding")
+            )["numberMatched"]
+            == 1
+        )
+        with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
+            connection.execute(
+                "DELETE FROM pgstac.items WHERE collection=%s AND id=%s",
+                (identifier, document["id"]),
+            )
+            connection.execute("DELETE FROM pgstac.search_wheres")
+        assert (
+            search_curated_items(
+                catalog_database, identifier, curated_text_filter("Replacement finding")
+            )["numberMatched"]
+            == 0
+        )
+
+
+def test_observation_dates_exclude_only_explicit_source_modified_times(
+    catalog_database: CatalogDatabase,
+) -> None:
+    """Keep legacy dates and observation intervals while excluding marked file dates.
+
+    Args:
+        catalog_database: Guarded database with the timestamp-basis queryable.
+    """
+    with collection(catalog_database) as identifier:
+        observation = curated_search_item(identifier, "observation")
+        modified = curated_search_item(identifier, "modified")
+        modified["properties"]["eolab:time_basis"] = "source-modified"
+        legacy = items(identifier, "legacy", 0, 1)[0]
+        legacy["properties"]["title"] = "Legacy searchable title"
+        assert (
+            ingest(
+                catalog_database, "date-basis", [observation, modified, legacy]
+            ).error
+            is None
+        )
+        predicate = {
+            "op": "or",
+            "args": [
+                {"op": "isnull", "args": [{"property": "eolab_time_basis"}]},
+                {
+                    "op": "<>",
+                    "args": [{"property": "eolab_time_basis"}, "source-modified"],
+                },
+            ],
+        }
+        result = search_curated_items(
+            catalog_database,
+            identifier,
+            predicate,
+            datetime_range="2020-01-01T00:00:00Z/2020-12-31T23:59:59Z",
+        )
+        assert {item["id"] for item in result["features"]} == {
+            "observation",
+            legacy["id"],
+        }
+        assert result["numberMatched"] == 2
+        title_filter = {
+            "op": "like",
+            "args": [
+                {"op": "casei", "args": [{"property": "title"}]},
+                {"op": "casei", "args": ["%LEGACY SEARCHABLE%"]},
+            ],
+        }
+        assert (
+            search_curated_items(catalog_database, identifier, title_filter)[
+                "numberMatched"
+            ]
+            == 1
+        )
+
+
+def test_curated_search_migration_replays_and_indexes_selective_queries(
+    catalog_database: CatalogDatabase,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Compare real selective query plans with and without index access.
+
+    Report timings as evidence, without a flaky machine-dependent speed threshold.
+    Both plans read the same Items and projection; the baseline disables index
+    access locally rather than dropping live schema objects.
+
+    Args:
+        catalog_database: Guarded database containing all application migrations.
+        capsys: Capture controller used to retain timing evidence in successful CI logs.
+    """
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "catalog/migrations/0009_curated_metadata_search.sql"
+    )
+    with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
+        connection.execute(migration.read_text(), prepare=False)
+        connection.execute(migration.read_text(), prepare=False)
+    with collection(catalog_database) as identifier:
+        base = items(identifier, "plan", 0, 1)[0]
+        documents = []
+        for index in range(2500):
+            document = deepcopy(base)
+            document["id"] = f"plan-{index:04}"
+            document["properties"]["eolab:metadata"] = {
+                "version": 1,
+                "annotations": {"notes": f"Common record {index}"},
+                "categories": ["Common"],
+            }
+            documents.append(document)
+        documents[-1]["properties"]["eolab:metadata"] = {
+            "version": 1,
+            "annotations": {"notes": "Distinctive curated needle"},
+            "categories": ["Distinctive category"],
+        }
+        assert ingest(catalog_database, "query-plan", documents).error is None
+        with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
+            connection.execute("SET search_path TO pgstac, public")
+            partition = connection.execute(
+                "SELECT tableoid::regclass::text FROM pgstac.items WHERE collection=%s LIMIT 1",
+                (identifier,),
+            ).fetchone()[0]
+            connection.execute(
+                sql.SQL("ANALYZE {}.{}").format(
+                    sql.Identifier("pgstac"), sql.Identifier(partition.split(".")[-1])
+                )
+            )
+            for predicate in (
+                curated_text_filter("Distinctive curated needle"),
+                {
+                    "op": "a_contains",
+                    "args": [
+                        {"property": "eolab_categories"},
+                        ["distinctive category"],
+                    ],
+                },
+            ):
+                where = connection.execute(
+                    "SELECT pgstac.stac_search_to_where(%s)",
+                    (
+                        Jsonb(
+                            {
+                                "collections": [identifier],
+                                "filter-lang": "cql2-json",
+                                "filter": predicate,
+                            }
+                        ),
+                    ),
+                ).fetchone()[0]
+                query = sql.SQL(
+                    "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM pgstac.items WHERE {} "
+                ).format(sql.SQL(where))
+                with connection.transaction():
+                    connection.execute(
+                        "SET LOCAL enable_bitmapscan=off; SET LOCAL enable_indexscan=off; SET LOCAL enable_indexonlyscan=off"
+                    )
+                    baseline = connection.execute(query).fetchone()[0][0]
+                with connection.transaction():
+                    connection.execute("SET LOCAL enable_seqscan=off")
+                    indexed = connection.execute(query).fetchone()[0][0]
+                assert (
+                    baseline["Plan"]["Actual Rows"]
+                    == indexed["Plan"]["Actual Rows"]
+                    == 1
+                )
+                indexed_plan = json.dumps(indexed["Plan"])
+                assert "Bitmap Index Scan" in indexed_plan
+                expression = (
+                    "eolab_item_metadata_text"
+                    if predicate["op"] == "like"
+                    else "eolab_item_metadata_labels"
+                )
+                assert expression in indexed_plan
+                with capsys.disabled():
+                    print(
+                        json.dumps(
+                            {
+                                "curated_query": predicate,
+                                "rows": len(documents),
+                                "baseline_ms": baseline["Execution Time"],
+                                "indexed_ms": indexed["Execution Time"],
+                                "baseline_plan": baseline["Plan"],
+                                "indexed_plan": indexed["Plan"],
+                            }
+                        ),
+                        flush=True,
+                    )

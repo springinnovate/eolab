@@ -126,7 +126,7 @@ function createSuggestionFixture() {
 test("Catalog filter descriptions are executable parser-owned syntax", () => {
   assert.deepEqual(
     CATALOG_SEARCH_FILTERS.map((filter) => filter.field),
-    ["type", "type", "type", "date"],
+    ["type", "type", "type", "type", "category", "date"],
   );
   for (const filter of CATALOG_SEARCH_FILTERS.filter(
     (candidate) => candidate.searchImmediately,
@@ -143,11 +143,11 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
   });
   assert.deepEqual(
     getCatalogSearchSuggestions("forest ty", 9).map((filter) => filter.field),
-    ["type", "type", "type"],
+    ["type", "type", "type", "type"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("datatype", 8).map((filter) => filter.token),
-    ["type:raster", "type:vector", "type:temporal"],
+    ["type:raster", "type:vector", "type:temporal", "type:nonspatial"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("forest date:202", 15).map(
@@ -159,7 +159,7 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
     getCatalogSearchSuggestions("type:raster ", 12).map(
       (filter) => filter.field,
     ),
-    ["date"],
+    ["category", "date"],
   );
 });
 
@@ -188,7 +188,7 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   assert.equal(fixture.panel.hidden, false);
   assert.equal(fixture.panel.popoverOpen, true);
   assert.equal(fixture.input.getAttribute("aria-expanded"), "true");
-  assert.equal(fixture.list.children.length, 3);
+  assert.equal(fixture.list.children.length, 4);
 
   fixture.input.dispatchEvent(keyboardEvent("ArrowDown"));
   assert.equal(
@@ -220,6 +220,7 @@ test("Raster, vector and temporal type suggestions have unique accessible option
       "catalog-search-suggestion-type-raster",
       "catalog-search-suggestion-type-vector",
       "catalog-search-suggestion-type-temporal",
+      "catalog-search-suggestion-type-nonspatial",
     ],
   );
   fixture.list.children[1].dispatchEvent(new Event("click"));
@@ -233,7 +234,8 @@ test("Incomplete date help leaves the caret ready without running a search", () 
   fixture.input.addEventListener("input", () => inputEvents += 1);
   fixture.input.dispatchEvent(new Event("focus"));
 
-  fixture.list.children[3].dispatchEvent(new Event("click"));
+  fixture.list.children.find((option) => option.id === "catalog-search-suggestion-date")
+    .dispatchEvent(new Event("click"));
 
   assert.equal(fixture.input.value, "date:");
   assert.equal(fixture.input.selectionStart, 5);
@@ -257,7 +259,7 @@ test("Escape dismisses Catalog suggestions without changing the query", () => {
 test("Using every Catalog filter closes the helper instead of showing an empty popup", () => {
   const { component, input, panel } = createSuggestionFixture();
   component.open();
-  input.value = "type:raster date:2020 ";
+  input.value = "type:raster date:2020 category:Water ";
   input.setSelectionRange(input.value.length, input.value.length);
   input.dispatchEvent(new Event("input"));
   assert.equal(panel.popoverOpen, false);

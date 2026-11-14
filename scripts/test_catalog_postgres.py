@@ -73,6 +73,7 @@ def build_test_image() -> str:
         "RUN python -m pip install --no-cache-dir 'pytest==8.4.2' "
         f"'psycopg[binary]=={version.group(1)}'\n"
         "COPY tests/test_catalog_ingestion_postgres.py /suite/tests/\n"
+        "COPY tests/fixtures/catalog_descriptors/public-items.json /suite/tests/fixtures/catalog_descriptors/\n"
         "COPY catalog/migrations/ /suite/catalog/migrations/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
@@ -87,6 +88,9 @@ def build_test_image() -> str:
                 entry.size = len(encoded)
                 archive.addfile(entry, io.BytesIO(encoded))
                 paths = [ROOT / "tests/test_catalog_ingestion_postgres.py"]
+                paths.append(
+                    ROOT / "tests/fixtures/catalog_descriptors/public-items.json"
+                )
                 paths.extend((ROOT / "catalog/migrations").glob("*.sql"))
                 for path in sorted(paths):
                     archive.add(path, arcname=path.relative_to(ROOT), recursive=False)

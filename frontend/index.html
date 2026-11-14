@@ -302,7 +302,13 @@
                         </div>
                       </div>
                       <small class="visually-hidden" id="catalog-search-help">
-                        Search text or use type:raster, type:vector, type:temporal, or date:YYYY-MM-DD.
+                        Search filenames, paper titles, authors, DOI or annotation words.
+                        Use type:raster, type:vector, type:temporal, type:nonspatial,
+                        category:Water or date:YYYY-MM-DD to narrow results.
+                        Categories are supplied with the data and match exactly,
+                        ignoring case. Quote categories with spaces, such as
+                        category:"Coastal protection".
+                        Date filters exclude timestamps marked as file modification times.
                         Example: ESA type:raster date:2020-01-01..2020-12-31,
                         date:2020-01..2020-03.
                         Arrow keys choose a filter, Enter adds it, Escape closes suggestions.
