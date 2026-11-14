@@ -28,6 +28,21 @@ class Element extends EventTarget {
 }
 
 /**
+ * Create a closed dialog with controllable upload and map operations.
+ * @param {Object} [options] Upload listing, deletion and map callbacks.
+ * @return {{dialog:UploadPolygonsDialog,document:Object}} Dialog and focus-tracking document.
+ */
+function createDialog(options = {}) {
+    const document = { createElement: tag => new Element(document, tag) };
+    document.body = document.createElement("body");
+    const trigger = document.createElement("button");
+    document.querySelector = selector => { assert.equal(selector, "#upload-polygons"); return trigger; };
+    const dialog = new UploadPolygonsDialog({ document, addToMap: async () => {},
+        isOnMap: () => false, onDeleted() {}, list: async () => [], ...options });
+    return { dialog, document };
+}
+
+/**
  * Build a dialog connected to real upload transport with controlled HTTP and map completion.
  * @param {typeof fetch} fetcher Upload response provider.
  * @param {(upload:import('../../src/vector-uploads/api.js').VectorUpload)=>Promise<void>} addToMap Map composition callback.
@@ -35,12 +50,7 @@ class Element extends EventTarget {
  * @return {Promise<{dialog:UploadPolygonsDialog,document:Object,file:File}>} Selected upload form.
  */
 async function setup(fetcher, addToMap, options = {}) {
-    const document = { createElement: tag => new Element(document, tag) };
-    document.body = document.createElement("body");
-    const trigger = document.createElement("button");
-    document.querySelector = selector => { assert.equal(selector, "#upload-polygons"); return trigger; };
-    const dialog = new UploadPolygonsDialog({ document, addToMap,
-        isOnMap: () => false, onDeleted() {}, list: async () => [],
+    const { dialog, document } = createDialog({ addToMap,
         upload: (file, name) => uploadPolygons(file, name, fetcher), ...options });
     await dialog.open();
     const file = new File(["original GeoPackage bytes"], "Café wetlands.gpkg");
@@ -185,6 +195,116 @@ test("listing failures can be retried without changing map layers or the file fo
     assert.equal(dialog.retry.hidden, true);
     assert.equal(dialog.file.files[0], file);
     assert.equal(dialog.status.textContent, "");
+});
+
+test("initial and retry list requests remain dismissible by Close and Escape", async t => {
+    for (const retry of [false, true]) {
+        for (const escape of [false, true]) {
+            await t.test(`${retry ? "retry" : "initial"} via ${escape ? "Escape" : "Close"}`, async () => {
+                let finishList;
+                const { dialog, document } = createDialog({ list: async () => { throw new Error("Try loading again."); } });
+                if (retry) await dialog.open();
+                dialog.list = () => new Promise(resolve => { finishList = resolve; });
+                const loading = retry ? dialog.loadUploads() : dialog.open();
+                assert.equal(dialog.cancel.disabled, false);
+                assert.equal(dialog.file.disabled, true);
+                assert.equal(dialog.submit.disabled, true);
+                assert.equal(dialog.progress.hidden, false);
+                assert.equal(dialog.dialog.attributes.get("aria-busy"), "true");
+                if (escape) {
+                    const event = new Event("cancel", { cancelable: true });
+                    dialog.dialog.dispatchEvent(event);
+                    assert.equal(event.defaultPrevented, false);
+                    dialog.dialog.close(); // Native dialog cancellation closes after the event.
+                } else dialog.cancel.dispatchEvent(new Event("click"));
+                assert.equal(dialog.dialog.open, false);
+                assert.equal(document.activeElement, dialog.trigger);
+                finishList([{ id: "late-upload", name: "Late response" }]);
+                await loading;
+                assert.equal(dialog.rows.length, 0);
+                assert.equal(document.activeElement, dialog.trigger);
+            });
+        }
+    }
+});
+
+test("obsolete list success and failure cannot change a reopened dialog or release its busy state", async t => {
+    for (const fail of [false, true]) {
+        await t.test(fail ? "failure" : "success", async () => {
+            const requests = [];
+            const { dialog, document } = createDialog({ list: () => new Promise((resolve, reject) => requests.push({ resolve, reject })) });
+            const firstOpening = dialog.open();
+            dialog.cancel.dispatchEvent(new Event("click"));
+            const secondOpening = dialog.open();
+            assert.equal(document.activeElement, dialog.cancel);
+            if (fail) requests[0].reject(new Error("Obsolete failure"));
+            else requests[0].resolve([{ id: "obsolete", name: "Obsolete upload" }]);
+            await firstOpening;
+            assert.equal(dialog.status.textContent, "Loading your uploads…");
+            assert.equal(dialog.retry.hidden, true);
+            assert.equal(dialog.rows.length, 0);
+            assert.equal(dialog.file.disabled, true);
+            assert.equal(dialog.progress.hidden, false);
+            assert.equal(dialog.dialog.attributes.get("aria-busy"), "true");
+            assert.equal(document.activeElement, dialog.cancel);
+            requests[1].resolve([{ id: "current", name: "Current upload" }]);
+            await secondOpening;
+            assert.equal(dialog.rows[0].upload.id, "current");
+            assert.equal(dialog.file.disabled, false);
+            assert.equal(dialog.progress.hidden, true);
+            assert.equal(document.activeElement, dialog.rows[0].add);
+        });
+    }
+});
+
+test("late close events and list completions cannot disturb a new map admission", async () => {
+    const requests = [];
+    let finishMap;
+    const { dialog, document } = createDialog({
+        list: () => new Promise(resolve => requests.push(resolve)),
+        addToMap: () => new Promise(resolve => { finishMap = resolve; }),
+    });
+    const firstOpening = dialog.open();
+    dialog.dialog.open = false; // Native close changes open before its queued close event.
+    const secondOpening = dialog.open();
+    dialog.dialog.dispatchEvent(new Event("close"));
+    assert.equal(document.activeElement, dialog.cancel);
+    requests[1]([{ id: "current", name: "Current upload" }]);
+    await secondOpening;
+    const adding = dialog.addExistingUpload(dialog.rows[0].upload);
+    requests[0]([{ id: "obsolete", name: "Obsolete upload" }]);
+    await firstOpening;
+    assert.equal(dialog.rows[0].upload.id, "current");
+    assert.equal(dialog.status.textContent, "Adding layer to map…");
+    assert.equal(dialog.cancel.disabled, true);
+    assert.equal(dialog.dialog.dispatchEvent(new Event("cancel", { cancelable: true })), false);
+    assert.equal(dialog.progress.hidden, false);
+    assert.equal(document.activeElement, dialog.rows[0].add);
+    finishMap();
+    await adding;
+    assert.equal(dialog.dialog.open, false);
+    assert.equal(document.activeElement, dialog.trigger);
+});
+
+test("a list response arriving before the queued close event cannot update or focus a closed dialog", async t => {
+    for (const fail of [false, true]) {
+        await t.test(fail ? "failure" : "success", async () => {
+            let complete;
+            const { dialog, document } = createDialog({ list: () => new Promise((resolve, reject) => {
+                complete = () => fail ? reject(new Error("Late failure")) : resolve([{ id: "late", name: "Late upload" }]);
+            }) });
+            const opening = dialog.open();
+            dialog.dialog.open = false;
+            dialog.trigger.focus();
+            complete();
+            await opening;
+            assert.equal(dialog.rows.length, 0);
+            assert.equal(dialog.retry.hidden, true);
+            assert.equal(dialog.status.textContent, "Loading your uploads…");
+            assert.equal(document.activeElement, dialog.trigger);
+            dialog.dialog.dispatchEvent(new Event("close"));
+        });
+    }
 });
 
 test("deleting a file requires confirmation and preserves the map until server success", async () => {
