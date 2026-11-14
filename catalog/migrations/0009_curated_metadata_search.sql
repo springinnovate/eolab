@@ -23,12 +23,15 @@ AS $function$
         UNION ALL
         SELECT asset->'eolab:metadata'
         FROM jsonb_each(COALESCE(item_content->'assets', '{}'::jsonb)) AS assets(key, asset)
+        WHERE key NOT IN ('eolab:temporal-source', 'eolab:vector-field-values',
+                          'eolab:asset-source', 'eolab:descriptor-source')
     ) AS envelopes
     WHERE jsonb_typeof(envelope) = 'object';
 $function$;
 
 -- Extract scalar values, not JSON keys or syntax. Null has no searchable text;
 -- zero and false remain meaningful supplied annotations.
+-- Curated annotation objects are author-declared public, including their keys.
 CREATE OR REPLACE FUNCTION pgstac.eolab_metadata_scalar_text(metadata_value jsonb)
 RETURNS SETOF text
 LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT
@@ -69,6 +72,8 @@ AS $function$
         UNION ALL
         SELECT jsonb_build_array(asset->'title', asset->'description')
         FROM jsonb_each(COALESCE(item_content->'assets', '{}'::jsonb)) AS assets(key, asset)
+        WHERE key NOT IN ('eolab:temporal-source', 'eolab:vector-field-values',
+                          'eolab:asset-source', 'eolab:descriptor-source')
     ), scalar_values AS (
         SELECT DISTINCT scalar
         FROM selected_values, pgstac.eolab_metadata_scalar_text(value) AS scalar
