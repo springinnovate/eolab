@@ -114,13 +114,13 @@ def build_api_test_image() -> str:
 
 
 def build_test_image() -> str:
-    """Build the catalog tests with the application's supported Python and psycopg.
+    """Build the catalog tests with the application's supported Python, psycopg and Pydantic.
 
     Returns:
         Unique test-only image tag owned and removed by this launcher.
 
     Raises:
-        ValueError: If the deployment's exact psycopg version cannot be found.
+        ValueError: If the deployment's exact database/model library pins are absent.
         subprocess.CalledProcessError: If image construction fails.
         subprocess.TimeoutExpired: If the build exceeds ten minutes.
     """
@@ -128,17 +128,22 @@ def build_test_image() -> str:
         encoding="utf-8"
     )
     version = re.search(r"(?m)^psycopg==([0-9.]+)\s", runtime)
-    if version is None:
-        raise ValueError("Catalog tests require the deployment's exact psycopg pin")
+    pydantic_version = re.search(r"(?m)^pydantic==([0-9.]+)\s", runtime)
+    if version is None or pydantic_version is None:
+        raise ValueError(
+            "Catalog tests require the deployment's psycopg and Pydantic pins"
+        )
     recipe = (
         "FROM python:3.12-slim-trixie\n"
         "USER root\nWORKDIR /suite\n"
         "RUN python -m pip install --no-cache-dir 'pytest==8.4.2' "
-        f"'psycopg[binary]=={version.group(1)}'\n"
+        f"'psycopg[binary]=={version.group(1)}' "
+        f"'pydantic=={pydantic_version.group(1)}'\n"
         "COPY tests/test_catalog_ingestion_postgres.py tests/test_catalog_descriptor_postgres.py /suite/tests/\n"
         "COPY tests/fixtures/catalog_descriptors/public-items.json /suite/tests/fixtures/catalog_descriptors/public-items.json\n"
         "COPY catalog/migrations/ /suite/catalog/migrations/\n"
-        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
+        "COPY src/eolab_app/catalog/models.py /suite/src/eolab_app/catalog/models.py\n"
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/suite/src "
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
         "ENTRYPOINT []\nHEALTHCHECK NONE\n"
     )
@@ -154,6 +159,7 @@ def build_test_image() -> str:
                     ROOT / "tests/test_catalog_ingestion_postgres.py",
                     ROOT / "tests/test_catalog_descriptor_postgres.py",
                     ROOT / "tests/fixtures/catalog_descriptors/public-items.json",
+                    ROOT / "src/eolab_app/catalog/models.py",
                 ]
                 paths.extend((ROOT / "catalog/migrations").glob("*.sql"))
                 for path in sorted(paths):

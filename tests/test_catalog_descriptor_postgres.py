@@ -1,6 +1,7 @@
 """Prove nonspatial metadata round trips through the deployment's real STAC API."""
 
 from copy import deepcopy
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,8 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import psycopg
+from pydantic import TypeAdapter
+from eolab_app.catalog.models import DescriptorSource
 from psycopg.types.json import Jsonb
 import pytest
 
@@ -120,16 +123,37 @@ def nonspatial_item() -> dict[str, Any]:
     )
 
 
+@pytest.mark.parametrize("interval", [False, True])
 def test_nonspatial_admission_retrieval_search_and_replacement(
     descriptor_api: tuple[str, str],
+    interval: bool,
 ) -> None:
     """Keep null geometry, curated notes and identity Assets through real HTTP writes.
 
     Args:
         descriptor_api: Ready private STAC API and guarded database DSN.
+        interval: Whether the Item declares an interval with explicit null datetime.
     """
-    base, _ = descriptor_api
+    base, dsn = descriptor_api
     item = nonspatial_item()
+    values = {
+        "missing": None,
+        "zero": 0,
+        "reviewed": False,
+        "nested": {"missing": None},
+        "empty": {},
+        "literal_marker": "𒍟※",
+    }
+    item["properties"]["eolab:metadata"]["annotations"] = deepcopy(values)
+    item["assets"]["data"]["eolab:metadata"]["annotations"] = deepcopy(values)
+    if interval:
+        item["properties"].update(
+            {
+                "datetime": None,
+                "start_datetime": "2020-01-01T00:00:00Z",
+                "end_datetime": "2020-12-31T23:59:59Z",
+            }
+        )
     item["assets"]["data"]["eolab:asset-source"] = {
         "href": "file:///scan-source/field-observations.csv"
     }
@@ -146,6 +170,72 @@ def test_nonspatial_admission_retrieval_search_and_replacement(
         returned["properties"]["eolab:metadata"] == item["properties"]["eolab:metadata"]
     )
     assert returned["assets"] == item["assets"]
+    assert returned["properties"]["datetime"] == item["properties"]["datetime"]
+    with psycopg.connect(dsn) as connection:
+        stored = connection.execute(
+            "SELECT content FROM pgstac.items WHERE collection=%s AND id=%s",
+            (COLLECTION, item["id"]),
+        ).fetchone()[0]
+    assert (
+        stored["properties"]["eolab:metadata"] == item["properties"]["eolab:metadata"]
+    )
+    assert (
+        stored["assets"]["data"]["eolab:metadata"]
+        == item["assets"]["data"]["eolab:metadata"]
+    )
+    listed = api_request(base, "GET", f"/collections/{COLLECTION}/items")["features"][0]
+    assert listed["geometry"] is None and "bbox" not in listed
+    assert listed["properties"]["eolab:metadata"]["annotations"] == values
+    unfiltered = api_request(base, "POST", "/search", {"collections": [COLLECTION]})[
+        "features"
+    ][0]
+    assert unfiltered["geometry"] is None and "bbox" not in unfiltered
+    assert unfiltered["properties"]["eolab:metadata"]["annotations"] == values
+    projected = api_request(
+        base,
+        "POST",
+        "/search",
+        {
+            "collections": [COLLECTION],
+            "fields": {
+                "include": [
+                    "geometry",
+                    "properties.eolab:metadata",
+                    "assets.data.eolab:metadata",
+                ],
+                "exclude": [
+                    "properties.eolab:metadata.annotations.nested",
+                    "assets.data.eolab:metadata.annotations.reviewed",
+                ],
+            },
+        },
+    )["features"][0]
+    assert projected["geometry"] is None
+    assert "nested" not in projected["properties"]["eolab:metadata"]["annotations"]
+    assert projected["properties"]["eolab:metadata"]["annotations"]["missing"] is None
+    assert (
+        "reviewed" not in projected["assets"]["data"]["eolab:metadata"]["annotations"]
+    )
+    geometry_only = api_request(
+        base,
+        "POST",
+        "/search",
+        {
+            "collections": [COLLECTION],
+            "fields": {"include": ["geometry"], "exclude": ["collection"]},
+        },
+    )["features"][0]
+    assert geometry_only["geometry"] is None and "collection" not in geometry_only
+    without_geometry = api_request(
+        base,
+        "POST",
+        "/search",
+        {
+            "collections": [COLLECTION],
+            "fields": {"exclude": ["geometry"]},
+        },
+    )["features"][0]
+    assert "geometry" not in without_geometry
     search = {
         "collections": [COLLECTION],
         "filter-lang": "cql2-json",
@@ -178,7 +268,9 @@ def test_nonspatial_admission_retrieval_search_and_replacement(
     )
     assert api_request(base, "POST", "/search", search)["features"] == []
     returned = api_request(base, "GET", f"/collections/{COLLECTION}/items/{item['id']}")
+    assert returned["geometry"] is None and "bbox" not in returned
     assert returned["properties"]["eolab:metadata"]["annotations"] == {}
+    assert returned["assets"]["data"]["eolab:metadata"]["annotations"] == values
     assert (
         len(
             api_request(base, "POST", "/search", {"collections": [COLLECTION]})[
@@ -339,3 +431,84 @@ def test_provider_retains_ordinary_spatial_http_writes(
         ] == [item["id"]]
     finally:
         api_request(base, "DELETE", f"/collections/{item['collection']}")
+
+
+@pytest.mark.parametrize("external", [False, True])
+def test_persisted_private_descriptor_is_decodable_on_the_next_scan(
+    descriptor_api: tuple[str, str],
+    external: bool,
+) -> None:
+    """Decode nullable private ownership after the actual HTTP and database path.
+
+    Args:
+        descriptor_api: Ready private STAC API and guarded database DSN.
+        external: Use an external nonspatial source instead of a native raster.
+    """
+    base, dsn = descriptor_api
+    if external:
+        item = nonspatial_item()
+        item["assets"]["data"]["href"] = "https://example.org/observations.csv"
+        item["assets"]["data"]["eolab:access"] = {"kind": "external"}
+        source = DescriptorSource(
+            href="file:///scan-source/observations.eolab.yaml",
+            relative_path="observations.eolab.yaml",
+            descriptor_id=item["id"],
+            primary_href=item["assets"]["data"]["href"],
+            primary_relative_path=None,
+            primary_asset_key="data",
+            kind="nonspatial",
+            claimed_paths=(),
+            selector=None,
+        )
+    else:
+        records = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        item = deepcopy(
+            next(
+                record["item"]
+                for record in records
+                if record["item"]["collection"] == "eolab-mounted-geotiffs"
+            )
+        )
+        collection = api_request(base, "GET", f"/collections/{COLLECTION}")
+        collection.update({"id": item["collection"], "links": []})
+        api_request(base, "POST", "/collections", collection)
+        source = DescriptorSource(
+            href="file:///scan-source/depth.tif.eolab.yaml",
+            relative_path="depth.tif.eolab.yaml",
+            descriptor_id="depth-study",
+            primary_href="file:///scan-source/depth.tif",
+            primary_relative_path="depth.tif",
+            primary_asset_key="data",
+            kind="raster",
+            claimed_paths=("depth.tif",),
+            selector=None,
+        )
+    item["assets"]["eolab:descriptor-source"] = asdict(source)
+    try:
+        api_request(
+            base,
+            "POST",
+            f"/collections/{item['collection']}/bulk_items",
+            {
+                "method": "upsert",
+                "items": {item["id"]: item},
+            },
+        )
+        with psycopg.connect(dsn) as connection:
+            stored = connection.execute(
+                "SELECT content->'assets'->'eolab:descriptor-source' FROM pgstac.items WHERE collection=%s AND id=%s",
+                (item["collection"], item["id"]),
+            ).fetchone()[0]
+        assert TypeAdapter(DescriptorSource).validate_python(stored) == source
+        returned = api_request(
+            base, "GET", f"/collections/{item['collection']}/items/{item['id']}"
+        )
+        assert (
+            TypeAdapter(DescriptorSource).validate_python(
+                returned["assets"]["eolab:descriptor-source"]
+            )
+            == source
+        )
+    finally:
+        if not external:
+            api_request(base, "DELETE", f"/collections/{item['collection']}")
