@@ -176,7 +176,9 @@ def _reduce_streaming_batch(
     """Reduce a spatial batch while opening each observation only once.
 
     Every cell retains the original observation order and float64 operations.
-    Accumulators and precipitation scratch arrays are retained for this batch;
+    Standard-deviation moments are centered on each cell's first valid value,
+    avoiding repeated rounding of a large absolute mean. Accumulators and
+    precipitation scratch arrays are retained only for this spatial batch;
     observation handles close before opening the next or returning the arrays.
 
     Args:
@@ -206,6 +208,10 @@ def _reduce_streaming_batch(
         np.zeros(shape, dtype="float64") if reduction.reducer == "stdev" else None
         for shape in shapes
     ]
+    origins = [
+        np.zeros(shape, dtype="float64") if reduction.reducer == "stdev" else None
+        for shape in shapes
+    ]
     precipitation_values = [
         (
             np.empty(shape, dtype="float64")
@@ -217,8 +223,14 @@ def _reduce_streaming_batch(
     for observation in interval.observations:
         with TemporalRasterDataset(observation) as dataset:
             dataset.prepare_column_view(column_rotation)
-            for window, result, count, variance_sum, converted_values in zip(
-                windows, results, counts, variances, precipitation_values, strict=True
+            for window, result, count, variance_sum, origin, converted_values in zip(
+                windows,
+                results,
+                counts,
+                variances,
+                origins,
+                precipitation_values,
+                strict=True,
             ):
                 values = read_native_raster_window(dataset, window)
                 valid = ~np.ma.getmaskarray(values)
@@ -249,6 +261,10 @@ def _reduce_streaming_batch(
                     )
                 else:
                     current = values.data[valid].astype("float64")
+                    if origin is not None:
+                        first = valid & (count == 1)
+                        origin[first] = values.data[first]
+                        current -= origin[valid]
                     if reduction.reducer in {"mean", "stdev"}:
                         delta = current - result[valid]
                         result[valid] += delta / count[valid]
