@@ -31,7 +31,7 @@ function fixture(overrides = {}, viewOverride = null) {
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
-        getTemporalItem: source => api.getTemporalItem(source),
+        getCatalogItem: source => api.getCatalogItem(source),
         loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
         prepareVector: async source => ({selection: {...selection, filter: source.filter}, matched: 3, total: 8}), editVectorFilter: async request => { filterRequests.push(request); },
         closeVectorFilter: () => filterRequests.at(-1)?.close(),
@@ -113,7 +113,7 @@ const temporalChoices = {months: ["2000-01", "2000-03"], month: "2000-01",
  * @return {Promise<Object>} Existing controller fixture with a loaded temporal source.
  */
 async function periodFixture(overrides = {}, view = null) {
-    const h = fixture({getTemporalItem: async () => structuredClone(temporalItem),
+    const h = fixture({getCatalogItem: async () => structuredClone(temporalItem),
         loadTemporalTimes: async () => structuredClone(temporalChoices), ...overrides}, view);
     h.context.rasters = [];
     h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
@@ -243,7 +243,7 @@ test("temporal setup captures typed inputs in UTC without raster publication or 
 
 test("refresh and map changes preserve the analysis interval; Use this month replaces it explicitly", async () => {
     let item = structuredClone(temporalItem), dates = structuredClone(temporalChoices);
-    const h = await periodFixture({getTemporalItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
+    const h = await periodFixture({getCatalogItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
     await h.controller.chooseTemporalVariable("temperature");
     const draft = h.controller.state.draft;
     h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
@@ -292,7 +292,7 @@ test("period maps accept ordinary statistics for every observation type and date
     const item = structuredClone(temporalItem);
     item.properties["cube:variables"].energy = {description: "Stored energy", unit: "J m-2", "eolab:time_support": "accumulation"};
     const view = new ModelsView(new SummaryControlDocument());
-    const h = await periodFixture({getTemporalItem: async () => structuredClone(item)}, view), draft = h.controller.state.draft;
+    const h = await periodFixture({getCatalogItem: async () => structuredClone(item)}, view), draft = h.controller.state.draft;
     const controls = view.setup.temporal, statistics = ["mean", "sum", "min", "max", "median", "percentile", "stdev"];
     controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
     editExactTime(controls, "start", "2000-01-01T00:10");
@@ -349,7 +349,7 @@ test("only selecting Precipitation total rounds UTC hours and submits those date
     const item = structuredClone(temporalItem);
     item.properties["cube:variables"].water_flux = {description: "Precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"};
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
-    const h = await periodFixture({getTemporalItem: async () => structuredClone(item)}, view);
+    const h = await periodFixture({getCatalogItem: async () => structuredClone(item)}, view);
     const draft = h.controller.state.draft, controls = view.setup.temporal;
     controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
     await h.controller.chooseTemporalVariable("temperature");
@@ -406,7 +406,7 @@ test("only selecting Precipitation total rounds UTC hours and submits those date
 test("a sole precipitation variable defaults to Mean and copied totals preserve their exact period and area", async () => {
     const item = structuredClone(temporalItem);
     item.properties["cube:variables"] = {water_flux: {description: "Precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"}};
-    const h = await periodFixture({getTemporalItem: async () => structuredClone(item)});
+    const h = await periodFixture({getCatalogItem: async () => structuredClone(item)});
     assert.equal(h.controller.state.draft.temporal.variable, "water_flux");
     assert.equal(h.controller.state.draft.reduction.reducer, "mean");
     const saved = {model: periodModel, label: "Rainfall", parameters: {}, inputs: {
@@ -432,7 +432,7 @@ test("recipe units add a precipitation total without restricting ordinary statis
     item.properties["cube:variables"].rain.unit = "mm/hour";
     item.properties["cube:variables"].water_flux = {description: "Another precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"};
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
-    const h = fixture({getTemporalItem: async () => structuredClone(item),
+    const h = fixture({getCatalogItem: async () => structuredClone(item),
         loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
     h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
     h.controller.chooseModel(recipe);
@@ -462,7 +462,7 @@ test("area-series controls accept every observation type and capture scalar stat
     item.properties["cube:variables"].energy = {description: "Stored energy", unit: "J m-2", "eolab:time_support": "accumulation"};
     const view = new ModelsView(new SummaryControlDocument());
     const h = fixture({discoverModels: async () => [model, seriesModel],
-        getTemporalItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
+        getCatalogItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
     h.context.rasters = [];
     h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
     await h.controller.loadLibrary();
@@ -509,7 +509,7 @@ test("copying an area series preserves its scalar statistic, exact period and ar
     const run = job({model: seriesModel, status: "ready", result: timeSeriesResult, expiresAt: "2099-01-01T00:00:00Z"});
     const view = new ModelsView(new SummaryControlDocument());
     const h = fixture({discoverModels: async () => [seriesModel], getJob: async () => run,
-        readModelInvocation: async () => structuredClone(saved), getTemporalItem: async () => structuredClone(temporalItem),
+        readModelInvocation: async () => structuredClone(saved), getCatalogItem: async () => structuredClone(temporalItem),
         loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
     h.context.temporalDatasets = [temporalDataset];
     await h.controller.loadLibrary(); await h.controller.showRun(run.jobId); await h.controller.duplicateRun();

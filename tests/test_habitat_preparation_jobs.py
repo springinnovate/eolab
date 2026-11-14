@@ -32,7 +32,9 @@ from eolab_app.processing.habitat_preparation_models import (
     HabitatInputPreparationRequest,
 )
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.habitat_prepared_areas import PostgresHabitatPreparedAreas
+from eolab_app.processing.habitat_preparation_selections import (
+    PostgresHabitatPreparationSelections,
+)
 from eolab_app.processing.models import PreparedJobPlan
 from eolab_app.processing.service import HABITAT_PREPARATION_OWNER, ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
@@ -71,13 +73,13 @@ def preparation_boundary(
     areas = VectorSamplingService(catalog, catalog)
     artifacts = LocalJobArtifacts(tmp_path / "processing", (source.path,))
     artifacts.initialize()
-    prepared_areas = PostgresHabitatPreparedAreas(store.conninfo)
-    prepared_areas.open()
+    preparation_selections = PostgresHabitatPreparationSelections(store.conninfo)
+    preparation_selections.open()
     service = ProcessingService(
         store,
         artifacts,
         areas=areas,
-        habitat_prepared_areas=prepared_areas,
+        habitat_preparation_selections=preparation_selections,
         habitat_cache_directory=tmp_path / "processing" / "habitat-cache",
     )
     app = FastAPI()
@@ -88,7 +90,7 @@ def preparation_boundary(
             client.auth = ("admin", PASSWORD)
             yield client, service, source, artifacts
     finally:
-        prepared_areas.close()
+        preparation_selections.close()
 
 
 def _body(
@@ -140,10 +142,8 @@ def test_preparation_admission_recovers_before_source_and_stack_reads(
     client, service, source, _ = preparation_boundary
     body = _body(source)
     accepted = _submit(client, body)
-    saved_area = service.habitat_prepared_areas.find(source.selection)
-    assert saved_area is not None
-    assert saved_area.name == body["name"]
-    assert saved_area.selection == source.selection
+    assert service.habitat_preparation_selections.contains(source.selection)
+    assert service.habitat_preparation_selections.list() == (source.selection,)
     assert "set-cookie" not in client.get(BASE).headers
     monkeypatch.setattr(
         service.areas,

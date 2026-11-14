@@ -39,20 +39,19 @@ const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2
         {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"], requiredRoles: ["predictor"]},
     ]};
 
-/** Saved administrator areas independent of the browser's Map layers.
- * @type {Array<{id:string,name:string,selection:Object}>}
+/** Existing Catalog selections used for preparation, independent of Map layers.
+ * @type {Object[]}
  */
-const savedAreas = [{id: "a".repeat(64), name: "Northern study", selection: structuredClone(selection)},
-    {id: "b".repeat(64), name: "Southern study", selection: {...structuredClone(selection),
-        filter: {...selection.filter, rules: [{...selection.filter.rules[0], value: "South"}]}}}];
+const preparationSelections = [structuredClone(selection), {...structuredClone(selection),
+    filter: {...selection.filter, rules: [{...selection.filter.rules[0], value: "South"}]}}];
 
-/** Select one saved area through the rendered control and wait for its coverage.
+/** Choose a preparation descriptor through the rendered control and await coverage.
  * @param {Object} harness Models controller/view fixture.
- * @param {string} [id=savedAreas[0].id] Saved-area identity to choose.
+ * @param {number|null} [index=0] Local option index; null clears the selection.
  * @return {Promise<void>} Completion after current coverage is rendered.
  */
-async function choosePreparedArea(harness, id = savedAreas[0].id) {
-    edit(harness.view.setup.inputs.area.preparedArea.source, id);
+async function choosePreparationSelection(harness, index = 0) {
+    edit(harness.view.setup.inputs.area.preparationSelection.source, index === null ? "" : String(index));
     await settle();
 }
 
@@ -93,8 +92,9 @@ async function fixture(contextOverrides = {}) {
     };
     const api = {discoverModels: async () => [model, habitat], listModelRuns: async () => ({jobs: [], nextCursor: null}),
         getHabitatEarthEngineOptions: async () => structuredClone(earthEngineOptions),
-        getHabitatPreparedAreas: async () => ({areas: structuredClone(savedAreas)}),
-        getHabitatPreparedAreaCoverage: async (areaId, year) => ({areaId, year, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}),
+        getCatalogItem: async source => ({collection: source.collectionId, id: source.itemId, properties: {title: "Watersheds"}}),
+        getHabitatPreparationSelections: async () => ({selections: structuredClone(preparationSelections)}),
+        getHabitatPreparationCoverage: async (_selection, year) => ({year, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}),
         uploadPolygonArea: async polygons => {
             const polygonArea = {id: String(uploads.length + 1).padStart(32, "0"), sha256: "a".repeat(64)};
             uploads.push({polygons, polygonArea}); return {polygonArea};
@@ -107,6 +107,7 @@ async function fixture(contextOverrides = {}) {
     const jobs = {subscribe: () => () => {}, tracked: new Set(), schedule() {}, accept() {}};
     let id = 0;
     const controller = new ModelsController({api, jobs, view, getContext: () => context,
+        getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
         describeSource: async (source, _signal, targetCrs) => ({crs: "EPSG:4326",
             projectedGrid: {crs: targetCrs, pixelSize: [25000, 50000], origin: [0, 0], unit: "metre", approximate: true}}),
         prepareVector: async source => ({selection: source.uploadId
@@ -202,21 +203,21 @@ for (const area of [undefined, {kind: "wholeRaster"}]) test(`Habitat retains a s
     const viewportBounds = {west: -109, south: 46, east: -107, north: 48};
     const draft = createModelDraft(habitat, {area, viewportBounds}, "default-area");
     assert.equal(draft.inputs.stack.kind, "earthEngine");
-    assert.equal(draft.habitatArea.selectedId, "");
+    assert.equal(draft.habitatPreparationSelections.selectedSelection, null);
     assert.equal(draft.inputs.area.areaMode, "viewport");
     assert.deepEqual(draft.inputs.area.area, {kind: "selectedArea", selectedBounds: viewportBounds});
 });
 
-test("Default GEE setup requires a saved area even when the map cannot supply one", async () => {
+test("Default GEE setup requires a preparation selection even when the map cannot supply one", async () => {
     const h = await fixture({area: undefined});
     await chooseVector(h, "references", h.context.vectors[0], "North");
     assert.equal(h.controller.state.draft.inputs.area.area, null);
     assert.equal(h.view.setup.run.disabled, true);
-    assert.throws(() => captureModelSubmission(h.controller.state.draft, "no-area"), /saved preparation area/i);
-    await choosePreparedArea(h);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "no-area"), /Catalog selection/i);
+    await choosePreparationSelection(h);
     assert.equal(h.view.setup.run.disabled, false);
-    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "saved-area").inputs.area,
-        {kind: "catalogSelection", selection: savedAreas[0].selection});
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "preparation-selection").inputs.area,
+        {kind: "catalogSelection", selection: preparationSelections[0]});
     h.controller.destroy();
 });
 
@@ -510,8 +511,8 @@ test("Earth Engine runs capture and duplicate dataset choices, year, area and re
     assert.equal(stack.manual.hidden, true); assert.equal(stack.manual.disabled, true);
     assert.equal(stack.automatic.disabled, false); assert.equal(stack.year.value, "2018");
     assert.equal(h.view.setup.inputs.area.group.hidden, true);
-    assert.equal(h.view.setup.inputs.area.preparedArea.root.hidden, false);
-    await choosePreparedArea(h);
+    assert.equal(h.view.setup.inputs.area.preparationSelection.root.hidden, false);
+    await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[1], "South");
     toggleDataset(stack.datasetGroups.predictor.controls.get("era5_daily").checkbox, false);
     toggleDataset(stack.datasetGroups.response.controls.get("modis_phenology").checkbox, false);
@@ -523,7 +524,7 @@ test("Earth Engine runs capture and duplicate dataset choices, year, area and re
     const expected = h.requests[0].inputs;
     assert.deepEqual(expected.stack, {kind: "earthEngine", year: 2017,
         predictorDatasets: ["modis_phenology", "srtm_landforms"], responseDatasets: ["landsat_ndvi"]});
-    assert.deepEqual(expected.area, {kind: "catalogSelection", selection: savedAreas[0].selection});
+    assert.deepEqual(expected.area, {kind: "catalogSelection", selection: preparationSelections[0]});
     assert.deepEqual(expected.preparation, {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], resampling: {}});
     const summary = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
     assert.ok(summary.includes("Original model inputs from Earth Engine · Assessment year 2017"));
@@ -538,14 +539,14 @@ test("Earth Engine runs capture and duplicate dataset choices, year, area and re
     assert.equal(h.view.setup.inputs.stack.datasetGroups.response.controls.get("modis_phenology").checkbox.checked, false);
     h.controller.state.draft.inputs.area.area = {kind: "wholeRaster"};
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "saved-only").inputs.area, expected.area);
-    await choosePreparedArea(h, "");
-    assert.throws(() => captureModelSubmission(h.controller.state.draft, "missing-area"), /Choose a saved preparation area/);
+    await choosePreparationSelection(h, null);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "missing-area"), /Choose a Catalog selection/);
     h.controller.destroy();
 });
 
 test("dataset roles remain independent and keep focus and disclosure state through refreshes", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    await choosePreparedArea(h);
+    await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const stack = h.view.setup.inputs.stack, predictors = stack.datasetGroups.predictor, responses = stack.datasetGroups.response;
     const checkbox = predictors.controls.get("modis_phenology").checkbox;
@@ -569,7 +570,7 @@ test("dataset roles remain independent and keep focus and disclosure state throu
 
 test("saved API runs with omitted dataset choices display and duplicate the configured defaults", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    await choosePreparedArea(h);
+    await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     h.api.readModelInvocation = async () => {
         const saved = structuredClone(h.requests[0]);
@@ -588,7 +589,7 @@ test("saved API runs with omitted dataset choices display and duplicate the conf
 
 test("an empty response selection stays empty on refresh and prevents submission with useful guidance", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    await choosePreparedArea(h);
+    await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const stack = h.view.setup.inputs.stack;
     for (const controls of stack.datasetGroups.response.controls.values()) toggleDataset(controls.checkbox, false);
@@ -604,7 +605,7 @@ test("an empty response selection stays empty on refresh and prevents submission
 
 test("Earth Engine grid stays first with raster masks and preserves custom choices through duplication", async () => {
     const h = await fixture(), inputs = h.view.setup.inputs;
-    await choosePreparedArea(h);
+    await choosePreparationSelection(h);
     edit(inputs.references.source, `raster:${modelSourceKey(h.context.rasters[3])}`);
     edit(inputs.habitat_mask.source, modelSourceKey(h.context.rasters[4]));
     await settle();
@@ -661,7 +662,7 @@ test("Earth Engine configuration errors can be retried without blocking manual s
     assert.equal(stack.retry.hidden, false);
     h.api.getHabitatEarthEngineOptions = async () => structuredClone(earthEngineOptions);
     stack.retry.dispatchEvent(new Event("click")); await settle();
-    await choosePreparedArea(h);
+    await choosePreparationSelection(h);
     assert.equal(stack.year.value, "2018"); assert.equal(h.view.setup.run.disabled, false);
     h.controller.destroy();
 });
@@ -879,18 +880,18 @@ test("an expired selected reference output stays identified and explained by the
 });
 
 
-test("saved Earth Engine areas are independent of Map layers, manual area choices and reference filters", async t => {
+test("Earth Engine preparation selections are independent of Map layers, manual area choices and reference filters", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
     chooseStack(h);
     await chooseVector(h, "area", h.context.vectors[0], "South");
     const manual = structuredClone(h.controller.state.draft.inputs.area);
     await chooseVector(h, "references", h.context.vectors[1], "North");
     edit(h.view.setup.inputs.stack.source, "earthEngine");
-    await choosePreparedArea(h, savedAreas[1].id);
+    await choosePreparationSelection(h, 1);
     const controls = h.view.setup.inputs.area;
     assert.equal(controls.group.hidden, true);
     assert.equal(controls.source.disabled, true);
-    assert.deepEqual(controls.preparedArea.source.children.map(option => option.value), ["", ...savedAreas.map(area => area.id)]);
+    assert.deepEqual(controls.preparationSelection.source.children.map(option => option.value), ["", "0", "1"]);
     assert.deepEqual(h.controller.state.draft.inputs.area.area, manual.area);
     edit(h.view.setup.inputs.stack.source, "manual");
     assert.deepEqual(h.controller.state.draft.inputs.area.area, manual.area);
@@ -899,25 +900,25 @@ test("saved Earth Engine areas are independent of Map layers, manual area choice
     h.context.area = {kind: "selectedArea", selectedBounds: {west: 9, south: 9, east: 10, north: 10}};
     h.controller.refreshMapLayers(); h.controller.refreshMapArea();
     const captured = captureModelSubmission(h.controller.state.draft, "independent");
-    assert.deepEqual(captured.inputs.area, {kind: "catalogSelection", selection: savedAreas[1].selection});
+    assert.deepEqual(captured.inputs.area, {kind: "catalogSelection", selection: preparationSelections[1]});
     assert.equal(captured.inputs.references.selection.uploadId, h.context.vectors[0].uploadId);
     assert.equal(captured.inputs.references.selection.filter.rules[0].value, "North");
     assert.equal(h.view.setup.run.disabled, false);
     edit(h.view.setup.inputs.stack.source, "manual");
-    assert.equal(controls.preparedArea.root.hidden, true);
+    assert.equal(controls.preparationSelection.root.hidden, true);
     assert.equal(controls.source.disabled, false);
     assert.equal(h.controller.state.draft.inputs.area.area, null, "Removing the manual source retains its existing unavailability behavior");
-    assert.equal(h.controller.state.draft.habitatArea.selectedId, savedAreas[1].id);
+    assert.deepEqual(h.controller.state.draft.habitatPreparationSelections.selectedSelection, preparationSelections[1]);
 });
 
-for (const cachedTiles of [0, 2, 4]) test("saved area with " + cachedTiles + " cached tiles has explicit readiness", async t => {
+for (const cachedTiles of [0, 2, 4]) test("preparation selection with " + cachedTiles + " cached tiles has explicit readiness", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    h.api.getHabitatPreparedAreaCoverage = async (areaId, year) => ({areaId, year, requiredTiles: 4, cachedTiles, missingTiles: 4 - cachedTiles});
+    h.api.getHabitatPreparationCoverage = async (_selection, year) => ({year, requiredTiles: 4, cachedTiles, missingTiles: 4 - cachedTiles});
     await chooseVector(h, "references", h.context.vectors[0], "North");
-    await choosePreparedArea(h);
-    const controls = h.view.setup.inputs.area.preparedArea;
+    await choosePreparationSelection(h);
+    const controls = h.view.setup.inputs.area.preparationSelection;
     assert.equal(controls.status.getAttribute("role"), "status");
-    assert.equal(controls.source.getAttribute("aria-describedby"), controls.status.id);
+    assert.equal(controls.source.getAttribute("aria-describedby"), controls.selectionDetails.id + " " + controls.status.id);
     assert.equal(h.view.setup.run.disabled, cachedTiles === 0);
     if (cachedTiles === 0) {
         assert.match(controls.status.textContent, /No prepared inputs.*area and year/);
@@ -925,7 +926,7 @@ for (const cachedTiles of [0, 2, 4]) test("saved area with " + cachedTiles + " c
     } else {
         assert.match(controls.status.textContent, cachedTiles === 4 ? /all 4 required tiles/ : /2 of 4 tiles.*results will be missing/);
         await h.controller.submit(); assert.equal(h.requests.length, 1);
-        assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: savedAreas[0].selection});
+        assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: preparationSelections[0]});
     }
 });
 
@@ -933,71 +934,71 @@ test("coverage requests cancel stale years and areas, and retry failures without
     const h = await fixture(); t.after(() => h.controller.destroy());
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const pending = [];
-    h.api.getHabitatPreparedAreaCoverage = (areaId, year, signal) => new Promise((resolve, reject) => pending.push({areaId, year, signal, resolve, reject}));
-    await choosePreparedArea(h);
+    h.api.getHabitatPreparationCoverage = (selection, year, signal) => new Promise((resolve, reject) => pending.push({selection, year, signal, resolve, reject}));
+    await choosePreparationSelection(h);
     assert.equal(h.view.setup.run.disabled, true);
     edit(h.view.setup.inputs.stack.year, "2017");
     assert.equal(pending[0].signal.aborted, true);
-    pending[1].resolve({areaId: pending[1].areaId, year: 2017, requiredTiles: 4, cachedTiles: 0, missingTiles: 4}); await settle();
-    pending[0].resolve({areaId: pending[0].areaId, year: 2018, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}); await settle();
-    assert.equal(h.controller.state.draft.habitatArea.coverage.year, 2017);
+    pending[1].resolve({year: 2017, requiredTiles: 4, cachedTiles: 0, missingTiles: 4}); await settle();
+    pending[0].resolve({year: 2018, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}); await settle();
+    assert.equal(h.controller.state.draft.habitatPreparationSelections.coverage.year, 2017);
     assert.equal(h.view.setup.run.disabled, true);
-    await choosePreparedArea(h, savedAreas[1].id);
+    await choosePreparationSelection(h, 1);
     pending[2].reject(new Error("Connection interrupted")); await settle();
-    assert.match(h.view.setup.inputs.area.preparedArea.status.textContent, /Try again.*Connection interrupted/);
+    assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /Try again.*Connection interrupted/);
     assert.equal(h.view.setup.run.disabled, true);
-    h.view.setup.inputs.area.preparedArea.retry.dispatchEvent(new Event("click"));
-    assert.equal(pending[3].areaId, savedAreas[1].id);
-    pending[3].resolve({areaId: savedAreas[1].id, year: 2017, requiredTiles: 4, cachedTiles: 2, missingTiles: 2}); await settle();
+    h.view.setup.inputs.area.preparationSelection.retry.dispatchEvent(new Event("click"));
+    assert.deepEqual(pending[3].selection, preparationSelections[1]);
+    pending[3].resolve({year: 2017, requiredTiles: 4, cachedTiles: 2, missingTiles: 2}); await settle();
     assert.equal(h.view.setup.run.disabled, false);
-    await choosePreparedArea(h, savedAreas[0].id);
+    await choosePreparationSelection(h, 0);
     edit(h.view.setup.inputs.stack.source, "manual");
     assert.equal(pending[4].signal.aborted, true);
-    pending[4].resolve({areaId: savedAreas[0].id, year: 2017, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}); await settle();
-    assert.equal(h.controller.state.draft.habitatArea.coverage, null);
+    pending[4].resolve({year: 2017, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}); await settle();
+    assert.equal(h.controller.state.draft.habitatPreparationSelections.coverage, null);
 });
 
-test("saved-area loading failures and empty lists can be retried without blocking manual setup", async t => {
+test("preparation-selection loading failures and empty lists can be retried without blocking manual setup", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    h.api.getHabitatPreparedAreas = async () => { throw new Error("Offline"); };
+    h.api.getHabitatPreparationSelections = async () => { throw new Error("Offline"); };
     h.controller.chooseModel(habitat); await settle();
-    let controls = h.view.setup.inputs.area.preparedArea;
+    let controls = h.view.setup.inputs.area.preparationSelection;
     assert.match(controls.status.textContent, /Offline/);
     assert.equal(controls.source.disabled, true);
     chooseStack(h); await chooseVector(h, "references", h.context.vectors[0], "North");
     assert.equal(h.view.setup.run.disabled, false);
     edit(h.view.setup.inputs.stack.source, "earthEngine"); await settle();
-    h.api.getHabitatPreparedAreas = async () => ({areas: []});
+    h.api.getHabitatPreparationSelections = async () => ({selections: []});
     controls.refresh.dispatchEvent(new Event("click")); await settle();
-    assert.match(controls.status.textContent, /No saved preparation areas.*administrator/);
+    assert.match(controls.status.textContent, /No preparation selections.*administrator/);
     assert.equal(h.view.setup.run.disabled, true);
-    h.api.getHabitatPreparedAreas = async () => ({areas: structuredClone(savedAreas)});
+    h.api.getHabitatPreparationSelections = async () => ({selections: structuredClone(preparationSelections)});
     controls.refresh.dispatchEvent(new Event("click")); await settle();
     assert.equal(controls.source.disabled, false); assert.equal(controls.source.value, "");
-    await choosePreparedArea(h); assert.equal(h.view.setup.run.disabled, false);
+    await choosePreparationSelection(h); assert.equal(h.view.setup.run.disabled, false);
 });
 
-test("late saved-area replies cannot restore an abandoned model or destroyed controller", async t => {
+test("late preparation-selection replies cannot restore an abandoned model or destroyed controller", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
     const pending = [];
-    h.api.getHabitatPreparedAreas = signal => new Promise(resolve => pending.push({signal, resolve}));
+    h.api.getHabitatPreparationSelections = signal => new Promise(resolve => pending.push({signal, resolve}));
     h.controller.chooseModel(habitat);
     const abandoned = h.controller.state.draft;
-    assert.equal(h.view.setup.inputs.area.preparedArea.source.disabled, true);
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.disabled, true);
     h.controller.chooseModel(model);
     assert.equal(pending[0].signal.aborted, true);
-    pending[0].resolve({areas: structuredClone(savedAreas)}); await settle();
+    pending[0].resolve({selections: structuredClone(preparationSelections)}); await settle();
     assert.equal(h.controller.state.draft.model.id, model.id);
-    assert.equal(abandoned.habitatArea.loaded, false);
+    assert.equal(abandoned.habitatPreparationSelections.loaded, false);
     h.controller.chooseModel(habitat);
     h.controller.destroy(); assert.equal(pending[1].signal.aborted, true);
-    pending[1].resolve({areas: structuredClone(savedAreas)}); await settle();
-    assert.equal(h.controller.state.draft.habitatArea.loaded, false);
+    pending[1].resolve({selections: structuredClone(preparationSelections)}); await settle();
+    assert.equal(h.controller.state.draft.habitatPreparationSelections.loaded, false);
 });
 
 test("duplicate matches the full saved selection regardless of object-key order and never substitutes another area", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    await choosePreparedArea(h, savedAreas[1].id);
+    await choosePreparationSelection(h, 1);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     await h.controller.submit();
     const original = structuredClone(h.requests[0]);
@@ -1006,56 +1007,56 @@ test("duplicate matches the full saved selection regardless of object-key order 
         layerName: chosen.layerName, assetKey: chosen.assetKey, itemId: chosen.itemId, collectionId: chosen.collectionId};
     h.api.readModelInvocation = async () => ({...structuredClone(original), model: {...habitat, definition: habitat}});
     await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.habitatArea.selectedId, savedAreas[1].id);
-    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "ordered").inputs.area.selection, savedAreas[1].selection);
-    h.api.getHabitatPreparedAreas = async () => ({areas: [structuredClone(savedAreas[0])]});
+    assert.deepEqual(h.controller.state.draft.habitatPreparationSelections.selectedSelection, preparationSelections[1]);
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "ordered").inputs.area.selection, preparationSelections[1]);
+    h.api.getHabitatPreparationSelections = async () => ({selections: [structuredClone(preparationSelections[0])]});
     await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.habitatArea.selectedId, "");
-    assert.match(h.view.setup.inputs.area.preparedArea.status.textContent, /original area is not available/);
+    assert.equal(h.controller.state.draft.habitatPreparationSelections.selectedSelection, null);
+    assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /original Catalog selection is not available/);
     assert.equal(h.view.setup.run.disabled, true);
-    await choosePreparedArea(h); assert.equal(h.view.setup.run.disabled, false);
+    await choosePreparationSelection(h); assert.equal(h.view.setup.run.disabled, false);
     original.inputs.area = {kind: "selectedArea", selectedBounds: {west: 1, south: 1, east: 2, north: 2}};
     await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.habitatArea.selectedId, "");
+    assert.equal(h.controller.state.draft.habitatPreparationSelections.selectedSelection, null);
     assert.equal(h.view.setup.run.disabled, true);
-    assert.match(h.view.setup.inputs.area.preparedArea.status.textContent, /original area is not available/);
+    assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /original Catalog selection is not available/);
 });
 
-test("Earth Engine saved areas keep drawn Reference sites independent and upload only those polygons", async t => {
+test("Earth Engine preparation selections keep drawn Reference sites independent and upload only those polygons", async t => {
     const references = drawnPolygonLayer("Forest", 2);
     const h = await fixture({drawnPolygonLayers: [references]}); t.after(() => h.controller.destroy());
-    await choosePreparedArea(h);
+    await choosePreparationSelection(h);
     edit(h.view.setup.inputs.references.source, "drawn:" + references.key);
     await h.controller.submit();
     assert.equal(h.uploads.length, 1);
     assert.deepEqual(h.uploads[0].polygons, references.polygons);
-    assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: savedAreas[0].selection});
+    assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: preparationSelections[0]});
     assert.deepEqual(h.requests[0].inputs.references, {kind: "polygonArea", reference: h.uploads[0].polygonArea});
 });
 
 
-test("an abandoned duplicate cannot cancel the next draft's saved-area request", async t => {
+test("an abandoned duplicate cannot cancel the next draft's preparation-selection request", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
-    await choosePreparedArea(h); await chooseVector(h, "references", h.context.vectors[0], "North");
+    await choosePreparationSelection(h); await chooseVector(h, "references", h.context.vectors[0], "North");
     await h.controller.submit();
     let finishOldOptions;
     h.api.getHabitatEarthEngineOptions = () => new Promise(resolve => { finishOldOptions = resolve; });
     const duplicate = h.controller.duplicateRun();
     const pending = [];
-    h.api.getHabitatPreparedAreas = signal => new Promise(resolve => pending.push({signal, resolve}));
+    h.api.getHabitatPreparationSelections = signal => new Promise(resolve => pending.push({signal, resolve}));
     h.api.getHabitatEarthEngineOptions = async () => structuredClone(earthEngineOptions);
     h.controller.chooseModel(habitat);
     const current = h.controller.state.draft;
     finishOldOptions(structuredClone(earthEngineOptions)); await duplicate;
     assert.equal(pending.length, 1);
     assert.equal(pending[0].signal.aborted, false);
-    pending[0].resolve({areas: structuredClone(savedAreas)}); await settle();
+    pending[0].resolve({selections: structuredClone(preparationSelections)}); await settle();
     assert.equal(h.controller.state.draft, current);
-    assert.equal(current.habitatArea.loaded, true);
+    assert.equal(current.habitatPreparationSelections.loaded, true);
 });
 
 
-test("switching to saved areas closes a hidden manual area editor while Reference sites stay independent", async t => {
+test("switching to preparation selections closes a hidden manual area editor while Reference sites stay independent", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy()); chooseStack(h);
     await chooseVector(h, "area", h.context.vectors[0], "North");
     await chooseVector(h, "references", h.context.vectors[1], "South");
@@ -1063,8 +1064,8 @@ test("switching to saved areas closes a hidden manual area editor while Referenc
     assert.equal(h.controller.state.draft.inputs.area.filterEditing, true);
     edit(h.view.setup.inputs.stack.source, "earthEngine");
     assert.equal(h.controller.state.draft.inputs.area.filterEditing, false);
-    await choosePreparedArea(h);
-    assert.equal(h.view.setup.inputs.area.preparedArea.source.parentElement.textContent, "Prepared analysis area");
+    await choosePreparationSelection(h);
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.parentElement.textContent, "Prepared analysis area");
     await h.controller.submit(); assert.equal(h.requests.length, 1);
     await h.controller.duplicateRun();
     await chooseVector(h, "references", h.context.vectors[1], "South");
@@ -1074,4 +1075,57 @@ test("switching to saved areas closes a hidden manual area editor while Referenc
     edit(h.view.setup.inputs.stack.source, "earthEngine");
     assert.equal(h.controller.state.draft.inputs.references.filterEditing, true);
     h.filters.at(-1).close();
+});
+
+
+test("off-map preparation selections show authoritative titles, layers and distinct filters without waiting for titles", async t => {
+    const h = await fixture({vectors: []}); t.after(() => h.controller.destroy());
+    const requests = [];
+    h.api.getCatalogItem = (source, signal) => new Promise(resolve => requests.push({source, signal, resolve}));
+    h.controller.chooseModel(habitat); await settle();
+    const controls = h.view.setup.inputs.area.preparationSelection;
+    assert.equal(requests.length, 1, "Selections sharing an Item use one metadata read");
+    assert.match(controls.source.children[1].textContent, /watersheds.*basins.*North/);
+    assert.match(controls.source.children[2].textContent, /watersheds.*basins.*South/);
+    await choosePreparationSelection(h, 1);
+    edit(h.view.setup.inputs.references.source, "raster:" + modelSourceKey(h.context.rasters[3])); await settle();
+    assert.equal(h.view.setup.run.disabled, false, "Title retrieval does not gate selection or coverage");
+    const source = controls.source; source.focus();
+    requests[0].resolve({collection: selection.collectionId, id: selection.itemId, properties: {title: "River basins <img src=x>"}}); await settle();
+    assert.equal(h.doc.activeElement, source);
+    assert.match(controls.selectionDetails.textContent, /River basins <img src=x>.*basins.*South/);
+    assert.equal(controls.root.querySelectorAll("img").length, 0);
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "exact-selection").inputs.area,
+        {kind: "catalogSelection", selection: preparationSelections[1]});
+});
+
+test("failed or stale Catalog title reads never block or rename a later preparation selection", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    h.api.getCatalogItem = async () => { throw new Error("Metadata unavailable"); };
+    h.controller.chooseModel(habitat); await settle();
+    await choosePreparationSelection(h); await chooseVector(h, "references", h.context.vectors[0], "North");
+    assert.equal(h.view.setup.run.disabled, false);
+    assert.match(h.view.setup.inputs.area.preparationSelection.selectionDetails.textContent, /^watersheds/);
+    let finish, signal;
+    h.api.getCatalogItem = (_source, requestSignal) => new Promise(resolve => { finish = resolve; signal = requestSignal; });
+    await h.controller.loadHabitatPreparationSelections(h.controller.state.draft);
+    h.controller.chooseModel(model);
+    assert.equal(signal.aborted, true);
+    finish({id: selection.itemId, properties: {title: "Stale title"}}); await settle();
+    assert.equal(h.controller.state.draft.model.id, model.id);
+});
+
+test("preparation refresh matches descriptors across option reorder without selecting another filter", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await choosePreparationSelection(h, 1);
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    h.api.getHabitatPreparationSelections = async () => ({selections: structuredClone(preparationSelections).reverse()});
+    await h.controller.loadHabitatPreparationSelections(h.controller.state.draft);
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "0");
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "reordered").inputs.area.selection, preparationSelections[1]);
+    h.api.getHabitatPreparationSelections = async () => ({selections: [structuredClone(preparationSelections[0])]});
+    await h.controller.loadHabitatPreparationSelections(h.controller.state.draft);
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "");
+    assert.equal(h.controller.state.draft.habitatPreparationSelections.selectedSelection, null);
+    assert.equal(h.view.setup.run.disabled, true);
 });

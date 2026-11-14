@@ -89,7 +89,7 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
     result.migrate()  # Exercise redeployment of an already initialized schema.
     with psycopg.connect(dsn) as connection:
         connection.execute(
-            "TRUNCATE processing.habitat_prepared_areas, processing.input_files, processing.job_subscribers, processing.transfers, processing.jobs, processing.calculation_results, processing.inputs"
+            "TRUNCATE processing.habitat_preparation_selections, processing.input_files, processing.job_subscribers, processing.transfers, processing.jobs, processing.calculation_results, processing.inputs"
         )
     return result
 
@@ -685,7 +685,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     store: PostgresJobStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Import durable areas before reset and cleanup without web/rendering initialization.
+    """Import prepared Catalog selections before reset and cleanup without web/rendering initialization.
 
     Args:
         tmp_path: Independent source and artifact roots.
@@ -700,8 +700,8 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         HABITAT_PREPARATION_OWNER,
         HabitatInputPreparationRequest,
     )
-    from eolab_app.processing.habitat_prepared_areas import (
-        PostgresHabitatPreparedAreas,
+    from eolab_app.processing.habitat_preparation_selections import (
+        PostgresHabitatPreparationSelections,
     )
 
     mount = tmp_path / "mount"
@@ -718,9 +718,11 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.delenv("HABITAT_EARTH_ENGINE_PROJECT", raising=False)
     monkeypatch.delenv("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", raising=False)
     monkeypatch.setattr(composition, "PostgresJobStore", lambda limits: store)
-    prepared_areas = PostgresHabitatPreparedAreas(store.conninfo)
+    preparation_selections = PostgresHabitatPreparationSelections(store.conninfo)
     monkeypatch.setattr(
-        composition, "PostgresHabitatPreparedAreas", lambda: prepared_areas
+        composition,
+        "PostgresHabitatPreparationSelections",
+        lambda: preparation_selections,
     )
 
     preparation = HabitatInputPreparationRequest(
@@ -768,15 +770,13 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     resets = 0
 
     def reset_once() -> int:
-        """Require historical area import before the single reset and worker startup."""
+        """Require historical selection import before the single reset and worker startup."""
         nonlocal resets
         resets += 1
         assert resets == 1
         assert not composed_workers
-        imported = prepared_areas.find(preparation.selection)
-        assert imported is not None
-        assert imported.name == preparation.name
-        assert imported.selection == preparation.selection
+        assert preparation_selections.contains(preparation.selection)
+        assert preparation_selections.list() == (preparation.selection,)
         return reset()
 
     monkeypatch.setattr(store, "interrupt_unfinished_jobs_on_restart", reset_once)
@@ -804,7 +804,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         assert store.get(pending["id"], "owner")["status"] == "interrupted"
         async with cleanup_lock:
             await worker.cleanup()
-        assert prepared_areas.find(preparation.selection) is not None
+        assert preparation_selections.contains(preparation.selection)
         assert store.get(pending["id"], "owner")["reserved_bytes"] == 0
         assert not await worker.run_once()
 
@@ -816,7 +816,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     assert composed_workers[0].native is not composed_workers[1].native
     assert cleanup_locks[0] is cleanup_locks[1]
     assert store._pool.closed
-    assert prepared_areas._pool.closed
+    assert preparation_selections._pool.closed
 
 
 def test_queue_notification_is_committed_with_admission(store, tmp_path, monkeypatch):

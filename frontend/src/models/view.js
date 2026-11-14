@@ -6,7 +6,7 @@ import { renderModelResult, updateModelFileActions, describeAreaStatistic } from
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, getHabitatEarthEngineInput, selectedDrawnPolygonLayer } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
-import { HabitatAreaView } from "./habitat-area-view.js";
+import { HabitatPreparationSelectionView } from "./habitat-preparation-selection-view.js";
 import { RasterGridView } from "./raster-grid-view.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { describeTemporalInterval, describeTemporalReduction, describeTemporalResult } from "./temporal-inputs.js";
@@ -241,7 +241,7 @@ export class ModelsView {
 
     /** Construct editable inputs and recipe parameters, retaining their DOM identities.
      * Choice parameters use the recipe's option labels and preserve their string values.
-     * Habitat gets separate saved-area controls so changing modes retains manual choices.
+     * Habitat gets separate preparation-selection controls so changing modes retains manual choices.
      * @param {Object} draft New draft with validated recipe settings and current parameter values.
      * @return {void}
      */
@@ -269,10 +269,10 @@ export class ModelsView {
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
                 inputs[name] = this.buildSpatialInput(fields, name, input);
-                if (input.type === "summary_area" && draft.habitatArea) {
-                    inputs[name].preparedArea = new HabitatAreaView({element: this.element.bind(this), field: this.field.bind(this),
+                if (input.type === "summary_area" && draft.habitatPreparationSelections) {
+                    inputs[name].preparationSelection = new HabitatPreparationSelectionView({element: this.element.bind(this), field: this.field.bind(this),
                         button: this.button.bind(this), options: this.options.bind(this)}, this.handlers, name, input.label);
-                    fields.append(inputs[name].preparedArea.root);
+                    fields.append(inputs[name].preparationSelection.root);
                 }
             }
             else if (input.type === "habitat_stack") {
@@ -354,7 +354,7 @@ export class ModelsView {
         return optional && !value.raster || Boolean(value.raster) && value.raster.available !== false;
     }
 
-    /** Present saved-area coverage for Earth Engine or ordinary spatial choices for other inputs.
+    /** Present preparation coverage for Earth Engine or ordinary spatial choices for other inputs.
      * Hidden area controls are disabled so they cannot prevent the active form from submitting.
      * @param {Object} controls Stable controls for this spatial input.
      * @param {{type:string,label:string}} input Declared area, mask or reference input.
@@ -364,13 +364,13 @@ export class ModelsView {
      */
     renderSpatialInput(controls, input, value, state) {
         const draft = state.draft;
-        if (controls.preparedArea) {
+        if (controls.preparationSelection) {
             const prepared = Boolean(getHabitatEarthEngineInput(draft));
             controls.group.hidden = prepared;
             controls.source.disabled = prepared;
-            controls.preparedArea.root.hidden = !prepared;
-            controls.preparedArea.source.disabled = !prepared;
-            if (prepared) return controls.preparedArea.render(draft);
+            controls.preparationSelection.root.hidden = !prepared;
+            controls.preparationSelection.source.disabled = !prepared;
+            if (prepared) return controls.preparationSelection.render(draft);
         }
         const references = input.type === "habitat_references";
         const usesRasterOrVector = input.type === "mask_source" || references;

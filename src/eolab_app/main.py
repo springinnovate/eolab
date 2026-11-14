@@ -41,9 +41,9 @@ from eolab_app.polygon_areas import (
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.habitat_prepared_areas import (
-    PostgresHabitatPreparedAreas,
-    import_retained_habitat_preparation_areas,
+from eolab_app.processing.habitat_preparation_selections import (
+    PostgresHabitatPreparationSelections,
+    import_retained_habitat_preparation_selections,
 )
 from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
@@ -242,7 +242,7 @@ def create_app(
     processing_limits = load_processing_limits()
     processing_events = PostgresJobEvents()
     processing_store = PostgresJobStore(processing_limits)
-    habitat_prepared_areas = PostgresHabitatPreparedAreas()
+    habitat_preparation_selections = PostgresHabitatPreparationSelections()
     processing_service = ProcessingService(
         processing_store,
         LocalJobArtifacts(
@@ -253,7 +253,7 @@ def create_app(
         model_authorizer=raster_source_authorizer,
         uploads=vector_uploads,
         areas=vector_selection_reader,
-        habitat_prepared_areas=habitat_prepared_areas,
+        habitat_preparation_selections=habitat_preparation_selections,
         habitat_cache_directory=app_global_configuration.processing_data_path
         / "habitat-cache",
     )
@@ -549,9 +549,9 @@ def create_app(
             client_stack.push_async_callback(asyncio.to_thread, processing_store.close)
             processing_store.open()
             client_stack.push_async_callback(
-                asyncio.to_thread, habitat_prepared_areas.close
+                asyncio.to_thread, habitat_preparation_selections.close
             )
-            habitat_prepared_areas.open()
+            habitat_preparation_selections.open()
             client_stack.push_async_callback(processing_events.close)
             processing_events.start()
             for client in (
@@ -664,7 +664,7 @@ def create_app(
     application.include_router(create_vector_sampling_router(vector_selection_reader))
     application.include_router(
         create_habitat_router(
-            habitat_prepared_areas,
+            habitat_preparation_selections,
             vector_selection_reader,
             app_global_configuration.processing_data_path / "habitat-cache",
         )
@@ -833,9 +833,9 @@ async def run_processing_worker() -> None:
     """Start configured worker loops, each with its own native calculation process.
 
     No web application or GeoServer client is constructed.
-    Migrate, import retained Habitat area definitions, and interrupt unfinished
-    jobs once before starting any loops. The container must replace the previous
-    worker container, not overlap it.
+    Migrate, import retained Habitat preparation selections, and interrupt
+    unfinished jobs once before starting any loops. The container must replace
+    the previous worker container, not overlap it.
     Completed results remain available. Child recycling never repeats the reset.
 
     Raises:
@@ -849,12 +849,14 @@ async def run_processing_worker() -> None:
     )
     artifacts.initialize()
     jobs = PostgresJobStore(limits)
-    habitat_prepared_areas = PostgresHabitatPreparedAreas()
+    habitat_preparation_selections = PostgresHabitatPreparationSelections()
     async with httpx2.AsyncClient(timeout=10) as client, AsyncExitStack() as lifecycle:
         lifecycle.push_async_callback(asyncio.to_thread, jobs.close)
         jobs.open()
-        lifecycle.push_async_callback(asyncio.to_thread, habitat_prepared_areas.close)
-        habitat_prepared_areas.open()
+        lifecycle.push_async_callback(
+            asyncio.to_thread, habitat_preparation_selections.close
+        )
+        habitat_preparation_selections.open()
         authorizer = CatalogRasterSourceAuthorizer(
             StacRasterCatalog(client, settings.catalog_internal_url),
             MountedRasterResolver(settings.scan_mount_path),
@@ -871,8 +873,8 @@ async def run_processing_worker() -> None:
         while True:
             try:
                 await asyncio.to_thread(jobs.migrate)
-                await import_retained_habitat_preparation_areas(
-                    jobs, habitat_prepared_areas
+                await import_retained_habitat_preparation_selections(
+                    jobs, habitat_preparation_selections
                 )
                 await asyncio.to_thread(jobs.interrupt_unfinished_jobs_on_restart)
                 break

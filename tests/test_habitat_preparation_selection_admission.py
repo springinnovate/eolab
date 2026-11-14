@@ -1,4 +1,4 @@
-"""Check prepared-area policy where model requests become durable Processing jobs."""
+"""Check saved-selection policy where model requests become durable Processing jobs."""
 
 import asyncio
 from copy import deepcopy
@@ -23,10 +23,8 @@ from eolab_app.processing import habitat_cache
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.habitat_earth_engine import HabitatCacheCoverage
 from eolab_app.processing.habitat_models import HabitatEarthEngineStack, QueuedHabitat
-from eolab_app.processing.habitat_prepared_areas import (
-    HabitatPreparedArea,
-    HabitatPreparedAreaStore,
-    get_habitat_prepared_area_id,
+from eolab_app.processing.habitat_preparation_selections import (
+    HabitatPreparationSelections,
 )
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
@@ -44,7 +42,7 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.routes.processing import create_processing_router
 from raster_source_support import SOURCE
 
-OWNER = "prepared-area-browser"
+OWNER = "preparation-selection-browser"
 BOUNDS_AREA: dict[str, Any] = {
     "kind": "selectedArea",
     "selectedBounds": {"west": 0, "south": 0, "east": 2, "north": 2},
@@ -189,7 +187,7 @@ class AdmissionBoundary:
     Attributes:
         service: Actual model admission, retry and serialization implementation.
         jobs: Recording storage adapter returning complete queued job rows.
-        prepared_areas: Durable registry containing only the assessment selection.
+        preparation_selections: Durable set containing only the assessment selection.
         coverage: Current cache inspection replaced at its I/O boundary.
         selections: Original vector reader passed through to cache inspection.
         cache_directory: Server-controlled cache root supplied by composition.
@@ -198,7 +196,7 @@ class AdmissionBoundary:
 
     service: ProcessingService
     jobs: Mock
-    prepared_areas: Mock
+    preparation_selections: Mock
     coverage: AsyncMock
     selections: Mock
     cache_directory: Path
@@ -244,14 +242,9 @@ def admission_boundary(
 
     jobs.submit.side_effect = submit
     selection = _selection()
-    area = HabitatPreparedArea(
-        id=get_habitat_prepared_area_id(selection),
-        name="Northern area",
-        selection=selection,
-    )
-    prepared_areas = Mock(spec=HabitatPreparedAreaStore)
-    prepared_areas.find.side_effect = lambda requested: (
-        area if requested == selection else None
+    preparation_selections = Mock(spec=HabitatPreparationSelections)
+    preparation_selections.contains.side_effect = (
+        lambda requested: requested == selection
     )
     coverage = AsyncMock(return_value=HabitatCacheCoverage("a" * 64, 2018, 4, 2, 2))
     monkeypatch.setattr(habitat_cache, "get_habitat_cache_coverage", coverage)
@@ -269,13 +262,13 @@ def admission_boundary(
         model_registry=ModelRegistry.load_installed(),
         model_authorizer=raster_authorizer,
         areas=selections,
-        habitat_prepared_areas=prepared_areas,
+        habitat_preparation_selections=preparation_selections,
         habitat_cache_directory=cache_directory,
     )
     return AdmissionBoundary(
         service,
         jobs,
-        prepared_areas,
+        preparation_selections,
         coverage,
         selections,
         cache_directory,
@@ -290,7 +283,7 @@ def test_current_coverage_controls_admission_without_changing_captured_inputs(
     """Block zero coverage, accept partial/full coverage and retain independent references.
 
     Args:
-        admission_boundary: Actual service with one registered assessment selection.
+        admission_boundary: Actual service with one saved assessment selection.
         cached_tiles: Current availability for the requested area and year.
     """
     boundary = admission_boundary
@@ -316,7 +309,7 @@ def test_current_coverage_controls_admission_without_changing_captured_inputs(
         assert queued.request.stack == HabitatEarthEngineStack(
             kind="earthEngine", year=2018
         )
-    boundary.prepared_areas.find.assert_called_once_with(_selection())
+    boundary.preparation_selections.contains.assert_called_once_with(_selection())
     boundary.coverage.assert_awaited_once_with(
         _selection(), 2018, boundary.selections, boundary.cache_directory
     )
@@ -351,9 +344,9 @@ def test_arbitrary_earth_engine_areas_are_rejected_before_private_input_reads(
     request = _request(boundary.service.model_registry, area=area)
     with pytest.raises(ProcessingError) as error:
         asyncio.run(boundary.service.submit_model_run(OWNER, request))
-    assert error.value.code == "habitat_prepared_area_required"
+    assert error.value.code == "habitat_preparation_selection_required"
     assert error.value.status == 422
-    boundary.prepared_areas.find.assert_not_called()
+    boundary.preparation_selections.contains.assert_not_called()
     boundary.coverage.assert_not_awaited()
     boundary.jobs.get_input.assert_not_called()
     boundary.jobs.submit.assert_not_called()
@@ -379,10 +372,10 @@ def test_arbitrary_earth_engine_areas_are_rejected_before_private_input_reads(
 def test_forged_selection_is_not_admitted_by_another_areas_cached_tiles(
     admission_boundary: AdmissionBoundary, changes: dict[str, Any]
 ) -> None:
-    """Require the registered exact descriptor before asking about cached coverage.
+    """Require the saved exact descriptor before asking about cached coverage.
 
     Args:
-        admission_boundary: Registry containing only the original selection.
+        admission_boundary: Durable set containing only the original selection.
         changes: One valid alteration to its source or feature predicate.
     """
     boundary = admission_boundary
@@ -393,13 +386,13 @@ def test_forged_selection_is_not_admitted_by_another_areas_cached_tiles(
     )
     with pytest.raises(ProcessingError) as error:
         asyncio.run(boundary.service.submit_model_run(OWNER, request))
-    assert error.value.code == "habitat_prepared_area_unavailable"
+    assert error.value.code == "habitat_preparation_selection_unavailable"
     assert error.value.status == 409
     boundary.coverage.assert_not_awaited()
     boundary.jobs.submit.assert_not_called()
 
 
-def test_accepted_retry_recovers_before_registry_coverage_or_model_revalidation(
+def test_accepted_retry_recovers_before_membership_coverage_or_model_revalidation(
     admission_boundary: AdmissionBoundary,
 ) -> None:
     """Recover accepted work during dependency outages without admitting a new run.
@@ -410,7 +403,9 @@ def test_accepted_retry_recovers_before_registry_coverage_or_model_revalidation(
     boundary = admission_boundary
     request = _request(boundary.service.model_registry)
     accepted = asyncio.run(boundary.service.submit_model_run(OWNER, request))
-    boundary.prepared_areas.find.side_effect = AssertionError("registry unavailable")
+    boundary.preparation_selections.contains.side_effect = AssertionError(
+        "saved selections unavailable"
+    )
     boundary.coverage.side_effect = AssertionError("cache unavailable")
     boundary.service.model_registry = Mock()
     boundary.service.model_registry.get.side_effect = AssertionError("recipe removed")
@@ -418,7 +413,7 @@ def test_accepted_retry_recovers_before_registry_coverage_or_model_revalidation(
     assert recovered == accepted
     boundary.jobs.submit.assert_called_once()
     assert boundary.coverage.await_count == 1
-    assert boundary.prepared_areas.find.call_count == 1
+    assert boundary.preparation_selections.contains.call_count == 1
     changed = request.model_dump(mode="json")
     changed["label"] = "Conflicting request"
     with pytest.raises(ProcessingError) as error:
@@ -434,7 +429,7 @@ def test_accepted_retry_recovers_before_registry_coverage_or_model_revalidation(
 def test_source_authorization_failure_blocks_admission_before_persistence(
     admission_boundary: AdmissionBoundary,
 ) -> None:
-    """Keep the original-source authorization boundary even for a registered area.
+    """Keep the original-source authorization boundary even for a saved selection.
 
     Args:
         admission_boundary: Real service with a source-reader failure from coverage.
@@ -458,7 +453,7 @@ def test_model_http_reports_unavailable_prepared_source_without_queueing(
     """Translate original-source denial to the model API's actionable conflict response.
 
     Args:
-        admission_boundary: Actual admission service whose registered source is gone.
+        admission_boundary: Actual admission service whose saved source is gone.
     """
     boundary = admission_boundary
     boundary.coverage.side_effect = SelectionUnavailableError(
@@ -492,7 +487,7 @@ def test_manual_rasters_keep_arbitrary_areas_without_preparation_dependencies(
         admission_boundary: Service whose prepared-area dependencies are unavailable.
     """
     boundary = admission_boundary
-    boundary.service.habitat_prepared_areas = None
+    boundary.service.habitat_preparation_selections = None
     boundary.service.habitat_cache_directory = None
     boundary.service.areas = None
     boundary.coverage.side_effect = AssertionError("manual mode must not inspect cache")
@@ -500,7 +495,7 @@ def test_manual_rasters_keep_arbitrary_areas_without_preparation_dependencies(
     response = asyncio.run(boundary.service.submit_model_run(OWNER, request))
     assert response["status"] == "queued"
     boundary.coverage.assert_not_awaited()
-    boundary.prepared_areas.find.assert_not_called()
+    boundary.preparation_selections.contains.assert_not_called()
     assert boundary.raster_authorizer.authorize.await_count == 2
     plan = boundary.jobs.submit.call_args.args[2]
     assert plan.retained_metadata["invocation"]["inputs"] == request.inputs
@@ -524,28 +519,25 @@ def test_concurrent_admission_waits_for_native_cleanup_without_blocking_manual_r
         """Observe two competing requests and cancellation before allowing child cleanup."""
         loop = asyncio.get_running_loop()
         inspection_started = asyncio.Event()
-        second_registration_read = asyncio.Event()
+        second_request_lookup = asyncio.Event()
         cleanup_started = asyncio.Event()
         cleanup_finished = asyncio.Event()
-        registered_area = boundary.prepared_areas.find(_selection())
-        boundary.prepared_areas.find.reset_mock()
-        registrations = 0
         inspections = 0
+        find_accepted = boundary.jobs.find_request.side_effect
 
-        def find(selection: CatalogSelection) -> HabitatPreparedArea | None:
-            """Signal that the competing request has reached exact registry lookup.
+        def find_accepted_request(owner: str, request_id: str) -> dict[str, Any] | None:
+            """Signal that the competing request has reached the admission boundary.
 
             Args:
-                selection: The request's Catalog descriptor.
+                owner: Session owning the public request.
+                request_id: Retry identity being checked before new admission.
 
             Returns:
-                The one registered assessment area, or None for another selection.
+                Existing accepted job from recording storage, or None for a new request.
             """
-            nonlocal registrations
-            registrations += 1
-            if registrations == 2:
-                loop.call_soon_threadsafe(second_registration_read.set)
-            return registered_area if selection == registered_area.selection else None
+            if request_id == waiting_request.requestId:
+                loop.call_soon_threadsafe(second_request_lookup.set)
+            return find_accepted(owner, request_id)
 
         async def inspect(
             selection: CatalogSelection,
@@ -578,7 +570,7 @@ def test_concurrent_admission_waits_for_native_cleanup_without_blocking_manual_r
                     await cleanup_finished.wait()
             return HabitatCacheCoverage("a" * 64, year, 4, 2, 2)
 
-        boundary.prepared_areas.find.side_effect = find
+        boundary.jobs.find_request.side_effect = find_accepted_request
         boundary.coverage.side_effect = inspect
         first = asyncio.create_task(
             boundary.service.submit_model_run(OWNER, first_request)
@@ -589,7 +581,7 @@ def test_concurrent_admission_waits_for_native_cleanup_without_blocking_manual_r
             waiting = asyncio.create_task(
                 boundary.service.submit_model_run(OWNER, waiting_request)
             )
-            await asyncio.wait_for(second_registration_read.wait(), timeout=10)
+            await asyncio.wait_for(second_request_lookup.wait(), timeout=10)
             first.cancel()
             await asyncio.wait_for(cleanup_started.wait(), timeout=10)
             manual = await asyncio.wait_for(
@@ -630,7 +622,7 @@ def test_drawn_references_and_raster_mask_remain_independent_inputs(
     """Copy owned reference polygons and authorize the mask separately from AOI policy.
 
     Args:
-        admission_boundary: Real service with a registered assessment area.
+        admission_boundary: Real service with a saved assessment selection.
         monkeypatch: Supply the geometry already authorized by polygon-input storage.
     """
     boundary = admission_boundary
@@ -679,7 +671,7 @@ def test_drawn_references_and_raster_mask_remain_independent_inputs(
     boundary.raster_authorizer.authorize.assert_awaited_once_with(
         queued.request.habitat_mask
     )
-    boundary.prepared_areas.find.assert_called_once_with(_selection())
+    boundary.preparation_selections.contains.assert_called_once_with(_selection())
 
 
 def test_old_arbitrary_area_run_remains_readable_but_new_duplicate_is_rejected(
@@ -711,5 +703,5 @@ def test_old_arbitrary_area_run_remains_readable_but_new_duplicate_is_rejected(
                 OWNER, ModelRunRequest.model_validate(duplicate)
             )
         )
-    assert error.value.code == "habitat_prepared_area_required"
+    assert error.value.code == "habitat_preparation_selection_required"
     boundary.jobs.submit.assert_not_called()

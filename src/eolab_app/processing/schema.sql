@@ -274,12 +274,11 @@ INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS input_uploads jsonb NOT NULL DEFAULT '{}'::jsonb;
 INSERT INTO processing.schema_version VALUES (21) ON CONFLICT DO NOTHING;
 
--- Administrator preparation areas outlive jobs, reports and cache availability.
--- Only path-free Catalog selection metadata is persisted; no polygons or files.
-CREATE TABLE IF NOT EXISTS processing.habitat_prepared_areas (
-    id text PRIMARY KEY CHECK (id ~ '^[a-f0-9]{64}$'),
-    name text NOT NULL CHECK (length(name) BETWEEN 1 AND 80 AND name ~ '\S'),
-    selection jsonb NOT NULL CHECK (jsonb_typeof(selection) = 'object'),
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+-- Preparation references retain the original Catalog selection, not a new area identity.
+-- Exact JSONB equality preserves numeric predicate identity across browser round trips.
+CREATE TABLE IF NOT EXISTS processing.habitat_preparation_selections (
+    selection jsonb NOT NULL CHECK (jsonb_typeof(selection) = 'object')
 );
+CREATE INDEX IF NOT EXISTS habitat_preparation_selections_selection
+    ON processing.habitat_preparation_selections USING hash (selection);
 INSERT INTO processing.schema_version VALUES (22) ON CONFLICT DO NOTHING;

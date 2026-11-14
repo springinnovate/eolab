@@ -1,4 +1,5 @@
 /** Build model drafts from available source identities and explicit analysis areas. */
+import { vectorSelectionsEqual } from "../selected-area.js";
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
 import { getModelInputHandler } from "./input-handlers.js";
@@ -30,26 +31,26 @@ export function getHabitatEarthEngineInput(draft) {
     return input?.kind === "earthEngine" ? input : undefined;
 }
 
-/** Capture the selected saved area after checking this draft's current coverage.
- * The server independently checks registry membership and source access at admission.
+/** Capture existing Catalog features after checking this draft's preparation coverage.
+ * The server independently checks preparation membership and source access at admission.
  * Manual area state remains separate and is never used for Earth Engine capture.
- * @param {Object} draft Habitat draft with controller-owned area choices and coverage.
+ * @param {Object} draft Habitat draft with controller-owned preparation selections and coverage.
  * @return {{kind:"catalogSelection",selection:Object}} Detached original Catalog selection.
  * @throws {Error} If choices or coverage are pending, unavailable, empty or unselected.
  */
-export function captureHabitatPreparedArea(draft) {
-    const state = draft.habitatArea;
-    if (state.loading || !state.loaded) throw new Error(state.error || "Wait for saved preparation areas to load.");
+export function captureHabitatPreparationSelection(draft) {
+    const state = draft.habitatPreparationSelections;
+    if (state.loading || !state.loaded) throw new Error(state.error || "Wait for preparation selections to load.");
     if (state.error) throw new Error(state.error);
-    if (!state.areas.length) throw new Error("No saved preparation areas are available. Ask an administrator to prepare an area.");
-    const area = state.areas.find(value => value.id === state.selectedId);
-    if (!area) throw new Error(state.unavailable
-        ? "The original area is not available as a saved preparation area. Choose a saved area."
-        : "Choose a saved preparation area.");
+    if (!state.selections.length) throw new Error("No preparation selections are available. Ask an administrator to prepare inputs for a Catalog selection.");
+    const selection = state.selections.find(value => vectorSelectionsEqual(value, state.selectedSelection));
+    if (!selection) throw new Error(state.unavailable
+        ? "The original Catalog selection is not available for preparation. Choose another selection."
+        : "Choose a Catalog selection with prepared inputs.");
     if (state.coverageError) throw new Error(state.coverageError);
     if (state.coverageLoading || !state.coverage) throw new Error("Wait for prepared-input coverage to be checked.");
     if (!state.coverage.cachedTiles) throw new Error("No prepared inputs are available for this area and year. Choose another area or year, or ask an administrator to prepare the inputs.");
-    return {kind: "catalogSelection", selection: structuredClone(area.selection)};
+    return {kind: "catalogSelection", selection: structuredClone(selection)};
 }
 
 /** Identify a raster or vector choice without using its label or map visibility.
@@ -256,7 +257,7 @@ export function selectedDrawnPolygonLayer(draft, input) {
 /** Create independent setup state for each declared raster and spatial input.
  * The selectedArea input is the sampling area used by raster histograms.
  * Models with a starting mask require the user to choose that mask explicitly.
- * Habitat starts with Earth Engine inputs and an unselected saved-area chooser;
+ * Habitat starts with Earth Engine inputs and an unselected preparation chooser;
  * manual spatial choices remain independent until manual input mode is selected.
  * @param {Object} model Installed recipe.
  * @param {Object & {drawnPolygonLayers?:DrawnPolygonLayer[]}} context Catalog and map choices supplied by browser composition, with detached drawn layers for Ecosystem Condition.
@@ -313,8 +314,8 @@ export function createModelDraft(model, context, id) {
         }
     }
     return {id, model, label: model.title, sources, inputs,
-        habitatArea: modelHasInput(model, "habitat_stack") ? {areas: [], loaded: false, loading: false, error: "",
-            selectedId: "", restoreSelection: null, unavailable: false, coverage: null, coverageLoading: false, coverageError: ""} : null,
+        habitatPreparationSelections: modelHasInput(model, "habitat_stack") ? {selections: [], titles: {}, loaded: false, loading: false, error: "",
+            selectedSelection: null, restoreSelection: null, unavailable: false, coverage: null, coverageLoading: false, coverageError: ""} : null,
         drawnPolygonLayers: model.id === "habitat-condition" ? context.drawnPolygonLayers ?? [] : [],
         temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], statisticType,
             statisticType === "temporal_reduction" ? model.steps[0].inputs.precipitation.value : null) : null,
@@ -326,7 +327,7 @@ export function createModelDraft(model, context, id) {
 /** Capture the checked model inputs independently of later map and draft edits.
  * Drawn polygon choices are captured as local geometry for the controller to
  * replace with private area references before sending or saving the request.
- * Earth Engine captures only a selected saved preparation area with available tiles.
+ * Earth Engine captures only a Catalog preparation selection with available tiles.
  * @param {Object} draft Editable model setup with raster and spatial state in inputs[name].
  * @param {string} requestId Stable retry identity generated before dispatch.
  * @param {number} [utcOffsetMinutes=-new Date().getTimezoneOffset()] Local minutes east of UTC, captured once for this submission and its retries.
@@ -342,7 +343,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         if (handler) inputs[name] = handler.capture(state, input);
         else if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
             inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
-        else if (input.type === "summary_area" && getHabitatEarthEngineInput(draft)) inputs[name] = captureHabitatPreparedArea(draft);
+        else if (input.type === "summary_area" && getHabitatEarthEngineInput(draft)) inputs[name] = captureHabitatPreparationSelection(draft);
         else if (input.type === "habitat_stack") inputs[name] = captureHabitatStack(state, draft.sources);
         else if (input.type === "raster_preparation") inputs[name] = captureRasterPreparation(state, draft);
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);

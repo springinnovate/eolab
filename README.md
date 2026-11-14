@@ -363,12 +363,13 @@ reference sites and input data.
 The default **Original model inputs (Google Earth Engine)** configuration uses
 the [NHI Terrestrial Integrity Modeling](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
 inputs prepared by an administrator for your selected **Assessment year**.
-Choose a **Prepared analysis area** from the saved administrator areas. Setup
-checks cached inputs for that area and year before you run. Partial coverage is
+Choose a **Prepared analysis area** from the Catalog selections used for input
+preparation. Each choice identifies its Catalog layer and feature filter. Setup
+checks cached inputs for that selection and year before you run. Partial coverage is
 allowed with a warning; areas without prepared tiles produce NoData. If no tiles
 are available, ask an administrator to prepare the area and year. Reference sites
-remain a separate choice. Saved area definitions remain available after their
-preparation reports expire.
+remain a separate choice. Preparation references remain available after their
+reports expire; the original vector data stays in the Catalog.
 
 Open **Select predictor datasets** or **Select observed response datasets** to
 turn datasets on or off for your run. All start selected; SRTM landforms remains
@@ -384,8 +385,8 @@ queues downloads without running the model. Preparation continues after closing
 the page and attempts remaining tiles when a tile download fails. Return to
 administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
-Submitting preparation also saves the exact Catalog layer and feature filter as
-a model area. Existing areas with retained preparation details are imported when
+Submitting preparation records its exact Catalog layer and feature filter.
+References from retained preparation details are recovered when
 the worker starts. If older preparation details have already expired, choose the
 original area and submit preparation again; existing cached tiles are reused.
 The area/year table shows the latest preparation for each saved area and year,

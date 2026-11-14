@@ -438,35 +438,32 @@ export class ProcessingApiClient {
         return this.request("/models/habitat-condition/earth-engine-options");
     }
 
-    /** List saved preparation areas that ordinary Earth Engine runs may select.
+    /** List existing Catalog selections used for Earth Engine input preparation.
      * @param {AbortSignal} [signal] Cancel an obsolete setup request.
-     * @return {Promise<{areas:Array<{id:string,name:string,selection:Object}>}>} Named, path-free Catalog selections and opaque choice IDs.
-     * @throws {Error|TypeError} If the request fails or an area identity/selection is malformed.
+     * @return {Promise<{selections:Object[]}>} Path-free Catalog source and filter descriptors.
+     * @throws {Error|TypeError} If the request fails or a selection is malformed or uploaded.
      */
-    async getHabitatPreparedAreas(signal) {
-        const response = await this.request("/models/habitat-condition/prepared-areas", "GET", undefined, signal);
-        if (!Array.isArray(response.areas)) throw new TypeError("Invalid saved preparation areas.");
-        const areas = response.areas.map(area => {
-            if (!area || typeof area.id !== "string" || !/^[a-f0-9]{64}$/.test(area.id) ||
-                typeof area.name !== "string" || !area.name.trim() || area.selection?.uploadId !== undefined)
-                throw new TypeError("Invalid saved preparation area.");
-            return {id: area.id, name: area.name, selection: validateVectorSelection(area.selection)};
-        });
-        if (new Set(areas.map(area => area.id)).size !== areas.length) throw new TypeError("Duplicate saved preparation area.");
-        return {areas};
+    async getHabitatPreparationSelections(signal) {
+        const response = await this.request("/models/habitat-condition/preparation-selections", "GET", undefined, signal);
+        if (!Array.isArray(response.selections)) throw new TypeError("Invalid preparation selections.");
+        return {selections: response.selections.map(selection => {
+            if (selection?.uploadId !== undefined) throw new TypeError("Preparation requires a Catalog selection.");
+            return validateVectorSelection(selection);
+        })};
     }
 
-    /** Read current prepared-input tile coverage for one saved area and year.
-     * @param {string} areaId Opaque 64-character saved-area identity.
+    /** Read current prepared-input coverage for exact Catalog features and a year.
+     * @param {Object} selection Existing Catalog source, layer and filter descriptor.
      * @param {number} year Assessment year selected in Habitat setup.
-     * @param {AbortSignal} [signal] Cancel an obsolete area/year request.
-     * @return {Promise<{areaId:string,year:number,requiredTiles:number,cachedTiles:number,missingTiles:number}>} Current file coverage; zero and partial coverage are valid responses.
-     * @throws {Error|TypeError} If the request fails or its identity/counts are inconsistent.
+     * @param {AbortSignal} [signal] Cancel an obsolete selection/year request.
+     * @return {Promise<{year:number,requiredTiles:number,cachedTiles:number,missingTiles:number}>} Current file coverage; zero and partial coverage are valid responses.
+     * @throws {Error|TypeError} If the request fails or its selection/year/counts are invalid.
      */
-    async getHabitatPreparedAreaCoverage(areaId, year, signal) {
-        if (!/^[a-f0-9]{64}$/.test(areaId) || !Number.isInteger(year)) throw new TypeError("Invalid saved area or year.");
-        const response = await this.request("/models/habitat-condition/prepared-areas/" + areaId + "/coverage?year=" + year, "GET", undefined, signal);
-        if (response.areaId !== areaId || response.year !== year ||
+    async getHabitatPreparationCoverage(selection, year, signal) {
+        if (selection?.uploadId !== undefined || !Number.isInteger(year)) throw new TypeError("Invalid Catalog selection or year.");
+        const descriptor = validateVectorSelection(selection);
+        const response = await this.request("/models/habitat-condition/preparation-coverage", "POST", {selection: descriptor, year}, signal);
+        if (response.year !== year ||
             !["requiredTiles", "cachedTiles", "missingTiles"].every(key => Number.isSafeInteger(response[key]) && response[key] >= 0) ||
             response.cachedTiles + response.missingTiles !== response.requiredTiles)
             throw new TypeError("Invalid prepared-input coverage.");

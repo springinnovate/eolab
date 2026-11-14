@@ -18,7 +18,7 @@ export class ModelsController {
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
      * @param {(options?:{includeDrawnPolygons?:boolean})=>Object & {drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} dependencies.getContext Catalog and map choices, with optional detached drawn polygons.
-     * @param {(identity:{collectionId:string,itemId:string})=>Promise<Object>} dependencies.getTemporalItem Read the selected dataset's current Catalog metadata.
+     * @param {(identity:{collectionId:string,itemId:string},signal?:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read an exact Catalog Item for input metadata and display titles.
      * @param {(source:Object,signal:AbortSignal,targetCrs?:string|null)=>Promise<Object>} dependencies.describeSource Read source grid metadata in the chosen CRS.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
@@ -36,12 +36,12 @@ export class ModelsController {
      * @param {Object} [dependencies.clock=globalThis] Timeout scheduler for deletion notices.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
-    constructor({api, jobs, view, getContext, getTemporalItem, loadTemporalTimes, describeSource, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getCatalogItem, loadTemporalTimes, describeSource, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
-        Object.assign(this, {getTemporalItem, loadTemporalTimes});
+        Object.assign(this, {getCatalogItem, loadTemporalTimes});
         this.describeSource = describeSource;
         this.outputState = outputState;
         this.onRunChange = onRunChange;
@@ -60,8 +60,8 @@ export class ModelsController {
             onEdit: change => this.editDraft(change), onInput: (name, change) => this.editInput(name, change),
             onRefreshGrid: () => this.refreshRasterPreparation(true),
             onRefreshHabitat: name => void this.loadHabitatOptions(this.state.draft, name),
-            onHabitatArea: id => this.chooseHabitatArea(id),
-            onRefreshHabitatAreas: () => void this.loadHabitatAreas(this.state.draft),
+            onHabitatPreparationSelection: selection => this.chooseHabitatPreparationSelection(selection),
+            onRefreshHabitatPreparationSelections: () => void this.loadHabitatPreparationSelections(this.state.draft),
             onRefreshHabitatCoverage: () => void this.refreshHabitatCoverage(true),
             onArea: (name, mode) => this.chooseArea(name, mode),
             onTemporalDataset: key => void this.chooseTemporalDataset(key),
@@ -140,13 +140,13 @@ export class ModelsController {
      */
     navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
-    /** Create a draft with independent manual areas and load model-specific saved choices.
+    /** Create a draft with independent manual areas and load model-specific Catalog choices.
      * @param {Object} model Installed recipe chosen by the user.
      * @return {void}
      */
     chooseModel(model) {
         this.resetRasterPreparation();
-        this.resetHabitatAreaRequests();
+        this.resetHabitatPreparationRequests();
         this.closeVectorFilter();
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
@@ -157,7 +157,7 @@ export class ModelsController {
         for (const name of Object.keys(draft.inputs)) {
             if (draft.model.inputs[name].type === "habitat_stack") void this.loadHabitatOptions(draft, name);
         }
-        if (draft.habitatArea) void this.loadHabitatAreas(draft);
+        if (draft.habitatPreparationSelections) void this.loadHabitatPreparationSelections(draft);
     }
 
     /** Stop vector checks when their entire model draft is replaced or destroyed.
@@ -197,44 +197,44 @@ export class ModelsController {
         }
     }
 
-    /** Cancel area-choice and coverage reads without changing accepted run inputs.
+    /** Cancel preparation-selection and coverage reads without changing accepted run inputs.
      * Draft replacement, mode changes and destruction invalidate their late responses.
      * @return {void}
      */
-    resetHabitatAreaRequests() {
-        this.habitatAreasAbort?.abort(); this.habitatCoverageAbort?.abort();
+    resetHabitatPreparationRequests() {
+        this.habitatPreparationSelectionsAbort?.abort(); this.habitatCoverageAbort?.abort();
         this.habitatCoverageKey = null;
-        const state = this.state.draft?.habitatArea;
+        const state = this.state.draft?.habitatPreparationSelections;
         if (state) { state.loading = false; state.coverageLoading = false; state.coverage = null; }
     }
 
-    /** Load public saved areas and restore only an exact duplicated Catalog selection.
-     * Failed requests block Earth Engine setup while manual inputs remain usable.
-     * @param {Object} draft Habitat draft whose choice list is being loaded.
-     * @return {Promise<void>} Completion after area choices and selected-year coverage settle.
+    /** Load Catalog selections used for preparation and retain only an exact selection match.
+     * Catalog titles load separately and never authorize or delay coverage checks.
+     * @param {Object} draft Habitat draft whose preparation selections are being loaded.
+     * @return {Promise<void>} Completion after selections and selected-year coverage settle.
      */
-    async loadHabitatAreas(draft) {
+    async loadHabitatPreparationSelections(draft) {
         if (!draft || this.destroyed || this.state.draft !== draft || !getHabitatEarthEngineInput(draft) || this.state.submitting) return;
-        this.habitatAreasAbort?.abort(); this.habitatCoverageAbort?.abort();
+        this.habitatPreparationSelectionsAbort?.abort(); this.habitatCoverageAbort?.abort();
         this.habitatCoverageKey = null;
-        const abort = new AbortController(); this.habitatAreasAbort = abort;
-        const state = draft.habitatArea;
+        const abort = new AbortController(); this.habitatPreparationSelectionsAbort = abort;
+        const state = draft.habitatPreparationSelections;
         Object.assign(state, {loading: true, error: "", coverage: null, coverageLoading: false, coverageError: ""});
         const isCurrent = () => !abort.signal.aborted && !this.destroyed && this.state.draft === draft && Boolean(getHabitatEarthEngineInput(draft));
         this.render();
         try {
-            const {areas} = await this.api.getHabitatPreparedAreas(abort.signal);
+            const {selections} = await this.api.getHabitatPreparationSelections(abort.signal);
             if (!isCurrent()) return;
-            state.areas = areas; state.loaded = true;
-            if (state.restoreSelection) {
-                const restored = areas.find(area => vectorSelectionsEqual(area.selection, state.restoreSelection));
-                state.selectedId = restored?.id ?? ""; state.unavailable = !restored;
+            state.selections = selections; state.loaded = true;
+            const previous = state.restoreSelection ?? state.selectedSelection;
+            if (previous) {
+                const restored = selections.find(selection => vectorSelectionsEqual(selection, previous));
+                state.selectedSelection = restored ?? null; state.unavailable = !restored;
                 if (restored) state.restoreSelection = null;
-            } else if (state.selectedId && !areas.some(area => area.id === state.selectedId)) {
-                state.selectedId = ""; state.unavailable = true;
             }
+            void this.loadHabitatSelectionTitles(draft, selections, abort);
         } catch (error) {
-            if (isCurrent()) state.error = "Saved preparation areas could not be loaded. Refresh to try again. " + error.message;
+            if (isCurrent()) state.error = "Preparation selections could not be loaded. Refresh to try again. " + error.message;
         } finally {
             if (isCurrent()) {
                 state.loading = false; this.render(); await this.refreshHabitatCoverage();
@@ -242,41 +242,61 @@ export class ModelsController {
         }
     }
 
-    /** Select a saved area without copying its descriptor into the manual AOI state.
-     * @param {string} id Opaque area identity chosen from the loaded public list.
+    /** Read each distinct Catalog Item's title without gating a preparation selection.
+     * Unavailable metadata leaves the Item ID as the display fallback. Late replies
+     * cannot replace titles after refresh, mode changes or draft replacement.
+     * @param {Object} draft Habitat draft receiving presentation-only titles.
+     * @param {Object[]} selections Validated Catalog selections, possibly sharing an Item.
+     * @param {AbortController} abort Cancellation owned by the selection-list request.
+     * @return {Promise<void>} Completion after all current title reads settle.
+     */
+    async loadHabitatSelectionTitles(draft, selections, abort) {
+        const items = new Map(selections.map(selection => [modelSourceKey(selection), selection]));
+        await Promise.all([...items].map(async ([key, selection]) => {
+            try {
+                const item = await this.getCatalogItem(selection, abort.signal);
+                if (abort.signal.aborted || this.destroyed || this.state.draft !== draft) return;
+                draft.habitatPreparationSelections.titles[key] = item.properties?.title ?? item.id;
+                this.render();
+            } catch { /* The exact Catalog identity remains a usable display fallback. */ }
+        }));
+    }
+
+    /** Choose an existing Catalog selection independently of the manual analysis area.
+     * @param {Object|null} selection Descriptor chosen from preparation selections, or null to clear it.
      * @return {void}
      */
-    chooseHabitatArea(id) {
+    chooseHabitatPreparationSelection(selection) {
         const draft = this.state.draft;
         if (!draft || !getHabitatEarthEngineInput(draft) || this.state.submitting) return;
-        Object.assign(draft.habitatArea, {selectedId: id, restoreSelection: null, unavailable: false});
+        Object.assign(draft.habitatPreparationSelections, {selectedSelection: selection, restoreSelection: null, unavailable: false});
         this.state.error = ""; void this.refreshHabitatCoverage(); this.render();
     }
 
-    /** Check the active saved area and assessment year, ignoring superseded replies.
+    /** Check the selected Catalog features and year, ignoring superseded replies.
      * Repeated renders and unrelated input changes reuse this completed check;
-     * explicit retry, year/area edits and mode changes request current coverage.
-     * @param {boolean} [retry=false] Refresh the same area/year after user action.
+     * explicit retry, year/selection edits and mode changes request current coverage.
+     * @param {boolean} [retry=false] Refresh the same selection/year after user action.
      * @return {Promise<void>} Completion after current coverage or retry guidance is displayed.
      */
     async refreshHabitatCoverage(retry = false) {
         const draft = this.state.draft;
-        const stack = draft && getHabitatEarthEngineInput(draft), state = draft?.habitatArea;
+        const stack = draft && getHabitatEarthEngineInput(draft), state = draft?.habitatPreparationSelections;
         if (!stack || !state) return;
         const ready = state.loaded && !state.loading && !state.error &&
-            state.areas.some(area => area.id === state.selectedId) && Number.isInteger(stack.year);
-        const key = ready ? JSON.stringify([draft.id, state.selectedId, stack.year]) : null;
+            state.selections.some(selection => vectorSelectionsEqual(selection, state.selectedSelection)) && Number.isInteger(stack.year);
+        const key = ready ? JSON.stringify([draft.id, state.selectedSelection, stack.year]) : null;
         if (!retry && key && key === this.habitatCoverageKey) return;
         this.habitatCoverageAbort?.abort(); this.habitatCoverageKey = key;
         state.coverage = null; state.coverageError = ""; state.coverageLoading = Boolean(key);
         if (!key) { this.render(); return; }
-        const areaId = state.selectedId, year = stack.year, abort = new AbortController();
+        const selection = state.selectedSelection, year = stack.year, abort = new AbortController();
         this.habitatCoverageAbort = abort;
         const isCurrent = () => !abort.signal.aborted && !this.destroyed && this.state.draft === draft &&
-            getHabitatEarthEngineInput(draft) === stack && state.selectedId === areaId && stack.year === year;
+            getHabitatEarthEngineInput(draft) === stack && state.selectedSelection === selection && stack.year === year;
         this.render();
         try {
-            const coverage = await this.api.getHabitatPreparedAreaCoverage(areaId, year, abort.signal);
+            const coverage = await this.api.getHabitatPreparationCoverage(selection, year, abort.signal);
             if (isCurrent()) state.coverage = coverage;
         } catch (error) {
             if (isCurrent()) state.coverageError = "Prepared-input coverage could not be checked. Try again. " + error.message;
@@ -310,8 +330,8 @@ export class ModelsController {
                 if (definition.type === "raster_preparation") Object.assign(draft.inputs[key], {mode: "auto", sourceKey: ""});
                 if (definition.type === "summary_area" && draft.inputs[key].filterEditing) this.closeVectorFilter();
             }
-            this.resetHabitatAreaRequests();
-            if (change.kind === "earthEngine" && !draft.habitatArea.loaded) void this.loadHabitatAreas(draft);
+            this.resetHabitatPreparationRequests();
+            if (change.kind === "earthEngine" && !draft.habitatPreparationSelections.loaded) void this.loadHabitatPreparationSelections(draft);
         }
         if (this.state.draft.model.inputs[name].type === "habitat_stack") void this.refreshHabitatCoverage();
         this.editDraft({});
@@ -467,7 +487,7 @@ export class ModelsController {
         temporal.loading = true; temporal.error = ""; temporal.datesError = ""; this.render();
         try {
             if (reloadItem) {
-                const item = await this.getTemporalItem(source);
+                const item = await this.getCatalogItem(source, abort.signal);
                 if (!isCurrent()) return;
                 temporal.item = item;
                 if (!temporal.variable) {
@@ -1052,13 +1072,13 @@ export class ModelsController {
     /** Copy a saved run's inputs into editable setup, including dataset and polygon choices.
      * The exact recipe must remain available. Choosing a vector view explicitly
      * switches a captured area to that view's current filter. Earth Engine areas must
-     * match an available saved preparation area before their coverage is checked.
+     * match an existing preparation selection before their coverage is checked.
      * @return {Promise<void>} Completion after the copied setup loads its current source choices.
      */
     async duplicateRun() {
         const saved = this.state.invocation; if (!saved) return;
         this.resetRasterPreparation();
-        this.resetHabitatAreaRequests();
+        this.resetHabitatPreparationRequests();
         this.closeVectorFilter();
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
@@ -1112,8 +1132,8 @@ export class ModelsController {
         if (getHabitatEarthEngineInput(draft)) {
             const areaName = Object.keys(model.inputs).find(name => model.inputs[name].type === "summary_area");
             const area = saved.inputs[areaName];
-            draft.habitatArea.restoreSelection = area.kind === "catalogSelection" ? structuredClone(area.selection) : null;
-            draft.habitatArea.unavailable = true;
+            draft.habitatPreparationSelections.restoreSelection = area.kind === "catalogSelection" ? structuredClone(area.selection) : null;
+            draft.habitatPreparationSelections.unavailable = true;
         }
         const preparationName = Object.keys(model.inputs).find(name => model.inputs[name].type === "raster_preparation");
         if (preparationName) {
@@ -1124,7 +1144,7 @@ export class ModelsController {
         for (const [name, definition] of Object.entries(model.inputs)) {
             if (definition.type === "habitat_stack") await this.loadHabitatOptions(draft, name);
         }
-        if (getHabitatEarthEngineInput(draft)) await this.loadHabitatAreas(draft);
+        if (getHabitatEarthEngineInput(draft)) await this.loadHabitatPreparationSelections(draft);
         if (draft.temporal?.datasetKey) await this.loadTemporalDates(undefined, true);
     }
 
@@ -1155,7 +1175,7 @@ export class ModelsController {
      */
     destroy() {
         this.resetRasterPreparation();
-        this.resetHabitatAreaRequests();
+        this.resetHabitatPreparationRequests();
         this.closeVectorFilter();
         this.destroyed = true; this.revision += 1; this.cancelVectorSelections();
         this.temporalAbort?.abort(); this.temporalRevision += 1;

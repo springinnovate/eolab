@@ -241,33 +241,33 @@ test("time-series results require the current named-calculation contract", async
 });
 
 
-test("saved Habitat areas use path-free Catalog selections and propagate cancellation", async () => {
-    const area = {id: "a".repeat(64), name: "Study area", selection};
-    const h = fixture(() => ({areas: [area]})), abort = new AbortController();
-    assert.deepEqual(await h.api.getHabitatPreparedAreas(abort.signal), {areas: [area]});
-    assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/prepared-areas");
+test("Habitat preparation lists exact path-free Catalog selections and propagates cancellation", async () => {
+    const h = fixture(() => ({selections: [selection]})), abort = new AbortController();
+    assert.deepEqual(await h.api.getHabitatPreparationSelections(abort.signal), {selections: [selection]});
+    assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/preparation-selections");
     assert.equal(h.calls[0].options.signal, abort.signal);
-    for (const invalid of [{...area, id: "../private"}, {...area, selection: {...selection, path: "/private/data.gpkg"}},
-        {...area, selection: {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "sites", filter: selection.filter}}]) {
-        await assert.rejects(fixture(() => ({areas: [invalid]})).api.getHabitatPreparedAreas(), /Invalid|invalid/);
+    for (const invalid of [{...selection, path: "/private/data.gpkg"},
+        {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "sites", filter: selection.filter}]) {
+        await assert.rejects(fixture(() => ({selections: [invalid]})).api.getHabitatPreparationSelections(), /Invalid|requires a Catalog/);
     }
-    await assert.rejects(fixture(() => ({areas: [area, area]})).api.getHabitatPreparedAreas(), /duplicate/i);
 });
 
-test("saved Habitat coverage accepts zero or partial availability and rejects mismatched responses", async () => {
-    const areaId = "a".repeat(64), year = 2018, abort = new AbortController();
+test("Habitat coverage posts the exact selection and year and accepts zero or partial availability", async () => {
+    const year = 2018, abort = new AbortController();
     for (const cachedTiles of [0, 2, 4]) {
-        const coverage = {areaId, year, requiredTiles: 4, cachedTiles, missingTiles: 4 - cachedTiles};
+        const coverage = {year, requiredTiles: 4, cachedTiles, missingTiles: 4 - cachedTiles};
         const h = fixture(() => coverage);
-        assert.deepEqual(await h.api.getHabitatPreparedAreaCoverage(areaId, year, abort.signal), coverage);
-        assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/prepared-areas/" + areaId + "/coverage?year=2018");
+        assert.deepEqual(await h.api.getHabitatPreparationCoverage(selection, year, abort.signal), coverage);
+        assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/preparation-coverage");
+        assert.equal(h.calls[0].options.method, "POST");
         assert.equal(h.calls[0].options.signal, abort.signal);
+        assert.deepEqual(JSON.parse(h.calls[0].options.body), {selection, year});
     }
-    const coverage = {areaId, year, requiredTiles: 4, cachedTiles: 2, missingTiles: 2};
-    for (const change of [{areaId: "b".repeat(64)}, {year: 2017}, {missingTiles: 3}, {cachedTiles: -1}, {cachedTiles: 0.5}]) {
-        await assert.rejects(fixture(() => ({...coverage, ...change})).api.getHabitatPreparedAreaCoverage(areaId, year), /invalid/i);
+    const coverage = {year, requiredTiles: 4, cachedTiles: 2, missingTiles: 2};
+    for (const change of [{year: 2017}, {missingTiles: 3}, {cachedTiles: -1}, {cachedTiles: 0.5}]) {
+        await assert.rejects(fixture(() => ({...coverage, ...change})).api.getHabitatPreparationCoverage(selection, year), /invalid/i);
     }
     const h = fixture(() => coverage);
-    await assert.rejects(h.api.getHabitatPreparedAreaCoverage("../private", year), /Invalid|invalid/);
+    await assert.rejects(h.api.getHabitatPreparationCoverage({...selection, path: "/private/data.gpkg"}, year), /Invalid|invalid/);
     assert.equal(h.calls.length, 0);
 });
