@@ -279,7 +279,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                 ),
                 cache_directory=cache,
                 working_directory=staging,
-                progress=lambda complete, total: None,
+                progress=lambda update: None,
                 check_cancelled=lambda: None,
             )
     authorizer = SimpleNamespace(

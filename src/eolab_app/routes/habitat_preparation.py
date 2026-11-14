@@ -33,6 +33,28 @@ from eolab_app.routes.processing import JobDownloadResponse, RequestSizeLimitedR
 PreparationJobId = Annotated[str, Path(pattern=r"^[a-f0-9]{32}$")]
 
 
+class HabitatDownloadMeasurements(BaseModel):
+    """Expose successful download activity independently of worker heartbeats.
+
+    Attributes:
+        cachedTiles: Reusable tiles that required no download by this attempt.
+        downloadedTiles: Successfully downloaded and validated tiles in this attempt.
+        failedTiles: Terminal tile failures, excluded from throughput and remaining work.
+        downloadedBytes: Compressed response bytes for successful tile downloads.
+        elapsedSeconds: Monotonic acquisition time measured at observedAt.
+        observedAt: UTC snapshot timestamp; active rates age from this observation.
+        lastDownloadAt: Last successful download time, or None before any completed.
+    """
+
+    cachedTiles: Annotated[int, Field(ge=0)]
+    downloadedTiles: Annotated[int, Field(ge=0)]
+    failedTiles: Annotated[int, Field(ge=0)]
+    downloadedBytes: Annotated[int, Field(ge=0)]
+    elapsedSeconds: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    observedAt: datetime
+    lastDownloadAt: datetime | None
+
+
 class HabitatPreparationProgress(JobProgressResponse):
     """Report measured completed and total tiles once acquisition has planned them.
 
@@ -40,11 +62,13 @@ class HabitatPreparationProgress(JobProgressResponse):
         completed: Number of complete reusable tiles, including existing cache hits.
         total: Number of tiles needed for the selected polygons, or None while unknown.
         unit: Work unit supplied by the native progress producer.
+        details: Acquisition measurements once cache coverage has been counted.
     """
 
     completed: int | None = None
     total: int | None = None
     unit: str | None = None
+    details: HabitatDownloadMeasurements | None = None
 
 
 class HabitatPreparationReport(JobResultResponse):
