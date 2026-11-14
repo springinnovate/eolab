@@ -240,17 +240,6 @@ test("feature navigation publishes intent and redraws the current observation", 
     }),
     /Invalid feature-profile navigation state/,
   );
-  assert.throws(
-    () => h.controller.setCurrentObservation(observation({
-      focus: { center: [181, 0], bounds: null },
-    }), {
-      position: 1,
-      total: 1,
-      canPrevious: false,
-      canNext: false,
-    }),
-    /Invalid vector feature focus target/,
-  );
 });
 
 test("numeric field-name spacing is reflected on the horizontal axis", () => {

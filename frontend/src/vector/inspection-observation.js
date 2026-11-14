@@ -1,6 +1,8 @@
-/** Validate inspected feature attributes and map locations for charts and navigation. */
+/** Describe immutable inspected observations and validate map navigation targets. */
 
 /**
+ * Immutable scalar-only record constructed by the feature inspector and passed
+ * through composition to chart consumers. Consumers trust this producer contract.
  * @typedef {Object} VectorInspectionObservation
  * @property {string} sourceId Layer identifier supplied by the application.
  * @property {string} layerLabel User-facing source layer or filename.
@@ -48,49 +50,4 @@ export function validateVectorFeatureFocus(focus) {
         throw new TypeError("Invalid vector feature focus target.");
     }
     return focus;
-}
-
-/**
- * Check inspected features for layer identifiers, map locations and scalar attributes.
- *
- * @param {unknown} observations Feature records supplied by the application.
- * @return {VectorInspectionObservation[]} Validated observations.
- * @throws {TypeError} If a record has invalid identifiers, coordinates or nested attributes.
- */
-export function validateVectorInspectionObservations(observations) {
-    if (!Array.isArray(observations)) {
-        throw new TypeError("Vector inspection observations must be an array.");
-    }
-    for (const observation of observations) {
-        if (
-            typeof observation?.sourceId !== "string" ||
-            observation.sourceId.length === 0 ||
-            typeof observation?.layerLabel !== "string" ||
-            observation.layerLabel.length === 0 ||
-            !(
-                observation.featureId === null ||
-                typeof observation.featureId === "string" ||
-                typeof observation.featureId === "number"
-            ) ||
-            observation.properties === null ||
-            typeof observation.properties !== "object" ||
-            Array.isArray(observation.properties)
-        ) {
-            throw new TypeError("Invalid vector inspection observation.");
-        }
-        validateVectorFeatureFocus(observation.focus);
-        for (const value of Object.values(observation.properties)) {
-            if (!(
-                value === null ||
-                typeof value === "string" ||
-                typeof value === "boolean" ||
-                typeof value === "number"
-            )) {
-                throw new TypeError(
-                    "Vector inspection properties must contain JSON scalars."
-                );
-            }
-        }
-    }
-    return observations;
 }

@@ -4,7 +4,7 @@ import {
     formatSeriesNumber,
     renderOrdinalSeriesChart,
 } from "../charts/series-chart.js";
-import { validateVectorInspectionObservations } from "./inspection-observation.js";
+/** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
 
 export const VECTOR_TIME_SERIES_LAYER_LABEL = "__eolab_layer_label__";
 
@@ -37,11 +37,11 @@ function isOrderableValue(value) {
 /**
  * Summarize usable X and numeric Y fields without requiring a common schema.
  *
- * @param {VectorInspectionObservation[]} observations Validated observations.
- * @return {{xFields:Object[],numericFields:Object[]}} Field names and coverage.
+ * @param {ReadonlyArray<VectorInspectionObservation>} observations Immutable inspector records.
+ * @return {{xFields:{name:string,count:number,total:number}[],
+ * numericFields:{name:string,count:number,total:number}[]}} Field names and coverage.
  */
 export function summarizeVectorTimeSeriesFields(observations) {
-    validateVectorInspectionObservations(observations);
     const xCoverage = new Map();
     const numericCoverage = new Map();
     for (const observation of observations) {
@@ -108,12 +108,11 @@ function vectorTimeSeriesXScale(points) {
 /**
  * Build ordered chart points while retaining duplicate X observations.
  *
- * @param {VectorInspectionObservation[]} observations Inspection results.
+ * @param {ReadonlyArray<VectorInspectionObservation>} observations Immutable inspector results.
  * @param {VectorTimeSeriesSettings} settings Persistent chart settings.
  * @return {{points:Object[],omitted:number,total:number}} Ordered plot contract.
  */
 export function buildVectorTimeSeriesSeries(observations, settings) {
-    validateVectorInspectionObservations(observations);
     if (
         typeof settings?.xField !== "string" ||
         !(
@@ -364,7 +363,7 @@ export class VectorTimeSeriesController {
      *
      * @param {Object} sample Immutable inspector-owned sample envelope.
      * @param {"loading"|"ready"|"empty"|"invalidated"} sample.state State.
-     * @param {VectorInspectionObservation[]} sample.observations Results.
+     * @param {ReadonlyArray<VectorInspectionObservation>} sample.observations Immutable results.
      * @param {string} sample.message Browser-safe status text.
      * @return {void}
      */
@@ -377,7 +376,6 @@ export class VectorTimeSeriesController {
         ) {
             throw new TypeError("Invalid vector inspection sample.");
         }
-        validateVectorInspectionObservations(sample.observations);
         this.sampleState = sample.state;
         this.sampleMessage = sample.message;
         this.observations = Object.freeze([...sample.observations]);

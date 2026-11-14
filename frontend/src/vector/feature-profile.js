@@ -1,6 +1,6 @@
 /** Plot several numeric fields from one bounded vector feature observation. */
 
-import { validateVectorInspectionObservations } from "./inspection-observation.js";
+/** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
 import {
     formatSeriesNumber,
     renderOrdinalSeriesChart,
@@ -56,11 +56,10 @@ const NATURAL_TEXT = new Intl.Collator("en", {
 /**
  * Return naturally ordered field names with finite numeric values.
  *
- * @param {Object} observation Validated inspection observation.
+ * @param {VectorInspectionObservation} observation Immutable inspector observation.
  * @return {string[]} Numeric field names.
  */
 export function numericFeatureFields(observation) {
-    validateVectorInspectionObservations([observation]);
     return Object.entries(observation.properties)
         .filter(([, value]) => typeof value === "number" && Number.isFinite(value))
         .map(([name]) => name)
@@ -83,11 +82,10 @@ export function fieldNameNumber(fieldName) {
 /**
  * Suggest a useful title attribute from conventional field names.
  *
- * @param {Object} observation Validated inspection observation.
+ * @param {VectorInspectionObservation} observation Immutable inspector observation.
  * @return {string} Field name or the layer-title sentinel.
  */
 export function suggestFeatureProfileTitle(observation) {
-    validateVectorInspectionObservations([observation]);
     const fieldNames = Object.keys(observation.properties);
     const exactPriority = ["node_nm", "name", "label"];
     for (const candidate of exactPriority) {
@@ -108,7 +106,7 @@ export function suggestFeatureProfileTitle(observation) {
  * ID and a generic final fallback. The source layer and feature ID remain
  * explicit context even when a friendly name is available.
  *
- * @param {Object} observation Validated inspection observation.
+ * @param {VectorInspectionObservation} observation Immutable inspector observation.
  * @param {string|null} [titleField=null] Configured chart-title field.
  * @return {{label:string,title:string,heading:string,context:string}} Identity.
  */
@@ -116,7 +114,6 @@ export function vectorFeatureProfilePresentation(
     observation,
     titleField = null
 ) {
-    validateVectorInspectionObservations([observation]);
     if (titleField !== null && typeof titleField !== "string") {
         throw new TypeError("Feature profile title field must be a string.");
     }
@@ -160,7 +157,7 @@ export function vectorFeatureProfilePresentation(
  * A family replaces the last number with a marker, so R2000 through R2024 are
  * selected together while unrelated numeric identifiers remain separate.
  *
- * @param {Object} observation Validated inspection observation.
+ * @param {VectorInspectionObservation} observation Immutable inspector observation.
  * @return {string[]} Suggested field names.
  */
 export function suggestFeatureProfileFields(observation) {
@@ -186,7 +183,7 @@ export function suggestFeatureProfileFields(observation) {
 /**
  * Build ordered points from selected fields while preserving missing values.
  *
- * @param {Object} observation Validated inspection observation.
+ * @param {VectorInspectionObservation} observation Immutable inspector observation.
  * @param {Object} settings Per-source feature-profile settings.
  * @param {string[]} settings.selectedFields Selected attribute names.
  * @param {"ascending"|"descending"} settings.direction Sort direction.
@@ -194,7 +191,6 @@ export function suggestFeatureProfileFields(observation) {
  * Neutral ordinal chart model.
  */
 export function buildVectorFeatureProfile(observation, settings) {
-    validateVectorInspectionObservations([observation]);
     if (
         !Array.isArray(settings?.selectedFields) ||
         !settings.selectedFields.every((field) => typeof field === "string") ||
@@ -437,14 +433,13 @@ export class VectorFeatureProfileController {
      * from the same vector layer. An active mode temporarily hides for a null
      * observation and reopens when a later feature becomes current.
      *
-     * @param {Object|null} observation Current inspector result or null.
+     * @param {VectorInspectionObservation|null} observation Immutable inspector result or null.
      * @param {Object|null} [navigation=null] Inspector-owned result position.
      * @return {void}
      */
     setCurrentObservation(observation, navigation = null) {
         let normalizedNavigation = null;
         if (observation !== null) {
-            validateVectorInspectionObservations([observation]);
             normalizedNavigation = normalizeFeatureNavigation(navigation);
         }
         this.currentObservation = observation;
