@@ -3,7 +3,8 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "title",
     "description",
     "eolab_datetime_text",
-    "eolab_end_datetime_text"
+    "eolab_end_datetime_text",
+    "eolab_metadata_text"
 ];
 const CATALOG_COLLECTION_PROPERTY = "collection";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
@@ -16,6 +17,8 @@ export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
 /** @type {string} Catalog collection for admitted raster time series. */
 export const TEMPORAL_COLLECTION_ID = "eolab-temporal-datasets";
+/** @type {string} Catalog collection for described files without map geometry. */
+export const NONSPATIAL_COLLECTION_ID = "eolab-described-nonspatial";
 
 /**
  * User-facing Catalog field filters accepted by `buildCatalogSearch`.
@@ -32,7 +35,8 @@ export const TEMPORAL_COLLECTION_ID = "eolab-temporal-datasets";
  *   description:string,
  *   keywords:ReadonlyArray<string>,
  *   searchImmediately:boolean,
- *   collectionId?:string
+ *   collectionId?:string,
+ *   queryable?:string
  * }>>}
  */
 export const CATALOG_SEARCH_FILTERS = Object.freeze([
@@ -67,11 +71,36 @@ export const CATALOG_SEARCH_FILTERS = Object.freeze([
         collectionId: TEMPORAL_COLLECTION_ID
     }),
     Object.freeze({
+        field: "type",
+        token: "type:nonspatial",
+        value: "nonspatial",
+        label: "Files without map geometry",
+        description: "Standalone tables, documents and other described files.",
+        keywords: Object.freeze(["type", "datatype", "nonspatial", "table", "document", "file"]),
+        searchImmediately: true,
+        collectionId: NONSPATIAL_COLLECTION_ID
+    }),
+    ...[
+        ["study", "Study identifier", "eolab_study_ids", "study", "paper"],
+        ["category", "Category", "eolab_categories", "category", "dimension"],
+        ["risk", "Asset or risk", "eolab_risks", "risk", "asset"],
+        ["status", "Match status", "eolab_statuses", "status", "readiness"]
+    ].map(([field, label, queryable, ...keywords]) => Object.freeze({
+        field,
+        token: `${field}:`,
+        value: null,
+        label,
+        description: 'Match an exact label on the dataset or a supporting file. Quote labels with spaces.',
+        keywords: Object.freeze(keywords),
+        searchImmediately: false,
+        queryable
+    })),
+    Object.freeze({
         field: "date",
         token: "date:",
         value: null,
         label: "Observation date or range",
-        description: "Use YYYY, YYYY-MM, YYYY-MM-DD, or FROM..TO.",
+        description: "Use YYYY, YYYY-MM, YYYY-MM-DD, or FROM..TO. Excludes dates marked as file modification times.",
         keywords: Object.freeze(["date", "time", "year", "range"]),
         searchImmediately: false
     })
@@ -409,7 +438,7 @@ export function formatCatalogItemCount(itemCollection, isFiltered) {
 }
 
 /**
- * Builds a standard CQL2 substring filter for Item text and datetime values.
+ * Build a CQL2 substring filter for dataset, supporting-file and date text.
  * The EOLab queryables expose standard STAC datetime fields as text because
  * pgSTAC's native datetime queryables are timestamps rather than strings.
  *
@@ -446,6 +475,71 @@ export class CatalogSearchSyntaxError extends Error {
         super(message);
         this.name = "CatalogSearchSyntaxError";
     }
+}
+
+/**
+ * Locate search tokens while keeping quoted field values together.
+ *
+ * An unfinished quoted value extends to the end so suggestions remain usable
+ * while typing; the executing parser reports an unclosed quote. Backslashes
+ * escape quotes only inside a quoted field value. Ordinary filenames keep
+ * their existing literal backslash behavior.
+ *
+ * @param {string} value Complete user-entered search text.
+ * @return {{start:number,end:number,text:string}[]} Token ranges in the input.
+ */
+export function getCatalogSearchTokens(value) {
+    const tokens = [];
+    let offset = 0;
+    while (offset < value.length) {
+        if (/\s/.test(value[offset])) {
+            offset += 1;
+            continue;
+        }
+        const start = offset;
+        const quotedField = /^[a-z][a-z0-9_-]*:"/i.exec(value.slice(start));
+        if (quotedField !== null) {
+            offset += quotedField[0].length;
+            while (offset < value.length) {
+                if (value[offset] === "\\") {
+                    offset += Math.min(2, value.length - offset);
+                } else if (value[offset++] === '"') {
+                    break;
+                }
+            }
+        }
+        while (offset < value.length && !/\s/.test(value[offset])) offset += 1;
+        tokens.push({ start, end: offset, text: value.slice(start, offset) });
+    }
+    return tokens;
+}
+
+/**
+ * Read one exact metadata label, accepting JSON-style quoted values with spaces.
+ *
+ * @param {string} field Filter name used in actionable syntax errors.
+ * @param {string} value Raw value following the field's colon.
+ * @return {string} Nonempty case-normalized label for array membership.
+ * @throws {CatalogSearchSyntaxError} If the value is empty or incorrectly quoted.
+ */
+function parseCatalogMetadataLabel(field, value) {
+    let label = value;
+    if (value.startsWith('"')) {
+        try {
+            label = JSON.parse(value);
+        } catch {
+            throw new CatalogSearchSyntaxError(
+                `Use ${field}:label or ${field}:"label with spaces".`
+            );
+        }
+    }
+    if (typeof label !== "string" || label.trim() === "" ||
+        (!value.startsWith('"') && value.includes('"'))) {
+        throw new CatalogSearchSyntaxError(
+            `Enter a label after ${field}:; quote labels containing spaces.`
+        );
+    }
+    return label.toLowerCase();
 }
 
 /**
@@ -512,7 +606,10 @@ function parseCatalogDatePeriod(dateText) {
  *
  * A date field becomes an inclusive UTC Item Search datetime interval. The
  * provider applies temporal-intersection semantics to instant and interval
- * Items. Literal terms remain CQL2 substring filters.
+ * Items. Explicitly marked source-modified dates are excluded; unmarked legacy
+ * Items retain their existing temporal behavior. Literal terms remain CQL2
+ * substring filters. Metadata filters match an exact case-insensitive label
+ * on the Item or any Asset; different filters may match different Assets.
  *
  * @param {string} searchText Text and field filters entered by the user.
  * @return {{filter: Object|null, datetime: string|null}} Parsed search fields.
@@ -525,9 +622,10 @@ export function buildCatalogSearch(searchText) {
     }
 
     const literalTokens = [];
+    const metadataFilters = new Map();
     let datasetCollectionId = null;
     let datetime = null;
-    for (const token of normalizedSearchText.split(/\s+/)) {
+    for (const { text: token } of getCatalogSearchTokens(normalizedSearchText)) {
         if (token === "&") {
             throw new CatalogSearchSyntaxError(
                 "Use spaces instead of &: search terms and filters are " +
@@ -551,6 +649,22 @@ export function buildCatalogSearch(searchText) {
         const supportedFilters = CATALOG_SEARCH_FILTERS_BY_FIELD.get(
             normalizedFieldName
         );
+        const metadataFilter = supportedFilters?.find((filter) => filter.queryable);
+        if (metadataFilter !== undefined) {
+            if (metadataFilters.has(normalizedFieldName)) {
+                throw new CatalogSearchSyntaxError(
+                    `The ${normalizedFieldName} filter may appear only once.`
+                );
+            }
+            metadataFilters.set(normalizedFieldName, {
+                op: "a_contains",
+                args: [
+                    { property: metadataFilter.queryable },
+                    [parseCatalogMetadataLabel(normalizedFieldName, fieldValue)]
+                ]
+            });
+            continue;
+        }
         if (
             normalizedFieldName === "date" &&
             supportedFilters !== undefined
@@ -588,7 +702,7 @@ export function buildCatalogSearch(searchText) {
             );
             if (typeFilter === undefined) {
                 throw new CatalogSearchSyntaxError(
-                    "Use type:raster, type:vector, or type:temporal."
+                    "Use type:raster, type:vector, type:temporal, or type:nonspatial."
                 );
             }
             if (datasetCollectionId !== null) {
@@ -611,6 +725,16 @@ export function buildCatalogSearch(searchText) {
             args: [
                 { property: CATALOG_COLLECTION_PROPERTY },
                 datasetCollectionId
+            ]
+        });
+    }
+    filters.push(...metadataFilters.values());
+    if (datetime !== null) {
+        filters.push({
+            op: "or",
+            args: [
+                { op: "isnull", args: [{ property: "eolab_time_basis" }] },
+                { op: "<>", args: [{ property: "eolab_time_basis" }, "source-modified"] }
             ]
         });
     }

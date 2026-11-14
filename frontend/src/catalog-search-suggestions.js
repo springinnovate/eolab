@@ -5,7 +5,7 @@
  * The Catalog parser remains authoritative for executing the resulting text.
  */
 
-import { CATALOG_SEARCH_FILTERS } from "./catalog.js";
+import { CATALOG_SEARCH_FILTERS, getCatalogSearchTokens } from "./catalog.js";
 
 /**
  * @typedef {Object} CatalogSearchTokenRange
@@ -15,7 +15,7 @@ import { CATALOG_SEARCH_FILTERS } from "./catalog.js";
  */
 
 /**
- * Find the whitespace-delimited Catalog search token containing the caret.
+ * Find the Catalog token at the caret, including a quoted filter value.
  *
  * @param {string} value Complete Catalog search text.
  * @param {number} caretPosition Current input caret offset.
@@ -23,15 +23,9 @@ import { CATALOG_SEARCH_FILTERS } from "./catalog.js";
  */
 export function getCatalogSearchTokenRange(value, caretPosition) {
     const caret = Math.max(0, Math.min(value.length, caretPosition));
-    let start = caret;
-    let end = caret;
-    while (start > 0 && !/\s/.test(value[start - 1])) {
-        start -= 1;
-    }
-    while (end < value.length && !/\s/.test(value[end])) {
-        end += 1;
-    }
-    return { start, end, text: value.slice(start, end) };
+    return getCatalogSearchTokens(value).find(
+        ({ start, end }) => start <= caret && caret <= end
+    ) ?? { start: caret, end: caret, text: "" };
 }
 
 /**
@@ -53,14 +47,9 @@ export function getCatalogSearchSuggestions(
     filters = CATALOG_SEARCH_FILTERS
 ) {
     const range = getCatalogSearchTokenRange(value, caretPosition);
-    const otherTokens = [
-        value.slice(0, range.start),
-        value.slice(range.end)
-    ]
-        .join(" ")
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
+    const otherTokens = getCatalogSearchTokens(value)
+        .filter(({ start }) => start !== range.start)
+        .map(({ text }) => text);
     const usedFields = new Set(
         otherTokens
             .map((token) => {
