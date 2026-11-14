@@ -105,6 +105,11 @@ on top. Drag a row by its handle to reorder it, or use the keyboard controls on
 the same handle.
 
 Regular Catalog layers and darker **Custom layer** cards share this one list.
+
+![One Map layers list with plain Catalog dataset cards and darker Custom layer cards for watersheds and precipitation](docs/images/eolab-custom-layers.jpg)
+
+*Catalog and Custom layers appear together in the same drawing order.*
+
 Use a layer's checkbox to show or hide it and its color swatch to open the legend.
 **Create custom layer** gives the same dataset independent display choices without
 changing the original data; **Duplicate** makes another custom layer. These kinds
