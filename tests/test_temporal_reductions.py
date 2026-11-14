@@ -3,9 +3,10 @@
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
-from itertools import count
+from itertools import count, permutations
 import json
 from pathlib import Path
+from statistics import pstdev
 from types import SimpleNamespace, TracebackType
 from typing import Literal
 
@@ -588,6 +589,62 @@ def test_native_tile_larger_than_streaming_batch_target_is_still_processed(
     assert len(trace.opened) == 1 + len(interval.observations) * spec.grid.tileCount
     assert trace.maximum_active <= 2
     assert not trace.active
+
+
+@pytest.mark.parametrize("offsets", tuple(permutations((0.0, 2.0, 4.0))))
+def test_temporal_stdev_preserves_small_spread_at_large_offsets(
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    offsets: tuple[float, float, float],
+) -> None:
+    """Keep population spread independent of a large common offset and input order.
+
+    Args:
+        interval: Existing admitted temporal metadata for native TIFF fixtures.
+        tmp_path: Isolated source and completed-output directory.
+        offsets: Every ordering of three exactly representable differences.
+    """
+    template = interval.observations[0]
+    observations = []
+    for index in range(4):
+        values = np.full((1, 4), np.nan, dtype="float64")
+        if index:
+            values[0, :2] = (1e16 + offsets[index - 1], offsets[index - 1])
+            if index == 2:
+                values[0, 2] = 1e16
+        observations.append(
+            replace(
+                template,
+                path=_write_observation(
+                    tmp_path / "offset-archive" / f"observation-{index}.tif",
+                    values,
+                    template.transform,
+                    None,
+                ),
+                nodata=None,
+                time=template.time + timedelta(hours=index),
+                interval_start=template.time + timedelta(hours=index),
+                interval_end=template.time + timedelta(hours=index),
+            )
+        )
+    interval = replace(interval, observations=tuple(observations))
+    directory = tmp_path / "offset-output"
+    _calculate(
+        interval,
+        TemporalReduction(reducer="stdev"),
+        AggregateArea(kind="wholeRaster"),
+        directory,
+    )
+    expected = [
+        [pstdev([1e16 + value for value in offsets]), pstdev(offsets), 0, np.nan]
+    ]
+    with rasterio.open(directory / "result.tif") as result:
+        np.testing.assert_allclose(result.read(1), expected, rtol=1e-15, equal_nan=True)
+        np.testing.assert_array_equal(
+            result.read_masks(1) != 0, [[True, True, True, False]]
+        )
+    with rasterio.open(directory / "count.tif") as counts:
+        np.testing.assert_array_equal(counts.read(1), [[3, 3, 1, 0]])
 
 
 @pytest.mark.parametrize(
