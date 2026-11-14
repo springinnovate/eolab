@@ -150,6 +150,9 @@ class FilesystemDatasetDiscovery:
     ) -> list[DatasetCandidate]:
         """Resolve descriptor ownership before allowing ordinary payload reads.
 
+        Ownership indexes and confined retained paths live only for this scan;
+        unrelated descriptors do not require pairwise comparisons.
+
         Args:
             candidates: Complete deterministic filesystem recognition results.
             retained_sources: Previous private ownership records.
@@ -168,9 +171,30 @@ class FilesystemDatasetDiscovery:
             for candidate in candidates
             if candidate.handler_name != DESCRIPTOR_HANDLER_NAME
         ]
+        retained_locations: dict[str, Path] = {}
+
+        def retained_location(relative_path: str) -> Path:
+            """Resolve one retained ownership path once within this scan.
+
+            Args:
+                relative_path: Persisted mount-relative source or descriptor path.
+
+            Returns:
+                Confined canonical location, including a presently absent file.
+
+            Raises:
+                ValueError: If persisted ownership escapes its path contract.
+                OSError: If filesystem resolution fails.
+            """
+            if relative_path not in retained_locations:
+                retained_locations[relative_path] = source_path_from_relative(
+                    self.source_root, relative_path
+                )
+            return retained_locations[relative_path]
+
         known: dict[Path, list[DescriptorSource]] = {}
         for source in retained_sources:
-            path = source_path_from_relative(self.source_root, source.relative_path)
+            path = retained_location(source.relative_path)
             known.setdefault(path, []).append(source)
         recognized = {candidate.path.resolve() for candidate in sidecars}
         claimed: set[Path] = set()
@@ -200,12 +224,11 @@ class FilesystemDatasetDiscovery:
             """
             for source in known.get(path, []):
                 for relative_path in source.claimed_paths:
-                    location = source_path_from_relative(
-                        self.source_root, relative_path
-                    )
+                    location = retained_location(relative_path)
                     claimed.add(location)
                     failed_claims.add(location)
 
+        ordinary_paths = {candidate.path.resolve() for candidate in ordinary}
         for path in known.keys() - recognized:
             in_scope = any(
                 path.is_relative_to(scope.resolve()) for scope in self.source_paths
@@ -223,9 +246,7 @@ class FilesystemDatasetDiscovery:
                     if source.kind == "nonspatial":
                         continue
                     try:
-                        primary = source_path_from_relative(
-                            self.source_root, source.primary_relative_path
-                        )
+                        primary = retained_location(source.primary_relative_path)
                         entries = tuple(primary.parent.iterdir())
                         matches, _ = self.dataset_handlers.discover_directory(
                             primary.parent,
@@ -240,15 +261,15 @@ class FilesystemDatasetDiscovery:
                                 )
                             ),
                         )
-                        existing_paths = {
-                            candidate.path.resolve() for candidate in ordinary
-                        }
-                        ordinary.extend(
+                        restored = [
                             candidate
                             for candidate in matches
                             if candidate.path.resolve() == primary
-                            and primary not in existing_paths
-                        )
+                            and primary not in ordinary_paths
+                        ]
+                        ordinary.extend(restored)
+                        if restored:
+                            ordinary_paths.add(primary)
                     except OSError as error:
                         record_error(path, error)
                         retain_claims(path)
@@ -282,9 +303,19 @@ class FilesystemDatasetDiscovery:
         rejected: set[Path] = set()
         by_id: dict[str, list[PreparedDescriptor]] = {}
         by_primary: dict[Path | str, list[PreparedDescriptor]] = {}
+        by_support: dict[Path, list[PreparedDescriptor]] = {}
+        support_paths: dict[Path, set[Path]] = {}
+        known_by_id: dict[str, set[Path]] = {}
+        for path in active_known:
+            for source in known[path]:
+                known_by_id.setdefault(source.descriptor_id, set()).add(path)
         for descriptor in prepared:
             by_id.setdefault(descriptor.declaration.id, []).append(descriptor)
             primary = descriptor.primary_path
+            support = set(descriptor.locations.values()) - {primary}
+            support_paths[descriptor.path] = support
+            for location in support:
+                by_support.setdefault(location, []).append(descriptor)
             if primary is None:
                 primary = descriptor.declaration.assets[
                     descriptor.declaration.primary_asset
@@ -292,11 +323,7 @@ class FilesystemDatasetDiscovery:
             by_primary.setdefault(primary, []).append(descriptor)
         for identifier, declarations in by_id.items():
             declared_paths = {descriptor.path.resolve() for descriptor in declarations}
-            other_owners = [
-                path
-                for path in active_known - declared_paths
-                if any(source.descriptor_id == identifier for source in known[path])
-            ]
+            other_owners = known_by_id.get(identifier, set()) - declared_paths
             if len(declarations) > 1 or other_owners:
                 for descriptor in declarations:
                     rejected.add(descriptor.path)
@@ -323,50 +350,54 @@ class FilesystemDatasetDiscovery:
                                 conflict.path,
                                 "Multiple descriptors claim the same primary source/layer",
                             )
-            for descriptor in prepared:
-                if descriptor in declarations:
-                    continue
-                support = set(descriptor.locations.values()) - {descriptor.primary_path}
-                if primary in support:
-                    for conflict in (*declarations, descriptor):
-                        rejected.add(conflict.path)
-                        record_error(
-                            conflict.path,
-                            "A supporting Asset is also declared as another Item's primary source",
-                        )
+            for descriptor in by_support.get(primary, ()):
+                for conflict in (*declarations, descriptor):
+                    rejected.add(conflict.path)
+                    record_error(
+                        conflict.path,
+                        "A supporting Asset is also declared as another Item's primary source",
+                    )
         # Prior unreadable or out-of-scope declarations still own their sources.
         # Shared supporting files are allowed; primary/support transitions require
         # all affected descriptors to participate in a successful scan.
         retained_owners = active_known - {
             descriptor.path.resolve() for descriptor in prepared
         }
+        retained_by_primary: dict[Path, set[Path]] = {}
+        retained_by_support: dict[Path, set[Path]] = {}
+        for retained_path in retained_owners:
+            for owner in known[retained_path]:
+                prior_primary = (
+                    retained_location(owner.primary_relative_path)
+                    if owner.primary_relative_path is not None
+                    else None
+                )
+                if prior_primary is not None:
+                    retained_by_primary.setdefault(prior_primary, set()).add(
+                        retained_path
+                    )
+                for location in {
+                    retained_location(path) for path in owner.claimed_paths
+                } - {prior_primary}:
+                    retained_by_support.setdefault(location, set()).add(retained_path)
         for descriptor in prepared:
             primary = descriptor.primary_path
-            support = set(descriptor.locations.values()) - {primary}
-            for retained_path in retained_owners:
-                for owner in known[retained_path]:
-                    prior_primary = (
-                        source_path_from_relative(
-                            self.source_root, owner.primary_relative_path
-                        )
-                        if owner.primary_relative_path is not None
-                        else None
-                    )
-                    prior_support = {
-                        source_path_from_relative(self.source_root, path)
-                        for path in owner.claimed_paths
-                    } - {prior_primary}
-                    if (
-                        (primary is not None and primary == prior_primary)
-                        or prior_primary in support
-                        or primary in prior_support
-                    ):
-                        rejected.add(descriptor.path)
-                        record_error(
-                            descriptor.path,
-                            "Source ownership conflicts with an unreadable or unscanned descriptor; scan and correct all affected descriptors together",
-                        )
-                        break
+            conflicts = retained_by_primary.get(
+                primary, set()
+            ) | retained_by_support.get(primary, set())
+            for location in support_paths[descriptor.path]:
+                conflicts.update(retained_by_primary.get(location, ()))
+            for _ in conflicts:
+                rejected.add(descriptor.path)
+                record_error(
+                    descriptor.path,
+                    "Source ownership conflicts with an unreadable or unscanned descriptor; scan and correct all affected descriptors together",
+                )
+        ordinary_by_source: dict[tuple[Path, str], DatasetCandidate] = {}
+        for candidate in ordinary:
+            ordinary_by_source.setdefault(
+                (candidate.path.resolve(), candidate.handler_name), candidate
+            )
         output: list[DatasetCandidate] = []
         for primary, declarations in by_primary.items():
             if (
@@ -382,15 +413,7 @@ class FilesystemDatasetDiscovery:
             try:
                 if first.declaration.kind != "nonspatial":
                     source_format = first.declaration.source.format
-                    source_candidate = next(
-                        (
-                            candidate
-                            for candidate in ordinary
-                            if candidate.path.resolve() == primary
-                            and candidate.handler_name == source_format
-                        ),
-                        None,
-                    )
+                    source_candidate = ordinary_by_source.get((primary, source_format))
                     if source_candidate is None:
                         directory = primary.parent
                         entries = tuple(directory.iterdir())
