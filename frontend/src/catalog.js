@@ -112,7 +112,8 @@ const VECTOR_RENDERING_POLICY = "vector-v1";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     [MOUNTED_VECTOR_COLLECTION_ID, "Vector"],
-    [TEMPORAL_COLLECTION_ID, "Raster time series"]
+    [TEMPORAL_COLLECTION_ID, "Raster time series"],
+    [NONSPATIAL_COLLECTION_ID, "Nonspatial data"]
 ]);
 
 /**
@@ -838,8 +839,7 @@ export function buildCatalogItemDetails(
         { label: "Item ID", value: item.id },
         { label: "Collection", value: collectionLabel }
     ];
-    const datasetType = item.collection === "eolab-described-nonspatial"
-        ? "Nonspatial data" : MOUNTED_DATASET_TYPES.get(item.collection);
+    const datasetType = MOUNTED_DATASET_TYPES.get(item.collection);
     if (datasetType !== undefined) {
         metadata.push({ label: "Dataset type", value: datasetType });
     }
