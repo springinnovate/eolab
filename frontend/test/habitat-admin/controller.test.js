@@ -35,6 +35,16 @@ function bulkJob(changes = {}) {
     return job({jobId: "d".repeat(32), operation: "habitat.retry-missing-inputs.v1", inputs: {areaCount: 3}, ...changes});
 }
 
+/** Create a uniquely ordered history attempt for pagination scenarios.
+ * @param {number} number Increasing creation order and identifier.
+ * @param {Object} [changes={}] Lifecycle or input overrides.
+ * @returns {Object} Retained preparation snapshot.
+ */
+function historyJob(number, changes = {}) {
+    return job({jobId: number.toString(16).padStart(32, "0"),
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, number)).toISOString(), ...changes});
+}
+
 /** Compose the controller with observable browser, storage and transport boundaries.
  * @param {Object} [overrides={}] API methods replaced by the test.
  * @param {Map<string,string>} [values=new Map()] Persistent command storage shared across reloads.
@@ -164,8 +174,8 @@ test("multiple years submit distinct commands once and continue definite row fai
     await h.handlers.prepare();
     assert.equal(requests.length, 2); assert.notEqual(requests[0].requestId, requests[1].requestId);
     assert.deepEqual(h.controller.state.submissions.map(row => row.status), ["failed", "accepted"]);
-    assert.equal(h.controller.state.requestedJobs, 1); assert.equal(h.controller.state.completedJobs, 1);
-    assert.equal(h.renders.at(-1).completedJobs, 1);
+    assert.equal(h.controller.state.areaRows.length, 1);
+    assert.equal(h.renders.at(-1).areaRows[0].latest.status, "ready");
     assert.equal(h.values.size, 0); assert.equal(h.controller.state.canPrepare, true);
     await h.handlers.prepare();
     assert.equal(requests.length, 3); assert.equal(requests.at(-1).year, 2018);
@@ -197,7 +207,7 @@ test("unknown acceptance survives reload and recovers the exact original request
     await second.handlers.prepare(); assert.equal(attempts.length, 1);
     await second.handlers.recover(key);
     assert.deepEqual(attempts[1], attempts[0]); assert.equal(values.size, 0);
-    assert.equal(second.controller.state.requestedJobs, 1);
+    assert.equal(second.controller.state.areaRows[0].latest.jobId, job().jobId);
 });
 
 test("storage failure prevents POSTs whose request identity cannot be recovered", async t => {
@@ -272,7 +282,7 @@ test("closing before the bulk response retains its exact command for recovery af
     t.after(() => second.controller.destroy()); await second.controller.start();
     assert.equal(second.controller.state.submissions[0].status, "uncertain"); assert.equal(attempts.length, 1);
     await second.handlers.retryAll(); assert.equal(attempts.length, 1);
-    assert.match(second.controller.state.error, /Use Recover submission in Requested preparations/);
+    assert.match(second.controller.state.error, /Use Recover submission in Requests from this visit/);
     await second.handlers.recover(second.controller.state.submissions[0].key);
     assert.deepEqual(attempts, [saved[0].request.requestId, saved[0].request.requestId]);
     assert.equal(second.controller.state.submissions[0].jobId, bulkJob().jobId); assert.equal(values.size, 0);
@@ -300,7 +310,7 @@ test("unresolved individual commands still require recovery before requesting bu
         retry: async () => { throw Object.assign(new Error("Response lost"), {uncertain: true}); }});
     t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.retry(original.jobId);
     await h.handlers.retryAll(); assert.deepEqual(h.bulkRequests, []);
-    assert.match(h.controller.state.error, /Use Recover submission in Requested preparations/);
+    assert.match(h.controller.state.error, /Use Recover submission in Requests from this visit/);
 });
 
 test("returning to the page observes the bulk receipt and child jobs without resubmitting either", async t => {
@@ -345,16 +355,90 @@ test("older history responses cannot undo a cancellation acknowledgement", async
     assert.equal(h.controller.state.jobs[0].status, "cancelled");
 });
 
-test("history polling retains older pages and refreshes active jobs outside the first page", async t => {
+test("initial history follows every page and polling refreshes older active jobs", async t => {
     const older = job({ jobId: "f".repeat(32), createdAt: "2025-01-01T00:00:00Z" });
-    const h = fixture({ list: async ({ cursor }) => cursor ? { jobs: [older], nextCursor: "tail" } : { jobs: [job()], nextCursor: "older" },
-        get: async id => job({ ...older, jobId: id, status: "ready", updatedAt: "2026-01-01T00:02:00Z" }) });
-    t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.loadMore();
-    assert.equal(h.controller.state.jobs.length, 2); assert.equal(h.controller.state.nextCursor, "tail");
+    const cursors = [], fetched = [];
+    const h = fixture({ list: async ({ cursor }) => { cursors.push(cursor);
+        return cursor ? { jobs: [older], nextCursor: null } : { jobs: [job()], nextCursor: "older" }; },
+        get: async id => { fetched.push(id); return job({ ...older, jobId: id, status: "ready", updatedAt: "2026-01-01T00:02:00Z" }); } });
+    t.after(() => h.controller.destroy()); await h.controller.start();
+    assert.equal(h.controller.state.jobs.length, 2); assert.equal(h.controller.state.historyComplete, true);
+    assert.deepEqual(cursors, [null, "older"]);
     const timer = [...h.timers.values()].at(-1); assert.equal(timer.delay, 2000);
     await timer.callback();
-    assert.equal(h.controller.state.jobs.length, 2); assert.equal(h.controller.state.nextCursor, "tail");
+    assert.equal(h.controller.state.jobs.length, 2); assert.deepEqual(cursors, [null, "older", null]);
+    assert.deepEqual(fetched, [older.jobId]);
     assert.equal(h.controller.state.jobs.find(value => value.jobId === older.jobId).status, "ready");
+});
+
+test("area rows group exact source predicates and years across labels, configurations and expired reports", async t => {
+    const first = historyJob(1, {status: "expired"});
+    const latest = historyJob(2, {inputs: {...first.inputs, name: "Renamed North", configurationSha256: "c".repeat(64)}});
+    const anotherYear = historyJob(3, {inputs: {...first.inputs, year: 2019}});
+    const anotherSource = historyJob(4, {inputs: {...first.inputs, selection: {...selection, itemId: "other-areas"}}});
+    const anotherFilter = historyJob(5, {inputs: {...first.inputs, selection: {...selection,
+        filter: {enabled: true, match: "all", rules: [{field: "project", operator: "eq", value: 1}]}}}});
+    const expiredInputs = historyJob(6, {status: "expired", metadataExpiresAt: "2020-01-01T00:00:00Z"});
+    const noInputs = historyJob(7, {status: "expired", inputs: null});
+    const bulk = bulkJob();
+    const h = fixture({list: async () => ({jobs: [first, latest, anotherYear, anotherSource, anotherFilter, expiredInputs, noInputs, bulk], nextCursor: null})});
+    t.after(() => h.controller.destroy()); await h.controller.start();
+    assert.equal(h.controller.state.areaRows.length, 4);
+    const grouped = h.controller.state.areaRows.find(row => row.latest.jobId === latest.jobId);
+    assert.equal(grouped.name, "Renamed North"); assert.deepEqual(grouped.previous.map(row => row.jobId), [first.jobId]);
+    assert.equal(new Set(h.controller.state.areaRows.map(row => row.key)).size, 4);
+    assert.deepEqual(h.controller.state.expiredJobs.map(row => row.jobId), [noInputs.jobId, expiredInputs.jobId]);
+    assert.deepEqual(h.controller.state.bulkJobs, [bulk]);
+    assert.equal(grouped.coverage, null); assert.deepEqual(h.checked, []);
+});
+
+test("polling follows more than fifty new arrivals until the previous newest attempt", async t => {
+    const original = historyJob(1, {status: "ready"}), arrivals = Array.from({length: 75}, (_, index) => historyJob(index + 2));
+    let incoming = false; const cursors = [];
+    const h = fixture({list: async ({cursor}) => { cursors.push(cursor);
+        if (!incoming) return {jobs: [original], nextCursor: null};
+        const rows = [...arrivals].reverse().concat(original), offset = cursor === null ? 0 : Number(cursor);
+        return {jobs: rows.slice(offset, offset + 50), nextCursor: offset + 50 < rows.length ? String(offset + 50) : null};
+    }});
+    t.after(() => h.controller.destroy()); await h.controller.start(); incoming = true;
+    await [...h.timers.values()].at(-1).callback();
+    assert.deepEqual(cursors, [null, null, "50"]);
+    assert.equal(h.controller.state.jobs.length, 76); assert.equal(h.controller.state.historyComplete, true);
+    assert.equal(h.controller.state.areaRows[0].previous.length, 75);
+    assert.equal(h.controller.state.areaRows[0].latest.jobId, arrivals.at(-1).jobId);
+});
+
+test("full refresh reconciles all pages without deleting a retry accepted during the read", async t => {
+    const original = historyJob(1, {status: "cancelled"}), removed = historyJob(2, {status: "expired"});
+    const child = historyJob(3), tail = deferred(); let refreshing = false; const cursors = [];
+    const h = fixture({list: async ({cursor}) => { cursors.push(cursor);
+        if (!refreshing) return {jobs: [removed, original], nextCursor: null};
+        return cursor === null ? {jobs: [original], nextCursor: "tail"} : tail.promise;
+    }, retry: async () => child});
+    t.after(() => h.controller.destroy()); await h.controller.start(); refreshing = true;
+    const refresh = h.handlers.refreshHistory(); await flush();
+    assert.equal(h.controller.state.historyComplete, false);
+    await h.handlers.retry(original.jobId);
+    tail.resolve({jobs: [], nextCursor: null}); await refresh;
+    assert.deepEqual(cursors, [null, null, "tail"]);
+    assert.deepEqual(h.controller.state.jobs.map(row => row.jobId), [child.jobId, original.jobId]);
+    assert.equal(h.controller.state.historyComplete, true); assert.ok(h.controller.state.historyCheckedAt);
+});
+
+test("an incomplete initial traversal remains labelled incomplete and retries every page", async t => {
+    const newest = historyJob(2), older = historyJob(1); let fail = true; const cursors = [];
+    const h = fixture({list: async ({cursor}) => { cursors.push(cursor);
+        if (cursor === null) return {jobs: [newest], nextCursor: "older"};
+        if (fail) throw new Error("History unavailable");
+        return {jobs: [older], nextCursor: null};
+    }});
+    t.after(() => h.controller.destroy()); await h.controller.start();
+    assert.equal(h.controller.state.historyComplete, false); assert.equal(h.controller.state.historyCheckedAt, null);
+    assert.equal(h.controller.state.jobs.length, 1); assert.match(h.controller.state.historyError, /History unavailable/);
+    fail = false; await [...h.timers.values()].at(-1).callback();
+    assert.deepEqual(cursors, [null, "older", null, "older"]);
+    assert.equal(h.controller.state.historyComplete, true); assert.equal(h.controller.state.jobs.length, 2);
+    assert.equal(h.controller.state.historyError, "");
 });
 
 test("visibility changes stop reads/timers and immediately refresh on return", async t => {
@@ -421,4 +505,50 @@ test("hiding the page cancels inventory reads and late replies cannot replace an
     pending.resolve([{configurationSha256: "a".repeat(64)}]); await read;
     assert.deepEqual(h.controller.state.inventory, [{configurationSha256: "b".repeat(64)}]);
     assert.equal(h.controller.state.inventoryError, "");
+});
+
+test("saved-area cache checks remain explicit timestamped snapshots across history and failures", async t => {
+    const h = fixture({list: async () => ({jobs: [job({status: "expired"})], nextCursor: null})});
+    t.after(() => h.controller.destroy()); await h.controller.start();
+    const key = h.controller.state.areaRows[0].key;
+    assert.deepEqual(h.checked, []); assert.equal(h.controller.state.areaRows[0].coverage, null);
+    await h.handlers.checkSavedArea(key);
+    const snapshot = h.controller.state.areaRows[0];
+    assert.equal(snapshot.coverage.missingTiles, 1); assert.ok(snapshot.checkedAt);
+    assert.equal(h.checked.length, 1);
+    await h.handlers.refreshHistory();
+    h.window.dispatchEvent(new Event("pagehide")); h.window.dispatchEvent(new Event("pageshow")); await flush();
+    assert.equal(h.checked.length, 1);
+    h.api.coverage = async () => { throw new Error("Cache unavailable"); };
+    await h.handlers.checkSavedArea(key);
+    const failed = h.controller.state.areaRows[0];
+    assert.deepEqual(failed.coverage, snapshot.coverage); assert.equal(failed.checkedAt, snapshot.checkedAt);
+    assert.match(failed.coverageError, /Cache unavailable/); assert.equal(failed.checking, false);
+    assert.deepEqual(h.submitted, []); assert.deepEqual(h.bulkRequests, []);
+});
+
+test("hiding cancels a saved-area check and its late reply cannot replace a newer explicit check", async t => {
+    const reads = [], h = fixture({list: async () => ({jobs: [job()], nextCursor: null}),
+        coverage: (selected, year, signal) => { const request = deferred(); reads.push({selected, year, signal, request}); return request.promise; }});
+    t.after(() => h.controller.destroy()); await h.controller.start();
+    const key = h.controller.state.areaRows[0].key;
+    const first = h.handlers.checkSavedArea(key); await h.handlers.checkSavedArea(key);
+    assert.equal(reads.length, 1); assert.equal(h.controller.state.areaRows[0].checking, true);
+    assert.deepEqual(reads[0].selected, selection); assert.equal(reads[0].year, 2018);
+    h.window.dispatchEvent(new Event("pagehide"));
+    assert.equal(reads[0].signal.aborted, true); assert.equal(h.controller.state.areaRows[0].checking, false);
+    h.window.dispatchEvent(new Event("pageshow")); await flush(); assert.equal(reads.length, 1);
+    const second = h.handlers.checkSavedArea(key), current = {year: 2018, requiredTiles: 4, cachedTiles: 4, missingTiles: 0};
+    reads[1].request.resolve(current); await second;
+    reads[0].request.resolve({year: 2018, requiredTiles: 4, cachedTiles: 1, missingTiles: 3}); await first;
+    assert.deepEqual(h.controller.state.areaRows[0].coverage, current);
+    assert.equal(h.controller.state.areaRows[0].checking, false); assert.deepEqual(h.cancelled, []);
+});
+
+test("checking the chosen area shares its explicit snapshot with the matching saved row", async t => {
+    const h = fixture({list: async () => ({jobs: [job()], nextCursor: null})});
+    t.after(() => h.controller.destroy()); await chooseArea(h); await h.handlers.check();
+    assert.deepEqual(h.controller.state.areaRows[0].coverage, h.controller.state.coverageRows[0].coverage);
+    assert.equal(h.controller.state.areaRows[0].checkedAt, h.controller.state.coverageRows[0].checkedAt);
+    assert.equal(h.checked.length, 1); assert.deepEqual(h.submitted, []);
 });

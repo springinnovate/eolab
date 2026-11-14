@@ -5,6 +5,20 @@ import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterSummary } from 
 
 const PENDING_KEY = "eolab.habitatAdmin.pending.v1";
 
+/** One exact saved area/year and its independent preparation and cache snapshots.
+ * @typedef {Object} HabitatAreaStatus
+ * @property {string} key Canonical Catalog source/filter and assessment year identity.
+ * @property {string} name Latest attempt's display name; never used for grouping.
+ * @property {number} year Assessment year.
+ * @property {Object} selection Validated immutable Catalog source and predicate.
+ * @property {Object} latest Most recently requested attempt, regardless of outcome.
+ * @property {Object[]} previous Earlier attempts in newest-first request order.
+ * @property {{cachedTiles:number,missingTiles:number,requiredTiles:number}|null} coverage Last explicitly requested current-cache snapshot.
+ * @property {string|null} checkedAt Browser timestamp for that successful cache read.
+ * @property {string} coverageError Latest cache-read failure; prior coverage stays visible.
+ * @property {boolean} checking Whether this row has an explicit cache read in progress.
+ */
+
 /** Identify one exact Catalog predicate and assessment year, independently of its label.
  * @param {Object} selection Validated immutable Catalog selection.
  * @param {number} year Assessment year.
@@ -32,22 +46,23 @@ export class HabitatAdminController {
             try { this.storage = windowContext?.localStorage ?? null; } catch { this.storage = null; }
         }
         this.state = { options: null, sources: [], searching: false, searchError: "", nextSearch: null,
-            areas: [], years: [], coverageRows: [], checking: false, submissions: [], jobs: [], nextCursor: null,
+            areas: [], years: [], coverageRows: [], checking: false, submissions: [], jobs: [], areaRows: [], bulkJobs: [], expiredJobs: [],
             inventory: null, inventoryLoading: false, inventoryError: "", inventoryCheckedAt: null,
-            historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, requestedJobs: 0, completedJobs: 0 };
+            historyLoading: false, historyComplete: false, historyReadCount: 0, historyCheckedAt: null,
+            historyError: "", error: "", submitting: false, canPrepare: false };
         this.jobs = new Map(); this.jobMutations = new Map(); this.mutationRevision = 0;
-        this.failureLogs = new Map();
+        this.failureLogs = new Map(); this.savedCoverage = new Map();
         this.readControllers = new Set(); this.mutationControllers = new Set();
         this.searchRevision = 0; this.coverageRevision = 0; this.historyRevision = 0; this.inventoryRevision = 0;
         this.started = false; this.destroyed = false; this.pageHidden = false; this.yearsEdited = false;
-        this.historyPaged = false; this.timer = null; this.query = "";
+        this.historyHead = null; this.timer = null; this.query = "";
         this.onVisibility = () => this.isVisible() ? this.resume() : this.suspend();
         this.onPageHide = () => { this.pageHidden = true; this.suspend(); };
         this.onPageShow = () => { this.pageHidden = false; this.resume(); };
         view.bind({ search: query => this.search(query), searchMore: () => this.searchMore(),
             addArea: (name, key, filter) => this.addArea(name, key, filter), removeArea: id => this.removeArea(id),
             setYears: years => this.setYears(years), check: () => this.check(), prepare: () => this.prepare(),
-            recover: key => this.recover(key), refreshHistory: () => this.refreshHistory(), loadMore: () => this.loadMore(),
+            recover: key => this.recover(key), refreshHistory: () => this.refreshHistory(), checkSavedArea: key => this.checkSavedArea(key),
             cancel: id => this.cancel(id), retry: id => this.retry(id), retryAll: () => this.retryAll(), refreshInventory: () => this.refreshInventory(),
             openFailureLog: id => this.openFailureLog(id), closeFailureLog: id => this.closeFailureLog(id) });
     }
@@ -86,6 +101,7 @@ export class HabitatAdminController {
         for (const controller of this.readControllers) controller.abort();
         this.readControllers.clear();
         for (const [id, log] of this.failureLogs) if (log.controller) this.failureLogs.delete(id);
+        for (const snapshot of this.savedCoverage.values()) { snapshot.controller = null; snapshot.checking = false; }
         this.searchRevision++; this.coverageRevision++; this.historyRevision++; this.inventoryRevision++;
         this.searchRequest = null; this.coverageRequest = null; this.historyRequest = null; this.optionsRequest = null; this.inventoryRequest = null;
         this.state.searching = this.state.checking = this.state.historyLoading = this.state.inventoryLoading = false;
@@ -275,6 +291,7 @@ export class HabitatAdminController {
                     const coverage = await this.api.coverage(row.selection, row.year, controller.signal);
                     if (this.destroyed || revision !== this.coverageRevision || controller.signal.aborted) return;
                     row.coverage = coverage; row.checkedAt = new Date().toISOString(); row.error = "";
+                    this.savedCoverage.set(row.key, {coverage, checkedAt: row.checkedAt, error: "", checking: false, controller: null});
                 } catch (error) {
                     if (this.destroyed || revision !== this.coverageRevision || controller.signal.aborted) return;
                     row.error = error.message;
@@ -284,6 +301,29 @@ export class HabitatAdminController {
         } finally {
             this.readControllers.delete(controller);
             if (this.coverageRequest === controller) { this.coverageRequest = null; this.state.checking = false; this.render(); }
+        }
+    }
+
+    /** Check a saved area/year against the current cache without starting preparation.
+     * Keep the previous timestamped snapshot on failure. Hiding the page cancels
+     * this read; neither polling nor a completed preparation repeats it.
+     * @param {string} key Canonical selection/year identity from the status table.
+     * @returns {Promise<void>} Resolves after the snapshot, error or cancellation is shown.
+     */
+    async checkSavedArea(key) {
+        const row = this.state.areaRows.find(value => value.key === key);
+        if (!this.isVisible() || !row || this.savedCoverage.get(key)?.checking) return;
+        const controller = new AbortController();
+        const snapshot = {...this.savedCoverage.get(key), checking: true, error: "", controller};
+        this.savedCoverage.set(key, snapshot); this.readControllers.add(controller); this.render();
+        try {
+            const coverage = await this.api.coverage(row.selection, row.year, controller.signal);
+            if (!controller.signal.aborted && !this.destroyed) Object.assign(snapshot, {coverage, checkedAt: new Date().toISOString()});
+        } catch (error) {
+            if (!controller.signal.aborted && !this.destroyed) snapshot.error = error.message;
+        } finally {
+            this.readControllers.delete(controller);
+            if (this.savedCoverage.get(key) === snapshot) { snapshot.controller = null; snapshot.checking = false; this.render(); }
         }
     }
 
@@ -397,38 +437,48 @@ export class HabitatAdminController {
         if (!current || current.updatedAt <= job.updatedAt) this.jobs.set(job.jobId, job);
     }
 
-    /** Explicitly refresh the first server-history page while preserving already displayed jobs.
+    /** Explicitly reread every retained history page and reconcile removed attempts.
      * @returns {Promise<void>} Resolves after history refresh settles.
      */
-    refreshHistory() { return this.readHistory(false, true); }
+    refreshHistory() { return this.readHistory(true); }
 
-    /** Load another page of retained server history.
-     * @returns {Promise<void>} Resolves after the next page, or immediately at the end.
-     */
-    loadMore() { return this.state.nextCursor ? this.readHistory(true) : Promise.resolve(); }
-
-    /** Read paginated history and loaded active jobs without overlapping another history request.
-     * @param {boolean} [more=false] Append older history rather than refresh the newest page.
-     * @param {boolean} [reset=false] Reset pagination after an explicit user refresh.
+    /** Load complete retained history initially, then poll new entries and known active jobs.
+     * Polling follows pages back to the prior newest entry so a burst of more than
+     * one page cannot hide new work. Full refreshes discard removed history while
+     * preserving mutations acknowledged after the read began. Failed or aborted
+     * initial/full reads remain explicitly incomplete and restart on the next read.
+     * @param {boolean} [full=false] Reread all retained pages, as on explicit refresh.
      * @returns {Promise<void>} The current or newly started history read.
      */
-    readHistory(more = false, reset = false) {
+    readHistory(full = false) {
         if (!this.isVisible()) return Promise.resolve();
         if (this.historyRequest) return this.historyPromise;
+        full = full || !this.state.historyComplete;
         const controller = new AbortController(), revision = ++this.historyRevision, mutations = this.mutationRevision;
-        const active = more ? [] : [...this.jobs.values()].filter(job => ACTIVE_PREPARATION_STATES.has(job.status)).map(job => job.jobId);
+        const active = [...this.jobs.values()].filter(job => ACTIVE_PREPARATION_STATES.has(job.status)).map(job => job.jobId);
+        const listed = new Set(), previousHead = this.historyHead;
         this.historyRequest = controller; this.readControllers.add(controller);
+        if (full) this.state.historyComplete = false;
+        this.state.historyReadCount = 0;
         this.state.historyLoading = true; this.state.historyError = ""; this.render();
         this.historyPromise = (async () => {
             try {
-                const page = await this.api.list({ cursor: more ? this.state.nextCursor : null, limit: 50, signal: controller.signal });
-                if (revision !== this.historyRevision || controller.signal.aborted || this.destroyed) return;
-                for (const job of page.jobs) this.mergeJob(job, false, mutations);
-                if (reset) this.historyPaged = false;
-                if (more || !this.historyPaged) this.state.nextCursor = page.nextCursor;
-                if (more) this.historyPaged = true;
-                const listed = new Set(page.jobs.map(job => job.jobId));
+                let cursor = null, newest = null;
+                do {
+                    const page = await this.api.list({cursor, limit: 50, signal: controller.signal});
+                    if (revision !== this.historyRevision || controller.signal.aborted || this.destroyed) return;
+                    if (cursor === null) newest = page.jobs[0] ?? null;
+                    for (const job of page.jobs) { listed.add(job.jobId); this.mergeJob(job, false, mutations); }
+                    this.state.historyReadCount = listed.size; this.render();
+                    const reachedPrevious = previousHead && page.jobs.some(job => job.createdAt < previousHead.createdAt ||
+                        job.createdAt === previousHead.createdAt && job.jobId <= previousHead.jobId);
+                    cursor = !full && reachedPrevious ? null : page.nextCursor;
+                } while (cursor !== null);
+                if (full) for (const id of this.jobs.keys()) {
+                    if (!listed.has(id) && (this.jobMutations.get(id) ?? 0) <= mutations) this.jobs.delete(id);
+                }
                 for (const id of active.filter(id => !listed.has(id))) {
+                    if (full && !this.jobs.has(id)) continue;
                     try {
                         const job = await this.api.get(id, controller.signal);
                         if (revision !== this.historyRevision || controller.signal.aborted || this.destroyed) return;
@@ -438,6 +488,8 @@ export class HabitatAdminController {
                         if ((this.jobMutations.get(id) ?? 0) <= mutations) this.jobs.delete(id);
                     }
                 }
+                this.historyHead = newest; this.state.historyComplete = true;
+                this.state.historyCheckedAt = new Date().toISOString();
             } catch (error) {
                 if (revision === this.historyRevision && !controller.signal.aborted && !this.destroyed) this.state.historyError = `Preparation history could not be refreshed: ${error.message}`;
             } finally {
@@ -490,7 +542,7 @@ export class HabitatAdminController {
         if (!this.isVisible() || this.state.submitting) return;
         if ([...this.jobs.values()].some(job => job.operation === RETRY_ALL_OPERATION && ACTIVE_PREPARATION_STATES.has(job.status))) return;
         if (this.state.submissions.some(row => ["uncertain", "submitting"].includes(row.status))) {
-            this.state.error = "Use Recover submission in Requested preparations to check unknown results before retrying all."; this.render(); return;
+            this.state.error = "Use Recover submission in Requests from this visit to check unknown results before retrying all."; this.render(); return;
         }
         const request = {requestId: this.newId()};
         const row = {key: `retryAll:${request.requestId}`, name: "Retry all missing inputs", year: null, kind: "retryAll",
@@ -522,9 +574,20 @@ export class HabitatAdminController {
         this.state.failureLogs = new Map([...this.failureLogs].map(([id, {controller, failures, error}]) =>
             [id, {loading: Boolean(controller), failures, error}]));
         this.state.jobs = [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
-        const requested = new Set(this.state.submissions.filter(row => row.jobId).map(row => row.jobId));
-        this.state.requestedJobs = requested.size;
-        this.state.completedJobs = [...requested].filter(id => ["ready", "expired"].includes(this.jobs.get(id)?.status)).length;
+        const areas = new Map(); this.state.bulkJobs = []; this.state.expiredJobs = [];
+        for (const job of this.state.jobs) {
+            if (job.operation === RETRY_ALL_OPERATION) { this.state.bulkJobs.push(job); continue; }
+            const inputs = job.metadataExpiresAt != null && Date.parse(job.metadataExpiresAt) <= Date.now() ? null : job.inputs;
+            if (!inputs) { this.state.expiredJobs.push(job); continue; }
+            const key = preparationKey(inputs.selection, inputs.year);
+            if (!areas.has(key)) {
+                const snapshot = this.savedCoverage.get(key);
+                areas.set(key, {key, name: inputs.name, year: inputs.year, selection: inputs.selection, latest: job, previous: [],
+                    coverage: snapshot?.coverage ?? null, checkedAt: snapshot?.checkedAt ?? null,
+                    coverageError: snapshot?.error ?? "", checking: snapshot?.checking ?? false});
+            } else areas.get(key).previous.push(job);
+        }
+        this.state.areaRows = [...areas.values()];
         this.state.canPrepare = !this.state.submitting && this.state.coverageRows.some(row => !this.state.submissions.some(item => item.key === row.key && item.status !== "failed"));
         this.view.render(this.state);
     }

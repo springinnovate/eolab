@@ -160,6 +160,34 @@ test("bulk receipts validate their own inputs, report counts and protected URLs"
     await assert.rejects(new HabitatAdminApi(async () => response(job())).retryAll("wrong-bulk-operation"), error => error instanceof HabitatAdminRequestError && error.uncertain);
 });
 
+test("bulk area-check progress crosses HTTP without becoming tile-download progress", async () => {
+    const progress = {phase: "checking_habitat_areas", completed: 3, total: 8, unit: "areas", details: null};
+    const snapshot = bulkJob({status: "running", inputs: {areaCount: 8}, progress});
+    const api = new HabitatAdminApi(async url => response(url.includes("?") ? {jobs: [snapshot], nextCursor: null} : snapshot));
+    assert.deepEqual((await api.get(ID)).progress, progress);
+    assert.deepEqual((await api.list()).jobs[0].progress, progress);
+    for (const changes of [{unit: "tiles"}, {phase: "fetching_habitat_tiles"}, {completed: null}, {total: null},
+        {completed: -1}, {completed: 9}, {total: 2.5}, {details: {cachedTiles: 3}}]) {
+        const invalid = new HabitatAdminApi(async () => response({...snapshot, progress: {...progress, ...changes}}));
+        await assert.rejects(invalid.get(ID), HabitatAdminRequestError);
+    }
+    const individual = new HabitatAdminApi(async () => response(job({progress})));
+    await assert.rejects(individual.get(ID), HabitatAdminRequestError);
+    const empty = new HabitatAdminApi(async () => response(bulkJob({progress: {...progress, completed: 0, total: 0}})));
+    assert.equal((await empty.get(ID)).progress.total, 0);
+});
+
+test("history selections normalize object key order before area grouping", async () => {
+    const reordered = {filter: {rules: [], match: "all", enabled: true}, layerName: selection.layerName,
+        assetKey: selection.assetKey, itemId: selection.itemId, collectionId: selection.collectionId};
+    const original = job(), renamed = job({jobId: "c".repeat(32),
+        inputs: {...original.inputs, name: "Renamed countries", selection: reordered}});
+    const api = new HabitatAdminApi(async () => response({jobs: [original, renamed], nextCursor: null}));
+    const {jobs} = await api.list();
+    assert.equal(JSON.stringify(jobs[0].inputs.selection), JSON.stringify(jobs[1].inputs.selection));
+    assert.notEqual(jobs[0].inputs.name, jobs[1].inputs.name);
+});
+
 test("bulk report failures are read on demand and validated against every outcome count", async () => {
     const metadata = bulkReport(), outcomes = [
         {name: "North", year: 2018, status: "queued", jobId: "c".repeat(32), detail: null},

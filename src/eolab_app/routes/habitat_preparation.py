@@ -61,14 +61,30 @@ class HabitatPreparationProgress(JobProgressResponse):
     Attributes:
         completed: Number of complete reusable tiles, including existing cache hits.
         total: Number of tiles needed for the selected polygons, or None while unknown.
-        unit: Work unit supplied by the native progress producer.
+        unit: The literal string "tiles" once acquisition reports work counts.
         details: Acquisition measurements once cache coverage has been counted.
     """
 
     completed: int | None = None
     total: int | None = None
-    unit: str | None = None
+    unit: Literal["tiles"] | None = None
     details: HabitatDownloadMeasurements | None = None
+
+
+class HabitatBulkPreparationProgress(JobProgressResponse):
+    """Report checked area/year combinations independently of tile downloads.
+
+    Attributes:
+        completed: Areas checked, including failed checks and reused preparations.
+        total: Captured area/year count, or None before checking starts.
+        unit: The literal string "areas" while check counts are available.
+        details: Always None; bulk checks do not report tile-download measurements.
+    """
+
+    completed: int | None = None
+    total: int | None = None
+    unit: Literal["areas"] | None = None
+    details: None = None
 
 
 class HabitatPreparationReport(JobResultResponse):
@@ -132,14 +148,14 @@ class HabitatBulkPreparationJob(JobResponse):
         operation: Bulk retry discriminator, distinct from individual downloads.
         inputs: Captured scope size until metadata expiry; never source paths.
         metadataExpiresAt: Saved-summary expiry, or None while the job is active.
-        progress: Existing worker lifecycle progress while checks run.
+        progress: Worker lifecycle and checked area/year counts while checks run.
         result: Summary and downloadable per-area outcomes after checks finish.
     """
 
     operation: Literal["habitat.retry-missing-inputs.v1"] = BULK_OPERATION
     inputs: HabitatBulkPreparationSummary | None
     metadataExpiresAt: datetime | None
-    progress: HabitatPreparationProgress
+    progress: HabitatBulkPreparationProgress
     result: HabitatBulkPreparationReport | None
 
 
