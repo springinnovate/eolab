@@ -42,6 +42,6 @@ export function renderCatalogMapAction(elements, item, state) {
     );
     elements.layerStatus.textContent = [
         formatCatalogVisualizationReason(item, visualization?.metadata?.reason),
-        retained ? "This dataset is on the map. Add another view using its controls in Map layers." : "",
+        retained ? "This dataset is on the map. Use Map layers to create or duplicate a custom layer." : "",
     ].filter((message) => message !== "").join(" ");
 }

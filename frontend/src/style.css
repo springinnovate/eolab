@@ -12,6 +12,9 @@
   --surface-4: #eeeeeb;
   --surface-hover: #f2f7fa;
   --surface-selected: #e5f2f8;
+  --surface-custom-layer: color-mix(in srgb, var(--brand) 6%, var(--surface-4));
+  --surface-custom-layer-badge: color-mix(in srgb, var(--brand) 12%, var(--surface-4));
+  --border-custom-layer: color-mix(in srgb, var(--brand) 15%, var(--border-1));
   --border-1: #d6d6d3;
   --border-2: #dfdfdc;
   --border-3: #ebebeb;
@@ -706,13 +709,13 @@ h5 {
   position: relative;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
-  gap: 4px 6px;
+  gap: 2px 6px;
   align-items: start;
   min-width: 0;
-  border: 1px solid transparent;
-  border-bottom-color: var(--border-3);
+  border: 1px solid var(--border-3);
   border-radius: var(--radius-sm);
   padding: 6px;
+  background: var(--surface-2);
   transition:
     border-color 120ms ease,
     background-color 120ms ease,
@@ -726,11 +729,21 @@ h5 {
   background: var(--surface-1);
 }
 
+.raster-layer-row.is-custom-layer {
+  border-color: var(--border-custom-layer);
+  background: var(--surface-custom-layer);
+}
+
+.raster-layer-row.is-custom-layer:hover,
+.raster-layer-row.is-custom-layer:focus-within {
+  border-color: var(--brand);
+}
+
 .map-layer-drag-handle {
   grid-row: 1;
   display: grid;
   width: 28px;
-  height: 32px;
+  height: 28px;
   place-items: center;
   touch-action: none;
   border: 1px solid transparent;
@@ -784,11 +797,10 @@ h5 {
 .raster-layer-row.is-drop-after::after { bottom: -6px; }
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
-.map-layer-attribution { grid-column: 2; margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-3); overflow-wrap: anywhere; }
+.map-layer-attribution { font-weight: 600; color: var(--text-3); }
 .map-layer-group-heading { grid-column: 1 / -1; grid-row: 1; min-width: 0; padding-top: 4px; font-size: 0.85rem; overflow-wrap: anywhere; }
 .map-layer-group-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.raster-layer-row.has-layer-group .raster-layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.map-layer-group-name:focus, .raster-layer-row.has-layer-group .raster-layer-name:focus { white-space: normal; overflow-wrap: anywhere; }
+.map-layer-group-name:focus { white-space: normal; overflow-wrap: anywhere; }
 .map-layer-group-heading button { display: block; margin-top: 4px; padding: 2px 0; border: 0; background: transparent; font: inherit; font-weight: 400; text-align: left; }
 .raster-layer-row.has-group-heading .map-layer-drag-handle { grid-row: 2; }
 
@@ -799,7 +811,10 @@ h5 {
   align-items: start;
   gap: 6px;
 }
-.map-layer-title { display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px; }
+.map-layer-title { display: flex; flex: 1; flex-wrap: wrap; min-width: 0; align-items: center; gap: 2px 6px; }
+.map-layer-title > .raster-layer-name { flex-basis: auto; }
+.map-layer-kind { flex: none; color: var(--text-3); font-size: 0.8rem; line-height: 1.3; }
+.is-custom-layer .map-layer-kind { padding: 2px 5px; border-radius: var(--radius); background: var(--surface-custom-layer-badge); color: var(--text-1); }
 
 .map-layer-name-editor { grid-column: 2; display: grid; gap: 6px; min-width: 0; }
 .map-layer-name-editor label { display: grid; gap: 4px; }
@@ -807,14 +822,16 @@ h5 {
 .map-layer-name-editor small { overflow-wrap: anywhere; }
 .map-layer-name-editor > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .map-layer-name-editor .secondary-button { padding: 3px 6px; font-size: inherit; }
-.map-layer-type { flex: none; color: var(--text-3); font-size: 0.65rem; line-height: 1.3; }
+.map-layer-details { grid-column: 2; display: grid; gap: 4px; min-width: 0; padding-top: 5px; border-top: 1px solid var(--border-2); color: var(--text-2); font-size: 0.8rem; }
+.map-layer-details[hidden] { display: none; }
+.map-layer-details p { margin: 0; overflow-wrap: anywhere; }
 .raster-layer-visibility {
   flex: 1;
   display: flex;
   gap: 8px;
   min-width: 0;
   align-items: center;
-  min-height: 32px;
+  min-height: 28px;
   cursor: pointer;
 }
 .raster-layer-visibility input { flex: none; margin: 0; }
@@ -822,7 +839,7 @@ h5 {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   line-height: 1.45;
 }
 .map-layer-role-badge {
@@ -840,9 +857,9 @@ h5 {
 }
 .raster-layer-row .secondary-button {
   min-width: 28px;
-  min-height: 32px;
-  padding: 4px 6px;
-  font-size: 0.68rem;
+  min-height: 28px;
+  padding: 3px 5px;
+  font-size: 0.8rem;
   margin: 0;
   border-color: transparent;
   background: transparent;
@@ -850,19 +867,18 @@ h5 {
 .raster-layer-row .secondary-button:hover:not(:disabled),
 .raster-layer-row .secondary-button:focus-visible { border-color: var(--brand); background: var(--surface-selected); }
 .map-layer-row-actions {
-  grid-column: 1 / -1;
+  grid-column: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 4px;
+  gap: 2px 4px;
   min-width: 0;
 }
 .map-layer-row-actions > .secondary-button { padding: 4px; font-weight: 600; }
 .map-layer-utility-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 2px; min-width: 0; }
 .raster-layer-row .map-layer-icon-button { display: grid; flex: none; min-width: 24px; place-items: center; padding: 4px 3px; }
 .map-layer-icon-button svg { width: 16px; height: 16px; }
-.map-layer-icon-button.has-active-filter { position: relative; color: var(--brand-strong); background: var(--surface-selected); }
-.map-layer-icon-button.has-active-filter::after { position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ""; }
+.map-layer-filter-action.has-active-filter { color: var(--brand-hover); text-decoration: underline; text-underline-offset: 3px; }
 .raster-layer-row .map-layer-remove-button {
   margin-inline-start: auto;
   color: var(--text-3);

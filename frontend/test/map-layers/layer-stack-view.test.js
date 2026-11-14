@@ -354,21 +354,82 @@ test("shared viewer omits removal but retains included-layer interaction tools",
   assert.equal(documentContext.querySelector("#map-layer-removal").hidden, true);
 });
 
-test("the shared row action names the source view and disables only its pending addition", () => {
+test("the create action names the source layer and disables only its pending addition", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), added = [];
   view.bind({onAddView: key => added.push(key)});
   const layers = [{...LAYERS[0], canAddView: true}, {...LAYERS[1], canAddView: false}];
   view.render(layers, layers[0].key);
   const list = doc.querySelector("#raster-layer-list");
   const button = actionControl(list.children[0], "add-view");
-  assert.equal(button.textContent, "Add another view");
+  assert.equal(button.textContent, "Create custom layer");
   assert.ok(button.getAttribute("aria-label").includes(layers[0].label));
   button.dispatchEvent(new Event("click"));
   assert.deepEqual(added, [layers[0].key]);
   assert.throws(() => actionControl(list.children[1], "add-view"), /expected one add-view/);
   view.render([{...layers[0], addingView: true}], layers[0].key);
   assert.equal(actionControl(list.children[0], "add-view").disabled, true);
-  assert.equal(actionControl(list.children[0], "add-view").textContent, "Adding view…");
+  assert.equal(actionControl(list.children[0], "add-view").textContent, "Creating…");
+});
+
+test("Catalog and Custom cards share one unchanged order and use explicit layer meaning", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layers = [
+    { ...LAYERS[0], key: "catalog-shaped-key", isCustom: true, canAddView: true, sourceName: "temperature.tif" },
+    { ...LAYERS[1], key: "local:view:restored-catalog", isCustom: false, canAddView: true },
+    { ...LAYERS[0], key: "second-custom", isCustom: true, canAddView: true },
+  ];
+  const added = [];
+  view.bind({ onAddView: key => added.push(key) });
+  view.render(layers, layers[0].key);
+  const rows = doc.querySelector("#raster-layer-list").children;
+  assert.deepEqual(rows.map(row => row.dataset.layerKey), layers.map(layer => layer.key));
+  assert.deepEqual(rows.map(row => row.classList.contains("is-custom-layer")), [true, false, true]);
+  assert.deepEqual(rows.map(row => elementsByClass(row, "map-layer-kind")[0].textContent),
+    ["Custom layer", "Catalog dataset", "Custom layer"]);
+  assert.deepEqual(rows.map(row => actionControl(row, "add-view").textContent),
+    ["Duplicate", "Create custom layer", "Duplicate"]);
+  actionControl(rows[0], "add-view").dispatchEvent(new Event("click"));
+  assert.deepEqual(added, [layers[0].key]);
+  assert.match(actionControl(rows[0], "add-view").getAttribute("aria-label"), /^Duplicate /);
+  const details = elementsByClass(rows[0], "map-layer-details")[0];
+  assert.equal(details.hidden, true);
+  assert.equal(elementsByClass(details, "map-layer-source")[0].textContent, "Based on: temperature.tif");
+  assert.equal(elementsByClass(details, "map-layer-source-notice")[0].textContent,
+    "The original Catalog dataset stays unchanged.");
+});
+
+test("Details preserves disclosure and utility focus through refresh and reorder", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layers = LAYERS.map(layer => ({ ...layer, isCustom: false }));
+  view.render(layers, layers[0].key);
+  const list = doc.querySelector("#raster-layer-list");
+  let row = list.children[0];
+  let trigger = actionControl(row, "details");
+  let panel = elementsByClass(row, "map-layer-details")[0];
+  assert.equal(trigger.getAttribute("aria-controls"), panel.id);
+  assert.equal(trigger.getAttribute("aria-expanded"), "false");
+  trigger.dispatchEvent(new Event("click"));
+  assert.equal(panel.hidden, false);
+  assert.equal(trigger.getAttribute("aria-expanded"), "true");
+  actionControl(row, "copy-style").focus();
+  view.render([layers[1], layers[0], layers[2]], layers[0].key);
+  row = list.children[1];
+  panel = elementsByClass(row, "map-layer-details")[0];
+  assert.equal(panel.hidden, false);
+  assert.equal(doc.activeElement, actionControl(row, "copy-style"));
+  panel.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
+  assert.equal(panel.hidden, true);
+  assert.equal(doc.activeElement, actionControl(row, "details"));
+  view.render([layers[1], layers[0], layers[2]], layers[0].key,
+    { key: layers[0].key, action: "rename" });
+  row = list.children[1];
+  assert.equal(elementsByClass(row, "map-layer-details")[0].hidden, false);
+  assert.equal(doc.activeElement, actionControl(row, "rename"));
+  view.render([layers[1], layers[2]], layers[1].key);
+  doc.querySelector("#map-layers-show-all").focus();
+  view.render(layers, layers[0].key);
+  assert.equal(elementsByClass(list.children[0], "map-layer-details")[0].hidden, true,
+    "removing a row clears its old disclosure state");
 });
 
 test("active filter strips show full layer names and status beside explicit editing actions", () => {
@@ -683,7 +744,7 @@ test("an uploaded vector keeps map controls without an unavailable Catalog Info 
   for (const action of ["style", "filter", "zoom", "visibility", "copy-style", "remove"]) actionControl(row, action);
 });
 
-test("utility icons stay directly accessible with tooltips and layer-specific names", () => {
+test("Details keeps utility actions while frequent actions remain on the compact row", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   const raster = { ...LAYERS[0], datasetKind: "raster", capabilities: {calculations: true}, legend: { kind: "fixed", label: "Raster" } };
@@ -692,11 +753,16 @@ test("utility icons stay directly accessible with tooltips and layer-specific na
   for (const row of doc.querySelector("#raster-layer-list").children) {
     const strip = elementsByClass(row, "map-layer-row-actions")[0];
     const utilities = elementsByClass(row, "map-layer-utility-actions")[0];
+    const details = elementsByClass(row, "map-layer-details")[0];
     assert.equal(elementsByClass(row, "map-layer-actions").length, 0);
     assert.ok(strip.children.includes(actionControl(row, "style")));
+    assert.ok(strip.children.includes(actionControl(row, "details")));
+    assert.ok(details.contains(utilities));
+    actionControl(row, "details").dispatchEvent(new Event("click"));
+    assert.equal(details.hidden, false);
     for (const action of ["zoom", "rename", "info", "copy-style", "paste-style"]) {
       const button = actionControl(row, action);
-      assert.ok(utilities.contains(button), `${action} is a direct utility action`);
+      assert.ok(utilities.contains(button), `${action} remains available in Details`);
       assert.equal(button.tagName, "BUTTON");
       assert.equal(button.hidden, false);
       assert.match(button.getAttribute("aria-label"), /Catalog Item/);
@@ -711,7 +777,8 @@ test("utility icons stay directly accessible with tooltips and layer-specific na
   assert.ok(strip.children.includes(actionControl(rasterRow, "calculate")));
   assert.ok(elementsByClass(rasterRow, "map-layer-primary-row")[0].children.includes(actionControl(rasterRow, "legend")));
   assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "download")));
-  assert.ok(elementsByClass(vectorRow, "map-layer-utility-actions")[0].children.includes(actionControl(vectorRow, "filter")));
+  assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].children.includes(actionControl(vectorRow, "filter")));
+  assert.equal(actionControl(vectorRow, "filter").textContent, "Filter");
 });
 
 test("direct utility actions retain focus on refresh and after inline naming", () => {
@@ -1363,7 +1430,7 @@ test("layer types and owner style targets distinguish annotations without embedd
     assert.equal(actionControl(row, "style").getAttribute("aria-controls"), "annotations-panel");
 });
 
-test("layer provenance precedes its title and its primary action retains focus", () => {
+test("Details retains owner provenance while the primary action remains directly available", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
   const primaryControl = documentContext.createElement("div");
@@ -1372,9 +1439,11 @@ test("layer provenance precedes its title and its primary action retains focus",
   view.render([layer], null);
   const row = documentContext.querySelector("#raster-layer-list").children[0];
   const attribution = elementsByClass(row, "map-layer-attribution")[0];
-  const primary = elementsByClass(row, "map-layer-primary-row")[0];
+  const details = elementsByClass(row, "map-layer-details")[0];
   assert.equal(attribution.textContent, layer.attribution);
-  assert.ok(row.children.indexOf(attribution) < row.children.indexOf(primary));
+  assert.ok(details.contains(attribution));
+  assert.equal(details.hidden, true);
+  assert.equal(row.children.includes(attribution), false);
   assert.ok(row.children.includes(primaryControl));
   draw.focus(); view.render([layer], null);
   assert.equal(documentContext.activeElement, draw);

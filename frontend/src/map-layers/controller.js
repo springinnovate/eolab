@@ -72,6 +72,7 @@ function normalizeCustomLayerName(value) {
  * @typedef {Object} RemovedMapLayer
  * @property {string} key Stable layer identity.
  * @property {string} label Display name before removal.
+ * @property {boolean} isCustom Whether the captured layer has Custom layer presentation.
  * @property {string|null} [customName] Map-specific layer name, or null for its source name.
  * @property {number} index Previous top-first drawing position.
  * @property {boolean} visible Previous visibility.
@@ -181,7 +182,7 @@ export class MapLayerController {
      * createState, createLayer and snapshot, plus optional lifecycle callbacks.
      * Providing sourceName enables the standard name editor, preserving custom names
      * when the owner later updates its source name.
-     * @param {{key:string,label:string,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object,canAddView?:boolean}} source Local presentation and optional publication; canAddView opts into independent restoration of the same source.
+     * @param {{key:string,label:string,isCustom?:boolean,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object,canAddView?:boolean}} source Local presentation and optional publication; canAddView opts into independent restoration of the same source. isCustom defaults to true for owner-created layers; temporal Catalog owners explicitly supply false.
      * @param {Object} adapter Owner's rendering and presentation methods.
      * @return {Object} Retained record.
      * @throws {Error} If the identity is duplicated or construction fails.
@@ -191,6 +192,7 @@ export class MapLayerController {
             throw new Error("Local layer cannot be added to this stack.");
         }
         const { entry } = this.stack.addLocal(source.key, source.label, this.recordIntent());
+        entry.isCustom = source.isCustom ?? true;
         const record = { entry, adapter, publication: source.publication ?? null, state: null, error: null,
             canAddView: source.canAddView === true };
         try {
@@ -282,13 +284,14 @@ export class MapLayerController {
      * @param {boolean} [presentation.visible=true] Initial visibility.
      * @param {number} [presentation.opacity=1] Initial opacity in [0, 1].
      * @param {string|null} [presentation.customName=null] Optional map-specific display name.
+     * @param {boolean} [presentation.isCustom=false] Explicit Catalog or Custom layer presentation.
      * @param {string} [presentation.key=getCatalogItemKey(item)] View identity,
      * separate from its source when retaining multiple views of one Item.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached
      * publication, owner state, and Leaflet layer.
      * @throws {Error} If publication or detached construction fails.
      */
-    async stage(item, adapter, { visible = true, opacity = 1, customName = null, key = getCatalogItemKey(item) } = {}) {
+    async stage(item, adapter, { visible = true, opacity = 1, customName = null, isCustom = false, key = getCatalogItemKey(item) } = {}) {
         this.#requireAdapter(adapter);
         customName = normalizeCustomLayerName(customName);
         if (this.destroyed) {
@@ -313,7 +316,7 @@ export class MapLayerController {
             item,
             adapter,
             publication,
-            { visible, opacity, customName, key }
+            { visible, opacity, customName, isCustom, key }
         );
     }
 
@@ -378,6 +381,7 @@ export class MapLayerController {
                 this.stack.setOpacity(key, presentation.opacity);
                 this.stack.setVisible(key, presentation.visible);
                 entry.customName = presentation.customName ?? null;
+                entry.isCustom = presentation.isCustom;
                 record.entry = entry;
                 this.records.set(key, record);
                 this.leafletLayers.add(key, layer, {
@@ -480,6 +484,19 @@ export class MapLayerController {
      */
     isAttached(key) {
         return this.leafletLayers.isAttached(key);
+    }
+
+    /** Restore a layer's Catalog or Custom presentation without changing its source or order.
+     * @param {string} key Retained map-layer identity.
+     * @param {boolean} isCustom Validated saved presentation or the source owner's admission choice.
+     * @return {void}
+     * @throws {RangeError} If the layer is no longer retained.
+     */
+    setCustomLayer(key, isCustom) {
+        const record = this.#requireRecord(key);
+        if (record.entry.isCustom === isCustom) return;
+        record.entry.isCustom = isCustom;
+        this.render();
     }
 
     /**
@@ -806,7 +823,7 @@ export class MapLayerController {
         const record = this.#requireRecord(key);
         const {entry, adapter} = record;
         return {
-            key, label: entry.label, customName: entry.customName ?? null,
+            key, label: entry.label, customName: entry.customName ?? null, isCustom: entry.isCustom,
             index: this.stack.entries.findIndex(candidate => candidate.key === key),
             visible: entry.visible, opacity: entry.opacity,
             ...(entry.legendIncluded === false ? {legendIncluded: false} : {}),
@@ -817,7 +834,7 @@ export class MapLayerController {
         };
     }
 
-    /** Restore a captured layer through its original owner and restore legend inclusion.
+    /** Restore a captured layer through its original owner, including its kind and legend inclusion.
      * @param {RemovedMapLayer} snapshot Captured presentation and source identity.
      * @param {()=>boolean} isCurrent Whether restoration still belongs to the current action.
      * @return {Promise<void>} Completion after owner restoration.
@@ -827,11 +844,12 @@ export class MapLayerController {
         await this.restoreRemovedLayer(snapshot, isCurrent);
         if (isCurrent()) {
             this.#requireRecord(snapshot.key).entry.legendIncluded = snapshot.legendIncluded !== false;
+            this.#requireRecord(snapshot.key).entry.isCustom = snapshot.isCustom;
             this.render();
         }
     }
 
-    /** Add an independent view through the source owner's existing restoration path.
+    /** Create a custom layer through the source owner's existing restoration path.
      * Copy presentation without copying the underlying source. Removing the original
      * view or replacing the map cancels an unfinished addition.
      * @param {string} key Retained view whose source and appearance should be reused.
@@ -847,12 +865,13 @@ export class MapLayerController {
         try {
             const snapshot = this.captureLayerSnapshot(key);
             snapshot.key = `local:view:${globalThis.crypto.randomUUID()}`;
+            snapshot.isCustom = true;
             await this.restoreLayerSnapshot(snapshot, isCurrent);
             if (!isCurrent()) return null;
-            this.view.announceStatus?.(`Added another view of ${snapshot.label}.`);
+            this.view.announceStatus?.(`Created a custom layer from ${snapshot.label}.`);
             return snapshot.key;
         } catch (error) {
-            if (isCurrent()) this.view.setStatus(`Could not add another view: ${error.message}`);
+            if (isCurrent()) this.view.setStatus(`Could not create custom layer: ${error.message}`);
             return null;
         } finally {
             this.pendingAdditionalViews.delete(key);
@@ -951,6 +970,7 @@ export class MapLayerController {
             this.stack.setVisible(key, presentation.visible);
             this.stack.setOpacity(key, presentation.opacity);
             entry.customName = presentation.customName ?? null;
+            entry.isCustom = presentation.isCustom;
             record.entry = entry;
             this.records.set(key, record);
             this.leafletLayers.add(key, layer, { visible: false, opacity: entry.opacity });
@@ -1099,6 +1119,7 @@ export class MapLayerController {
             return {
                 ...entry,
                 ...record.adapter.snapshot(record),
+                isCustom: entry.isCustom,
                 ...(entry.group ? {group: entry.group} : {}),
                 sourceName: entry.item === null ? entry.sourceName ?? null : record.adapter.label(entry.item),
                 styleClipboard: this.#styleClipboardSnapshot(record),
@@ -1280,7 +1301,7 @@ export class MapLayerController {
      * @param {Object} item Supported Catalog Item.
      * @param {MapLayerAdapter} adapter Feature-owned adapter.
      * @param {Object} publication Completed owner publication response.
-     * @param {{visible:boolean,opacity:number,customName?:string|null,key:string}} presentation Initial state, optional display name and view identity.
+     * @param {{visible:boolean,opacity:number,customName?:string|null,isCustom?:boolean,key:string}} presentation Initial state, optional display name, layer kind and view identity.
      * @return {{key:string,record:Object,layer:Object}} Detached layer.
      */
     #createStaged(item, adapter, publication, presentation) {
@@ -1290,6 +1311,7 @@ export class MapLayerController {
             item,
             label: presentation.customName ?? adapter.label(item),
             customName: presentation.customName ?? null,
+            isCustom: presentation.isCustom ?? false,
             retentionOrder: 1,
             visible: presentation.visible,
             opacity: presentation.opacity,

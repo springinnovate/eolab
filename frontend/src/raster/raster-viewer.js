@@ -4530,7 +4530,7 @@ export function initializeRasterViewer(
     /** Publish and attach a source through ordinary raster tiles, style and analysis.
      * @param {Object} raster Original source, metadata, label, group and capabilities.
      * @param {Object} lifecycle Composition-supplied info, Undo and removal callbacks.
-     * @param {Object} [presentation={}] Initial names and group, visibility, opacity, restored appearance, signal and isCurrent callback.
+     * @param {Object} [presentation={}] Initial names and group, visibility, opacity, restored appearance, isCustom presentation flag, signal and isCurrent callback.
      * @return {Promise<Object|null>} Retained raster record, or null after cancellation.
      * @throws {Error} If identity, appearance or layer construction fails.
      */
@@ -4538,7 +4538,7 @@ export function initializeRasterViewer(
         const publication = await publishRaster(raster, undefined, presentation.signal);
         if (presentation.signal?.aborted || presentation.isCurrent?.() === false) return null;
         const key = rasterSourceKey(raster);
-        const record = mapLayers.addLocal({key, label: raster.label, raster, lifecycle, ...presentation, publication}, rasterMapLayerAdapter);
+        const record = mapLayers.addLocal({key, label: raster.label, isCustom: true, raster, lifecycle, ...presentation, publication}, rasterMapLayerAdapter);
         renderLayerHistogramSummaries();
         return record;
     }
@@ -4718,7 +4718,7 @@ export function initializeRasterViewer(
      * selections remain selected when absent so restoration never substitutes data.
      * @param {Object} item Admitted Catalog temporal Item.
      * @param {{variable:string,time:string}|null} [selection=null] Explicit observation.
-     * @param {Object} [presentation={}] Key for Undo, names, visibility, opacity, appearance and isCurrent callback.
+     * @param {Object} [presentation={}] Key for Undo, names, visibility, opacity, appearance, isCustom flag (false for the ordinary Catalog layer) and isCurrent callback.
      * @return {Promise<Object|null>} Retained record, including unavailable rows, or null after cancellation.
      */
     async function showTemporal(item, selection = null, presentation = {}) {
@@ -4736,7 +4736,7 @@ export function initializeRasterViewer(
         });
         const raster = temporalRaster(item, initial, false);
         record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`, canAddView: true,
-            label: raster.label, sourceName: raster.label, raster, temporal, ...presentation}, rasterMapLayerAdapter);
+            label: raster.label, sourceName: raster.label, isCustom: false, raster, temporal, ...presentation}, rasterMapLayerAdapter);
         await loadTemporalChoices(record, initial, selection ? initial.time.slice(0, 7) : undefined, selection === null);
         if (presentation.isCurrent?.() === false) {
             if (mapLayers.getRecord(record.entry.key) === record) mapLayers.removeKey(record.entry.key);
@@ -4813,7 +4813,7 @@ export function initializeRasterViewer(
     async function restoreTemporal(layer, item, isCurrent) {
         const {variable, time} = layer.temporalSource;
         const record = await showTemporal(item, {variable, time}, {visible: layer.visible,
-            opacity: layer.opacity, customName: layer.customName, appearance: layer.style, isCurrent});
+            opacity: layer.opacity, customName: layer.customName, isCustom: layer.isCustom ?? false, appearance: layer.style, isCurrent});
         return record?.entry.key ?? null;
     }
 
@@ -4821,8 +4821,8 @@ export function initializeRasterViewer(
      * Publish and construct one raster layer without retaining or attaching it.
      *
      * @param {Object} item Selected mounted GeoTIFF STAC Item.
-     * @param {{visible:boolean,opacity:number,customName?:string|null,key?:string}} presentation Initial neutral
-     * layer visibility, opacity, optional name and independent view key.
+     * @param {{visible:boolean,opacity:number,customName?:string|null,isCustom?:boolean,key?:string}} presentation Initial neutral
+     * layer visibility, opacity, optional name, layer kind and independent view key.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached raster
      * layer prepared by the neutral retained-layer owner.
      */

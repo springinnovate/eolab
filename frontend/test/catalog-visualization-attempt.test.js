@@ -323,7 +323,7 @@ test("selected Item mirrors pending and success states", async () => {
   assert.equal(h.onMap.hidden, false);
   assert.equal(h.row.state.retained, true);
   assert.equal(h.actionStatus.textContent, "Raster added to the map.");
-  assert.equal(h.status.textContent, "This dataset is on the map. Add another view using its controls in Map layers.");
+  assert.equal(h.status.textContent, "This dataset is on the map. Use Map layers to create or duplicate a custom layer.");
   assert.equal(h.actionContainer.getAttribute("aria-busy"), "false");
   assert.equal(h.row.state.pendingAction, null);
 });
@@ -550,7 +550,7 @@ test("temporal Catalog controls explain which view they remove and pass the data
   assert.equal(h.layerButton.textContent, "Remove first view");
   assert.equal(h.row.mapButton.textContent, "Remove first view");
   assert.match(h.row.mapButton.getAttribute("aria-label"), /^Remove first view:/);
-  assert.match(h.status.textContent, /Add another view.*Map layers/);
+  assert.match(h.status.textContent, /Map layers.*create or duplicate a custom layer/);
   h.styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.calls.at(-1), ["style", getCatalogItemKey(item), item]);
   h.row.mapButton.dispatchEvent(new Event("click"));

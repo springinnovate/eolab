@@ -468,7 +468,7 @@ export class AnnotationController {
                 this.save();
             },
         };
-        this.mapLayers.addLocal({ key, label: layer.name, visible: layer.visible, opacity: layer.opacity }, adapter);
+        this.mapLayers.addLocal({ key, label: layer.name, isCustom: true, visible: layer.visible, opacity: layer.opacity }, adapter);
         this.panel.registerLayerControls(key, layer.name, controls.root);
     }
 

@@ -470,6 +470,7 @@ export class SavedMapViewController {
 
     /**
      * Capture layer identifiers and map appearance in drawing order.
+     * Every exported layer records whether its card is Catalog or Custom.
      * Upload references grant no access; GeoPackage contents and browser credentials are excluded.
      *
      * @return {Readonly<Object>} Validated portable map document.
@@ -482,7 +483,10 @@ export class SavedMapViewController {
             const layer = this.exportTemporal(record) ?? (record.entry.item === null
                 ? this.exportUpload(record) ?? this.exportAnnotation(record)
                 : this.#exportLayer(record));
-            return layer === null ? null : { ...layer, ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}) };
+            return layer === null ? null : {
+                ...layer, isCustom: record.entry.isCustom,
+                ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}),
+            };
         });
         return createSavedMapView({
             viewer: {
@@ -525,6 +529,7 @@ export class SavedMapViewController {
 
     /**
      * Restore saved layers through their owners and apply the saved drawing order.
+     * Saved Custom presentation overrides the source owner's admission default.
      * Private uploads and shared layers must belong to this deployment; their
      * owners enforce browser access before returning a map key.
      * Layers removed while other sources are loading stay out of the final order.
@@ -590,6 +595,9 @@ export class SavedMapViewController {
             }
             const key = result.key ?? result.staged?.record.entry.key;
             if (key) this.mapLayers.setLegendIncluded(key, savedMapView.layers[index].legendIncluded !== false);
+            if (result.key && Object.hasOwn(savedMapView.layers[index], "isCustom")) {
+                this.mapLayers.setCustomLayer(result.key, savedMapView.layers[index].isCustom);
+            }
         }
         this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
@@ -608,7 +616,8 @@ export class SavedMapViewController {
     }
 
     /**
-     * Resolve, validate, publish, and style one detached saved layer.
+     * Resolve, validate, publish, and style one detached saved Catalog source.
+     * Retain its explicit Catalog or Custom card presentation independently of its row key.
      *
      * @param {Object} layer Validated saved-layer document.
      * @return {Promise<{staged:Object|null,detail:string|null}>} Detached layer and
@@ -627,6 +636,7 @@ export class SavedMapViewController {
             const staged = await this.catalogVisualization.stage(
                 preparedItem,
                 { key: `local:view:${globalThis.crypto.randomUUID()}`, visible: layer.visible, opacity: layer.opacity,
+                    isCustom: layer.isCustom ?? false,
                     ...(layer.customName ? { customName: layer.customName } : {}) }
             );
             const record = staged.record;

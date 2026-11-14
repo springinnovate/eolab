@@ -132,6 +132,9 @@ function validateSavedMapView(candidate) {
         if (Object.hasOwn(layer, "legendIncluded") && typeof layer.legendIncluded !== "boolean") {
             throw new SavedMapViewValidationError("Layer legend inclusion must be boolean.");
         }
+        if (Object.hasOwn(layer, "isCustom") && typeof layer.isCustom !== "boolean") {
+            throw new SavedMapViewValidationError("Custom layer presentation must be boolean.");
+        }
         if (layer?.sharedAnnotation !== undefined) {
             if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
@@ -175,7 +178,9 @@ function validateSavedMapView(candidate) {
  */
 function validateAnnotationReference(candidate) {
     requirePlainObject(candidate, "Shared layer");
-    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance", ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : [])], "Shared layer");
+    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance",
+        ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
+        ...(Object.hasOwn(candidate, "isCustom") ? ["isCustom"] : [])], "Shared layer");
     const reference = candidate.sharedAnnotation;
     requirePlainObject(reference, "Shared layer reference");
     requireExactKeys(reference, ["id", "joinCode"], "Shared layer reference");
@@ -199,6 +204,8 @@ function validateAnnotationReference(candidate) {
 /**
  * Validate a catalog, temporal or private-upload reference and its saved appearance.
  * Upload identifiers locate data; they never grant another browser access.
+ * isCustom preserves the card's presentation without changing its source identity.
+ * When absent, restoration uses the source owner's ordinary presentation.
  *
  * @param {unknown} candidate Untrusted layer value.
  * @return {Readonly<Object>} Frozen normalized layer entry.
@@ -212,6 +219,7 @@ function validateLayer(candidate) {
         candidate,
         [isTemporal ? "temporalSource" : isUpload ? "uploadId" : "catalogItem", "visible", "opacity", "style",
             ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
+            ...(Object.hasOwn(candidate, "isCustom") ? ["isCustom"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
         "Saved layer"
@@ -289,6 +297,7 @@ function validateLayer(candidate) {
         ...identity,
         ...(customName === undefined ? {} : { customName }),
         ...(Object.hasOwn(candidate, "legendIncluded") ? { legendIncluded: candidate.legendIncluded } : {}),
+        ...(Object.hasOwn(candidate, "isCustom") ? { isCustom: candidate.isCustom } : {}),
         visible: candidate.visible,
         opacity: candidate.opacity,
         style: structuredClone(candidate.style),

@@ -1044,7 +1044,7 @@ async function initializeCatalog(
         const publication = await vectorMapLayerAdapter.publish(source);
         const record = mapLayerController.addLocal({
             key: `local:upload:${upload.id}`, label: upload.name, sourceName: upload.name,
-            upload: source, publication, canAddView: true,
+            upload: source, publication, canAddView: true, isCustom: true,
         }, vectorMapLayerAdapter);
         onRenderingWorkspaceRequested();
         vectorMapLayerAdapter.added(record);
@@ -1061,7 +1061,7 @@ async function initializeCatalog(
     async function addGeneratedVector(source, lifecycle, presentation) {
         const publication = await vectorMapLayerAdapter.publish(source);
         if (!presentation.isCurrent()) return null;
-        const record = mapLayerController.addLocal({...presentation, vector: source, publication, lifecycle,
+        const record = mapLayerController.addLocal({isCustom: true, ...presentation, vector: source, publication, lifecycle,
             visible: false, canAddView: true}, vectorMapLayerAdapter);
         const isCurrent = () => presentation.isCurrent() && mapLayerController.getRecord(presentation.key) === record;
         try {
@@ -1093,7 +1093,7 @@ async function initializeCatalog(
         mapLayerController.addLocal({
             key: snapshot.key, label: snapshot.label, sourceName: upload.name,
             customName: snapshot.customName, visible: snapshot.visible, opacity: snapshot.opacity,
-            upload, publication, restore: snapshot.local, canAddView: true,
+            upload, publication, restore: snapshot.local, canAddView: true, isCustom: snapshot.isCustom,
         }, vectorMapLayerAdapter);
         mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
     }
@@ -1111,7 +1111,7 @@ async function initializeCatalog(
         const key = `local:view:${globalThis.crypto.randomUUID()}`;
         const record = mapLayerController.addLocal({
             key, label: upload.name, sourceName: upload.name, customName: layer.customName,
-            upload, publication, visible: false, opacity: layer.opacity, canAddView: true,
+            upload, publication, visible: false, opacity: layer.opacity, canAddView: true, isCustom: layer.isCustom ?? true,
         }, vectorMapLayerAdapter);
         /** Check that asynchronous restoration still owns this map layer. @return {boolean} */
         const stillRetained = () => isCurrent() && mapLayerController.getRecord(key) === record;
@@ -1297,7 +1297,7 @@ async function initializeCatalog(
                 getTarget: key => key === target.key && request.isCurrent() ? target : null});
             modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
                 applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
-                help: "Change the filter for this map view and every tool input using it. Use another view for a different filter.",
+                help: "Change the filter for this layer and every tool input using it. Use a separate custom layer for a different filter.",
             });
         },
         closeVectorFilter: () => modelFilterControls?.close(),
@@ -1435,7 +1435,7 @@ async function initializeCatalog(
         const item = await catalogItemClient.get({collection: collectionId, id: itemId});
         const record = await rasterVisualization.showTemporal(item, {variable, time}, {
             key: snapshot.key, appearance: layer.style, visible: layer.visible,
-            opacity: layer.opacity, customName: layer.customName, isCurrent,
+            opacity: layer.opacity, customName: layer.customName, isCustom: snapshot.isCustom, isCurrent,
         });
         if (record && isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
     }

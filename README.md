@@ -104,10 +104,12 @@ Open **Map layers** to see the current stack. The first layer in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
 the same handle.
 
-Use a layer's checkbox to show or hide it, **Zoom to** to find it, and the color
-swatch to open its legend. **Add another view** gives the same dataset another
-independent set of display choices. **Copy style** and **Paste style** help keep
-comparable layers consistent.
+Regular Catalog layers and darker **Custom layer** cards share this one list.
+Use a layer's checkbox to show or hide it and its color swatch to open the legend.
+**Create custom layer** gives the same dataset independent display choices without
+changing the original data; **Duplicate** makes another custom layer. These kinds
+and their appearances are saved with the map. Open **Details** for source information,
+**Zoom to**, **Rename**, **Copy style**, **Paste style**, and other available actions.
 
 Open **Style** to bring out the pattern you care about:
 
@@ -242,8 +244,8 @@ the same layer, so the chart updates instead of making you configure it again.
 A data time cube brings observations from different dates together as one
 dataset. Search with `type:temporal`, add a dataset, and choose its **Variable**,
 **Month** and **Date and time (UTC)** in Map layers. Only available observations
-are listed. **Add another view** lets you compare dates or variables with
-independent styles.
+are listed. **Create custom layer** lets you compare dates or variables with
+independent styles; use **Duplicate** for further custom layers.
 
 ![Blue hourly precipitation over the Atlantic and Africa, with controls for the variable, month and UTC observation time](docs/images/eolab-temporal-map.jpg)
 

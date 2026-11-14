@@ -96,7 +96,7 @@ for (const keepAvailableLayer of [true, false]) test(`published map saves curren
   assert.equal(submissions.length, 1);
   assert.equal(submissions[0].slug, "amazon");
   assert.equal(submissions[0].request.revision, 1);
-  assert.deepEqual(submissions[0].request.view.layers, keepAvailableLayer ? [available] : []);
+  assert.deepEqual(submissions[0].request.view.layers, keepAvailableLayer ? [{ ...available, isCustom: false }] : []);
   assert.match(view.editStatus, /Saved/);
 });
 
@@ -171,18 +171,19 @@ test("missing named maps never fall back to fragments or private maps", async ()
 
 test("mixed shared maps export invitations, preserve layer order and restore presentation only", async () => {
   const annotation = { sharedAnnotation: { id: "11111111-1111-4111-8111-111111111111", joinCode: "ABCDEFGH" },
-    visible: true, legendIncluded: false, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
+    visible: true, isCustom: true, legendIncluded: false, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
   const catalog = { catalogItem: { collection: "vectors", id: "included" },
-    visible: true, legendIncluded: false, opacity: 1, style: { kind: "vector", definition: {} } };
+    visible: true, isCustom: false, legendIncluded: false, opacity: 1, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), mapLegend: { visible: false, collapsed: true }, layers: [catalog, annotation] };
   const fragment = await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 });
   const view = createView(), records = [], restorations = [], ordered = [];
-  const annotationRecord = { entry: { key: "local:annotation:mine", item: null }, polygons: ["private polygon"] };
+  const annotationRecord = { entry: { key: "local:annotation:mine", item: null, isCustom: true }, polygons: ["private polygon"] };
   let legendPreferences;
   const controller = createController({ view, restoreSharedMap: true,
     viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
+      setCustomLayer(key, value) { records.find(record => record.entry.key === key).entry.isCustom = value; },
       setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
       commitStaged(staged) { records.unshift(...staged.map(s => s.record)); }, restoreOrder(keys) { ordered.push(keys); } },
     mapLegend: { snapshot: () => legendPreferences, restore(value) { legendPreferences = value; } },
@@ -415,7 +416,7 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
   const view = createView();
   const item = { collection: "vectors", id: "roads" };
   const record = {
-    entry: { item, visible: true, opacity: 0.4, label: "Workshop roads", customName: "Workshop roads" },
+    entry: { item, isCustom: false, visible: true, opacity: 0.4, label: "Workshop roads", customName: "Workshop roads" },
     adapter: {
       exportSavedState: () => ({ kind: "vector", definition: { width: 2 } }),
       exportFilterState: () => ({ enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] }),
@@ -454,11 +455,11 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
     categorical: null,
   };
   const first = { catalogItem: { collection: kind, id: "source" }, customName: "First view",
-    visible: true, opacity: 0.7, style,
+    visible: true, isCustom: false, opacity: 0.7, style,
     ...(kind === "vector" ? { filter: { enabled: true, match: "all",
       rules: [{ field: "ISO3", operator: "eq", value: "PER" }] } } : {}) };
   const second = { ...structuredClone(first), customName: "Second view", visible: false,
-    opacity: 0.3, legendIncluded: false };
+    opacity: 0.3, isCustom: true, legendIncluded: false };
   if (kind === "vector") {
     second.style.definition.color = "#ABCDEF";
     second.filter.rules[0].value = "BRA";
@@ -499,6 +500,7 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
   }));
   assert.deepEqual(view.result.details, []);
   assert.equal(view.result.loaded, 2);
+  assert.deepEqual(mapLayers.retainedRecords.map(record => record.entry.isCustom), [false, true]);
   const originalKeys = mapLayers.retainedRecords.map(record => record.entry.key);
   assert.equal(new Set(originalKeys).size, 2);
   await controller.copyMapLink();
@@ -511,6 +513,7 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
   const restored = mapLayers.retainedRecords;
   assert.equal(restored.length, 2);
   assert.ok(restored.every(record => !originalKeys.includes(record.entry.key)));
+  assert.deepEqual(restored.map(record => record.entry.isCustom), [false, true]);
   mapLayers.removeKey(restored[0].entry.key);
   assert.equal(mapLayers.retainedRecords[0], restored[1]);
   await controller.copyMapLink();
@@ -603,8 +606,8 @@ test("saved map controller stages concurrently and commits final saved order", a
   const restoredKeys = mapLayers.retainedRecords.map(record => record.entry.key);
   assert.equal(new Set(restoredKeys).size, 2);
   assert.deepEqual(calls.filter(([kind]) => kind === "stage"), [
-    ["stage", "top", { key: restoredKeys[0], visible: true, opacity: 0.5, customName: "Protected areas" }],
-    ["stage", "bottom", { key: restoredKeys[1], visible: false, opacity: 0.8 }],
+    ["stage", "top", { key: restoredKeys[0], visible: true, isCustom: false, opacity: 0.5, customName: "Protected areas" }],
+    ["stage", "bottom", { key: restoredKeys[1], visible: false, isCustom: false, opacity: 0.8 }],
   ]);
   assert.deepEqual(calls.filter(([kind]) => kind === "commit"), [
     ["commit", ["top", "bottom"], { fitToBounds: false }],
@@ -937,7 +940,7 @@ test("startup discards corrupt remembered content without blocking the map", asy
 test("remembered map persistence coalesces complete validated snapshots", async () => {
   const item = { collection: "vectors", id: "roads" };
   const record = {
-    entry: { item, visible: false, opacity: 0.35, label: "Workshop roads", customName: "Workshop roads" },
+    entry: { item, isCustom: false, visible: false, opacity: 0.35, label: "Workshop roads", customName: "Workshop roads" },
     adapter: {
       exportSavedState: () => ({ kind: "vector", definition: { width: 4 } }),
     },
@@ -975,6 +978,7 @@ test("remembered map persistence coalesces complete validated snapshots", async 
   });
   assert.deepEqual(remembered.layers, [{
     catalogItem: item,
+    isCustom: false,
     visible: false,
     opacity: 0.35,
     customName: "Workshop roads",
@@ -995,7 +999,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
   const item = { collection: "vectors", id: "roads" };
   const style = { kind: "vector", definition: { width: 3 } };
   const originalRecord = {
-    entry: { item, visible: true, opacity: 0.6, label: "Roads" },
+    entry: { item, isCustom: true, visible: true, opacity: 0.6, label: "Roads" },
     adapter: { exportSavedState: () => style },
   };
   let currentViewport = workingViewport;
@@ -1086,6 +1090,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
   assert.equal(view.undoVisible, false);
   assert.deepEqual(JSON.parse(storage.serialized).layers[0], {
     catalogItem: item,
+    isCustom: true,
     visible: true,
     opacity: 0.6,
     style,
@@ -1121,10 +1126,10 @@ test("shared map links exclude private local annotation contents", async () => {
 
 test("upload references survive autosave and links with their appearance and map order", async () => {
   const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
-    visible: false, opacity: 0.4, legendIncluded: false,
+    visible: false, isCustom: true, opacity: 0.4, legendIncluded: false,
     style: { kind: "vector", definition: { fillColor: "#123456" } },
     filter: { enabled: true, match: "all", rules: [{ field: "label", operator: "eq", value: "Café wetlands" }] } };
-  const record = { entry: { item: null, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
+  const record = { entry: { item: null, isCustom: true, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
   const storage = createStorage(), view = createView(), timers = createTimers();
   const saved = emptySavedMap(10, 20, 6);
   const controller = createController({ view, storage,
@@ -1146,6 +1151,7 @@ test("upload references survive autosave and links with their appearance and map
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { restore() {} }, catalogVisualization: { clear() {} },
     mapLayers: { retainedRecords: records, commitStaged() {},
+      setCustomLayer(key, value) { assert.equal(key, record.entry.key); record.entry.isCustom = value; },
       setLegendIncluded(key, included) { assert.equal(key, record.entry.key); assert.equal(included, false); },
       restoreOrder(keys) { order.push(keys); } },
     restoreUpload: async (layer, isCurrent) => {
@@ -1230,7 +1236,7 @@ test("undoing Reset explains an upload deleted after the reset", async () => {
   const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
     visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
   const saved = emptySavedMap(10, 20, 6), view = createView(), timers = createTimers();
-  const records = [{ entry: { key: `local:upload:${upload.uploadId}`, item: null } }];
+  const records = [{ entry: { key: `local:upload:${upload.uploadId}`, item: null, isCustom: true } }];
   const controller = createController({ view, storage: createStorage(), initialViewport: saved.viewport,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
@@ -1256,16 +1262,17 @@ test("temporal views restore independently in mixed map order and retain unavail
     categorical: null };
   const temporal = { temporalSource: { collectionId: "eolab-temporal-datasets", itemId: "era5",
     variable: "air_temperature", time: "2020-01-15T12:00:00.000Z" },
-    customName: "First", visible: true, opacity: 0.6, legendIncluded: false, style };
+    customName: "First", visible: true, isCustom: false, opacity: 0.6, legendIncluded: false, style };
   const catalog = { catalogItem: { collection: "vectors", id: "roads" }, visible: false,
-    opacity: 0.8, style: { kind: "vector", definition: {} } };
+    opacity: 0.8, isCustom: false, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), layers: [temporal, catalog,
-    { ...structuredClone(temporal), customName: "Second", opacity: 0.3 }] };
+    { ...structuredClone(temporal), customName: "Second", isCustom: true, opacity: 0.3 }] };
   const records = [], view = createView(), order = [];
   const controller = createController({ view,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
+      setCustomLayer(key, value) { records.find(record => record.entry.key === key).entry.isCustom = value; },
       commitStaged(staged) { records.push(...staged.map(value => value.record)); },
       setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
       restoreOrder(keys) { order.push(keys); records.sort((a, b) => keys.indexOf(a.entry.key) - keys.indexOf(b.entry.key)); } },
@@ -1277,7 +1284,7 @@ test("temporal views restore independently in mixed map order and retain unavail
     restoreTemporal: async (layer, isCurrent) => {
       assert.equal(isCurrent(), true);
       const key = `local:temporal:${layer.customName}`;
-      records.push({ entry: { key, item: null }, savedTemporal: layer,
+      records.push({ entry: { key, item: null, isCustom: false }, savedTemporal: layer,
         error: layer.customName === "Second" ? "This observation is unavailable." : null });
       return key;
     },
@@ -1288,6 +1295,7 @@ test("temporal views restore independently in mixed map order and retain unavail
   assert.equal(view.result.loaded, 3);
   assert.deepEqual(order, [["local:temporal:First", records[1].entry.key, "local:temporal:Second"]]);
   assert.match(records[2].error, /unavailable/);
+  assert.deepEqual(records.map(record => record.entry.isCustom), [false, false, true]);
   await controller.copyMapLink();
   const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
   assert.deepEqual(copied.layers, saved.layers);
