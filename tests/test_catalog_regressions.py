@@ -1055,6 +1055,7 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
         "eolab-mounted-geotiffs",
         "eolab-mounted-vectors",
         "eolab-temporal-datasets",
+        "eolab-described-nonspatial",
     }
     assert {
         item["collection"]
