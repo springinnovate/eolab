@@ -1,0 +1,58 @@
+schema: eolab/item/v1
+id: survey-container
+kind: vector
+primary_asset: data
+source:
+  format: geopackage
+metadata:
+  title: Survey layers
+  description: Common study description.
+  keywords: [survey]
+  categories: [Biodiversity]
+  study_ids: [paper-003]
+  publications:
+    - id: paper-003
+      title: Survey sites and study regions
+      doi: 10.1234/example-survey
+      url: https://example.org/papers/survey
+      year: 2022
+  annotations:
+    objective: Shared study objective.
+assets:
+  data:
+    location: local
+    path: survey.gpkg
+    media_type: application/geopackage+sqlite3
+    roles: [data]
+    metadata:
+      title: Survey container
+  methods:
+    location: local
+    path: ../shared/survey-methods.pdf
+    media_type: application/pdf
+    roles: [metadata]
+    metadata:
+      title: Shared survey methods
+item_overrides:
+  sites:
+    metadata:
+      title: Survey sites
+      description: null
+      keywords: []
+      annotations:
+        relationship: described_asset
+        sample_count: 0
+        reviewed: false
+    assets:
+      field_notes:
+        location: local
+        path: field-notes.csv
+        media_type: text/csv
+        roles: [metadata]
+        metadata:
+          title: Site field notes
+  regions:
+    metadata:
+      title: Study regions
+      annotations:
+        relationship: related_input

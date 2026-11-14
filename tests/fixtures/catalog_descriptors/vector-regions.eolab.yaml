@@ -1,0 +1,33 @@
+schema: eolab/item/v1
+id: study-03-regions
+kind: vector
+primary_asset: data
+source:
+  format: geopackage
+  layer: regions
+metadata:
+  title: Study regions
+  study_ids: [paper-003]
+  publications:
+    - id: paper-003
+      title: Survey sites and study regions
+      doi: 10.1234/example-survey
+      url: https://example.org/papers/survey
+      year: 2022
+  annotations:
+    relationship: related_input
+assets:
+  data:
+    location: local
+    path: survey.gpkg
+    media_type: application/geopackage+sqlite3
+    roles: [data]
+    metadata:
+      title: Study regions layer
+  methods:
+    location: local
+    path: ../shared/survey-methods.pdf
+    media_type: application/pdf
+    roles: [metadata]
+    metadata:
+      title: Shared survey methods
