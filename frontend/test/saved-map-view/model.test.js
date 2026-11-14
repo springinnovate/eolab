@@ -174,6 +174,33 @@ test("saved maps retain repeated Catalog sources with independent appearance and
   assert.equal(saved.layers.at(-1).opacity, 0.25);
 });
 
+test("Catalog and Custom presentation round-trips for every source kind with strict Boolean values", () => {
+  const candidate = savedMapCandidate();
+  candidate.layers[0].isCustom = false;
+  const annotation = JSON.parse(readFileSync(new URL(
+    "../../../tests/fixtures/saved-map-v2.json", import.meta.url
+  ), "utf8")).layers[0];
+  candidate.layers.push(
+    { ...structuredClone(candidate.layers[0]), isCustom: true, customName: "Rainfall comparison" },
+    { uploadId: "11111111-1111-4111-8111-111111111111", isCustom: true, visible: false,
+      opacity: 0.4, style: { kind: "vector", definition: { fillColor: "#123456" } } },
+    { temporalSource: { collectionId: "eolab-temporal-datasets", itemId: "era5",
+      variable: "air_temperature", time: "2020-01-15T12:00:00.000Z" },
+      isCustom: true, visible: true, opacity: 0.6, style: structuredClone(candidate.layers[0].style) },
+    { ...annotation, isCustom: true },
+  );
+  const saved = createSavedMapView(candidate);
+  assert.deepEqual(parseSavedMapView(serializeSavedMapView(saved)), saved);
+  assert.deepEqual(saved.layers, candidate.layers);
+  for (let index = 0; index < saved.layers.length; index++) {
+    for (const value of [null, "false", 0, 1, {}]) {
+      const invalid = structuredClone(saved);
+      invalid.layers[index].isCustom = value;
+      assert.throws(() => parseSavedMapView(JSON.stringify(invalid)), /presentation must be boolean/);
+    }
+  }
+});
+
 test("map legend preferences round-trip for catalog and shared layers without changing older maps", () => {
   const candidate = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
   candidate.mapLegend = { visible: false, collapsed: true };

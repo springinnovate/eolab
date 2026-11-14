@@ -38,6 +38,7 @@ test("custom names change presentation and sorting without changing source or re
     controller.renameLayer(key, "  <b>Protected areas</b>  ");
     assert.equal(record.entry.label, "<b>Protected areas</b>");
     assert.equal(record.entry.customName, "<b>Protected areas</b>");
+    assert.equal(record.entry.isCustom, false, "a name or appearance change does not create a custom layer");
     assert.equal(controller.snapshots().find(layer => layer.key === key).sourceName, "Raster first");
     controller.sortLayers("name-ascending");
     assert.equal(controller.snapshots()[0].key, key);
@@ -760,6 +761,8 @@ test("Add another view restores copied presentation through its owner without re
     assert.equal(second.entry.visible, false);
     assert.equal(second.entry.opacity, 0.3);
     assert.equal(second.entry.legendIncluded, false);
+    assert.equal(first.entry.isCustom, false);
+    assert.equal(second.entry.isCustom, true);
     assert.equal(second.state.color, "blue");
     second.state.color = "red";
     controller.renameLayer(key, "Red view");
@@ -767,6 +770,46 @@ test("Add another view restores copied presentation through its owner without re
     assert.equal(first.state.color, "blue");
     assert.equal(first.entry.label, "Blue view");
     assert.equal(controller.removedLayer, null, "adding a view does not replace removal Undo");
+    controller.destroy();
+});
+
+test("Catalog and custom layers retain their explicit kind in a mixed stack through removal and Undo", async () => {
+    const {controller, adapter} = undoFixture();
+    await controller.show(catalogItem("source"), adapter);
+    const originalKey = controller.activeKey;
+    await controller.show(catalogItem("other"), adapter);
+    const otherKey = controller.activeKey;
+    const customKey = await controller.addAnotherView(originalKey);
+    controller.reorder(customKey, 1);
+    controller.renameLayer(customKey, "Comparison");
+    controller.setVisible(customKey, false);
+    const expected = [[otherKey, false], [customKey, true], [originalKey, false]];
+    assert.deepEqual(controller.snapshots().map(layer => [layer.key, layer.isCustom]), expected);
+    controller.removeWithUndo(customKey);
+    assert.equal(controller.removedLayer.isCustom, true);
+    await controller.undoLayerRemoval();
+    assert.deepEqual(controller.snapshots().map(layer => [layer.key, layer.isCustom]), expected);
+    assert.equal(controller.getRecord(customKey).entry.visible, false);
+    assert.equal(controller.getRecord(customKey).entry.label, "Comparison");
+    controller.removeWithUndo(originalKey);
+    assert.equal(controller.removedLayer.isCustom, false);
+    await controller.undoLayerRemoval();
+    assert.deepEqual(controller.snapshots().map(layer => [layer.key, layer.isCustom]), expected);
+    controller.destroy();
+});
+
+test("restored Catalog keys do not imply custom presentation and restoring kind leaves order untouched", async () => {
+    const {controller, adapter} = undoFixture();
+    const regular = await controller.stage(catalogItem("source"), adapter, {key: "local:view:restored"});
+    const custom = await controller.stage(catalogItem("other"), adapter, {isCustom: true});
+    controller.commitStaged([regular, custom]);
+    assert.deepEqual(controller.snapshots().map(layer => [layer.key, layer.isCustom]), [
+        [regular.key, false], [custom.key, true],
+    ]);
+    const order = controller.snapshots().map(layer => layer.key);
+    controller.setCustomLayer(regular.key, true);
+    assert.deepEqual(controller.snapshots().map(layer => layer.key), order);
+    assert.equal(controller.getRecord(regular.key).entry.isCustom, true);
     controller.destroy();
 });
 
@@ -786,7 +829,7 @@ test("pending view additions cannot outlive their source view and failures can b
     await h.controller.show(catalogItem("source"), h.adapter);
     h.beforeRestore = async () => { throw new Error("Publication unavailable"); };
     assert.equal(await h.controller.addAnotherView(key), null);
-    assert.match(h.view.status, /Could not add another view.*Publication unavailable/);
+    assert.match(h.view.status, /Could not create custom layer.*Publication unavailable/);
     assert.equal(h.controller.snapshots()[0].addingView, false);
     h.beforeRestore = async () => {};
     assert.ok(await h.controller.addAnotherView(key));

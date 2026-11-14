@@ -192,9 +192,12 @@ class MapStyledLayer(MapDocumentPart):
     customName is presentation text; it never replaces the source identity or
     source metadata. Omitted or null means to display the original source name.
     Omitted legendIncluded means to include a visible layer in the map legend.
+    isCustom records the card presentation without changing its source or access.
+    When omitted, the browser uses the source owner's ordinary presentation.
     """
 
     customName: Title | None = None
+    isCustom: bool = False
     visible: bool
     legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]
@@ -265,10 +268,12 @@ class MapTemporalLayer(MapDocumentPart):
 
     Repeated selections represent separate map rows, even at the same time.
     Runtime row identifiers and disposable rendering publications are not saved.
+    isCustom distinguishes a custom card from the ordinary Catalog card.
     """
 
     temporalSource: MapTemporalSource
     customName: Title | None = None
+    isCustom: bool = False
     visible: bool
     legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]
@@ -317,9 +322,11 @@ class MapAnnotationLayer(MapDocumentPart):
 
     Omitted legendIncluded includes the visible layer in the map legend. These
     preferences do not change a contributor's polygons or shared colors.
+    isCustom preserves the card presentation; omission retains the owner's default.
     """
 
     sharedAnnotation: MapAnnotationReference
+    isCustom: bool = False
     visible: bool
     legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]

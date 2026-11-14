@@ -13,6 +13,7 @@ import { getCatalogItemKey } from "../catalog-item-identity.js";
  * @property {string} key Stable map view identifier.
  * @property {Object|null} item Catalog STAC Item; null for browser-owned layers.
  * @property {string} label Readable layer label.
+ * @property {boolean} isCustom Whether this is a user-created layer rather than an ordinary Catalog layer.
  * @property {string|null} [customName] Optional map-specific name; source metadata is unchanged.
  * @property {string} [sourceName] Owner-supplied local name that enables the standard name editor.
  * @property {{id:string,label:string,actionLabel?:string}} [group] Current owner-supplied local layer group.
@@ -103,6 +104,7 @@ export class MapLayerStack {
             key,
             item,
             label,
+            isCustom: false,
             retentionOrder,
             visible: true,
             legendIncluded: true,

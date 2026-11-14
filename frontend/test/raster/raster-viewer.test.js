@@ -5767,14 +5767,17 @@ test("independent temporal views preserve explicit saved selections and reset ra
         const secondKey = await fixture.mapLayers.addAnotherView(first.entry.key);
         const second = fixture.mapLayers.getRecord(secondKey);
         assert.notEqual(first.entry.key, second.entry.key);
+        assert.equal(first.entry.isCustom, false, "the temporal owner admits the ordinary Catalog layer");
+        assert.equal(second.entry.isCustom, true, "duplication creates a custom layer of the same temporal source");
         assert.equal(fixture.mapLayers.retainedRecords.length, 2);
         await fixture.temporalViews[1].handlers.onTimeChange("2020-01-01T02:00:00Z");
         assert.equal(first.state.item.source.time, "2020-01-01T00:00:00Z");
         assert.equal(second.state.item.source.time, "2020-01-01T02:00:00Z");
         const saved = fixture.viewer.exportTemporal(second);
-        const restoredKey = await fixture.viewer.restoreTemporal(saved, temporalItem(), () => true);
+        const restoredKey = await fixture.viewer.restoreTemporal({...saved, isCustom: true}, temporalItem(), () => true);
         assert.notEqual(restoredKey, second.entry.key);
         assert.equal(fixture.mapLayers.getRecord(restoredKey).state.item.source.time, saved.temporalSource.time);
+        assert.equal(fixture.mapLayers.getRecord(restoredKey).entry.isCustom, true);
         const appearance = structuredClone(first.adapter.exportSavedState(first));
         appearance.continuous.definition.minimum = 100;
         appearance.continuous.definition.midpoint = 200;

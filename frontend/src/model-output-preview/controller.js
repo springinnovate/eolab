@@ -160,7 +160,7 @@ export class ModelOutputLayers {
             state.appearance = this.normalizeAppearance(state, state.appearance);
             layer = this.createLayer(key, data, state.appearance); state.layer = layer;
             this.layers.set(key, state);
-            this.addLayer({key, ...this.outputPresentation(job.jobId, file), customName: restore?.customName ?? null,
+            this.addLayer({key, ...this.outputPresentation(job.jobId, file), isCustom: true, customName: restore?.customName ?? null,
                 visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1}, this.adapter(state));
             this.schedule();
         } catch (error) {

@@ -30,6 +30,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @typedef {Object} MapLayerStackSnapshot
  * @property {string} key Stable retained-layer identity.
  * @property {string} label Current display name.
+ * @property {boolean} isCustom Whether this is a user-created Custom layer rather than an ordinary Catalog layer.
  * @property {{collection:string,id:string}|null} item Catalog identity, or null for an owner-supplied layer.
  * @property {string} datasetKind Owner-reported layer type.
  * @property {boolean} visible Independent map visibility.
@@ -158,6 +159,8 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         /** @type {Map<string,{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}>} Presentation-owned legend state and controls. */
         this.legends = new Map();
+        /** @type {Map<string,{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}>} Source details and utility disclosure state for each retained layer. */
+        this.details = new Map();
         this.renameEditor = null;
         this.layers = [];
         this.activeKey = null;
@@ -217,6 +220,7 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         this.handlers = null;
         this.legends.clear();
+        this.details.clear();
         this.renameEditor = null;
     }
 
@@ -224,7 +228,7 @@ export class MapLayerStackView {
      * Render rows while keeping the visible portion of an unchanged layer order stationary.
      * Restore control focus without scrolling during refreshes and visibility changes;
      * explicit focus after reordering or removal may still bring its target into view.
-     * Legends retain expansion; focus returns to the visible legend control when
+     * Details and legends retain expansion; focus returns to the visible legend control when
      * its collapsed swatch has been replaced by the full graphic.
      *
      * @param {MapLayerStackSnapshot[]} layers Owner-supplied layer snapshots and retained controls.
@@ -249,6 +253,9 @@ export class MapLayerStackView {
         if (this.renameEditor && !retainedKeys.has(this.renameEditor.key)) this.renameEditor = null;
         for (const key of this.legends.keys()) {
             if (!retainedKeys.has(key)) this.legends.delete(key);
+        }
+        for (const key of this.details.keys()) {
+            if (!retainedKeys.has(key)) this.details.delete(key);
         }
         this.#renderVisibilityActions(layers);
         this.sort.disabled = layers.length < 2;
@@ -321,6 +328,8 @@ export class MapLayerStackView {
             if (legend?.expanded && focusTarget === legend.trigger) {
                 focusTarget = focusTargets.get(`${retainedFocus.key}\u0000legend-collapse`);
             }
+            const details = this.details.get(retainedFocus.key);
+            if (details?.panel.contains(focusTarget)) this.#toggleDetails(retainedFocus.key, true);
             focusTarget?.focus({ preventScroll: preserveViewport });
         }
     }
@@ -428,8 +437,9 @@ export class MapLayerStackView {
     }
 
     /**
-     * Construct a semantic row with text style/analysis actions, direct utility icons
-     * and a swatch that becomes the full legend, retaining stable action identities.
+     * Construct a compact Catalog or Custom layer card in the existing drawing order.
+     * Keep frequent actions beside a source-details disclosure, preserving owner
+     * controls and every action's stable focus identity.
      *
      * @param {MapLayerStackSnapshot} layer Layer presentation snapshot.
      * @param {number} index Top-first row index.
@@ -446,11 +456,13 @@ export class MapLayerStackView {
         focusTargets
     ) {
         const typeLabel = layer.typeLabel ?? ({ raster: "Raster", vector: "Vector", annotation: "Shared layer" }[layer.datasetKind] ?? "Layer");
-        const accessibleName = layer.item === null
+        const accessibleName = (layer.item === null
             ? `${layer.label}; ${typeLabel.toLowerCase()}${typeLabel.toLowerCase().endsWith("layer") ? "" : " layer"}${layer.group ? ` from ${layer.group.label}` : ""}`
-            : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
+            : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`) +
+            (layer.isCustom ? "; Custom layer" : "");
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
+        row.classList.toggle("is-custom-layer", Boolean(layer.isCustom));
         row.classList.toggle("has-layer-group", Boolean(layer.group));
         row.dataset.layerKey = layer.key;
         row.dataset.layerIndex = String(index);
@@ -494,20 +506,20 @@ export class MapLayerStackView {
         title.className = "map-layer-title";
         title.append(name);
         label.append(title);
+        const kind = this.documentContext.createElement("span");
+        kind.className = "map-layer-kind";
+        kind.textContent = layer.isCustom ? "Custom layer" : "Catalog dataset";
+        title.append(kind);
         if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
             const roleBadge = this.documentContext.createElement("span");
             roleBadge.className = "map-layer-role-badge";
             roleBadge.textContent = layer.roleBadge.label;
             roleBadge.title = layer.roleBadge.description;
             roleBadge.setAttribute("aria-label", layer.roleBadge.description);
-            label.append(roleBadge);
+            title.append(roleBadge);
         }
         const primary = this.documentContext.createElement("div");
         primary.className = "map-layer-primary-row";
-        const type = this.documentContext.createElement("span");
-        type.className = "map-layer-type";
-        type.textContent = typeLabel;
-        title.append(type);
         primary.append(label);
         const style = this.#button(
             "Style", `Style ${accessibleName}`, layer.key, "style",
@@ -573,24 +585,29 @@ export class MapLayerStackView {
         }
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
-        const filter = layer.canFilter ? this.#iconButton(
-            "filter", `${layer.filterActive ? "Edit active filter for" : "Filter"} ${accessibleName}`,
+        const filter = layer.canFilter ? this.#button(
+            "Filter", `${layer.filterActive ? "Edit active filter for" : "Filter"} ${accessibleName}`,
             layer.key, "filter", () => this.handlers?.onFilter?.(layer.key), focusTargets,
         ) : null;
-        if (filter) filter.classList.toggle("has-active-filter", Boolean(layer.filterActive));
+        if (filter) {
+            filter.classList.add("map-layer-filter-action");
+            filter.classList.toggle("has-active-filter", Boolean(layer.filterActive));
+        }
         // Local editors supply their own Edit/Details action instead of the catalog Info action.
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
+            ...(filter ? [filter] : []),
             ...(layer.capabilities?.calculations ? [this.#button(
                 "Raster statistics", "Calculate statistics for " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : [])
         );
         if (this.allowRemoval && layer.canAddView) {
+            const actionLabel = layer.isCustom ? "Duplicate" : "Create custom layer";
             const addView = this.#button(
-                layer.addingView ? "Adding view…" : "Add another view",
-                `Add another view of ${accessibleName}`, layer.key, "add-view",
+                layer.addingView ? "Creating…" : actionLabel,
+                `${layer.isCustom ? "Duplicate" : "Create custom layer from"} ${accessibleName}`, layer.key, "add-view",
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
@@ -599,7 +616,6 @@ export class MapLayerStackView {
         const utilities = this.documentContext.createElement("div");
         utilities.className = "map-layer-utility-actions";
         utilities.append(
-            ...(filter ? [filter] : []),
             zoom,
             ...(layer.item !== null || layer.sourceName ? [this.#iconButton(
                 "rename", `Rename ${accessibleName}`, layer.key, "rename",
@@ -613,17 +629,13 @@ export class MapLayerStackView {
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
             )] : [])
         );
-        rowActions.append(utilities);
+        const details = this.#buildDetails(layer, typeLabel, utilities, focusTargets);
+        rowActions.append(details.trigger);
         row.append(reorder);
-        if (layer.attribution) {
-            const attribution = this.documentContext.createElement("p");
-            attribution.className = "map-layer-attribution";
-            attribution.textContent = layer.attribution;
-            row.append(attribution);
-        }
         row.append(primary);
         if (layer.primaryControl) row.append(layer.primaryControl);
         row.append(rowActions);
+        row.append(details.panel);
         if (legend !== null) row.append(legend.panel);
         if (this.renameEditor?.key === layer.key) row.append(this.renameEditor.form);
         if (layer.filterStatus) {
@@ -642,6 +654,76 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
+    }
+
+    /**
+     * Build a collapsed source description and utility actions for one layer.
+     * The explicit layer kind controls presentation only; source identity,
+     * owner-specific attribution and action permissions remain unchanged.
+     * @param {MapLayerStackSnapshot} layer Current owner-supplied presentation.
+     * @param {string} typeLabel Readable source type, such as Raster or Shared layer.
+     * @param {HTMLDivElement} utilities Existing zoom, naming, metadata and style-copy actions.
+     * @param {Map<string,Element>} focusTargets Controls keyed for focus restoration.
+     * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}} Details controls and current expansion state.
+     */
+    #buildDetails(layer, typeLabel, utilities, focusTargets) {
+        const panel = this.documentContext.createElement("div");
+        panel.className = "map-layer-details";
+        panel.id = `map-layer-details-${encodeURIComponent(layer.key)}`;
+        panel.setAttribute("role", "group");
+        panel.setAttribute("aria-label", `Details for ${layer.label}`);
+        const type = this.documentContext.createElement("p");
+        type.className = "map-layer-type";
+        type.textContent = typeLabel;
+        panel.append(type);
+        if (layer.sourceName) {
+            const source = this.documentContext.createElement("p");
+            source.className = "map-layer-source";
+            source.textContent = `${layer.isCustom ? "Based on" : "Source"}: ${layer.sourceName}`;
+            panel.append(source);
+        }
+        if (layer.item !== null) {
+            const notice = this.documentContext.createElement("p");
+            notice.className = "map-layer-source-notice";
+            notice.textContent = "The original Catalog dataset stays unchanged.";
+            panel.append(notice);
+        }
+        if (layer.attribution) {
+            const attribution = this.documentContext.createElement("p");
+            attribution.className = "map-layer-attribution";
+            attribution.textContent = layer.attribution;
+            panel.append(attribution);
+        }
+        panel.append(utilities);
+        const trigger = this.#button("Details", `Details for ${layer.label}`, layer.key, "details",
+            () => this.#toggleDetails(layer.key, !this.details.get(layer.key)?.expanded), focusTargets);
+        trigger.setAttribute("aria-controls", panel.id);
+        const state = { expanded: this.details.get(layer.key)?.expanded ?? false, trigger, panel };
+        this.details.set(layer.key, state);
+        this.#toggleDetails(layer.key, state.expanded);
+        panel.addEventListener("keydown", event => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                this.#toggleDetails(layer.key, false);
+                trigger.focus({ preventScroll: true });
+            }
+        });
+        return state;
+    }
+
+    /**
+     * Show or hide source details without changing layer state or focus.
+     * @param {string} key Retained layer identity with rendered details.
+     * @param {boolean} expanded Whether details and utility actions are visible.
+     * @return {void}
+     */
+    #toggleDetails(key, expanded) {
+        const state = this.details.get(key);
+        if (!state) return;
+        state.expanded = expanded;
+        state.trigger.setAttribute("aria-expanded", String(expanded));
+        state.panel.hidden = !expanded;
     }
 
     /**

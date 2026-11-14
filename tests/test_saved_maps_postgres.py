@@ -58,18 +58,21 @@ def store(request: pytest.FixtureRequest) -> SavedMapStore:
 
 
 def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
-    """Persist a browser document and retrieve it through a new store and API instance.
+    """Persist Catalog and Custom cards through a new store and API instance.
 
     Args:
         store: Empty disposable PostgreSQL store.
     """
     app = FastAPI()
     app.include_router(create_saved_maps_router(store))
+    request = map_request()
+    request["view"]["layers"][0]["isCustom"] = False
+    request["view"]["layers"][1]["isCustom"] = True
     with TestClient(app, headers=HEADERS) as client:
-        response = client.post(BASE, json=map_request())
+        response = client.post(BASE, json=request)
         assert response.status_code == 201, response.text
         original = response.json()
-        assert original["view"] == map_request()["view"]
+        assert original["view"] == request["view"]
         assert response.headers["location"] == BASE + "/amazon-priorities"
         assert response.headers["cache-control"] == "no-store"
         assert client.post(BASE, json=map_request()).status_code == 409
