@@ -116,6 +116,38 @@ def test_shared_worker_does_not_import_downstream_settings() -> None:
         }, name
 
 
+def test_model_submission_delegates_habitat_policy_to_registered_operations() -> None:
+    """Keep Habitat preparation dependencies and decisions out of shared submission.
+
+    Existing administrator preparation methods remain domain-specific entry points;
+    the common model-run path must use only the registered lifecycle callback.
+    """
+    path = Path("src/eolab_app/processing/service.py")
+    assert not imports(path) & {
+        "eolab_app.processing.habitat_models",
+        "eolab_app.processing.habitat_preparation_selections",
+    }
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    submission = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "submit_model_run"
+    )
+    names = {
+        node.id if isinstance(node, ast.Name) else node.attr
+        for node in ast.walk(submission)
+        if isinstance(node, (ast.Name, ast.Attribute))
+    }
+    assert not {name for name in names if "habitat" in name.lower()}
+    assert not {
+        node.value
+        for node in ast.walk(submission)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.startswith("habitat.")
+    }
+
+
 def test_mechanisms_and_storage_never_import_application_services() -> None:
     """Keep neutral native execution and storage below their workflow owners."""
     paths = [

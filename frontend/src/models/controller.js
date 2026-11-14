@@ -1,7 +1,8 @@
 /** Own model setup and run navigation while accepted work remains on the server. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
+import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getRasterPreparationSources, getHabitatEarthEngineInput } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getRasterPreparationSources } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
@@ -17,7 +18,7 @@ export class ModelsController {
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
      * @param {(options?:{includeDrawnPolygons?:boolean})=>Object & {drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} dependencies.getContext Catalog and map choices, with optional detached drawn polygons.
-     * @param {(identity:{collectionId:string,itemId:string})=>Promise<Object>} dependencies.getTemporalItem Read the selected dataset's current Catalog metadata.
+     * @param {(identity:{collectionId:string,itemId:string},signal?:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read an exact Catalog Item for input metadata and display titles.
      * @param {(source:Object,signal:AbortSignal,targetCrs?:string|null)=>Promise<Object>} dependencies.describeSource Read source grid metadata in the chosen CRS.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
@@ -34,14 +35,16 @@ export class ModelsController {
      * @param {(layers:Object[],isCurrent:()=>boolean)=>Promise<void>} [dependencies.restoreRunLayers] Restore captured displays through their existing owners.
      * @param {Object} [dependencies.clock=globalThis] Timeout scheduler for deletion notices.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
+     * @param {(model:Object)=>import("./model-setup.js").ModelSetupIntegration|null} [dependencies.getSetupIntegration] Resolve the installed setup adapter.
      */
-    constructor({api, jobs, view, getContext, getTemporalItem, loadTemporalTimes, describeSource, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getCatalogItem, loadTemporalTimes, describeSource, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
-        newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
+        newId = () => globalThis.crypto.randomUUID().replaceAll("-", ""), getSetupIntegration = getModelSetupIntegration}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
-        Object.assign(this, {getTemporalItem, loadTemporalTimes});
+        Object.assign(this, {getCatalogItem, loadTemporalTimes});
         this.describeSource = describeSource;
+        this.getSetupIntegration = getSetupIntegration;
         this.outputState = outputState;
         this.onRunChange = onRunChange;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
@@ -58,7 +61,10 @@ export class ModelsController {
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onInput: (name, change) => this.editInput(name, change),
             onRefreshGrid: () => this.refreshRasterPreparation(true),
-            onRefreshHabitat: name => void this.loadHabitatOptions(this.state.draft, name),
+            onSetupAction: (action, value) => {
+                if (!this.state.draft || this.state.submitting) return;
+                this.state.error = ""; return this.setupSession?.action(action, value);
+            },
             onArea: (name, mode) => this.chooseArea(name, mode),
             onTemporalDataset: key => void this.chooseTemporalDataset(key),
             onTemporalVariable: variable => void this.chooseTemporalVariable(variable),
@@ -136,22 +142,22 @@ export class ModelsController {
      */
     navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
-    /** Create a draft with the supplied area and load model-specific choices.
+    /** Create a draft with independent manual areas and load model-specific Catalog choices.
      * @param {Object} model Installed recipe chosen by the user.
      * @return {void}
      */
     chooseModel(model) {
         this.resetRasterPreparation();
+        this.setupSession?.dispose();
         this.closeVectorFilter();
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
-        this.state.draft = createModelDraft(model, this.inputContext(model), this.newId());
+        this.state.draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
-        for (const name of Object.keys(draft.inputs)) {
-            if (draft.model.inputs[name].type === "habitat_stack") void this.loadHabitatOptions(draft, name);
-        }
+        this.bindModelSetup(draft);
+        void this.setupSession?.start();
     }
 
     /** Stop vector checks when their entire model draft is replaced or destroyed.
@@ -162,31 +168,19 @@ export class ModelsController {
         this.vectorSelectionRequests.clear();
     }
 
-    /** Load Habitat's years, dataset choices and acquisition grid for model setup.
-     * Manual raster setup remains usable if this request fails. Replaced drafts
-     * ignore late replies. New drafts select every dataset; refreshes and duplicated
-     * runs retain their existing year, dataset selections and output grid.
-     * @param {Object} draft Draft requesting the configuration.
-     * @param {string} name Habitat stack input declared by that recipe.
-     * @return {Promise<void>} Resolves after choices or retry guidance are displayed.
+    /** Bind one model-owned setup session using only explicit host capabilities.
+     * Draft replacement disposes its predecessor before the new session starts.
+     * @param {Object} draft Current editable model draft.
+     * @return {void}
      */
-    async loadHabitatOptions(draft, name) {
-        const input = draft.inputs[name];
-        if (input.loading) return;
-        input.loading = true; input.error = ""; this.render();
-        try {
-            const options = await this.api.getHabitatEarthEngineOptions();
-            if (this.destroyed || this.state.draft !== draft) return;
-            input.configuration = options; input.year ??= options.defaultYear;
-            for (const [role, field] of [["predictor", "predictorDatasets"], ["response", "responseDatasets"]])
-                input[field] ??= options.datasets.filter(dataset => dataset.roles.includes(role)).map(dataset => dataset.id);
-        } catch (error) {
-            if (this.destroyed || this.state.draft !== draft) return;
-            input.error = `Could not load Earth Engine choices: ${error.message}`;
-        } finally {
-            input.loading = false;
-            if (!this.destroyed && this.state.draft === draft) { this.refreshRasterPreparation(); this.render(); }
-        }
+    bindModelSetup(draft) {
+        const current = () => !this.destroyed && this.state.draft === draft;
+        this.setupSession = draft.integration?.createSession(draft, {
+            api: this.api, getCatalogItem: this.getCatalogItem,
+            render: () => { if (current()) this.render(); },
+            refreshGrid: () => { if (current()) this.refreshRasterPreparation(); },
+            closeInputEditor: () => { if (current()) this.closeVectorFilter(); },
+        }) ?? null;
     }
 
     /** Change one named input and update its dependent grid or area choices.
@@ -208,14 +202,7 @@ export class ModelsController {
             }
         }
         Object.assign(input, change);
-        if (this.state.draft.model.inputs[name].type === "habitat_stack" && change.kind) {
-            const draft = this.state.draft;
-            for (const [key, definition] of Object.entries(draft.model.inputs)) {
-                if (definition.type === "raster_preparation") Object.assign(draft.inputs[key], {mode: "auto", sourceKey: ""});
-                if (change.kind === "earthEngine" && definition.type === "summary_area" && draft.inputs[key].area?.kind === "wholeRaster")
-                    this.chooseArea(key, "viewport");
-            }
-        }
+        this.setupSession?.inputChanged(name, change);
         this.editDraft({});
     }
 
@@ -238,17 +225,17 @@ export class ModelsController {
         const input = draft.inputs[name];
         const sources = [...new Map(getRasterPreparationSources(draft).filter(value => value.raster.available !== false)
             .map(value => [modelSourceKey(value.raster), value.raster])).values()];
-        const earthEngine = getHabitatEarthEngineInput(draft);
-        const grid = earthEngine?.configuration?.grid;
-        const choices = grid ? [{key: "earthEngine", label: "Earth Engine inputs", sourceCrs: grid.crs, grid}] : [];
-        const key = JSON.stringify([draft.id, input.crs, earthEngine?.kind, grid, sources.map(modelSourceKey)]);
+        const acquisition = draft.integration?.acquisitionGrid(draft);
+        const grid = acquisition?.grid;
+        const choices = acquisition ? [acquisition] : [];
+        const key = JSON.stringify([draft.id, input.crs, acquisition, sources.map(modelSourceKey)]);
         if (!retry && key === this.preparationKey) return;
         this.preparationAbort?.abort();
         const abort = new AbortController(); this.preparationAbort = abort; this.preparationKey = key;
         input.choices = choices; input.loading = Boolean(sources.length && (input.crs || input.projectionMode !== "custom")); input.error = "";
         if (grid) input.unit = grid.unit;
         if (input.mode === "auto" && grid) {
-            Object.assign(input, {pixelSize: [...grid.pixelSize], origin: [...grid.origin], sourceKey: "earthEngine", unit: grid.unit});
+            Object.assign(input, {pixelSize: [...grid.pixelSize], origin: [...grid.origin], sourceKey: acquisition.key, unit: grid.unit});
         } else if (input.mode === "auto" && input.sourceKey !== (sources[0] ? modelSourceKey(sources[0]) : "")) {
             Object.assign(input, {pixelSize: [null, null], origin: [0, 0], sourceKey: ""});
         }
@@ -273,8 +260,7 @@ export class ModelsController {
                     const native = await this.describeSource(source, abort.signal);
                     if (!isCurrent()) return;
                     input.crs = native.crs;
-                    const earthEngine = getHabitatEarthEngineInput(draft);
-                    this.preparationKey = JSON.stringify([draft.id, input.crs, earthEngine?.kind, earthEngine?.configuration?.grid, sources.map(modelSourceKey)]);
+                    this.preparationKey = JSON.stringify([draft.id, input.crs, draft.integration?.acquisitionGrid(draft), sources.map(modelSourceKey)]);
                 }
                 const key = modelSourceKey(source);
                 const metadata = await this.describeSource(source, abort.signal, input.crs);
@@ -369,7 +355,7 @@ export class ModelsController {
         temporal.loading = true; temporal.error = ""; temporal.datesError = ""; this.render();
         try {
             if (reloadItem) {
-                const item = await this.getTemporalItem(source);
+                const item = await this.getCatalogItem(source, abort.signal);
                 if (!isCurrent()) return;
                 temporal.item = item;
                 if (!temporal.variable) {
@@ -953,39 +939,31 @@ export class ModelsController {
 
     /** Copy a saved run's inputs into editable setup, including dataset and polygon choices.
      * The exact recipe must remain available. Choosing a vector view explicitly
-     * switches a captured area to that view's current filter.
+     * switches a captured area to that view's current filter. Registered setup
+     * integrations restore their own values before asynchronous choices reload.
      * @return {Promise<void>} Completion after the copied setup loads its current source choices.
      */
     async duplicateRun() {
         const saved = this.state.invocation; if (!saved) return;
-        this.resetRasterPreparation();
-        this.closeVectorFilter();
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
         if (!model) { this.state.error = "This tool version is not available in setup. Its YAML remains available until metadata expires."; this.render(); return; }
+        this.resetRasterPreparation();
+        this.setupSession?.dispose();
+        this.closeVectorFilter();
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
-        const draft = createModelDraft(model, this.inputContext(model), this.newId());
+        const draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
         for (const [name, definition] of Object.entries(model.inputs)) {
             const input = draft.inputs[name];
             const handler = getModelInputHandler(definition.type);
+            if (draft.integration?.restoreInput(draft, name, saved.inputs[name])) continue;
             if (handler) handler.restore(input, saved.inputs[name], definition);
             else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
                 input.raster = structuredClone(saved.inputs[name]);
                 input.sourceReason = "Copied from the original run; choose another raster to change it.";
-            } else if (definition.type === "habitat_stack") {
-                const value = saved.inputs[name];
-                if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year,
-                    predictorDatasets: value.predictorDatasets == null ? null : [...value.predictorDatasets],
-                    responseDatasets: value.responseDatasets == null ? null : [...value.responseDatasets]});
-                else {
-                    input.kind = "manual";
-                    input.predictors = value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)}));
-                    input.responses = value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)}));
-                    input.categoricalPredictor = value.categoricalPredictor;
-                }
             } else if (definition.type === "raster_preparation") {
                 const {crs, pixelSize, origin} = saved.inputs[name];
                 Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});
@@ -1009,15 +987,15 @@ export class ModelsController {
                 input.areaDescription = input.area.kind === "polygonArea" ? "Exact polygons from the original run." : "Exact area and filter copied from the original run.";
             }
         }
+        draft.integration?.restoreState(draft, saved.inputs);
         const preparationName = Object.keys(model.inputs).find(name => model.inputs[name].type === "raster_preparation");
         if (preparationName) {
             for (const source of getRasterPreparationSources(draft)) source.state.resampling = saved.inputs[preparationName].resampling[source.key];
         }
         this.refreshMapLayers();
         this.render(); this.view.focusHeading();
-        for (const [name, definition] of Object.entries(model.inputs)) {
-            if (definition.type === "habitat_stack") await this.loadHabitatOptions(draft, name);
-        }
+        this.bindModelSetup(draft);
+        await this.setupSession?.start();
         if (draft.temporal?.datasetKey) await this.loadTemporalDates(undefined, true);
     }
 
@@ -1048,6 +1026,7 @@ export class ModelsController {
      */
     destroy() {
         this.resetRasterPreparation();
+        this.setupSession?.dispose();
         this.closeVectorFilter();
         this.destroyed = true; this.revision += 1; this.cancelVectorSelections();
         this.temporalAbort?.abort(); this.temporalRevision += 1;

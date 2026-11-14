@@ -1,4 +1,5 @@
 /** Build model drafts from available source identities and explicit analysis areas. */
+import { getModelSetupIntegration } from "./model-setup.js";
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
 import { getModelInputHandler } from "./input-handlers.js";
@@ -19,16 +20,6 @@ import { getModelInputHandler } from "./input-handlers.js";
  * @return {boolean} Whether the recipe needs this control.
  */
 export function modelHasInput(model, type) { return Object.values(model.inputs).some(input => input.type === type); }
-
-/** Find the active Earth Engine stack in this model's editable inputs.
- * @param {Object} draft Model draft with named input state.
- * @return {Object|undefined} Habitat stack state, absent when manual rasters are selected.
- */
-export function getHabitatEarthEngineInput(draft) {
-    const name = Object.keys(draft.model.inputs).find(key => draft.model.inputs[key].type === "habitat_stack");
-    const input = draft.inputs[name];
-    return input?.kind === "earthEngine" ? input : undefined;
-}
 
 /** Identify a raster or vector choice without using its label or map visibility.
  * @param {Object} source Catalog identity, uploaded vector identity or owned run-file reference.
@@ -121,7 +112,7 @@ export function captureRasterPreparation(value, draft) {
  * @return {Object} Catalog identity or owned run-artifact reference.
  * @throws {Error} If the source is absent, expired or ineligible for this input.
  */
-function captureModelRaster(raster, sources, type = "raster") {
+export function captureModelRaster(raster, sources, type = "raster") {
     const startingMask = type === "mask_source";
     if (!raster || !sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
         throw new Error(startingMask ? "Choose a starting raster from Map layers." : "Choose a raster from Map layers or a completed run.");
@@ -131,39 +122,6 @@ function captureModelRaster(raster, sources, type = "raster") {
         throw new Error("This raster is no longer available. Choose another input.");
     return raster.kind === "runArtifact" ?
         {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
-}
-
-/** Capture selected Earth Engine datasets for a year or named Habitat rasters.
- * @param {Object} state Editable mode, year, dataset selections, server options and manual rows.
- * @param {Object[]} sources Current source choices in this model setup.
- * @return {Object} Earth Engine year and dataset IDs, or named predictors/responses with ordinary raster references.
- * @throws {Error} If choices have not loaded, or the year, dataset selections, roles, names or raster selections are invalid.
- */
-export function captureHabitatStack(state, sources) {
-    if (state.kind === "earthEngine") {
-        if (!state.configuration) throw new Error("Wait for the Earth Engine year choices to load, or retry.");
-        if (!Number.isInteger(state.year) || state.year < state.configuration.minimumYear || state.year > state.configuration.maximumYear)
-            throw new Error("Choose an assessment year from the available years.");
-        const selected = {};
-        for (const [role, field, label] of [["predictor", "predictorDatasets", "predictor"], ["response", "responseDatasets", "observed response"]]) {
-            const choices = state.configuration.datasets.filter(dataset => dataset.roles.includes(role));
-            const ids = state[field];
-            if (!ids.length) throw new Error(`Select at least one ${label} dataset.`);
-            if (ids.some(id => !choices.some(dataset => dataset.id === id))) throw new Error(`A selected ${label} dataset is no longer available. Review the dataset choices.`);
-            const missing = choices.find(dataset => dataset.requiredRoles.includes(role) && !ids.includes(dataset.id));
-            if (missing) throw new Error(`${missing.label} is required by the model.`);
-            selected[field] = choices.filter(dataset => ids.includes(dataset.id)).map(dataset => dataset.id);
-        }
-        return {kind: "earthEngine", year: state.year, ...selected};
-    }
-    if (!state.predictors.length || !state.responses.length) throw new Error("Choose at least one predictor and one observed response.");
-    const names = [...state.predictors, ...state.responses].map(row => row.name.trim());
-    if (names.some(name => !name)) throw new Error("Name each predictor and observed response.");
-    if (new Set(names).size !== names.length) throw new Error("Give each predictor and observed response a different name.");
-    const categoricalPredictor = state.categoricalPredictor.trim();
-    if (!state.predictors.some(row => row.name.trim() === categoricalPredictor)) throw new Error("Choose the categorical predictor.");
-    return {predictors: state.predictors.map(row => ({name: row.name.trim(), source: captureModelRaster(row.raster, sources)})),
-        responses: state.responses.map(row => ({name: row.name.trim(), source: captureModelRaster(row.raster, sources)})), categoricalPredictor};
 }
 
 /** Explain the saved polygon selection without exposing server paths.
@@ -234,16 +192,17 @@ export function selectedDrawnPolygonLayer(draft, input) {
 /** Create independent setup state for each declared raster and spatial input.
  * The selectedArea input is the sampling area used by raster histograms.
  * Models with a starting mask require the user to choose that mask explicitly.
- * Habitat starts with Earth Engine inputs and an explicit analysis area.
+ * Registered model setup owns specialized initial choices and cross-input state.
  * @param {Object} model Installed recipe.
  * @param {Object & {drawnPolygonLayers?:DrawnPolygonLayer[]}} context Catalog and map choices supplied by browser composition, with detached drawn layers for Ecosystem Condition.
  * @param {string} id Local draft identity.
+ * @param {import("./model-setup.js").ModelSetupIntegration|null} [integration] Registered setup owner or explicit ordinary setup.
  * @return {Object} Draft with field state in inputs[name], shared source choices,
  * temporal controls and parameters. Spatial fields select live vector views or
  * retain an explicitly captured area from the map or an earlier run.
  * @throws {Error} If the supplied map selection is invalid.
  */
-export function createModelDraft(model, context, id) {
+export function createModelDraft(model, context, id, integration = getModelSetupIntegration(model)) {
     const sources = structuredClone(context.rasters ?? []);
     const catalogRasters = sources.filter(source => source.kind !== "runArtifact");
     const visibleCatalogRasters = catalogRasters.filter(source => source.visible);
@@ -255,16 +214,15 @@ export function createModelDraft(model, context, id) {
     const inputs = {};
     for (const [name, input] of Object.entries(model.inputs)) {
         const handler = getModelInputHandler(input.type);
-        if (handler) inputs[name] = handler.createDraft(input, context);
+        const owned = integration?.createInput(input, preparation);
+        if (owned !== undefined) inputs[name] = owned;
+        else if (handler) inputs[name] = handler.createDraft(input, context);
         else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) {
             inputs[name] = {
                 ...preparation,
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
                 sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.",
             };
-        } else if (input.type === "habitat_stack") {
-            inputs[name] = {kind: "earthEngine", year: null, configuration: null, loading: false, error: "", predictorDatasets: null, responseDatasets: null,
-                predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
         } else if (input.type === "raster_preparation") {
             const step = model.steps.find(value => value.inputs.preparation?.input === name);
             const settings = step.inputs.settings.value;
@@ -275,8 +233,7 @@ export function createModelDraft(model, context, id) {
             let area = explicitSelection ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
             let areaMode = explicitSelection ? "vector" : ({wholeRaster: "whole", selectedArea: "samplingArea", samplingBox: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
             let selectionError = "";
-            if (!explicitSelection && (!modelSupportsArea(input.type, area) || usesTemporal && !context.area ||
-                modelHasInput(model, "habitat_stack") && area.kind === "wholeRaster")) {
+            if (!explicitSelection && (!modelSupportsArea(input.type, area) || usesTemporal && !context.area)) {
                 areaMode = "viewport"; area = null;
                 try { area = modelViewportArea(context.viewportBounds); }
                 catch (error) { selectionError = error.message; }
@@ -289,7 +246,8 @@ export function createModelDraft(model, context, id) {
             };
         }
     }
-    return {id, model, label: model.title, sources, inputs,
+    return {id, model, label: model.title, sources, inputs, integration,
+        setupState: integration?.createState(model, inputs, context, {viewportArea: modelViewportArea}) ?? null,
         drawnPolygonLayers: model.id === "habitat-condition" ? context.drawnPolygonLayers ?? [] : [],
         temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], statisticType,
             statisticType === "temporal_reduction" ? model.steps[0].inputs.precipitation.value : null) : null,
@@ -301,6 +259,7 @@ export function createModelDraft(model, context, id) {
 /** Capture the checked model inputs independently of later map and draft edits.
  * Drawn polygon choices are captured as local geometry for the controller to
  * replace with private area references before sending or saving the request.
+ * Registered integrations capture their owned inputs through the same invocation contract.
  * @param {Object} draft Editable model setup with raster and spatial state in inputs[name].
  * @param {string} requestId Stable retry identity generated before dispatch.
  * @param {number} [utcOffsetMinutes=-new Date().getTimezoneOffset()] Local minutes east of UTC, captured once for this submission and its retries.
@@ -313,10 +272,11 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         const state = draft.inputs[name];
         const handler = getModelInputHandler(input.type);
-        if (handler) inputs[name] = handler.capture(state, input);
+        const owned = draft.integration?.captureInput(draft, name, {captureRaster: captureModelRaster});
+        if (owned !== undefined) inputs[name] = owned;
+        else if (handler) inputs[name] = handler.capture(state, input);
         else if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
             inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
-        else if (input.type === "habitat_stack") inputs[name] = captureHabitatStack(state, draft.sources);
         else if (input.type === "raster_preparation") inputs[name] = captureRasterPreparation(state, draft);
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
@@ -349,9 +309,6 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         }
         else throw new Error(`This tool requires an input type this interface does not yet support: ${input.type}.`);
     }
-    if (getHabitatEarthEngineInput(draft) && Object.entries(draft.model.inputs).some(([name, input]) =>
-        input.type === "summary_area" && inputs[name].kind === "wholeRaster"))
-        throw new Error("Choose an analysis area for Earth Engine inputs.");
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
         if (parameter.type === "choice" && !parameter.choices.some(choice => choice.value === value))

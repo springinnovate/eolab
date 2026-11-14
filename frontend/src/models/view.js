@@ -3,9 +3,8 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
-import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, getHabitatEarthEngineInput, selectedDrawnPolygonLayer } from "./inputs.js";
+import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
-import { HabitatStackView } from "./habitat-stack-view.js";
 import { RasterGridView } from "./raster-grid-view.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { describeTemporalInterval, describeTemporalReduction, describeTemporalResult } from "./temporal-inputs.js";
@@ -240,6 +239,7 @@ export class ModelsView {
 
     /** Construct editable inputs and recipe parameters, retaining their DOM identities.
      * Choice parameters use the recipe's option labels and preserve their string values.
+     * Registered setup integrations own any specialized input controls and readiness.
      * @param {Object} draft New draft with validated recipe settings and current parameter values.
      * @return {void}
      */
@@ -259,19 +259,23 @@ export class ModelsView {
         const inputs = {};
         for (const [name, input] of Object.entries(draft.model.inputs)) {
             const handler = getModelInputHandler(input.type);
-            if (handler) {
+            const owned = draft.integration?.buildInput({element: this.element.bind(this), field: this.field.bind(this),
+                options: this.options.bind(this), button: this.button.bind(this), document: this.document,
+                describeFilter: describeModelFilter, sourceKey: modelSourceKey, captureRaster: captureModelRaster,
+                append: root => fields.append(root),
+                buildRasterInput: this.buildRasterInput.bind(this), renderRasterInput: this.renderRasterInput.bind(this),
+                buildSpatialInput: (inputName, definition) => this.buildSpatialInput(fields, inputName, definition),
+                renderSpatialInput: this.renderSpatialInput.bind(this)},
+            {onInput: this.handlers.onInput, onSetupAction: this.handlers.onSetupAction}, name, input, draft);
+            if (owned) inputs[name] = owned;
+            else if (handler) {
                 inputs[name] = handler.buildView({element: this.element.bind(this), field: this.field.bind(this),
                     options: this.options.bind(this), describeFilter: describeModelFilter}, this.handlers, name, input);
                 fields.append(inputs[name].root);
             }
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
-            else if (input.type === "habitat_stack") {
-                inputs[name] = new HabitatStackView({element: this.element.bind(this), field: this.field.bind(this),
-                    button: this.button.bind(this), options: this.options.bind(this), document: this.document,
-                    buildRasterInput: this.buildRasterInput.bind(this), renderRasterInput: this.renderRasterInput.bind(this)}, this.handlers, name, input);
-                fields.append(inputs[name].root);
-            } else if (input.type === "raster_preparation") {
+            else if (input.type === "raster_preparation") {
                 inputs[name] = new RasterGridView({element: this.element.bind(this), field: this.field.bind(this),
                     button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers, name, input);
                 fields.append(inputs[name].root);
@@ -345,7 +349,7 @@ export class ModelsView {
         return optional && !value.raster || Boolean(value.raster) && value.raster.available !== false;
     }
 
-    /** List eligible spatial sources and show the selected source's controls or drawn polygon count.
+    /** Present ordinary spatial choices, independent of model-specific eligibility controls.
      * @param {Object} controls Stable controls for this spatial input.
      * @param {{type:string,label:string}} input Declared area, mask or reference input.
      * @param {Object} value This input's area, filter and selection feedback.
@@ -361,7 +365,7 @@ export class ModelsView {
         const runLabel = "Run tool";
         const areaChoices = [{value: "", label: references ? "Choose reference sites…" : input.type === "mask_source" ? "Choose a starting area…" : "Choose an area…"}];
         if (!usesRasterOrVector) areaChoices.push({value: "viewport", label: "Visible map area"}, {value: "samplingArea", label: "Sampling box"});
-        if (modelSupportsArea(input.type, {kind: "wholeRaster"}) && !getHabitatEarthEngineInput(draft)) areaChoices.splice(1, 0, {value: "whole", label: "Whole raster"});
+        if (modelSupportsArea(input.type, {kind: "wholeRaster"})) areaChoices.splice(1, 0, {value: "whole", label: "Whole raster"});
         if (value.capturedArea?.kind === "polygonArea" && value.areaOrigin === "map" && modelSupportsArea(input.type, value.capturedArea)) {
             areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
         }
@@ -460,10 +464,10 @@ export class ModelsView {
         if (this.document.activeElement !== setupControls.label) setupControls.label.value = draft.label;
         let inputsReady = !temporalError;
         for (const [name, input] of Object.entries(draft.model.inputs)) {
-            if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
+            if (setupControls.inputs[name]?.renderModelInput) inputsReady = setupControls.inputs[name].renderModelInput(draft, state) && inputsReady;
+            else if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
-            else if (input.type === "habitat_stack") inputsReady = setupControls.inputs[name].render(draft, state) && inputsReady;
             else if (input.type === "raster_preparation") inputsReady = setupControls.inputs[name].render(draft.inputs[name], draft) && inputsReady;
         }
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";

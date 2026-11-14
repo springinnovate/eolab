@@ -381,8 +381,8 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                         assert error["code"] == "habitat_inputs_not_prepared"
                         assert error["detail"] == (
                             "No Ecosystem Condition inputs are prepared for this area and year. "
-                            "Ask your administrator to prepare them and provide a geospatial "
-                            "file defining your area of interest (AOI)."
+                            "Ask an administrator to prepare the saved area and year, "
+                            "then try running the model again."
                         )
                     store.cleanup_candidates.return_value = [row]
                     store.active_attempts.return_value = set()

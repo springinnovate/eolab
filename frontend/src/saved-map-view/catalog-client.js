@@ -17,15 +17,16 @@ export class SavedMapViewCatalogClient {
      * Retrieve one authoritative Item by its composite Catalog identity.
      *
      * @param {{collection:string,id:string}} identity Saved Catalog identity.
+     * @param {AbortSignal} [signal] Cancel an obsolete metadata request.
      * @return {Promise<Object>} Current STAC Item.
      * @throws {Error} If the Item is absent or the response identity differs.
      */
-    async get(identity) {
+    async get(identity, signal) {
         const url = `${this.catalogUrl}/collections/` +
             `${encodeURIComponent(identity.collection)}/items/` +
             encodeURIComponent(identity.id);
         const response = await this.fetchImplementation(url, {
-            headers: { Accept: "application/geo+json" },
+            headers: { Accept: "application/geo+json" }, signal,
         });
         if (!response.ok) {
             throw new Error(

@@ -1,10 +1,10 @@
 /** Choose Earth Engine inputs or a named raster stack for Habitat condition. */
-import { captureHabitatStack } from "./inputs.js";
 
 /** Choose Habitat datasets or manual rasters while retaining focused controls. */
 export class HabitatStackView {
     /** Group the configuration selector with its existing year and raster controls.
      * @param {Object} helpers Models presentation helpers.
+     * @param {(state:Object,sources:Object[])=>Object} helpers.captureStack Capture and validate the model stack.
      * @param {(tag:string,text?:string,className?:string)=>HTMLElement} helpers.element Create a text-only element.
      * @param {(id:string,caption:string,input:HTMLElement)=>HTMLLabelElement} helpers.field Create a labelled field.
      * @param {(label:string,action:()=>void,className?:string)=>HTMLButtonElement} helpers.button Create a button.
@@ -16,8 +16,8 @@ export class HabitatStackView {
      * @param {string} name Recipe input name for this stack.
      * @param {{label:string}} input Declared stack input.
      */
-    constructor({element, field, button, options, document, buildRasterInput, renderRasterInput}, handlers, name, input) {
-        Object.assign(this, {element, field, button, options, document, buildRasterInput, renderRasterInput, handlers});
+    constructor({element, field, button, options, document, buildRasterInput, renderRasterInput, captureStack}, handlers, name, input) {
+        Object.assign(this, {element, field, button, options, document, buildRasterInput, renderRasterInput, captureStack, handlers});
         this.inputName = name;
         this.predictors = []; this.responses = []; this.nextRowId = 0; this.categoricalRow = null;
         this.root = element("section", "", "models-vector");
@@ -244,7 +244,7 @@ export class HabitatStackView {
         this.options(this.categorical, [{value: "", label: "Choose the categorical predictor…"},
             ...this.value.predictors.filter(row => row.name.trim()).map(row => ({value: row.name, label: row.name}))], this.value.categoricalPredictor);
         let error = "";
-        try { captureHabitatStack(this.value, draft.sources); } catch (problem) { error = problem.message; }
+        try { this.captureStack(this.value, draft.sources); } catch (problem) { error = problem.message; }
         this.status.textContent = error; this.status.hidden = !error;
         return !error;
     }

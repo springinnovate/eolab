@@ -7,6 +7,7 @@ import math
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import PurePath
+from collections.abc import Mapping
 from typing import Any
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
@@ -290,6 +291,7 @@ class ProcessingService:
         model_authorizer: RasterSourceAuthorizer | None = None,
         uploads: VectorUploadStore | None = None,
         areas: CatalogSelectionReader | None = None,
+        operation_submission_dependencies: Mapping[str, object] | None = None,
     ) -> None:
         """Configure job storage, source access and the installed model library.
 
@@ -306,6 +308,10 @@ class ProcessingService:
                 inputs at admission. Existing raster endpoints retain their behavior.
             uploads: Original GeoPackages and retained links for accepted jobs.
             areas: Existing reader authorizing Catalog and uploaded vector selections.
+            operation_submission_dependencies: Server-only dependencies keyed by
+                installed operation ID. Only that operation's before_queue callback
+                interprets its value; these bindings are never persisted or exposed
+                in model requests. An absent binding is passed to the callback as None.
 
         Raises:
             ValueError: If the submission observation budget is negative or non-finite.
@@ -324,6 +330,9 @@ class ProcessingService:
         self.model_authorizer = model_authorizer
         self.uploads = uploads
         self.areas = areas
+        self.operation_submission_dependencies = dict(
+            operation_submission_dependencies or {}
+        )
         self._upload_admission_lock = asyncio.Lock()
 
     async def _recover_habitat_preparation_request(
@@ -362,7 +371,7 @@ class ProcessingService:
         request_hash: str,
         expected_configuration_sha256: str | None = None,
     ) -> dict[str, Any]:
-        """Authorize one Catalog AOI and queue preparation under the admin scope.
+        """Record an authorized Catalog selection and queue its input preparation.
 
         Args:
             request: Validated area, year, name and submission identifier.
@@ -374,8 +383,9 @@ class ProcessingService:
             Newly accepted preparation or an atomic, unchanged concurrent retry.
 
         Raises:
-            ProcessingError: If the scientific configuration or job storage is
-                unavailable, the year is unsupported, or request inputs conflict.
+            ProcessingError: If scientific configuration, preparation references
+                or job storage are unavailable, the year is unsupported, or
+                inputs conflict.
             SelectionUnavailableError: If Catalog authorization rejects the area.
         """
         if self.areas is None:
@@ -406,6 +416,11 @@ class ProcessingService:
                 409,
             )
         await self.areas.resolve_for_sampling(request.selection)
+        operation = get_model_operation(HABITAT_PREPARATION_OPERATION)
+        if operation.before_queue is not None:
+            await operation.before_queue(
+                request, self.operation_submission_dependencies.get(operation.id)
+            )
         row = await asyncio.to_thread(
             self.jobs.submit,
             HABITAT_PREPARATION_OWNER,
@@ -717,6 +732,8 @@ class ProcessingService:
         and copies each owned polygon input by role before queueing work.
         Repeating the same request ID and inputs returns the original run even
         if its model or source is no longer installed.
+        Operation-owned submission checks run only for new requests, before any
+        job is queued. The operation receives only its configured dependencies.
 
         Args:
             owner: Hash of the requesting browser's Processing session cookie.
@@ -749,6 +766,10 @@ class ProcessingService:
             request, self.model_registry
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
+        if operation.before_queue is not None:
+            await operation.before_queue(
+                calculation, self.operation_submission_dependencies.get(operation.id)
+            )
         source = operation.source(calculation) if operation.source is not None else None
         polygons: dict[str, AggregateArea] = {}
         polygons_by_reference: dict[PolygonAreaReference, AggregateArea] = {}
