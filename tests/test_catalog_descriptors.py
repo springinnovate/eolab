@@ -568,6 +568,43 @@ def test_shared_support_asset_is_not_independently_admitted(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.parametrize("support_owner_first", [False, True])
+def test_primary_support_conflicts_reject_both_descriptors(
+    tmp_path: Path, support_owner_first: bool
+) -> None:
+    """Reject a primary/support collision regardless of descriptor scan order.
+
+    Args:
+        tmp_path: Isolated mount containing real sidecars and local payloads.
+        support_owner_first: Whether the supporting owner sorts before the primary.
+    """
+    (tmp_path / "shared.csv").touch()
+    (tmp_path / "other.csv").touch()
+    support_owner = descriptor_document("other.csv", identifier="support-owner")
+    support_owner["assets"]["support"] = {
+        "location": "local",
+        "path": "shared.csv",
+        "media_type": "text/csv",
+        "roles": ["data"],
+        "metadata": {"title": "Shared source"},
+    }
+    primary_owner = descriptor_document("shared.csv", identifier="primary-owner")
+    documents = (
+        (support_owner, primary_owner)
+        if support_owner_first
+        else (primary_owner, support_owner)
+    )
+    for name, document in zip(("a", "b"), documents, strict=True):
+        write_descriptor(tmp_path / f"{name}.eolab.yaml", document)
+    writer = RecordingCatalogWriter()
+
+    status = scan(tmp_path, writer)
+
+    assert status["failed"] == 2
+    assert status["catalogItemsWritten"] == 0
+    assert writer.write_session.items == {}
+
+
 def test_new_primary_claim_survives_missing_support_on_rejected_edit(
     tmp_path: Path,
 ) -> None:
@@ -599,34 +636,51 @@ def test_new_primary_claim_survives_missing_support_on_rejected_edit(
     assert writer.write_session.items == previous
 
 
-def test_partial_scan_rejects_claiming_another_descriptors_primary_as_support(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "relationship", ["primary-primary", "primary-support", "support-primary"]
+)
+def test_partial_scan_rejects_retained_primary_support_conflicts(
+    tmp_path: Path, relationship: str
 ) -> None:
-    """Keep out-of-scope ownership authoritative during supporting-file changes.
+    """Keep out-of-scope primary and supporting ownership authoritative.
 
     Args:
         tmp_path: Isolated mounted source tree.
+        relationship: Roles of the colliding source in the new and retained owners.
     """
     first = tmp_path / "first"
     first.mkdir()
     second = tmp_path / "second"
     second.mkdir()
     (first / "one.csv").touch()
+    (first / "support.csv").touch()
     (second / "two.csv").touch()
-    write_descriptor(
-        first / "one.eolab.yaml", descriptor_document("one.csv", identifier="one")
-    )
+    retained = descriptor_document("one.csv", identifier="one")
+    retained["assets"]["support"] = {
+        "location": "local",
+        "path": "support.csv",
+        "media_type": "text/csv",
+        "roles": ["data"],
+        "metadata": {"title": "Retained support"},
+    }
+    write_descriptor(first / "one.eolab.yaml", retained)
     writer = RecordingCatalogWriter()
     assert scan(tmp_path, writer)["failed"] == 0
     previous = deepcopy(writer.write_session.items)
-    document = descriptor_document("two.csv", identifier="two")
-    document["assets"]["support"] = {
-        "location": "local",
-        "path": "../first/one.csv",
-        "media_type": "text/csv",
-        "roles": ["data"],
-        "metadata": {"title": "Already another Item"},
-    }
+    primary = {
+        "primary-primary": "../first/one.csv",
+        "primary-support": "../first/support.csv",
+        "support-primary": "two.csv",
+    }[relationship]
+    document = descriptor_document(primary, identifier="two")
+    if relationship == "support-primary":
+        document["assets"]["support"] = {
+            "location": "local",
+            "path": "../first/one.csv",
+            "media_type": "text/csv",
+            "roles": ["data"],
+            "metadata": {"title": "Already another Item"},
+        }
     write_descriptor(second / "two.eolab.yaml", document)
     assert scan(tmp_path, writer, paths=(second,))["failed"] == 1
     assert writer.write_session.items == previous
