@@ -355,6 +355,10 @@ queues downloads without running the model. Preparation continues after closing
 the page and attempts remaining tiles when a tile download fails. Return to
 administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
+Download progress separates reused tiles from new downloads and shows the last
+completed download, average speed and an approximate remaining size based on
+completed tiles. A recent status update means the worker reported in; it does not
+mean a tile finished.
 **Retry all missing inputs** checks all areas and years still saved in preparation
 history against current inputs, reuses cached tiles, and skips matching work
 already in progress. Once the request is accepted, checks and preparation continue
@@ -459,12 +463,14 @@ environmental models. Choose a tool to select its inputs and analysis area.
 Select **Run tool** and follow progress in **Runs** while continuing to use the
 map. Closing the panel does not cancel work; use **Cancel run** to stop it.
 
-**Vector summary** calculates a numeric statistic for each distinct value of a
+**Vector summary** calculates field statistics for each distinct value of a
 grouping field and merges that group's polygons. Add a Catalog or uploaded polygon
-layer to the map, then choose its fields, statistic and whether to include all
-features or the layer's filter. Choose Sum (the default), Mean, Maximum, Minimum,
-or Standard deviation. For example, mean `total_es` by `state_name` produces
-`mean_total_es`. Standard deviation uses the whole group (population), with zero
+layer to the map, then choose its grouping field and whether to include all
+features or the layer's filter. Each **Summary** pairs a numeric field with Sum
+(the default), Mean, Maximum, Minimum, or Standard deviation. Choose **Add summary**
+for more pairs; all pairs share one read and merge of the selected polygons.
+For example, Sum and Mean of `total_es` by `state_name` produce `sum_total_es`
+and `mean_total_es` in one layer. Standard deviation uses the whole group (population), with zero
 for one valid value. **Boundary detail**
 sets approximate outline simplification in metres; use zero for detailed merged
 boundaries. It does not change the statistics. Missing numeric values are skipped;

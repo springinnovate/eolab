@@ -1,6 +1,6 @@
 """Summarize original polygon attributes by group and publish dissolved overview geometry."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
 import hashlib
 import json
@@ -33,6 +33,8 @@ from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.vector_summary_models import (
     OPERATION,
     VectorSummaryArtifact,
+    VectorSummaryCalculation,
+    VectorSummaryColumn,
     VectorSummaryInput,
     VectorSummarySpec,
     VectorSummaryStatistic,
@@ -43,10 +45,10 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class _SummaryGroup:
-    """Accumulate one attribute group's exact input values and original polygons."""
+    """Retain each requested source field once and the group's original polygons."""
 
     polygons: list[BaseGeometry] = field(default_factory=list)
-    values: list[int | float] = field(default_factory=list)
+    values: dict[str, list[int | float]] = field(default_factory=dict)
 
 
 def _unique_field_name(preferred: str, used: set[str]) -> str:
@@ -71,32 +73,35 @@ def _unique_field_name(preferred: str, used: set[str]) -> str:
 
 
 def _read_summary_schema(
-    source: ResolvedCatalogSelection, inputs: VectorSummaryInput
-) -> tuple[str, bool]:
+    source: ResolvedCatalogSelection,
+    inputs: VectorSummaryInput,
+    summaries: tuple[VectorSummaryCalculation, ...],
+) -> tuple[str, dict[str, bool]]:
     """Check selected attribute types against the original native layer schema.
 
     Args:
         source: Authorized original polygon source.
-        inputs: Captured grouping and numeric field names.
+        inputs: Captured source and grouping field.
+        summaries: Ordered numeric field/statistic pairs.
 
     Returns:
-        Fiona's grouping-field type and whether the numeric field contains integers.
+        Fiona's grouping type and each distinct numeric field's integer flag.
 
     Raises:
-        ProcessingError: If either field is absent or has an unsupported type.
+        ProcessingError: If a selected field is absent or has an unsupported type.
         FionaError: If the native dataset cannot be opened.
     """
     with fiona.open(
         source.path, layer=source.selection.layerName, enabled_drivers=[source.driver]
     ) as dataset:
         fields = dataset.schema["properties"]
-        if inputs.groupField not in fields or inputs.valueField not in fields:
+        value_fields = dict.fromkeys(summary.field for summary in summaries)
+        if {inputs.groupField, *value_fields} - set(fields):
             raise ProcessingError(
                 "invalid_vector_summary_fields",
                 "A selected field is missing. Choose the layer and fields again.",
             )
         group_type = fields[inputs.groupField]
-        value_type = fields[inputs.valueField].split(":", 1)[0]
         if group_type.split(":", 1)[0] not in {
             "str",
             "int",
@@ -109,11 +114,16 @@ def _read_summary_schema(
                 "invalid_vector_summary_fields",
                 "Group by a text, number or boolean field.",
             )
-        if value_type not in {"int", "int32", "int64", "float"}:
-            raise ProcessingError(
-                "invalid_vector_summary_fields", "Choose a numeric field to summarize."
-            )
-        return group_type, value_type != "float"
+        integer_fields = {}
+        for name in value_fields:
+            value_type = fields[name].split(":", 1)[0]
+            if value_type not in {"int", "int32", "int64", "float"}:
+                raise ProcessingError(
+                    "invalid_vector_summary_fields",
+                    "Choose numeric fields to summarize.",
+                )
+            integer_fields[name] = value_type != "float"
+        return group_type, integer_fields
 
 
 def _merge_group_polygons(
@@ -257,18 +267,19 @@ def _summarize_group_values(
 def calculate_vector_summary(
     source: ResolvedCatalogSelection, spec: VectorSummarySpec, directory: Path
 ) -> VectorSummaryArtifact:
-    """Write one dissolved feature and selected statistic per original grouping value.
+    """Write every requested statistic with one dissolved feature per original group.
 
     Missing groups become one null group. Null and non-finite numeric values do
     not contribute; an all-missing group receives a null result. Integer sums,
     minima and maxima stay integers; mean and population deviation use floats.
     Boundary simplification never changes which original values contribute.
     Processing supervises native execution without application-imposed work,
-    memory or time ceilings.
+    memory or time ceilings. Repeated source fields share one list of values;
+    all calculations share one source read and one geometry merge per group.
 
     Args:
         source: Authorized original polygons and captured exact predicate.
-        spec: Admitted field choices, statistic and boundary tolerance.
+        spec: Admitted field/statistic pairs and boundary tolerance.
         directory: Worker-owned attempt directory for result and provenance files.
 
     Returns:
@@ -282,24 +293,33 @@ def calculate_vector_summary(
         OSError: If result or provenance storage is unavailable.
     """
     inputs = spec.inputs.vector
-    group_type, integer_values = _read_summary_schema(source, inputs)
-    statistic = spec.inputs.statistic
-    summary_field = _unique_field_name(
-        f"{statistic}_{inputs.valueField}", {inputs.groupField}
+    group_type, integer_values = _read_summary_schema(
+        source, inputs, spec.inputs.summaries
     )
-    integer_output = integer_values and statistic in {"sum", "min", "max"}
-    fields = {
-        inputs.groupField: group_type,
-        summary_field: "int64" if integer_output else "float",
-    }
+    fields = {inputs.groupField: group_type}
+    columns = []
+    for summary in spec.inputs.summaries:
+        output_field = _unique_field_name(
+            f"{summary.statistic}_{summary.field}", set(fields)
+        )
+        integer_output = integer_values[summary.field] and summary.statistic in {
+            "sum",
+            "min",
+            "max",
+        }
+        fields[output_field] = "int64" if integer_output else "float"
+        columns.append(
+            VectorSummaryColumn(summary.field, summary.statistic, output_field, 0)
+        )
     geometry_field = _unique_field_name("geom", set(fields))
     identifier_field = _unique_field_name("fid", {*fields, geometry_field})
     groups: dict[str | int | float | bool | None, _SummaryGroup] = {}
-    included = missing = 0
+    included = 0
+    missing = dict.fromkeys(integer_values, 0)
     write_progress(directory, "reading_vector_features", 0, 0, unit="features")
     with polygon_records(
         source,
-        tuple(dict.fromkeys((inputs.groupField, inputs.valueField))),
+        tuple(dict.fromkeys((inputs.groupField, *integer_values))),
         timeout_seconds=None,
         max_features=None,
         max_feature_coordinates=None,
@@ -310,11 +330,13 @@ def calculate_vector_summary(
                 key = None
             group = groups.setdefault(key, _SummaryGroup())
             group.polygons.append(shape(geometry))
-            value = properties[inputs.valueField]
-            if value is None or not math.isfinite(value):
-                missing += 1
-            else:
-                group.values.append(value)
+            for name in integer_values:
+                values = group.values.setdefault(name, [])
+                value = properties[name]
+                if value is None or not math.isfinite(value):
+                    missing[name] += 1
+                else:
+                    values.append(value)
             included += 1
             if included % 512 == 0:
                 write_progress(
@@ -338,14 +360,20 @@ def calculate_vector_summary(
         FID=identifier_field,
     ) as destination:
         for completed, (key, group) in enumerate(groups.items(), 1):
-            value = _summarize_group_values(group.values, statistic, integer_output)
+            properties = {inputs.groupField: key}
+            for column in columns:
+                properties[column.output_field] = _summarize_group_values(
+                    group.values[column.source_field],
+                    column.statistic,
+                    fields[column.output_field] == "int64",
+                )
             merged = _merge_group_polygons(
                 group.polygons, spec.inputs.boundary_tolerance_m, key
             )
             destination.write(
                 {
                     "geometry": mapping(merged),
-                    "properties": {inputs.groupField: key, summary_field: value},
+                    "properties": properties,
                 }
             )
             write_progress(
@@ -362,9 +390,13 @@ def calculate_vector_summary(
         sha256=checksum,
         filename="vector-summary.gpkg",
         feature_count=len(groups),
-        summary_field=summary_field,
+        columns=tuple(
+            replace(column, missing_value_count=missing[column.source_field])
+            for column in columns
+        ),
+        summary_field=columns[0].output_field,
         input_feature_count=included,
-        missing_value_count=missing,
+        missing_value_count=missing[columns[0].source_field],
     )
     (directory / "provenance.json").write_text(
         json.dumps(

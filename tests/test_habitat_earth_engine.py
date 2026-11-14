@@ -31,6 +31,7 @@ from shapely.geometry import MultiPolygon, box
 from eolab_app.processing.habitat_earth_engine import (
     HabitatCacheCoverage,
     HabitatEarthEngineSettings,
+    HabitatTileProgress,
     get_cached_habitat_tiles,
     get_habitat_tiles,
     inspect_habitat_cache,
@@ -197,8 +198,11 @@ def _use_offline_earth_engine(
 
     requests = Mock(wraps=request)
 
-    def create_transport() -> Mock:
+    def create_transport(*, timeout: float) -> Mock:
         """Use the offline request handler in a fresh, thread-owned transport.
+
+        Args:
+            timeout: Socket timeout selected by the acquisition transport.
 
         Returns:
             One HTTP connection with the same request and close API as Http.
@@ -218,7 +222,7 @@ def _use_offline_earth_engine(
             assert get_ident() == owner
             return requests(*args, **kwargs)
 
-        connection = Mock(spec=["request", "close"])
+        connection = Mock(spec=["request", "close", "timeout"], timeout=timeout)
         connection.request.side_effect = owned_request
         if transports is not None:
             transports.append((owner, connection))
@@ -417,7 +421,9 @@ def test_download_preserves_pixels_and_reuses_completed_tiles(
     assert [path.parent.name for path in result.tiles] == ["0_-2", "1_-1"]
     assert tuple(result.bands) == names
     assert tuple(result.bands.values()) == stack.bands[1:]
-    assert [call.args for call in progress.call_args_list] == [(0, 2), (1, 2), (2, 2)]
+    assert [
+        (call.args[0].completed, call.args[0].total) for call in progress.call_args_list
+    ] == [(0, 2), (1, 2), (2, 2)]
     ee.ServiceAccountCredentials.assert_called_once_with(
         key_file=str(settings.credentials_file)
     )
@@ -481,7 +487,13 @@ def test_download_preserves_pixels_and_reuses_completed_tiles(
             check_cancelled=Mock(),
         )
     assert repeated == result
-    assert [call.args for call in progress.call_args_list] == [(0, 2), (1, 2), (2, 2)]
+    measurement = progress.call_args.args[0]
+    assert measurement.cached_tiles == 2 and measurement.downloaded_tiles == 0
+    assert measurement.downloaded_bytes == 0 and measurement.elapsed_seconds == 0
+    assert measurement.last_download_at is None
+    assert [
+        (call.args[0].completed, call.args[0].total) for call in progress.call_args_list
+    ] == [(2, 2)]
     assert list(working_directory.iterdir()) == []
 
 
@@ -590,7 +602,9 @@ def test_invalid_download_removes_its_private_directory(
     assert retained.read_text(encoding="utf-8") == "caller-owned"
     assert not list((tmp_path / "cache").rglob("tile.tif"))
     assert list(working_directory.iterdir()) == [retained]
-    assert [call.args for call in progress.call_args_list] == [(0, 1)]
+    assert [
+        (call.args[0].completed, call.args[0].total) for call in progress.call_args_list
+    ] == [(0, 1)]
 
 
 def test_cancellation_preserves_completed_tiles(
@@ -632,7 +646,7 @@ def test_cancellation_preserves_completed_tiles(
             HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
             cache_directory=tmp_path / "cache",
             working_directory=working_directory,
-            progress=lambda done, total: updates.append((done, total)),
+            progress=lambda update: updates.append((update.completed, update.total)),
             check_cancelled=check_cancelled,
         )
     cached = list((tmp_path / "cache").rglob("tile.tif"))
@@ -692,7 +706,10 @@ def test_provider_failure_preserves_safe_reason_and_continues_to_next_tile(
     acquisition = get_habitat_tiles(area, stack, settings, **options)
     assert acquisition.required_tiles == 2 and acquisition.missing_tiles == 1
     assert [path.parent.name for path in acquisition.tiles] == ["1_-1"]
-    assert [call.args for call in options["progress"].call_args_list] == [
+    assert [
+        (call.args[0].completed, call.args[0].total)
+        for call in options["progress"].call_args_list
+    ] == [
         (0, 2),
         (0, 2),
         (1, 2),
@@ -765,14 +782,13 @@ def test_successful_tiles_increase_download_concurrency_without_reordering_cache
             assert fourth_published.wait(timeout=5)
         return {"status": "200"}, pixels[left]
 
-    def record_progress(done: int, total: int) -> None:
+    def record_progress(update: HabitatTileProgress) -> None:
         """Allow the third response after the fourth tile is safely cached.
 
         Args:
-            done: Number of available tiles.
-            total: Number of tiles needed by the acquisition.
+            update: Measured reusable tiles and download activity.
         """
-        progress(done, total)
+        progress(update)
         if (cache / stack.raster_configuration_sha256 / "3_-1" / "tile.tif").exists():
             fourth_published.set()
 
@@ -789,9 +805,9 @@ def test_successful_tiles_increase_download_concurrency_without_reordering_cache
     )
     assert [path.parent.name for path in tiles.tiles] == [f"{i}_-1" for i in range(4)]
     assert not tiles.failures
-    assert [call.args for call in progress.call_args_list] == [
-        (done, 4) for done in range(5)
-    ]
+    assert [
+        (call.args[0].completed, call.args[0].total) for call in progress.call_args_list
+    ] == [(done, 4) for done in range(5)]
     assert (
         sum("image:computePixels" in call.args[0] for call in requests.call_args_list)
         == 4
@@ -819,6 +835,7 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
     now = 100.0
     received: list[tuple[float, float]] = []
     initial_pair = ThreadBarrier(2, timeout=5)
+    throttle_observed = ThreadEvent()
     cache = tmp_path / "cache"
     pixels = {7 + 20 * index: _tile_bytes(7 + 20 * index, 31) for index in range(5)}
     lock = Lock()
@@ -839,6 +856,8 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
             received.append((left, now))
         if first and left in (47, 67):
             initial_pair.wait()
+        if first and left == 67:
+            assert throttle_observed.wait(timeout=5)
         if first and left == 47:
             return (
                 {"status": "429", "retry-after": "7"},
@@ -849,6 +868,19 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
                 cache / stack.raster_configuration_sha256 / "2_-1" / "tile.tif"
             ).exists()
         return {"status": "200"}, pixels[left]
+
+    def observe_throttle(retry_after: float, backoff: float) -> float:
+        """Release the sibling response after the scheduler observes throttling.
+
+        Args:
+            retry_after: Provider's requested delay.
+            backoff: Local minimum delay.
+
+        Returns:
+            Delay required before another request may start.
+        """
+        throttle_observed.set()
+        return max(retry_after, backoff)
 
     def advance_clock(seconds: float) -> None:
         """Advance the scheduler's clock without a wall-clock wait.
@@ -862,6 +894,7 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
     _use_offline_earth_engine(monkeypatch, respond)
     monkeypatch.setattr(habitat_tile_downloads, "monotonic", lambda: now)
     monkeypatch.setattr(habitat_tile_downloads, "sleep", advance_clock)
+    monkeypatch.setattr(habitat_tile_downloads, "_throttle_delay", observe_throttle)
     tiles = get_habitat_tiles(
         box(7, 11, 107, 31),
         stack,
@@ -1160,8 +1193,8 @@ def _fetch_tile_in_process(
             HabitatEarthEngineSettings("habitat-test", working / "key.json"),
             cache_directory=cache,
             working_directory=working,
-            progress=lambda done, total: (
-                published.set() if first and done == 1 else None
+            progress=lambda update: (
+                published.set() if first and update.completed == 1 else None
             ),
             check_cancelled=Mock(),
         )
@@ -1305,7 +1338,7 @@ def test_ordinary_acquisition_persists_inventory_labels_without_historical_backf
         HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
         cache_directory=cache,
         working_directory=working_directory,
-        progress=lambda done, total: None,
+        progress=lambda update: None,
         check_cancelled=lambda: None,
     )
     metadata = cache / stack.raster_configuration_sha256 / "configuration.json"
@@ -1338,7 +1371,7 @@ def test_ordinary_acquisition_persists_inventory_labels_without_historical_backf
         HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
         cache_directory=cache,
         working_directory=working_directory,
-        progress=lambda done, total: None,
+        progress=lambda update: None,
         check_cancelled=lambda: None,
     )
     assert reused.tiles == tiles.tiles

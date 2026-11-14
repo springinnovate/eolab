@@ -33,6 +33,13 @@
 .models-help { color: var(--text-2); font-size: 0.78rem; margin: 4px 0; overflow-wrap: anywhere; }
 .models-vector { display: grid; gap: 8px; }
 .models-spatial-input { display: grid; gap: 8px; min-width: 0; }
+.models-vector-rows { display: grid; gap: 10px; min-width: 0; }
+.models-form .models-vector-row { margin: 0; padding: 10px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); }
+.models-vector-row > legend { padding: 0 4px; font-size: 0.82rem; }
+.models-vector-row-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 10px; min-width: 0; }
+.models-vector-row-remove { justify-self: end; }
+.models-vector-row-remove:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.models-vector-row-add { justify-self: start; }
 .models-spatial-reference { padding: 8px; border: 1px solid var(--border-1); border-radius: var(--radius); }
 .models-habitat-datasets { display: grid; gap: 8px; font-size: 0.78rem; }
 .models-habitat-datasets h4 { margin: 0 0 4px; font-size: inherit; }

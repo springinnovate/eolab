@@ -39,6 +39,31 @@ function jobStatus(job, status) {
         ? ` · ${prefix}${progress.completed} of ${progress.total} tiles prepared` : ""}`;
 }
 
+/** Describe observed download work without treating cache reuse or heartbeats as downloads.
+ * @param {Object} job Validated administrator preparation snapshot.
+ * @param {string} status Effective lifecycle status.
+ * @return {string} Counts, last completion age and sample-based estimates, or an empty string.
+ */
+function downloadActivity(job, status) {
+    const progress = job.progress, measured = progress?.details;
+    if (!measured || job.operation === RETRY_ALL_OPERATION) return "";
+    const remaining = progress.total - progress.completed - measured.failedTiles;
+    const active = status === "running" || status === "cancelling";
+    const counts = `${measured.cachedTiles} reused from cache · ${measured.downloadedTiles} downloaded during this preparation · ${remaining} awaiting download`;
+    const failures = measured.failedTiles ? ` · ${measured.failedTiles} failed (retry needed)` : "";
+    if (!measured.downloadedTiles) {
+        return `${counts}${failures}. ${remaining ? "No downloads completed yet; size and speed estimates will appear after the first tile." : measured.failedTiles ? "No downloads completed." : "No download was needed."}`;
+    }
+    const ageSeconds = Math.max(0, (Date.now() - Date.parse(measured.lastDownloadAt)) / 1000);
+    const age = ageSeconds < 60 ? "less than a minute ago" : ageSeconds < 3600
+        ? new Intl.RelativeTimeFormat(undefined, {numeric: "always"}).format(-Math.floor(ageSeconds / 60), "minute")
+        : new Intl.RelativeTimeFormat(undefined, {numeric: "always"}).format(-Math.floor(ageSeconds / 3600), "hour");
+    const elapsed = measured.elapsedSeconds + (active ? Math.max(0, (Date.now() - Date.parse(measured.observedAt)) / 1000) : 0);
+    const rate = elapsed > 0 ? ` Average ${(60 * measured.downloadedTiles / elapsed).toFixed(1)} downloaded tiles/min${active ? " so far" : " at last progress update"}.` : "";
+    const estimate = remaining ? ` About ${(remaining * measured.downloadedBytes / measured.downloadedTiles / 1e6).toLocaleString(undefined, {maximumFractionDigits: 1})} MB awaiting download, estimated from ${measured.downloadedTiles} downloaded tiles.` : "";
+    return `${counts}${failures}. Last tile downloaded ${timeLabel(measured.lastDownloadAt)} (${age}).${rate}${estimate}`;
+}
+
 /** Own the standalone page's controls and stable rows without map dependencies. */
 export class HabitatAdminView {
     /** Build administrator controls in the protected page's existing root.
@@ -254,6 +279,7 @@ export class HabitatAdminView {
     jobCard(job) {
         const card = this.textCard(); card.times = this.element("p", "", "habitat-times");
         card.bulkNote = this.element("p");
+        card.activity = this.element("p");
         card.cancel = this.button("Cancel", () => this.handlers.cancel(job.jobId));
         card.retry = this.button("Retry missing inputs", () => this.handlers.retry(job.jobId));
         card.report = this.element("a", "Download report"); card.provenance = this.element("a", "Download provenance");
@@ -267,7 +293,7 @@ export class HabitatAdminView {
             else this.handlers.closeFailureLog(job.jobId);
         });
         card.log.append(card.logSummary, card.logStatus, card.logRows);
-        card.root.append(card.bulkNote, card.times, card.log, actions); return card;
+        card.root.append(card.activity, card.bulkNote, card.times, card.log, actions); return card;
     }
 
     /** Show tile or saved-area failures without replacing the focused log disclosure.
@@ -390,7 +416,7 @@ export class HabitatAdminView {
             card.error.textContent = row.error || ""; card.error.hidden = !row.error;
             card.recover.hidden = row.status !== "uncertain"; card.recover.disabled = this.busy;
         });
-        this.historyStatus.textContent = state.historyError || (state.historyLoading ? "Loading preparation history…" : state.jobs.length ? "Preparation history is up to date." : "No retained preparations yet.");
+        this.historyStatus.textContent = state.historyError ? `Could not refresh preparation status. Displayed progress may be out of date. ${state.historyError}` : (state.historyLoading ? "Loading preparation history…" : state.jobs.length ? "Preparation history is up to date." : "No retained preparations yet.");
         const pending = state.submissions.some(row => ["uncertain", "submitting"].includes(row.status));
         const bulkActive = state.jobs.some(job => job.operation === RETRY_ALL_OPERATION && ACTIVE_PREPARATION_STATES.has(job.status));
         this.retryAll.disabled = this.busy || pending || bulkActive;
@@ -408,7 +434,8 @@ export class HabitatAdminView {
             const label = bulk ? "Retry all missing inputs" : inputs ? `${inputs.name} · ${inputs.year}` : "Preparation details expired";
             card.title.textContent = label;
             card.detail.textContent = jobStatus(job, status); card.error.textContent = job.error?.detail ?? ""; card.error.hidden = !job.error;
-            const times = [`Updated ${timeLabel(job.updatedAt)}`];
+            card.activity.textContent = downloadActivity(job, status); card.activity.hidden = !card.activity.textContent;
+            const times = [`Status updated ${timeLabel(job.updatedAt)}`];
             if (report) times.push(`Report expires ${timeLabel(job.expiresAt)}`);
             if (job.metadataExpiresAt) times.push(`Saved inputs expire ${timeLabel(job.metadataExpiresAt)}`);
             card.times.textContent = times.join(" · ");
