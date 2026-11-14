@@ -451,18 +451,18 @@ export class HabitatAdminController {
      * one page cannot hide new work. Full refreshes discard removed history while
      * preserving mutations acknowledged after the read began. Failed or aborted
      * initial/full reads remain explicitly incomplete and restart on the next read.
-     * @param {boolean} [full=false] Reread all retained pages, as on explicit refresh.
+     * @param {boolean} [forceFullRefresh=false] Request all retained pages, as on explicit refresh.
      * @returns {Promise<void>} The current or newly started history read.
      */
-    readHistory(full = false) {
+    readHistory(forceFullRefresh = false) {
         if (!this.isVisible()) return Promise.resolve();
         if (this.historyRequest) return this.historyPromise;
-        full = full || !this.state.historyComplete;
+        const loadAllHistory = forceFullRefresh || !this.state.historyComplete;
         const controller = new AbortController(), revision = ++this.historyRevision, mutations = this.mutationRevision;
         const active = [...this.jobs.values()].filter(job => ACTIVE_PREPARATION_STATES.has(job.status)).map(job => job.jobId);
         const listed = new Set(), previousHead = this.historyHead;
         this.historyRequest = controller; this.readControllers.add(controller);
-        if (full) this.state.historyComplete = false;
+        if (loadAllHistory) this.state.historyComplete = false;
         this.state.historyReadCount = 0;
         this.state.historyLoading = true; this.state.historyError = ""; this.view.renderHistoryProgress(this.state);
         this.historyPromise = (async () => {
@@ -479,13 +479,13 @@ export class HabitatAdminController {
                     else this.view.renderHistoryProgress(this.state);
                     const reachedPrevious = previousHead && page.jobs.some(job => job.createdAt < previousHead.createdAt ||
                         job.createdAt === previousHead.createdAt && job.jobId <= previousHead.jobId);
-                    cursor = !full && reachedPrevious ? null : page.nextCursor;
+                    cursor = !loadAllHistory && reachedPrevious ? null : page.nextCursor;
                 } while (cursor !== null);
-                if (full) for (const id of this.jobs.keys()) {
+                if (loadAllHistory) for (const id of this.jobs.keys()) {
                     if (!listed.has(id) && (this.jobMutations.get(id) ?? 0) <= mutations) this.jobs.delete(id);
                 }
                 for (const id of active.filter(id => !listed.has(id))) {
-                    if (full && !this.jobs.has(id)) continue;
+                    if (loadAllHistory && !this.jobs.has(id)) continue;
                     try {
                         const job = await this.api.get(id, controller.signal);
                         if (revision !== this.historyRevision || controller.signal.aborted || this.destroyed) return;
