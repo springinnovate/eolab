@@ -183,7 +183,8 @@ export function suggestFeatureProfileFields(observation) {
 /**
  * Build ordered points from selected fields while preserving missing values.
  *
- * @param {VectorInspectionObservation} observation Immutable inspector observation.
+ * @param {import("./inspection-observation.js").VectorInspectionObservation}
+ * observation Validated inspection observation.
  * @param {Object} settings Per-source feature-profile settings.
  * @param {string[]} settings.selectedFields Selected attribute names.
  * @param {"ascending"|"descending"} settings.direction Sort direction.

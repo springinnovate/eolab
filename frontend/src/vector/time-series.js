@@ -108,7 +108,8 @@ function vectorTimeSeriesXScale(points) {
 /**
  * Build ordered chart points while retaining duplicate X observations.
  *
- * @param {ReadonlyArray<VectorInspectionObservation>} observations Immutable inspector results.
+ * @param {import("./inspection-observation.js").VectorInspectionObservation[]}
+ * observations Inspection results.
  * @param {VectorTimeSeriesSettings} settings Persistent chart settings.
  * @return {{points:Object[],omitted:number,total:number}} Ordered plot contract.
  */
