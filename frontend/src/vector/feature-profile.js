@@ -337,6 +337,8 @@ export class VectorFeatureProfileController {
         this.currentObservation = null;
         this.currentNavigation = null;
         this.settingsBySource = new Map();
+        /** @type {Map<string, {row:HTMLLabelElement, checkbox:HTMLInputElement, value:HTMLOutputElement}>} */
+        this.fieldRows = new Map();
         this.filter = "";
         this.modeActive = false;
         this.onClose = () => this.close({ moveFocus: true });
@@ -363,7 +365,7 @@ export class VectorFeatureProfileController {
         };
         this.onSearchInput = () => {
             this.filter = this.fieldSearch.value.trim().toLocaleLowerCase();
-            this.#renderFieldList();
+            this.#filterFieldList();
         };
         this.onSelectMatching = () => {
             const settings = this.#currentSettings();
@@ -482,7 +484,7 @@ export class VectorFeatureProfileController {
         if (this.currentObservation === null || settings === null) {
             this.#renderPresentation(null);
             this.titleField.replaceChildren();
-            this.fieldList.replaceChildren();
+            this.#renderFieldList();
             this.status.textContent = "Inspect a vector feature first.";
             return;
         }
@@ -548,42 +550,72 @@ export class VectorFeatureProfileController {
         );
     }
 
-    /** Rebuild the searchable numeric-field checklist. @return {void} */
+    /** Retain existing controls while updating field membership, order and values. @return {void} */
     #renderFieldList() {
         const settings = this.#currentSettings();
         if (this.currentObservation === null || settings === null) {
             this.fieldList.replaceChildren();
+            this.fieldRows.clear();
             return;
         }
         const selected = new Set(settings.selectedFields);
         const available = numericFeatureFields(this.currentObservation);
-        const fields = [...new Set([...available, ...settings.selectedFields])]
-            .sort(NATURAL_TEXT.compare);
-        this.fieldList.replaceChildren(...fields.map((fieldName) => {
-            const row = this.document.createElement("label");
-            row.classList.add("vector-feature-profile-field");
-            row.hidden = !fieldName.toLocaleLowerCase().includes(this.filter);
-            const checkbox = this.document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.value = fieldName;
+        const fields = new Set([...available, ...settings.selectedFields]);
+        for (const [fieldName, { row }] of this.fieldRows) {
+            if (!fields.has(fieldName)) {
+                row.remove();
+                this.fieldRows.delete(fieldName);
+            }
+        }
+        for (const [index, fieldName] of [...fields].sort(NATURAL_TEXT.compare).entries()) {
+            if (!this.fieldRows.has(fieldName)) {
+                this.fieldRows.set(fieldName, this.#createFieldRow(fieldName));
+            }
+            const { row, checkbox, value } = this.fieldRows.get(fieldName);
             checkbox.checked = selected.has(fieldName);
-            checkbox.addEventListener("change", () => {
-                if (checkbox.checked) selected.add(fieldName);
-                else selected.delete(fieldName);
-                settings.selectedFields = [...selected];
-                this.render();
-            });
-            const name = this.document.createElement("span");
-            name.textContent = fieldName;
-            const value = this.document.createElement("output");
             const fieldValue = this.currentObservation.properties[fieldName];
             value.textContent = typeof fieldValue === "number" &&
                 Number.isFinite(fieldValue)
                 ? formatSeriesNumber(fieldValue)
                 : "No value";
-            row.append(checkbox, name, value);
-            return row;
-        }));
+            if (this.fieldList.children[index] !== row) {
+                this.fieldList.insertBefore(row, this.fieldList.children[index] ?? null);
+            }
+        }
+        this.#filterFieldList();
+    }
+
+    /**
+     * Create one field control whose selection always updates the current source.
+     * @param {string} fieldName Numeric or previously selected field name.
+     * @return {{row:HTMLLabelElement, checkbox:HTMLInputElement, value:HTMLOutputElement}} Detached field row.
+     */
+    #createFieldRow(fieldName) {
+        const row = this.document.createElement("label");
+        row.classList.add("vector-feature-profile-field");
+        const checkbox = this.document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = fieldName;
+        checkbox.addEventListener("change", () => {
+            const settings = this.#currentSettings();
+            const selected = new Set(settings.selectedFields);
+            if (checkbox.checked) selected.add(fieldName);
+            else selected.delete(fieldName);
+            settings.selectedFields = [...selected];
+            this.render();
+        });
+        const name = this.document.createElement("span");
+        name.textContent = fieldName;
+        const value = this.document.createElement("output");
+        row.append(checkbox, name, value);
+        return { row, checkbox, value };
+    }
+
+    /** Show matching field rows without rebuilding their controls. @return {void} */
+    #filterFieldList() {
+        for (const [fieldName, { row }] of this.fieldRows) {
+            row.hidden = !fieldName.toLocaleLowerCase().includes(this.filter);
+        }
     }
 
     /**
