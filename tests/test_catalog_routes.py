@@ -23,7 +23,9 @@ CATALOG_ITEM = {
 def catalog_client(random_item_lookup: Any) -> TestClient:
     """Create an isolated application around the Catalog route."""
     application = FastAPI()
-    application.include_router(create_catalog_router(random_item_lookup, AsyncMock(), AsyncMock()))
+    application.include_router(
+        create_catalog_router(random_item_lookup, AsyncMock(), AsyncMock(), AsyncMock())
+    )
     return TestClient(application)
 
 

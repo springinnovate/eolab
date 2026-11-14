@@ -1,5 +1,6 @@
 """Keep server-only source locations out of public Catalog responses."""
 
+from copy import deepcopy
 from typing import TypeAlias
 
 JsonValue: TypeAlias = (
@@ -13,7 +14,11 @@ def copy_public_catalog_metadata(value: JsonValue) -> JsonValue:
     Apply this at public response boundaries, including STAC field projections
     that may omit an Item's collection or other identifying fields. The reserved
     key ``eolab:temporal-source`` contains the descriptor's server-side location;
-    ``eolab:vector-field-values`` holds server-only string suggestions.
+    ``eolab:vector-field-values`` holds server-only string suggestions. Private
+    Asset and descriptor source records are also omitted, even when a STAC
+    field projection excludes the owning Item identity. The validated
+    ``eolab:metadata`` envelope is deliberately public: arbitrary annotation
+    keys inside it retain their supplied meaning, including reserved spellings.
 
     Args:
         value: Catalog JSON from the internal STAC service or database.
@@ -25,9 +30,19 @@ def copy_public_catalog_metadata(value: JsonValue) -> JsonValue:
 
     if isinstance(value, dict):
         return {
-            key: copy_public_catalog_metadata(child)
+            key: (
+                deepcopy(child)
+                if key == "eolab:metadata"
+                else copy_public_catalog_metadata(child)
+            )
             for key, child in value.items()
-            if key not in {"eolab:temporal-source", "eolab:vector-field-values"}
+            if key
+            not in {
+                "eolab:temporal-source",
+                "eolab:vector-field-values",
+                "eolab:asset-source",
+                "eolab:descriptor-source",
+            }
         }
     if isinstance(value, list):
         return [copy_public_catalog_metadata(child) for child in value]

@@ -16,6 +16,8 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
+from eolab_app.catalog.asset_access import get_asset_source_href
+
 from eolab_app.catalog.filegeodatabase import FILE_GEODATABASE_MEDIA_TYPE
 from eolab_app.catalog.geojson import GEOJSON_MEDIA_TYPE
 from eolab_app.catalog.geopackage import GEOPACKAGE_MEDIA_TYPE
@@ -98,8 +100,9 @@ class MountedVectorResolver:
     def resolve(self, item: dict[str, Any]) -> ResolvedVectorSource:
         """Resolve one authoritative vector Item to its explicit source identity.
 
-        Items must carry ``eolab:vector_source``. A non-file Asset is classified
-        as remote and is never interpreted as a mounted path.
+        Items must carry ``eolab:vector_source``. Described Assets use their
+        private original source URI, not the public download URL. A non-file
+        Asset is classified as remote and is never interpreted as a mounted path.
 
         Args:
             item: Authoritative vector STAC Item.
@@ -119,18 +122,19 @@ class MountedVectorResolver:
         )
         assets = item.get("assets")
         asset = assets.get(asset_key) if isinstance(assets, dict) else None
+        source_href = get_asset_source_href(asset) if isinstance(asset, dict) else None
         expected_media_type = _FORMAT_ASSET_CONTRACTS[source_format][1]
         if (
             not isinstance(asset, dict)
             or asset.get("type") != expected_media_type
             or asset.get("roles") != ["data"]
-            or not isinstance(asset.get("href"), str)
+            or not isinstance(source_href, str)
         ):
             raise VectorAssetError(
                 f"The Item has no exact {source_format} data Asset"
             )
 
-        asset_uri = urlsplit(asset["href"])
+        asset_uri = urlsplit(source_href)
         if asset_uri.scheme != "file":
             return ResolvedVectorSource(
                 source_kind="remote",
@@ -143,7 +147,7 @@ class MountedVectorResolver:
             raise VectorAssetError(
                 "The remote vector source contract points to a mounted Asset"
             )
-        source_path = self._resolve_mounted_uri(asset["href"])
+        source_path = self._resolve_mounted_uri(source_href)
         self._validate_source_path(source_format, source_path)
         component_paths: tuple[Path, ...] = ()
         if source_format == "shapefile":
@@ -327,13 +331,16 @@ class MountedVectorResolver:
             asset = assets.get(asset_key)
             if asset is None:
                 continue
+            source_href = (
+                get_asset_source_href(asset) if isinstance(asset, dict) else None
+            )
             if (
                 not isinstance(asset, dict)
                 or asset.get("type") != SHAPEFILE_COMPONENT_TYPES[extension]
-                or not isinstance(asset.get("href"), str)
+                or not isinstance(source_href, str)
             ):
                 raise VectorAssetError("A Shapefile component Asset is invalid")
-            path = self._resolve_mounted_uri(asset["href"])
+            path = self._resolve_mounted_uri(source_href)
             if (
                 not path.is_file()
                 or path.parent != shapefile_path.parent

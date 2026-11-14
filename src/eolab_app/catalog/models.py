@@ -88,6 +88,33 @@ class DatasetMetadataResult:
 
 
 @dataclass(frozen=True)
+class DescriptorSource:
+    """Retain private descriptor ownership for later scans and reconciliation.
+
+    Attributes:
+        href: Confined descriptor file URI.
+        relative_path: Descriptor location relative to the source mount.
+        descriptor_id: Author-declared stable dataset identity.
+        primary_href: Primary source URI, local or external.
+        primary_relative_path: Local primary location, or None for external data.
+        primary_asset_key: Native primary Asset key within the Item.
+        kind: Declared raster, vector or nonspatial capability.
+        claimed_paths: Mount-relative primary/supporting paths owned by the descriptor.
+        selector: Exact native layer/member represented by this Item, if any.
+    """
+
+    href: str
+    relative_path: str
+    descriptor_id: str
+    primary_href: str
+    primary_relative_path: str | None
+    primary_asset_key: str
+    kind: Literal["raster", "vector", "nonspatial"]
+    claimed_paths: tuple[str, ...]
+    selector: str | None
+
+
+@dataclass(frozen=True)
 class CatalogItemSource:
     """Source Assets for one scanner-owned catalog Item.
 
@@ -95,11 +122,13 @@ class CatalogItemSource:
         collection: Collection containing the Item.
         item_id: Item identifier within the Collection.
         asset_hrefs: Required source Asset locations.
+        descriptor: Private descriptor ownership, absent for ordinary Items.
     """
 
     collection: str
     item_id: str
     asset_hrefs: tuple[str, ...]
+    descriptor: DescriptorSource | None = None
 
 
 @dataclass

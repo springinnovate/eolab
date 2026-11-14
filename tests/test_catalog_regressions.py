@@ -934,7 +934,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     }
     assert second_status["catalogItemsWritten"] == 1
     assert second_status["catalogItemsAlreadyPresent"] == 1
-    assert len(catalog_writer.write_session.collections) == 3
+    assert len(catalog_writer.write_session.collections) == 4
     assert len(catalog_writer.write_session.items) == 1
     assert catalog_database.search_count_cache_invalidations == 2
 
@@ -971,7 +971,7 @@ def test_scan_reports_null_geometry_before_catalog_write(tmp_path: Path) -> None
         {
             "path": "empty.shp",
             "error": (
-                "Dataset has no spatial footprint; pgSTAC requires Item geometry"
+                "Spatial dataset has no footprint; only explicitly described nonspatial Items may omit geometry"
             ),
         }
     ]
@@ -1378,6 +1378,7 @@ def test_reconciliation_overlaps_metadata_extraction(
             "collection": "eolab-mounted-geotiffs",
             "id": "geotiff-current",
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     def check_item(*_: object) -> bool:
@@ -1549,6 +1550,7 @@ def test_scan_continues_after_item_finalization_failure(
             "id": dataset_path.stem,
             "collection": "eolab-mounted-geotiffs",
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     class SelectiveFinalizer:
@@ -1610,6 +1612,7 @@ def test_existing_items_are_classified_by_collection_and_identifier(
             "id": "same-id",
             "collection": collection,
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
@@ -1681,6 +1684,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
                     else "eolab-mounted-geotiffs"
                 ),
                 "geometry": {"type": "Point", "coordinates": [0, 0]},
+                "assets": {},
             }
         finally:
             with metadata_lock:
@@ -1739,6 +1743,7 @@ def test_scan_runs_the_configured_number_of_catalog_writers(
             "id": relative_path,
             "collection": "eolab-mounted-geotiffs",
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
@@ -1789,6 +1794,7 @@ def test_scan_cancels_concurrent_writers_after_one_fails(
             "id": relative_path,
             "collection": "eolab-mounted-geotiffs",
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
@@ -1834,6 +1840,7 @@ def test_dataset_metadata_timing_separates_cpu_from_wait(
             "id": path.name,
             "collection": "eolab-mounted-geotiffs",
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     elapsed_clock = iter([10.0, 12.5])
@@ -1912,6 +1919,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
             "id": relative_path,
             "collection": "eolab-mounted-geotiffs",
             "geometry": {"type": "Point", "coordinates": [0, 0]},
+            "assets": {},
         }
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)

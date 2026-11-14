@@ -110,7 +110,9 @@ def test_catalog_value_route_validates_identity_and_pages() -> None:
         )
     )
     app = FastAPI()
-    app.include_router(create_catalog_router(AsyncMock(), AsyncMock(), lookup))
+    app.include_router(
+        create_catalog_router(AsyncMock(), AsyncMock(), lookup, AsyncMock())
+    )
     client = TestClient(app)
     body = {
         "collectionId": "eolab-mounted-vectors",

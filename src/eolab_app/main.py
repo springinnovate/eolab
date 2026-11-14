@@ -30,6 +30,7 @@ from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
 from eolab_app.catalog.reconciliation import MissingItemReconciler
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.catalog.search_counts import number_matched_is_estimated
+from eolab_app.catalog.asset_access import CatalogAttachment, resolve_catalog_attachment
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
@@ -597,6 +598,32 @@ def create_app(
         )
     )
     catalog_database = PgStacCatalogDatabase()
+
+    async def get_catalog_attachment(
+        collection_id: str, item_id: str, asset_key: str
+    ) -> CatalogAttachment:
+        """Resolve a stored catalog Asset to its original downloadable file.
+
+        Args:
+            collection_id: Owning STAC Collection identity.
+            item_id: Owning Item identity.
+            asset_key: Asset key within the stored Item.
+
+        Returns:
+            Original file confined to the configured scan mount.
+
+        Raises:
+            CatalogAttachmentNotFound: If no downloadable local Asset is found.
+            CatalogAttachmentUnavailable: If its source cannot be accessed.
+            psycopg.Error: If the catalog lookup fails.
+        """
+        asset = await catalog_database.get_catalog_asset(
+            collection_id, item_id, asset_key
+        )
+        return await asyncio.to_thread(
+            resolve_catalog_attachment, asset, app_global_configuration.scan_mount_path
+        )
+
     saved_maps = SavedMapStore(capacity=app_global_configuration.saved_map_capacity)
     application.include_router(create_saved_maps_router(saved_maps))
     application.include_router(
@@ -607,6 +634,7 @@ def create_app(
             catalog_database.random_matching_item,
             raster_source_authorizer.get_time_choices,
             catalog_database.get_vector_field_values,
+            get_catalog_attachment,
         )
     )
     application.include_router(

@@ -5,7 +5,9 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from eolab_app.catalog.collections import TEMPORAL_COLLECTION_ID
-from eolab_app.catalog.models import CatalogItemSource
+from eolab_app.catalog.models import CatalogItemSource, DescriptorSource
+from eolab_app.catalog.descriptors import DESCRIPTOR_SOURCE_KEY
+from pydantic import TypeAdapter
 from eolab_app.catalog.pgstac import catalog_item_source
 
 
@@ -96,6 +98,26 @@ class RecordingCatalogDatabase:
         self.search_count_cache_invalidations = 0
         self.deleted_batches: list[list[tuple[str, str]]] = []
         self.requested_page_sizes: list[int] = []
+
+    async def descriptor_sources(
+        self, collection_identifiers: tuple[str, ...]
+    ) -> tuple[DescriptorSource, ...]:
+        """Read private descriptor records from the in-memory catalog.
+
+        Args:
+            collection_identifiers: Scanner-owned Collections to inventory.
+
+        Returns:
+            Validated stored ownership records.
+        """
+        return tuple(
+            TypeAdapter(DescriptorSource).validate_python(
+                item["assets"][DESCRIPTOR_SOURCE_KEY]
+            )
+            for (collection, _), item in self.catalog_writer.write_session.items.items()
+            if collection in collection_identifiers
+            and DESCRIPTOR_SOURCE_KEY in item.get("assets", {})
+        )
 
     async def existing_item_keys(
         self,

@@ -595,12 +595,19 @@ def test_catalog_migrator_indexes_data_asset_media_type() -> None:
     )
 
 
-def test_stac_api_uses_the_pinned_upstream_image() -> None:
-    """Use upstream CQL2 Filter support without a custom API image."""
+def test_stac_api_extends_only_the_pinned_provider_geometry_check() -> None:
+    """Keep upstream API startup and its user with the approved nonspatial patch."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    dockerfile = (COMPOSE_PATH.parent / "Dockerfile.stac-api").read_text(
+        encoding="utf-8"
+    )
 
-    assert "stac-fastapi-pgstac:6.3.1@sha256:" in compose
-    assert "dockerfile: Dockerfile.stac-api" not in compose
+    assert "dockerfile: Dockerfile.stac-api" in compose
+    assert "FROM ghcr.io/stac-utils/stac-fastapi-pgstac:6.3.1@sha256:" in dockerfile
+    assert "RUN python /opt/eolab/patch-stac-nonspatial.py" in dockerfile
+    assert dockerfile.rstrip().endswith("USER user")
+    assert "CMD" not in dockerfile
+    assert "ENTRYPOINT" not in dockerfile
 
 
 def test_catalog_random_selection_uses_an_indexed_key_seek() -> None:

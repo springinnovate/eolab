@@ -159,3 +159,33 @@ def test_stac_api_writer_bounds_upstream_error_detail() -> None:
         assert request_timeouts == [17]
     else:
         raise AssertionError("upstream rejection was accepted")
+
+
+@pytest.mark.parametrize(
+    "row",
+    [None, (None,), ({"href": "/api/catalog/asset?collection=c&item=i&asset=data"},)],
+)
+def test_catalog_asset_lookup_uses_all_three_identity_fields(
+    row: tuple[dict[str, str] | None] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve only the requested stored Asset without accepting a source path.
+
+    Args:
+        row: Persisted Asset or absent Item/Asset returned by PostgreSQL.
+        monkeypatch: Replace the database connection at its external boundary.
+    """
+    cursor = AsyncMock()
+    cursor.fetchone.return_value = row
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    monkeypatch.setattr(
+        psycopg.AsyncConnection, "connect", AsyncMock(return_value=connection)
+    )
+    result = asyncio.run(
+        PgStacCatalogDatabase().get_catalog_asset("collection-a", "item-b", "asset-c")
+    )
+    assert result == (row[0] if row is not None else None)
+    query, parameters = connection.execute.await_args.args
+    assert "collection=%s AND id=%s" in query
+    assert parameters == ("asset-c", "collection-a", "item-b")

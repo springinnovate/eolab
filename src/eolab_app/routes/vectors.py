@@ -1,10 +1,11 @@
 """Publish, style and filter catalog vectors and browser-owned polygon uploads."""
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from eolab_app.catalog.public_metadata import copy_public_catalog_metadata
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.http_disconnect import HttpClientDisconnectedError, run_until_http_disconnect
 from eolab_app.vector.filters import AppliedVectorFilter, CatalogVectorFilterRequest, VectorFilterCount, VectorFilterRequest
@@ -74,13 +75,15 @@ def create_vector_feature(
             request: Authoritative Collection and Item identity.
 
         Returns:
-            Updated browser-safe vector visualization assessment.
+            Updated browser-safe vector Item, with curated metadata retained and
+            private source records and field inventories omitted.
 
         Raises:
             HTTPException: If the Item or exact source layer cannot be assessed.
         """
         try:
-            return await assessment_service.assess(request)
+            item = await assessment_service.assess(request)
+            return cast(dict[str, object], copy_public_catalog_metadata(item))
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
 

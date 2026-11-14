@@ -1,4 +1,4 @@
-"""Run the catalog concurrency regressions in the deployment's pinned pgSTAC images."""
+"""Verify catalog ingestion and descriptor API round trips in pinned deployment images."""
 
 from __future__ import annotations
 
@@ -50,6 +50,70 @@ def deployment_images() -> tuple[str, str]:
     return database.group(1), migration.group(1)
 
 
+def deployment_api_base_image() -> str:
+    """Read the deployment's exact STAC API image for HTTP contract verification.
+
+    Returns:
+        Digest-pinned STAC FastAPI pgSTAC image already used by deployment.
+
+    Raises:
+        ValueError: If the expected deployment image pin is absent.
+    """
+    recipe = (ROOT / "Dockerfile.stac-api").read_text(encoding="utf-8")
+    match = re.search(
+        r"(?m)^FROM (ghcr\.io/stac-utils/stac-fastapi-pgstac:6\.3\.1@sha256:[0-9a-f]{64})\s*$",
+        recipe,
+    )
+    if match is None:
+        raise ValueError(
+            "Catalog API tests require the deployment's STAC FastAPI 6.3.1 digest pin"
+        )
+    return match.group(1)
+
+
+def build_api_test_image() -> str:
+    """Build the exact deployment API patch with only its declared source inputs.
+
+    Returns:
+        A unique test-owned API image tag removed by the launcher.
+
+    Raises:
+        ValueError: If the API recipe lacks the approved upstream digest pin.
+        subprocess.CalledProcessError: If the image or provider checks fail.
+        subprocess.TimeoutExpired: If the build exceeds ten minutes.
+    """
+    deployment_api_base_image()
+    tag = "eolab-catalog-api-test:" + uuid4().hex
+    try:
+        with tempfile.TemporaryFile() as context:
+            with tarfile.open(fileobj=context, mode="w") as archive:
+                for name in (
+                    "Dockerfile.stac-api",
+                    "deployment/patch-stac-nonspatial.py",
+                ):
+                    archive.add(ROOT / name, arcname=name, recursive=False)
+            context.seek(0)
+            subprocess.run(
+                [
+                    "docker",
+                    "build",
+                    "--pull",
+                    "--file",
+                    "Dockerfile.stac-api",
+                    "--tag",
+                    tag,
+                    "-",
+                ],
+                stdin=context,
+                check=True,
+                timeout=600,
+            )
+    except BaseException:
+        subprocess.run(["docker", "image", "rm", tag], timeout=30, check=False)
+        raise
+    return tag
+
+
 def build_test_image() -> str:
     """Build the catalog tests with the application's supported Python and psycopg.
 
@@ -72,8 +136,8 @@ def build_test_image() -> str:
         "USER root\nWORKDIR /suite\n"
         "RUN python -m pip install --no-cache-dir 'pytest==8.4.2' "
         f"'psycopg[binary]=={version.group(1)}'\n"
-        "COPY tests/test_catalog_ingestion_postgres.py /suite/tests/\n"
-        "COPY tests/fixtures/catalog_descriptors/public-items.json /suite/tests/fixtures/catalog_descriptors/\n"
+        "COPY tests/test_catalog_ingestion_postgres.py tests/test_catalog_descriptor_postgres.py /suite/tests/\n"
+        "COPY tests/fixtures/catalog_descriptors/public-items.json /suite/tests/fixtures/catalog_descriptors/public-items.json\n"
         "COPY catalog/migrations/ /suite/catalog/migrations/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
@@ -87,10 +151,11 @@ def build_test_image() -> str:
                 entry = tarfile.TarInfo("Dockerfile")
                 entry.size = len(encoded)
                 archive.addfile(entry, io.BytesIO(encoded))
-                paths = [ROOT / "tests/test_catalog_ingestion_postgres.py"]
-                paths.append(
-                    ROOT / "tests/fixtures/catalog_descriptors/public-items.json"
-                )
+                paths = [
+                    ROOT / "tests/test_catalog_ingestion_postgres.py",
+                    ROOT / "tests/test_catalog_descriptor_postgres.py",
+                    ROOT / "tests/fixtures/catalog_descriptors/public-items.json",
+                ]
                 paths.extend((ROOT / "catalog/migrations").glob("*.sql"))
                 for path in sorted(paths):
                     archive.add(path, arcname=path.relative_to(ROOT), recursive=False)
@@ -176,7 +241,7 @@ def disposable_database(database_image: str) -> Iterator[tuple[str, str, str]]:
             f"postgresql://catalog_test:{password}@database:5432/{name}?connect_timeout=3"
         )
     finally:
-        for container in (name + "_runner", name + "_migrate", name):
+        for container in (name + "_runner", name + "_api", name + "_migrate", name):
             subprocess.run(
                 ["docker", "rm", "--force", "--volumes", container],
                 stdout=subprocess.DEVNULL,
@@ -198,7 +263,9 @@ def disposable_database(database_image: str) -> Iterator[tuple[str, str, str]]:
         print(f"Catalog test cleanup verified: {name}", flush=True)
 
 
-def run_suite(image: str, database_image: str, migration_image: str) -> int:
+def run_suite(
+    image: str, database_image: str, migration_image: str, api_image: str
+) -> int:
     """Initialize real pgSTAC and run the migrated catalog regressions.
 
     On POSIX hosts the test container uses the launcher's user and group so it can
@@ -208,6 +275,7 @@ def run_suite(image: str, database_image: str, migration_image: str) -> int:
         image: Test-only image containing pytest, source tests and application SQL.
         database_image: Pinned deployment database image.
         migration_image: Pinned deployment image used only to initialize upstream SQL.
+        api_image: Exact patched deployment API image built for this test run.
 
     Returns:
         Pytest's exact exit status after logs are printed and owned resources removed.
@@ -242,6 +310,37 @@ def run_suite(image: str, database_image: str, migration_image: str) -> int:
             timeout=180,
             capture=False,
         )
+        docker(
+            "run",
+            "--detach",
+            "--name",
+            name + "_api",
+            "--label",
+            f"{LABEL}={name}",
+            "--network",
+            network,
+            "--network-alias",
+            "catalog-api",
+            "--memory",
+            "512m",
+            "--env",
+            "PGHOST=database",
+            "--env",
+            "PGPORT=5432",
+            "--env",
+            "PGUSER=catalog_test",
+            "--env",
+            f"PGPASSWORD={urlsplit(dsn).password}",
+            "--env",
+            f"PGDATABASE={name}",
+            "--env",
+            "DB_MIN_CONN_SIZE=1",
+            "--env",
+            "DB_MAX_CONN_SIZE=5",
+            "--env",
+            "ENABLE_TRANSACTIONS_EXTENSIONS=TRUE",
+            api_image,
+        )
         command = [
             "-m",
             "pytest",
@@ -254,6 +353,7 @@ def run_suite(image: str, database_image: str, migration_image: str) -> int:
             "--tb=short",
             "--junitxml=/results/catalog-results.xml",
             "/suite/tests/test_catalog_ingestion_postgres.py",
+            "/suite/tests/test_catalog_descriptor_postgres.py",
         ]
         # The fixture records upstream contracts before applying migration 0007 twice.
         initializer = (
@@ -292,6 +392,8 @@ def run_suite(image: str, database_image: str, migration_image: str) -> int:
                 "no-new-privileges",
                 "--env",
                 f"EOLAB_CATALOG_TEST_DSN={dsn}",
+                "--env",
+                "EOLAB_CATALOG_TEST_URL=http://catalog-api:8080",
                 image,
                 "python",
                 "-c",
@@ -301,6 +403,7 @@ def run_suite(image: str, database_image: str, migration_image: str) -> int:
                 status = int(docker("wait", name + "_runner", timeout=180))
             finally:
                 docker("logs", name + "_runner", timeout=30, capture=False)
+                docker("logs", name + "_api", timeout=30, capture=False)
             report = Path(directory) / "catalog-results.xml"
             suites = ET.parse(report).getroot().iter("testsuite")
             if any(int(suite.attrib.get("skipped", "0")) for suite in suites):
@@ -334,15 +437,19 @@ def main() -> int:
     signal.signal(signal.SIGINT, interrupt)
     database_image, migration_image = deployment_images()
     image = None
+    api_image = None
     try:
         docker("pull", database_image, timeout=300, capture=False)
+        api_image = build_api_test_image()
         image = build_test_image()
-        return run_suite(image, database_image, migration_image)
+        return run_suite(image, database_image, migration_image, api_image)
     except KeyboardInterrupt:
         return 130
     finally:
         if image:
             docker("image", "rm", image)
+        if api_image:
+            docker("image", "rm", api_image)
 
 
 if __name__ == "__main__":

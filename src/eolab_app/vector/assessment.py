@@ -10,6 +10,10 @@ from eolab_app.catalog.handlers import (
     create_default_dataset_handler_registry,
 )
 from eolab_app.catalog.models import DatasetCandidate
+from eolab_app.catalog.descriptors import (
+    preserve_admitted_descriptor_metadata,
+    publish_descriptor_assets,
+)
 from eolab_app.catalog.vector import MOUNTED_VECTOR_COLLECTION_ID
 from eolab_app.vector.errors import (
     VectorAssetError,
@@ -253,13 +257,17 @@ class VectorAssessmentService:
         )
 
     async def assess(self, request: CatalogVectorRequest) -> dict[str, Any]:
-        """Reassess one Item without scanning sibling datasets.
+        """Refresh one Item's technical assessment while retaining admitted studies.
+
+        Curated fields, supporting Assets and descriptor ownership remain those
+        of the last Catalog scan. Reassessment never reads changed sidecar YAML.
 
         Args:
             request: Validated Collection and Item identity.
 
         Returns:
-            Newly rebuilt and assessed authoritative STAC Item.
+            Rebuilt and assessed authoritative Item with admitted annotations and
+            private original-source records retained for internal consumers.
 
         Raises:
             VectorFeatureError: If catalog, source, or reader boundaries fail.
@@ -278,6 +286,7 @@ class VectorAssessmentService:
                     request.item_id,
                     source,
                 )
+                preserve_admitted_descriptor_metadata(updated_item, item)
         except VectorAssetError:
             updated_item = dict(item)
             updated_item["properties"] = dict(item.get("properties", {}))
@@ -290,6 +299,7 @@ class VectorAssessmentService:
                 "The mounted vector layer no longer matches the catalog Item"
             )
         updated_item = await self._finalizer.finalize(updated_item)
+        publish_descriptor_assets(updated_item)
         await self._catalog.upsert_item(request, updated_item)
         return updated_item
 
