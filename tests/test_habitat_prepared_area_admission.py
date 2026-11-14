@@ -18,6 +18,7 @@ from eolab_app.catalog_selection import (
     CatalogSelectionReader,
     SelectionUnavailableError,
 )
+from eolab_app.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 from eolab_app.processing import habitat_cache
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.habitat_earth_engine import HabitatCacheCoverage
@@ -633,22 +634,31 @@ def test_drawn_references_and_raster_mask_remain_independent_inputs(
         monkeypatch: Supply the geometry already authorized by polygon-input storage.
     """
     boundary = admission_boundary
-    reference_geometry = AggregateArea(
-        kind="polygons",
-        bounds=(0, 0, 1, 1),
-        geometryHash=POLYGON_REFERENCE["sha256"],
-        geometries=(
+    polygons = PolygonSummaryInput(
+        polygons=(
             {
                 "type": "Polygon",
                 "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
             },
         ),
     )
+    reference = PolygonAreaReference(id="a" * 32, sha256=polygons.geometry_hash())
+    reference_geometry = AggregateArea(
+        kind="polygons",
+        bounds=polygons.bounds(),
+        geometryHash=reference.sha256,
+        geometries=tuple(
+            polygon.model_dump(mode="json") for polygon in polygons.polygons
+        ),
+    )
     read_polygon = AsyncMock(return_value=reference_geometry)
     monkeypatch.setattr(boundary.service, "read_polygon_area", read_polygon)
     request = _request(
         boundary.service.model_registry,
-        references={"kind": "polygonArea", "reference": POLYGON_REFERENCE},
+        references={
+            "kind": "polygonArea",
+            "reference": reference.model_dump(mode="json"),
+        },
         habitat_mask=SOURCE,
         preparation={
             "crs": "EPSG:6933",
@@ -664,7 +674,8 @@ def test_drawn_references_and_raster_mask_remain_independent_inputs(
     assert isinstance(queued, QueuedHabitat)
     assert queued.referencePolygons == reference_geometry
     assert queued.polygonArea is None
-    read_polygon.assert_awaited_once_with(OWNER, queued.request.references.reference)
+    assert queued.request.references.reference == reference
+    read_polygon.assert_awaited_once_with(OWNER, reference)
     boundary.raster_authorizer.authorize.assert_awaited_once_with(
         queued.request.habitat_mask
     )
