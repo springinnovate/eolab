@@ -1,6 +1,7 @@
 """Test bounded numeric classification for authoritative vector Items."""
 
 import asyncio
+from math import isfinite, nextafter
 from pathlib import Path
 from threading import Event
 
@@ -167,6 +168,63 @@ def test_equal_interval_classification_returns_complete_open_ranges(
     assert summary.default_class_count == 5
     assert summary.minimum_class_count == 2
     assert summary.maximum_class_count == 9
+
+
+@pytest.mark.parametrize(
+    "values, expected_breaks",
+    [
+        ([-1e308, 1e308], [-6e307, -2e307, 2e307, 6e307]),
+        ([1e308, 1.7e308], [1.14e308, 1.28e308, 1.42e308, 1.56e308]),
+        ([1.0, nextafter(1.0, 2.0)], []),
+        ([3.0, 3.0], []),
+        ([-5.0, 5.0], [-3.0, -1.0, 1.0, 3.0]),
+    ],
+    ids=[
+        "mixed-extremes",
+        "positive-extremes",
+        "adjacent-floats",
+        "constant",
+        "ordinary",
+    ],
+)
+def test_equal_intervals_cover_finite_values_without_invalid_breaks(
+    tmp_path: Path, values: list[float], expected_breaks: list[float]
+) -> None:
+    """Classify finite native values even when interval arithmetic would collapse.
+
+    Args:
+        tmp_path: Isolated mount containing the original GeoPackage.
+        values: Finite observations covering overflow, precision and ordinary cases.
+        expected_breaks: Representable interior boundaries for five requested classes.
+    """
+    item = assessed_numeric_item(tmp_path, [*values, None])
+    summary = asyncio.run(
+        category_service(item, tmp_path).classify_numeric(
+            numeric_request(item, "score", "equal-interval", 5)
+        )
+    )
+
+    boundaries = [entry.maximum for entry in summary.classes[:-1]]
+    assert boundaries == pytest.approx(expected_breaks)
+    assert all(isfinite(value) for value in boundaries)
+    assert all(left < right for left, right in zip(boundaries, boundaries[1:]))
+    assert summary.requested_class_count == 5
+    assert summary.actual_class_count == len(expected_breaks) + 1
+    assert summary.classes[0].minimum is None
+    assert summary.classes[-1].maximum is None
+    assert sum(entry.count for entry in summary.classes) == len(values)
+    assert summary.numeric_value_count == len(values)
+    assert summary.null_count == 1
+    assert summary.complete
+    for value in values:
+        assert (
+            sum(
+                (entry.minimum is None or value > entry.minimum)
+                and (entry.maximum is None or value <= entry.maximum)
+                for entry in summary.classes
+            )
+            == 1
+        )
 
 
 def test_quantile_classification_collapses_repeated_breaks(
