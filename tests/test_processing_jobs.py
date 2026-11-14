@@ -685,7 +685,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     store: PostgresJobStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep the settings boundary while avoiding web/AOI/rendering initialization.
+    """Import durable areas before reset and cleanup without web/rendering initialization.
 
     Args:
         tmp_path: Independent source and artifact roots.
@@ -693,6 +693,16 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         monkeypatch: Supply only the worker's validated dependencies.
     """
     import eolab_app.main as composition
+    from eolab_app.processing.habitat_preparation import (
+        build_habitat_input_preparation_submission,
+    )
+    from eolab_app.processing.habitat_preparation_models import (
+        HABITAT_PREPARATION_OWNER,
+        HabitatInputPreparationRequest,
+    )
+    from eolab_app.processing.habitat_prepared_areas import (
+        PostgresHabitatPreparedAreas,
+    )
 
     mount = tmp_path / "mount"
     mount.mkdir()
@@ -708,6 +718,33 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.delenv("HABITAT_EARTH_ENGINE_PROJECT", raising=False)
     monkeypatch.delenv("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", raising=False)
     monkeypatch.setattr(composition, "PostgresJobStore", lambda limits: store)
+    prepared_areas = PostgresHabitatPreparedAreas(store.conninfo)
+    monkeypatch.setattr(
+        composition, "PostgresHabitatPreparedAreas", lambda: prepared_areas
+    )
+
+    preparation = HabitatInputPreparationRequest(
+        requestId="retained-preparation-before-restart",
+        name="Saved northern region",
+        year=2018,
+        selection={
+            "collectionId": "eolab-mounted-vectors",
+            "itemId": "retained-preparation-area",
+            "assetKey": "data",
+            "layerName": "regions",
+            "filter": {
+                "enabled": True,
+                "match": "all",
+                "rules": [{"field": "ZONE", "operator": "eq", "value": "North"}],
+            },
+        },
+    )
+    store.submit(
+        HABITAT_PREPARATION_OWNER,
+        preparation.requestId,
+        build_habitat_input_preparation_submission(preparation),
+        "b" * 64,
+    )
 
     pending = store.submit(
         "owner",
@@ -731,11 +768,15 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     resets = 0
 
     def reset_once() -> int:
-        """Ensure startup reset runs once, before either loop starts."""
+        """Require historical area import before the single reset and worker startup."""
         nonlocal resets
         resets += 1
         assert resets == 1
         assert not composed_workers
+        imported = prepared_areas.find(preparation.selection)
+        assert imported is not None
+        assert imported.name == preparation.name
+        assert imported.selection == preparation.selection
         return reset()
 
     monkeypatch.setattr(store, "interrupt_unfinished_jobs_on_restart", reset_once)
@@ -763,6 +804,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         assert store.get(pending["id"], "owner")["status"] == "interrupted"
         async with cleanup_lock:
             await worker.cleanup()
+        assert prepared_areas.find(preparation.selection) is not None
         assert store.get(pending["id"], "owner")["reserved_bytes"] == 0
         assert not await worker.run_once()
 
@@ -774,6 +816,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     assert composed_workers[0].native is not composed_workers[1].native
     assert cleanup_locks[0] is cleanup_locks[1]
     assert store._pool.closed
+    assert prepared_areas._pool.closed
 
 
 def test_queue_notification_is_committed_with_admission(store, tmp_path, monkeypatch):
