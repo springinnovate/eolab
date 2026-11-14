@@ -1,12 +1,15 @@
 """Test catalog database and STAC Transactions adapters."""
 
 import asyncio
+from dataclasses import asdict
 from unittest.mock import AsyncMock
 
 import httpx2
 import psycopg
+from pydantic import ValidationError
 import pytest
 
+from eolab_app.catalog.models import DescriptorSource
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase, catalog_item_source
 from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
@@ -189,3 +192,114 @@ def test_catalog_asset_lookup_uses_all_three_identity_fields(
     query, parameters = connection.execute.await_args.args
     assert "collection=%s AND id=%s" in query
     assert parameters == ("asset-c", "collection-a", "item-b")
+
+
+@pytest.mark.parametrize("source_count", [0, 2], ids=["empty", "multiple"])
+def test_descriptor_inventory_consumes_async_database_rows(
+    source_count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Return all validated ownership records before the scan starts discovery.
+
+    Args:
+        source_count: Number of retained descriptors returned by the database.
+        monkeypatch: Replace only the external PostgreSQL connection.
+    """
+    sources = (
+        DescriptorSource(
+            href="file:///scan-source/forest.tif.eolab.yaml",
+            relative_path="forest.tif.eolab.yaml",
+            descriptor_id="forest-study",
+            primary_href="file:///scan-source/forest.tif",
+            primary_relative_path="forest.tif",
+            primary_asset_key="data",
+            kind="raster",
+            claimed_paths=("forest.tif", "observations.csv"),
+            selector=None,
+        ),
+        DescriptorSource(
+            href="file:///scan-source/observations.eolab.yaml",
+            relative_path="observations.eolab.yaml",
+            descriptor_id="observations-study",
+            primary_href="https://example.org/observations.csv",
+            primary_relative_path=None,
+            primary_asset_key="data",
+            kind="nonspatial",
+            claimed_paths=(),
+            selector=None,
+        ),
+    )[:source_count]
+    cursor = AsyncMock()
+    cursor.__aiter__.return_value = [(asdict(source),) for source in sources]
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
+    collections = ("eolab-mounted-geotiffs", "eolab-described-nonspatial")
+
+    result = asyncio.run(PgStacCatalogDatabase().descriptor_sources(collections))
+
+    assert result == sources
+    connect.assert_awaited_once_with()
+    connection.execute.assert_awaited_once()
+    query, parameters = connection.execute.await_args.args
+    assert "SELECT DISTINCT" in query
+    assert "collection=ANY(%s)" in query
+    assert parameters == (
+        "eolab:descriptor-source",
+        list(collections),
+        "eolab:descriptor-source",
+    )
+    connection.__aexit__.assert_awaited_once_with(None, None, None)
+
+
+def test_descriptor_inventory_rejects_invalid_persisted_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject malformed ownership instead of letting discovery expose bare sources.
+
+    Args:
+        monkeypatch: Replace only the external PostgreSQL connection.
+    """
+    cursor = AsyncMock()
+    cursor.__aiter__.return_value = [({"relative_path": "forest.tif.eolab.yaml"},)]
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    monkeypatch.setattr(
+        psycopg.AsyncConnection, "connect", AsyncMock(return_value=connection)
+    )
+
+    with pytest.raises(ValidationError, match="descriptor_id"):
+        asyncio.run(
+            PgStacCatalogDatabase().descriptor_sources(("eolab-mounted-geotiffs",))
+        )
+
+    connection.__aexit__.assert_awaited_once()
+
+
+def test_descriptor_inventory_propagates_database_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep database failures visible while closing the inventory connection.
+
+    Args:
+        monkeypatch: Replace only the external PostgreSQL connection.
+    """
+    failure = psycopg.OperationalError("descriptor inventory connection lost")
+    cursor = AsyncMock()
+    cursor.__aiter__.side_effect = failure
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    monkeypatch.setattr(
+        psycopg.AsyncConnection, "connect", AsyncMock(return_value=connection)
+    )
+
+    with pytest.raises(psycopg.OperationalError) as raised:
+        asyncio.run(
+            PgStacCatalogDatabase().descriptor_sources(("eolab-mounted-geotiffs",))
+        )
+
+    assert raised.value is failure
+    connection.__aexit__.assert_awaited_once()

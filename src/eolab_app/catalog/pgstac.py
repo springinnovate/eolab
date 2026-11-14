@@ -80,8 +80,10 @@ class PgStacCatalogDatabase:
                 ),
             )
             return tuple(
-                TypeAdapter(DescriptorSource).validate_python(row[0])
-                async for row in cursor
+                [
+                    TypeAdapter(DescriptorSource).validate_python(row[0])
+                    async for row in cursor
+                ]
             )
 
     async def get_vector_field_values(
