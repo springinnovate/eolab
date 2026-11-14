@@ -851,6 +851,9 @@ def test_curated_item_and_asset_search_uses_public_values_once(
         document["assets"]["observations"]["eolab:metadata"]["annotations"]["notes"] = [
             "Unique supporting note: 50%_confidence"
         ]
+        document["assets"]["observations"]["eolab:metadata"]["risks"] = [
+            "Coastal inundation outlook"
+        ]
         document["assets"]["second-table"] = deepcopy(
             document["assets"]["observations"]
         )
@@ -889,6 +892,8 @@ def test_curated_item_and_asset_search_uses_public_values_once(
             "A. Researcher",
             "Compare observed",
             "partial_or_processed",
+            "paper-009",
+            "Coastal inundation outlook",
             "metres",
             "supporting note",
             "50%_confidence",
@@ -950,13 +955,13 @@ def test_curated_item_and_asset_search_uses_public_values_once(
             assert "null" not in text.splitlines()
 
 
-def test_curated_exact_labels_combine_across_assets_and_keep_pagination(
+def test_curated_category_and_text_combine_across_assets_and_keep_pagination(
     catalog_database: CatalogDatabase,
 ) -> None:
-    """Match exact normalized Item/Asset labels and page distinct parent Items.
+    """Combine an exact category with supplied annotation text across parent Assets.
 
     Args:
-        catalog_database: Guarded database containing the label-array queryables.
+        catalog_database: Guarded database containing category and text queryables.
     """
     with collection(catalog_database) as identifier:
         documents = [
@@ -973,13 +978,13 @@ def test_curated_exact_labels_combine_across_assets_and_keep_pagination(
         predicate = {
             "op": "and",
             "args": [
-                {"op": "a_contains", "args": [{"property": name}, [label]]}
-                for name, label in (
-                    ("eolab_study_ids", "paper-009"),
-                    ("eolab_categories", "coastal protection"),
-                    ("eolab_risks", "flood"),
-                    ("eolab_statuses", "reviewed"),
-                )
+                {
+                    "op": "a_contains",
+                    "args": [{"property": "eolab_categories"}, ["coastal protection"]],
+                },
+                curated_text_filter("paper-009"),
+                curated_text_filter("flood"),
+                curated_text_filter("reviewed"),
             ],
         }
         first = search_curated_items(catalog_database, identifier, predicate, limit=2)

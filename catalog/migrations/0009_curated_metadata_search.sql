@@ -44,7 +44,7 @@ AS $function$
 $function$;
 
 -- Project the v1 envelope's explicit public fields. Publication IDs are internal
--- associations; user-facing study_ids are separately searchable/filterable.
+-- associations; supplied study_ids remain ordinary searchable text.
 -- Unknown fields cannot silently enter the projection with a future schema.
 CREATE OR REPLACE FUNCTION pgstac.eolab_item_metadata_text(item_content jsonb)
 RETURNS text
@@ -122,18 +122,9 @@ BEGIN
         ('eolab_metadata_text',
             '{"type":"string","title":"Curated dataset and supporting-file text"}'::jsonb,
             'content', 'eolab_item_metadata_text'),
-        ('eolab_study_ids',
-            '{"type":"array","items":{"type":"string"},"title":"Study identifiers"}'::jsonb,
-            'pgstac.eolab_item_metadata_labels(content, ''study_ids'')', 'to_text_array'),
         ('eolab_categories',
             '{"type":"array","items":{"type":"string"},"title":"Category labels"}'::jsonb,
             'pgstac.eolab_item_metadata_labels(content, ''categories'')', 'to_text_array'),
-        ('eolab_risks',
-            '{"type":"array","items":{"type":"string"},"title":"Asset or risk labels"}'::jsonb,
-            'pgstac.eolab_item_metadata_labels(content, ''risks'')', 'to_text_array'),
-        ('eolab_statuses',
-            '{"type":"array","items":{"type":"string"},"title":"Match status labels"}'::jsonb,
-            'pgstac.eolab_item_metadata_labels(content, ''statuses'')', 'to_text_array'),
         ('eolab_time_basis',
             '{"type":"string","title":"Observation or source-modified timestamp basis"}'::jsonb,
             'content->''properties''->''eolab:time_basis''', 'to_text')
@@ -158,13 +149,7 @@ $queryables$;
 -- expressions match its CQL2 compilation while leaving partition policy intact.
 CREATE INDEX IF NOT EXISTS eolab_items_metadata_text_trgm_idx ON pgstac.items
 USING GIN ((upper(pgstac.eolab_item_metadata_text(content))) gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS eolab_items_study_ids_idx ON pgstac.items
-USING GIN (pgstac.to_text_array(pgstac.eolab_item_metadata_labels(content, 'study_ids')));
 CREATE INDEX IF NOT EXISTS eolab_items_categories_idx ON pgstac.items
 USING GIN (pgstac.to_text_array(pgstac.eolab_item_metadata_labels(content, 'categories')));
-CREATE INDEX IF NOT EXISTS eolab_items_risks_idx ON pgstac.items
-USING GIN (pgstac.to_text_array(pgstac.eolab_item_metadata_labels(content, 'risks')));
-CREATE INDEX IF NOT EXISTS eolab_items_statuses_idx ON pgstac.items
-USING GIN (pgstac.to_text_array(pgstac.eolab_item_metadata_labels(content, 'statuses')));
 
 COMMIT;

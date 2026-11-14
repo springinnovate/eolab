@@ -80,21 +80,16 @@ export const CATALOG_SEARCH_FILTERS = Object.freeze([
         searchImmediately: true,
         collectionId: NONSPATIAL_COLLECTION_ID
     }),
-    ...[
-        ["study", "Study identifier", "eolab_study_ids", "study", "paper"],
-        ["category", "Category", "eolab_categories", "category", "dimension"],
-        ["risk", "Asset or risk", "eolab_risks", "risk", "asset"],
-        ["status", "Match status", "eolab_statuses", "status", "readiness"]
-    ].map(([field, label, queryable, ...keywords]) => Object.freeze({
-        field,
-        token: `${field}:`,
+    Object.freeze({
+        field: "category",
+        token: "category:",
         value: null,
-        label,
-        description: 'Match an exact label on the dataset or a supporting file. Quote labels with spaces.',
-        keywords: Object.freeze(keywords),
+        label: "Dataset category",
+        description: 'Match a supplied category on the dataset or a supporting file. Quote categories with spaces.',
+        keywords: Object.freeze(["category", "dimension"]),
         searchImmediately: false,
-        queryable
-    })),
+        queryable: "eolab_categories"
+    }),
     Object.freeze({
         field: "date",
         token: "date:",
@@ -608,8 +603,8 @@ function parseCatalogDatePeriod(dateText) {
  * provider applies temporal-intersection semantics to instant and interval
  * Items. Explicitly marked source-modified dates are excluded; unmarked legacy
  * Items retain their existing temporal behavior. Literal terms remain CQL2
- * substring filters. Metadata filters match an exact case-insensitive label
- * on the Item or any Asset; different filters may match different Assets.
+ * substring filters. The category filter matches an exact case-insensitive
+ * category on the Item or any Asset; text terms may match other Assets.
  *
  * @param {string} searchText Text and field filters entered by the user.
  * @return {{filter: Object|null, datetime: string|null}} Parsed search fields.

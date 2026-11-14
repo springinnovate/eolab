@@ -126,7 +126,7 @@ function createSuggestionFixture() {
 test("Catalog filter descriptions are executable parser-owned syntax", () => {
   assert.deepEqual(
     CATALOG_SEARCH_FILTERS.map((filter) => filter.field),
-    ["type", "type", "type", "type", "study", "category", "risk", "status", "date"],
+    ["type", "type", "type", "type", "category", "date"],
   );
   for (const filter of CATALOG_SEARCH_FILTERS.filter(
     (candidate) => candidate.searchImmediately,
@@ -159,7 +159,7 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
     getCatalogSearchSuggestions("type:raster ", 12).map(
       (filter) => filter.field,
     ),
-    ["study", "category", "risk", "status", "date"],
+    ["category", "date"],
   );
 });
 
@@ -259,7 +259,7 @@ test("Escape dismisses Catalog suggestions without changing the query", () => {
 test("Using every Catalog filter closes the helper instead of showing an empty popup", () => {
   const { component, input, panel } = createSuggestionFixture();
   component.open();
-  input.value = "type:raster date:2020 study:a category:b risk:c status:d ";
+  input.value = "type:raster date:2020 category:Water ";
   input.setSelectionRange(input.value.length, input.value.length);
   input.dispatchEvent(new Event("input"));
   assert.equal(panel.popoverOpen, false);

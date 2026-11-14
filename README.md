@@ -52,15 +52,16 @@ project boundaries.
 
 ### Find data
 
-Use **Catalog search** to enter any part of a filename, description, date,
-or supplied dataset, paper and supporting-file annotations. Ordinary words
-are combined with AND and can be combined with these filters:
+Use **Catalog search** to enter words from a filename, description, paper title,
+author, DOI, or supplied dataset and supporting-file annotations. Ordinary words
+are combined with AND; no paper number or special prefix is needed. Narrow the
+results with these filters:
 
 - `type:raster` — only raster datasets
 - `type:vector` — only vector datasets
 - `type:nonspatial` — standalone described tables, documents and other files
-- `study:paper-009`, `category:Water`, `risk:Flood`, `status:"Partial match"` — exact
-  annotation labels, ignoring case; quote labels containing spaces
+- `category:Water` or `category:"Coastal protection"` — a category supplied with
+  the data, matched exactly and ignoring case; quote categories containing spaces
 - `type:temporal` — datasets containing observations over time
 - `format:cog` — only Cloud Optimized GeoTIFFs
 - `date:2020`, `date:2020-06`, or `date:2020-06-15` — a year, month, or day
@@ -71,9 +72,15 @@ For example, `resistance type:raster date:2020` finds raster records containing
 show the complete Catalog, or use **Surprise me** to open a random matching
 item.
 
-Annotation filters match labels on the dataset or any supporting file; different
-filters may match different files belonging to the same dataset. A dataset appears
-once even if several files match. Search includes supplied titles, descriptions,
+Category names come from the data's annotations, not a fixed EOLab vocabulary.
+For example, `category:risk` matches data explicitly categorized as “risk”; it
+does not infer risk from other annotations. Search `flood` as an ordinary word
+to find it in any searchable annotation. Study labels, risks and curator statuses
+are also searchable as ordinary text, without separate filter syntax.
+
+The category and text terms can match the dataset or any supporting file;
+different terms may match different files belonging to the same dataset. A dataset
+appears once even if several files match. Search includes supplied titles, descriptions,
 keywords, attribution, license, dataset and publication DOI/citations, authors,
 publication year, notes and annotation values. It does not search file contents.
 `date:` uses the Catalog observation interval and excludes timestamps explicitly
