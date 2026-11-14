@@ -40,6 +40,7 @@ import rasterio
 from rasterio.crs import CRS
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
+from shapely.prepared import prep
 
 from eolab_app.processing.habitat_tile_downloads import (
     HabitatTileDownload,
@@ -358,6 +359,9 @@ def _select_tile_grids(
 ) -> tuple[RasterGrid, ...]:
     """Select full acquisition tiles with positive-area overlap with the AOI.
 
+    Prepared predicates skip disjoint tiles and accept strictly contained tiles;
+    boundary candidates retain an exact overlay to exclude edge/point contacts.
+
     Args:
         area: Nonempty AOI already projected into the acquisition CRS.
         grid: Original stack's globally anchored tile and pixel grid.
@@ -372,11 +376,18 @@ def _select_tile_grids(
         (span, span),
         (grid.origin_x, grid.origin_y),
     )
+    prepared_area = prep(area)
     selected = []
     for row in range(tiles.height):
         for column in range(tiles.width):
             left, top = tiles.transform * (column, row)
-            if area.intersection(box(left, top - span, left + span, top)).area > 0:
+            tile = box(left, top - span, left + span, top)
+            if not prepared_area.intersects(tile):
+                continue
+            if (
+                prepared_area.contains_properly(tile)
+                or area.intersection(tile).area > 0
+            ):
                 selected.append(
                     RasterGrid(
                         tiles.crs,
