@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProcessingApiClient } from "../../src/processing/api.js";
-import { model, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
+import { selection, model, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 test("raster results retain valid prepared input coverage and reject inconsistent counts", async () => {
     const coverage = {requiredTiles: 35, cachedTiles: 32, missingTiles: 3};
@@ -238,4 +238,36 @@ test("time-series results require the current named-calculation contract", async
     const result = {...timeSeriesResult, calculations: []};
     const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
     await assert.rejects(h.api.getJob(job().jobId), /invalid time-series calculations/);
+});
+
+
+test("Habitat preparation lists exact path-free Catalog selections and propagates cancellation", async () => {
+    const h = fixture(() => ({selections: [selection]})), abort = new AbortController();
+    assert.deepEqual(await h.api.getHabitatPreparationSelections(abort.signal), {selections: [selection]});
+    assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/preparation-selections");
+    assert.equal(h.calls[0].options.signal, abort.signal);
+    for (const invalid of [{...selection, path: "/private/data.gpkg"},
+        {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "sites", filter: selection.filter}]) {
+        await assert.rejects(fixture(() => ({selections: [invalid]})).api.getHabitatPreparationSelections(), /Invalid|requires a Catalog/);
+    }
+});
+
+test("Habitat coverage posts the exact selection and year and accepts zero or partial availability", async () => {
+    const year = 2018, abort = new AbortController();
+    for (const cachedTiles of [0, 2, 4]) {
+        const coverage = {year, requiredTiles: 4, cachedTiles, missingTiles: 4 - cachedTiles};
+        const h = fixture(() => coverage);
+        assert.deepEqual(await h.api.getHabitatPreparationCoverage(selection, year, abort.signal), coverage);
+        assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/preparation-coverage");
+        assert.equal(h.calls[0].options.method, "POST");
+        assert.equal(h.calls[0].options.signal, abort.signal);
+        assert.deepEqual(JSON.parse(h.calls[0].options.body), {selection, year});
+    }
+    const coverage = {year, requiredTiles: 4, cachedTiles: 2, missingTiles: 2};
+    for (const change of [{year: 2017}, {missingTiles: 3}, {cachedTiles: -1}, {cachedTiles: 0.5}]) {
+        await assert.rejects(fixture(() => ({...coverage, ...change})).api.getHabitatPreparationCoverage(selection, year), /invalid/i);
+    }
+    const h = fixture(() => coverage);
+    await assert.rejects(h.api.getHabitatPreparationCoverage({...selection, path: "/private/data.gpkg"}, year), /Invalid|invalid/);
+    assert.equal(h.calls.length, 0);
 });

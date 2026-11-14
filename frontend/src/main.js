@@ -1225,7 +1225,7 @@ async function initializeCatalog(
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         describeSource: (source, signal, targetCrs) => describeRasterSource(source, signal, undefined, targetCrs),
-        getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
+        getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
         showOutput: (job, file) => outputLayers.show(job, file),
         outputState: (jobId, artifactId, file) => outputLayers.state(jobId, artifactId, file),

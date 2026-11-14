@@ -89,7 +89,7 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
     result.migrate()  # Exercise redeployment of an already initialized schema.
     with psycopg.connect(dsn) as connection:
         connection.execute(
-            "TRUNCATE processing.input_files, processing.job_subscribers, processing.transfers, processing.jobs, processing.calculation_results, processing.inputs"
+            "TRUNCATE processing.habitat_preparation_selections, processing.input_files, processing.job_subscribers, processing.transfers, processing.jobs, processing.calculation_results, processing.inputs"
         )
     return result
 
@@ -685,7 +685,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     store: PostgresJobStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep the settings boundary while avoiding web/AOI/rendering initialization.
+    """Import prepared Catalog selections before reset and cleanup without web/rendering initialization.
 
     Args:
         tmp_path: Independent source and artifact roots.
@@ -693,6 +693,16 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         monkeypatch: Supply only the worker's validated dependencies.
     """
     import eolab_app.main as composition
+    from eolab_app.processing.habitat_preparation import (
+        build_habitat_input_preparation_submission,
+    )
+    from eolab_app.processing.habitat_preparation_models import (
+        HABITAT_PREPARATION_OWNER,
+        HabitatInputPreparationRequest,
+    )
+    from eolab_app.processing.habitat_preparation_selections import (
+        PostgresHabitatPreparationSelections,
+    )
 
     mount = tmp_path / "mount"
     mount.mkdir()
@@ -708,6 +718,35 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.delenv("HABITAT_EARTH_ENGINE_PROJECT", raising=False)
     monkeypatch.delenv("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", raising=False)
     monkeypatch.setattr(composition, "PostgresJobStore", lambda limits: store)
+    preparation_selections = PostgresHabitatPreparationSelections(store.conninfo)
+    monkeypatch.setattr(
+        composition,
+        "PostgresHabitatPreparationSelections",
+        lambda: preparation_selections,
+    )
+
+    preparation = HabitatInputPreparationRequest(
+        requestId="retained-preparation-before-restart",
+        name="Saved northern region",
+        year=2018,
+        selection={
+            "collectionId": "eolab-mounted-vectors",
+            "itemId": "retained-preparation-area",
+            "assetKey": "data",
+            "layerName": "regions",
+            "filter": {
+                "enabled": True,
+                "match": "all",
+                "rules": [{"field": "ZONE", "operator": "eq", "value": "North"}],
+            },
+        },
+    )
+    store.submit(
+        HABITAT_PREPARATION_OWNER,
+        preparation.requestId,
+        build_habitat_input_preparation_submission(preparation),
+        "b" * 64,
+    )
 
     pending = store.submit(
         "owner",
@@ -731,11 +770,13 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     resets = 0
 
     def reset_once() -> int:
-        """Ensure startup reset runs once, before either loop starts."""
+        """Require historical selection import before the single reset and worker startup."""
         nonlocal resets
         resets += 1
         assert resets == 1
         assert not composed_workers
+        assert preparation_selections.contains(preparation.selection)
+        assert preparation_selections.list() == (preparation.selection,)
         return reset()
 
     monkeypatch.setattr(store, "interrupt_unfinished_jobs_on_restart", reset_once)
@@ -763,6 +804,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         assert store.get(pending["id"], "owner")["status"] == "interrupted"
         async with cleanup_lock:
             await worker.cleanup()
+        assert preparation_selections.contains(preparation.selection)
         assert store.get(pending["id"], "owner")["reserved_bytes"] == 0
         assert not await worker.run_once()
 
@@ -774,6 +816,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     assert composed_workers[0].native is not composed_workers[1].native
     assert cleanup_locks[0] is cleanup_locks[1]
     assert store._pool.closed
+    assert preparation_selections._pool.closed
 
 
 def test_queue_notification_is_committed_with_admission(store, tmp_path, monkeypatch):

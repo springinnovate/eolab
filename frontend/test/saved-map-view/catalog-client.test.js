@@ -41,3 +41,15 @@ test("saved map Catalog client rejects missing and substituted Items", async () 
   );
   await assert.rejects(() => substituted.get(identity), /different Item/);
 });
+
+
+test("exact Catalog metadata reads propagate caller cancellation independently of search", async () => {
+  const identity = {collection: "vectors", id: "watersheds"}, abort = new AbortController();
+  let receivedSignal;
+  const client = new SavedMapViewCatalogClient("/stac", async (_url, options) => {
+    receivedSignal = options.signal;
+    return {ok: true, json: async () => identity};
+  });
+  assert.deepEqual(await client.get(identity, abort.signal), identity);
+  assert.equal(receivedSignal, abort.signal);
+});

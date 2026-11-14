@@ -1,6 +1,6 @@
 /** Same-origin Processing API for catalog rasters, owned polygon inputs and job results. */
 import { validateCalculationRows, validateModelResult } from "./model-results.js";
-import { normalizeRasterSamplingArea, validatePolygonAreaReference } from "../selected-area.js";
+import { normalizeRasterSamplingArea, validatePolygonAreaReference, validateVectorSelection } from "../selected-area.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./calculation-session.js";
 import { csvParse } from "d3";
@@ -436,6 +436,38 @@ export class ProcessingApiClient {
      */
     async getHabitatEarthEngineOptions() {
         return this.request("/models/habitat-condition/earth-engine-options");
+    }
+
+    /** List existing Catalog selections used for Earth Engine input preparation.
+     * @param {AbortSignal} [signal] Cancel an obsolete setup request.
+     * @return {Promise<{selections:Object[]}>} Path-free Catalog source and filter descriptors.
+     * @throws {Error|TypeError} If the request fails or a selection is malformed or uploaded.
+     */
+    async getHabitatPreparationSelections(signal) {
+        const response = await this.request("/models/habitat-condition/preparation-selections", "GET", undefined, signal);
+        if (!Array.isArray(response.selections)) throw new TypeError("Invalid preparation selections.");
+        return {selections: response.selections.map(selection => {
+            if (selection?.uploadId !== undefined) throw new TypeError("Preparation requires a Catalog selection.");
+            return validateVectorSelection(selection);
+        })};
+    }
+
+    /** Read current prepared-input coverage for exact Catalog features and a year.
+     * @param {Object} selection Existing Catalog source, layer and filter descriptor.
+     * @param {number} year Assessment year selected in Habitat setup.
+     * @param {AbortSignal} [signal] Cancel an obsolete selection/year request.
+     * @return {Promise<{year:number,requiredTiles:number,cachedTiles:number,missingTiles:number}>} Current file coverage; zero and partial coverage are valid responses.
+     * @throws {Error|TypeError} If the request fails or its selection/year/counts are invalid.
+     */
+    async getHabitatPreparationCoverage(selection, year, signal) {
+        if (selection?.uploadId !== undefined || !Number.isInteger(year)) throw new TypeError("Invalid Catalog selection or year.");
+        const descriptor = validateVectorSelection(selection);
+        const response = await this.request("/models/habitat-condition/preparation-coverage", "POST", {selection: descriptor, year}, signal);
+        if (response.year !== year ||
+            !["requiredTiles", "cachedTiles", "missingTiles"].every(key => Number.isSafeInteger(response[key]) && response[key] >= 0) ||
+            response.cachedTiles + response.missingTiles !== response.requiredTiles)
+            throw new TypeError("Invalid prepared-input coverage.");
+        return response;
     }
 
     /** Read a page of this browser session's model history.

@@ -273,3 +273,12 @@ INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;
 -- Tokens remain server-only and are not included in the subscribed_jobs view.
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS input_uploads jsonb NOT NULL DEFAULT '{}'::jsonb;
 INSERT INTO processing.schema_version VALUES (21) ON CONFLICT DO NOTHING;
+
+-- Preparation references retain the original Catalog selection, not a new area identity.
+-- Exact JSONB equality preserves numeric predicate identity across browser round trips.
+CREATE TABLE IF NOT EXISTS processing.habitat_preparation_selections (
+    selection jsonb NOT NULL CHECK (jsonb_typeof(selection) = 'object')
+);
+CREATE INDEX IF NOT EXISTS habitat_preparation_selections_selection
+    ON processing.habitat_preparation_selections USING hash (selection);
+INSERT INTO processing.schema_version VALUES (22) ON CONFLICT DO NOTHING;
