@@ -349,6 +349,7 @@ def run_suite(
             "-p",
             "no:cacheprovider",
             "-v",
+            "-x",
             "-ra",
             "--tb=short",
             "--junitxml=/results/catalog-results.xml",
