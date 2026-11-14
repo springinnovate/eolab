@@ -859,6 +859,30 @@ def test_curated_item_and_asset_search_uses_public_values_once(
         document["properties"]["eolab:metadata"]["publications"][0][
             "id"
         ] = "internal-id-needle"
+        for private_key in (
+            "eolab:temporal-source",
+            "eolab:vector-field-values",
+            "eolab:asset-source",
+            "eolab:descriptor-source",
+        ):
+            document["assets"][private_key] = {
+                "title": "private-title-needle",
+                "description": "private-description-needle",
+                "eolab:metadata": {
+                    "version": 1,
+                    "annotations": {"notes": "private-envelope-needle"},
+                    "categories": ["private-label-needle"],
+                },
+            }
+            document["properties"]["eolab:metadata"]["annotations"][private_key] = {
+                "notes": "public-nested-needle"
+            }
+            document["assets"]["observations"]["eolab:metadata"]["annotations"][
+                "notes"
+            ].append({"nested": [{private_key: "public-array-needle"}]})
+            document["properties"]["eolab:metadata"]["publications"][0].setdefault(
+                "annotations", {}
+            )[private_key] = "public-publication-needle"
         assert ingest(catalog_database, "curated", [document]).error is None
         for term in (
             "10.1234/example-flood-dataset",
@@ -868,6 +892,9 @@ def test_curated_item_and_asset_search_uses_public_values_once(
             "metres",
             "supporting note",
             "50%_confidence",
+            "public-nested-needle",
+            "public-array-needle",
+            "public-publication-needle",
         ):
             result = search_curated_items(
                 catalog_database, identifier, curated_text_filter(term)
@@ -890,6 +917,10 @@ def test_curated_item_and_asset_search_uses_public_values_once(
             "hidden-href-needle",
             "internal-id-needle",
             "missing_note",
+            "private-title-needle",
+            "private-description-needle",
+            "private-envelope-needle",
+            "private-label-needle",
         ):
             assert (
                 search_curated_items(
@@ -897,6 +928,20 @@ def test_curated_item_and_asset_search_uses_public_values_once(
                 )["numberMatched"]
                 == 0
             ), term
+        assert (
+            search_curated_items(
+                catalog_database,
+                identifier,
+                {
+                    "op": "a_contains",
+                    "args": [
+                        {"property": "eolab_categories"},
+                        ["private-label-needle"],
+                    ],
+                },
+            )["numberMatched"]
+            == 0
+        )
         with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
             text = connection.execute(
                 "SELECT pgstac.eolab_item_metadata_text(%s)", (Jsonb(document),)
