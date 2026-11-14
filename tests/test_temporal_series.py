@@ -1,6 +1,7 @@
 """Verify per-observation area summaries from real TIFFs and their CSV results."""
 
 import csv
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -10,7 +11,9 @@ from queue import SimpleQueue
 from threading import Barrier, Event, Lock
 
 import numpy as np
+from numpy.typing import NDArray
 import pytest
+from pyproj import Transformer
 import rasterio
 from affine import Affine
 from rasterio.crs import CRS
@@ -22,6 +25,7 @@ from eolab_app.processing.aggregate_models import (
     PixelPoint,
     RasterAggregateLimits,
 )
+from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.raster_aggregate import (
     calculate_raster_statistics_for_area,
@@ -527,13 +531,17 @@ def test_unreadable_observation_returns_native_failure_without_artifact(
 
 @pytest.mark.parametrize("area_kind", ["bounds", "polygons"])
 def test_temporal_formulas_match_ordinary_raster_calculations(
-    interval: ResolvedTemporalInterval, tmp_path: Path, area_kind: str
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    area_kind: str,
 ) -> None:
     """Reuse point, formula, cell-centre and fractional-hectare semantics per date.
 
     Args:
         interval: Native TIFFs with different NoData patterns on the same grid.
         tmp_path: Separate temporal and ordinary calculation directories.
+        monkeypatch: Count real geometry calculations without replacing their results.
         area_kind: A partial-cell box or triangular polygon.
     """
     bounds = (11.25, 10.25, 13.75, 11.75)
@@ -575,6 +583,25 @@ def test_temporal_formulas_match_ordinary_raster_calculations(
     assert ground_area is not None and ground_area.strategy == "rectilinear"
     directory = tmp_path / "temporal"
     directory.mkdir()
+    weight_windows: list[Window] = []
+    calculate_hectares = PixelAreaCalculator.calculate_hectares
+
+    def measure_hectares(
+        calculator: PixelAreaCalculator, tile: Window
+    ) -> NDArray[np.float64]:
+        """Record geometry work and return its exact float64 area weights.
+
+        Args:
+            calculator: The attempt-owned original geometry calculator.
+            tile: Native window shared by all observations.
+
+        Returns:
+            Original fractional hectare weights without conversion.
+        """
+        weight_windows.append(tile)
+        return calculate_hectares(calculator, tile)
+
+    monkeypatch.setattr(PixelAreaCalculator, "calculate_hectares", measure_hectares)
     actual = list(
         calculate_temporal_observations(
             interval, area, grid, calculations, point, directory, limits
@@ -583,6 +610,10 @@ def test_temporal_formulas_match_ordinary_raster_calculations(
     assert [observation.time for observation, _ in actual] == [
         observation.time for observation in interval.observations
     ]
+    assert set(Counter(weight_windows).values()) == (
+        {1} if area_kind == "polygons" else {len(interval.observations)}
+    )
+    assert not list(directory.glob("hectare-weights-*"))
     for index, (observation, rows) in enumerate(actual):
         reference_directory = tmp_path / f"ordinary-{index}"
         reference_directory.mkdir()
@@ -602,6 +633,233 @@ def test_temporal_formulas_match_ordinary_raster_calculations(
     assert [rows[3]["value"] for _, rows in actual] == ["1.0", "3.0", "5.0"]
     assert all(rows[2]["unit"] == "ha" for _, rows in actual)
     assert not (directory / "polygon-mask.tif").exists()
+
+
+@pytest.fixture
+def projected_interval(
+    interval: ResolvedTemporalInterval, tmp_path: Path
+) -> ResolvedTemporalInterval:
+    """Create three admitted north-up projected observations with changing NoData.
+
+    Args:
+        interval: Original timestamp and variable metadata.
+        tmp_path: Isolated native source directory.
+
+    Returns:
+        UTM observations spanning three native blocks on one fixed grid.
+    """
+    transform = Affine(100, 0, 500000, 0, -100, 1200000)
+    crs = CRS.from_epsg(32632)
+    observations = []
+    for index, observation in enumerate(interval.observations):
+        path = tmp_path / f"projected-{index}.tif"
+        values = np.full((16, 48), index + 1, dtype="float32")
+        values[:index, :] = np.nan
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            height=16,
+            width=48,
+            count=1,
+            dtype="float32",
+            crs=crs,
+            transform=transform,
+            tiled=True,
+            blockxsize=16,
+            blockysize=16,
+        ) as dataset:
+            dataset.write(values, 1)
+        observations.append(
+            replace(observation, path=path, transform=transform, crs=crs, nodata=None)
+        )
+    return replace(interval, observations=tuple(observations))
+
+
+@pytest.mark.parametrize("outcome", ["complete", "close", "failure", "single"])
+def test_temporal_area_weights_reuse_and_cleanup(
+    projected_interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    """Reuse projected weights without retaining them beyond an attempt's readers.
+
+    Args:
+        projected_interval: Three native windows per projected observation.
+        tmp_path: Separate temporal and ordinary result directories.
+        monkeypatch: Trace actual weight calculation or fail a scratch write.
+        outcome: Complete, close early, fail scratch I/O, or calculate one date.
+    """
+    source = projected_interval
+    if outcome == "single":
+        source = replace(source, observations=source.observations[:1])
+    area = AggregateArea(kind="wholeRaster")
+    expressions = ("areaha(a > 0)", "areaha(a < 0)", "mean(a)")
+    calculations = tuple(
+        NamedCalculation(label=expression, expression=expression)
+        for expression in expressions
+    )
+    limits = RasterAggregateLimits()
+    grid, ground_area = plan_temporal_calculation_grid(
+        source.observations[0], area, limits, calculations, None
+    )
+    assert ground_area is not None and ground_area.strategy == "cell_polygons"
+    directory = tmp_path / "weights-attempt"
+    directory.mkdir()
+    windows: list[Window] = []
+    scratch_seen: list[bool] = []
+    calculate_hectares = PixelAreaCalculator.calculate_hectares
+
+    def measure_hectares(
+        calculator: PixelAreaCalculator, tile: Window
+    ) -> NDArray[np.float64]:
+        """Count the real projected geometry calculations for each spatial tile.
+
+        Args:
+            calculator: Attempt-owned original area calculator.
+            tile: Native tile being measured.
+
+        Returns:
+            Exact original float64 fractional area weights.
+        """
+        windows.append(tile)
+        scratch_seen.append(bool(list(directory.glob("hectare-weights-*"))))
+        weights = calculate_hectares(calculator, tile)
+        assert weights.dtype == np.float64
+        return weights
+
+    monkeypatch.setattr(PixelAreaCalculator, "calculate_hectares", measure_hectares)
+    if outcome == "failure":
+        save = np.save
+
+        def fail_scratch_write(
+            file: Path, array: NDArray[np.float64], *, allow_pickle: bool
+        ) -> None:
+            """Fail after an actual weight-file write to exercise resource cleanup.
+
+            Args:
+                file: Private attempt weight-file path.
+                array: Newly computed float64 weights.
+                allow_pickle: Native safe-array serialization setting.
+
+            Raises:
+                OSError: Always, after the weight file has been written.
+            """
+            save(file, array, allow_pickle=allow_pickle)
+            raise OSError("area-weight scratch unavailable")
+
+        monkeypatch.setattr(np, "save", fail_scratch_write)
+    results = calculate_temporal_observations(
+        source, area, grid, calculations, None, directory, limits
+    )
+    if outcome == "failure":
+        with pytest.raises(OSError, match="area-weight scratch unavailable"):
+            list(results)
+    elif outcome == "close":
+        next(results)
+        results.close()
+    else:
+        actual = list(results)
+        assert len(windows) == len(set(windows)) == grid.tileCount == 3
+        assert [observation.time for observation, _ in actual] == [
+            observation.time for observation in source.observations
+        ]
+        if outcome == "complete":
+            assert all(scratch_seen)
+        else:
+            assert not any(scratch_seen)
+        for index, (observation, rows) in enumerate(actual):
+            reference_directory = tmp_path / f"ordinary-weights-{index}"
+            reference_directory.mkdir()
+            spec = make_spec(observation.path, list(expressions), area)
+            reference = calculate_raster_statistics_for_area(
+                observation.path, spec, reference_directory, limits
+            )
+            assert [row["value"] for row in rows] == [
+                row["value"] for row in reference.rows
+            ]
+    assert not list(directory.glob("hectare-weights-*"))
+
+
+def test_temporal_reuses_zero_weights_between_disconnected_polygons(
+    projected_interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reuse all-zero spatial tiles as well as partially covered polygon tiles.
+
+    Args:
+        projected_interval: Three projected native windows per observation.
+        tmp_path: Private attempt directory.
+        monkeypatch: Count original geometry calculations, retaining actual weights.
+    """
+    project = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True)
+    polygons = PolygonSummaryInput(
+        polygons=tuple(
+            {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        project.transform(x, y)
+                        for x, y in (
+                            (left, 1198400),
+                            (left + 800, 1198400),
+                            (left + 800, 1200000),
+                            (left, 1200000),
+                            (left, 1198400),
+                        )
+                    ]
+                ],
+            }
+            for left in (500000, 504000)
+        )
+    )
+    area = AggregateArea(
+        kind="polygons",
+        bounds=polygons.bounds(),
+        geometryHash=polygons.geometry_hash(),
+        geometries=tuple(polygon.model_dump() for polygon in polygons.polygons),
+    )
+    calculations = (NamedCalculation(label="Area", expression="areaha(a > 0)"),)
+    limits = RasterAggregateLimits()
+    grid, _ = plan_temporal_calculation_grid(
+        projected_interval.observations[0], area, limits, calculations, None
+    )
+    directory = tmp_path / "disconnected-weights"
+    directory.mkdir()
+    measured: list[Window] = []
+    empty: list[Window] = []
+    calculate_hectares = PixelAreaCalculator.calculate_hectares
+
+    def measure_hectares(
+        calculator: PixelAreaCalculator, tile: Window
+    ) -> NDArray[np.float64]:
+        """Record original zero and nonzero fractional-weight calculations.
+
+        Args:
+            calculator: Original attempt-owned geometry calculator.
+            tile: Native tile on the common observation grid.
+
+        Returns:
+            Unmodified original float64 weights, including all-zero tiles.
+        """
+        measured.append(tile)
+        weights = calculate_hectares(calculator, tile)
+        if not weights.any():
+            empty.append(tile)
+        return weights
+
+    monkeypatch.setattr(PixelAreaCalculator, "calculate_hectares", measure_hectares)
+    results = list(
+        calculate_temporal_observations(
+            projected_interval, area, grid, calculations, None, directory, limits
+        )
+    )
+    assert len(results) == len(projected_interval.observations)
+    assert len(measured) == len(set(measured)) == grid.tileCount
+    assert empty
+    assert not list(directory.glob("hectare-weights-*"))
 
 
 @pytest.mark.parametrize("outside", [False, True])

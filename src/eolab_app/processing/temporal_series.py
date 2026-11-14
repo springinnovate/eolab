@@ -10,11 +10,13 @@ import hashlib
 import json
 from itertools import islice
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Lock
 import time
 from typing import Any, Literal
 
 import numpy as np
+from numpy.typing import NDArray
 import rasterio
 from rasterio.windows import Window
 
@@ -79,9 +81,11 @@ def calculate_temporal_observations(
     Two readers start the next observation as soon as either finishes. Scalar
     results wait for earlier timestamps before being yielded in order.
     The selected-area mask and hectare calculator are prepared once and shared;
-    their native reads are serialized. Point-only formulas read one cell per
-    observation without preparing area geometry. Each observation retains the
-    scalar engine's decimal strings, units, states and aggregate coverage.
+    their native reads are serialized. Expensive hectare weights are reused from
+    attempt-owned scratch files when several observations share the grid.
+    Point-only formulas read one cell per observation without preparing area
+    geometry. Each observation retains the scalar engine's decimal strings,
+    units, states and aggregate coverage.
 
     Args:
         interval: Authorized nonempty observations unchanged during the calculation.
@@ -89,7 +93,7 @@ def calculate_temporal_observations(
         grid: Common native grid produced for these formulas and area.
         calculations: Validated named formulas using the raster alias a.
         pixel_point: WGS84 point supplied when a formula uses pixelValue.
-        directory: Private attempt directory for the temporary mask and progress.
+        directory: Private attempt directory for the mask, area weights and progress.
         limits: Existing Processing lifecycle and geometry settings.
 
     Yields:
@@ -98,7 +102,7 @@ def calculate_temporal_observations(
 
     Raises:
         ProcessingError: If the area or hectare calculation fails.
-        OSError: If source, mask or progress I/O fails.
+        OSError: If source, mask, area-weight or progress I/O fails.
         ValueError: If native decoding fails.
         rasterio.errors.RasterioError: If a source or mask cannot be read.
     """
@@ -140,6 +144,20 @@ def calculate_temporal_observations(
         if isinstance(polygons, PolygonRasterizer):
             polygons.close()
         hectares_calculator = tools.pixel_area_calculator
+        weights_directory: Path | None = None
+        if (
+            hectares_calculator is not None
+            and len(interval.observations) > 1
+            and (
+                not hectares_calculator.rectilinear
+                or area.kind not in {"wholeRaster", "bounds"}
+            )
+        ):
+            weights_directory = Path(
+                resources.enter_context(
+                    TemporaryDirectory(prefix="hectare-weights-", dir=directory)
+                )
+            )
         tile_side = (
             AREA_TILE_SIDE
             if hectares_calculator is not None and not hectares_calculator.rectilinear
@@ -150,6 +168,40 @@ def calculate_temporal_observations(
             interval.observations
         )
         write_progress(directory, "summarizing", 0, total_tiles)
+
+        def read_hectares(tile: Window) -> NDArray[np.float64] | None:
+            """Return this tile's fractional hectares, reusing expensive geometry work.
+
+            The lock serializes the calculator's mutable geometry and scratch I/O.
+            Only one tile array is loaded per call; completed arrays stay on disk
+            until the attempt's readers exit and its resource scope removes them.
+
+            Args:
+                tile: Integral native window in the common calculation grid.
+
+            Returns:
+                Exact float64 weights, or None when no formula needs hectares.
+
+            Raises:
+                ProcessingError: If selected geometry cannot be measured.
+                OSError: If area-weight scratch or original source I/O fails.
+                ValueError: If native area-weight decoding fails.
+                rasterio.errors.RasterioError: If selected source data cannot be read.
+            """
+            if hectares_calculator is None:
+                return None
+            with read_lock:
+                if weights_directory is None:
+                    return hectares_calculator.calculate_hectares(tile)
+                coordinates = (tile.col_off, tile.row_off, tile.width, tile.height)
+                path = weights_directory / (
+                    "_".join(str(int(value)) for value in coordinates) + ".npy"
+                )
+                if path.exists():
+                    return np.load(path, allow_pickle=False)
+                hectares = hectares_calculator.calculate_hectares(tile)
+                np.save(path, hectares, allow_pickle=False)
+                return hectares
 
         def record_read() -> None:
             """Count a completed native read and periodically publish run progress."""
@@ -175,7 +227,7 @@ def calculate_temporal_observations(
 
             Raises:
                 ProcessingError: If the hectare calculation fails.
-                OSError: If source, mask or progress I/O fails.
+                OSError: If source, mask, area-weight or progress I/O fails.
                 ValueError: If native decoding fails.
                 rasterio.errors.RasterioError: If a source or mask cannot be read.
             """
@@ -218,12 +270,7 @@ def calculate_temporal_observations(
                                 local.width,
                                 local.height,
                             )
-                            hectares = None
-                            if hectares_calculator is not None:
-                                with read_lock:
-                                    hectares = hectares_calculator.calculate_hectares(
-                                        tile
-                                    )
+                            hectares = read_hectares(tile)
                             accumulate_raster_tile(
                                 accumulators,
                                 values[local.toslices()],
