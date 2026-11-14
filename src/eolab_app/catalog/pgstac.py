@@ -22,6 +22,9 @@ from eolab_app.vector_field_values import (
     VECTOR_FIELD_VALUES_KEY,
 )
 
+DESCRIPTOR_SOURCE_ADAPTER: TypeAdapter[DescriptorSource] = TypeAdapter(DescriptorSource)
+"""Validate persisted descriptor ownership with one compiled schema."""
+
 
 class PgStacCatalogDatabase:
     """Implement catalog database operations through libpq."""
@@ -81,7 +84,7 @@ class PgStacCatalogDatabase:
             )
             return tuple(
                 [
-                    TypeAdapter(DescriptorSource).validate_python(row[0])
+                    DESCRIPTOR_SOURCE_ADAPTER.validate_python(row[0])
                     async for row in cursor
                 ]
             )
@@ -375,7 +378,7 @@ def catalog_item_source(
         ValueError: If a required source Asset is missing.
     """
     descriptor = (
-        TypeAdapter(DescriptorSource).validate_python(assets[DESCRIPTOR_SOURCE_KEY])
+        DESCRIPTOR_SOURCE_ADAPTER.validate_python(assets[DESCRIPTOR_SOURCE_KEY])
         if DESCRIPTOR_SOURCE_KEY in assets
         else None
     )
