@@ -31,7 +31,7 @@ export class HabitatAdminController {
     /** Connect the Habitat admin view to existing source and job APIs.
      * @param {Object} dependencies Feature-local dependencies.
      * @param {import("./api.js").HabitatAdminApi} dependencies.api Authenticated admin transport.
-     * @param {{bind:(handlers:Object)=>void,render:(state:Object)=>void,destroy?:()=>void}} dependencies.view Presentation boundary.
+     * @param {{bind:(handlers:Object)=>void,render:(state:Object)=>void,renderHistoryProgress:(state:Object)=>void,destroy?:()=>void}} dependencies.view Presentation boundary with a lightweight history-progress update.
      * @param {Document} [dependencies.documentContext=globalThis.document] Visibility event source.
      * @param {Window} [dependencies.windowContext=globalThis.window] Page lifecycle event source.
      * @param {{setTimeout:Function,clearTimeout:Function}} [dependencies.clock=globalThis] Polling scheduler.
@@ -443,6 +443,10 @@ export class HabitatAdminController {
     refreshHistory() { return this.readHistory(true); }
 
     /** Load complete retained history initially, then poll new entries and known active jobs.
+     * The first page exposes recent attempts; later pages update the loading count
+     * without rebuilding prior rows. Completion, failure and suspension reconcile
+     * every received attempt through the ordinary full render.
+     *
      * Polling follows pages back to the prior newest entry so a burst of more than
      * one page cannot hide new work. Full refreshes discard removed history while
      * preserving mutations acknowledged after the read began. Failed or aborted
@@ -460,16 +464,19 @@ export class HabitatAdminController {
         this.historyRequest = controller; this.readControllers.add(controller);
         if (full) this.state.historyComplete = false;
         this.state.historyReadCount = 0;
-        this.state.historyLoading = true; this.state.historyError = ""; this.render();
+        this.state.historyLoading = true; this.state.historyError = ""; this.view.renderHistoryProgress(this.state);
         this.historyPromise = (async () => {
             try {
                 let cursor = null, newest = null;
                 do {
                     const page = await this.api.list({cursor, limit: 50, signal: controller.signal});
                     if (revision !== this.historyRevision || controller.signal.aborted || this.destroyed) return;
-                    if (cursor === null) newest = page.jobs[0] ?? null;
+                    const firstPage = cursor === null;
+                    if (firstPage) newest = page.jobs[0] ?? null;
                     for (const job of page.jobs) { listed.add(job.jobId); this.mergeJob(job, false, mutations); }
-                    this.state.historyReadCount = listed.size; this.render();
+                    this.state.historyReadCount = listed.size;
+                    if (firstPage) this.render();
+                    else this.view.renderHistoryProgress(this.state);
                     const reachedPrevious = previousHead && page.jobs.some(job => job.createdAt < previousHead.createdAt ||
                         job.createdAt === previousHead.createdAt && job.jobId <= previousHead.jobId);
                     cursor = !full && reachedPrevious ? null : page.nextCursor;
