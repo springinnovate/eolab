@@ -468,8 +468,11 @@ def test_combined_nonspatial_curated_search_and_replacement(
                 ],
             },
             {
-                "op": "a_contains",
-                "args": [{"property": "eolab_study_ids"}, ["study-integration"]],
+                "op": "like",
+                "args": [
+                    {"op": "casei", "args": [{"property": "eolab_metadata_text"}]},
+                    {"op": "casei", "args": ["%study-integration%"]},
+                ],
             },
             {
                 "op": "a_contains",
