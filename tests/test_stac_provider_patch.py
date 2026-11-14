@@ -2,6 +2,9 @@
 
 from importlib import util
 from pathlib import Path
+import subprocess
+import tarfile
+from typing import Any
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -91,3 +94,60 @@ def test_installed_patch_writes_the_located_provider_only(
     )
     with pytest.raises(RuntimeError, match="validation block changed"):
         provider_patch.patch_installed_transactions()
+
+
+def test_api_image_build_uses_default_dockerfile_from_exact_deployment_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass Docker an unambiguous tar context containing the deployment API recipe.
+
+    Args:
+        monkeypatch: Replace Docker execution while inspecting its actual stdin archive.
+    """
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    specification = util.spec_from_file_location(
+        "catalog_postgres_launcher", root / "scripts/test_catalog_postgres.py"
+    )
+    launcher = util.module_from_spec(specification)
+    specification.loader.exec_module(launcher)
+    builds: list[list[str]] = []
+
+    def inspect_build(
+        command: list[str], **options: Any
+    ) -> subprocess.CompletedProcess[str]:
+        """Inspect the real Docker input without requiring a running daemon.
+
+        Args:
+            command: CLI arguments supplied by the image builder.
+            **options: Process options including the completed tar stream.
+
+        Returns:
+            A successful Docker result after checking its external input contract.
+        """
+        builds.append(command)
+        assert command[:3] == ["docker", "build", "--pull"]
+        assert "--file" not in command and command[-1] == "-"
+        context = options["stdin"]
+        assert context.read(10) == b"Dockerfile"
+        context.seek(0)
+        with tarfile.open(fileobj=context, mode="r") as archive:
+            assert archive.getnames() == [
+                "Dockerfile",
+                "deployment/patch-stac-nonspatial.py",
+            ]
+            assert (
+                archive.extractfile("Dockerfile").read()
+                == (root / "Dockerfile.stac-api").read_bytes()
+            )
+            assert (
+                archive.extractfile("deployment/patch-stac-nonspatial.py").read()
+                == (root / "deployment/patch-stac-nonspatial.py").read_bytes()
+            )
+        assert options["check"] is True
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(launcher.subprocess, "run", inspect_build)
+    image = launcher.build_api_test_image()
+    assert len(builds) == 1
+    assert builds[0][-2] == image

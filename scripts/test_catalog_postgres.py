@@ -87,19 +87,18 @@ def build_api_test_image() -> str:
     try:
         with tempfile.TemporaryFile() as context:
             with tarfile.open(fileobj=context, mode="w") as archive:
-                for name in (
-                    "Dockerfile.stac-api",
-                    "deployment/patch-stac-nonspatial.py",
-                ):
-                    archive.add(ROOT / name, arcname=name, recursive=False)
+                recipe = (ROOT / "Dockerfile.stac-api").read_bytes()
+                entry = tarfile.TarInfo("Dockerfile")
+                entry.size = len(recipe)
+                archive.addfile(entry, io.BytesIO(recipe))
+                name = "deployment/patch-stac-nonspatial.py"
+                archive.add(ROOT / name, arcname=name, recursive=False)
             context.seek(0)
             subprocess.run(
                 [
                     "docker",
                     "build",
                     "--pull",
-                    "--file",
-                    "Dockerfile.stac-api",
                     "--tag",
                     tag,
                     "-",
