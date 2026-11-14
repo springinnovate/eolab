@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCatalogResultView } from "../src/catalog-result-view.js";
+import { buildCatalogResultPresentation } from "../src/catalog-result-presentation.js";
 
 /** Minimal DOM boundary: stable nodes, attributes, focus, and native events. */
 function fixture(presentation = {}) {
@@ -63,6 +64,27 @@ test("result row has separate native map/details buttons without nested buttons"
   assert.deepEqual(f.calls, [["map", f.item]]);
   f.view.detailsButton.dispatchEvent(new Event("click"));
   assert.deepEqual(f.calls.at(-1), ["details", f.item, f.view.detailsButton]);
+});
+
+test("result rows display curated titles and distinguish native vector layers", () => {
+  for (const layerName of ["habitat", "reference_sites"]) {
+    const title = "Central India habitat classes";
+    const presentation = buildCatalogResultPresentation({
+      id: layerName,
+      properties: {
+        title, "eolab:metadata": { title },
+        "eolab:vector_source": {
+          kind: "mounted", format: "geopackage", asset_key: "data", layer_name: layerName,
+        },
+      },
+      assets: { support: { title: "supporting.tif" }, data: { title: "habitat.gpkg" } },
+    }, "Vector");
+    const { view } = fixture(presentation);
+    assert.equal(view.element.children[0].textContent, title);
+    assert.equal(view.element.children[1].textContent, `Layer: ${layerName}`);
+    assert.equal(view.detailsButton.getAttribute("aria-label"),
+      `More details for ${title}, Layer: ${layerName}, Vector`);
+  }
 });
 
 test("state changes preserve controls/focus and keep On map distinct from Remove", () => {

@@ -22,6 +22,23 @@ const PUBLICATION = Object.freeze({
   },
 });
 
+test("Catalog map labels preserve curated titles and distinguish container layers", () => {
+  const { adapter } = createAdapterFixture(false);
+  for (const layerName of ["habitat", "reference_sites"]) {
+    const title = "Central India habitat classes";
+    assert.equal(adapter.label({
+      id: layerName,
+      properties: {
+        title, "eolab:metadata": { title },
+        "eolab:vector_source": {
+          kind: "mounted", format: "geopackage", asset_key: "data", layer_name: layerName,
+        },
+      },
+      assets: { support: { title: "supporting.tif" }, data: { title: "habitat.gpkg" } },
+    }), `${title} — ${layerName}`);
+  }
+});
+
 test("run artifacts use ordinary vector metadata, style actions and owner lifecycle callbacks", async () => {
   const fixture = createAdapterFixture(false), {adapter} = fixture;
   const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32), name: "Processed regions",
