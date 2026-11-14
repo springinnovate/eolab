@@ -73,7 +73,7 @@ test("upload form sends the original file and chosen name, then adds the returne
         return new Promise(resolve => { finishMap = resolve; });
     });
     assert.equal(dialog.name.value, "Café wetlands");
-    assert.equal(document.activeElement, dialog.file);
+    assert.equal(document.activeElement, dialog.cancel);
     dialog.name.value = " Floodplain & wetlands ";
     const pending = dialog.uploadAndAdd();
     assert.equal(request.url, "/api/vector-uploads?name=Floodplain+%26+wetlands");
@@ -167,7 +167,7 @@ test("existing uploads reopen from the server list without uploading again", asy
     });
     assert.equal(dialog.rows[0].add.textContent, "Add to map");
     assert.equal(dialog.rows[0].add.attributes.get("aria-label"), "Add to map: Wetlands");
-    assert.equal(document.activeElement, dialog.rows[0].add);
+    assert.equal(document.activeElement, dialog.cancel);
     await dialog.addExistingUpload(upload);
     assert.deepEqual(mapped, [upload]);
     assert.equal(dialog.dialog.open, false);
@@ -176,7 +176,7 @@ test("existing uploads reopen from the server list without uploading again", asy
     assert.equal(dialog.rows[0].add.textContent, "On map");
     assert.equal(dialog.rows[0].add.disabled, true);
     assert.equal(dialog.rows[0].remove.disabled, false);
-    assert.equal(document.activeElement, dialog.file);
+    assert.equal(document.activeElement, dialog.cancel);
 });
 
 test("listing failures can be retried without changing map layers or the file form", async () => {
@@ -228,6 +228,24 @@ test("initial and retry list requests remain dismissible by Close and Escape", a
     }
 });
 
+test("initial list success and failure leave focus on Close", async t => {
+    for (const fail of [false, true]) {
+        await t.test(fail ? "failure" : "success", async () => {
+            let finishList;
+            const { dialog, document } = createDialog({ list: () => new Promise((resolve, reject) => {
+                finishList = () => fail ? reject(new Error("Try again.")) : resolve([{ id: "stored", name: "Stored upload" }]);
+            }) });
+            const opening = dialog.open();
+            assert.equal(document.activeElement, dialog.cancel);
+            finishList();
+            await opening;
+            assert.equal(document.activeElement, dialog.cancel);
+            assert.equal(dialog.cancel.disabled, false);
+            assert.equal(dialog.file.disabled, false);
+        });
+    }
+});
+
 test("obsolete list success and failure cannot change a reopened dialog or release its busy state", async t => {
     for (const fail of [false, true]) {
         await t.test(fail ? "failure" : "success", async () => {
@@ -252,7 +270,7 @@ test("obsolete list success and failure cannot change a reopened dialog or relea
             assert.equal(dialog.rows[0].upload.id, "current");
             assert.equal(dialog.file.disabled, false);
             assert.equal(dialog.progress.hidden, true);
-            assert.equal(document.activeElement, dialog.rows[0].add);
+            assert.equal(document.activeElement, dialog.cancel);
         });
     }
 });
@@ -271,6 +289,7 @@ test("late close events and list completions cannot disturb a new map admission"
     assert.equal(document.activeElement, dialog.cancel);
     requests[1]([{ id: "current", name: "Current upload" }]);
     await secondOpening;
+    dialog.rows[0].add.focus();
     const adding = dialog.addExistingUpload(dialog.rows[0].upload);
     requests[0]([{ id: "obsolete", name: "Obsolete upload" }]);
     await firstOpening;

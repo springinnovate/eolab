@@ -144,16 +144,14 @@ export class UploadPolygonsDialog {
         this.setBusy(false);
         this.dialog.showModal();
         this.cancel.focus();
-        await this.loadUploads({ focusAfterLoad: true });
+        await this.loadUploads();
     }
 
     /**
      * Refresh uploads while allowing dismissal; obsolete responses leave the dialog untouched.
-     * @param {Object} [options] Focus behavior for an initial opening or an in-place retry.
-     * @param {boolean} [options.focusAfterLoad=false] Focus the first available file action after the current request settles.
      * @return {Promise<void>} Completion with current list errors available for retry.
      */
-    async loadUploads({ focusAfterLoad = false } = {}) {
+    async loadUploads() {
         const request = Symbol("upload-list");
         this.listRequest = request;
         this.retry.hidden = true;
@@ -174,7 +172,6 @@ export class UploadPolygonsDialog {
             if (this.listRequest === request && this.dialog.open) {
                 this.listRequest = null;
                 this.setBusy(false);
-                if (focusAfterLoad) (this.rows.find(row => !row.add.disabled)?.add ?? this.file).focus();
             }
         }
     }
