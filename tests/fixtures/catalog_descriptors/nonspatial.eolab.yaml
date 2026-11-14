@@ -1,0 +1,30 @@
+schema: eolab/item/v1
+id: field-observations-study-02
+kind: nonspatial
+primary_asset: data
+temporal:
+  mode: modified
+metadata:
+  title: Field observations without coordinates
+  description: The table is searchable evidence; no geographic footprint is asserted.
+  categories: [Biodiversity]
+  statuses: [Matched]
+  study_ids: [paper-002]
+  study_time: May to September 2023
+  publications:
+    - id: paper-002
+      title: Field observations in forest sites
+      year: 2024
+      url: https://example.org/papers/forest
+  annotations:
+    contains_coordinates: false
+    row_count: 251
+    data_readiness: null
+assets:
+  data:
+    location: local
+    path: field-observations.csv
+    media_type: text/csv
+    roles: [data]
+    metadata:
+      title: Observations table

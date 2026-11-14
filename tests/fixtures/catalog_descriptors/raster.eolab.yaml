@@ -1,0 +1,68 @@
+schema: eolab/item/v1
+id: flood-depth-study-01
+kind: raster
+primary_asset: data
+source:
+  format: geotiff
+temporal:
+  mode: interval
+  start_datetime: '2020-01-01T00:00:00Z'
+  end_datetime: '2020-12-31T23:59:59Z'
+metadata:
+  title: Flood depth estimates
+  description: Modeled annual flood depth, with the study's supporting observations.
+  keywords: [flood, depth]
+  license: CC-BY-4.0
+  attribution: Example Research Group
+  doi: 10.1234/example-flood-dataset
+  citation: Example Research Group (2021). Annual flood depth dataset.
+  categories: [Water]
+  risks: [Flood]
+  statuses: [Partial match]
+  study_ids: [paper-009]
+  study_time: Observations collected during 2020
+  publications:
+    - id: paper-009
+      title: Flood observations and modeled depth
+      doi: 10.1234/example-flood
+      citation: Example Research Group (2021). Flood observations and modeled depth.
+      url: https://example.org/papers/flood
+      authors: [A. Researcher, B. Researcher]
+      year: 2021
+      notes: [Supporting table covers only the northern sites.]
+  annotations:
+    row_ids: [row-011, row-012]
+    objective: Compare observed and modeled depth.
+    reviewed: false
+    observed_minimum: 0
+    missing_note: null
+    evidence:
+      relationship: partial_or_processed
+      limitations: [Missing southern sites, Different temporal aggregation]
+assets:
+  data:
+    location: local
+    path: flood-depth.tif
+    media_type: image/tiff; application=geotiff
+    roles: [data]
+    metadata:
+      title: Flood depth raster
+  observations:
+    location: local
+    path: observations.csv
+    media_type: text/csv
+    roles: [data]
+    metadata:
+      title: Supporting observations
+      description: Values associated with the flood raster, not an independent map layer.
+      annotations:
+        units: metres
+        zero_is_valid: true
+        empty_observations: 0
+  publication:
+    location: external
+    href: https://example.org/papers/flood
+    media_type: text/html
+    roles: [metadata]
+    metadata:
+      title: Study publication

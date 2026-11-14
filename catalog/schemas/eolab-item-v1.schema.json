@@ -1,0 +1,616 @@
+{
+  "$defs": {
+    "CuratedMetadata": {
+      "additionalProperties": false,
+      "description": "Carry the same public annotation envelope on an Item or one Asset.\n\nLists retain source order; absent lists/maps become empty. Optional values\nremain null or absent. ``annotations`` preserves JSON scalar, array, object\nand null values, including zero and false. Authors must exclude private\nlocations/secrets from these deliberately public values. Category, risk,\nstatus and study IDs are exact author-supplied labels for search; they are\nnot restricted to the resilience workbook's vocabulary. ``doi`` and\n``citation`` describe the dataset/resource itself, separately from related\npapers in ``publications``.",
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "keywords": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "license": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License"
+        },
+        "attribution": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attribution"
+        },
+        "doi": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doi"
+        },
+        "citation": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation"
+        },
+        "categories": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "risks": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Risks",
+          "type": "array"
+        },
+        "statuses": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Statuses",
+          "type": "array"
+        },
+        "study_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]*$",
+            "type": "string"
+          },
+          "title": "Study Ids",
+          "type": "array"
+        },
+        "study_time": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Study Time"
+        },
+        "publications": {
+          "items": {
+            "$ref": "#/$defs/Publication"
+          },
+          "title": "Publications",
+          "type": "array"
+        },
+        "annotations": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Annotations",
+          "type": "object"
+        }
+      },
+      "title": "CuratedMetadata",
+      "type": "object"
+    },
+    "ExternalAsset": {
+      "additionalProperties": false,
+      "description": "Reference an existing external HTTP(S) resource without fetching it.",
+      "properties": {
+        "location": {
+          "const": "external",
+          "title": "Location",
+          "type": "string"
+        },
+        "href": {
+          "pattern": "^https?://",
+          "title": "Href",
+          "type": "string"
+        },
+        "media_type": {
+          "pattern": "\\S",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "roles": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "metadata": {
+          "$ref": "#/$defs/CuratedMetadata"
+        }
+      },
+      "required": [
+        "location",
+        "href",
+        "media_type"
+      ],
+      "title": "ExternalAsset",
+      "type": "object"
+    },
+    "InstantTime": {
+      "additionalProperties": false,
+      "description": "Supply one observation timestamp, independently of publication dates.",
+      "properties": {
+        "mode": {
+          "const": "instant",
+          "title": "Mode",
+          "type": "string"
+        },
+        "datetime": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+          "title": "Datetime",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "datetime"
+      ],
+      "title": "InstantTime",
+      "type": "object"
+    },
+    "IntervalTime": {
+      "additionalProperties": false,
+      "description": "Supply an inclusive observation interval with no invented midpoint.",
+      "properties": {
+        "mode": {
+          "const": "interval",
+          "title": "Mode",
+          "type": "string"
+        },
+        "start_datetime": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+          "title": "Start Datetime",
+          "type": "string"
+        },
+        "end_datetime": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+          "title": "End Datetime",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "start_datetime",
+        "end_datetime"
+      ],
+      "title": "IntervalTime",
+      "type": "object"
+    },
+    "ItemOverride": {
+      "additionalProperties": false,
+      "description": "Override one container layer/member without duplicating common metadata.\n\nOnly explicitly supplied metadata fields replace common fields. Arrays and\nannotation maps replace as a whole; optional scalar nulls clear inherited\nvalues. An empty list/map clears that field. Item title cannot be cleared.\nAssets merge by key as complete replacements; the primary Asset cannot be\nreplaced. Common supporting Assets remain unless their key is replaced.",
+      "properties": {
+        "metadata": {
+          "$ref": "#/$defs/CuratedMetadata"
+        },
+        "assets": {
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._~-]*$": {
+              "discriminator": {
+                "mapping": {
+                  "external": "#/$defs/ExternalAsset",
+                  "local": "#/$defs/LocalAsset"
+                },
+                "propertyName": "location"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/LocalAsset"
+                },
+                {
+                  "$ref": "#/$defs/ExternalAsset"
+                }
+              ]
+            }
+          },
+          "propertyNames": {
+            "maxLength": 128,
+            "minLength": 1
+          },
+          "title": "Assets",
+          "type": "object"
+        }
+      },
+      "title": "ItemOverride",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LocalAsset": {
+      "additionalProperties": false,
+      "description": "Reference a local file or container without exposing its location publicly.\n\nThe admission boundary resolves ``path`` relative to the descriptor and\nconfines it to the source mount. Supporting files can be shared by Items.",
+      "properties": {
+        "location": {
+          "const": "local",
+          "title": "Location",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "media_type": {
+          "pattern": "\\S",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "roles": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "metadata": {
+          "$ref": "#/$defs/CuratedMetadata"
+        }
+      },
+      "required": [
+        "location",
+        "path",
+        "media_type"
+      ],
+      "title": "LocalAsset",
+      "type": "object"
+    },
+    "ModifiedTime": {
+      "additionalProperties": false,
+      "description": "Explicitly use primary-file modification time when observation time is unknown.\n\nAdmission must publish ``eolab:time_basis=source-modified``. This is a\ncatalog timestamp, never a claim that the study observed data at that time.",
+      "properties": {
+        "mode": {
+          "const": "modified",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "ModifiedTime",
+      "type": "object"
+    },
+    "Publication": {
+      "additionalProperties": false,
+      "description": "Describe a related publication, independently of dataset observation time.\n\n``doi`` identifies the paper, not the dataset. Ordered authors and notes are\nretained as supplied; unavailable values remain absent rather than invented.\nArbitrary public annotations preserve additional source fields losslessly.",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "pattern": "\\S",
+          "title": "Title",
+          "type": "string"
+        },
+        "doi": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doi"
+        },
+        "citation": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "pattern": "^https?://",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "authors": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Authors",
+          "type": "array"
+        },
+        "year": {
+          "anyOf": [
+            {
+              "maximum": 9999,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year"
+        },
+        "notes": {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "annotations": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Annotations",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "title": "Publication",
+      "type": "object"
+    },
+    "SpatialSource": {
+      "additionalProperties": false,
+      "description": "Select the existing reader and exact logical layer in the primary Asset.\n\nGeoPackages and File Geodatabases optionally select ``layer``. ZIP/Shapefile\nsources optionally select the complete internal ``member`` path to a .shp\nfile. Omit the selector to admit every Item the existing reader produces. These are\nadmission selectors, not public paths. Ordinary GeoTIFF, GeoJSON and\nShapefile sources have neither selector.",
+      "properties": {
+        "format": {
+          "enum": [
+            "geotiff",
+            "geopackage",
+            "shapefile",
+            "zipped-shapefile",
+            "geojson",
+            "file-geodatabase"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "member": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member"
+        }
+      },
+      "required": [
+        "format"
+      ],
+      "title": "SpatialSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Describe a dataset and its assets without prescribing a collection.\n\nA stable descriptor ID identifies this declared logical dataset. Existing\nspatial Item IDs and collections remain reader-owned; the scanner records\nthe descriptor association. A container may produce several Items; common\nmetadata applies to each, with exact layer/member ``item_overrides``. A\ncommon title remains unchanged unless overridden. Several descriptors may\ninstead select distinct layers in one container. ``metadata.title`` is required\nfor an Item. Nonspatial Items require explicit temporal metadata; spatial sources may retain their\nexisting reader's date contract. The existing temporal ``dataset.yaml`` is\na separate contract and is not interpreted by this model. Spatial primary\nAsset keys retain the reader contract: ``shp`` for Shapefiles, ``archive``\nfor zipped Shapefiles, and ``data`` for other supported spatial formats.\nNonspatial Asset keys are author-defined.",
+  "properties": {
+    "schema": {
+      "const": "eolab/item/v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]*$",
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "raster",
+        "vector",
+        "nonspatial"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "primary_asset": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]*$",
+      "title": "Primary Asset",
+      "type": "string"
+    },
+    "assets": {
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._~-]*$": {
+          "discriminator": {
+            "mapping": {
+              "external": "#/$defs/ExternalAsset",
+              "local": "#/$defs/LocalAsset"
+            },
+            "propertyName": "location"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/LocalAsset"
+            },
+            {
+              "$ref": "#/$defs/ExternalAsset"
+            }
+          ]
+        }
+      },
+      "propertyNames": {
+        "maxLength": 128,
+        "minLength": 1
+      },
+      "title": "Assets",
+      "type": "object"
+    },
+    "metadata": {
+      "$ref": "#/$defs/CuratedMetadata"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpatialSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "temporal": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "instant": "#/$defs/InstantTime",
+              "interval": "#/$defs/IntervalTime",
+              "modified": "#/$defs/ModifiedTime"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/InstantTime"
+            },
+            {
+              "$ref": "#/$defs/IntervalTime"
+            },
+            {
+              "$ref": "#/$defs/ModifiedTime"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temporal"
+    },
+    "item_overrides": {
+      "patternProperties": {
+        "\\S": {
+          "$ref": "#/$defs/ItemOverride"
+        }
+      },
+      "title": "Item Overrides",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "kind",
+    "primary_asset",
+    "assets",
+    "metadata"
+  ],
+  "title": "CatalogDescriptor",
+  "type": "object"
+}

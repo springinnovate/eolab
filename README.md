@@ -523,3 +523,19 @@ EOLab is open-source software under the [Apache License 2.0](LICENSE). Bivariate
 palette definitions originate in the
 [ESOS-C data viewer](https://github.com/springinnovate/esos-c-dataviewer), also under
 the [Apache License 2.0](https://github.com/springinnovate/esos-c-dataviewer/blob/main/LICENSE).
+
+### Author catalog metadata descriptors
+
+The [versioned sidecar schema](catalog/schemas/eolab-item-v1.schema.json) defines
+`*.eolab.yaml` metadata documents. The [executable examples](tests/fixtures/catalog_descriptors)
+show a raster with supporting files, a nonspatial table, and shared metadata with
+per-layer overrides for a vector container. Local paths are relative to the
+descriptor and must remain within the configured source mount.
+
+Validate an authoring document with
+`eolab_app.catalog.descriptor_contract.parse_catalog_descriptor` before distributing
+it. Export the current JSON schema with
+`python -m eolab_app.catalog.descriptor_contract`. The examples' public Item JSON
+shows how annotations and publication references are shared with catalog clients
+without exposing local source paths. Descriptor validation does not import files
+into a running workspace.
