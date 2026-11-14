@@ -339,3 +339,70 @@ def test_provider_retains_ordinary_spatial_http_writes(
         ] == [item["id"]]
     finally:
         api_request(base, "DELETE", f"/collections/{item['collection']}")
+
+
+def test_combined_nonspatial_curated_search_and_replacement(
+    descriptor_api: tuple[str, str],
+) -> None:
+    """Verify the admission and curated-search drafts together through real HTTP.
+
+    Args:
+        descriptor_api: Ready private STAC API with both feature migrations.
+    """
+    base, _ = descriptor_api
+    item = nonspatial_item()
+    metadata = item["properties"]["eolab:metadata"]
+    metadata["annotations"] = {"finding": "Combined nonspatial evidence"}
+    metadata["study_ids"] = ["Study-integration"]
+    item["assets"]["data"]["eolab:metadata"] = {
+        "version": 1,
+        "categories": ["Coastal recovery"],
+        "annotations": {"notes": "Attached census details"},
+    }
+    api_request(
+        base,
+        "POST",
+        f"/collections/{COLLECTION}/bulk_items",
+        {"method": "upsert", "items": {item["id"]: item}},
+    )
+    predicate = {
+        "op": "and",
+        "args": [
+            {
+                "op": "like",
+                "args": [
+                    {"property": "eolab_metadata_text"},
+                    "%attached census details%",
+                ],
+            },
+            {
+                "op": "a_contains",
+                "args": [{"property": "eolab_study_ids"}, ["study-integration"]],
+            },
+            {
+                "op": "a_contains",
+                "args": [{"property": "eolab_categories"}, ["coastal recovery"]],
+            },
+        ],
+    }
+    request = {
+        "collections": [COLLECTION],
+        "filter-lang": "cql2-json",
+        "filter": predicate,
+    }
+    found = api_request(base, "POST", "/search", request)["features"]
+    assert [entry["id"] for entry in found] == [item["id"]]
+    assert found[0]["geometry"] is None
+    assert found[0]["properties"]["eolab:metadata"] == metadata
+    assert (
+        found[0]["assets"]["data"]["eolab:metadata"]
+        == item["assets"]["data"]["eolab:metadata"]
+    )
+    item["assets"]["data"]["eolab:metadata"]["annotations"] = {}
+    api_request(
+        base,
+        "POST",
+        f"/collections/{COLLECTION}/bulk_items",
+        {"method": "upsert", "items": {item["id"]: item}},
+    )
+    assert api_request(base, "POST", "/search", request)["features"] == []
