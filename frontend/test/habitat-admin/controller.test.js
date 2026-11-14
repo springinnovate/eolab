@@ -474,6 +474,21 @@ test("later pages update progress and a subsequent failure presents every receiv
     assert.match(h.renders.at(-1).historyError, /Later page failed/);
 });
 
+test("a one-page poll presents new history before waiting for an older active job", async t => {
+    const active = historyJob(1), previous = historyJob(2, {status: "ready"});
+    const newest = historyJob(3, {status: "ready"}), updated = deferred();
+    let polling = false;
+    const h = fixture({list: async () => ({jobs: polling ? [newest, previous] : [previous, active], nextCursor: null}),
+        get: async () => updated.promise});
+    t.after(() => h.controller.destroy()); await h.controller.start(); polling = true;
+    const reading = h.controller.readHistory(); await flush();
+    assert.equal(h.renders.at(-1).jobs[0].jobId, newest.jobId);
+    assert.equal(h.renders.at(-1).historyLoading, true);
+    updated.resolve({...active, status: "ready", updatedAt: "2026-01-01T00:03:00Z"}); await reading;
+    assert.equal(h.renders.at(-1).historyLoading, false);
+    assert.equal(h.renders.at(-1).jobs.find(value => value.jobId === active.jobId).status, "ready");
+});
+
 test("visibility changes stop reads/timers and immediately refresh on return", async t => {
     const pending = deferred(); let reads = 0, hiddenSignal;
     const h = fixture({ list: async ({ signal }) => { reads++; if (reads === 2) { hiddenSignal = signal; return pending.promise; }

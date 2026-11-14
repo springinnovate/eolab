@@ -443,13 +443,14 @@ export class HabitatAdminController {
     refreshHistory() { return this.readHistory(true); }
 
     /** Load complete retained history initially, then poll new entries and known active jobs.
+     * The first page exposes recent attempts; later pages update the loading count
+     * without rebuilding prior rows. Completion, failure and suspension reconcile
+     * every received attempt through the ordinary full render.
+     *
      * Polling follows pages back to the prior newest entry so a burst of more than
      * one page cannot hide new work. Full refreshes discard removed history while
      * preserving mutations acknowledged after the read began. Failed or aborted
      * initial/full reads remain explicitly incomplete and restart on the next read.
-     * The first page exposes recent attempts; later pages update the loading count
-     * without rebuilding prior rows. Completion, failure and suspension reconcile
-     * every received attempt through the ordinary full render.
      * @param {boolean} [full=false] Reread all retained pages, as on explicit refresh.
      * @returns {Promise<void>} The current or newly started history read.
      */
@@ -474,11 +475,11 @@ export class HabitatAdminController {
                     if (firstPage) newest = page.jobs[0] ?? null;
                     for (const job of page.jobs) { listed.add(job.jobId); this.mergeJob(job, false, mutations); }
                     this.state.historyReadCount = listed.size;
+                    if (firstPage) this.render();
+                    else this.view.renderHistoryProgress(this.state);
                     const reachedPrevious = previousHead && page.jobs.some(job => job.createdAt < previousHead.createdAt ||
                         job.createdAt === previousHead.createdAt && job.jobId <= previousHead.jobId);
                     cursor = !full && reachedPrevious ? null : page.nextCursor;
-                    if (firstPage && cursor !== null) this.render();
-                    else this.view.renderHistoryProgress(this.state);
                 } while (cursor !== null);
                 if (full) for (const id of this.jobs.keys()) {
                     if (!listed.has(id) && (this.jobMutations.get(id) ?? 0) <= mutations) this.jobs.delete(id);
