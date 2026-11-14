@@ -233,6 +233,51 @@ test("retained field controls follow current feature values and source selection
   assert.deepEqual(list.children.map(row => [row.children[0].value, row.children[0].checked]), [["R2000", false], ["R2002", true]]);
 });
 
+test("removing focused missing fields moves to a visible neighbor, then Find fields", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation({ properties: { R1999: 1, R2000: 2, R2001: 3 } }));
+  h.controller.setCurrentObservation(observation({ properties: {} }));
+  const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
+  const [first, middle, last] = list.children.map(row => row.children[0]);
+
+  middle.focus();
+  middle.checked = false;
+  middle.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(middle), false);
+  assert.ok(h.documentContext.activeElement === last);
+  assert.equal(list.contains(h.documentContext.activeElement), true);
+
+  last.checked = false;
+  last.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(last), false);
+  assert.ok(h.documentContext.activeElement === first);
+  assert.equal(list.contains(h.documentContext.activeElement), true);
+
+  first.checked = false;
+  first.dispatchEvent(new Event("change"));
+  assert.equal(list.children.length, 0);
+  assert.ok(h.documentContext.activeElement === search);
+});
+
+test("removing a focused missing field never focuses a filtered-out neighbor", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation({ properties: { R1999: 1, R2000: 2 } }));
+  h.controller.setCurrentObservation(observation({ properties: { R2000: 3 } }));
+  const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
+  search.value = "1999";
+  search.dispatchEvent(new Event("input"));
+  const missing = list.children[0].children[0];
+  missing.focus();
+  missing.checked = false;
+  missing.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(missing), false);
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].hidden, true);
+  assert.ok(h.documentContext.activeElement === search);
+});
+
 test("controller plots suggested fields and updates from partial search actions", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());

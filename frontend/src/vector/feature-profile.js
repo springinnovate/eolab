@@ -550,7 +550,7 @@ export class VectorFeatureProfileController {
         );
     }
 
-    /** Retain existing controls while updating field membership, order and values. @return {void} */
+    /** Reconcile field rows, keeping focus on a visible control when a row is removed. @return {void} */
     #renderFieldList() {
         const settings = this.#currentSettings();
         if (this.currentObservation === null || settings === null) {
@@ -561,8 +561,19 @@ export class VectorFeatureProfileController {
         const selected = new Set(settings.selectedFields);
         const available = numericFeatureFields(this.currentObservation);
         const fields = new Set([...available, ...settings.selectedFields]);
+        /** @type {HTMLInputElement|null} */
+        let focusAfterRemoval = null;
         for (const [fieldName, { row }] of this.fieldRows) {
             if (!fields.has(fieldName)) {
+                if (row.contains(this.document.activeElement)) {
+                    const rows = [...this.fieldList.children];
+                    const index = rows.indexOf(row);
+                    const neighbors = [...rows.slice(index + 1), ...rows.slice(0, index).reverse()];
+                    const nextRow = neighbors.find(candidate =>
+                        !candidate.hidden && fields.has(candidate.children[0].value)
+                    );
+                    focusAfterRemoval = nextRow?.children[0] ?? this.fieldSearch;
+                }
                 row.remove();
                 this.fieldRows.delete(fieldName);
             }
@@ -583,6 +594,7 @@ export class VectorFeatureProfileController {
             }
         }
         this.#filterFieldList();
+        focusAfterRemoval?.focus();
     }
 
     /**
