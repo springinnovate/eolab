@@ -17,6 +17,11 @@ const alternateDefinition = {type: "vector", label: "Comparison regions", geomet
     baseline: {label: "Baseline measurement", kind: "numeric"}, comparison: {label: "Comparison measurement", kind: "numeric"},
     category: {label: "Region category", kind: "scalar"},
 }};
+const repeatedDefinition = {type: "vector", label: "Observations", fields: {
+    identifier: {label: "Location identifier", kind: "scalar"},
+}, rows: {label: "Measurements", itemLabel: "Measurement", fields: {attribute: {label: "Measured field", kind: "numeric"}},
+    parameters: {method: {type: "choice", label: "Method", choices: [{value: "combined", label: "Combined amount"},
+        {value: "typical", label: "Typical amount"}], default: "combined"}}}};
 const predicate = {enabled: true, match: "all", rules: [{field: "region_name", operator: "eq", value: "West"}]};
 const allFeatures = {enabled: false, match: "all", rules: []};
 const selection = {collectionId: "vectors", itemId: "regions", assetKey: "data", layerName: "observations", filter: predicate};
@@ -174,6 +179,142 @@ test("saved input descriptions use recipe labels instead of operation-specific w
     assert.equal(handler.describe({selection, fields: {baseline: "year", comparison: "measurement", category: "region_name"}},
         alternateDefinition, {describeFilter: () => "West regions"}),
     "Baseline measurement: year · Comparison measurement: measurement · Region category: region_name · West regions");
+});
+
+test("repeated vector cards keep independent controls, accessible numbering and focus through adding and removing", async t => {
+    const h = setup(recipeFor(repeatedDefinition)); t.after(() => h.controller.destroy());
+    const controls = h.view.setup.inputs.features;
+    assert.equal(controls.rows.length, 1);
+    assert.equal(controls.add.textContent, "Add measurement");
+    assert.equal(controls.add.type, "button");
+    assert.equal(controls.add.disabled, true);
+    assert.equal(controls.rows[0].legend.textContent, "Measurement 1");
+    assert.equal(controls.rows[0].remove.disabled, true);
+    assert.equal(controls.rows[0].parameters.method.value, "combined");
+    assert.deepEqual(controls.rows[0].parameters.method.children.map(option => option.value), ["combined", "typical"]);
+    choose(controls.source, source.key);
+    choose(controls.fields.identifier, "region_name");
+    choose(controls.rows[0].fields.attribute, "measurement");
+    assert.equal(controls.rows[0].fields.attribute.children.some(option => option.value === "region_name"), false);
+    assert.equal(h.view.setup.run.disabled, false);
+    const first = controls.rows[0];
+    controls.add.dispatchEvent(new Event("click"));
+    assert.equal(h.doc.activeElement, controls.rows[1].fields.attribute);
+    assert.equal(h.view.setup.run.disabled, true);
+    choose(controls.rows[1].fields.attribute, "year");
+    choose(controls.rows[1].parameters.method, "typical");
+    controls.add.dispatchEvent(new Event("click"));
+    const last = controls.rows[2];
+    choose(last.fields.attribute, "measurement");
+    assert.equal(last.parameters.method.value, "combined", "Each new row uses its own configured defaults");
+    assert.equal(last.remove.getAttribute("aria-label"), "Remove measurement 3");
+    controls.rows[1].remove.dispatchEvent(new Event("click"));
+    assert.equal(controls.rows[0], first);
+    assert.equal(controls.rows[1], last);
+    assert.equal(h.doc.activeElement, last.fields.attribute);
+    assert.equal(last.legend.textContent, "Measurement 2");
+    assert.equal(last.remove.getAttribute("aria-label"), "Remove measurement 2");
+    assert.notEqual(first.fields.attribute.id, last.fields.attribute.id);
+    choose(last.parameters.method, "typical");
+    assert.equal(first.parameters.method.value, "combined");
+    const changedFilter = {...predicate, rules: [{...predicate.rules[0], value: "East"}]};
+    h.context.vectors[0].selection.filter = changedFilter;
+    await h.controller.submit();
+    assert.equal(h.submitted.length, 1);
+    assert.deepEqual(h.submitted[0].inputs.features, {selection: {...selection, filter: changedFilter},
+        fields: {identifier: "region_name"}, rows: [
+            {fields: {attribute: "measurement"}, parameters: {method: "combined"}},
+            {fields: {attribute: "measurement"}, parameters: {method: "typical"}},
+        ]});
+});
+
+test("a different row configuration supports scalar fields, multiple roles and string choice values", async t => {
+    const input = {type: "vector", label: "Comparison data", rows: {label: "Comparisons", itemLabel: "Comparison", fields: {
+        category: {label: "Category attribute", kind: "scalar"}, reference: {label: "Reference attribute", kind: "numeric"},
+    }, parameters: {precision: {type: "choice", label: "Precision", choices: [{value: "2", label: "Two places"},
+        {value: "0", label: "Whole values"}], default: "2"}}}};
+    const h = setup(recipeFor(input)); t.after(() => h.controller.destroy());
+    const controls = h.view.setup.inputs.features, row = controls.rows[0];
+    assert.equal(controls.add.textContent, "Add comparison");
+    assert.equal(row.parameters.precision.value, "2");
+    choose(controls.source, source.key);
+    choose(row.fields.category, "region_name"); choose(row.fields.reference, "year");
+    choose(row.parameters.precision, "0");
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs.features, {selection, fields: {}, rows: [
+        {fields: {category: "region_name", reference: "year"}, parameters: {precision: "0"}},
+    ]});
+});
+
+test("repeated row capture rejects incomplete fields and choices without imposing a row limit", () => {
+    const handler = getModelInputHandler("vector"), state = handler.createDraft(repeatedDefinition, {vectors: [source]});
+    Object.assign(state, {vectorKey: source.key, fields: {identifier: "region_name"}});
+    assert.throws(() => handler.capture(state, repeatedDefinition), /Measurement 1: Measured field/);
+    state.rows[0].fields.attribute = "region_name";
+    assert.throws(() => handler.capture(state, repeatedDefinition), /available field for Measurement 1/);
+    state.rows[0].fields.attribute = "measurement";
+    for (const value of [undefined, null, "", "unknown", 2, false, {}, []]) {
+        state.rows[0].parameters.method = value;
+        assert.throws(() => handler.capture(state, repeatedDefinition), /option for Measurement 1: Method/);
+    }
+    state.rows = [];
+    assert.throws(() => handler.capture(state, repeatedDefinition), /Add at least one measurement/);
+    state.rows = Array.from({length: 1024}, (_, index) => ({fields: {attribute: index % 2 ? "year" : "measurement"}, parameters: {method: "combined"}}));
+    const captured = handler.capture(state, repeatedDefinition);
+    assert.equal(captured.rows.length, 1024);
+    assert.deepEqual(captured.rows.at(-1), {fields: {attribute: "year"}, parameters: {method: "combined"}});
+    state.rows[0].parameters.method = "typical";
+    assert.equal(captured.rows[0].parameters.method, "combined");
+});
+
+test("changing or losing the source clears every field while preserving row count and settings", t => {
+    const h = setup(recipeFor(repeatedDefinition)); t.after(() => h.controller.destroy());
+    const controls = h.view.setup.inputs.features;
+    h.context.vectors.push({...source, key: "other", label: "Other observations"}); h.controller.refreshMapLayers();
+    choose(controls.source, source.key); choose(controls.fields.identifier, "region_name");
+    choose(controls.rows[0].fields.attribute, "measurement"); choose(controls.rows[0].parameters.method, "typical");
+    controls.add.dispatchEvent(new Event("click")); choose(controls.rows[1].fields.attribute, "year");
+    const expectedRows = [{fields: {attribute: ""}, parameters: {method: "typical"}},
+        {fields: {attribute: ""}, parameters: {method: "combined"}}];
+    choose(controls.source, "other");
+    assert.deepEqual(h.controller.state.draft.inputs.features.rows, expectedRows);
+    assert.equal(controls.fields.identifier.value, ""); assert.equal(h.view.setup.run.disabled, true);
+    choose(controls.fields.identifier, "region_name"); choose(controls.rows[0].fields.attribute, "year");
+    choose(controls.rows[1].fields.attribute, "measurement");
+    h.context.vectors = [source]; h.controller.refreshMapLayers();
+    assert.equal(controls.source.value, "");
+    assert.deepEqual(h.controller.state.draft.inputs.features.rows, expectedRows);
+    assert.equal(controls.fields.identifier.value, ""); assert.equal(h.view.setup.run.disabled, true);
+    assert.match(controls.status.textContent, /Add the vector layer/);
+    controls.rows[0].remove.dispatchEvent(new Event("click"));
+    assert.equal(h.doc.activeElement, controls.source);
+    assert.equal(controls.rows[0].remove.disabled, true);
+});
+
+test("duplicated repeated inputs restore all rows and saved labels without a live source", async t => {
+    const recipe = recipeFor(repeatedDefinition), h = setup(recipe); t.after(() => h.controller.destroy());
+    const input = {selection, fields: {identifier: "region_name"}, rows: [
+        {fields: {attribute: "measurement"}, parameters: {method: "typical"}},
+        {fields: {attribute: "year"}, parameters: {method: "combined"}},
+    ]};
+    h.controller.state.library = [recipe];
+    h.controller.state.invocation = {model: recipe, label: "Repeated measurements", parameters: {scale: 2}, inputs: {features: input}};
+    h.context.vectors = [];
+    await h.controller.duplicateRun();
+    const controls = h.view.setup.inputs.features;
+    assert.equal(controls.source.required, false); assert.equal(controls.scope.disabled, true);
+    assert.equal(h.submitted.length, 0); assert.equal(h.view.setup.run.disabled, false);
+    assert.deepEqual(controls.rows.map(row => row.parameters.method.value), ["typical", "combined"]);
+    assert.deepEqual(controls.rows[0].fields.attribute.children.map(option => option.value), ["", "measurement", "year"]);
+    controls.add.dispatchEvent(new Event("click"));
+    choose(controls.rows[2].fields.attribute, "measurement");
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs.features.rows, [...input.rows, {fields: {attribute: "measurement"}, parameters: {method: "combined"}}]);
+    assert.deepEqual(h.submitted[0].inputs.features.selection, selection);
+    assert.equal(getModelInputHandler("vector").describe(input, repeatedDefinition, {describeFilter: () => "West regions"}),
+        "Location identifier: region_name · Measurement 1: Measured field: measurement, Method: Typical amount · Measurement 2: Measured field: year, Method: Combined amount · West regions");
+    input.rows[0].parameters.method = "combined";
+    assert.equal(h.submitted[0].inputs.features.rows[0].parameters.method, "typical");
 });
 
 test("input registration is the only vector-type dispatch in the shared Models lifecycle", () => {

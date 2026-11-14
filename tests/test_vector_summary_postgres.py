@@ -41,14 +41,14 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     statistic: str | None,
     expected: int | float,
 ) -> None:
-    """Publish a grouped GeoPackage and retain its typed diagnostics after file expiry.
+    """Publish two field/statistic pairs and retain their diagnostics after file expiry.
 
     Args:
         upload_boundary: Existing upload, source, HTTP and native worker composition.
         store: Explicit disposable PostgreSQL lifecycle database.
         tmp_path: Directory used to inspect the downloaded result.
         source_kind: Original Catalog dataset or retained private upload.
-        statistic: Chosen reduction, or None to exercise the ordinary sum default.
+        statistic: First reduction, or None to use the form's default sum choice.
         expected: Independently calculated result for the selected source features.
     """
     client, worker, _, _, selection = upload_boundary
@@ -101,8 +101,6 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
             "filter": {"enabled": False, "match": "all", "rules": []},
         }
     parameters: dict[str, Any] = {"boundary_tolerance_m": 0}
-    if statistic is not None:
-        parameters["statistic"] = statistic
     effective_statistic = statistic or "sum"
     summary_field = f"{effective_statistic}_count"
     request = model_request(
@@ -111,7 +109,17 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
         inputs={
             "vector": {
                 "selection": selection,
-                "fields": {"group": "label", "value": "count"},
+                "fields": {"group": "label"},
+                "rows": [
+                    {
+                        "fields": {"value": "count"},
+                        "parameters": {"statistic": effective_statistic},
+                    },
+                    {
+                        "fields": {"value": "weight"},
+                        "parameters": {"statistic": "mean"},
+                    },
+                ],
             }
         },
         parameters=parameters,
@@ -143,6 +151,9 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
         features = list(dataset)
         assert len(features) == 1
         assert features[0].properties[summary_field] == pytest.approx(expected)
+        assert features[0].properties["mean_weight"] == (
+            2.5 if source_kind == "catalog" else 4
+        )
         assert features[0].properties["label"] == "Café wetlands"
         assert features[0].geometry.type == "MultiPolygon"
     document = parse_yaml(client.get(base + "/run-yaml").content, run=True)
@@ -161,7 +172,6 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     assert document["invocation"]["inputs"]["vector"] == request["inputs"]["vector"]
     assert document["invocation"]["parameters"] == {
         "boundary_tolerance_m": 0,
-        "statistic": effective_statistic,
     }
     assert document["execution"]["numericalPolicy"]["boundaryToleranceMeters"] == 0
     with TestClient(client.app, base_url="https://testserver") as stranger:
@@ -217,7 +227,13 @@ def test_summary_rejects_another_browsers_upload_before_queueing(
             inputs={
                 "vector": {
                     "selection": selection,
-                    "fields": {"group": "label", "value": "count"},
+                    "fields": {"group": "label"},
+                    "rows": [
+                        {
+                            "fields": {"value": "count"},
+                            "parameters": {"statistic": "sum"},
+                        }
+                    ],
                 }
             },
             parameters={"boundary_tolerance_m": 0},
@@ -245,10 +261,16 @@ def test_summary_rejects_unknown_statistic_before_queueing(
         inputs={
             "vector": {
                 "selection": selection,
-                "fields": {"group": "label", "value": "count"},
+                "fields": {"group": "label"},
+                "rows": [
+                    {
+                        "fields": {"value": "count"},
+                        "parameters": {"statistic": "median"},
+                    }
+                ],
             }
         },
-        parameters={"boundary_tolerance_m": 0, "statistic": "median"},
+        parameters={"boundary_tolerance_m": 0},
     )
     response = client.post("/api/processing/model-runs", json=request, headers=HEADERS)
     assert response.status_code == 422, response.text

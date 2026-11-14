@@ -1,9 +1,9 @@
 schema: eolab.model/v1
 id: vector-summary
-version: "1.1.0"
+version: "2.0.0"
 title: Vector summary
 description: >-
-  Summarize a numeric field for each distinct group and merge its polygons into an overview layer.
+  Calculate one or more field statistics for each distinct group and merge its polygons into an overview layer.
   Boundary detail changes outlines only; use 0 to retain detailed merged boundaries.
   Missing values are excluded. Standard deviation describes the whole group (population);
   one valid value has zero deviation, and a group with no valid values has a missing result.
@@ -16,20 +16,25 @@ inputs:
       group:
         label: Group by
         kind: scalar
-      value:
-        label: Field to summarize
-        kind: numeric
+    rows:
+      label: Summaries
+      itemLabel: Summary
+      fields:
+        value:
+          label: Field
+          kind: numeric
+      parameters:
+        statistic:
+          type: choice
+          label: Statistic
+          choices:
+            - {value: sum, label: Sum}
+            - {value: mean, label: Mean}
+            - {value: max, label: Maximum}
+            - {value: min, label: Minimum}
+            - {value: stdev, label: Standard deviation}
+          default: sum
 parameters:
-  statistic:
-    type: choice
-    label: Statistic
-    choices:
-      - {value: sum, label: Sum}
-      - {value: mean, label: Mean}
-      - {value: max, label: Maximum}
-      - {value: min, label: Minimum}
-      - {value: stdev, label: Standard deviation}
-    default: sum
   boundary_tolerance_m:
     type: number
     label: Boundary detail
@@ -42,7 +47,6 @@ steps:
     inputs:
       vector: {input: vector}
     parameters:
-      statistic: {parameter: statistic}
       boundary_tolerance_m: {parameter: boundary_tolerance_m}
 outputs:
   summary:

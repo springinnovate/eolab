@@ -15,18 +15,29 @@ VectorSummaryStatistic = Literal["sum", "mean", "max", "min", "stdev"]
 
 
 class VectorSummaryInput(BaseModel):
-    """Choose original polygons, the grouping attribute and the numeric value field.
+    """Choose original polygons and the attribute that groups their features.
 
     Attributes:
         selection: Catalog or owned-upload identity with its captured predicate.
         groupField: Scalar attribute whose distinct values define output features.
-        valueField: Numeric attribute summarized independently of boundary detail.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     selection: VectorSelection
     groupField: FIELD_NAME
-    valueField: FIELD_NAME
+
+
+class VectorSummaryCalculation(BaseModel):
+    """Select one numeric field and the statistic written for each group.
+
+    Attributes:
+        field: Original numeric attribute, independent of boundary detail.
+        statistic: Reduction over finite values; stdev uses population deviation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    field: FIELD_NAME
+    statistic: VectorSummaryStatistic
 
 
 class VectorSummaryRequest(BaseModel):
@@ -34,8 +45,8 @@ class VectorSummaryRequest(BaseModel):
 
     Attributes:
         vector: Original source selection and attribute names.
-        statistic: Reduction over each group's finite original values. Standard
-            deviation uses the population formula and is zero for one value.
+        summaries: Ordered field/statistic pairs, each producing its own column.
+            Repeated fields share their original values and all pairs share geometry.
         boundary_tolerance_m: Approximate simplification distance using a local
             equirectangular scale per group, or zero to retain the dissolved boundary.
             Simplification affects geometry only, never attribute statistics.
@@ -43,7 +54,7 @@ class VectorSummaryRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     vector: VectorSummaryInput
-    statistic: VectorSummaryStatistic
+    summaries: Annotated[tuple[VectorSummaryCalculation, ...], Field(min_length=1)]
     boundary_tolerance_m: Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
@@ -80,12 +91,13 @@ class VectorSummaryPolicy(BaseModel):
 
 
 class VectorSummaryDetails(BaseModel):
-    """Retain grouping diagnostics separately from ordinary vector file metadata.
+    """Describe the primary statistic used for the layer's initial presentation.
 
     Attributes:
-        summaryField: Generated statistic column, including any collision-avoidance suffix.
+        summaryField: First requested statistic's generated output column.
         inputFeatureCount: Original features included after applying the captured filter.
-        missingValueCount: Included features without a finite numeric value to summarize.
+        missingValueCount: Included features missing the first pair's numeric value.
+            Full per-column diagnostics are recorded in the calculation provenance.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -95,19 +107,38 @@ class VectorSummaryDetails(BaseModel):
 
 
 @dataclass(frozen=True)
+class VectorSummaryColumn:
+    """Carry one calculated column's provenance into ordinary result publication.
+
+    Attributes:
+        source_field: Original numeric attribute used by this calculation.
+        statistic: Reduction over finite original values.
+        output_field: Unique output column name.
+        missing_value_count: Selected features without a finite value for this field.
+    """
+
+    source_field: str
+    statistic: VectorSummaryStatistic
+    output_field: str
+    missing_value_count: int
+
+
+@dataclass(frozen=True)
 class VectorSummaryArtifact(Artifact):
     """Publish a grouped GeoPackage through the existing artifact lifecycle.
 
     Attributes:
         feature_count: Number of distinct grouping values written.
-        summary_field: Statistic column, including a suffix if the group name collides.
+        columns: Ordered statistic columns and their source-value diagnostics.
+        summary_field: First requested output column, used for initial layer styling.
         input_feature_count: Number of original features included in the calculation.
-        missing_value_count: Included features whose numeric value was missing.
+        missing_value_count: Missing-value count for the primary presentation column.
         result_name: Worker-owned file basename used for atomic publication.
         media_type: Ordinary GeoPackage download format.
     """
 
     feature_count: int
+    columns: tuple[VectorSummaryColumn, ...]
     summary_field: str
     input_feature_count: int
     missing_value_count: int
