@@ -52,11 +52,15 @@ project boundaries.
 
 ### Find data
 
-Use **Catalog search** to enter any part of a filename, path, description, or
-date. Ordinary words can be combined with these filters:
+Use **Catalog search** to enter any part of a filename, description, date,
+or supplied dataset, paper and supporting-file annotations. Ordinary words
+are combined with AND and can be combined with these filters:
 
 - `type:raster` — only raster datasets
 - `type:vector` — only vector datasets
+- `type:nonspatial` — standalone described tables, documents and other files
+- `study:paper-009`, `category:Water`, `risk:Flood`, `status:"Partial match"` — exact
+  annotation labels, ignoring case; quote labels containing spaces
 - `type:temporal` — datasets containing observations over time
 - `format:cog` — only Cloud Optimized GeoTIFFs
 - `date:2020`, `date:2020-06`, or `date:2020-06-15` — a year, month, or day
@@ -66,6 +70,15 @@ For example, `resistance type:raster date:2020` finds raster records containing
 “resistance” from 2020. Suggestions appear while you type. Clear the search to
 show the complete Catalog, or use **Surprise me** to open a random matching
 item.
+
+Annotation filters match labels on the dataset or any supporting file; different
+filters may match different files belonging to the same dataset. A dataset appears
+once even if several files match. Search includes supplied titles, descriptions,
+keywords, attribution, license, dataset and publication DOI/citations, authors,
+publication year, notes and annotation values. It does not search file contents.
+`date:` uses the Catalog observation interval and excludes timestamps explicitly
+marked as file modification times. Existing unmarked dates retain their previous
+behavior. A publication year can match ordinary text, but does not change `date:`.
 
 Each result shows the source filename and the actions you are most likely to
 need:
