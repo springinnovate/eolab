@@ -182,14 +182,18 @@ export function suggestFeatureProfileFields(observation) {
 
 /**
  * Build ordered points from selected fields while preserving missing values.
+ * Numeric field-name ordering applies only when every selected name has a
+ * number; otherwise complete names use one natural order for the whole series.
  *
  * @param {import("./inspection-observation.js").VectorInspectionObservation}
  * observation Validated inspection observation.
  * @param {Object} settings Per-source feature-profile settings.
  * @param {string[]} settings.selectedFields Selected attribute names.
  * @param {"ascending"|"descending"} settings.direction Sort direction.
- * @return {{points:Object[],finiteCount:number,missingCount:number,xAxisLabel:string,xScale:string}}
- * Neutral ordinal chart model.
+ * @return {{points:{fieldName:string,xValue:number|null,xLabel:string,yValue:number|null}[],
+ * finiteCount:number,missingCount:number,xAxisLabel:string,xScale:"numeric"|"ordinal"}}
+ * Ordered chart model with its matching horizontal scale.
+ * @throws {TypeError} If the observation or settings violate their contract.
  */
 export function buildVectorFeatureProfile(observation, settings) {
     if (
@@ -211,19 +215,16 @@ export function buildVectorFeatureProfile(observation, settings) {
                 : null,
         };
     });
-    points.sort((left, right) => {
-        let compared;
-        if (left.xValue !== null && right.xValue !== null) {
-            compared = left.xValue - right.xValue;
-        } else {
-            compared = NATURAL_TEXT.compare(left.fieldName, right.fieldName);
-        }
-        return settings.direction === "ascending" ? compared : -compared;
-    });
-    const finiteCount = points.filter((point) => point.yValue !== null).length;
     const usesNumericNames = points.length > 0 && points.every(
         (point) => point.xValue !== null
     );
+    points.sort((left, right) => {
+        const compared = usesNumericNames
+            ? left.xValue - right.xValue
+            : NATURAL_TEXT.compare(left.fieldName, right.fieldName);
+        return settings.direction === "ascending" ? compared : -compared;
+    });
+    const finiteCount = points.filter((point) => point.yValue !== null).length;
     return {
         points,
         finiteCount,

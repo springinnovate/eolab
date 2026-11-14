@@ -77,20 +77,6 @@ function formatScalar(value) {
 }
 
 /**
- * Compare supported scalar X values, preserving a deterministic natural order.
- *
- * @param {string|number|boolean} left Left value.
- * @param {string|number|boolean} right Right value.
- * @return {number} Negative, zero, or positive comparison result.
- */
-function compareXValues(left, right) {
-    if (typeof left === "number" && typeof right === "number") {
-        return left - right;
-    }
-    return NATURAL_TEXT.compare(formatScalar(left), formatScalar(right));
-}
-
-/**
  * Select continuous spacing only when every plotted X value is finite numeric data.
  *
  * Mixed and textual values retain ordinal spacing so each inspected observation
@@ -107,11 +93,17 @@ function vectorTimeSeriesXScale(points) {
 
 /**
  * Build ordered chart points while retaining duplicate X observations.
+ * All-numeric X values use numeric order; mixed and textual series use one
+ * natural label order. Equal keys retain the original observation order.
  *
  * @param {import("./inspection-observation.js").VectorInspectionObservation[]}
  * observations Inspection results.
  * @param {VectorTimeSeriesSettings} settings Persistent chart settings.
- * @return {{points:Object[],omitted:number,total:number}} Ordered plot contract.
+ * @return {{points:{sourceIndex:number,sourceId:string,layerLabel:string,
+ * featureId:string|number|null,focus:import("./inspection-observation.js").VectorInspectionObservation["focus"],
+ * xValue:string|number|boolean,xLabel:string,yValue:number}[],omitted:number,total:number}}
+ * Ordered plot points and the number of omitted/total observations.
+ * @throws {TypeError} If observations or settings violate their contract.
  */
 export function buildVectorTimeSeriesSeries(observations, settings) {
     if (
@@ -149,8 +141,11 @@ export function buildVectorTimeSeriesSeries(observations, settings) {
             yValue,
         });
     });
+    const numericX = vectorTimeSeriesXScale(points) === "numeric";
     points.sort((left, right) => {
-        const compared = compareXValues(left.xValue, right.xValue);
+        const compared = numericX
+            ? left.xValue - right.xValue
+            : NATURAL_TEXT.compare(left.xLabel, right.xLabel);
         if (compared !== 0) {
             return settings.direction === "ascending" ? compared : -compared;
         }

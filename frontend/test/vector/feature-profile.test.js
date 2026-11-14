@@ -130,6 +130,39 @@ test("profile points use field-name numbers and preserve missing-value gaps", ()
   assert.equal(profile.xScale, "numeric");
 });
 
+test("mixed field names have one natural order for every selection permutation", () => {
+  const current = observation({ properties: { A2: 2, M: null, Z1: 1 } });
+  for (const selectedFields of [
+    ["A2", "M", "Z1"], ["A2", "Z1", "M"], ["M", "A2", "Z1"],
+    ["M", "Z1", "A2"], ["Z1", "A2", "M"], ["Z1", "M", "A2"],
+  ]) {
+    for (const direction of ["ascending", "descending"]) {
+      const profile = buildVectorFeatureProfile(current, { selectedFields, direction });
+      assert.deepEqual(profile.points.map(point => point.fieldName),
+        direction === "ascending" ? ["A2", "M", "Z1"] : ["Z1", "M", "A2"]);
+      assert.equal(profile.xScale, "ordinal");
+      assert.equal(profile.points[1].yValue, null);
+      assert.equal(profile.missingCount, 1);
+    }
+  }
+});
+
+test("checkbox selection history does not change mixed profile chart or table order", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation({ properties: { A2: 2, M: 3, Z1: 1 } }));
+  const rows = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  for (const name of ["M", "Z1", "A2"]) {
+    const checkbox = rows.children.find(row => row.children[0].value === name).children[0];
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+  }
+  const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
+  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["A2", "M", "Z1"]);
+  const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
+  assert.deepEqual(chart.children.filter(element => element.getAttribute("class") === "series-chart-point")
+    .map(element => element.getAttribute("aria-label")), ["A2: 2", "M: 3", "Z1: 1"]);
+});
+
 test("controller plots suggested fields and updates from partial search actions", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
