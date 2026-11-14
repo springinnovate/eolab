@@ -100,6 +100,7 @@ def _context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OperationContex
         native=None,
         run_native=AsyncMock(),
         reuse_results=False,
+        report_progress=AsyncMock(),
         operation_settings={BULK_OPERATION: runtime},
     )
 
@@ -202,6 +203,15 @@ def test_bulk_checks_all_active_history_and_queues_more_than_fifty_areas(
         assert plan.summary["configurationSha256"] == "c" * 64
         assert len(request_hash) == 64
     assert prepared.retained_metadata == {"inputs": {"areaCount": 61}}
+    assert [call.args[0] for call in context.report_progress.await_args_list] == [
+        {
+            "phase": "checking_habitat_areas",
+            "completed": completed,
+            "total": 61,
+            "unit": "areas",
+        }
+        for completed in range(62)
+    ]
 
 
 def test_bulk_recovers_child_before_rechecking_changed_sources(
@@ -347,6 +357,7 @@ def test_empty_scope_finishes_without_source_or_runtime_access(
         None,
         context.run_native,
         False,
+        report_progress=context.report_progress,
     )
     prepared = asyncio.run(
         bulk.prepare_habitat_bulk_preparation(context, _queued(), None)
@@ -355,6 +366,9 @@ def test_empty_scope_finishes_without_source_or_runtime_access(
     assert report.areaCount == report.queuedCount == report.failedCount == 0
     context.jobs.list_session_jobs_page.assert_not_called()
     context.jobs.submit.assert_not_called()
+    context.report_progress.assert_awaited_once_with(
+        {"phase": "checking_habitat_areas", "completed": 0, "total": 0, "unit": "areas"}
+    )
 
 
 def test_cancellation_waits_for_inflight_child_admission(
@@ -419,18 +433,28 @@ def test_cancellation_waits_for_inflight_child_admission(
         assert accepted == [_request(1).requestId]
         assert context.jobs.submit.call_count == 1
         context.jobs.cancel.assert_not_called()
+        context.report_progress.assert_awaited_once_with(
+            {
+                "phase": "checking_habitat_areas",
+                "completed": 0,
+                "total": 2,
+                "unit": "areas",
+            }
+        )
 
     asyncio.run(run())
 
 
-def test_registered_worker_publishes_receipt_without_waiting_for_child_downloads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("stop_after", [None, 0, 1])
+def test_registered_worker_reports_checks_and_obeys_its_attempt_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop_after: int | None
 ) -> None:
-    """Release the parent worker slot after normal report publication while children remain queued.
+    """Report every check through the worker and stop further work after lease loss.
 
     Args:
         tmp_path: Isolated normal artifact storage and runtime paths.
         monkeypatch: Controlled source/cache boundaries; native report writer remains real.
+        stop_after: Check count at which the store rejects this attempt, or None.
     """
     context = _context(tmp_path, monkeypatch)
     monkeypatch.setattr(
@@ -438,7 +462,7 @@ def test_registered_worker_publishes_receipt_without_waiting_for_child_downloads
         "get_habitat_cache_coverage",
         AsyncMock(return_value=HabitatCacheCoverage("c" * 64, 2018, 1, 0, 1)),
     )
-    queued = _queued(_request(1))
+    queued = _queued(_request(1), _request(2))
     plan = bulk.build_habitat_bulk_preparation_submission(queued.request)
     now = datetime.now(timezone.utc)
     row = {
@@ -461,6 +485,26 @@ def test_registered_worker_publishes_receipt_without_waiting_for_child_downloads
     configure_prepared_job_store(store, row)
     store.claim_next_job.return_value = row
     store.heartbeat.return_value = store.finish.return_value = True
+    snapshots: list[dict[str, Any]] = []
+
+    def heartbeat(identifier: str, attempt: str, progress: dict[str, Any]) -> bool:
+        """Record operation checkpoints and emulate a cancelled or expired lease.
+
+        Args:
+            identifier: Claimed job identifier supplied by the worker.
+            attempt: Current attempt token supplied by the worker.
+            progress: Supervisor heartbeat or operation-owned progress snapshot.
+
+        Returns:
+            Whether the attempt may continue, including empty supervisor heartbeats.
+        """
+        assert (identifier, attempt) == (row["id"], row["attempt_id"])
+        if progress.get("unit") == "areas":
+            snapshots.append(progress)
+            return progress["completed"] != stop_after
+        return True
+
+    store.heartbeat.side_effect = heartbeat
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
     artifacts.initialize()
     native = ReusableProcess(
@@ -484,13 +528,29 @@ def test_registered_worker_publishes_receipt_without_waiting_for_child_downloads
             await native.close()
 
     asyncio.run(run())
+    last = 2 if stop_after is None else stop_after
+    assert snapshots == [
+        {
+            "phase": "checking_habitat_areas",
+            "completed": count,
+            "total": 2,
+            "unit": "areas",
+        }
+        for count in range(last + 1)
+    ]
+    if stop_after is not None:
+        assert store.submit.call_count == stop_after
+        assert store.finish.call_args.args[2] is None
+        assert store.finish.call_args.args[3]["code"] == "interrupted"
+        store.cancel.assert_not_called()
+        return
     artifact = store.finish.call_args.args[2]
-    assert artifact.queued_count == 1 and artifact.failed_count == 0
+    assert artifact.queued_count == 2 and artifact.failed_count == 0
     report = HabitatBulkPreparationReport.model_validate_json(
         artifacts.result_path(row["attempt_id"], result_name="result.json").read_text()
     )
-    assert report.queuedCount == 1 and len(report.outcomes) == 1
-    assert store.submit.call_count == 1
+    assert report.queuedCount == 2 and len(report.outcomes) == 2
+    assert store.submit.call_count == 2
     store.get.assert_not_called()
     store.cancel.assert_not_called()
     operation = get_model_operation(BULK_OPERATION)

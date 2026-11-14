@@ -101,7 +101,7 @@ class ProcessingWorker:
         reuse_results: bool,
         source_checksum: str | None = None,
     ) -> OperationContext:
-        """Supply existing execution capabilities to a registered raster operation.
+        """Supply source access and fenced preparation progress to an operation.
 
         Args:
             row: Claimed job with its retained upload references.
@@ -125,6 +125,28 @@ class ProcessingWorker:
             areas = RetainedVectorSelectionReader(
                 areas, self.uploads, row["input_uploads"]
             )
+
+        async def report_progress(progress: dict[str, Any]) -> None:
+            """Persist preparation progress while this attempt may continue working.
+
+            Args:
+                progress: Small operation-owned snapshot without paths or secrets.
+                    Use before native execution starts reporting its own progress.
+
+            Raises:
+                ProcessingError: If storage fails, the job is cancelled, or this
+                    attempt no longer holds its execution lease.
+                asyncio.CancelledError: If the operation is stopped while reporting.
+            """
+            if not await asyncio.to_thread(
+                self.jobs.heartbeat, row["id"], row["attempt_id"], progress
+            ):
+                raise ProcessingError(
+                    "interrupted",
+                    "The job was cancelled or its worker lease ended.",
+                    409,
+                )
+
         return OperationContext(
             self.jobs,
             areas,
@@ -134,6 +156,7 @@ class ProcessingWorker:
             run_process,
             reuse_results,
             source_checksum,
+            report_progress=report_progress,
             operation_settings=self.operation_settings,
         )
 

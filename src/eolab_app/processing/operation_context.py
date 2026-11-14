@@ -24,6 +24,10 @@ class OperationContext:
         native: Supervised native execution lane.
         run_native: Bounded execution function supplied by the worker.
         reuse_results: Whether this job may use the scalar-results cache.
+        report_progress: Persist preparation-stage progress through the worker's
+            current attempt lease. Await this before continuing preparation;
+            cancellation or lease loss stops the operation. Native execution
+            continues to report through its ordinary attempt progress file.
         source_checksum: Published checksum for a private raster input.
         rasters: Additional raster inputs authorized for this operation attempt.
         operation_settings: Server-only dependencies keyed by operation ID.
@@ -38,6 +42,7 @@ class OperationContext:
     native: ReusableProcess | None
     run_native: Callable[..., Awaitable[Any]]
     reuse_results: bool
+    report_progress: Callable[[dict[str, Any]], Awaitable[None]] = field(kw_only=True)
     source_checksum: str | None = None
     rasters: dict[str, AuthorizedRaster] = field(default_factory=dict)
     operation_settings: Mapping[str, object] = field(default_factory=dict)

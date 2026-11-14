@@ -31,15 +31,25 @@ function fixture() {
         return root;
     };
     const view = new HabitatAdminView(document);
-    view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "loadMore", "cancel", "retry", "retryAll", "refreshInventory", "openFailureLog", "closeFailureLog"]
+    view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "checkSavedArea", "cancel", "retry", "retryAll", "refreshInventory", "openFailureLog", "closeFailureLog"]
         .map(name => [name, (...args) => actions.push([name, ...args])])));
+    const renderView = view.render.bind(view);
+    const presenter = new HabitatAdminController({api: {}, view: {bind() {}, render() {}},
+        documentContext: null, windowContext: null, storage: null});
+    view.render = snapshot => {
+        if (snapshot.areaRows) return renderView(snapshot);
+        presenter.state = {...snapshot}; presenter.jobs = new Map(snapshot.jobs.map(value => [value.jobId, value]));
+        presenter.view.render = derived => renderView({...derived, failureLogs: snapshot.failureLogs});
+        presenter.render();
+    };
     const state = {options: {minimumYear: 2017, maximumYear: 2019}, sources: [{key: "areas", label: "Country polygons", selection,
         fields: [{name: "code", type: "int"}]}], searching: false, searchError: "", nextSearch: null,
-        areas: [], years: [2018], coverageRows: [], checking: false, submissions: [], jobs: [], nextCursor: null,
+        areas: [], years: [2018], coverageRows: [], checking: false, submissions: [], jobs: [],
         inventory: null, inventoryLoading: false, inventoryError: "", inventoryCheckedAt: null,
-        historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, completedJobs: 0, requestedJobs: 0, failureLogs: new Map()};
+        historyLoading: false, historyComplete: true, historyReadCount: 0, historyCheckedAt: "2026-11-13T20:00:00Z",
+        historyError: "", error: "", submitting: false, canPrepare: false, failureLogs: new Map()};
     view.render(state);
-    return {view, state, actions, document};
+    return {view, state, actions, document, presenter};
 }
 
 /** Create one retained administrator job with overridable lifecycle state.
@@ -47,10 +57,10 @@ function fixture() {
  * @return {Object} Path-free preparation job.
  */
 function job(changes = {}) {
-    return {jobId: "a".repeat(32), inputs: {name: "Northern area", year: 2018}, status: "running",
+    return {jobId: "a".repeat(32), inputs: {name: "Northern area", year: 2018, selection}, status: "running",
         progress: ["ready", "expired"].includes(changes.status) ? {phase: "ready", completed: null, total: null, unit: null} :
             {phase: "fetching_habitat_tiles", completed: 2, total: 6, unit: "tiles"},
-        updatedAt: "2026-11-03T08:00:00Z", expiresAt: "2099-11-04T08:00:00Z", metadataExpiresAt: "2099-11-10T08:00:00Z", error: null, result: null, ...changes};
+        createdAt: "2026-11-03T08:00:00Z", updatedAt: "2026-11-03T08:00:00Z", expiresAt: "2099-11-04T08:00:00Z", metadataExpiresAt: "2099-11-10T08:00:00Z", error: null, result: null, ...changes};
 }
 
 test("long Catalog labels can be added with their suggested names and original source identity", async t => {
@@ -130,11 +140,11 @@ test("coverage snapshots stay separate from historical completion and job counts
     const h = fixture();
     h.state.coverageRows = [{key: "north:2018", name: "Northern area", year: 2018, coverage: {requiredTiles: 6, cachedTiles: 4, missingTiles: 2}, checkedAt: "2026-11-03T08:00:00Z", error: ""},
         {key: "south:2018", name: "Overlapping area", year: 2018, coverage: {requiredTiles: 6, cachedTiles: 4, missingTiles: 2}, checkedAt: "2026-11-03T08:00:00Z", error: ""}];
-    h.state.jobs = [job({status: "ready"})]; h.state.requestedJobs = 2; h.state.completedJobs = 1;
+    h.state.jobs = [job({status: "ready"})]; h.state.submissions = [{key: "accepted", status: "accepted", name: "Northern area", year: 2018}];
     h.view.render(h.state);
     assert.match(h.view.cards.get("coverage:north:2018").detail.textContent, /^4 cached · 2 missing · 6 required tiles/);
     assert.match(h.view.cards.get("coverage:south:2018").detail.textContent, /^4 cached · 2 missing · 6 required tiles/);
-    assert.equal(h.view.submissionStatus.textContent, "1 of 2 preparation reports generated.");
+    assert.equal(h.view.submissionStatus.textContent, "1 requests accepted during this visit. This counts submissions, not finished downloads.");
     assert.equal(h.view.cards.get(`job:${"a".repeat(32)}`).detail.textContent, "Completed");
     assert.match(markup, /Habitat cached inputs/); assert.match(markup, /\/assets\/habitat-admin\.js/);
     h.view.destroy();
@@ -150,7 +160,7 @@ test("history actions respect retained inputs and preserve focus during progress
     for (const status of ["failed", "cancelled", "interrupted", "expired"]) {
         running.status = status; h.view.render(h.state); assert.equal(card.retry.hidden, false); assert.equal(card.cancel.hidden, true);
     }
-    assert.equal(h.document.activeElement, card.title);
+    assert.equal(h.document.activeElement, card.focusTarget);
     click(card.retry); assert.deepEqual(h.actions.at(-1), ["retry", running.jobId]);
     running.inputs = null; h.view.render(h.state); assert.equal(card.retry.hidden, true);
     assert.equal(card.title.textContent, "Preparation details expired");
@@ -185,7 +195,7 @@ test("reports, partial failures and uncertain submissions retain distinct visibl
     assert.equal(card.log.hidden, true); assert.equal(card.retry.hidden, true);
     assert.equal(card.report.hidden, false); assert.equal(card.report.href, ready.result.url); assert.equal(card.provenance.href, ready.result.provenanceUrl);
     assert.match(uncertain.detail.textContent, /unknown/); assert.equal(uncertain.error.textContent, "Connection lost");
-    assert.match(h.view.submissionStatus.textContent, /No preparations have been confirmed yet/);
+    assert.match(h.view.submissionStatus.textContent, /0 requests accepted during this visit/);
     click(uncertain.recover); assert.deepEqual(h.actions.at(-1), ["recover", "north:2018"]);
     assert.equal(h.view.cards.get("submission:south:2018").error.textContent, "Catalog source unavailable");
     assert.equal(h.view.cards.get("submission:south:2018").recover.hidden, true);
@@ -205,7 +215,7 @@ test("partial and empty reports retain retry and an accessible on-demand failure
     assert.match(card.times.textContent, /Report expires .* · Saved inputs expire /);
     assert.equal(card.logSummary.getAttribute("aria-label"), "View tile failure log for Northern area · 2018");
     assert.equal(h.actions.length, 0);
-    card.logSummary.focus(); card.log.open = true; card.log.dispatchEvent(new Event("toggle"));
+    card.details.open = true; card.logSummary.focus(); card.log.open = true; card.log.dispatchEvent(new Event("toggle"));
     assert.deepEqual(h.actions.at(-1), ["openFailureLog", partial.jobId]);
     h.state.failureLogs.set(partial.jobId, {loading: true}); h.view.render(h.state);
     assert.match(card.logStatus.textContent, /Loading/);
@@ -226,7 +236,9 @@ test("partial and empty reports retain retry and an accessible on-demand failure
     click(card.retry); assert.deepEqual(h.actions.at(-1), ["retry", partial.jobId]);
     partial.expiresAt = "2000-01-01T00:00:00Z"; h.view.render(h.state);
     assert.equal(card.log.hidden, true); assert.equal(card.report.hidden, true); assert.equal(card.retry.hidden, false);
-    assert.equal(h.document.activeElement, card.title);
+    assert.equal(h.document.activeElement, card.focusTarget);
+    assert.equal(card.focusTarget.hidden, false);
+    assert.equal(card.title.hidden, true);
     assert.doesNotMatch(card.times.textContent, /Report expires/);
     h.view.destroy();
 });
@@ -277,13 +289,13 @@ test("bulk receipt and recovery wording make it clear when the administrator can
     assert.equal(h.view.retryAll.disabled, true); assert.equal(h.view.retryAll.textContent, "Sending retry request…");
     assert.equal(h.view.prepare.textContent, "Prepare inputs"); assert.doesNotMatch(h.view.retryAllStatus.textContent, /accepted|Recover submission/);
     submission.status = "uncertain"; h.state.submitting = false; h.view.render(h.state);
-    assert.match(h.view.retryAllStatus.textContent, /Use Recover submission in Requested preparations/);
+    assert.match(h.view.retryAllStatus.textContent, /Use Recover submission in Requests from this visit/);
     assert.equal(h.view.cards.get("submission:bulk-request").recover.disabled, false);
     const receipt = job({operation: "habitat.retry-missing-inputs.v1", inputs: {areaCount: 4}, status: "queued"});
     submission.status = "accepted"; submission.jobId = receipt.jobId; h.state.jobs = [receipt]; h.view.render(h.state);
     assert.equal(h.view.cards.get("submission:bulk-request").title.textContent, "Retry all missing inputs");
     assert.match(h.view.cards.get("submission:bulk-request").detail.textContent, /Request accepted.*continue after you leave/);
-    assert.match(h.view.retryAllStatus.textContent, /server has accepted.*You can leave/);
+    assert.match(h.view.retryAllStatus.textContent, /Checking saved areas and years.*You can leave/);
     assert.equal(h.view.retryAll.disabled, true);
     const card = h.view.cards.get(`job:${receipt.jobId}`);
     assert.equal(card.title.textContent, "Retry all missing inputs"); assert.equal(card.detail.textContent, "Queued for checking");
@@ -317,13 +329,19 @@ test("completed bulk checks show separate download progress and retained per-are
     h.view.destroy();
 });
 
-test("new history appears in server order while existing rows keep their controls", () => {
+test("a newer attempt keeps one area row and moves focused older work into a closed disclosure safely", () => {
     const h = fixture(), older = job(), newer = job({jobId: "b".repeat(32)});
     h.state.jobs = [older]; h.view.render(h.state);
     const olderCard = h.view.cards.get(`job:${older.jobId}`); olderCard.cancel.focus();
     h.state.jobs = [newer, older]; h.view.render(h.state);
-    assert.equal(h.view.history.children[0], h.view.cards.get(`job:${newer.jobId}`).root);
-    assert.equal(h.view.history.children[1], olderCard.root); assert.equal(h.document.activeElement, olderCard.cancel);
+    const row = [...h.view.cards].find(([key]) => key.startsWith("status:"))[1];
+    assert.equal(h.view.history.children.length, 1);
+    assert.equal(row.latestHost.children[0], h.view.cards.get(`job:${newer.jobId}`).root);
+    assert.equal(row.previousHost.children[0], olderCard.root);
+    assert.equal(Boolean(row.previous.open), false); assert.equal(h.document.activeElement, row.title);
+    assert.match(row.previousSummary.textContent, /Earlier attempts \(1; 1 still active\)/);
+    row.previous.open = true; olderCard.cancel.focus(); h.view.render(h.state);
+    assert.equal(row.previous.open, true); assert.equal(h.document.activeElement, olderCard.cancel);
     h.state.jobs = [newer]; h.view.render(h.state);
     assert.equal(h.view.cards.has(`job:${older.jobId}`), false); assert.equal(h.document.activeElement, h.view.refresh);
     const before = h.actions.length; click(olderCard.cancel); assert.equal(h.actions.length, before);
@@ -349,12 +367,89 @@ test("loaded history follows report and saved-input deadlines before another ser
     const h = fixture(), retained = job({status: "ready", expiresAt: "2000-01-01T00:00:00Z"});
     h.state.jobs = [retained]; h.view.render(h.state);
     const card = h.view.cards.get(`job:${retained.jobId}`);
-    assert.equal(card.detail.textContent, "Report expired"); assert.equal(card.report.hidden, true);
+    assert.equal(card.detail.textContent, "Finished; report expired"); assert.equal(card.report.hidden, true);
     assert.equal(card.retry.hidden, false); click(card.retry);
     assert.deepEqual(h.actions.at(-1), ["retry", retained.jobId]);
+    card.retry.focus();
     retained.metadataExpiresAt = "2000-01-08T00:00:00Z"; h.view.render(h.state);
     assert.notEqual(retained.inputs, null); assert.equal(card.retry.hidden, true);
     assert.equal(card.title.textContent, "Preparation details expired");
+    assert.equal(h.view.history.children.length, 0);
+    assert.equal(h.view.expiredHistory.children[0], card.root);
+    assert.equal(Boolean(h.view.expiredDetails.open), false);
+    assert.equal(h.document.activeElement, h.view.expiredSummary);
+    h.view.destroy();
+});
+
+test("the area overview precedes setup and preserves separate area/year and bulk status", () => {
+    const h = fixture(), current = job(), other = job({jobId: "b".repeat(32),
+        inputs: {...current.inputs, year: 2019}});
+    h.state.jobs = [current, other]; h.view.render(h.state);
+    const headings = h.view.root.children.map(section => section.children[0]?.textContent);
+    assert.ok(headings.indexOf("Area and year status") < headings.indexOf("Choose areas and assessment years"));
+    assert.ok(headings.indexOf("Checks for all saved areas") < headings.indexOf("Choose areas and assessment years"));
+    assert.equal(h.view.history.children.length, 2);
+    assert.equal(h.view.statusTable.children[0].textContent, "Saved areas and assessment years");
+    assert.equal(h.view.tableScroll.getAttribute("role"), "region"); assert.equal(h.view.tableScroll.tabIndex, 0);
+    const row = [...h.view.cards].find(([key]) => key.startsWith("status:"))[1];
+    assert.equal(row.root.children[0].getAttribute("scope"), "row");
+    assert.equal(row.coverage.textContent, "Not checked");
+    assert.equal(h.view.preparationSection.hidden, true);
+    assert.equal(Boolean(h.view.cards.get(`job:${current.jobId}`).details.open), false);
+    assert.match(h.view.historyStatus.textContent, /2 saved area\/year entries.*Current cache coverage requires a separate check/);
+    h.view.destroy();
+});
+
+test("a saved-row cache check has independent busy, timestamp and error presentation", async () => {
+    const h = fixture(), expired = job({status: "expired"}); h.state.jobs = [expired]; h.view.render(h.state);
+    const entry = h.presenter.state.areaRows[0], row = h.view.cards.get(`status:${entry.key}`);
+    click(row.check); assert.deepEqual(h.actions.at(-1), ["checkSavedArea", entry.key]);
+    let finish;
+    h.presenter.api.coverage = () => new Promise(resolve => { finish = resolve; });
+    row.check.focus(); const checking = h.presenter.checkSavedArea(entry.key);
+    assert.equal(row.check.disabled, true); assert.equal(row.check.getAttribute("aria-busy"), "true");
+    assert.match(row.check.getAttribute("aria-label"), /^Checking cached inputs for Northern area 2018$/);
+    finish({cachedTiles: 6, missingTiles: 0, requiredTiles: 6}); await checking;
+    assert.match(row.coverage.textContent, /^6 cached · 0 missing · 6 required tiles$/);
+    assert.match(row.checkedAt.textContent, /^Checked .*This snapshot does not update automatically/);
+    assert.equal(row.check.disabled, false);
+    assert.equal(h.view.cards.get(`job:${expired.jobId}`).detail.textContent, "Finished; report expired");
+    const checkedAt = row.checkedAt.textContent;
+    h.presenter.api.coverage = async () => { throw new Error("Connection lost"); };
+    await h.presenter.checkSavedArea(entry.key);
+    assert.equal(row.checkedAt.textContent, checkedAt);
+    assert.match(row.error.textContent, /Cache check failed: Connection lost.*previous snapshot is shown/);
+    assert.equal(row.coverage.textContent, "6 cached · 0 missing · 6 required tiles");
+    h.view.destroy();
+});
+
+test("incomplete history never describes the first page as a complete area inventory", () => {
+    const h = fixture(); h.state.jobs = [job()]; h.state.historyComplete = false;
+    h.state.historyLoading = true; h.state.historyReadCount = 50; h.view.render(h.state);
+    assert.match(h.view.historyStatus.textContent, /Loading all saved preparations.*50 read so far.*More areas may appear/);
+    assert.equal(h.view.refresh.disabled, true);
+    h.state.historyLoading = false; h.state.historyError = "Connection lost"; h.view.render(h.state);
+    assert.match(h.view.historyStatus.textContent, /History is incomplete; more saved areas may exist/);
+    assert.equal(h.view.refresh.disabled, false);
+    h.state.historyError = ""; h.view.render(h.state);
+    assert.match(h.view.historyStatus.textContent, /History is incomplete.*finish loading/);
+    h.view.destroy();
+});
+
+test("bulk area-check counts stay separate from downloads and preserve stopping state", () => {
+    const h = fixture(), receipt = job({operation: "habitat.retry-missing-inputs.v1", inputs: {areaCount: 8},
+        progress: {phase: "checking_habitat_areas", completed: 0, total: 8, unit: "areas", details: null}});
+    h.state.jobs = [receipt]; h.view.render(h.state);
+    const card = h.view.cards.get(`job:${receipt.jobId}`);
+    assert.equal(h.view.history.children.length, 0); assert.equal(h.view.bulkHistory.children[0], card.root);
+    assert.equal(card.detail.textContent, "Checking saved areas and years · 0 of 8 area/year combinations checked");
+    receipt.progress.completed = 3; receipt.status = "cancelling"; h.view.render(h.state);
+    assert.equal(card.detail.textContent, "Stopping checks… · 3 of 8 area/year combinations checked");
+    receipt.status = "cancelled"; h.view.render(h.state);
+    assert.equal(card.detail.textContent, "Checks stopped · 3 of 8 area/year combinations checked");
+    assert.doesNotMatch(card.bulkNote.textContent, /checks are finished/);
+    assert.match(card.bulkNote.textContent, /Queued preparations run separately/);
+    assert.equal(card.activity.hidden, true);
     h.view.destroy();
 });
 
@@ -444,6 +539,8 @@ test("download activity distinguishes cached and failed tiles and ages a stalled
     assert.equal(h.document.activeElement, card.cancel);
     current.status = "cancelled"; h.view.render(h.state);
     assert.match(card.activity.textContent, /Average 2.5 downloaded tiles\/min at last progress update/);
+    assert.match(card.activity.textContent, /22 not completed in this attempt · 1 failed in this attempt/);
+    assert.doesNotMatch(card.activity.textContent, /awaiting download|MB|retry needed/);
     h.state.historyError = "Connection lost"; h.view.render(h.state);
     assert.match(h.view.historyStatus.textContent, /Displayed progress may be out of date/);
     h.view.destroy();

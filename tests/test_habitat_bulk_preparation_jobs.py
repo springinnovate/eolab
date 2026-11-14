@@ -378,7 +378,7 @@ def test_stopped_bulk_parent_does_not_cancel_an_accepted_child(
     store: PostgresJobStore,
     terminal_status: str,
 ) -> None:
-    """Stop the bulk check without transferring cancellation to independently queued work.
+    """Retain checked-area progress and stop only the parent when its work is cancelled.
 
     Args:
         preparation_boundary: Real cancellation and status endpoints.
@@ -400,10 +400,22 @@ def test_stopped_bulk_parent_does_not_cancel_an_accepted_child(
         build_habitat_input_preparation_submission(captured),
         captured.requestId,
     )
+    progress = {
+        "phase": "checking_habitat_areas",
+        "completed": 1,
+        "total": 1,
+        "unit": "areas",
+    }
+    assert store.heartbeat(claimed["id"], claimed["attempt_id"], progress)
+    assert store.heartbeat(claimed["id"], claimed["attempt_id"], {})
+    assert client.get(f"{BASE}/{parent['jobId']}").json()["progress"] == {
+        **progress,
+        "details": None,
+    }
     if terminal_status == "cancelled":
         response = client.post(f"{BASE}/{parent['jobId']}/cancel", headers=HEADERS)
         assert response.status_code == 202 and response.json()["status"] == "cancelling"
-        assert not store.heartbeat(claimed["id"], claimed["attempt_id"], {})
+        assert not store.heartbeat(claimed["id"], claimed["attempt_id"], progress)
     assert store.finish(
         claimed["id"],
         claimed["attempt_id"],

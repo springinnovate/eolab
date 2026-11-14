@@ -237,6 +237,37 @@ def test_malformed_saved_preparation_metadata_returns_a_private_failure(
     jobs.get.assert_called_once_with(IDENTIFIER, HABITAT_PREPARATION_OWNER)
 
 
+def test_bulk_check_progress_reaches_the_protected_history_response() -> None:
+    """Expose checked-area counts through persisted-job serialization and HTTP."""
+    now = datetime.now(timezone.utc)
+    jobs = Mock()
+    progress = {
+        "phase": "checking_habitat_areas",
+        "completed": 3,
+        "total": 8,
+        "unit": "areas",
+    }
+    jobs.get.return_value = {
+        "id": IDENTIFIER,
+        "operation": "habitat.retry-missing-inputs.v1",
+        "status": "running",
+        "created_at": now,
+        "updated_at": now,
+        "expires_at": now + timedelta(days=1),
+        "metadata_expires_at": None,
+        "retained_metadata": {"inputs": {"areaCount": 8}},
+        "artifact": None,
+        "progress": progress,
+        "error": None,
+    }
+    lifecycle = ProcessingService(jobs, Mock(), model_registry=Mock())
+    response = _client(lifecycle).get(f"{BASE}/{IDENTIFIER}", auth=("admin", PASSWORD))
+    assert response.status_code == 200, response.text
+    assert response.json()["progress"] == {**progress, "details": None}
+    assert response.headers["cache-control"] == "private, no-store"
+    jobs.get.assert_called_once_with(IDENTIFIER, HABITAT_PREPARATION_OWNER)
+
+
 def test_preparation_administration_is_wired_into_the_application(
     configured_environment: None,
     version_file_path: Path,

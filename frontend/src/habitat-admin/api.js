@@ -64,6 +64,8 @@ export class HabitatAdminRequestError extends Error {
 
 /**
  * Read the server's preparation lifecycle contract and restrict downloads to that job.
+ * Bulk-check progress counts area/year combinations; individual preparation
+ * progress counts tiles and may include download measurements.
  * @param {Object} value JSON returned by an administration endpoint.
  * @param {string|null} [expectedId=null] Requested handle for detail/cancellation reads.
  * @return {Object} Validated individual preparation or bulk-check job, with path-free inputs.
@@ -110,7 +112,8 @@ function readPreparation(value, expectedId = null) {
     if ((completed !== null && (!Number.isInteger(completed) || completed < 0)) ||
         (total !== null && (!Number.isInteger(total) || total < 0)) ||
         (completed !== null && total !== null && completed > total) ||
-        !(progress.unit === undefined || progress.unit === null || !bulk && progress.unit === "tiles")) {
+        !(progress.unit === undefined || progress.unit === null || progress.unit === (bulk ? "areas" : "tiles")) ||
+        bulk && progress.unit === "areas" && (progress.phase !== "checking_habitat_areas" || completed === null || total === null)) {
         throw new TypeError("Invalid preparation progress");
     }
     const details = progress.details ?? null;

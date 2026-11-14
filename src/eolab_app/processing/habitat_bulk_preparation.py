@@ -216,7 +216,8 @@ async def prepare_habitat_bulk_preparation(
     Cancellation stops further checks and native reads; children already accepted
     remain ordinary independent jobs. Each area failure is recorded while later
     areas continue. Completion means checking and queueing finished, not that the
-    accepted tile downloads finished.
+    accepted tile downloads finished. Preparation progress counts each checked
+    area/year once, including cached, active, queued and failed outcomes.
 
     Args:
         context: Existing worker lifecycle, source access and job-store capabilities.
@@ -232,6 +233,15 @@ async def prepare_habitat_bulk_preparation(
         asyncio.CancelledError: After an in-progress native coverage read has stopped.
     """
     outcomes = []
+    total = len(queued.request.areas)
+    await context.report_progress(
+        {
+            "phase": "checking_habitat_areas",
+            "completed": 0,
+            "total": total,
+            "unit": "areas",
+        }
+    )
     if queued.request.areas:
         if context.areas is None:
             raise ProcessingError(
@@ -266,6 +276,14 @@ async def prepare_habitat_bulk_preparation(
                     detail="The Ecosystem Condition inputs for this area and year could not be prepared. Ask the administrator to check its source and scientific configuration.",
                 )
             outcomes.append(outcome)
+            await context.report_progress(
+                {
+                    "phase": "checking_habitat_areas",
+                    "completed": len(outcomes),
+                    "total": total,
+                    "unit": "areas",
+                }
+            )
     report = HabitatBulkPreparationReport(
         areaCount=len(outcomes),
         queuedCount=sum(row.status == "queued" for row in outcomes),

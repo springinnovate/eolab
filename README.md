@@ -355,6 +355,10 @@ queues downloads without running the model. Preparation continues after closing
 the page and attempts remaining tiles when a tile download fails. Return to
 administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
+The area/year table shows the latest preparation for each saved area and year,
+with older attempts collapsed. Check a row's cached inputs for a timestamped
+coverage snapshot; a completed preparation or expired report does not establish
+current cache coverage.
 Download progress separates reused tiles from new downloads and shows the last
 completed download, average speed and an approximate remaining size based on
 completed tiles. A recent status update means the worker reported in; it does not
@@ -362,9 +366,10 @@ mean a tile finished.
 **Retry all missing inputs** checks all areas and years still saved in preparation
 history against current inputs, reuses cached tiles, and skips matching work
 already in progress. Once the request is accepted, checks and preparation continue
-after you leave the page. Return to preparation history for the check report and
-individual download progress; stopping a check leaves already queued preparations
-running.
+after you leave the page. The cache recheck shows how many area/year combinations
+have been checked. Finishing those checks does not mean queued downloads have
+finished; follow their progress in the area/year table. Stopping a check leaves
+already queued preparations running.
 Partial coverage still needs enough usable data and reference sites to fit the
 model; missing pixels are never treated as zero.
 
