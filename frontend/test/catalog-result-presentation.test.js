@@ -41,7 +41,11 @@ test("Catalog results retain GeoPackage and geodatabase layer identity", () => {
         id: "geopackage-item",
         properties: {
           title: "flooding-future/FLOPROS.gpkg — flood_protection",
-          "eolab:layer_name": "flood_protection",
+          "eolab:geopackage_layer": "flood_protection",
+          "eolab:vector_source": {
+            kind: "mounted", format: "geopackage", asset_key: "data",
+            layer_name: "flood_protection",
+          },
         },
         assets: {
           data: { title: "flooding-future/FLOPROS.gpkg" },
@@ -144,6 +148,64 @@ test("Catalog results keep em dashes inside actual filenames", () => {
   );
   assert.equal(presentation.filename, "recharge — model year 35.tif");
   assert.equal(presentation.context, "Model Outputs");
+});
+
+for (const [format, extension, legacyField] of [
+  ["file-geodatabase", "gdb", "eolab:layer_name"],
+  ["geopackage", "gpkg", "eolab:geopackage_layer"],
+]) {
+  test(`curated ${format} titles and layer names do not depend on asset order`, () => {
+    for (const title of [
+      "Central India habitat classes",
+      "Recharge / annual mean — L/day",
+      "Study notes/habitat.gpkg — comparison",
+      "Study notes/habitat.tif",
+    ]) {
+      const primary = ["source", { title: `GIS/habitat.${extension}` }];
+      const supporting = ["support", { title: "supporting-map.tif" }];
+      for (const assets of [[primary, supporting], [supporting, primary]]) {
+        const presentation = buildCatalogResultPresentation({
+          id: "habitat-item",
+          properties: {
+            title,
+            "eolab:metadata": { title },
+            [legacyField]: "habitat",
+            "eolab:vector_source": {
+              kind: "mounted", format, asset_key: "source", layer_name: "habitat",
+            },
+          },
+          assets: Object.fromEntries(assets),
+        }, "Vector");
+        assert.deepEqual(presentation, {
+          filename: title, fullTitle: title, context: "Layer: habitat",
+          datasetType: "Vector",
+          accessibleLabel: `More details for ${title}, Layer: habitat, Vector`,
+        });
+      }
+    }
+  });
+}
+
+test("native source binding chooses layer and asset while preserving descriptive titles", () => {
+  const item = {
+    id: "vector-item",
+    properties: {
+      title: "GIS/old.gpkg — old_layer",
+      "eolab:layer_name": "old_layer",
+      "eolab:vector_source": {
+        kind: "mounted", format: "geopackage", asset_key: "source", layer_name: "habitat",
+      },
+    },
+    assets: {
+      support: { title: "supporting-map.tif" },
+      source: { title: "GIS/habitat.gpkg" },
+    },
+  };
+  const presentation = buildCatalogResultPresentation(item, "Vector");
+  assert.equal(presentation.filename, "habitat.gpkg");
+  assert.equal(presentation.context, "Layer: habitat");
+  item.properties.title = "Habitat classes";
+  assert.equal(buildCatalogResultPresentation(item, "Vector").filename, "Habitat classes");
 });
 
 test("Catalog results infer legacy layer labels only from vector containers", () => {

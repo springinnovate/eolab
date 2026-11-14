@@ -48,45 +48,52 @@ function formatReadablePathSegment(segment) {
 /**
  * Preserve a descriptive Item title or recognize its dataset path and layer.
  *
- * Only scanner-supported filename endings identify paths. Slashes in units
- * such as L/day and punctuation in curated titles remain ordinary label text.
- * The legacy em-dash layer suffix applies only to vector-container paths.
+ * Curated metadata supplies display text, including titles resembling paths.
+ * Otherwise only scanner-supported filename endings identify paths. Native
+ * vector metadata supplies the layer and source asset; legacy container titles
+ * remain a fallback for Items without that metadata.
  *
- * @param {Object} item STAC Item with optional id, properties.title,
- * properties["eolab:layer_name"], and asset titles used to recover its identity.
+ * @param {Object} item STAC Item with optional title, curated metadata, native
+ * vector source binding, legacy layer metadata, and source asset titles.
  * @return {{sourcePath:string|null,fullTitle:string,layerName:string|null}}
  * Identity with a recognized sourcePath for filename extraction, or null for
  * descriptive text; fullTitle preserves the Item title (falling back to its id
- * or "Untitled dataset"). The layerName comes from explicit metadata or a
- * vector-container title suffix, or is null when neither supplies one.
+ * or "Untitled dataset"). The layerName comes from the native source binding,
+ * legacy metadata or an uncurated container title, or is null when absent.
  */
 function getCatalogSourceIdentity(item) {
-    const itemTitle = optionalLabel(item.properties?.title);
+    const curatedTitle = optionalLabel(item.properties?.["eolab:metadata"]?.title);
+    const itemTitle = curatedTitle ?? optionalLabel(item.properties?.title);
     const itemIdentifier = optionalLabel(item.id) ?? "Untitled dataset";
     const fullTitle = itemTitle ?? itemIdentifier;
     const titleParts = fullTitle.split(" — ");
     const titlePath = titleParts.slice(0, -1).join(" — ");
-    const hasContainerLayer = titleParts.length > 1
+    const hasContainerLayer = curatedTitle === null && titleParts.length > 1
         && /\.(?:gdb|gpkg)$/i.test(titlePath);
-    const layerName = optionalLabel(item.properties?.["eolab:layer_name"])
+    const vectorSource = item.properties?.["eolab:vector_source"];
+    const layerName = optionalLabel(vectorSource?.layer_name)
+        ?? optionalLabel(item.properties?.["eolab:layer_name"])
+        ?? optionalLabel(item.properties?.["eolab:geopackage_layer"])
         ?? optionalLabel(hasContainerLayer ? titleParts.at(-1) : null);
+
+    if (curatedTitle !== null) {
+        return { sourcePath: null, fullTitle, layerName };
+    }
 
     let sourcePath = hasContainerLayer ? titlePath : fullTitle;
     if (layerName !== null) {
-        const assetTitle = Object.values(item.assets ?? {})
-            .map((asset) => optionalLabel(asset?.title))
-            .find((title) => title !== null);
-        if (assetTitle !== undefined) {
+        const pathSegments = sourcePath.replaceAll("\\", "/").split("/");
+        if (
+            pathSegments.length > 1
+            && pathSegments.at(-1) === layerName
+            && /\.(?:gdb|gpkg)$/i.test(pathSegments.at(-2))
+        ) {
+            sourcePath = pathSegments.slice(0, -1).join("/");
+        }
+        const assetTitle = optionalLabel(item.assets?.[vectorSource?.asset_key]?.title);
+        if (CATALOG_FILE_PATH.test(sourcePath) && assetTitle !== null
+            && CATALOG_FILE_PATH.test(assetTitle)) {
             sourcePath = assetTitle;
-        } else {
-            const pathSegments = sourcePath.replaceAll("\\", "/").split("/");
-            if (
-                pathSegments.length > 1
-                && pathSegments.at(-1) === layerName
-                && /\.(?:gdb|gpkg)$/i.test(pathSegments.at(-2))
-            ) {
-                sourcePath = pathSegments.slice(0, -1).join("/");
-            }
         }
     }
     return {
