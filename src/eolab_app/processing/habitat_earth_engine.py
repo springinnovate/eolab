@@ -287,7 +287,7 @@ class HabitatEarthEngineRuntime:
 
 @contextmanager
 def prepare_habitat_band_views(
-    tiles: HabitatTiles, directory: Path
+    tiles: HabitatTiles, directory: Path, band_names: tuple[str, ...]
 ) -> Iterator[dict[str, Path]]:
     """Expose cached multiband tiles as job-local single-band raster mosaics.
 
@@ -297,6 +297,8 @@ def prepare_habitat_band_views(
     Args:
         tiles: Complete, aligned files admitted by Habitat acquisition.
         directory: Private attempt directory owned by the native supervisor.
+        band_names: Selected names from the admitted tile band definitions.
+            Physical cache band indexes remain unchanged.
 
     Yields:
         VRT paths keyed by scientific band name, valid inside this context.
@@ -311,6 +313,8 @@ def prepare_habitat_band_views(
     with TemporaryDirectory(prefix="habitat-bands-", dir=directory) as temporary:
         paths = {}
         for index, name in enumerate(tiles.bands, start=1):
+            if name not in band_names:
+                continue
             path = Path(temporary) / f"band-{index}.vrt"
             with gdal.ExceptionMgr():
                 dataset = gdal.BuildVRT(

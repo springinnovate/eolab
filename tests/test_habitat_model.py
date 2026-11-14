@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 import rasterio
 from rasterio.features import geometry_mask
 from rasterio.io import MemoryFile
@@ -27,6 +28,7 @@ from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_calculation import HabitatSources, read_habitat_area
+from eolab_app.processing.habitat_models import HabitatEarthEngineStack
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_run_contracts import (
@@ -50,6 +52,58 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.vector.filters import VectorFilter
 from catalog_selection_support import write_selection
 from test_processing_worker_results import configure_prepared_job_store
+
+
+def test_automatic_dataset_defaults_and_selections_survive_saved_roundtrip() -> None:
+    """Expand default roles and retain independent canonical choices when persisted."""
+    defaults = HabitatEarthEngineStack(kind="earthEngine", year=2018)
+    assert len(defaults.predictorDatasets) == 13
+    assert len(defaults.responseDatasets) == 6
+    assert "modis_phenology" in defaults.predictorDatasets
+    assert "modis_phenology" in defaults.responseDatasets
+    assert HabitatEarthEngineStack.model_validate(defaults) == defaults
+    assert (
+        HabitatEarthEngineStack.model_validate_json(defaults.model_dump_json())
+        == defaults
+    )
+
+    selected = HabitatEarthEngineStack(
+        kind="earthEngine",
+        year=2018,
+        predictorDatasets=("srtm_landforms", "era5_daily"),
+        responseDatasets=("modis_phenology",),
+    )
+    assert selected.predictorDatasets == ("era5_daily", "srtm_landforms")
+    assert selected.responseDatasets == ("modis_phenology",)
+    assert (
+        HabitatEarthEngineStack.model_validate_json(selected.model_dump_json())
+        == selected
+    )
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {"predictorDatasets": []},
+        {"responseDatasets": []},
+        {"predictorDatasets": ["era5_daily"]},
+        {"responseDatasets": ["landsat_ndvi", "landsat_ndvi"]},
+        {"responseDatasets": ["era5_daily"]},
+        {"predictorDatasets": ["srtm_landforms", "unknown"]},
+    ],
+)
+def test_automatic_dataset_selection_rejects_invalid_role_choices(
+    selection: dict[str, list[str]],
+) -> None:
+    """Reject empty, duplicate, unknown, wrong-role or missing-required selections.
+
+    Args:
+        selection: One invalid public selection field; the other uses its default.
+    """
+    with pytest.raises(ValidationError):
+        HabitatEarthEngineStack.model_validate(
+            {"kind": "earthEngine", "year": 2018, **selection}
+        )
 
 
 @pytest.fixture

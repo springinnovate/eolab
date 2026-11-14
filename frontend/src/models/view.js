@@ -626,6 +626,8 @@ export class ModelsView {
                 if (input.type === "habitat_stack") {
                     if (value.kind === "earthEngine") {
                         list.append(this.element("dt", input.label), this.element("dd", `Original model inputs from Earth Engine · Assessment year ${value.year}`));
+                        for (const [field, label] of [["predictorDatasets", "Predictor datasets"], ["responseDatasets", "Observed response datasets"]])
+                            list.append(this.element("dt", label), this.element("dd", value[field] == null ? "All configured datasets" : `${value[field].length} selected`));
                         continue;
                     }
                     for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {

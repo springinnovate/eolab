@@ -9,6 +9,7 @@ from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfig
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.clip_models import ClipGrid
+from eolab_app.processing.habitat_earth_engine import load_habitat_stack
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.sampling_box import Wgs84SamplingBox
 from eolab_app.raster.models import Wgs84Bounds
@@ -33,6 +34,47 @@ FITTING_COLUMN_NAMES = frozenset(
     }
 )
 """Columns upstream fitting writes into the table containing the selected bands."""
+
+
+def get_habitat_dataset_roles(
+    configuration: RasterStackConfiguration,
+) -> dict[str, tuple[Literal["predictor", "response"], ...]]:
+    """Return configured dataset aliases and the model roles that use them.
+
+    Args:
+        configuration: Admitted scientific source definitions for one year.
+
+    Returns:
+        Dataset aliases in configured band order, excluding reference-only sources.
+        A source used in both roles appears once with both roles.
+    """
+    roles: dict[str, set[Literal["predictor", "response"]]] = {}
+    for band in configuration.bands:
+        if band.role in ("predictor", "response"):
+            for key in band.source_dataset_keys:
+                roles.setdefault(key, set()).add(band.role)
+    return {
+        key: tuple(role for role in ("predictor", "response") if role in used_roles)
+        for key, used_roles in roles.items()
+    }
+
+
+def get_required_habitat_predictor_datasets(
+    configuration: RasterStackConfiguration,
+) -> tuple[str, ...]:
+    """Return the dataset aliases needed by the model's categorical predictor.
+
+    Args:
+        configuration: Scientific stack with exactly one categorical predictor.
+
+    Returns:
+        Sources that must remain selected to satisfy the existing fitting contract.
+    """
+    return next(
+        band.source_dataset_keys
+        for band in configuration.bands
+        if band.role == "predictor" and band.data_type == "categorical"
+    )
 
 
 class HabitatSchema(BaseModel):
@@ -91,10 +133,65 @@ class HabitatEarthEngineStack(HabitatSchema):
     sites still come from the user's separate selection, never from Earth Engine.
     Ordinary runs read complete cached tiles and leave unprepared areas as NoData;
     administrators prepare missing inputs separately.
+
+    Attributes:
+        kind: Selects the literal string "earthEngine".
+        year: Supported source year.
+        predictorDatasets: Configured source aliases used as predictors. Omission
+            selects all predictor datasets; explicit empty selections are invalid.
+        responseDatasets: Configured source aliases used as observed responses.
+            Omission selects all response datasets; at least one is required.
+            Choices for a source used in both roles are independent. A band with
+            several sources is included only when all are selected for its role.
     """
 
     kind: Literal["earthEngine"]
     year: Annotated[int, Field(strict=True)]
+    predictorDatasets: Annotated[tuple[str, ...], Field(min_length=1)] = Field(
+        default_factory=tuple
+    )
+    responseDatasets: Annotated[tuple[str, ...], Field(min_length=1)] = Field(
+        default_factory=tuple
+    )
+
+    @model_validator(mode="after")
+    def check_dataset_selection(self) -> Self:
+        """Admit known role-specific datasets and expand omitted choices to all.
+
+        Returns:
+            This immutable selection with effective aliases in configuration order.
+
+        Raises:
+            ValueError: If a year, alias, role, duplicate or required categorical
+                source is invalid.
+            OSError: If the installed scientific configuration cannot be read.
+        """
+        configuration = load_habitat_stack(self.year)
+        roles = get_habitat_dataset_roles(configuration)
+        for field_name, role in (
+            ("predictorDatasets", "predictor"),
+            ("responseDatasets", "response"),
+        ):
+            available = tuple(key for key, values in roles.items() if role in values)
+            selected = (
+                getattr(self, field_name)
+                if field_name in self.model_fields_set
+                else available
+            )
+            if len(selected) != len(set(selected)):
+                raise ValueError("Choose each dataset only once within a model role.")
+            if set(selected) - set(available):
+                raise ValueError(f"Choose configured {role} datasets.")
+            object.__setattr__(
+                self, field_name, tuple(key for key in available if key in selected)
+            )
+        if not set(get_required_habitat_predictor_datasets(configuration)).issubset(
+            self.predictorDatasets
+        ):
+            raise ValueError(
+                "Keep the required categorical predictor dataset selected."
+            )
+        return self
 
 
 HabitatStack = HabitatRasterStack | HabitatEarthEngineStack

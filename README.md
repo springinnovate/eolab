@@ -342,7 +342,11 @@ reference sites and input data.
 The default **Original model inputs (Google Earth Engine)** configuration uses
 the [NHI Terrestrial Integrity Modeling](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
 inputs prepared by an administrator for your selected **Assessment year**.
-Setup links to each dataset's catalog page. Runs use available cached tiles and
+Open **Select predictor datasets** or **Select observed response datasets** to
+turn datasets on or off for your run. All start selected; SRTM landforms remains
+required, and at least one observed response must stay selected. A dataset used
+in both groups can be selected independently for each role. Dataset information
+links remain available beside the choices. Runs reuse available cached tiles and
 report gaps; areas without prepared inputs remain NoData. If no inputs are
 prepared, ask your administrator to prepare them and provide a geospatial file
 defining your area of interest. Choose **Choose raster layers** to supply your

@@ -65,10 +65,18 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
         for role in ("predictor", "response")
     } == {"predictor": 13, "response": 6}
     assert sources_by_label["MODIS land-cover dynamics / phenology"] == {
+        "id": "modis_phenology",
         "label": "MODIS land-cover dynamics / phenology",
         "url": "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2",
         "roles": ["predictor", "response"],
+        "requiredRoles": [],
     }
+    assert {
+        source["id"]: source["requiredRoles"]
+        for source in datasets
+        if source["requiredRoles"]
+    } == {"srtm_landforms": ["predictor"]}
+    assert len({source["id"] for source in datasets}) == 18
     assert sources_by_label["Landsat NDVI composites"]["roles"] == ["response"]
     assert sources_by_label["ERA5 daily aggregates"]["roles"] == ["predictor"]
     assert sources_by_label["SoilGrids organic carbon"]["url"] == (
@@ -95,7 +103,7 @@ def test_habitat_options_follow_configured_band_sources_and_roles(
         bands=tuple(
             band
             for band in configuration.bands
-            if band.identifier in ("d01", "d04", "d25")
+            if band.identifier in ("d01", "d04", "d25", "d35")
         ),
     )
     monkeypatch.setattr(habitat, "load_habitat_stack", lambda: configuration)
@@ -112,4 +120,5 @@ def test_habitat_options_follow_configured_band_sources_and_roles(
     } == {
         "MODIS land-cover dynamics / phenology": ["predictor", "response"],
         "ERA5 daily aggregates": ["predictor"],
+        "SRTM landforms": ["predictor"],
     }
