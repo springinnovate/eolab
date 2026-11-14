@@ -133,18 +133,28 @@ function captureModelRaster(raster, sources, type = "raster") {
         {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
 }
 
-/** Capture either Earth Engine inputs for a year or explicitly selected Habitat rasters.
- * @param {Object} state Editable mode, year, server-provided options and manual stack rows.
+/** Capture selected Earth Engine datasets for a year or named Habitat rasters.
+ * @param {Object} state Editable mode, year, dataset selections, server options and manual rows.
  * @param {Object[]} sources Current source choices in this model setup.
- * @return {Object} Earth Engine year or named predictors/responses with ordinary raster references.
- * @throws {Error} If year choices have not loaded, or the year, roles, names or raster selections are invalid.
+ * @return {Object} Earth Engine year and dataset IDs, or named predictors/responses with ordinary raster references.
+ * @throws {Error} If choices have not loaded, or the year, dataset selections, roles, names or raster selections are invalid.
  */
 export function captureHabitatStack(state, sources) {
     if (state.kind === "earthEngine") {
         if (!state.configuration) throw new Error("Wait for the Earth Engine year choices to load, or retry.");
         if (!Number.isInteger(state.year) || state.year < state.configuration.minimumYear || state.year > state.configuration.maximumYear)
             throw new Error("Choose an assessment year from the available years.");
-        return {kind: "earthEngine", year: state.year};
+        const selected = {};
+        for (const [role, field, label] of [["predictor", "predictorDatasets", "predictor"], ["response", "responseDatasets", "observed response"]]) {
+            const choices = state.configuration.datasets.filter(dataset => dataset.roles.includes(role));
+            const ids = state[field];
+            if (!ids.length) throw new Error(`Select at least one ${label} dataset.`);
+            if (ids.some(id => !choices.some(dataset => dataset.id === id))) throw new Error(`A selected ${label} dataset is no longer available. Review the dataset choices.`);
+            const missing = choices.find(dataset => dataset.requiredRoles.includes(role) && !ids.includes(dataset.id));
+            if (missing) throw new Error(`${missing.label} is required by the model.`);
+            selected[field] = choices.filter(dataset => ids.includes(dataset.id)).map(dataset => dataset.id);
+        }
+        return {kind: "earthEngine", year: state.year, ...selected};
     }
     if (!state.predictors.length || !state.responses.length) throw new Error("Choose at least one predictor and one observed response.");
     const names = [...state.predictors, ...state.responses].map(row => row.name.trim());
@@ -253,7 +263,7 @@ export function createModelDraft(model, context, id) {
                 sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.",
             };
         } else if (input.type === "habitat_stack") {
-            inputs[name] = {kind: "earthEngine", year: null, configuration: null, loading: false, error: "",
+            inputs[name] = {kind: "earthEngine", year: null, configuration: null, loading: false, error: "", predictorDatasets: null, responseDatasets: null,
                 predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
         } else if (input.type === "raster_preparation") {
             const step = model.steps.find(value => value.inputs.preparation?.input === name);

@@ -53,13 +53,13 @@ from test_processing_worker_results import configure_prepared_job_store
 
 
 def _fixture_configuration(year: int) -> RasterStackConfiguration:
-    """Use six original variables, including drought, on six acquisition tiles.
+    """Use nine original variables, including shared sources, on six cache tiles.
 
     Args:
         year: Supported source year passed by the production operation.
 
     Returns:
-        Scientific definitions with a tiny grid, four predictors and two responses.
+        Scientific definitions with a tiny grid, six predictors and three responses.
     """
     original = load_habitat_stack(year)
     return replace(
@@ -67,7 +67,8 @@ def _fixture_configuration(year: int) -> RasterStackConfiguration:
         bands=tuple(
             band
             for band in original.bands
-            if band.identifier in {"d02", "d03", "d20", "d28", "d29", "d35"}
+            if band.identifier
+            in {"d02", "d03", "d04", "d20", "d25", "d26", "d28", "d29", "d35"}
         ),
         grid=replace(original.grid, pixel_size_meters=1000, tile_size_pixels=8),
     )
@@ -96,7 +97,10 @@ def _fixture_values() -> dict[str, NDArray[np.float32]]:
         - 0.15 * category
         + 0.03 * np.cos(rows * 2 + columns)
         + 0.1 * (rows % 3) * ~references,
+        "d04": 3 + 0.1 * environment + 0.2 * category + 0.05 * np.cos(columns),
         "d20": environment,
+        "d25": environment * 0.2,
+        "d26": environment * 0.3,
         "d28": np.full_like(environment, np.nan),
         "d29": np.full_like(environment, np.nan),
         "d35": category,
@@ -175,13 +179,30 @@ def _fixture_native_target(
 
 
 @pytest.mark.parametrize(
-    "coverage", ["complete", "partial", "empty", "wrong_year", "no_references"]
+    "coverage",
+    [
+        "complete",
+        "partial",
+        "empty",
+        "wrong_year",
+        "no_references",
+        "selected",
+        "categorical_only",
+    ],
 )
 def test_earth_engine_run_uses_prepared_geographic_coverage(
     tmp_path: Path,
     habitat_definition: ModelDefinition,
     monkeypatch: pytest.MonkeyPatch,
-    coverage: Literal["complete", "partial", "empty", "wrong_year", "no_references"],
+    coverage: Literal[
+        "complete",
+        "partial",
+        "empty",
+        "wrong_year",
+        "no_references",
+        "selected",
+        "categorical_only",
+    ],
 ) -> None:
     """Use prepared tiles without downloads and retain model screening and NoData.
 
@@ -189,8 +210,8 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         tmp_path: Separate cache, reference polygons and ordinary worker storage.
         habitat_definition: Installed recipe with small-fixture fitting settings.
         monkeypatch: Supply controlled preparation pixels and reject model downloads.
-        coverage: Complete or partial geographic preparation, no preparation for
-            the selected year, or prepared inputs without usable reference sites.
+        coverage: Geographic cache availability, absence of reference sites, or
+            selected dataset subsets including the minimum categorical-only fit.
     """
     aoi = box(0, 0, 24000, 16000)
     area = write_selection(tmp_path / "area.gpkg", [mapping(aoi)], crs="EPSG:6933")
@@ -231,6 +252,15 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         },
         parameters={},
     )
+    if coverage in {"selected", "categorical_only"}:
+        request.inputs["stack"].update(
+            predictorDatasets=(
+                ["srtm_landforms", "era5_daily"]
+                if coverage == "selected"
+                else ["srtm_landforms"]
+            ),
+            responseDatasets=["modis_phenology"],
+        )
     calculation, invocation = build_model_calculation_request(
         request, ModelRegistry((habitat_definition,))
     )
@@ -406,7 +436,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         "cached_tiles": len(prepared_tiles),
         "missing_tiles": 6 - len(prepared_tiles),
     }
-    assert provenance["inputs"]["stack"] == {"kind": "earthEngine", "year": 2018}
+    assert provenance["inputs"]["stack"] == calculation.stack.model_dump(mode="json")
 
     configuration = _fixture_configuration(2018)
     assert provenance["earthEngine"]["year"] == 2018
@@ -418,11 +448,36 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         mode="json"
     )
     named = list(zip(configuration.band_names(), configuration.bands))
+    selected_names = {
+        role: tuple(
+            name
+            for name, band in named
+            if band.role == role
+            and all(key in selected for key in band.source_dataset_keys)
+        )
+        for role, selected in (
+            ("predictor", calculation.stack.predictorDatasets),
+            ("response", calculation.stack.responseDatasets),
+        )
+    }
+    assert provenance["variables"]["predictors"] == list(selected_names["predictor"])
+    assert provenance["variables"]["responses"] == list(selected_names["response"])
+    if coverage in {"selected", "categorical_only"}:
+        assert [
+            band.identifier
+            for name, band in named
+            if name in selected_names["response"]
+        ] == ["d04"]
+        assert [
+            band.identifier
+            for name, band in named
+            if name in selected_names["predictor"]
+        ] == (["d20", "d35"] if coverage == "selected" else ["d35"])
     predictor_coverage = {
         item["predictor"]: item for item in provenance["fit"]["predictorCoverage"]
     }
     for name, band in named:
-        if band.role != "predictor":
+        if name not in selected_names["predictor"]:
             continue
         predictor = predictor_coverage[name]
         if band.identifier in {"d28", "d29"}:
@@ -462,12 +517,12 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         [
             RasterBand(name, paths[band.identifier])
             for name, band in named
-            if band.role == "predictor"
+            if name in selected_names["predictor"]
         ],
         [
             RasterBand(name, paths[band.identifier])
             for name, band in named
-            if band.role == "response"
+            if name in selected_names["response"]
         ],
         RasterBand("reference_sites", paths["references"]),
         aoi,

@@ -1,7 +1,7 @@
 /** Choose Earth Engine inputs or a named raster stack for Habitat condition. */
 import { captureHabitatStack } from "./inputs.js";
 
-/** Edit Habitat's input source and keep manual predictor/response rows stable. */
+/** Choose Habitat datasets or manual rasters while retaining focused controls. */
 export class HabitatStackView {
     /** Group the configuration selector with its existing year and raster controls.
      * @param {Object} helpers Models presentation helpers.
@@ -45,11 +45,13 @@ export class HabitatStackView {
         administration.append(manageInputs, element("span", " (administrator password required)"));
         this.automatic.append(element("p", "The model uses the tiles your administrator has prepared for the analysis area and assessment year. Areas without prepared inputs are shown as NoData.", "models-help"), administration);
         this.datasetSources = element("div", "", "models-habitat-datasets");
-        this.datasetLists = {};
-        for (const [role, title] of [["predictor", "Predictor datasets"], ["response", "Observed response datasets"]]) {
-            const group = element("section"), list = element("ul");
-            group.append(element("h4", title), list); this.datasetSources.append(group);
-            this.datasetLists[role] = list;
+        this.datasetGroups = {};
+        for (const [role, title, fieldName] of [["predictor", "Select predictor datasets", "predictorDatasets"],
+            ["response", "Select observed response datasets", "responseDatasets"]]) {
+            const root = element("details", "", "models-details"), summary = element("summary", title), list = element("ul");
+            root.open = false;
+            root.append(summary, list); this.datasetSources.append(root);
+            this.datasetGroups[role] = {root, summary, list, title, fieldName, controls: new Map()};
         }
         this.automatic.append(this.datasetSources);
         this.acquisitionStatus = element("p", "", "models-help"); this.acquisitionStatus.setAttribute("role", "status");
@@ -86,6 +88,56 @@ export class HabitatStackView {
         this.status = element("p", "", "models-error"); this.status.setAttribute("role", "status");
         this.manual.append(field(`models-${name}-categorical`, "Categorical predictor", this.categorical), categoryHelp);
         this.configurationGroup.append(this.status);
+    }
+
+    /** Create one stable checkbox for a dataset's use as predictor or response.
+     * @param {"predictor"|"response"} role Scientific role controlled by this checkbox.
+     * @param {{id:string,label:string,url:string,roles:string[],requiredRoles:string[]}} dataset Configured source and role requirements.
+     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,required:HTMLElement,link:HTMLAnchorElement}} Dataset row controls.
+     */
+    buildDatasetChoice(role, dataset) {
+        const root = this.element("li"), label = this.element("label", "", "models-habitat-dataset-choice");
+        const checkbox = this.element("input"); checkbox.type = "checkbox";
+        const caption = this.element("span"), name = this.element("span", dataset.label);
+        const required = this.element("span", "Required by the model", "models-habitat-dataset-required");
+        caption.append(name, required); label.append(checkbox, caption);
+        const link = this.element("a", "Source");
+        link.target = "_blank"; link.rel = "noopener noreferrer";
+        root.append(label, link);
+        checkbox.addEventListener("change", () => {
+            const {fieldName} = this.datasetGroups[role];
+            const selected = this.value[fieldName];
+            this.handlers.onInput(this.inputName, {[fieldName]: checkbox.checked ? [...selected, dataset.id] : selected.filter(id => id !== dataset.id)});
+        });
+        return {root, checkbox, label: name, required, link};
+    }
+
+    /** Refresh dataset choices in place so selection, focus and disclosures survive updates.
+     * @param {{datasets:Array<{id:string,label:string,url:string,roles:string[],requiredRoles:string[]}>}} configuration Model-owned dataset choices.
+     * @return {void}
+     */
+    renderDatasetChoices(configuration) {
+        for (const [role, group] of Object.entries(this.datasetGroups)) {
+            const datasets = configuration.datasets.filter(dataset => dataset.roles.includes(role));
+            const selected = this.value[group.fieldName];
+            for (const [id, controls] of group.controls) {
+                if (!datasets.some(dataset => dataset.id === id)) { controls.root.remove(); group.controls.delete(id); }
+            }
+            for (const dataset of datasets) {
+                let controls = group.controls.get(dataset.id);
+                if (!controls) {
+                    controls = this.buildDatasetChoice(role, dataset);
+                    group.controls.set(dataset.id, controls); group.list.append(controls.root);
+                }
+                controls.label.textContent = dataset.label;
+                controls.checkbox.checked = selected.includes(dataset.id);
+                controls.checkbox.disabled = dataset.requiredRoles.includes(role);
+                controls.required.hidden = !controls.checkbox.disabled;
+                controls.link.href = dataset.url;
+                controls.link.setAttribute("aria-label", `Source information for ${dataset.label}`);
+            }
+            group.summary.textContent = `${group.title} · ${selected.length} of ${datasets.length} selected`;
+        }
     }
 
     /** Add one explicitly named row without changing the existing choices.
@@ -162,16 +214,7 @@ export class HabitatStackView {
         this.manual.hidden = this.manual.disabled = automatic;
         this.automatic.hidden = this.automatic.disabled = !automatic;
         this.datasetSources.hidden = !configuration;
-        if (configuration && configuration !== this.displayedConfiguration) {
-            for (const [role, list] of Object.entries(this.datasetLists)) {
-                list.replaceChildren(...configuration.datasets.filter(dataset => dataset.roles.includes(role)).map(dataset => {
-                    const item = this.element("li"), link = this.element("a", dataset.label);
-                    link.href = dataset.url; link.target = "_blank"; link.rel = "noopener noreferrer";
-                    item.append(link); return item;
-                }));
-            }
-            this.displayedConfiguration = configuration;
-        }
+        if (configuration) this.renderDatasetChoices(configuration);
         this.year.required = automatic;
         this.options(this.year, configuration ? Array.from({length: configuration.maximumYear - configuration.minimumYear + 1},
             (_, index) => ({value: String(configuration.minimumYear + index), label: String(configuration.minimumYear + index)})) :

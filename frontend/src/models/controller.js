@@ -162,9 +162,10 @@ export class ModelsController {
         this.vectorSelectionRequests.clear();
     }
 
-    /** Load Habitat's year choices and suggested grid from its scientific configuration.
+    /** Load Habitat's years, dataset choices and acquisition grid for model setup.
      * Manual raster setup remains usable if this request fails. Replaced drafts
-     * ignore late replies; a duplicated run keeps its saved year and output grid.
+     * ignore late replies. New drafts select every dataset; refreshes and duplicated
+     * runs retain their existing year, dataset selections and output grid.
      * @param {Object} draft Draft requesting the configuration.
      * @param {string} name Habitat stack input declared by that recipe.
      * @return {Promise<void>} Resolves after choices or retry guidance are displayed.
@@ -177,6 +178,8 @@ export class ModelsController {
             const options = await this.api.getHabitatEarthEngineOptions();
             if (this.destroyed || this.state.draft !== draft) return;
             input.configuration = options; input.year ??= options.defaultYear;
+            for (const [role, field] of [["predictor", "predictorDatasets"], ["response", "responseDatasets"]])
+                input[field] ??= options.datasets.filter(dataset => dataset.roles.includes(role)).map(dataset => dataset.id);
         } catch (error) {
             if (this.destroyed || this.state.draft !== draft) return;
             input.error = `Could not load Earth Engine choices: ${error.message}`;
@@ -948,12 +951,9 @@ export class ModelsController {
         finally { notice.busy = false; this.scheduleDeletions(); this.render(); }
     }
 
-    /** Copy a run into a new draft, retaining its exact area and filter.
-     * The exact recipe must be available. Choosing a vector view explicitly switches
-     * a captured area to that view's current filter.
-     * @return {Promise<void>}
-     */
-    /** Open a saved invocation in editable setup, retaining its exact polygon references.
+    /** Copy a saved run's inputs into editable setup, including dataset and polygon choices.
+     * The exact recipe must remain available. Choosing a vector view explicitly
+     * switches a captured area to that view's current filter.
      * @return {Promise<void>} Completion after the copied setup loads its current source choices.
      */
     async duplicateRun() {
@@ -977,7 +977,9 @@ export class ModelsController {
                 input.sourceReason = "Copied from the original run; choose another raster to change it.";
             } else if (definition.type === "habitat_stack") {
                 const value = saved.inputs[name];
-                if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year});
+                if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year,
+                    predictorDatasets: value.predictorDatasets == null ? null : [...value.predictorDatasets],
+                    responseDatasets: value.responseDatasets == null ? null : [...value.responseDatasets]});
                 else {
                     input.kind = "manual";
                     input.predictors = value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)}));
