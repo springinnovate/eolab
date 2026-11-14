@@ -507,7 +507,7 @@ def _classify_numeric_values(
 
     Returns:
         Adjacent classes covering every numeric value. Repeated quantile breaks
-        and collapsed percentile intervals may produce fewer classes than
+        and collapsed or unrepresentable intervals may produce fewer classes than
         requested. Percentile intervals use nearest-rank 5th/95th percentiles;
         their open-ended first and last classes retain the tails.
 
@@ -526,16 +526,10 @@ def _classify_numeric_values(
     minimum = ordered[0]
     maximum = ordered[-1]
     boundaries: list[float] = []
-    if method == "equal-interval":
-        if minimum < maximum:
-            span = maximum - minimum
-            boundaries = [
-                minimum + span * index / class_count
-                for index in range(1, class_count)
-            ]
-    elif method == "percentile-interval":
-        minimum = ordered[max(0, ceil(len(ordered) * 0.05) - 1)]
-        maximum = ordered[ceil(len(ordered) * 0.95) - 1]
+    if method in {"equal-interval", "percentile-interval"}:
+        if method == "percentile-interval":
+            minimum = ordered[max(0, ceil(len(ordered) * 0.05) - 1)]
+            maximum = ordered[ceil(len(ordered) * 0.95) - 1]
         if minimum < maximum:
             # A weighted sum avoids overflowing the span for finite extremes.
             for index in range(1, class_count):
