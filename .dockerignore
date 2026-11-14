@@ -26,3 +26,6 @@ tests/fixtures/*
 !tests/fixtures/rasters/*.tif
 !tests/fixtures/vectors/
 !tests/fixtures/vectors/*.gpkg
+!tests/fixtures/catalog_descriptors/
+tests/fixtures/catalog_descriptors/*
+!tests/fixtures/catalog_descriptors/public-items.json
