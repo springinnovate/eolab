@@ -1,3 +1,4 @@
+import { createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink } from "./catalog-curated-metadata.js";
 import { rasterSamplingAreaBounds } from "./selected-area.js";
 import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
@@ -412,7 +413,9 @@ function createCatalogMetadataList(metadata) {
 }
 
 /**
- * Displays the selected STAC Item in the inspector.
+ * Display curated study evidence, supporting files and technical details for the selected Item.
+ * The same pane serves Catalog results and retained/shared map layers; supplied
+ * publications and annotations never control map or analysis availability.
  *
  * @param {Object|null} item Selected STAC Item, or null for the empty state.
  * @param {Object[]} collections STAC Collections available to the Catalog.
@@ -475,6 +478,13 @@ function renderCatalogItemInspector(
         description.textContent = inspector.description;
         inspectorContent.append(description);
     }
+    const curated = item.properties["eolab:metadata"];
+    if (curated) {
+        inspectorContent.append(createCuratedMetadataView(curated));
+        const technicalHeading = document.createElement("h4");
+        technicalHeading.textContent = "Technical details";
+        inspectorContent.append(technicalHeading);
+    }
     inspectorContent.append(createCatalogMetadataList([
         { label: "Item title", value: inspector.title },
         ...inspector.metadata,
@@ -495,7 +505,7 @@ function renderCatalogItemInspector(
 
     // Introduce the Item's Asset records or their empty state.
     const assetsHeading = document.createElement("h4");
-    assetsHeading.textContent = "Assets";
+    assetsHeading.textContent = curated ? "Data and supporting files" : "Assets";
     inspectorContent.append(assetsHeading);
     if (inspector.assets.length === 0) {
         const noAssetsMessage = document.createElement("p");
@@ -513,11 +523,26 @@ function renderCatalogItemInspector(
         const assetKey = document.createElement("p");
         assetKey.className = "catalog-asset-key";
         assetKey.textContent = `Asset key: ${asset.key}`;
-        assetCard.append(
-            assetHeading,
-            assetKey,
-            createCatalogMetadataList(asset.metadata)
-        );
+        assetCard.append(assetHeading);
+        const sourceAsset = item.assets[asset.key];
+        const assetCurated = sourceAsset["eolab:metadata"];
+        const assetDescription = assetCurated ? assetCurated.description : sourceAsset.description;
+        if (assetDescription != null) {
+            const description = document.createElement("p");
+            description.className = "catalog-inspector-description";
+            description.textContent = assetDescription;
+            assetCard.append(description);
+        }
+        const reference = catalogAssetReference(item, asset.key, sourceAsset);
+        if (reference !== null) {
+            const link = createCatalogReferenceLink(document, reference);
+            link.setAttribute("aria-label", reference.label + ": " + asset.title);
+            assetCard.append(link);
+        }
+        if (assetCurated) assetCard.append(createCuratedMetadataView(assetCurated, {
+            scope: "file", headingLevel: 6,
+        }));
+        assetCard.append(assetKey, createCatalogMetadataList(asset.metadata));
 
         // Render Raster extension band metadata when the Asset supplies it.
         if (asset.bands.length > 0) {
