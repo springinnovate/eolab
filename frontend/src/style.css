@@ -5155,3 +5155,87 @@ summary:hover > .raster-disclosure-chevron {
 .temporal-calendar-picker::-webkit-datetime-edit { display: none; }
 .temporal-calendar-picker::-webkit-calendar-picker-indicator { width: 1.4rem; height: 1.4rem; margin: 0 auto; }
 .temporal-period[hidden], .temporal-period [hidden] { display: none; }
+
+/* Curated Catalog evidence remains within the existing scrollable inspector. */
+.catalog-curated,
+.catalog-curated-section,
+.catalog-publication {
+  min-width: 0;
+}
+
+.catalog-curated-section {
+  margin: 0 0 18px;
+}
+
+.catalog-curated-section h4,
+.catalog-curated-section h6 {
+  margin: 18px 0 10px;
+  font-size: 0.85rem;
+}
+
+.catalog-publication {
+  border-left: 3px solid var(--border-2);
+  padding: 0 0 2px 12px;
+  margin: 12px 0 18px;
+}
+
+.catalog-publication h5,
+.catalog-publication h6 {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.catalog-reference {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 8px 0;
+  color: var(--brand-hover);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.catalog-reference:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.catalog-annotation-value,
+.catalog-inspector-description {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.catalog-annotation-list {
+  padding-left: 18px;
+  margin: 0;
+}
+
+.catalog-annotation-list li + li {
+  margin-top: 5px;
+}
+
+.catalog-annotations .catalog-annotations {
+  display: block;
+}
+
+.catalog-annotations .catalog-annotations dt {
+  margin: 8px 0 3px;
+}
+
+.catalog-annotations .catalog-annotations dd {
+  margin-left: 0;
+}
+
+@container catalog-workspace (max-width: 639px) {
+  .catalog-annotations {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .catalog-annotations > dd {
+    margin-bottom: 8px;
+  }
+}

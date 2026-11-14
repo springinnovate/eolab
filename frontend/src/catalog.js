@@ -817,6 +817,8 @@ export function findPaginationLink(itemCollection, relations) {
  * datetime range, geometry, bounding box, projection, raster dimensions,
  * assets, vector fields, and raster bands. Temporal datasets show their variables,
  * observation-label extent and month count instead of individual monthly assets.
+ * Curated source-modified dates are labeled separately from observation periods;
+ * catalog attachment URLs stay in file actions rather than location labels.
  *
  * @param {Object} item STAC Item selected in the result list.
  * @param {Object[]} collections STAC Collections available to the Catalog.
@@ -833,6 +835,7 @@ export function buildCatalogItemDetails(
     const collection = collections.find(
         (candidateCollection) => candidateCollection.id === item.collection
     );
+    const curatedMetadata = properties["eolab:metadata"];
     const collectionLabel = collection?.title
         ? `${collection.title} (${item.collection})`
         : item.collection;
@@ -840,7 +843,8 @@ export function buildCatalogItemDetails(
         { label: "Item ID", value: item.id },
         { label: "Collection", value: collectionLabel }
     ];
-    const datasetType = MOUNTED_DATASET_TYPES.get(item.collection);
+    const datasetType = item.collection === "eolab-described-nonspatial"
+        ? "Nonspatial data" : MOUNTED_DATASET_TYPES.get(item.collection);
     if (datasetType !== undefined) {
         metadata.push({ label: "Dataset type", value: datasetType });
     }
@@ -862,11 +866,16 @@ export function buildCatalogItemDetails(
         });
     } else if (properties.datetime === null) {
         metadata.push({
-            label: "Item datetime range",
+            label: properties["eolab:time_basis"] === "observation"
+                ? "Observation period" : "Item datetime range",
             value: `${properties.start_datetime} – ${properties.end_datetime}`
         });
     } else {
-        metadata.push({ label: "Item datetime", value: properties.datetime });
+        metadata.push({
+            label: properties["eolab:time_basis"] === "source-modified" ? "Source file modified"
+                : properties["eolab:time_basis"] === "observation" ? "Observation time" : "Item datetime",
+            value: properties.datetime,
+        });
     }
     if (item.geometry !== null) {
         metadata.push({
@@ -917,7 +926,7 @@ export function buildCatalogItemDetails(
                     : separator;
             location = `${scanDisplayPathPrefix}${joiner}${relativePath}`;
         }
-        const assetMetadata = [
+        const assetMetadata = asset["eolab:access"] ? [] : [
             {
                 label: isMountedFile ? "Original location" : "Location",
                 value: location
@@ -968,15 +977,15 @@ export function buildCatalogItemDetails(
 
         return {
             key: assetKey,
-            title: asset.title ?? assetKey,
+            title: asset["eolab:metadata"]?.title ?? asset.title ?? assetKey,
             metadata: assetMetadata,
             bands
         };
     });
 
     return {
-        title: properties.title ?? item.id,
-        description: properties.description ?? null,
+        title: curatedMetadata?.title ?? properties.title ?? item.id,
+        description: curatedMetadata ? curatedMetadata.description ?? null : properties.description ?? null,
         metadata,
         fields,
         assets
