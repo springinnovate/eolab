@@ -167,9 +167,9 @@ test("feature-field analysis is a sibling behind neutral observation and chart c
   );
   assert.match(
     FEATURE_PROFILE_SOURCE,
-    /from "\.\/inspection-observation\.js"/,
+    /import\("\.\/inspection-observation\.js"\)\.VectorInspectionObservation/,
   );
-  assert.match(TIME_SERIES_SOURCE, /from "\.\/inspection-observation\.js"/);
+  assert.match(TIME_SERIES_SOURCE, /import\("\.\/inspection-observation\.js"\)\.VectorInspectionObservation/);
   assert.match(FEATURE_PROFILE_SOURCE, /from "\.\.\/charts\/series-chart\.js"/);
   assert.match(TIME_SERIES_SOURCE, /from "\.\.\/charts\/series-chart\.js"/);
   for (const forbiddenOwner of [
