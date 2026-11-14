@@ -66,6 +66,7 @@ def build_cardinality_items(
         "id": f"{candidate.path.stem}-{item_index}",
         "collection": "eolab-mounted-vectors",
         "geometry": {"type": "Point", "coordinates": [item_index, 0]},
+        "assets": {},
     } for item_index in range(item_count))
 
 

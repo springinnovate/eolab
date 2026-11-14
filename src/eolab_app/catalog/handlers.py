@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from eolab_app.catalog.descriptors import (
+    DESCRIPTOR_HANDLER_NAME,
+    build_descriptor_items,
+)
+from eolab_app.catalog.descriptor_contract import DESCRIPTOR_SUFFIX
 from eolab_app.catalog.filegeodatabase import (
     build_stac_items as build_file_geodatabase_stac_items,
     discover_file_geodatabases,
@@ -188,6 +193,23 @@ class DatasetHandlerRegistry:
                 ))
         return candidates, frozenset(pruned_directory_names)
 
+    def get_builder(self, handler_name: str) -> DatasetItemBuilder:
+        """Return an existing reader callback for prepared descriptor dispatch.
+
+        Args:
+            handler_name: Admitted format handler name.
+
+        Returns:
+            The registered Item builder, suitable for a spawned metadata worker.
+
+        Raises:
+            KeyError: If the format is not registered.
+        """
+        for handler in self.handlers:
+            if handler.name == handler_name:
+                return handler.build_items
+        raise KeyError(f"Unknown dataset handler: {handler_name}")
+
     def prepare_candidate(
         self,
         source_root: Path,
@@ -265,6 +287,31 @@ def discover_temporal_datasets(
     return HandlerDiscovery(
         matches=(DatasetMatch(directory_path / "dataset.yaml"),),
         owns_directory=True,
+    )
+
+
+def discover_sidecar_descriptors(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize sidecars without claiming unrelated files or directories.
+
+    Args:
+        directory_path: Directory being enumerated.
+        directory_names: Child directories, unused for sidecar recognition.
+        file_names: Files listed by the filesystem walker.
+
+    Returns:
+        Descriptor candidates prepared globally before ordinary source admission.
+    """
+    del directory_names
+    return HandlerDiscovery(
+        matches=tuple(
+            DatasetMatch(directory_path / name)
+            for name in file_names
+            if name.endswith(DESCRIPTOR_SUFFIX)
+        )
     )
 
 
@@ -544,7 +591,7 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
     """Create the explicit registry for supported mounted formats.
 
     Returns:
-        Registry containing temporal datasets, GeoTIFF, GeoPackage, mounted
+        Registry containing temporal datasets, sidecars, GeoTIFF, GeoPackage, mounted
         Shapefile, ZIP/Shapefile, GeoJSON, and File Geodatabase handlers.
     """
     return DatasetHandlerRegistry(handlers=(
@@ -553,6 +600,11 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
             discover=discover_temporal_datasets,
             build_items=build_temporal_items,
             prepare_candidate=prepare_temporal_candidate,
+        ),
+        DatasetHandler(
+            name=DESCRIPTOR_HANDLER_NAME,
+            discover=discover_sidecar_descriptors,
+            build_items=build_descriptor_items,
         ),
         DatasetHandler(
             name="geotiff",

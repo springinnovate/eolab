@@ -42,8 +42,13 @@ PROCESSING_FILES = {
 CATALOG_FILES = {
     "docker-compose.yml",
     "Dockerfile.catalog-migrate",
+    "Dockerfile.stac-api",
+    "deployment/patch-stac-nonspatial.py",
+    "tests/test_stac_provider_patch.py",
     "deployment/application-runtime-requirements.txt",
     "tests/test_catalog_ingestion_postgres.py",
+    "tests/test_catalog_descriptor_postgres.py",
+    "tests/fixtures/catalog_descriptors/public-items.json",
     "scripts/test_catalog_postgres.py",
     "scripts/test_processing_postgres.py",
 }

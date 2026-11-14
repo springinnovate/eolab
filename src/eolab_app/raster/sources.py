@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from eolab_app.catalog.asset_access import get_asset_source_href
+
 from eolab_app.raster.source_models import (
     TemporalRasterSelection,
     TemporalIntervalSelection,
@@ -40,7 +42,10 @@ class MountedRasterResolver:
         self._scan_mount_path = scan_mount_path
 
     def resolve(self, item: dict[str, Any]) -> Path:
-        """Resolve an Item's data Asset to a readable mounted GeoTIFF.
+        """Resolve an Item's original data Asset to a readable mounted GeoTIFF.
+
+        Described Assets retain their private source URI independently of the
+        public catalog download URL.
 
         Args:
             item: Authoritative STAC Item from the catalog.
@@ -54,16 +59,19 @@ class MountedRasterResolver:
         """
         assets = item.get("assets")
         data_asset = assets.get("data") if isinstance(assets, dict) else None
+        source_href = (
+            get_asset_source_href(data_asset) if isinstance(data_asset, dict) else None
+        )
         if not isinstance(data_asset, dict) or (
             data_asset.get("type") not in GEOTIFF_MEDIA_TYPES
             or data_asset.get("roles") != ["data"]
-            or not isinstance(data_asset.get("href"), str)
+            or not isinstance(source_href, str)
         ):
             raise RasterAssetError(
                 "The Item has no supported GeoTIFF data Asset"
             )
 
-        asset_uri = urlsplit(data_asset["href"])
+        asset_uri = urlsplit(source_href)
         mount_uri = urlsplit(self._scan_mount_path.resolve().as_uri())
         mount_uri_path = unquote(mount_uri.path).rstrip("/")
         asset_uri_path = unquote(asset_uri.path)

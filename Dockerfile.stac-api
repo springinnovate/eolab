@@ -1,0 +1,6 @@
+FROM ghcr.io/stac-utils/stac-fastapi-pgstac:6.3.1@sha256:db117b91302f7983ce4e07658768a6e8d2f6716613252a15f5dcdbda8dae9883
+
+USER root
+COPY deployment/patch-stac-nonspatial.py /opt/eolab/patch-stac-nonspatial.py
+RUN python /opt/eolab/patch-stac-nonspatial.py
+USER user

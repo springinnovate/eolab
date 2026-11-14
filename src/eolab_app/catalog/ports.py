@@ -3,9 +3,11 @@
 from collections.abc import AsyncIterator, Iterable
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
+from pathlib import Path
 
 from eolab_app.catalog.models import (
     CatalogItemSource,
+    DescriptorSource,
     DatasetCandidate,
     DatasetMetadataResult,
     ReconciliationStatus,
@@ -16,8 +18,13 @@ from eolab_app.catalog.models import (
 class DatasetDiscovery(Protocol):
     """Discover supported datasets within the configured source mount."""
 
-    def discover(self) -> tuple[list[DatasetCandidate], list[ScanError]]:
+    def discover(
+        self, retained_sources: tuple[DescriptorSource, ...] = ()
+    ) -> tuple[list[DatasetCandidate], list[ScanError]]:
         """Return deterministic candidates and tolerated walk errors.
+
+        Args:
+            retained_sources: Existing claims preserved after invalid/unscanned edits.
 
         Returns:
             Discovered datasets and directory traversal failures.
@@ -62,11 +69,19 @@ class DatasetItemFinalizer(Protocol):
 class CatalogReconciler(Protocol):
     """Verify and remove missing scanner-owned Items."""
 
-    async def reconcile(self, status: ReconciliationStatus) -> int:
+    async def reconcile(
+        self,
+        status: ReconciliationStatus,
+        *,
+        protected_paths: tuple[Path, ...] = (),
+        source_paths: tuple[Path, ...] = (),
+    ) -> int:
         """Run reconciliation while updating typed progress.
 
         Args:
             status: Mutable reconciliation status for the active scan.
+            protected_paths: Failed descriptor/directory paths whose records remain.
+            source_paths: Explicit scan scope; other descriptor records remain.
 
         Returns:
             Number of Items removed, or zero after a captured failure.
@@ -104,6 +119,19 @@ class CatalogWriter(Protocol):
 
 class CatalogDatabase(Protocol):
     """Direct catalog operations needed outside STAC Transactions."""
+
+    async def descriptor_sources(
+        self,
+        collection_identifiers: tuple[str, ...],
+    ) -> tuple[DescriptorSource, ...]:
+        """Return previously admitted sidecar ownership for source-claim preparation.
+
+        Args:
+            collection_identifiers: Scanner-owned Collections to inventory.
+
+        Returns:
+            Validated descriptor ownership without source payload reads.
+        """
 
     async def existing_item_keys(
         self,

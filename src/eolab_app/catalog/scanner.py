@@ -21,6 +21,7 @@ from eolab_app.catalog.handlers import (
 from eolab_app.catalog.metadata import MetadataPipeline
 from eolab_app.catalog.models import (
     DatasetCandidate,
+    DescriptorSource,
     DatasetMetadataResult,
     ScanError,
     ScanState,
@@ -36,7 +37,11 @@ from eolab_app.catalog.ports import (
     DatasetMetadataReader,
 )
 from eolab_app.catalog.reconciliation import MissingItemReconciler
-
+from eolab_app.catalog.descriptors import (
+    DESCRIPTOR_SOURCE_KEY,
+    publish_descriptor_assets,
+    source_path_from_relative,
+)
 
 DEFAULT_SCAN_ERROR_DETAIL_LIMIT = 100
 LOGGER = logging.getLogger(__name__)
@@ -90,6 +95,7 @@ class ScanManager:
 
         """
         self.source_root = source_root
+        self.source_paths = source_paths
         self.catalog_writer = catalog_writer
         self.catalog_database = catalog_database
         self.metadata_worker_count = metadata_worker_count
@@ -165,13 +171,23 @@ class ScanManager:
         reconciliation_task: asyncio.Task[int] | None = None
         try:
             existing_item_keys = await self._inventory_catalog()
-            dataset_candidates, discovery_errors = await self._discover_datasets()
+            retained_sources = await self.catalog_database.descriptor_sources(
+                SCAN_COLLECTION_IDENTIFIERS
+            )
+            dataset_candidates, discovery_errors = await self._discover_datasets(
+                retained_sources
+            )
+            protected_paths = tuple(
+                self.source_root / error["path"]
+                for error in discovery_errors
+                if error["path"] is not None
+            )
             self._record_discovery(dataset_candidates, discovery_errors)
 
             async with self.catalog_writer.session() as catalog_session:
                 await self._write_collections(catalog_session)
                 reconciliation_task = asyncio.create_task(
-                    self._reconcile_missing_items()
+                    self._reconcile_missing_items(protected_paths)
                 )
                 if any(
                     candidate.item_key is not None for candidate in dataset_candidates
@@ -225,9 +241,14 @@ class ScanManager:
             for source in page:
                 key = (source.collection, source.item_id)
                 candidate = declared.get(key)
-                if (
-                    candidate is not None
-                    and candidate.path.absolute().as_uri() not in source.asset_hrefs
+                if candidate is not None and candidate.path.resolve().as_uri() not in (
+                    (
+                        source_path_from_relative(
+                            self.source_root, source.descriptor.relative_path
+                        ).as_uri(),
+                    )
+                    if source.descriptor is not None
+                    else source.asset_hrefs
                 ):
                     self._record_dataset_error(
                         candidate.path,
@@ -260,8 +281,12 @@ class ScanManager:
 
     async def _discover_datasets(
         self,
+        retained_sources: tuple[DescriptorSource, ...],
     ) -> tuple[list[DatasetCandidate], list[ScanError]]:
         """Run deterministic filesystem discovery off the event loop.
+
+        Args:
+            retained_sources: Last admitted ownership for invalid/unscanned sidecars.
 
         Returns:
             Discovered datasets and bounded-path traversal errors.
@@ -272,7 +297,7 @@ class ScanManager:
         """
         phase_started = perf_counter()
         try:
-            return await asyncio.to_thread(self.discovery.discover)
+            return await asyncio.to_thread(self.discovery.discover, retained_sources)
         finally:
             self._status.timing.discovery_seconds = perf_counter() - phase_started
 
@@ -338,9 +363,9 @@ class ScanManager:
             for collection_identifier in SCAN_COLLECTION_IDENTIFIERS
         }
         catalog_write_tasks: set[asyncio.Task[None]] = set()
-        metadata_results = aiter(
-            self.metadata_pipeline.results(dataset_candidates)
-        )
+        published_descriptors: dict[str, set[tuple[str, str]]] = {}
+        attached_sources: set[str] = set()
+        metadata_results = aiter(self.metadata_pipeline.results(dataset_candidates))
         try:
             while True:
                 self._raise_completed_catalog_writes(catalog_write_tasks)
@@ -372,9 +397,22 @@ class ScanManager:
                     continue
 
                 for item in finalized_items:
-                    pending_items = pending_items_by_collection[
-                        item["collection"]
-                    ]
+                    item = publish_descriptor_assets(item)
+                    ownership = item["assets"].get(DESCRIPTOR_SOURCE_KEY)
+                    if ownership is not None:
+                        published_descriptors.setdefault(
+                            ownership["relative_path"], set()
+                        ).add((item["collection"], item["id"]))
+                        attached_sources.update(
+                            {
+                                source_path_from_relative(
+                                    self.source_root, path
+                                ).as_uri()
+                                for path in ownership["claimed_paths"]
+                                if path != ownership["primary_relative_path"]
+                            }
+                        )
+                    pending_items = pending_items_by_collection[item["collection"]]
                     pending_items.append(item)
                     if len(pending_items) == self.item_batch_size:
                         self._schedule_item_write(
@@ -384,9 +422,7 @@ class ScanManager:
                             existing_item_keys,
                         )
                         pending_items_by_collection[item["collection"]] = []
-                        await self._enforce_catalog_writer_limit(
-                            catalog_write_tasks
-                        )
+                        await self._enforce_catalog_writer_limit(catalog_write_tasks)
 
             for pending_items in pending_items_by_collection.values():
                 if pending_items:
@@ -401,6 +437,7 @@ class ScanManager:
             if catalog_write_tasks:
                 await asyncio.wait(catalog_write_tasks)
                 self._raise_completed_catalog_writes(catalog_write_tasks)
+            await self._retire_descriptor_items(published_descriptors, attached_sources)
         finally:
             await metadata_results.aclose()
             for catalog_write_task in catalog_write_tasks:
@@ -409,6 +446,50 @@ class ScanManager:
                 *catalog_write_tasks,
                 return_exceptions=True,
             )
+
+    async def _retire_descriptor_items(
+        self,
+        published: dict[str, set[tuple[str, str]]],
+        attached_sources: set[str],
+    ) -> None:
+        """Retire replaced ownership only after all admitted Items were written.
+
+        Args:
+            published: Successful mount-relative descriptors and their complete current Item keys.
+            attached_sources: Local supporting files now represented only as Assets.
+
+        Raises:
+            Exception: If catalog inventory or transactional retirement fails.
+        """
+        if not published:
+            return
+        retired: list[tuple[str, str]] = []
+        async for page in self.catalog_database.scanner_item_pages(
+            SCAN_COLLECTION_IDENTIFIERS, self.item_batch_size
+        ):
+            for source in page:
+                key = (source.collection, source.item_id)
+                owner = source.descriptor
+                if (
+                    owner is not None
+                    and owner.relative_path in published
+                    and key not in published[owner.relative_path]
+                ):
+                    retired.append(key)
+                elif (
+                    owner is None
+                    and source.collection != TEMPORAL_COLLECTION_ID
+                    and source.asset_hrefs
+                    and source.asset_hrefs[0] in attached_sources
+                ):
+                    retired.append(key)
+        if retired:
+            await self.catalog_database.delete_item_batches(
+                retired[index : index + self.item_batch_size]
+                for index in range(0, len(retired), self.item_batch_size)
+            )
+            if self.items_updated is not None:
+                await self.items_updated(tuple(retired))
 
     def _record_metadata_result(
         self,
@@ -554,19 +635,24 @@ class ScanManager:
                 tuple((item["collection"], item["id"]) for item in items) + retired_keys
             )
 
-    async def _reconcile_missing_items(self) -> int:
+    async def _reconcile_missing_items(self, protected_paths: tuple[Path, ...]) -> int:
         """Run destructive reconciliation and record phase duration.
+
+        Args:
+            protected_paths: Failed descriptor/directory paths retained this scan.
 
         Returns:
             Number of Items removed, or zero after a captured failure.
         """
         phase_started = perf_counter()
         try:
-            return await self.reconciler.reconcile(self._status.reconciliation)
-        finally:
-            self._status.timing.reconciliation_seconds = (
-                perf_counter() - phase_started
+            return await self.reconciler.reconcile(
+                self._status.reconciliation,
+                protected_paths=protected_paths,
+                source_paths=self.source_paths,
             )
+        finally:
+            self._status.timing.reconciliation_seconds = perf_counter() - phase_started
 
     async def _invalidate_search_count_cache(self) -> None:
         """Invalidate pgSTAC search counts and record phase duration.
