@@ -285,6 +285,20 @@ def _tile_bytes(left: float, top: float, *, last_value: float = 3) -> bytes:
     [
         (box(7, 11, 47, 51), [(7, 51), (27, 51), (7, 31), (27, 31)]),
         (
+            box(7, 11, 67, 71),
+            [
+                (7, 71),
+                (27, 71),
+                (47, 71),
+                (7, 51),
+                (27, 51),
+                (47, 51),
+                (7, 31),
+                (27, 31),
+                (47, 31),
+            ],
+        ),
+        (
             box(7, 11, 67, 71).difference(box(27, 31, 47, 51)),
             [
                 (7, 71),
@@ -303,7 +317,13 @@ def _tile_bytes(left: float, top: float, *, last_value: float = 3) -> bytes:
             [(7, 51), (27, 51), (7, 31), (27, 31)],
         ),
     ],
-    ids=["aligned", "hole", "disconnected-touching", "thin-boundary-overlap"],
+    ids=[
+        "aligned",
+        "strict-interior",
+        "hole",
+        "disconnected-touching",
+        "thin-boundary-overlap",
+    ],
 )
 def test_tile_selection_preserves_positive_area_and_grid_order(
     stack: RasterStackConfiguration,
