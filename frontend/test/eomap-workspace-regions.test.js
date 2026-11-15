@@ -523,6 +523,11 @@ test("closed workspaces release the map inset while keeping compact reachable co
         `${closedWorkspaces} \\.workspace-disclosure\\s*\\{[^}]*width:\\s*100%[^}]*min-height:\\s*44px[^}]*writing-mode:\\s*horizontal-tb`, "s"));
     assert.match(STYLESHEET, new RegExp(
         `@media \\(min-width: 1200px\\)\\s*\\{\\s*${closedWorkspaces} #map\\s*\\{[^}]*left:\\s*var\\(--workspace-edge\\)`, "s"));
+    const visibleCard = "#app:not\\(\\.is-control-panel-collapsed\\):not\\(:is\\(\\.is-expanded-catalog-workspace, \\.is-expanded-map-layers-workspace\\)\\)";
+    assert.match(STYLESHEET, new RegExp(
+        `${visibleCard} #map\\s*\\{[^}]*--map-controls-top-clearance:\\s*calc\\(var\\(--workspace-card-height, 0px\\) \\+ var\\(--workspace-gap\\)\\)`, "s"));
+    assert.match(STYLESHEET, new RegExp(
+        `@media \\(max-width: 1199px\\)\\s*\\{[^}]*\\}\\s*${visibleCard} #map\\s*\\{[^}]*--map-controls-top-clearance:[^}]*var\\(--map-tools-height, 42px\\)`, "s"));
 });
 
 test("CSS allocates wide space and intentional medium and narrow overlays", () => {

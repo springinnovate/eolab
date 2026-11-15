@@ -60,6 +60,7 @@ class FakeLayoutElement extends EventTarget {
         this.open = false;
         this.scrollTop = 0;
         this.textContent = "";
+        this.height = 688;
         this.focused = false;
         this.ownerDocument = null;
         this.tagName = tagName;
@@ -100,6 +101,9 @@ class FakeLayoutElement extends EventTarget {
     removeAttribute(name) {
         this.attributes.delete(name);
     }
+
+    /** Return the shell's measured border-box height. @return {{height:number}} */
+    getBoundingClientRect() { return {height: this.height}; }
 
     /** Mark this element as the document focus target. @return {void} */
     focus() {
@@ -233,13 +237,27 @@ function createLayoutFixture() {
         ["#eomap-map-layers-body", renderingContent],
     ]);
     const timers = [];
+    const observers = [];
+    const document = new FakeLayoutDocument(elements);
+    document.defaultView = {
+        /** Observe shell dimensions without creating a browser layout engine. */
+        ResizeObserver: class {
+            /** @param {()=>void} callback Reports a changed layout size. */
+            constructor(callback) { this.callback = callback; observers.push(this); }
+            /** @param {FakeLayoutElement} element Observed shell. @return {void} */
+            observe(element) { this.element = element; }
+            /** Stop future size reports. @return {void} */
+            disconnect() { this.disconnected = true; }
+        },
+    };
     return {
         app,
         catalogContent,
         catalogRegion,
         catalogTab,
         collapsePanel,
-        document: new FakeLayoutDocument(elements),
+        document,
+        observers,
         openPanel,
         operationalBody,
         operationalRegion,
@@ -254,6 +272,34 @@ function createLayoutFixture() {
         timers,
     };
 }
+
+test("shell size measurement follows card reflow without changing panel choices or focus", () => {
+    const fixture = createLayoutFixture();
+    const layout = new EomapLayoutController({
+        documentContext: fixture.document, schedule: fixture.schedule,
+        invalidateMapSize() {},
+    });
+    assert.equal(fixture.observers[0].element, fixture.panel);
+    fixture.catalogTab.focus();
+    fixture.catalogTab.dispatchEvent(new Event("click"));
+    fixture.panel.height = 177;
+    fixture.observers[0].callback();
+    assert.equal(fixture.app.style.getPropertyValue("--workspace-card-height"), "177px");
+    fixture.operationalToggle.dispatchEvent(new Event("click"));
+    fixture.panel.height = 457;
+    fixture.observers[0].callback();
+    assert.equal(fixture.app.style.getPropertyValue("--workspace-card-height"), "457px");
+    assert.equal(fixture.document.activeElement, fixture.catalogTab);
+    assert.equal(fixture.catalogTab.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
+    layout.setControlPanelCollapsed(true);
+    assert.equal(fixture.app.classList.contains("is-control-panel-collapsed"), true);
+    layout.setControlPanelCollapsed(false);
+    assert.equal(fixture.catalogTab.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
+    layout.destroy();
+    assert.equal(fixture.observers[0].disconnected, true);
+});
 
 test("shared viewer omits catalog and status while retaining layer and sidebar controls", () => {
     const fixture = createLayoutFixture();

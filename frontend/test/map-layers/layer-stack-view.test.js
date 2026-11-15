@@ -1605,8 +1605,8 @@ test("large neutral legends retain every entry in a bounded keyboard-accessible 
   assert.equal(legend.body.tabIndex, 0);
   assert.equal(legend.body.getAttribute("role"), "region");
   assert.equal(legend.body.getAttribute("aria-label"), "Legend entries and layer choices");
-  assert.equal(legend.root.style.marginTop, "calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)");
-  assert.equal(legend.root.style.maxHeight, "max(0px, calc(620px - calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)))");
+  assert.equal(legend.root.style.marginTop, "max(calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px), var(--map-controls-top-clearance, 0px))");
+  assert.equal(legend.root.style.maxHeight, "max(0px, calc(620px - max(calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px), var(--map-controls-top-clearance, 0px))))");
   assert.ok(parseFloat(legend.root.style.width) < size.x);
   assert.equal(legend.contents.style.columnCount, "1", "one long layer does not create empty columns");
   for (const presentation of [legend.contents, doc.querySelector("#raster-layer-list")]) {
@@ -1639,8 +1639,8 @@ test("large neutral legends retain every entry in a bounded keyboard-accessible 
   for (const section of legend.contents.children) section.offsetHeight = 600;
   listeners.get("resize")();
   assert.equal(legend.contents.style.columnCount, "3", "separate layers keep the existing multi-column layout");
-  assert.equal(legend.root.style.marginTop, "10px");
-  assert.equal(legend.root.style.maxHeight, "max(0px, calc(880px - 10px))");
+  assert.equal(legend.root.style.marginTop, "max(10px, var(--map-controls-top-clearance, 0px))");
+  assert.equal(legend.root.style.maxHeight, "max(0px, calc(880px - max(10px, var(--map-controls-top-clearance, 0px))))");
   legend.collapse.dispatchEvent(new Event("click"));
   assert.equal(legend.body.hidden, true);
   assert.equal(legend.root.style.width, "auto");
@@ -1650,8 +1650,8 @@ test("large neutral legends retain every entry in a bounded keyboard-accessible 
   size = { x: 390, y: 360 };
   listeners.get("resize")();
   assert.equal(legend.contents.style.columnCount, "1");
-  assert.equal(legend.root.style.marginTop, "calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)");
-  assert.equal(legend.root.style.maxHeight, "max(0px, calc(340px - calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)))");
+  assert.equal(legend.root.style.marginTop, "max(calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px), var(--map-controls-top-clearance, 0px))");
+  assert.equal(legend.root.style.maxHeight, "max(0px, calc(340px - max(calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px), var(--map-controls-top-clearance, 0px))))");
   legend.update([{ ...layer, legendIncluded: false }]);
   assert.equal(legend.choices.children.length, 1);
   assert.equal(legend.choices.children[0].children[0].checked, false);

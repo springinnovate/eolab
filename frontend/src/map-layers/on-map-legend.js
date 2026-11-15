@@ -227,14 +227,15 @@ export class OnMapLegend {
     /**
      * Fit the legend inside the map while keeping long entry lists scrollable.
      * Use extra columns for separate layers when their keys grow tall; leave
-     * room for the shell's measured toolbar on narrow maps and retain the
-     * existing scroll region across updates.
+     * room for the shell's measured toolbar on narrow maps and its compact
+     * workspace card when present. Retain the existing scroll region across updates.
      * @return {void}
      */
     updateLayout() {
         const { x: width, y: height } = this.map.getSize();
         const available = Math.max(80, Math.min(660, width - (width >= 900 ? 400 : 40)));
-        const topMargin = width < 900 ? "calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)" : "10px";
+        const toolbarMargin = width < 900 ? "calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)" : "10px";
+        const topMargin = `max(${toolbarMargin}, var(--map-controls-top-clearance, 0px))`;
         const contentHeight = [...this.contents.children].reduce((total, node) => total + node.offsetHeight + 12, 0);
         const columns = Math.min(Math.max(1, this.contents.childElementCount),
             Math.max(1, Math.floor(available / 216)),

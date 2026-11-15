@@ -2574,6 +2574,10 @@ div.chart-tooltip {
   transform: translateY(-50%) rotate(-45deg);
 }
 
+#app:not(.is-control-panel-collapsed):not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #map {
+  --map-controls-top-clearance: calc(var(--workspace-card-height, 0px) + var(--workspace-gap));
+}
+
 @media (min-width: 1200px) {
   #app:not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #map {
     left: var(--workspace-edge);
@@ -4946,6 +4950,9 @@ summary:hover > .raster-disclosure-chevron {
 @media (max-width: 1199px) {
   #map, #app.is-control-panel-collapsed #map {
     inset: 0;
+  }
+  #app:not(.is-control-panel-collapsed):not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #map {
+    --map-controls-top-clearance: calc(var(--workspace-card-height, 0px) + 16px + var(--map-tools-height, 42px) + var(--workspace-gap));
   }
   #app #control-panel {
     top: calc(16px + var(--map-tools-height, 42px));
