@@ -158,6 +158,66 @@ test("statistics menu action remains enabled in every panel state", () => {
     h.controller.destroy();
 });
 
+test("explicit destination cues restart without stealing focus or reacting to passive updates", t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const h = fixture();
+    const root = h.doc.querySelector("#map-inspection");
+    h.map.focus();
+    h.controller.highlightActiveTool();
+    assert.equal(root.classList.contains("is-tool-highlighted"), false);
+
+    for (const open of [
+        () => h.controller.showStyle("Resistance"),
+        () => h.controller.showHistogram(2), // Active paired-raster styles.
+        () => h.controller.showAnnotations(),
+        () => h.controller.showRasterClips(),
+    ]) {
+        open();
+        assert.equal(root.classList.contains("is-tool-highlighted"), false,
+            "opening a panel alone does not imply a shortcut cue");
+        h.controller.highlightActiveTool();
+        assert.equal(root.classList.contains("is-tool-highlighted"), true);
+        t.mock.timers.tick(700);
+        open();
+        h.controller.highlightActiveTool();
+        t.mock.timers.tick(200);
+        assert.equal(root.classList.contains("is-tool-highlighted"), true,
+            "the previous expiry must not end the repeated cue");
+        t.mock.timers.tick(700);
+        assert.equal(root.classList.contains("is-tool-highlighted"), false);
+        assert.equal(h.doc.activeElement, h.map, "cue presentation does not move focus");
+    }
+
+    h.controller.showStyle("Resistance");
+    h.controller.highlightActiveTool();
+    t.mock.timers.tick(500);
+    h.controller.updateLayerEditorName("style", "Renamed resistance");
+    t.mock.timers.tick(400);
+    assert.equal(root.classList.contains("is-tool-highlighted"), false,
+        "renaming the source does not restart attention");
+    h.controller.destroy();
+});
+
+test("destination cues clear when their presentation closes, minimizes, switches or is destroyed", t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const h = fixture();
+    const root = h.doc.querySelector("#map-inspection");
+    for (const dismiss of [
+        () => h.controller.hideStyle(),
+        () => h.minimizeButton.dispatchEvent(new Event("click")),
+        () => h.controller.showFilter("Countries"),
+        () => h.controller.destroy(),
+    ]) {
+        h.controller.showStyle("Resistance");
+        h.controller.highlightActiveTool();
+        assert.equal(root.classList.contains("is-tool-highlighted"), true);
+        dismiss();
+        assert.equal(root.classList.contains("is-tool-highlighted"), false);
+        t.mock.timers.tick(900);
+        assert.equal(root.classList.contains("is-tool-highlighted"), false);
+    }
+});
+
 test("closing the last panel returns a focused minimize action to the persistent Tools button", () => {
     const h = fixture();
     h.controller.showStyle("Resistance");

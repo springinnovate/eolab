@@ -839,8 +839,11 @@ h5 {
   align-items: start;
   gap: 4px;
 }
+.map-layer-identity { flex: 1; display: flow-root; min-width: 0; line-height: 1.3; }
+.map-layer-visibility-zoom { float: inline-start; display: flex; flex-direction: column; align-items: center; gap: 2px; width: 18px; margin: 1px 3px 0 0; }
+.map-layer-visibility-zoom input { width: 13px; height: 13px; margin: 0; }
 .map-layer-title { display: inline; }
-.map-layer-kind { grid-column: 2; margin-top: 1px; color: var(--text-3); font-size: var(--font-size-support); line-height: 1.4; }
+.map-layer-kind { display: block; margin: 1px 0 0 21px; color: var(--text-3); font-size: var(--font-size-support); line-height: 1.4; }
 
 .map-layer-name-editor { grid-column: 2; display: grid; gap: 6px; min-width: 0; }
 .map-layer-name-editor label { display: grid; gap: 4px; }
@@ -852,20 +855,19 @@ h5 {
 .map-layer-details[hidden] { display: none; }
 .map-layer-details p { margin: 0; overflow-wrap: anywhere; }
 .raster-layer-visibility {
-  flex: 1;
-  display: flow-root;
-  min-width: 0;
+  display: inline;
   font-size: var(--font-size-title);
   line-height: 1.3;
   cursor: pointer;
 }
-.raster-layer-visibility input { float: inline-start; width: 13px; height: 13px; margin: 1px 3px 0 0; }
 .raster-layer-name {
   overflow-wrap: anywhere;
   font-size: var(--font-size-ui);
   line-height: 1.3;
 }
 .raster-layer-row .raster-layer-name { font-size: var(--font-size-title); font-weight: 600; }
+.map-layer-name-tail { display: inline-flex; max-width: 100%; align-items: last baseline; vertical-align: baseline; }
+.map-layer-name-tail > label { min-width: 0; overflow-wrap: anywhere; }
 .map-layer-role-badge {
   display: inline-block;
   margin-inline-start: 4px;
@@ -893,24 +895,33 @@ h5 {
   border-radius: 2px;
   background: var(--surface-3);
 }
-.raster-layer-row .secondary-button:hover:not(:disabled),
+.raster-layer-row .secondary-button:hover:not(:disabled):not([aria-disabled="true"]),
 .raster-layer-row .secondary-button:focus-visible { border-color: var(--brand); background: var(--surface-selected); }
+.raster-layer-row .secondary-button[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; }
 .map-layer-row-actions {
   grid-column: 1 / -1;
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 2px;
   margin-top: 3px;
   min-width: 0;
 }
-.map-layer-style-actions,
+.map-layer-style-actions { display: inline-flex; flex: none; align-items: stretch; border: 1px solid var(--action-border); border-radius: 2px; background: var(--surface-3); }
+.map-layer-style-actions > .secondary-button { border: 0; border-radius: 0; background: transparent; }
+.map-layer-style-actions > .secondary-button + .secondary-button { border-inline-start: 1px solid var(--action-border); }
+.map-layer-action-tooltip { position: fixed; inset: auto; z-index: 1; margin: 0; width: max-content; max-width: min(260px, calc(100vw - 8px)); padding: 5px 7px; border: 1px solid var(--border-1); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-1); box-shadow: var(--elevation-panel); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.map-layer-action-tooltip[hidden] { display: none; }
 .map-layer-data-actions {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   min-width: 0;
 }
-.map-layer-data-actions > [data-layer-action="details"] { margin-inline-start: auto; }
+.raster-layer-row .map-layer-data-actions > [data-layer-action="details"] { margin-inline-start: auto; border: 0; background: transparent; color: var(--brand-hover); font-weight: 400; text-decoration: underline; text-underline-offset: 2px; }
+.raster-layer-row .map-layer-data-actions > [data-layer-action="details"]:hover { background: transparent; text-decoration-thickness: 2px; }
 .map-layer-data-actions > [data-layer-action="details"]::after,
 .catalog-result-details::after {
   content: "";
@@ -928,6 +939,12 @@ h5 {
 .map-layer-utility-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 2px; min-width: 0; }
 .raster-layer-row .map-layer-icon-button { display: grid; flex: none; min-width: 18px; place-items: center; padding: 2px; }
 .map-layer-icon-button svg { width: 16px; height: 16px; }
+.raster-layer-row .map-layer-zoom { width: 18px; height: 18px; }
+.map-layer-zoom svg, .map-layer-clipboard-action svg { width: 12px; height: 12px; }
+.map-layer-style-actions > .map-layer-clipboard-action { width: 22px; }
+.raster-layer-row .map-layer-rename { display: inline-flex; vertical-align: baseline; min-width: 0; margin-inline-start: 3px; padding: 1px; border: 0; background: transparent; color: var(--text-3); }
+.map-layer-rename svg { width: 9px; height: 9px; }
+.raster-layer-row .map-layer-rename:hover { background: var(--surface-selected); }
 .map-layer-filter-action.has-active-filter { color: var(--brand-hover); text-decoration: underline; text-underline-offset: 3px; }
 .raster-layer-row .map-layer-remove-button {
   flex: none;
@@ -1030,6 +1047,9 @@ h5 {
   .raster-layer-row .secondary-button,
   .raster-layer-row .map-legend-inclusion { min-height: 44px; }
   .raster-layer-row .secondary-button { min-width: 44px; }
+  .map-layer-visibility-zoom { width: 44px; }
+  .map-layer-visibility-zoom input { width: 44px; height: 44px; }
+  .map-layer-kind { margin-inline-start: 47px; }
   .map-layer-legend { padding-right: 48px; }
 }
 .on-map-legend {
@@ -4074,6 +4094,21 @@ article.raster-histogram-summary {
   white-space: normal;
   font-size: 0.82rem;
   font-weight: 700;
+}
+
+#map-inspection.is-tool-highlighted > .map-inspection-dock-header {
+  animation: map-tool-destination 900ms ease-out;
+}
+@keyframes map-tool-destination {
+  from { background: var(--surface-selected); box-shadow: inset 3px 0 var(--brand); }
+  to { background: var(--surface-1); box-shadow: inset 3px 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #map-inspection.is-tool-highlighted > .map-inspection-dock-header {
+    animation: none;
+    background: var(--surface-selected);
+    box-shadow: inset 3px 0 var(--brand);
+  }
 }
 
 .map-inspection-context {

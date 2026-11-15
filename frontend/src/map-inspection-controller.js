@@ -146,6 +146,8 @@ export class MapInspectionController {
         this.minimized = false;
         this.activityListeners = new Set();
         this.reportedActiveTool = null;
+        /** @type {ReturnType<typeof setTimeout>|null} Expiry of the explicit destination cue. */
+        this.toolAttentionTimer = null;
         this.onClose = () => this.closeHistogram();
         this.onMinimize = () => {
             this.minimized = !this.minimized;
@@ -345,6 +347,29 @@ export class MapInspectionController {
 
     /** Reveal the raster clip tool while retaining peer panels. @return {void} */
     showRasterClips() { this.#showTool("raster-clips"); }
+
+    /**
+     * Briefly highlight the visible tool's header after an explicit shortcut.
+     * Composition calls this after the target owner opens its destination, which
+     * may be the ordinary Style editor, paired styles, or annotation controls.
+     * Repeated calls restart the cue without moving focus or changing tool data.
+     * @return {void}
+     */
+    highlightActiveTool() {
+        this.#clearToolAttention();
+        if (!this.isOpen || this.minimized || this.activeTool === null) return;
+        // Commit removal before re-adding so an already visible cue restarts.
+        void this.root.offsetWidth;
+        this.root.classList.add("is-tool-highlighted");
+        this.toolAttentionTimer = setTimeout(() => this.#clearToolAttention(), 900);
+    }
+
+    /** Clear a shortcut cue and its pending expiry. @return {void} */
+    #clearToolAttention() {
+        clearTimeout(this.toolAttentionTimer);
+        this.toolAttentionTimer = null;
+        this.root.classList.remove("is-tool-highlighted");
+    }
 
     /** Close raster clips without cancelling server work. @return {void} */
     hideRasterClips() { this.#hideTool("raster-clips"); }
@@ -860,6 +885,7 @@ export class MapInspectionController {
         const active = this.minimized ? null : this.activeTool;
         this.#renderResultNavigation();
         if (active !== this.reportedActiveTool) {
+            this.#clearToolAttention();
             this.reportedActiveTool = active;
             for (const listener of this.activityListeners) listener(active);
         }
@@ -894,6 +920,7 @@ export class MapInspectionController {
 
     /** Release presentation listeners without changing retained analysis state. @return {void} */
     destroy() {
+        this.#clearToolAttention();
         this.#closeToolActions();
         this.toolActions.removeEventListener("beforetoggle", this.onToolActionsBeforeToggle);
         this.toolActions.removeEventListener("toggle", this.onToolActionsLayout);
