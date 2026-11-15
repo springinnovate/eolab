@@ -568,7 +568,7 @@ test("CSS allocates wide space and intentional medium and narrow overlays", () =
     );
     assert.match(
         STYLESHEET,
-        /@container workspace-sidebar \(max-width: 699px\)\s*\{[\s\S]*?\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[\s\S]*?\.workspace-disclosure\s*\{[^}]*width:\s*100%[^}]*writing-mode:\s*horizontal-tb/s
+        /@container workspace-sidebar \(max-width: 639px\)\s*\{[\s\S]*?\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[\s\S]*?\.workspace-disclosure\s*\{[^}]*width:\s*100%[^}]*writing-mode:\s*horizontal-tb/s
     );
     assert.match(
         STYLESHEET,
