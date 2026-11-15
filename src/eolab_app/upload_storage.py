@@ -418,23 +418,43 @@ class UploadStorage:
                 429, "Another upload is being received. Try again shortly."
             )
         async with self._admission:
-            await finish_upload_disk_operation(self.sweep_expired)
-            with self._disk_lock:
-                usage = self._usage()
-                if len(usage.files.get(owner, set())) >= 5:
-                    raise UploadError(
-                        409,
-                        "You have 5 uploaded files. Delete an uploaded file in Your uploads before uploading another. Files in use count until the calculation stops.",
+            temporary: TemporaryDirectory[str] | None = None
+            output: BinaryIO | None = None
+
+            def prepare_staging() -> tuple[Path, Path, BinaryIO]:
+                """Reserve a staging directory and open its original for streaming.
+
+                Returns:
+                    Staging directory, original path and unbuffered output handle.
+
+                Raises:
+                    UploadError: If expiry cleanup or file-slot admission fails.
+                    OSError: If staging files cannot be created.
+                """
+                nonlocal temporary, output
+                with self._disk_lock:
+                    self.sweep_expired()
+                    usage = self._usage()
+                    if len(usage.files.get(owner, set())) >= 5:
+                        raise UploadError(
+                            409,
+                            "You have 5 uploaded files. Delete an uploaded file in Your uploads before uploading another. Files in use count until the calculation stops.",
+                        )
+                    owner_path = self.root / owner
+                    owner_path.mkdir(parents=True, exist_ok=True)
+                    temporary = TemporaryDirectory(prefix=".pending-", dir=owner_path)
+                    directory = Path(temporary.name)
+                    source = directory / (
+                        "source.gpkg" if kind == "vector" else "source.tif"
                     )
-                owner_path = self.root / owner
-                owner_path.mkdir(parents=True, exist_ok=True)
-                temporary = TemporaryDirectory(prefix=".pending-", dir=owner_path)
-                directory = Path(temporary.name)
-                source = directory / (
-                    "source.gpkg" if kind == "vector" else "source.tif"
-                )
-                self._incoming_usage = None
+                    self._incoming_usage = None
+                    output = source.open("wb", buffering=0)
+                    return directory, source, output
+
             try:
+                directory, source, output = await finish_upload_disk_operation(
+                    prepare_staging
+                )
                 limit = (
                     min(self.max_bytes, max_bytes)
                     if max_bytes is not None
@@ -444,19 +464,19 @@ class UploadStorage:
                 checksum = hashlib.sha256()
                 try:
                     async with asyncio.timeout(120):
-                        with source.open("wb", buffering=0) as output:
-                            async for chunk in chunks:
-                                next_size = size + len(chunk)
-                                if next_size > limit:
-                                    raise UploadError(
-                                        413,
-                                        f"The file exceeds the upload limit of {limit} bytes.",
-                                    )
-                                await finish_upload_disk_operation(
-                                    lambda: self._write_chunk(output, owner, chunk)
+                        async for chunk in chunks:
+                            next_size = size + len(chunk)
+                            if next_size > limit:
+                                raise UploadError(
+                                    413,
+                                    f"The file exceeds the upload limit of {limit} bytes.",
                                 )
-                                checksum.update(chunk)
-                                size = next_size
+                            await finish_upload_disk_operation(
+                                lambda: self._write_chunk(output, owner, chunk)
+                            )
+                            checksum.update(chunk)
+                            size = next_size
+                        await finish_upload_disk_operation(output.close)
                 except TimeoutError as error:
                     raise UploadError(
                         408,
@@ -467,15 +487,24 @@ class UploadStorage:
                 )
             finally:
 
-                def cleanup() -> None:
-                    """Remove this admission's remaining files before releasing its slot."""
+                def cleanup_staging() -> None:
+                    """Close and remove staging, including a cancelled late acquisition.
+
+                    Raises:
+                        OSError: If closing or deleting staging files fails.
+                        UploadError: If a directory leaves the upload volume.
+                    """
                     with self._disk_lock:
-                        if directory.exists():
-                            self._remove_directory(directory)
-                        temporary.cleanup()
+                        if output is not None:
+                            output.close()
+                        if temporary is not None:
+                            directory = Path(temporary.name)
+                            if directory.exists():
+                                self._remove_directory(directory)
+                            temporary.cleanup()
                         self._incoming_usage = None
 
-                await finish_upload_disk_operation(cleanup)
+                await finish_upload_disk_operation(cleanup_staging)
 
     def _write_chunk(self, output: BinaryIO, owner: str, chunk: bytes) -> None:
         """Charge and write one body chunk while other storage changes are excluded.
@@ -835,20 +864,34 @@ class UploadStorage:
 
         Raises:
             UploadError: If authorization, retention or cleanup fails.
-            asyncio.CancelledError: After the reader exits and its link is removed.
+            asyncio.CancelledError: After acquisition and this reader's cleanup finish.
         """
-        with self._disk_lock:
-            metadata, source = self.get_upload_source(owner, identifier, kind)
-            key = (owner, identifier, kind)
-            read = self._active_reads.get(key)
-            if read is None:
-                token = self._retain(source, ".reading")
-                link = self._link_directory(".reading") / f"{token}{source.suffix}"
-                read = ActiveUploadRead(link)
-                self._active_reads[key] = read
-            read.readers += 1
+        key = (owner, identifier, kind)
+        read: ActiveUploadRead | None = None
+
+        def acquire_read() -> tuple[UploadRecord, Path]:
+            """Authorize this reader and join or create its shared original link.
+
+            Returns:
+                Admitted metadata and the shared path protected by this reader.
+
+            Raises:
+                UploadError: If authorization or original retention fails.
+            """
+            nonlocal read
+            with self._disk_lock:
+                metadata, source = self.get_upload_source(owner, identifier, kind)
+                read = self._active_reads.get(key)
+                if read is None:
+                    token = self._retain(source, ".reading")
+                    link = self._link_directory(".reading") / f"{token}{source.suffix}"
+                    read = ActiveUploadRead(link)
+                    self._active_reads[key] = read
+                read.readers += 1
+                return metadata, read.path
+
         try:
-            yield metadata, read.path
+            yield await finish_upload_disk_operation(acquire_read)
         finally:
 
             def release() -> None:
@@ -858,6 +901,8 @@ class UploadStorage:
                     UploadError: If the unused link or its metadata cannot be removed.
                 """
                 with self._disk_lock:
+                    if read is None:
+                        return
                     read.readers -= 1
                     if read.readers:
                         return
