@@ -163,6 +163,24 @@ export class EomapLayoutController {
         this.#synchronizeOperationalStatusPresentation();
         this.#synchronizeWorkspacePresentation();
         this.#synchronizeControlPanelPresentation();
+        this.workspaceSizeObserver = new documentContext.defaultView.ResizeObserver(
+            () => this.#measureWorkspaceHeight()
+        );
+        this.workspaceSizeObserver.observe(this.controlPanelElement);
+        this.#measureWorkspaceHeight();
+    }
+
+    /**
+     * Publish the shell's measured height for map-control clearance in CSS.
+     * CSS decides when the compact card overlaps the map; this measurement
+     * does not inspect map controls or change any panel's visibility.
+     * @return {void}
+     */
+    #measureWorkspaceHeight() {
+        const height = `${this.controlPanelElement.getBoundingClientRect().height}px`;
+        if (this.appElement.style.getPropertyValue("--workspace-card-height") !== height) {
+            this.appElement.style.setProperty("--workspace-card-height", height);
+        }
     }
 
     /**
@@ -284,7 +302,7 @@ export class EomapLayoutController {
     }
 
     /**
-     * Detach every DOM listener installed during construction.
+     * Detach every DOM listener and the shell-size observer.
      *
      * Already scheduled invalidations still complete, matching browser timer
      * behavior; subsequent layout-control events no longer change state.
@@ -292,6 +310,7 @@ export class EomapLayoutController {
      * @return {void}
      */
     destroy() {
+        this.workspaceSizeObserver.disconnect();
         this.operationalToggle.removeEventListener(
             "click",
             this.boundOperationalToggle
