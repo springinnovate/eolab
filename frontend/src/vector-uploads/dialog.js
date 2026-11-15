@@ -27,6 +27,8 @@ export class UploadPolygonsDialog {
         this.confirming = null;
         this.uploaded = null;
         this.pending = false;
+        /** @type {symbol|null} Identity of the list request allowed to update this dialog. */
+        this.listRequest = null;
         this.trigger = document.querySelector("#upload-polygons");
         this.dialog = document.createElement("dialog");
         this.dialog.className = "upload-polygons-dialog";
@@ -123,7 +125,12 @@ export class UploadPolygonsDialog {
         });
         this.cancel.addEventListener("click", () => this.dialog.close());
         this.dialog.addEventListener("cancel", event => { if (this.pending) event.preventDefault(); });
-        this.dialog.addEventListener("close", () => this.trigger.focus());
+        this.dialog.addEventListener("close", () => {
+            // Native close events can arrive after the dialog has reopened.
+            if (this.dialog.open) return;
+            this.listRequest = null;
+            this.trigger.focus();
+        });
     }
 
     /** Open the file form and refresh this browser's stored uploads. @return {Promise<void>} Completion after listing or a visible error. */
@@ -136,25 +143,36 @@ export class UploadPolygonsDialog {
         this.message("");
         this.setBusy(false);
         this.dialog.showModal();
+        this.cancel.focus();
         await this.loadUploads();
-        (this.rows.find(row => !row.add.disabled)?.add ?? this.file).focus();
     }
 
-    /** Refresh the upload list without changing files or existing map layers. @return {Promise<void>} Completion with list errors available for retry. */
+    /**
+     * Refresh uploads while allowing dismissal; obsolete responses leave the dialog untouched.
+     * @return {Promise<void>} Completion with current list errors available for retry.
+     */
     async loadUploads() {
+        const request = Symbol("upload-list");
+        this.listRequest = request;
         this.retry.hidden = true;
         this.empty.hidden = true;
-        this.setBusy(true);
+        this.setBusy(false);
         this.message("Loading your uploads…");
         try {
-            this.uploads = await this.list();
+            const uploads = await this.list();
+            if (this.listRequest !== request || !this.dialog.open) return;
+            this.uploads = uploads;
             this.renderUploads();
             this.message("");
         } catch (error) {
+            if (this.listRequest !== request || !this.dialog.open) return;
             this.message(error.message, true);
             this.retry.hidden = false;
         } finally {
-            this.setBusy(false);
+            if (this.listRequest === request && this.dialog.open) {
+                this.listRequest = null;
+                this.setBusy(false);
+            }
         }
     }
 
@@ -264,13 +282,14 @@ export class UploadPolygonsDialog {
     }
 
     /**
-     * Prevent conflicting file actions while a request or deletion confirmation is pending.
-     * @param {boolean} busy Whether an operation is pending.
+     * Prevent conflicting file actions; only upload, deletion or map admission blocks dismissal.
+     * @param {boolean} busy Whether an upload, deletion or map admission is pending.
      * @return {void}
      */
     setBusy(busy) {
         this.pending = busy;
-        const blocked = busy || this.confirming !== null;
+        const working = busy || this.listRequest !== null;
+        const blocked = working || this.confirming !== null;
         this.file.disabled = this.name.disabled = blocked || this.uploaded !== null;
         this.submit.disabled = blocked;
         this.cancel.disabled = busy;
@@ -280,8 +299,8 @@ export class UploadPolygonsDialog {
             row.add.disabled = blocked || this.isOnMap(row.upload.id);
             row.remove.disabled = blocked;
         }
-        this.progress.hidden = !busy;
-        this.dialog.setAttribute("aria-busy", String(busy));
+        this.progress.hidden = !working;
+        this.dialog.setAttribute("aria-busy", String(working));
         this.submit.textContent = this.uploaded === null ? "Upload and add to map" : "Retry add to map";
     }
 }
