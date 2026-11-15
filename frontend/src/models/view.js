@@ -57,7 +57,7 @@ export class ModelsView {
     constructor(documentContext = globalThis.document) {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
         this.deletionNotices = new Map();
-        this.elements = Object.fromEntries(["heading", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
+        this.elements = Object.fromEntries(["setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
             "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
@@ -96,13 +96,13 @@ export class ModelsView {
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
     }
 
-    /** Focus the chosen model or run name, or the Models header on a list page.
+    /** Focus a visible page destination: the model/run title or the list's navigation button.
      * @param {"library"|"setup"|"runs"|"run"} [page=this.state.page] Destination, including a list transition before its render.
      * @return {void}
      */
-    focusHeading(page = this.state.page) {
-        const heading = page === "setup" ? this.elements["setup-heading"] : page === "run" ? this.run.title : this.elements.heading;
-        heading.focus();
+    focusPage(page = this.state.page) {
+        const target = page === "setup" ? this.elements["setup-heading"] : page === "run" ? this.run.title : this.navigation[page];
+        target.focus();
     }
 
     /** Focus the safe choice when asking to delete a run. @return {void} */
@@ -690,7 +690,7 @@ export class ModelsView {
         const ids = new Set(notices.map(value => value.deletionId));
         for (const [id, notice] of this.deletionNotices) {
             if (ids.has(id)) continue;
-            if (notice.root.contains(this.document.activeElement)) this.focusHeading();
+            if (notice.root.contains(this.document.activeElement)) this.focusPage();
             notice.root.remove(); this.deletionNotices.delete(id);
         }
         for (const deletion of notices) {

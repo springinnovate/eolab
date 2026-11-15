@@ -656,7 +656,7 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     ]) {
         assert.ok(requireElementRange(id).source.endsWith(`>${label}</button>`), `${id} names its destination`);
     }
-    assert.match(requireElementRange("models-heading").source, />Data tools<\/h2>$/);
+    assert.match(requireElementRange("models-heading").source, /class="visually-hidden" tabindex="-1">Data tools<\/h2>$/);
     assert.match(requireElementRange("models-panel").source, /<nav class="models-navigation" aria-label="Data tools">/);
     for (const id of ["map-tools-more-summary"]) {
         const {source} = requireElementRange(id);
