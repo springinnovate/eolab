@@ -51,6 +51,7 @@ export class ModelsController {
         this.deletions = new Map();
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
+            habitatDatasetLabels: null,
             pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
         this.vectorSelectionRequests = new Map();
@@ -781,6 +782,29 @@ export class ModelsController {
             else this.state.invocation = invocation;
         } catch (error) { if (revision === this.revision) this.state.invocationError = `This run is unavailable: ${error.message}`; }
         this.render();
+        void this.loadRunDatasetLabels(revision);
+    }
+
+    /** Add optional display names after the saved run's exact inputs are visible.
+     * Successful labels are reused for this controller's lifetime; they never
+     * determine a historical run's membership. Failed reads leave saved IDs visible.
+     * @param {number} revision Navigation revision that opened the run.
+     * @return {Promise<void>} Completion after current labels render or an obsolete/failed read is ignored.
+     */
+    async loadRunDatasetLabels(revision) {
+        const invocation = this.state.invocation;
+        if (revision !== this.revision || this.destroyed || !invocation || this.state.habitatDatasetLabels !== null) return;
+        const usesEarthEngine = Object.entries(invocation.model.definition.inputs).some(([name, input]) =>
+            input.type === "habitat_stack" && invocation.inputs[name].kind === "earthEngine");
+        if (!usesEarthEngine) return;
+        try {
+            const options = await this.api.getHabitatEarthEngineOptions();
+            if (revision !== this.revision || this.destroyed) return;
+            this.state.habitatDatasetLabels = new Map(options.datasets.map(dataset => [dataset.id, dataset.label]));
+            this.render();
+        } catch {
+            // Display names are optional; the saved dataset IDs already identify the inputs.
+        }
     }
 
     /** Cancel only the run whose Cancel button the user selected.
