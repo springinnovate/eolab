@@ -100,21 +100,23 @@ and **Style** without making you leave the search results.
 
 #### Build and style the map
 
-Open **Map layers** to see the current stack. The first layer in the list draws
+Open **Map contents** to see the current stack. The first item in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
 the same handle.
 
-Regular Catalog layers and darker **Custom layer** cards share this one list.
+Catalog datasets and darker custom copies share this one list.
 
-![One Map layers list with plain Catalog dataset cards and darker Custom layer cards for watersheds and precipitation](docs/images/eolab-custom-layers.jpg)
+![One Map contents list with plain Catalog dataset cards and darker custom copies for watersheds and precipitation](docs/images/eolab-custom-layers.jpg)
 
-*Catalog and Custom layers appear together in the same drawing order.*
+*Catalog datasets and custom copies appear together in the same drawing order.*
 
-Use a layer's checkbox to show or hide it and its color swatch to open the legend.
-**Create custom layer** gives the same dataset independent display choices without
-changing the original data; **Duplicate** makes another custom layer. These kinds
-and their appearances are saved with the map. Open **Details** for source information,
-**Zoom to**, **Rename**, **Copy style**, **Paste style**, and other available actions.
+Use an item's checkbox to show or hide it. Its **Style** button includes a color
+preview and opens the full style editor. **Copy style** and **Paste style** stay
+beside it so you can apply one style to several compatible items.
+**Create copy** gives the same dataset independent display choices without
+changing the original data; **Duplicate** makes another custom copy. These kinds
+and their appearances are saved with the map. Open **More actions** for source
+information, **Legend**, **Zoom to**, **Rename**, and other available actions.
 
 Open **Style** to bring out the pattern you care about:
 
@@ -173,8 +175,8 @@ box marks the sampled area; the bars include both land and marine classes.*
 #### Compare two rasters
 
 Choose **2D** in Histograms to compare the top two visible continuous rasters.
-Map layers marks them **X** and **Y**. Reorder the rasters to choose the pair,
-or swap the axes in the analysis panel. Other layers stay in Map layers but are
+Map contents marks them **X** and **Y**. Reorder the rasters to choose the pair,
+or swap the axes in the analysis panel. Other layers stay in Map contents but are
 temporarily hidden while the comparison is active.
 
 The joint histogram shows which pairs of values occur together within the same
@@ -248,9 +250,9 @@ the same layer, so the chart updates instead of making you configure it again.
 
 A data time cube brings observations from different dates together as one
 dataset. Search with `type:temporal`, add a dataset, and choose its **Variable**,
-**Month** and **Date and time (UTC)** in Map layers. Only available observations
-are listed. **Create custom layer** lets you compare dates or variables with
-independent styles; use **Duplicate** for further custom layers.
+**Month** and **Date and time (UTC)** in Map contents. Only available observations
+are listed. **Create copy** lets you compare dates or variables with
+independent styles; use **Duplicate** for further custom copies.
 
 ![Blue hourly precipitation over the Atlantic and Africa, with controls for the variable, month and UTC observation time](docs/images/eolab-temporal-map.jpg)
 
@@ -297,7 +299,7 @@ dataset.
 
 #### How do I download a clip?
 
-1. Add a raster to **Map layers**, then pan and zoom to the area you need.
+1. Add a raster to **Map contents**, then pan and zoom to the area you need.
 2. Open **Tools → Data tools** and choose **Raster clip**.
 3. Give the run a name, choose **Raster**, and set **Analysis area** to
    **Visible map area**. Choose **Sampling box** to use the box shown on the map,
@@ -445,7 +447,7 @@ site's current datasets; missing data can prevent full restoration.
 
 #### Draw and share polygons
 
-Use **Map layers → Draw polygon** to create a private polygon layer and start
+Use **Map contents → Draw polygon** to create a private polygon layer and start
 drawing. Drawings stay on this device. Edit their boundaries, add names and
 notes, and save before using them in an analysis. Use **Draw polygon** on the
 layer to add more polygons.
@@ -470,7 +472,7 @@ then choose its layer under **Sample area → Polygon layer**. The calculation u
 the saved polygons that match the layer's filter.
 
 To keep a GeoJSON copy, choose **Download** on the polygon layer card in
-**Map layers**. The file includes all saved polygons in the layer, including
+**Map contents**. The file includes all saved polygons in the layer, including
 those hidden by its filter. The suggested filename includes the layer name,
 a short layer identifier and the export date and time in UTC. Downloads from
 a published map also include its URL name.
@@ -481,7 +483,7 @@ them in a shared layer when collaborators need to see them.
 
 #### Bring your own polygons
 
-Open **Map layers → Upload polygons → GeoPackage uploads…** to add a GeoPackage
+Open **Map contents → Upload polygons → GeoPackage uploads…** to add a GeoPackage
 (`.gpkg`) containing one polygon layer. Choose the file, give the layer a name,
 then select **Upload and add to map**. You can style it, inspect its attributes and filter features,
 then use the supported polygon selection in raster analyses or model inputs.

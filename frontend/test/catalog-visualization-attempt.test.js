@@ -338,7 +338,7 @@ test("selected Item mirrors pending and success states", async () => {
   assert.equal(h.onMap.hidden, false);
   assert.equal(h.row.state.retained, true);
   assert.equal(h.actionStatus.textContent, "Raster added to the map.");
-  assert.equal(h.status.textContent, "This dataset is on the map. Use Map layers to create or duplicate a custom layer.");
+  assert.equal(h.status.textContent, "This dataset is on the map. Use Map contents to create a copy with its own style or filter.");
   assert.equal(h.actionContainer.getAttribute("aria-busy"), "false");
   assert.equal(h.row.state.pendingAction, null);
 });
@@ -504,7 +504,7 @@ test("concurrent raster and vector Adds use collection plus Item ID", async () =
   assert.equal(h.calls.filter(([call]) => call === "open-rendering").length, 2);
 });
 
-test("a successful addition opens Map layers even after browsing to another item", async () => {
+test("a successful addition opens Map contents even after browsing to another item", async () => {
   const item = raster("first"), completion = deferred();
   const h = harness({ selectedItem: item, show: () => completion.promise });
   const attempt = h.run(item);
@@ -594,7 +594,7 @@ test("temporal Catalog controls explain which view they remove and pass the data
   assert.equal(h.layerButton.textContent, "Remove from map");
   assert.equal(h.row.mapButton.textContent, "Remove from map");
   assert.match(h.row.mapButton.getAttribute("aria-label"), /^Remove from map:/);
-  assert.match(h.status.textContent, /Map layers.*create or duplicate a custom layer/);
+  assert.match(h.status.textContent, /Map contents.*create a copy with its own style or filter/);
   h.styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.calls.at(-1), ["style", getCatalogItemKey(item), item]);
   h.row.mapButton.dispatchEvent(new Event("click"));

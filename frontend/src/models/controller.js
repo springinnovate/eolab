@@ -534,7 +534,7 @@ export class ModelsController {
         }
     }
 
-    /** Open the rule editor inside model setup, using fields already supplied by Map layers.
+    /** Open the rule editor inside model setup, using fields already supplied by Map contents.
      * Editing is available while the initial geometry check runs. Applying rules
      * checks the selection, then updates the map separately without submitting a run.
      * @param {string} name Input whose vector filter will be edited.
@@ -603,7 +603,7 @@ export class ModelsController {
             if (draft.temporal.datasetKey && !draft.temporal.datasets.some(source => modelSourceKey(source) === draft.temporal.datasetKey)) {
                 this.temporalAbort?.abort(); this.temporalRevision += 1;
                 Object.assign(draft.temporal, {datasetKey: "", item: null, choices: null, loading: false,
-                    error: "Add the temporal dataset to Map layers, or choose another dataset."});
+                    error: "Add the temporal dataset to Map contents, or choose another dataset."});
             }
         }
         draft.sources = structuredClone(context.rasters ?? []);
@@ -628,7 +628,7 @@ export class ModelsController {
                 if (input.filterEditing) this.closeVectorFilter();
                 this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
                 input.vectorKey = ""; input.area = null; input.vectorInfo = null; input.selecting = false;
-                input.selectionError = "Add the vector layer to Map layers, or choose another layer.";
+                input.selectionError = "Add the vector dataset to Map contents, or choose another dataset.";
             } else if (input.areaMode === "vector" && selected &&
                 !vectorAreaInputsEqual(previous, selected) &&
                 !vectorAreaInputsEqual(input.area?.selection, selected)) {
@@ -963,7 +963,7 @@ export class ModelsController {
                 this.runSnapshots.get(id)?.updatedAt === job.updatedAt;
             if (restore && isCurrent()) {
                 try { await this.restoreRunLayers(notice.layers, isCurrent); }
-                catch (error) { this.state.error = `Run restored. Some map layers could not be restored: ${error.message} Open the run to show them again.`; }
+                catch (error) { this.state.error = `Run restored. Some map items could not be restored: ${error.message} Open the run to show them again.`; }
             }
         } catch (error) { this.state.error = `${restore ? "Could not undo deletion" : "Could not dismiss Undo"}: ${error.message}`; }
         finally { notice.busy = false; this.scheduleDeletions(); this.render(); }

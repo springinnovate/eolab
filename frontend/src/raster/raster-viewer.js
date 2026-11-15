@@ -1964,13 +1964,13 @@ export function initializeRasterViewer(
         const guidance = message ?? (
             bivariateMode.active
                 ? "2D analyzes the X/Y-badged rasters with coordinated colors " +
-                  "and blending at 100% opacity. Reorder Map layers to change " +
+                  "and blending at 100% opacity. Reorder Map contents to change " +
                   `the pair.${extraGuidance}`
                 : hasCategorical
                     ? "2D comparison is not available for categorical layers."
                 : canEnter
                     ? "2D analyzes the top two visible rasters. Reorder Map " +
-                      `layers to choose the pair.${extraGuidance}`
+                      `contents to choose the pair.${extraGuidance}`
                     : "Show at least two single-band raster layers to enable " +
                       "the 2D histogram."
         );

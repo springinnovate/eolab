@@ -908,7 +908,7 @@ test("a mixed raster recipe offers completed results only to fields that accept 
     h.controller.rememberRun(parent); h.controller.chooseModel(recipe);
     const controls = view.setup.inputs, draft = h.controller.state.draft;
     assert.deepEqual(controls.original.source.children.map(option => option.value), ["", modelSourceKey(raster)]);
-    assert.deepEqual(controls.processed.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
+    assert.deepEqual(controls.processed.source.children.slice(1).map(group => group.label), ["Map contents", "Completed runs"]);
     const source = draft.sources.find(value => value.kind === "runArtifact");
     controls.processed.source.value = modelSourceKey(source); controls.processed.source.dispatchEvent(new Event("change"));
     assert.deepEqual(captureModelSubmission(draft, "mixed-inputs").inputs, {
@@ -1512,6 +1512,7 @@ test("changed view filters cancel stale reads and cannot leave an older model ar
 });
 
 
+<<<<<<< HEAD
 test("live model areas follow formula-only edits while captured areas keep their definitions", async t => {
     const recipe = {...model, inputs: {raster: model.inputs.raster, live: model.inputs.area, captured: model.inputs.area}};
     const h = fixture(); t.after(() => h.controller.destroy());
@@ -1571,10 +1572,13 @@ test("an edited filter may preserve its prior area only while the calculated def
 
 
 test("removed raster and vector inputs must be added to Map layers again before Run", async () => {
+=======
+test("removed raster and vector inputs must be added to Map contents again before Run", async () => {
+>>>>>>> origin/bugfix/1259-compact-catalog-layers
     const h = fixture(); h.controller.chooseModel(model);
     h.context.rasters = []; h.controller.refreshMapLayers();
     assert.equal(h.controller.state.draft.inputs.raster.raster, null);
-    await h.controller.submit(); assert.equal(h.submitted.length, 0); assert.match(h.controller.state.error, /Map layers/);
+    await h.controller.submit(); assert.equal(h.submitted.length, 0); assert.match(h.controller.state.error, /Map contents/);
     h.context.rasters = [raster]; h.controller.refreshMapLayers(); h.controller.editInput("raster", {raster});
     h.context.vectors = [{key: modelSourceKey(selection), collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
     h.controller.refreshMapLayers(); h.controller.chooseArea("area", "vector");
@@ -1584,7 +1588,7 @@ test("removed raster and vector inputs must be added to Map layers again before 
     await h.controller.submit(); assert.equal(h.submitted.length, 0);
 });
 
-test("duplication preserves a captured vector area without adding its view to Map layers", async () => {
+test("duplication preserves a captured vector area without adding its view to Map contents", async () => {
     const saved = structuredClone(invocation); saved.inputs.area = {kind: "catalogSelection", selection};
     const h = fixture({readModelInvocation: async () => saved}); h.context.rasters = [];
     await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
