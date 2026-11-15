@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl
 from xml.etree import ElementTree
 
 import httpx2
+import pytest
 from fastapi import FastAPI
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
@@ -104,13 +105,26 @@ def _upstream_parameters(request: httpx2.Request) -> dict[str, str]:
     return dict(request.url.params)
 
 
-def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> None:
+@pytest.mark.parametrize("use_overviews", [False, True])
+def test_vector_maps_keep_their_styles_after_republication(
+    tmp_path: Path, use_overviews: bool
+) -> None:
     """Keep old tiles, inspection, legends and filters working after another view opens.
 
     Args:
         tmp_path: Isolated mounted GeoPackages used by the actual source resolver.
+        use_overviews: Whether map rendering has a separate original-geometry
+            publication for inspection and highlights.
     """
     item, _ = assessed_category_item(tmp_path)
+    if use_overviews:
+        item["properties"]["eolab:vector_overviews"] = [
+            {
+                "layer_name": "categories_10m",
+                "tolerance": 10.0,
+                "geometry_column": "geom",
+            }
+        ]
     other_item, _ = assessed_category_item(tmp_path / "other")
     other_item["id"] += "-other"
     registry = PublishedVectorRegistry()
@@ -142,6 +156,7 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
     async def use_two_maps() -> None:
         """Open two appearances through shared services and exercise their public rendering routes."""
         published = await publication.publish(identity)
+        inspection_layer = published.layer_name + ("_original" if use_overviews else "")
         first = await styling.apply(polygon_request(item, label_field="category"))
         predicate = VectorFilter(
             enabled=True,
@@ -277,9 +292,28 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
                 ).status_code == 200
                 parameters = _upstream_parameters(captured[-1])
                 assert parameters["styles"] == ""
-                assert parameters["query_layers"] == published.layer_name
+                assert parameters["query_layers"] == inspection_layer
+                assert parameters["layers"] == inspection_layer
+                assert ElementTree.fromstring(parameters["sld_body"]).findtext(
+                    f".//{{{SLD_NAMESPACE}}}NamedLayer/{{{SLD_NAMESPACE}}}Name"
+                ) == inspection_layer
                 assert parameters["buffer"] == "8"
                 assert "\"category\" = 'A'" in parameters["cql_filter"]
+                for selected_layer in (published.layer_name, filtered.layerName):
+                    highlight = {
+                        **_map_query(selected_layer, "vector-highlight-polygon"),
+                        "featureid": "categories.1",
+                    }
+                    assert (
+                        await browser.get("/geoserver/eolab/wms", params=highlight)
+                    ).status_code == 200
+                    parameters = _upstream_parameters(captured[-1])
+                    assert parameters["layers"] == inspection_layer
+                    if selected_layer == filtered.layerName:
+                        assert "categories.1" in parameters["cql_filter"]
+                        assert "\"category\" = 'A'" in parameters["cql_filter"]
+                    else:
+                        assert parameters["featureid"] == "categories.1"
                 legend = {
                     "service": "WMS",
                     "version": "1.1.1",

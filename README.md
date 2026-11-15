@@ -561,6 +561,30 @@ palette definitions originate in the
 [ESOS-C data viewer](https://github.com/springinnovate/esos-c-dataviewer), also under
 the [Apache License 2.0](https://github.com/springinnovate/esos-c-dataviewer/blob/main/LICENSE).
 
+### Prepare polygon display levels
+
+For large polygon datasets, [prepare_vector_overviews.py](scripts/prepare_vector_overviews.py)
+creates one GeoPackage containing the original data and indexed display levels.
+Run it with a GDAL-enabled Python environment, for example:
+
+```sh
+python scripts/prepare_vector_overviews.py original.gpkg prepared.gpkg --layer protected_areas --tolerances 10 100 1000 5000
+```
+
+The source must use a projected coordinate system measured in metres and have a
+spatial index. The command leaves it unchanged and refuses to replace an existing
+output. Each level preserves feature IDs and attribute values, simplifies its
+polygons, and omits display geometry for features whose original bounding-box
+diagonal is smaller than or equal to that level's tolerance. Choose tolerances
+that preserve useful detail at the intended map scales.
+
+Copy the completed package into the data directory, then scan from **Status**.
+EOLab shows one Catalog entry for the original polygon layer and automatically
+uses its stored display levels while rendering. Exact calculations continue to
+read the original polygons. Unrelated layers in the package retain their own
+Catalog entries. The embedded `eolab_vector_overviews` table describes the
+relationships; no per-dataset sidecar or manual GeoServer setup is needed.
+
 ### Author catalog metadata descriptors
 
 The [versioned sidecar schema](catalog/schemas/eolab-item-v1.schema.json) defines

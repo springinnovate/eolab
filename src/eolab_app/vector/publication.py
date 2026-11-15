@@ -27,6 +27,7 @@ from eolab_app.vector.models import (
     CatalogVectorRequest,
     VectorLayer,
     PublishedVector,
+    original_vector_resource_name,
 )
 from eolab_app.vector.ports import VectorCatalog, VectorPublisher, VectorFieldReader
 from eolab_app.vector.sources import (
@@ -137,6 +138,8 @@ class VectorPublicationService:
                 if parse_artifact_vector_name(layer.resource_name)
                 else {}
             )
+            if layer.display_levels:
+                options["display_levels"] = layer.display_levels
             style_name = await self._publisher.publish(
                 layer.resource_name,
                 source.source_format,
@@ -146,7 +149,17 @@ class VectorPublicationService:
                 **options,
             )
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{layer.resource_name}"
-            self._vector_registry.authorize(layer_name, source, style_name)
+            self._vector_registry.authorize(
+                layer_name,
+                source,
+                style_name,
+                inspection_layer_name=(
+                    f"{GEOSERVER_WORKSPACE_NAME}:"
+                    f"{original_vector_resource_name(layer.resource_name)}"
+                    if layer.display_levels
+                    else None
+                ),
+            )
             return PublishedVector(
                 layerName=layer_name,
                 bbox=layer.bbox,

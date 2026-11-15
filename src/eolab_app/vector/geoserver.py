@@ -6,9 +6,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 import httpx2
 
+from eolab_app.catalog.geopackage_overviews import GeoPackageOverview
 from eolab_app.rendering.errors import PublicationFailureCategory
 from eolab_app.rendering.geoserver import (
     GEOSERVER_WORKSPACE_NAME,
@@ -23,6 +25,7 @@ from eolab_app.vector.models import (
     VectorGeometryKind,
     VectorReaderAssessment,
     VectorStyle,
+    original_vector_resource_name,
 )
 from eolab_app.vector.styles import vector_style_name
 
@@ -162,6 +165,7 @@ class GeoServerVectorPublisher:
         geometry_kind: VectorGeometryKind,
         *,
         advertised: bool = True,
+        display_levels: tuple[GeoPackageOverview, ...] = (),
     ) -> str:
         """Create or reuse a GeoServer vector layer and apply its default style.
 
@@ -172,6 +176,8 @@ class GeoServerVectorPublisher:
             layer_name: Exact native layer selected by the catalog Item.
             geometry_kind: Point, line, or polygon style family.
             advertised: Whether public capabilities may list the result layer.
+            display_levels: Admitted display tables in this GeoPackage. An
+                unadvertised original layer remains available for exact queries.
 
         Returns:
             Initialized unqualified default style name.
@@ -183,6 +189,15 @@ class GeoServerVectorPublisher:
         """
         if source_format not in {"shapefile", "geopackage"}:
             raise ValueError(f"Unsupported vector publisher format: {source_format}")
+        if display_levels:
+            await self.publish(
+                original_vector_resource_name(resource_name),
+                source_format,
+                source_path,
+                layer_name,
+                geometry_kind,
+                advertised=False,
+            )
         style_name = GEOSERVER_VECTOR_STYLE_NAMES[geometry_kind]
         state = await self._inspect_vector_state(resource_name, style_name)
         self._require_vector_prerequisites(state, style_name)
@@ -200,6 +215,7 @@ class GeoServerVectorPublisher:
                 source_path,
                 layer_name,
                 style_name,
+                display_levels,
             )
         elif not self._is_complete_vector(state):
             raise self._vector_state_error(
@@ -414,6 +430,7 @@ class GeoServerVectorPublisher:
         source_path: Path,
         layer_name: str,
         style_name: str,
+        display_levels: tuple[GeoPackageOverview, ...] = (),
     ) -> None:
         """Create a clean datastore and exact configured feature type.
 
@@ -423,11 +440,23 @@ class GeoServerVectorPublisher:
             source_path: Canonical mounted source file.
             layer_name: Exact native layer name.
             style_name: Initialized geometry-specific default style.
+            display_levels: Validated display tables, or none for an exact source.
 
         Raises:
             VectorPublicationError: If creation or verification fails.
         """
         try:
+            if display_levels:
+                await self._gateway.request(
+                    "configure vector display levels",
+                    "PUT",
+                    f"/resource/eolab-vector-overviews/{resource_name}.xml",
+                    accepted_statuses=frozenset({200, 201}),
+                    content=self._display_levels_xml(
+                        resource_name, layer_name, display_levels
+                    ),
+                    headers={"Content-Type": "application/xml"},
+                )
             await self._gateway.request(
                 "create vector datastore",
                 "POST",
@@ -437,6 +466,7 @@ class GeoServerVectorPublisher:
                     resource_name,
                     source_format,
                     source_path,
+                    display_levels=display_levels,
                 ),
                 headers={"Accept": "application/json"},
             )
@@ -456,13 +486,13 @@ class GeoServerVectorPublisher:
                 headers={"Accept": "application/json"},
             )
         except VectorPublicationError:
-            await self._rollback_new_vector_publication(resource_name)
+            await self._rollback_new_vector_publication(resource_name, display_levels)
             raise
         state = await self._inspect_vector_state(resource_name, style_name)
         self._require_vector_prerequisites(state, style_name)
         if self._is_complete_vector(state):
             return
-        await self._rollback_new_vector_publication(resource_name)
+        await self._rollback_new_vector_publication(resource_name, display_levels)
         raise self._vector_state_error(
             "upstream_failure",
             (
@@ -517,11 +547,16 @@ class GeoServerVectorPublisher:
                 ),
             )
 
-    async def _rollback_new_vector_publication(self, resource_name: str) -> None:
+    async def _rollback_new_vector_publication(
+        self,
+        resource_name: str,
+        display_levels: tuple[GeoPackageOverview, ...] = (),
+    ) -> None:
         """Best-effort remove a datastore created by the current failed attempt.
 
         Args:
             resource_name: Stable datastore and layer resource name.
+            display_levels: Levels whose generated configuration needs cleanup.
         """
         try:
             exists = await self._gateway.resource_exists(
@@ -532,6 +567,13 @@ class GeoServerVectorPublisher:
                 await self._delete_datastore(
                     resource_name,
                     "roll back new vector datastore",
+                )
+            if display_levels:
+                await self._gateway.request(
+                    "roll back vector display configuration",
+                    "DELETE",
+                    f"/resource/eolab-vector-overviews/{resource_name}.xml",
+                    accepted_statuses=frozenset({200, 404}),
                 )
         except VectorPublicationError:
             LOGGER.warning(
@@ -598,10 +640,57 @@ class GeoServerVectorPublisher:
         )
 
     @staticmethod
+    def _display_levels_xml(
+        resource_name: str,
+        layer_name: str,
+        display_levels: tuple[GeoPackageOverview, ...],
+    ) -> bytes:
+        """Build stock GeoTools selector XML for a managed original datastore.
+
+        Args:
+            resource_name: Public datastore identity.
+            layer_name: Original native table used for exact queries.
+            display_levels: Nonempty admitted tables and their source-unit tolerances.
+
+        Returns:
+            Escaped XML consumed by the GeoServer pregeneralized extension.
+        """
+        root = ElementTree.Element(
+            "GeneralizationInfos",
+            {
+                "version": "1.0",
+                "dataSourceName": original_vector_resource_name(resource_name),
+                "dataSourceNameSpace": GEOSERVER_WORKSPACE_NAME,
+            },
+        )
+        feature = ElementTree.SubElement(
+            root,
+            "GeneralizationInfo",
+            {
+                "featureName": layer_name,
+                "baseFeatureName": layer_name,
+                "geomPropertyName": display_levels[0].geometry_column,
+            },
+        )
+        for level in display_levels:
+            ElementTree.SubElement(
+                feature,
+                "Generalization",
+                {
+                    "distance": str(level.tolerance),
+                    "featureName": level.layer_name,
+                    "geomPropertyName": level.geometry_column,
+                },
+            )
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    @staticmethod
     def _datastore_document(
         resource_name: str,
         source_format: VectorFormat,
         source_path: Path,
+        *,
+        display_levels: tuple[GeoPackageOverview, ...] = (),
     ) -> dict[str, Any]:
         """Build one read-only GeoServer datastore request document.
 
@@ -609,6 +698,7 @@ class GeoServerVectorPublisher:
             resource_name: Stable datastore name.
             source_format: Supported mounted source format.
             source_path: Canonical mounted source file.
+            display_levels: Admitted overview tables, or none for a raw datastore.
 
         Returns:
             GeoServer REST JSON preserving format-specific parameters.
@@ -616,7 +706,15 @@ class GeoServerVectorPublisher:
         Raises:
             ValueError: If the format is outside this adapter.
         """
-        if source_format == "shapefile":
+        if display_levels:
+            parameters = {
+                "RepositoryClassName": "org.geoserver.data.gen.DSFinderRepository",
+                "GeneralizationInfosProviderClassName": (
+                    "org.geoserver.data.gen.info.GeneralizationInfosProviderImpl"
+                ),
+                "GeneralizationInfosProviderParam": f"eolab-vector-overviews/{resource_name}.xml",
+            }
+        elif source_format == "shapefile":
             parameters = {
                 "url": source_path.as_uri(),
                 "create spatial index": "false",

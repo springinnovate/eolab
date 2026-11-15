@@ -1,6 +1,11 @@
 """Authoritative assessed vector metadata shared by vector workflows."""
 
 from typing import Any
+
+from eolab_app.catalog.geopackage_overviews import (
+    OVERVIEW_METADATA_KEY,
+    parse_catalog_overviews,
+)
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.models import (
     ResolvedVectorSource,
@@ -139,6 +144,19 @@ def get_catalog_vector_layer(
         raise VectorConflictError(
             f"{operation} unavailable: the assessed geometry is invalid."
         )
+    try:
+        display_levels = parse_catalog_overviews(
+            item["properties"].get(OVERVIEW_METADATA_KEY)
+        )
+    except ValueError as error:
+        raise VectorConflictError(
+            f"{operation} unavailable: rescan this dataset because its display "
+            "level metadata is invalid."
+        ) from error
+    if display_levels and source.source_format != "geopackage":
+        raise VectorConflictError(
+            f"{operation} unavailable: display levels require a GeoPackage source."
+        )
     return VectorLayer(
         resource_name=item["id"],
         source=source,
@@ -146,4 +164,5 @@ def get_catalog_vector_layer(
         feature_count=catalog_vector_feature_count(item, operation),
         bbox=tuple(item["bbox"]),
         geometry_kind=geometry_kind,
+        display_levels=display_levels,
     )

@@ -20,6 +20,7 @@ from pydantic import (
 from eolab_app.catalog.vector_contract import (
     CatalogVectorRequest as CatalogVectorRequest,
 )
+from eolab_app.catalog.geopackage_overviews import GeoPackageOverview
 from eolab_app.catalog.vector import (
     VECTOR_SOURCE_METADATA_KEY,
 )
@@ -71,6 +72,19 @@ VectorSequentialPalette = Literal[
 ]
 
 
+def original_vector_resource_name(resource_name: str) -> str:
+    """Return the private original-geometry publication for a display-level layer.
+
+    Args:
+        resource_name: Server-generated public vector publication name.
+
+    Returns:
+        Unqualified GeoServer name used for original-geometry inspection and
+        feature-ID highlights, independent of the displayed overview.
+    """
+    return f"{resource_name}_original"
+
+
 @dataclass(frozen=True)
 class ResolvedVectorSource:
     """A vector dataset's format, server file path, and selected layer.
@@ -114,6 +128,8 @@ class VectorLayer:
         feature_count: Number of features in the original layer.
         bbox: Layer bounds in WGS84 longitude/latitude order.
         geometry_kind: Point, line or polygon style family.
+        display_levels: Admitted GeoPackage tables used only for map rendering.
+            The source always identifies the original calculation geometry.
     """
 
     resource_name: str
@@ -122,6 +138,7 @@ class VectorLayer:
     feature_count: int
     bbox: tuple[float, float, float, float]
     geometry_kind: VectorGeometryKind
+    display_levels: tuple[GeoPackageOverview, ...] = ()
 
 
 class ArtifactVectorDescription(BaseModel):

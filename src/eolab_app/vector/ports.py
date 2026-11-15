@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Protocol
 
+from eolab_app.catalog.geopackage_overviews import GeoPackageOverview
 from eolab_app.vector.filters import VectorFilter, VectorFilterCount
 from eolab_app.vector.models import (
     CatalogVectorRequest,
@@ -93,6 +94,7 @@ class VectorPublisher(Protocol):
         geometry_kind: VectorGeometryKind,
         *,
         advertised: bool = True,
+        display_levels: tuple[GeoPackageOverview, ...] = (),
     ) -> str:
         """Converge and style one exact mounted vector layer.
 
@@ -103,6 +105,8 @@ class VectorPublisher(Protocol):
             layer_name: Exact native layer selected by the Item.
             geometry_kind: Default point, line, or polygon style class.
             advertised: Whether public capabilities may list this layer.
+            display_levels: Admitted GeoPackage display tables. Exact source
+                queries remain available separately when these are configured.
 
         Returns:
             Unqualified initialized style name assigned to the layer.
