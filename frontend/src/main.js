@@ -748,6 +748,8 @@ async function initializeCatalog(
 
     let annotations = null;
     let annotationSessions = null;
+    /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
+    let annotationsReady;
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
@@ -1471,6 +1473,7 @@ async function initializeCatalog(
                     mapLayerController.removeKey(record.entry.key);
                 }
             }
+            return annotationsReady;
         },
         exportUpload: record => {
             if (record.adapter !== vectorMapLayerAdapter || record.entry.item !== null) return null;
@@ -1689,12 +1692,14 @@ async function initializeCatalog(
                 if (annotations.updateSharedLayer(id, data)) { vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); }
             },
         });
-        void annotationSessions.start({ restoreBindings: false, refreshImmediately: false }).then(async () => {
+        annotationsReady = annotationSessions.start({ restoreBindings: false, refreshImmediately: false }).then(async () => {
             await annotations.load({ attachSavedLayers: !isSharedViewer && editableMapSlug === null,
                 sharedLayerIds: annotationSessions.bookmarkedLayerIds() });
             vectorSampling.refresh();
             summarySampling.refresh();
-            await savedMapViewController.restoreStartupView(globalThis.location.hash);
+        });
+        const restoringMap = savedMapViewController.restoreStartupView(globalThis.location.hash);
+        void Promise.all([annotationsReady, restoringMap]).then(() => {
             annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash,
                 mapOrderedLayerIds: annotationSessions.bookmarkedLayerIds() });
             void annotationSessions.refresh();

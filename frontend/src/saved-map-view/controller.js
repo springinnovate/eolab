@@ -35,8 +35,9 @@ export class SavedMapViewController {
      * viewport used by Reset view.
      * @param {boolean} [configuration.restoreSharedMap=false] Reset to the opening
      * shared fragment, ignore private autosave, and leave personal storage untouched.
-     * @param {()=>void} [configuration.beforeRestore] Composition-owned cleanup
-     * for transient map presentations excluded from the portable contract.
+     * @param {()=>void|Promise<void>} [configuration.beforeRestore] Composition-owned
+     * readiness and cleanup before restoring layers. Private startup appearance
+     * does not wait for this callback; explicit map actions commit appearance later.
      * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
@@ -330,6 +331,8 @@ export class SavedMapViewController {
      * private storage when malformed. Authoring mode can restore the last
      * validated origin-local document without a fragment; a shared viewer
      * requires a shared fragment and never restores private map storage.
+     * Private startup applies appearance before loading layers so later user
+     * changes are not replaced when those layers finish.
      *
      * @param {string} fragment Current browser URL fragment.
      * @return {Promise<void>} Completion after shared or local restoration.
@@ -365,7 +368,9 @@ export class SavedMapViewController {
         this.restoreGeneration = restoreGeneration;
         this.#setBusy(true);
         try {
-            const report = await this.#restore(savedMapView, restoreGeneration);
+            const report = await this.#restore(savedMapView, restoreGeneration, {
+                restoreAppearanceEarly: true,
+            });
             if (report !== null) {
                 if (report.loaded !== report.total || report.details.length > 0) this.view.showResults(report);
                 this.rememberPending = true;
@@ -536,55 +541,70 @@ export class SavedMapViewController {
      *
      * @param {Object} savedMapView Validated saved-map document.
      * @param {number} restoreGeneration Current restoration generation.
+     * @param {Object} [options] Restoration timing.
+     * @param {boolean} [options.restoreAppearanceEarly=false] Apply private startup
+     * appearance before preparing layers; explicit map actions apply it at commit.
      * @return {Promise<{loaded:number,total:number,details:string[]}|null>}
      * Per-layer restoration report, or null after supersession.
      */
-    async #restore(savedMapView, restoreGeneration) {
-        this.beforeRestore();
+    async #restore(savedMapView, restoreGeneration, { restoreAppearanceEarly = false } = {}) {
+        const restoreReady = this.beforeRestore();
         this.catalogVisualization.clear();
-        const preparations = await mapWithConcurrencyLimit(
-            savedMapView.layers,
-            RESTORE_CONCURRENCY,
-            async (layer) => {
-                if (layer.temporalSource) {
-                    try {
-                        const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                        return { key, staged: null, detail: null };
-                    } catch (error) {
-                        return { staged: null, detail: `${layer.customName ?? layer.temporalSource.variable}: ${asError(error).message}` };
+        const initialAppearance = restoreAppearanceEarly
+            ? this.#restoreViewportAndBasemap(savedMapView) : null;
+        if (restoreAppearanceEarly) {
+            this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
+        }
+        const preparingLayers = Promise.resolve(restoreReady).then(() => {
+            if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
+            return mapWithConcurrencyLimit(
+                savedMapView.layers,
+                RESTORE_CONCURRENCY,
+                async (layer) => {
+                    if (layer.temporalSource) {
+                        try {
+                            const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                            return { key, staged: null, detail: null };
+                        } catch (error) {
+                            return { staged: null, detail: `${layer.customName ?? layer.temporalSource.variable}: ${asError(error).message}` };
+                        }
                     }
-                }
-                if (layer.uploadId) {
+                    if (layer.uploadId) {
+                        try {
+                            if (savedMapView.viewer.origin !== this.viewerOrigin) {
+                                throw new Error("Private uploaded layers can only be opened on their original EOLab site.");
+                            }
+                            const key = await this.restoreUpload(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                            return { key, staged: null, detail: null };
+                        } catch (error) {
+                            return { staged: null, detail: `${layer.customName ?? "Private uploaded layer"}: ${asError(error).message}` };
+                        }
+                    }
+                    if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
                     try {
                         if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                            throw new Error("Private uploaded layers can only be opened on their original EOLab site.");
+                            throw new Error("Shared layers can only be opened on their original EOLab site.");
                         }
-                        const key = await this.restoreUpload(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                        const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
                         return { key, staged: null, detail: null };
                     } catch (error) {
-                        return { staged: null, detail: `${layer.customName ?? "Private uploaded layer"}: ${asError(error).message}` };
+                        return { staged: null, detail: `Shared layer ${layer.sharedAnnotation.id}: ${asError(error).message}` };
                     }
                 }
-                if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
-                try {
-                    if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                        throw new Error("Shared layers can only be opened on their original EOLab site.");
-                    }
-                    const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                    return { key, staged: null, detail: null };
-                } catch (error) {
-                    return { staged: null, detail: `Shared layer ${layer.sharedAnnotation.id}: ${asError(error).message}` };
-                }
-            }
-        );
+            );
+        });
+        const [preparations, initialBasemapWarning] = await Promise.all([
+            preparingLayers, initialAppearance,
+        ]);
+        if (preparations === null) return null;
         const stagedLayers = preparations
             .filter(({ staged }) => staged !== null)
             .map(({ staged }) => staged);
         if (restoreGeneration !== this.restoreGeneration) {
             return null;
         }
-        this.viewport.restore(savedMapView.viewport);
-        const basemapWarning = savedMapView.basemap === undefined ? null : await this.basemap.restore(savedMapView.basemap);
+        const basemapWarning = restoreAppearanceEarly ? initialBasemapWarning
+            : await this.#restoreViewportAndBasemap(savedMapView);
         if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
         this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
         const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
@@ -599,7 +619,9 @@ export class SavedMapViewController {
                 this.mapLayers.setCustomLayer(result.key, savedMapView.layers[index].isCustom);
             }
         }
-        this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
+        if (!restoreAppearanceEarly) {
+            this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
+        }
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         // Older callers may expose only catalog staging; mixed maps require explicit ordering.
         if (preparations.some(result => result.key)) {
@@ -613,6 +635,16 @@ export class SavedMapViewController {
                 .map(({ detail }) => detail)
                 .filter((detail) => detail !== null)],
         };
+    }
+
+    /**
+     * Apply the saved viewport and start loading its basemap through their owners.
+     * @param {Object} savedMapView Validated saved-map document.
+     * @return {Promise<string|null>} Warning if the saved basemap is unavailable.
+     */
+    async #restoreViewportAndBasemap(savedMapView) {
+        this.viewport.restore(savedMapView.viewport);
+        return savedMapView.basemap === undefined ? null : this.basemap.restore(savedMapView.basemap);
     }
 
     /**
