@@ -753,13 +753,9 @@ export class ModelsView {
         if (signature !== this.librarySignature) {
             this.librarySignature = signature;
             this.elements["library-items"].replaceChildren(...filtered.map(model => {
-                const card = this.element("article", "", "models-card");
-                const heading = this.element("h3");
-                const open = this.button(model.title, () => this.handlers.onChoose(model), "models-card-open models-name");
-                open.setAttribute("aria-label", `Set up ${model.title}`); heading.append(open);
-                const outputLabels = Object.entries(model.outputs).map(([name, output]) =>
-                    output.label ?? name.replace(/[_-]/g, " "));
-                card.append(heading, this.element("p", `Outputs: ${outputLabels.join(" · ")}`, "models-help")); return card;
+                const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
+                open.setAttribute("aria-label", `Set up ${model.title}`);
+                return open;
             }));
         }
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";

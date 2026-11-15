@@ -136,21 +136,18 @@ test("removed history entries leave the DOM while unrelated run cards retain the
     assert.match(h.view.elements["runs-status"].textContent, /No data tool runs/);
 });
 
-test("library and run cards use the same presentation and invoke their existing navigation", () => {
+test("tool rows and run cards retain native buttons, navigation and focus", () => {
     const h = fixture(), run = job();
     Object.assign(h.state, {page: "library", runs: [run]}); h.view.render(h.state);
-    const libraryCard = h.view.elements["library-items"].children[0];
-    const libraryButton = libraryCard.children[0].children[0];
+    const libraryButton = h.view.elements["library-items"].children[0];
     const runCard = h.view.runCards.get(run.jobId);
-    assert.equal(libraryCard.className, runCard.root.className);
-    assert.equal(libraryButton.className, runCard.button.className);
     assert.equal(libraryButton.type, "button"); assert.equal(runCard.button.type, "button");
     assert.equal(libraryButton.getAttribute("aria-label"), `Set up ${model.title}`);
     libraryButton.dispatchEvent(new Event("click")); runCard.button.dispatchEvent(new Event("click"));
     assert.deepEqual(h.actions.slice(-2), [["Choose", model], ["Run", run.jobId]]);
     libraryButton.focus(); h.view.render(h.state);
-    assert.equal(h.view.elements["library-items"].children[0], libraryCard);
-    assert.equal(libraryCard.contains(h.doc.activeElement), true);
+    assert.equal(h.view.elements["library-items"].children[0], libraryButton);
+    assert.equal(h.doc.activeElement, libraryButton);
 });
 
 test("raster creation leads matching tools without changing discovery order or selecting a tool", () => {
@@ -160,7 +157,7 @@ test("raster creation leads matching tools without changing discovery order or s
     Object.assign(h.state, {page: "library", library});
     h.view.render(h.state);
     /** @return {string[]} Tool titles in their displayed order. */
-    const titles = () => h.view.elements["library-items"].children.map(card => card.children[0].children[0].textContent);
+    const titles = () => h.view.elements["library-items"].children.map(button => button.textContent);
     assert.deepEqual(titles(), [period.title, model.title, clipModel.title, seriesModel.title]);
     assert.deepEqual(h.state.library, library);
     assert.deepEqual(library.map(item => item.id), [model.id, clipModel.id, period.id, seriesModel.id]);
@@ -173,13 +170,13 @@ test("raster creation leads matching tools without changing discovery order or s
     assert.deepEqual(titles(), []);
     assert.equal(h.view.elements["library-status"].textContent, "No matching tools.");
     h.state.query = ""; h.view.render(h.state);
-    const choose = h.view.elements["library-items"].children[0].children[0].children[0];
+    const choose = h.view.elements["library-items"].children[0];
     assert.equal(choose.getAttribute("aria-label"), `Set up ${period.title}`);
     choose.dispatchEvent(new Event("click"));
     assert.deepEqual(h.actions, [["Choose", period]]);
 });
 
-test("tool cards show output names while full descriptions remain searchable and visible in setup", () => {
+test("tool rows show only task names while full descriptions remain searchable and visible in setup", () => {
     const h = fixture();
     const recipe = {...model, description: "Valid pixels have equal weight; missing values are excluded.",
         outputs: {summary_result: {...model.outputs.statistics, label: "Summary statistic"},
@@ -188,12 +185,11 @@ test("tool cards show output names while full descriptions remain searchable and
     Object.assign(h.state, {page: "library", library: [recipe], query: "EQUAL WEIGHT",
         draft: createModelDraft(recipe, {rasters: [raster], area}, "compact-card")});
     h.view.render(h.state);
-    const cards = h.view.elements["library-items"].children;
-    assert.equal(cards.length, 1);
-    assert.equal(cards[0].children.length, 2);
-    assert.equal(cards[0].children[0].children[0].textContent, recipe.title);
-    assert.equal(cards[0].children[1].textContent, "Outputs: Summary statistic · masked values · valid pixel count");
-    cards[0].children[0].children[0].dispatchEvent(new Event("click"));
+    const choices = h.view.elements["library-items"].children;
+    assert.equal(choices.length, 1);
+    assert.equal(choices[0].children.length, 0);
+    assert.equal(choices[0].textContent, recipe.title);
+    choices[0].dispatchEvent(new Event("click"));
     assert.deepEqual(h.actions.at(-1), ["Choose", recipe]);
 
     h.state.page = "setup"; h.view.render(h.state);
