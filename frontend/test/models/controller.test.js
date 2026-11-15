@@ -1512,7 +1512,6 @@ test("changed view filters cancel stale reads and cannot leave an older model ar
 });
 
 
-<<<<<<< HEAD
 test("live model areas follow formula-only edits while captured areas keep their definitions", async t => {
     const recipe = {...model, inputs: {raster: model.inputs.raster, live: model.inputs.area, captured: model.inputs.area}};
     const h = fixture(); t.after(() => h.controller.destroy());
@@ -1571,10 +1570,7 @@ test("an edited filter may preserve its prior area only while the calculated def
 });
 
 
-test("removed raster and vector inputs must be added to Map layers again before Run", async () => {
-=======
 test("removed raster and vector inputs must be added to Map contents again before Run", async () => {
->>>>>>> origin/bugfix/1259-compact-catalog-layers
     const h = fixture(); h.controller.chooseModel(model);
     h.context.rasters = []; h.controller.refreshMapLayers();
     assert.equal(h.controller.state.draft.inputs.raster.raster, null);

@@ -503,7 +503,7 @@ features, then select that polygon layer when choosing your analysis area.
 This is useful for working with one country, watershed or project group without
 preparing another file.
 
-On a custom vector layer, open **Layer tools → Field calculator** to add a
+On a custom vector layer, open **More actions → Field calculator** to add a
 numeric field. Enter an output name and an expression, or use **Insert field**
 to insert a quoted field name. For example, `'Population' / 'Area km2'` divides
 two existing attributes. Supported operators are `+`, `-`, `*`, `/` and

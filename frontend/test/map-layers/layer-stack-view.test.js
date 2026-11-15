@@ -372,13 +372,13 @@ test("the create action names the source layer and disables only its pending add
   assert.equal(actionControl(list.children[0], "add-view").textContent, "Creating…");
 });
 
-test("custom vectors offer the calculator under Layer tools with a stable action identity", () => {
+test("custom vectors offer the calculator under More actions with a stable action identity", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), opened = [];
   view.bind({onCalculateFields: key => opened.push(key)});
   const layer = {...LAYERS[0], datasetKind: "vector", isCustom: true, canCalculateFields: true};
   view.render([layer], layer.key);
   const row = doc.querySelector("#raster-layer-list").children[0];
-  assert.equal(actionControl(row, "details").textContent, "Layer tools");
+  assert.equal(actionControl(row, "details").textContent, "More actions");
   actionControl(row, "details").dispatchEvent(new Event("click"));
   const calculator = actionControl(row, "field-calculator");
   assert.equal(calculator.textContent, "Field calculator");
