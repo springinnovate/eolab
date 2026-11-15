@@ -733,7 +733,7 @@ export class ModelsView {
         this.elements.recover.setAttribute("aria-disabled", String(state.submitting));
         if (!state.submitting) this.elements.recover.hidden = !state.pending;
         const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
-            : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs and won’t create a second run.`;
+            : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs.`;
         if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
         const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
         const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
