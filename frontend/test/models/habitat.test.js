@@ -330,6 +330,8 @@ test("Habitat duplicates a large mixed stack and preserves unavailable private s
     await chooseVector(h, "area", h.context.vectors[0], "North");
     await chooseVector(h, "references", h.context.vectors[1], "South");
     edit(h.view.setup.inputs.habitat_mask.source, modelSourceKey(source));
+    assert.equal(h.view.setup.inputs.habitat_mask.reason.hidden, true);
+    assert.equal(controls.responses[0].raster.reason.hidden, true);
     await h.controller.submit();
     assert.equal(h.requests.length, 1);
     const expected = structuredClone(h.requests[0].inputs);
@@ -355,10 +357,16 @@ test("Habitat duplicates a large mixed stack and preserves unavailable private s
     const draft = h.controller.state.draft;
     assert.equal(draft.inputs.stack.responses[0].raster.artifactId, source.artifactId);
     assert.equal(draft.inputs.habitat_mask.raster.artifactId, source.artifactId);
+    assert.equal(h.view.setup.inputs.habitat_mask.reason.hidden, false);
+    assert.match(h.view.setup.inputs.habitat_mask.reason.textContent, /no longer available/);
+    assert.equal(h.view.setup.inputs.stack.responses[0].raster.reason.hidden, false);
+    assert.match(h.view.setup.inputs.stack.responses[0].raster.reason.textContent, /no longer available/);
     edit(h.view.setup.inputs.stack.responses[0].source, modelSourceKey(h.context.rasters[2]));
     assert.equal(h.view.setup.run.disabled, true, "The unavailable optional mask must not become an omitted mask");
     edit(h.view.setup.inputs.habitat_mask.source, "");
     assert.equal(h.view.setup.run.disabled, false);
+    assert.equal(h.view.setup.inputs.habitat_mask.reason.hidden, false);
+    assert.match(h.view.setup.inputs.habitat_mask.reason.textContent, /None selected/);
     assert.equal(captureModelSubmission(draft, "mask-omitted").inputs.habitat_mask, null);
     h.controller.destroy();
 });

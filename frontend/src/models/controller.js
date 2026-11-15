@@ -184,6 +184,7 @@ export class ModelsController {
     }
 
     /** Change one named input and update its dependent grid or area choices.
+     * An explicit raster choice replaces its copied-run provenance.
      * @param {string} name Input name declared by the recipe.
      * @param {Object} change Edited source, acquisition mode, mask or grid fields.
      * @return {void}
@@ -201,6 +202,7 @@ export class ModelsController {
                 Object.assign(input, {pixelSize: [...choice.grid.pixelSize], origin: [...choice.grid.origin], unit: choice.grid.unit});
             }
         }
+        if ("raster" in change) input.copiedFromRun = false;
         Object.assign(input, change);
         this.setupSession?.inputChanged(name, change);
         this.editDraft({});
@@ -605,13 +607,7 @@ export class ModelsController {
             const definition = draft.model.inputs[name], type = definition.type;
             const handler = getModelInputHandler(type);
             if (handler) { handler.refresh(input, definition, context); continue; }
-            if (["raster", "catalog_raster", "optional_raster"].includes(type)) {
-                input.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.";
-                if (type !== "catalog_raster") input.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
-                if (input.raster?.available === false) input.sourceReason = "This raster is no longer available. Choose another input.";
-                continue;
-            }
-            if (["habitat_stack", "raster_preparation"].includes(type)) continue;
+            if (["raster", "catalog_raster", "optional_raster", "habitat_stack", "raster_preparation"].includes(type)) continue;
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
             const selected = input.vectors.find(source => source.key === input.vectorKey);
@@ -986,7 +982,7 @@ export class ModelsController {
             if (handler) handler.restore(input, saved.inputs[name], definition);
             else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
                 input.raster = structuredClone(saved.inputs[name]);
-                input.sourceReason = "Copied from the original run; choose another raster to change it.";
+                input.copiedFromRun = true;
             } else if (definition.type === "raster_preparation") {
                 const {crs, pixelSize, origin} = saved.inputs[name];
                 Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});

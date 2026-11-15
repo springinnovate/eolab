@@ -233,7 +233,7 @@ export class HabitatStackView {
                 controls.remove.setAttribute("aria-label", `Remove ${label.toLowerCase()}`);
                 if (this.document.activeElement !== controls.name) controls.name.value = row.name;
                 this.renderRasterInput(controls.raster, controls.definition, {raster: row.raster, resampling: row.resampling,
-                    sourceReason: row.raster?.available === false ? "This raster result is no longer available. Choose another input." : "Choose a raster from Map layers or a completed run."}, state);
+                    copiedFromRun: false}, state);
             });
         }
         if (this.value.categoricalPredictor && this.value.predictors[this.categoricalRow?.index]?.name !== this.value.categoricalPredictor) {

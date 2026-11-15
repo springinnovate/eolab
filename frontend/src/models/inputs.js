@@ -198,7 +198,8 @@ export function selectedDrawnPolygonLayer(draft, input) {
  * @param {string} id Local draft identity.
  * @param {import("./model-setup.js").ModelSetupIntegration|null} [integration] Registered setup owner or explicit ordinary setup.
  * @return {Object} Draft with field state in inputs[name], shared source choices,
- * temporal controls and parameters. Spatial fields select live vector views or
+ * temporal controls and parameters. Ordinary raster inputs track copiedFromRun
+ * until an explicit source choice replaces that provenance. Spatial fields select live vector views or
  * retain an explicitly captured area from the map or an earlier run.
  * @throws {Error} If the supplied map selection is invalid.
  */
@@ -221,7 +222,7 @@ export function createModelDraft(model, context, id, integration = getModelSetup
             inputs[name] = {
                 ...preparation,
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
-                sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.",
+                copiedFromRun: false,
             };
         } else if (input.type === "raster_preparation") {
             const step = model.steps.find(value => value.inputs.preparation?.input === name);

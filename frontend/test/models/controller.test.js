@@ -572,7 +572,6 @@ test("published results are explicit model choices without previews or map layer
     h.controller.rememberRun({...parent, status: "expired", artifacts: {...artifacts, availability: "unavailable", files: []}});
     h.controller.refreshMapLayers();
     assert.equal(draft.inputs.habitat.raster.available, false);
-    assert.match(draft.inputs.habitat.sourceReason, /no longer available/);
     assert.throws(() => captureModelSubmission(draft, "request-expired-result"), /no longer available/);
 });
 
@@ -804,7 +803,7 @@ test("multiple map rasters require a choice; catalog-only inputs cannot become s
     let draft = createModelDraft(model, {rasters: [raster, {...raster, itemId: "second"}, hidden]}, "draft");
     assert.equal(draft.inputs.raster.raster, null); assert.equal(draft.sources.length, 3);
     draft = createModelDraft(model, {rasters: [raster], selectedRaster: hidden}, "draft");
-    assert.equal(draft.inputs.raster.raster.itemId, "population"); assert.equal(draft.sources.length, 1); assert.match(draft.inputs.raster.sourceReason, /Map layers/);
+    assert.equal(draft.inputs.raster.raster.itemId, "population"); assert.equal(draft.sources.length, 1);
 });
 
 test("named raster and vector controls preserve distinct inputs through refresh, submission and duplication", async () => {
@@ -855,6 +854,16 @@ test("named raster and vector controls preserve distinct inputs through refresh,
     assert.equal(view.setup.inputs.reference.source.value, "captured");
     assert.match(view.setup.inputs.study.areaDescription.textContent, /BASIN equals "North"/);
     assert.match(view.setup.inputs.reference.areaDescription.textContent, /BASIN equals "South"/);
+    for (const name of ["observed", "expected"]) {
+        assert.equal(view.setup.inputs[name].reason.hidden, false);
+        assert.match(view.setup.inputs[name].reason.textContent, /Copied from the original run/);
+    }
+    view.setup.inputs.observed.source.value = modelSourceKey(h.context.rasters[1]);
+    view.setup.inputs.observed.source.dispatchEvent(new Event("change"));
+    h.controller.refreshMapLayers();
+    assert.equal(view.setup.inputs.observed.reason.hidden, true);
+    assert.equal(view.setup.inputs.observed.reason.textContent, "");
+    assert.match(view.setup.inputs.expected.reason.textContent, /Copied from the original run/);
     assert.equal(h.submitted.length, 1);
     h.controller.destroy();
 });
