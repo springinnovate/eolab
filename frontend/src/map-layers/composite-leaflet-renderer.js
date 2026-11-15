@@ -58,7 +58,7 @@ export class CompositeLeafletRenderer {
                 this.abortController = null;
                 this.planFailed = true;
                 this.#emitStatus("error", error instanceof Error
-                    ? error.message : "Map layers could not be prepared.");
+                    ? error.message : "Map contents could not be prepared.");
             },
         );
     }

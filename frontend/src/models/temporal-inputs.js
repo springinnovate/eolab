@@ -42,7 +42,7 @@ export function getTemporalStatistics(variable, temporal) {
 }
 
 /** Create empty period choices independently of the observation displayed on the map.
- * @param {Object[]} datasets Catalog dataset identities retained in Map layers.
+ * @param {Object[]} datasets Catalog dataset identities retained in Map contents.
  * @param {"temporal_reduction"|"area_statistic"} statisticType Recipe input defining whether to summarize observations or pixels.
  * @param {{inputUnit:string,outputUnit:string,factor:number}|null} precipitation Period-map conversion fixed in Model YAML; null for area series.
  * @return {Object} Editable choices, statistic type, fixed conversion and Catalog availability state.
@@ -61,8 +61,8 @@ export function createTemporalDraft(datasets, statisticType, precipitation) {
  * @return {string} User-facing problem, or an empty string when the choices are complete.
  */
 export function temporalSelectionError(temporal, reducer) {
-    if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset from Map layers." :
-        "Add a temporal dataset from Catalog to Map layers, then choose it here.";
+    if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset from Map contents." :
+        "Add a temporal dataset from Catalog to Map contents, then choose it here.";
     if (temporal.loading) return "Loading available variables and dates…";
     if (temporal.error) return temporal.error;
     if (!temporal.item) return "Load the dataset's variables before running the analysis.";

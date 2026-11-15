@@ -139,7 +139,7 @@ export class SavedMapViewDomView {
         link.href = `/maps/${encodeURIComponent(saved.slug)}`;
         link.textContent = link.href;
         this.document.querySelector("#published-map-save").disabled = false;
-        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some layers or settings could not load. Saving will publish the layers and settings currently on this map; unavailable layers will be omitted.");
+        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some map contents or settings could not load. Saving will publish the contents and settings currently on this map; unavailable items will be omitted.");
     }
 
     /**
@@ -336,8 +336,8 @@ export class SavedMapViewDomView {
             completedWithWarnings
                 ? "Map opened with warnings"
                 : "Map partially opened",
-            `${formatCount(report.loaded, "layer")} loaded from ` +
-                `${formatCount(report.total, "saved layer")}.`,
+            `${formatCount(report.loaded, "item")} loaded from ` +
+                `${formatCount(report.total, "saved item")}.`,
             report.details
         );
         this.cancelButton.textContent = "Close";
@@ -354,7 +354,7 @@ export class SavedMapViewDomView {
     showLoading(layerCount) {
         this.#prepareDialog(
             "Opening map…",
-            `Loading ${formatCount(layerCount, "map layer")}…`,
+            `Loading ${formatCount(layerCount, "map item")}…`,
             []
         );
         this.cancelButton.hidden = true;

@@ -461,7 +461,7 @@ export class MapLayerStackView {
         const accessibleName = (layer.item === null
             ? `${layer.label}; ${typeLabel.toLowerCase()}${typeLabel.toLowerCase().endsWith("layer") ? "" : " layer"}${layer.group ? ` from ${layer.group.label}` : ""}`
             : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`) +
-            (layer.isCustom ? "; Custom layer" : "");
+            (layer.isCustom ? "; Custom copy" : "");
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
         row.classList.toggle("is-custom-layer", Boolean(layer.isCustom));
@@ -510,7 +510,7 @@ export class MapLayerStackView {
         label.append(title);
         const kind = this.documentContext.createElement("span");
         kind.className = "map-layer-kind";
-        kind.textContent = layer.isCustom ? "Custom" : "Catalog";
+        kind.textContent = `${layer.isCustom ? "Custom" : "Catalog"} · ${typeLabel}`;
         if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
             const roleBadge = this.documentContext.createElement("span");
             roleBadge.className = "map-layer-role-badge";
@@ -526,6 +526,9 @@ export class MapLayerStackView {
             "Style", `Style ${accessibleName}`, layer.key, "style",
             () => this.handlers?.onStyle(layer.key), focusTargets
         );
+        style.classList.add("map-layer-style-action");
+        const stylePreview = this.#buildLegendKey(layer.legend, layer.effectiveOpacity ?? layer.opacity);
+        if (stylePreview) style.prepend(stylePreview);
         if (layer.stylePanelId) style.setAttribute("aria-controls", layer.stylePanelId);
         else if (!layer.controls) {
             style.setAttribute("aria-haspopup", "dialog");
@@ -570,7 +573,6 @@ export class MapLayerStackView {
             pasteStyle.setAttribute("aria-busy", String(clipboard.pasting));
         }
         const legend = this.#buildLegend(layer, focusTargets);
-        if (legend !== null) primary.append(legend.trigger);
         if (this.allowRemoval) {
             const remove = this.#button(
                 "×",
@@ -592,7 +594,6 @@ export class MapLayerStackView {
             style,
             ...(copyStyle ? [copyStyle] : []),
             ...(pasteStyle ? [pasteStyle] : []),
-            kind,
         );
         const layerActions = this.documentContext.createElement("div");
         layerActions.className = "map-layer-data-actions";
@@ -614,10 +615,10 @@ export class MapLayerStackView {
             )] : [])
         );
         if (this.allowRemoval && layer.canAddView) {
-            const actionLabel = layer.isCustom ? "Duplicate" : "Create custom layer";
+            const actionLabel = layer.isCustom ? "Duplicate" : "Create copy";
             const addView = this.#button(
                 layer.addingView ? "Creating…" : actionLabel,
-                `${layer.isCustom ? "Duplicate" : "Create custom layer from"} ${accessibleName}`, layer.key, "add-view",
+                `${layer.isCustom ? "Duplicate" : "Create copy of"} ${accessibleName}`, layer.key, "add-view",
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
@@ -626,6 +627,7 @@ export class MapLayerStackView {
         const utilities = this.documentContext.createElement("div");
         utilities.className = "map-layer-utility-actions";
         utilities.append(
+            ...(legend ? [legend.trigger] : []),
             zoom,
             ...(layer.item !== null || layer.sourceName ? [this.#iconButton(
                 "rename", `Rename ${accessibleName}`, layer.key, "rename",
@@ -638,14 +640,15 @@ export class MapLayerStackView {
             )] : [])
         );
         const details = this.#buildDetails(layer, typeLabel, utilities, focusTargets);
+        if (legend) details.panel.append(legend.panel);
         layerActions.append(details.trigger);
         rowActions.append(styleActions, layerActions);
         row.append(reorder);
         row.append(primary);
+        row.append(kind);
         if (layer.primaryControl) row.append(layer.primaryControl);
         row.append(rowActions);
         row.append(details.panel);
-        if (legend !== null) row.append(legend.panel);
         if (this.renameEditor?.key === layer.key) row.append(this.renameEditor.form);
         if (layer.filterStatus) {
             const filterStatus = this.#button(
@@ -680,7 +683,7 @@ export class MapLayerStackView {
         panel.className = "map-layer-details";
         panel.id = `map-layer-details-${encodeURIComponent(layer.key)}`;
         panel.setAttribute("role", "group");
-        panel.setAttribute("aria-label", `Details for ${layer.label}`);
+        panel.setAttribute("aria-label", `More actions for ${layer.label}`);
         const name = this.documentContext.createElement("strong");
         name.className = "map-layer-details-name";
         name.textContent = layer.label;
@@ -708,7 +711,7 @@ export class MapLayerStackView {
             panel.append(attribution);
         }
         panel.append(utilities);
-        const trigger = this.#button("Details", `Details for ${layer.label}`, layer.key, "details",
+        const trigger = this.#button("More actions", `More actions for ${layer.label}`, layer.key, "details",
             () => this.#toggleDetails(layer.key, !this.details.get(layer.key)?.expanded), focusTargets);
         trigger.setAttribute("aria-controls", panel.id);
         const state = { expanded: this.details.get(layer.key)?.expanded ?? false, trigger, panel };
@@ -1073,7 +1076,7 @@ export class MapLayerStackView {
     }
 
     /**
-     * Draw the compact color key for the legend trigger, including fixed styles.
+     * Draw the current color key inside the Style button, including fixed styles.
      * Class keys include every class color; full symbols and labels are in Legend.
      * @param {LayerLegend|null} legend Adapter-owned appearance.
      * @param {number} opacity Effective whole-layer opacity.
@@ -1093,7 +1096,7 @@ export class MapLayerStackView {
         }
         if (!key.childElementCount) return null;
         const description = legend.description ?? (legend.entries
-            ? `${legend.label}: ${legend.entries.length} ${legend.entries.length === 1 ? "class" : "classes"}. Expand Legend for all values.`
+            ? `${legend.label}: ${legend.entries.length} ${legend.entries.length === 1 ? "class" : "classes"}. Open More actions, then Legend for all values.`
             : `${legend.label}: fill ${legend.symbol?.fill ?? "none"}, outline ${legend.symbol?.stroke}.`);
         key.title = description;
         key.setAttribute("aria-label", description);
@@ -1122,9 +1125,9 @@ export class MapLayerStackView {
     }
 
     /**
-     * Build a swatch trigger and the full legend that replaces it when expanded.
+     * Build a Legend button and its expandable graphic for More actions.
      * Keep inclusion independent of expansion, with an explicit collapse control
-     * and Escape returning focus to the swatch without changing layer visibility.
+     * and Escape returning focus to Legend without changing map visibility.
      *
      * @param {MapLayerStackSnapshot} layer Layer identity, legend and effective opacity.
      * @param {Map<string,Element>} focusTargets Controls retained across style updates.
@@ -1143,15 +1146,12 @@ export class MapLayerStackView {
         panel.setAttribute("role", "group");
         panel.setAttribute("aria-label", `Legend for ${layer.label}`);
         const trigger = this.#button(
-            "", `Show legend for ${layer.label}`, layer.key, "legend",
+            "Legend", `Show legend for ${layer.label}`, layer.key, "legend",
             () => this.#toggleLegend(layer.key, true), focusTargets,
         );
         trigger.classList.add("map-layer-legend-trigger");
         trigger.title = `Show legend for ${layer.label}`;
         trigger.setAttribute("aria-controls", panel.id);
-        const key = this.#buildLegendKey(legend, opacity);
-        if (key) trigger.append(key);
-        else trigger.textContent = "Legend";
         const collapse = this.#iconButton(
             "collapse", `Collapse legend for ${layer.label}`, layer.key, "legend-collapse",
             () => this.#toggleLegend(layer.key, false), focusTargets,
@@ -1185,7 +1185,7 @@ export class MapLayerStackView {
     }
 
     /**
-     * Replace a legend swatch with its graphic, or restore the swatch on collapse.
+     * Show a full legend or restore its Legend button when collapsed.
      * @param {string} key Retained layer identity.
      * @param {boolean} expanded Whether the full legend should be visible.
      * @param {boolean} [moveFocus=true] Move focus to the newly visible control for user actions.

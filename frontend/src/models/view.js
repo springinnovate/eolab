@@ -337,7 +337,7 @@ export class ModelsView {
         const optional = input.type === "optional_raster";
         const sources = state.draft.sources.filter(source => acceptsResults || source.kind !== "runArtifact");
         this.options(controls.source, [{value: "", label: optional ? "None" : "Choose a raster…"}, ...sources.map(source => ({value: modelSourceKey(source),
-            group: acceptsResults ? source.kind === "runArtifact" ? "Completed runs" : "Map layers" : undefined,
+            group: acceptsResults ? source.kind === "runArtifact" ? "Completed runs" : "Map contents" : undefined,
             disabled: source.available === false,
             label: source.label + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : "")}))], value.raster ? modelSourceKey(value.raster) : "");
         if (value.raster?.available === false) {
@@ -346,8 +346,8 @@ export class ModelsView {
             controls.reason.textContent = value.copiedFromRun ? "Copied from the original run; choose another raster to change it." : "";
         } else {
             controls.reason.textContent = optional ? "Leave None selected to run without this optional input." : acceptsResults
-                ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map."
-                : sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.";
+                ? "Choose a raster from Map contents or a completed run. Results do not need to be shown on the map."
+                : sources.length ? "Choose a raster from Map contents." : "Add a raster to Map contents to use this tool.";
         }
         controls.reason.hidden = !controls.reason.textContent;
         if (controls.resampling) {
@@ -414,11 +414,11 @@ export class ModelsView {
             controls.mapHelp.hidden = true;
             controls.mapFilterStatus.textContent = "";
             controls.areaDescription.hidden = Boolean(drawnLayer);
-            controls.areaDescription.textContent = "Choose a drawn polygon layer from Map layers.";
+            controls.areaDescription.textContent = "Choose a drawn polygon layer from Map contents.";
             if (!drawnLayer) return false;
             const matched = drawnLayer.polygons.length;
             controls.selectedCount.textContent = `${matched} of ${drawnLayer.total} polygons selected`;
-            controls.filterDescription.textContent = "Uses the layer's filter in Map layers.";
+            controls.filterDescription.textContent = "Uses the layer's filter in Map contents.";
             controls.vectorStatus.textContent = matched ? "" : "No polygons match. Add a polygon or change the layer's filter.";
             return matched > 0;
         }
