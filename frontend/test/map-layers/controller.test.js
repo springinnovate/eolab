@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { MapLayerController } from "../../src/map-layers/controller.js";
+import { MapLayerStackView } from "../../src/map-layers/layer-stack-view.js";
+import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 
 test("tile recovery updates and clears warnings without republishing layers or restarting rendering", async () => {
     let changes = 0;
@@ -473,6 +475,97 @@ test("controller copies portable style and layer opacity onto a compatible targe
         view.status,
         "Style and opacity from raster source pasted onto raster target.",
     );
+});
+
+test("direct pastes retain the current action through concurrent completion and clipboard replacement", async t => {
+    const doc = new SummaryControlDocument(), view = new MapLayerStackView(doc);
+    const controller = new MapLayerController({leafletMap: createMap(), view});
+    t.after(() => controller.destroy());
+    const pending = new Map(), adapter = createAdapter("raster");
+    let applyCalls = 0;
+    adapter.createState = ({item}) => ({owner: "raster", item, style: {color: "red"}});
+    adapter.exportSavedState = record => ({kind: record.entry.item.id === "incompatible" ? "vector" : "raster", definition: record.state.style});
+    adapter.checkSavedStateCompatibility = (record, saved) => record.entry.item.id === "incompatible" || saved.kind !== "raster" ? "Incompatible style." : null;
+    adapter.applySavedState = (record, saved) => new Promise((resolve, reject) => {
+        applyCalls++;
+        pending.set(record.entry.key, {resolve: () => { record.state.style = structuredClone(saved.definition); resolve(); }, reject});
+    });
+    const items = ["source", "first", "second", "incompatible"].map(catalogItem);
+    for (const item of items) await controller.show(item, adapter);
+    const [source, first, second, incompatible] = items.map(getCatalogItemKey);
+    /** @param {string} key Layer key. @param {string} intent Action name. @return {Object|undefined} Current rendered button. */
+    const action = (key, intent) => doc.querySelector("#raster-layer-list").querySelectorAll("button")
+        .find(button => button.dataset.layerKey === key && button.dataset.layerAction === intent);
+    /** @param {string} key Layer key. @param {string} intent Action name. @return {void} Activate a focused native button. */
+    const click = (key, intent) => { const button = action(key, intent); button.focus(); button.dispatchEvent(new Event("click")); };
+    /** @param {string} key Layer key. @param {Error|null} [error=null] Optional service failure. @return {Promise<void>} Complete the pending adapter request and render. */
+    const complete = async (key, error = null) => {
+        if (error) pending.get(key).reject(error); else pending.get(key).resolve();
+        pending.delete(key); await new Promise(resolve => setImmediate(resolve));
+    };
+
+    assert.equal(action(first, "paste-style"), undefined);
+    controller.setOpacity(source, 0.37);
+    click(source, "copy-style");
+    assert.equal(doc.activeElement, action(source, "copy-style"));
+    assert.equal(action(incompatible, "paste-style"), undefined);
+    assert.equal(action(first, "paste-style").textContent, "Paste style");
+    assert.match(action(first, "paste-style").getAttribute("aria-label"), /from raster source onto raster first/);
+
+    click(first, "paste-style");
+    assert.equal(doc.activeElement, action(first, "paste-style"));
+    assert.equal(action(first, "paste-style").textContent, "Pasting…");
+    assert.equal(action(first, "paste-style").getAttribute("aria-disabled"), "true");
+    assert.equal(action(first, "paste-style").getAttribute("aria-busy"), "true");
+    assert.equal(action(first, "paste-style").disabled, false);
+    click(first, "paste-style");
+    assert.equal(applyCalls, 1, "a busy button cannot start another paste");
+    click(second, "paste-style");
+    await complete(second);
+    assert.equal(doc.activeElement, action(second, "paste-style"));
+    assert.equal(action(second, "paste-style").textContent, "Paste style");
+    await complete(first);
+    assert.equal(doc.activeElement, action(second, "paste-style"), "the earlier paste cannot steal focus back");
+    for (const key of [first, second]) {
+        assert.equal(action(key, "details").getAttribute("aria-expanded"), "false");
+        assert.equal(action(key, "paste-style").getAttribute("aria-disabled"), "false");
+        assert.equal(controller.getRecord(key).entry.opacity, 0.37);
+    }
+
+    click(first, "paste-style");
+    controller.getRecord(second).state.style.color = "green";
+    click(second, "copy-style");
+    click(first, "paste-style");
+    assert.equal(applyCalls, 3);
+    assert.equal(view.status.textContent, "Pasting style onto raster first.");
+    const outside = doc.querySelector("#models-query"); outside.focus();
+    await complete(first);
+    assert.equal(doc.activeElement, outside);
+    assert.equal(controller.getRecord(first).state.style.color, "red", "an in-flight paste keeps its captured source");
+
+    controller.remove(items[2]);
+    click(first, "paste-style");
+    await complete(first);
+    assert.equal(controller.getRecord(first).state.style.color, "green", "the copied style survives source removal");
+    assert.equal(action(first, "paste-style").textContent, "Paste style");
+
+    click(first, "paste-style");
+    click(incompatible, "copy-style");
+    action(first, "paste-style").focus();
+    await complete(first);
+    assert.equal(action(first, "paste-style"), undefined);
+    assert.equal(doc.activeElement, action(first, "style"), "a finished paste that is no longer offered returns to its row's Style action");
+
+    click(source, "copy-style");
+    click(first, "paste-style");
+    await complete(first, new Error("Style service unavailable"));
+    assert.equal(doc.activeElement, action(first, "paste-style"));
+    assert.equal(action(first, "paste-style").textContent, "Paste style");
+    assert.match(view.status.textContent, /Style service unavailable/);
+    assert.equal(controller.getRecord(first).state.style.color, "green");
+    click(first, "paste-style");
+    await complete(first);
+    assert.equal(controller.getRecord(first).state.style.color, "red");
 });
 
 test("controller rejects incompatible and failed pastes without changing opacity", async () => {

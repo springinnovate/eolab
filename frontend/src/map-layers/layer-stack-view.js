@@ -38,7 +38,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {number} [effectiveOpacity] Display opacity when the owner locks opacity.
  * @property {LayerLegend|null} legend Owner-supplied legend appearance.
  * @property {boolean} [legendIncluded] Include in the map legend unless false.
- * @property {{canCopy:boolean,canPaste:boolean,sourceLabel:string|null,pasteReason:string|null}} [styleClipboard] Owner-reported style compatibility.
+ * @property {{canCopy:boolean,canPaste:boolean,pasting:boolean,sourceLabel:string|null,pasteReason:string|null}} [styleClipboard] Owner-reported compatibility and pending paste state.
  * @property {string|null} error Visible layer failure, when present.
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
@@ -230,6 +230,8 @@ export class MapLayerStackView {
      * explicit focus after reordering or removal may still bring its target into view.
      * Details and legends retain expansion; focus returns to the visible legend control when
      * its collapsed swatch has been replaced by the full graphic.
+     * Clipboard actions keep the visible row stationary; a paste action that disappears
+     * returns focus to its row's Style control.
      *
      * @param {MapLayerStackSnapshot[]} layers Owner-supplied layer snapshots and retained controls.
      * @param {string|null} activeKey Active layer key.
@@ -238,7 +240,7 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
-        const preserveViewport = (requestedFocus === null || requestedFocus.action === "visibility") &&
+        const preserveViewport = (requestedFocus === null || ["visibility", "copy-style", "paste-style"].includes(requestedFocus.action)) &&
             layers.length === this.layers.length &&
             layers.every((layer, index) => layer.key === this.layers[index].key);
         const scrollTop = this.scrollContainer.scrollTop;
@@ -315,7 +317,7 @@ export class MapLayerStackView {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
             );
-            if (focusTarget?.disabled) {
+            if (focusTarget?.disabled || focusTarget === undefined && retainedFocus.action === "paste-style") {
                 focusTarget = focusTargets.get(
                     `${retainedFocus.key}\u0000style`
                 );
@@ -543,31 +545,31 @@ export class MapLayerStackView {
         const clipboard = layer.styleClipboard ?? {
             canCopy: false,
             canPaste: false,
+            pasting: false,
             sourceLabel: null,
-            pasteReason: "Style copy and paste is unavailable.",
         };
-        const copyStyle = this.#iconButton(
-            "copy",
+        const copyStyle = clipboard.canCopy ? this.#button(
+            "Copy style",
             `Copy style from ${accessibleName}`,
             layer.key,
             "copy-style",
             () => this.handlers?.onCopyStyle(layer.key),
             focusTargets
-        );
-        copyStyle.title = clipboard.canCopy ? `Copy style and opacity from ${layer.label}`
-            : "Copying styles is unavailable for this layer.";
-        copyStyle.disabled = !clipboard.canCopy;
-        const pasteStyle = this.#iconButton(
-            "paste",
-            `Paste copied style onto ${accessibleName}`,
+        ) : null;
+        if (copyStyle) copyStyle.title = `Copy style and opacity from ${layer.label}`;
+        const pasteStyle = clipboard.canPaste || clipboard.pasting ? this.#button(
+            clipboard.pasting ? "Pasting…" : "Paste style",
+            clipboard.pasting ? `Pasting style onto ${accessibleName}` : `Paste style from ${clipboard.sourceLabel} onto ${accessibleName}`,
             layer.key,
             "paste-style",
             () => this.handlers?.onPasteStyle(layer.key),
             focusTargets
-        );
-        pasteStyle.title = clipboard.canPaste ? `Paste style and opacity from ${clipboard.sourceLabel}`
-            : clipboard.pasteReason;
-        pasteStyle.disabled = !clipboard.canPaste;
+        ) : null;
+        if (pasteStyle) {
+            pasteStyle.title = clipboard.pasting ? `Pasting style onto ${layer.label}` : `Paste style and opacity from ${clipboard.sourceLabel}`;
+            pasteStyle.setAttribute("aria-disabled", String(clipboard.pasting));
+            pasteStyle.setAttribute("aria-busy", String(clipboard.pasting));
+        }
         const legend = this.#buildLegend(layer, focusTargets);
         if (legend !== null) primary.append(legend.trigger);
         if (this.allowRemoval) {
@@ -597,6 +599,8 @@ export class MapLayerStackView {
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
+            ...(copyStyle ? [copyStyle] : []),
+            ...(pasteStyle ? [pasteStyle] : []),
             ...(filter ? [filter] : []),
             ...(layer.capabilities?.calculations ? [this.#button(
                 "Raster statistics", "Calculate statistics for " + accessibleName, layer.key,
@@ -622,8 +626,6 @@ export class MapLayerStackView {
                 () => this.#openRenameEditor(layer), focusTargets,
             )] : []),
             ...(info ? [info] : []),
-            copyStyle,
-            pasteStyle,
             ...(layer.capabilities?.calculations ? [this.#iconButton(
                 "download", `Download clip of ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
@@ -662,7 +664,7 @@ export class MapLayerStackView {
      * owner-specific attribution and action permissions remain unchanged.
      * @param {MapLayerStackSnapshot} layer Current owner-supplied presentation.
      * @param {string} typeLabel Readable source type, such as Raster or Shared layer.
-     * @param {HTMLDivElement} utilities Existing zoom, naming, metadata and style-copy actions.
+     * @param {HTMLDivElement} utilities Existing zoom, naming, metadata and download actions.
      * @param {Map<string,Element>} focusTargets Controls keyed for focus restoration.
      * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}} Details controls and current expansion state.
      */
@@ -1191,7 +1193,7 @@ export class MapLayerStackView {
     /**
      * Create a direct utility action with a decorative SVG and explicit accessible name.
      * Tooltips describe the same intent; callers may supply a disabled-state reason.
-     * @param {"zoom"|"rename"|"info"|"copy"|"paste"|"filter"|"download"|"collapse"} icon Local utility symbol.
+     * @param {"zoom"|"rename"|"info"|"filter"|"download"|"collapse"} icon Local utility symbol.
      * @param {string} accessibleName Complete layer-specific action description.
      * @param {string} key Stable layer identity.
      * @param {string} action Stable intent/focus identity.
@@ -1204,8 +1206,6 @@ export class MapLayerStackView {
             zoom: "M8 3H3v5m0-5 5 5m8-5h5v5m0-5-5 5M3 16v5h5m-5 0 5-5m13 0v5h-5m5 0-5-5",
             rename: "m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z",
             info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Zm0-11v6m0-10v.1",
-            copy: "M8 8h13v13H8ZM16 5V2H2v14h3",
-            paste: "M9 4H5v17h14V4h-4M9 2h6v4H9ZM9 11h6m-6 4h6",
             filter: "M3 3h18l-7 8v8l-4 2V11Z",
             download: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5",
             collapse: "m6 15 6-6 6 6",
