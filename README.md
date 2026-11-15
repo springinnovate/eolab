@@ -110,13 +110,15 @@ Catalog datasets and darker custom copies share this one list.
 
 *Catalog datasets and custom copies appear together in the same drawing order.*
 
-Use an item's checkbox to show or hide it. Its **Style** button includes a color
-preview and opens the full style editor. **Copy style** and **Paste style** stay
-beside it so you can apply one style to several compatible items.
+Use an item's checkbox to show or hide it, and the Zoom icon beneath it to fit
+the map to that item. The pencil beside its title renames it. Its **Style**
+control includes a color preview and opens the full style editor; the adjacent
+copy and paste icons transfer styles between compatible items. Paste stays
+visible when unavailable; hover or focus it to see why.
 **Duplicate vector** and **Duplicate raster** make a custom copy with independent
 display choices. Custom vectors also support calculated fields. These copies
 and their appearances are saved with the map. Open **More actions** for source
-information, **Legend**, **Zoom to**, **Rename**, and other available actions.
+information, **Legend**, **Statistics**, **Download clip**, and other available actions.
 
 Open **Style** to bring out the pattern you care about:
 

@@ -990,7 +990,10 @@ async function initializeCatalog(
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: processingContext,
         getQuerySources: enabledRasterSources,
-        onOpen: () => mapInspection.showRasterClips(),
+        onOpen: () => {
+            mapInspection.showRasterClips();
+            mapInspection.highlightActiveTool();
+        },
         onClose: () => mapInspection.hideRasterClips(),
         onEditArea: editProcessingArea,
     });
@@ -1464,6 +1467,7 @@ async function initializeCatalog(
     });
     mapLayerController.onStyle = key => {
         if (!annotations?.openControls(key, "style")) layerStyleEditor.open(key);
+        mapInspection.highlightActiveTool();
     };
     rasterVisualization.syncVisibleLayers();
     const catalogVisualization = new CatalogVisualizationCoordinator(
