@@ -80,6 +80,8 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     h.editor.opacity.value = '65';
     h.editor.opacity.dispatchEvent(new Event('input'));
     assert.deepEqual(h.edits, [['a', 0.65]]);
+    assert.equal(h.editor.opacityValue.textContent, '65%');
+    assert.equal(h.editor.opacity.getAttribute('aria-valuetext'), '65 percent', 'standalone input refresh does not require composition');
     const escape = new Event('keydown', { cancelable: true });
     Object.defineProperty(escape, 'key', { value: 'Escape' });
     h.doc.dispatchEvent(escape);

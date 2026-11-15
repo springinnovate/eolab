@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 
 import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { MapLayerController } from "../../src/map-layers/controller.js";
@@ -1175,5 +1177,51 @@ test("legend inclusion changes presentation without changing visibility or reque
     controller.setLegendIncluded(key, true);
     assert.equal(latest[0].legendIncluded, true);
     controller.leafletLayers.render = render;
+    controller.destroy();
+});
+
+
+test("opacity updates preserve rows and send rendering, owner persistence and composed consumers the current value", async () => {
+    const doc = new SummaryControlDocument(), view = new MapLayerStackView(doc);
+    const calls = [], plans = [], saved = [], ownerSaves = [];
+    let controller;
+    const source = await readFile(new URL("../../src/main.js", import.meta.url), "utf8");
+    const start = source.indexOf("onLayersChange:", source.indexOf("const mapLayerController = new MapLayerController"));
+    const end = source.indexOf("onOrderChange:", start);
+    const observer = new Function("mapLegend", "layerStyleEditor", "mapFeatureHover", "savedMapViewController",
+        "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
+        "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
+        "temporalDatasets", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
+        { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
+        { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
+        () => calls.push(["catalog"]), { observeLayerOrder: () => calls.push(["annotations-order"]) },
+        { updateAvailableRasters: () => calls.push(["series"]) }, { syncVisibleLayers: () => calls.push(["raster-analysis"]) },
+        { syncVisibleLayers: () => calls.push(["vector-analysis"]) }, { refresh: () => calls.push(["filter"]) },
+        { refresh: () => calls.push(["fields"]) }, { refresh: () => calls.push(["sampling"]) },
+        { refresh: () => calls.push(["summary"]) }, { refreshMapLayers: () => calls.push(["models"]) },
+        { setClickResult() {}, closeHistogram() { calls.push(["histogram-close"]); } }, () => [],
+    );
+    const map = createMap();
+    controller = new MapLayerController({ leafletMap: map, view, onLayersChange: observer,
+        leafletLayers: new LeafletLayerSet(map, { clear() {}, update: layers => plans.push(layers) }) });
+    const adapter = createAdapter("Raster");
+    adapter.opacityChanged = (record, opacity) => ownerSaves.push([record.entry.key, opacity]);
+    for (const id of ["bottom", "top"]) await controller.show(catalogItem(id), adapter);
+    const key = getCatalogItemKey(catalogItem("top"));
+    const rows = [...view.list.children];
+    calls.length = saved.length = plans.length = 0;
+    for (const opacity of [0.4, 0, 0.75]) controller.setOpacity(key, opacity);
+    assert.deepEqual([...view.list.children], rows, "controller uses the opacity-only view path");
+    assert.deepEqual(calls.map(([name]) => name), Array(3).fill(["legend", "style", "hover"]).flat());
+    assert.deepEqual(calls.filter(([name]) => name === "legend").map(([, layers]) => layers[0].opacity), [0.4, 0, 0.75]);
+    assert.deepEqual(saved.map(layers => layers[0].opacity), [0.4, 0, 0.75], "autosave captures each latest value");
+    assert.deepEqual(ownerSaves, [[key, 0.4], [key, 0], [key, 0.75]], "annotation-style persistence hooks still run");
+    assert.deepEqual(plans.map(layers => layers.find(layer => layer.layerName === "eolab:top")?.opacity), [0.4, undefined, 0.75]);
+    assert.equal(controller.getLeafletLayer(key).opacity, 0.75);
+    calls.length = 0;
+    controller.setVisible(key, false);
+    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models"]) {
+        assert.ok(calls.some(([called]) => called === name), `${name} still receives general layer changes`);
+    }
     controller.destroy();
 });
