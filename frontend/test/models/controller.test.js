@@ -53,7 +53,7 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     t.after(() => h.controller.destroy());
     await h.controller.open();
     assert.equal(view.navigation.setup.disabled, true);
-    view.elements["library-items"].children[0].children[0].children[0].dispatchEvent(new Event("click"));
+    view.elements["library-items"].children[0].dispatchEvent(new Event("click"));
     const draft = h.controller.state.draft, setup = view.setup;
     assert.equal(view.elements["setup-heading"].textContent, model.title);
     assert.equal(doc.activeElement, view.elements["setup-heading"]);
