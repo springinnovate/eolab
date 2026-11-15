@@ -13,6 +13,56 @@ const VECTOR_ITEM = Object.freeze({
     id: "geopackage-a",
     properties: {},
 });
+const ASSESSED_VECTOR_ITEM = Object.freeze({
+    ...VECTOR_ITEM,
+    properties: {
+        "eolab:vector_rendering": {
+            policy: "vector-v1",
+            eligible: true,
+            reason_code: null,
+            reason: null,
+            reader_contract: "geoserver-3.0.1-geotools-35.1-vector-v1",
+            reader_compatible: true,
+            geometry_kind: "polygon",
+        },
+    },
+});
+
+test("current admitted vector support goes directly to the publication adapter", async () => {
+    const calls = [];
+    const adapter = {};
+    const coordinator = new CatalogVisualizationCoordinator({}, {
+        show(item, selectedAdapter) {
+            calls.push([item, selectedAdapter]);
+            return Promise.resolve("published");
+        },
+    }, adapter, async () => { assert.fail("an admitted vector must not be reassessed"); });
+
+    const prepared = await coordinator.prepare(ASSESSED_VECTOR_ITEM);
+    assert.equal(prepared, ASSESSED_VECTOR_ITEM);
+    assert.equal(await coordinator.show(prepared), "published");
+    assert.deepEqual(calls, [[ASSESSED_VECTOR_ITEM, adapter]]);
+});
+
+test("missing, obsolete and ineligible vector assessments retain the assessment workflow", async () => {
+    const current = ASSESSED_VECTOR_ITEM.properties["eolab:vector_rendering"];
+    for (const metadata of [
+        undefined,
+        { ...current, policy: "vector-old" },
+        { ...current, reader_contract: "old-reader" },
+        { ...current, reader_contract: undefined },
+        { ...current, eligible: false, reason: "Reader unavailable" },
+    ]) {
+        const item = { ...VECTOR_ITEM, properties: { "eolab:vector_rendering": metadata } };
+        const calls = [];
+        const coordinator = new CatalogVisualizationCoordinator({}, {}, {}, async source => {
+            calls.push(source);
+            return ASSESSED_VECTOR_ITEM;
+        });
+        assert.equal(await coordinator.prepare(item), ASSESSED_VECTOR_ITEM);
+        assert.deepEqual(calls, [item]);
+    }
+});
 
 test("catalog visualization routes explicit source kinds to owned adapters", async () => {
     const calls = [];
@@ -100,6 +150,24 @@ test("Undo re-fetches the source and applies appearance and filtering before att
     assert.deepEqual(calls, [["fetch", VECTOR_ITEM], ["assess"], ["stage"], ["style", snapshot.style], ["filter", snapshot.filter], ["attach", 2]]);
     assert.equal(record.entry.label, snapshot.label);
     assert.equal(discarded, false);
+});
+
+test("Undo reuses the freshly fetched admitted assessment before restoring a layer", async () => {
+    const calls = [];
+    const staged = { record: { entry: {}, adapter: {
+        applySavedState: async () => { calls.push("style"); },
+    } }, layer: {} };
+    const coordinator = new CatalogVisualizationCoordinator({}, {
+        stage: async item => { assert.equal(item, ASSESSED_VECTOR_ITEM); calls.push("stage"); return staged; },
+        restoreStagedLayer: layer => { assert.equal(layer, staged); calls.push("attach"); },
+    }, {}, async () => { assert.fail("the fetched assessment is current"); });
+
+    await coordinator.restoreRemovedLayer(
+        { item: VECTOR_ITEM, label: "Restored", style: {}, index: 0 },
+        async identity => { assert.equal(identity, VECTOR_ITEM); calls.push("fetch"); return ASSESSED_VECTOR_ITEM; },
+        () => true
+    );
+    assert.deepEqual(calls, ["fetch", "stage", "style", "attach"]);
 });
 
 test("filter failure and superseded Undo discard staged work without exposing an unfiltered layer", async () => {
