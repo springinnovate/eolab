@@ -31,6 +31,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string} key Stable retained-layer identity.
  * @property {string} label Current display name.
  * @property {boolean} isCustom Whether this is a user-created Custom layer rather than an ordinary Catalog layer.
+ * @property {"upload"|"catalog"|"runArtifact"} [sourceOrigin] Source owner's origin, independent of Custom presentation.
  * @property {{collection:string,id:string}|null} item Catalog identity, or null for an owner-supplied layer.
  * @property {string} datasetKind Owner-reported layer type.
  * @property {boolean} visible Independent map visibility.
@@ -540,6 +541,12 @@ export class MapLayerStackView {
         const kind = this.documentContext.createElement("span");
         kind.className = "map-layer-kind";
         kind.textContent = `${layer.isCustom ? "Custom" : "Catalog"} · ${typeLabel}`;
+        if (layer.sourceOrigin === "upload") {
+            const origin = this.documentContext.createElement("span");
+            origin.className = "map-layer-source-origin";
+            origin.textContent = "Uploaded by you";
+            title.append(origin);
+        }
         if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
             const roleBadge = this.documentContext.createElement("span");
             roleBadge.className = "map-layer-role-badge";

@@ -20,6 +20,7 @@ from eolab_app.routes.annotation_sessions import create_annotation_sessions_rout
 from eolab_app.routes.browser_identity import COOKIE
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.settings import load_settings
+from eolab_app.upload_storage import UploadStorage
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.fields import OgrVectorFieldReader
 from eolab_app.vector.models import ResolvedVectorSource
@@ -98,7 +99,7 @@ def test_preserves_original_file_and_reopens_after_startup_cleanup(
     tmp_path: Path,
     geometry: str,
 ) -> None:
-    """Preserve an uncapped upload's fields, geometry, CRS and bytes across restart.
+    """Preserve an upload's fields, geometry, CRS and bytes across restart.
 
     Args:
         tmp_path: Isolated upload volume and input fixture.
@@ -519,7 +520,7 @@ def test_upload_settings_and_application_wiring(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Accept an optional deployment limit and pass it to the composed store.
+    """Apply shared default budgets and an optional stricter GeoPackage limit.
 
     Args:
         configured_environment: Required application environment.
@@ -544,17 +545,20 @@ def test_upload_settings_and_application_wiring(
     monkeypatch.setenv("VECTOR_UPLOAD_DATA_PATH", str(tmp_path))
     stores: list[VectorUploadStore] = []
 
-    def capture(root: Path, max_bytes: int | None) -> VectorUploadStore:
+    def capture(
+        root: Path, max_bytes: int | None, *, storage: UploadStorage
+    ) -> VectorUploadStore:
         """Capture the configured store without changing its behavior.
 
         Args:
             root: Configured upload volume path.
-            max_bytes: Configured maximum file size, or None for no size cap.
+            max_bytes: Optional stricter maximum GeoPackage size.
+            storage: Shared mandatory budget and lifecycle owner.
 
         Returns:
             The real store used by upload routes.
         """
-        store = VectorUploadStore(root, max_bytes)
+        store = VectorUploadStore(root, max_bytes, storage=storage)
         stores.append(store)
         return store
 
@@ -563,6 +567,26 @@ def test_upload_settings_and_application_wiring(
     assert len(stores) == 1
     assert stores[0].root == tmp_path
     assert stores[0].max_bytes == 12345
+    assert stores[0].storage.max_bytes == 100 * 1024**2
+    assert stores[0].storage.owner_max_bytes == 500 * 1024**2
+    assert stores[0].storage.global_max_bytes == 10 * 1024**3
     monkeypatch.setenv("VECTOR_UPLOAD_MAX_BYTES", "")
     create_app(version_file_path)
     assert stores[1].max_bytes is None
+    for variable in (
+        "UPLOAD_MAX_BYTES",
+        "UPLOAD_OWNER_MAX_BYTES",
+        "UPLOAD_GLOBAL_MAX_BYTES",
+    ):
+        for value in ("0", "-1", "1.5", "invalid", ""):
+            monkeypatch.setenv(variable, value)
+            with pytest.raises(ValueError):
+                load_settings(version_file_path)
+        monkeypatch.delenv(variable)
+    monkeypatch.setenv("UPLOAD_MAX_BYTES", "1000")
+    monkeypatch.setenv("UPLOAD_OWNER_MAX_BYTES", "2000")
+    monkeypatch.setenv("UPLOAD_GLOBAL_MAX_BYTES", "3000")
+    create_app(version_file_path)
+    assert stores[2].storage.max_bytes == 1000
+    assert stores[2].storage.owner_max_bytes == 2000
+    assert stores[2].storage.global_max_bytes == 3000

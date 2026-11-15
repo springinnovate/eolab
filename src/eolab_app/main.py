@@ -23,6 +23,12 @@ from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from eolab_app.routes.uploads import create_uploads_router
+from eolab_app.upload_storage import (
+    UploadError,
+    UploadStorage,
+    finish_upload_disk_operation,
+)
 from eolab_app.routes.vector_artifacts import create_artifact_vector_router
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
@@ -229,9 +235,16 @@ def create_app(
         app_global_configuration.scan_mount_path
     )
     vector_jobs = JobsClient(jobs_client, app_global_configuration.jobs_token)
+    upload_storage = UploadStorage(
+        app_global_configuration.vector_upload_data_path,
+        app_global_configuration.upload_max_bytes,
+        app_global_configuration.upload_owner_max_bytes,
+        app_global_configuration.upload_global_max_bytes,
+    )
     vector_uploads = VectorUploadStore(
         app_global_configuration.vector_upload_data_path,
         app_global_configuration.vector_upload_max_bytes,
+        storage=upload_storage,
     )
     vector_selection_reader = VectorSamplingService(
         vector_catalog,
@@ -463,17 +476,25 @@ def create_app(
                         "Temporary publication cleanup will retry."
                     )
 
-    async def release_finished_upload_inputs() -> None:
-        """Remove retained uploads after their Processing jobs have stopped.
+    async def remove_expired_uploads_and_unused_inputs() -> None:
+        """Delete expired originals and release files no calculation still needs.
 
         Reconciles every five seconds, including unfinished cleanup after a
-        restart. Admission shares the service's lock; database outages keep files.
+        restart. Original-file expiry does not require the job database. Retained
+        input cleanup shares Processing's admission lock; database outages keep
+        those files until active calculations can be identified safely.
 
         Raises:
             asyncio.CancelledError: After in-flight cleanup stops on shutdown.
         """
         while True:
             await asyncio.sleep(5)
+            try:
+                await finish_upload_disk_operation(upload_storage.sweep_expired)
+            except (OSError, UploadError):
+                logging.getLogger(__name__).warning(
+                    "Expired upload cleanup will retry."
+                )
             try:
                 await processing_service.reconcile_upload_inputs()
             except (ProcessingError, VectorUploadError):
@@ -572,7 +593,9 @@ def create_app(
                 client_stack.push_async_callback(client.aclose)
             client_stack.push_async_callback(render_queue.close)
             publication_cleanup = asyncio.create_task(reconcile_output_publications())
-            upload_cleanup = asyncio.create_task(release_finished_upload_inputs())
+            upload_cleanup = asyncio.create_task(
+                remove_expired_uploads_and_unused_inputs()
+            )
             try:
                 yield
             finally:
@@ -596,6 +619,7 @@ def create_app(
     )
     application.include_router(create_annotation_sessions_router(annotation_sessions))
     application.include_router(create_vector_uploads_router(vector_uploads))
+    application.include_router(create_uploads_router(upload_storage))
     application.include_router(
         create_artifact_vector_router(
             artifact_vectors, vector_publication, vector_styles,

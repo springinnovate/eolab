@@ -102,7 +102,7 @@ import {
 import { VectorFilterControls } from "./vector/filter-controls.js";
 import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
-import { UploadPolygonsDialog } from "./vector-uploads/dialog.js";
+import { UploadsDialog } from "./vector-uploads/dialog.js";
 import { getUpload } from "./vector-uploads/api.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
@@ -1069,7 +1069,7 @@ async function initializeCatalog(
      */
     async function addUploadedVector(upload) {
         if (getUploadedVectorKeys(upload.id).length) return;
-        const source = { kind: "upload", ...upload };
+        const source = { ...upload, kind: "upload" };
         const publication = await vectorMapLayerAdapter.publish(source);
         const record = mapLayerController.addLocal({
             key: `local:upload:${upload.id}`, label: upload.name, sourceName: upload.name,
@@ -1134,7 +1134,7 @@ async function initializeCatalog(
      * @throws {Error} If the upload is unavailable or its saved appearance cannot be applied.
      */
     async function restoreSavedUpload(layer, isCurrent) {
-        const upload = { kind: "upload", ...await getUpload(layer.uploadId) };
+        const upload = { ...await getUpload(layer.uploadId), kind: "upload" };
         const publication = await vectorMapLayerAdapter.publish(upload);
         if (!isCurrent()) return null;
         const key = `local:view:${globalThis.crypto.randomUUID()}`;
@@ -1167,11 +1167,16 @@ async function initializeCatalog(
         mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.kind === "uploaded-vector" && snapshot.local.upload.id === uploadId);
         for (const key of getUploadedVectorKeys(uploadId)) mapLayerController.removeKey(key);
     }
-    if (!isSharedViewer) new UploadPolygonsDialog({
-        document, addToMap: addUploadedVector,
-        isOnMap: id => getUploadedVectorKeys(id).length > 0,
-        onDeleted: removeDeletedUpload,
-    });
+    if (!isSharedViewer) {
+        const uploads = new UploadsDialog({
+            document, appTitle: appGlobalConfiguration.appTitle,
+            addToMap: async upload => addUploadedVector(await getUpload(upload.id)),
+            isOnMap: id => getUploadedVectorKeys(id).length > 0,
+            removeFromMap: id => { for (const key of getUploadedVectorKeys(id)) mapLayerController.removeKey(key); },
+            onDeleted: removeDeletedUpload,
+        });
+        void uploads.refreshUsage();
+    }
     let modelFilterControls = null;
     /** @type {symbol} Distinguish explicit statistics-area edits from passive map-filter updates. */
     const statisticsAreaFilterIntent = Symbol("statistics-area-filter");
@@ -1209,7 +1214,7 @@ async function initializeCatalog(
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
     /** Read polygon choices for Models, histogram and summary controls.
      * Visibility and WMS publication do not determine numerical selection.
-     * @return {Array<{key:string,label:string,item:import("./vector/map-layer-adapter.js").VectorSourceDescription["source"],
+     * @return {Array<{key:string,label:string,sourceOrigin:"catalog"|"upload"|"runArtifact",item:import("./vector/map-layer-adapter.js").VectorSourceDescription["source"],
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
      * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
      * Retained source identities, immutable fields and applied filter snapshots.
@@ -1219,7 +1224,7 @@ async function initializeCatalog(
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
             return source.geometryKind === "polygon" && source.source.kind !== "runArtifact" ? [{
-                key: record.entry.key, label: record.entry.label, item: source.source,
+                key: record.entry.key, label: record.entry.label, item: source.source, sourceOrigin: source.origin,
                 fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
                 selection: source.selection, filter: record.adapter.exportFilterState(record),
             }] : [];
@@ -1296,7 +1301,7 @@ async function initializeCatalog(
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields,
+                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, sourceOrigin: target.sourceOrigin, filter: target.filter, fields: target.fields,
                     scalarFields: target.scalarFields, numericFields: target.numericFields,
                     selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
                 drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({

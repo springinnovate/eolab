@@ -204,6 +204,10 @@ export class ModelsView {
         sourceField.id = `models-${name}-source-label`;
         group.setAttribute("role", "group"); group.setAttribute("aria-labelledby", sourceField.id);
         group.append(sourceField); fields.append(group);
+        const sourceOrigin = this.element("p", "", "models-help");
+        sourceOrigin.id = `models-${name}-source-origin`;
+        sourceOrigin.hidden = true;
+        group.append(sourceOrigin);
         const maskGroup = this.element("div", "", "models-vector");
         const preparation = references ? this.buildRasterResampling(maskGroup, name,
             resampling => this.handlers.onInput(name, {resampling})) : {resampling: null, resamplingField: null};
@@ -233,7 +237,7 @@ export class ModelsView {
         const mapHelp = this.element("p", "", "models-help");
         group.append(vectorGroup, areaDescription, mapHelp);
         if (input.type === "mask_source") group.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
-        return {group, source, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
+        return {group, source, sourceOrigin, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
 
@@ -382,7 +386,8 @@ export class ModelsView {
             const originalLabel = references && value.capturedArea.kind === "polygonArea" ? "Reference sites from original run" : "Area from original run";
             areaChoices.push({value: "captured", label: value.areaOrigin === "run" ? originalLabel : "Selected features"});
         }
-        areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: source.label, group: "Vector layers"})));
+        areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: `${source.label} · Polygons`,
+            group: source.sourceOrigin === "upload" ? "Your uploads" : source.sourceOrigin === "runArtifact" ? "Completed runs" : "Catalog layers"})));
         if (references || input.type === "summary_area") {
             areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
@@ -400,7 +405,12 @@ export class ModelsView {
         this.options(controls.source, areaChoices, selected);
         const rasterActive = usesRasterOrVector && value.areaMode === "raster";
         controls.maskGroup.hidden = !rasterActive;
-        controls.source.setAttribute("aria-describedby", rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : "");
+        const selectedVector = value.areaMode === "vector" ? value.vectors.find(source => source.key === value.vectorKey) : null;
+        controls.sourceOrigin.textContent = selectedVector ? selectedVector.sourceOrigin === "upload" ? "Uploaded by you · Polygons"
+            : selectedVector.sourceOrigin === "runArtifact" ? "Completed run · Polygons" : "Catalog · Polygons"
+            : drawn && drawnLayer ? "Drawn polygons" : "";
+        controls.sourceOrigin.hidden = !controls.sourceOrigin.textContent;
+        controls.source.setAttribute("aria-describedby", rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id);
         if (controls.resampling) {
             controls.resampling.value = value.resampling;
             controls.resampling.disabled = !rasterActive;

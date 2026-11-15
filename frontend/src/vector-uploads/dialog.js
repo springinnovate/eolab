@@ -1,23 +1,27 @@
-/** Upload polygon files and reopen or delete this browser's existing uploads. */
-import { deleteUpload, listUploads, uploadPolygons } from "./api.js";
+/** Manage this browser's uploaded files and their independent map layers. */
+import { deleteUpload, getUploadStorageSummary, uploadPolygons } from "./api.js";
 
-/** Manage private polygon files independently of whether their layers are on the map. */
-export class UploadPolygonsDialog {
+/** Present stored uploads, their shared allowance and ordinary map actions. */
+export class UploadsDialog {
     /**
      * Connect the Map layers upload action to its file form and composition-owned map action.
      * @param {Object} options Browser document and upload/map operations.
      * @param {Document} options.document Browser document.
-     * @param {(upload:import('./api.js').VectorUpload)=>Promise<void>} options.addToMap Add the admitted layer through ordinary vector rendering.
+     * @param {string} options.appTitle Configured application name used in the upload policy.
+     * @param {(upload:import('./api.js').UploadSummary)=>Promise<void>} options.addToMap Add an authorized upload through ordinary rendering.
      * @param {(uploadId:string)=>boolean} options.isOnMap Whether an upload already has a map layer.
+     * @param {(uploadId:string)=>void} options.removeFromMap Remove map views while keeping the uploaded file.
      * @param {(uploadId:string)=>void} options.onDeleted Remove deleted upload references from the map and its Undo.
      * @param {typeof uploadPolygons} [options.upload=uploadPolygons] Upload transport.
-     * @param {typeof listUploads} [options.list=listUploads] Browser-owned upload listing.
+     * @param {typeof getUploadStorageSummary} [options.list=getUploadStorageSummary] Browser-owned files and shared allowance.
      * @param {typeof deleteUpload} [options.deleteFile=deleteUpload] Server-side deletion transport.
      */
-    constructor({ document, addToMap, isOnMap, onDeleted, upload = uploadPolygons, list = listUploads, deleteFile = deleteUpload }) {
+    constructor({ document, appTitle, addToMap, isOnMap, removeFromMap, onDeleted,
+        upload = uploadPolygons, list = getUploadStorageSummary, deleteFile = deleteUpload }) {
         this.document = document;
         this.addToMap = addToMap;
         this.isOnMap = isOnMap;
+        this.removeFromMap = removeFromMap;
         this.onDeleted = onDeleted;
         this.upload = upload;
         this.list = list;
@@ -27,6 +31,10 @@ export class UploadPolygonsDialog {
         this.confirming = null;
         this.uploaded = null;
         this.pending = false;
+        /** @type {import('./api.js').UploadStorageSummary|null} Last authoritative storage allowance. */
+        this.summary = null;
+        /** @type {symbol|null} Latest background toolbar-usage request. */
+        this.usageRequest = null;
         /** @type {symbol|null} Identity of the list request allowed to update this dialog. */
         this.listRequest = null;
         this.trigger = document.querySelector("#upload-polygons");
@@ -35,13 +43,15 @@ export class UploadPolygonsDialog {
         this.dialog.setAttribute("aria-labelledby", "upload-polygons-heading");
         const heading = document.createElement("h2");
         heading.id = "upload-polygons-heading";
-        heading.textContent = "Polygon uploads";
+        heading.textContent = "Your uploads";
         const privacy = document.createElement("p");
-        privacy.textContent = "Stored on this server and available only to this browser. A saved map link does not share these files with other browsers.";
-        const existingHeading = document.createElement("h3");
-        existingHeading.textContent = "Your uploads";
+        privacy.textContent = `Other users cannot access your uploads. ${appTitle} stores and processes them on its servers. Files are deleted after 7 days, or when you delete them. Files in use are kept until the calculation stops.`;
+        this.usage = document.createElement("p");
+        this.usage.className = "upload-storage-usage";
+        this.retention = document.createElement("p");
+        this.retention.hidden = true;
         const removalHelp = document.createElement("p");
-        removalHelp.textContent = "Remove from map keeps the uploaded file here so you can add it again.";
+        removalHelp.textContent = "Available only in this browser. Removing a layer from the map keeps its uploaded file.";
         this.uploadList = document.createElement("ul");
         this.uploadList.className = "upload-polygons-list";
         this.empty = document.createElement("p");
@@ -83,9 +93,11 @@ export class UploadPolygonsDialog {
         this.file.required = true;
         this.file.setAttribute("aria-describedby", "upload-polygons-file-help");
         fileLabel.append(this.file);
-        const fileHelp = document.createElement("p");
-        fileHelp.id = "upload-polygons-file-help";
-        fileHelp.textContent = "GeoPackage containing one polygon layer";
+        this.fileHelp = document.createElement("p");
+        this.fileHelp.id = "upload-polygons-file-help";
+        this.fileHelp.textContent = "GeoPackage containing one polygon layer";
+        this.quotaHelp = document.createElement("p");
+        this.quotaHelp.hidden = true;
         const nameLabel = document.createElement("label");
         nameLabel.textContent = "Layer name";
         this.name = document.createElement("input");
@@ -110,8 +122,8 @@ export class UploadPolygonsDialog {
         this.cancel.className = "secondary-button";
         this.cancel.textContent = "Close";
         actions.append(this.submit, this.cancel);
-        this.form.append(newHeading, fileLabel, fileHelp, nameLabel, actions);
-        this.dialog.append(heading, privacy, existingHeading, removalHelp, this.uploadList, this.empty,
+        this.form.append(newHeading, fileLabel, this.fileHelp, nameLabel, this.quotaHelp, actions);
+        this.dialog.append(heading, privacy, this.usage, this.retention, removalHelp, this.uploadList, this.empty,
             this.retry, this.confirmation, this.form, this.progress, this.status);
         document.body.append(this.dialog);
         this.trigger.addEventListener("click", () => void this.open());
@@ -152,6 +164,7 @@ export class UploadPolygonsDialog {
      * @return {Promise<void>} Completion with current list errors available for retry.
      */
     async loadUploads() {
+        this.usageRequest = null;
         const request = Symbol("upload-list");
         this.listRequest = request;
         this.retry.hidden = true;
@@ -159,13 +172,15 @@ export class UploadPolygonsDialog {
         this.setBusy(false);
         this.message("Loading your uploads…");
         try {
-            const uploads = await this.list();
+            const summary = await this.list();
             if (this.listRequest !== request || !this.dialog.open) return;
-            this.uploads = uploads;
+            this.applySummary(summary);
             this.renderUploads();
             this.message("");
         } catch (error) {
             if (this.listRequest !== request || !this.dialog.open) return;
+            this.summary = null;
+            this.trigger.textContent = "Your uploads";
             this.message(error.message, true);
             this.retry.hidden = false;
         } finally {
@@ -176,6 +191,50 @@ export class UploadPolygonsDialog {
         }
     }
 
+    /**
+     * Refresh the toolbar count without opening the manager or blocking map actions.
+     * A newer manager request or mutation makes an older response irrelevant.
+     * @return {Promise<boolean>} Whether the current server allowance was loaded.
+     */
+    async refreshUsage() {
+        const request = Symbol("upload-usage");
+        this.usageRequest = request;
+        try {
+            const summary = await this.list();
+            if (this.usageRequest !== request) return false;
+            this.applySummary(summary);
+            return true;
+        } catch {
+            if (this.usageRequest !== request) return false;
+            this.summary = null;
+            this.trigger.textContent = "Your uploads";
+            this.usage.textContent = "Storage usage is unavailable. Reopen Your uploads to refresh it.";
+            return false;
+        } finally {
+            if (this.usageRequest === request) this.usageRequest = null;
+        }
+    }
+
+    /**
+     * Present server-owned counts, byte limits and files still needed by calculations.
+     * @param {import('./api.js').UploadStorageSummary} summary Validated upload API response.
+     * @return {void}
+     */
+    applySummary(summary) {
+        this.summary = summary;
+        this.uploads = summary.uploads;
+        this.trigger.textContent = `Your uploads · ${summary.used_files} of ${summary.max_files}`;
+        this.usage.textContent = `${summary.used_files} of ${summary.max_files} files used · ${formatUploadBytes(summary.used_bytes)} of ${formatUploadBytes(summary.max_bytes)}`;
+        const pendingFiles = summary.used_files - summary.uploads.length - summary.retained_files;
+        this.retention.hidden = summary.retained_files === 0 && pendingFiles === 0;
+        this.retention.textContent = [
+            ...(summary.retained_files ? [`${summary.retained_files} deleted or expired file${summary.retained_files === 1 ? " is" : "s are"} still used by calculations. Those slots become available when the calculations stop.`] : []),
+            ...(pendingFiles ? [`${pendingFiles} file${pendingFiles === 1 ? " is" : "s are"} being uploaded or removed and still ${pendingFiles === 1 ? "uses a slot" : "use slots"}.`] : []),
+        ].join(" ");
+        this.fileHelp.textContent = `GeoPackage containing one polygon layer · Up to ${formatUploadBytes(summary.max_file_bytes)} per file`;
+        this.quotaHelp.textContent = `All ${summary.max_files} file slots are used. Delete an uploaded file to make room. Files still used by calculations keep their slots until those calculations stop.`;
+    }
+
     /** Render stored uploads with separate map and file actions. @return {void} */
     renderUploads() {
         this.uploadList.replaceChildren();
@@ -183,13 +242,23 @@ export class UploadPolygonsDialog {
             const row = this.document.createElement("li");
             const name = this.document.createElement("strong");
             name.textContent = upload.name;
+            const description = this.document.createElement("p");
+            description.className = "upload-file-description";
+            description.textContent = `${upload.kind === "raster" ? "Raster" : "Polygons"} · ${formatUploadBytes(upload.size_bytes)} · Expires ${new Date(upload.expires_at).toLocaleString()}`;
             const actions = this.document.createElement("div");
             actions.className = "upload-polygons-actions";
             const add = this.document.createElement("button");
             add.type = "button";
-            add.textContent = this.isOnMap(upload.id) ? "On map" : "Add to map";
+            add.textContent = this.isOnMap(upload.id) ? "Remove from map" : "Add to map";
             add.setAttribute("aria-label", `${add.textContent}: ${upload.name}`);
-            add.addEventListener("click", () => void this.addExistingUpload(upload));
+            add.addEventListener("click", () => {
+                if (this.isOnMap(upload.id)) {
+                    this.removeFromMap(upload.id);
+                    this.renderUploads();
+                    this.message(`${upload.name} was removed from the map. Its file still uses an upload slot.`);
+                    this.rows.find(row => row.upload.id === upload.id).add.focus();
+                } else void this.addExistingUpload(upload);
+            });
             const remove = this.document.createElement("button");
             remove.type = "button";
             remove.textContent = "Delete uploaded file";
@@ -202,7 +271,7 @@ export class UploadPolygonsDialog {
                 this.keep.focus();
             });
             actions.append(add, remove);
-            row.append(name, actions);
+            row.append(name, description, actions);
             this.uploadList.append(row);
             return { upload, add, remove };
         });
@@ -211,7 +280,7 @@ export class UploadPolygonsDialog {
 
     /**
      * Reopen an existing upload through the ordinary map action without sending its file again.
-     * @param {import('./api.js').VectorUpload} upload Metadata listed for this browser.
+     * @param {import('./api.js').UploadSummary} upload File listed for this browser.
      * @return {Promise<void>} Completion after adding the layer or displaying an error.
      */
     async addExistingUpload(upload) {
@@ -229,6 +298,7 @@ export class UploadPolygonsDialog {
 
     /** Delete the confirmed file, then remove its map references after server success. @return {Promise<void>} Completion with failure retaining the file's list row and map layer. */
     async deleteSelectedUpload() {
+        this.usageRequest = null;
         const upload = this.confirming;
         this.setBusy(true);
         this.message(`Deleting ${upload.name}…`);
@@ -238,6 +308,7 @@ export class UploadPolygonsDialog {
             this.uploads = this.uploads.filter(candidate => candidate.id !== upload.id);
             this.confirming = null;
             this.confirmation.hidden = true;
+            await this.refreshUsage();
             this.renderUploads();
             this.message(`${upload.name} was deleted from the server.`);
         } catch (error) {
@@ -253,16 +324,19 @@ export class UploadPolygonsDialog {
      * @return {Promise<void>} Completion, with failures displayed without discarding the entered file or admitted upload.
      */
     async uploadAndAdd() {
+        this.usageRequest = null;
         this.setBusy(true);
         try {
             if (this.uploaded === null) {
                 this.message("Uploading polygons…");
                 this.uploaded = await this.upload(this.file.files[0], this.name.value.trim());
+                await this.refreshUsage();
             }
             this.message("Adding layer to map…");
             await this.addToMap(this.uploaded);
             this.dialog.close();
         } catch (error) {
+            if (this.uploaded === null) await this.refreshUsage();
             this.message(this.uploaded === null ? error.message
                 : `Your file was uploaded, but could not be added to the map. ${error.message} Retry adding it, or close this dialog.`, true);
         } finally {
@@ -290,17 +364,31 @@ export class UploadPolygonsDialog {
         this.pending = busy;
         const working = busy || this.listRequest !== null;
         const blocked = working || this.confirming !== null;
-        this.file.disabled = this.name.disabled = blocked || this.uploaded !== null;
-        this.submit.disabled = blocked;
+        const full = this.summary !== null && this.summary.used_files >= this.summary.max_files;
+        const unavailable = this.summary === null;
+        this.quotaHelp.hidden = !full;
+        this.file.disabled = this.name.disabled = blocked || this.uploaded !== null || full || unavailable;
+        this.submit.disabled = blocked || this.uploaded === null && (full || unavailable);
         this.cancel.disabled = busy;
         this.retry.disabled = blocked;
         this.confirmDelete.disabled = this.keep.disabled = busy;
         for (const row of this.rows) {
-            row.add.disabled = blocked || this.isOnMap(row.upload.id);
+            row.add.disabled = blocked;
             row.remove.disabled = blocked;
         }
         this.progress.hidden = !working;
         this.dialog.setAttribute("aria-busy", String(working));
         this.submit.textContent = this.uploaded === null ? "Upload and add to map" : "Retry add to map";
     }
+}
+
+/**
+ * Format upload storage in binary units matching the server's configured limits.
+ * @param {number} bytes File size or storage allowance.
+ * @return {string} Readable byte, KiB or MiB quantity.
+ */
+function formatUploadBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString(undefined, {maximumFractionDigits: 1})} KiB`;
+    return `${(bytes / (1024 * 1024)).toLocaleString(undefined, {maximumFractionDigits: 1})} MiB`;
 }
