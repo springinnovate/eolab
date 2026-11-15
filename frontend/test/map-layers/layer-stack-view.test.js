@@ -154,13 +154,13 @@ class FakeLayerStackElement extends EventTarget {
     return this.attributes.get(name) ?? null;
   }
 
-  /** Remove an accessible relationship. @param {string} name Attribute name. @return {void} */
+  /** @param {string} name Attribute to remove. @return {void} */
   removeAttribute(name) { this.attributes.delete(name); }
 
-  /** Show the test popover in the top layer. @return {void} */
+  /** Display this native popover without moving focus. @return {void} */
   showPopover() { this.popoverOpen = true; }
 
-  /** Dismiss the test popover. @return {void} */
+  /** Hide this native popover without moving focus. @return {void} */
   hidePopover() { this.popoverOpen = false; }
 
   /**
@@ -188,7 +188,7 @@ class FakeLayerStackElement extends EventTarget {
     const isRow = this.tagName === "LI";
     const top = isRow ? Number(this.dataset.layerIndex) * 52 : 0;
     const height = isRow ? 48 : 156;
-    return { top, bottom: top + height, height, left: 0, right: 280, width: 280 };
+    return { top, bottom: top + height, height, left: 12, right: 132, width: 120 };
   }
 }
 
@@ -201,12 +201,12 @@ class FakeTextNode {
 }
 
 /** Fixed layer-stack markup plus an element factory. */
-class FakeLayerStackDocument {
+class FakeLayerStackDocument extends EventTarget {
   /** Create the required semantic layer-stack markup. */
   constructor() {
+    super();
     this.activeElement = null;
-    this.documentElement = { clientWidth: 1024, clientHeight: 768 };
-    this.defaultView = new EventTarget();
+    this.defaultView = Object.assign(new EventTarget(), {innerWidth: 1024, innerHeight: 768});
     this.layerScrollContainer = new FakeLayerStackElement("div", this);
     this.elements = new Map([
       ["#raster-layer-stack", new FakeLayerStackElement("div", this)],
@@ -284,6 +284,15 @@ function elementsByClass(element, className) {
 }
 
 /**
+ * Read text split across native title labels and the attached rename control.
+ * @param {FakeLayerStackElement} element Test subtree.
+ * @return {string} Combined literal text in DOM order.
+ */
+function subtreeText(element) {
+  return element.textContent + element.children.map(subtreeText).join("");
+}
+
+/**
  * Find one row control by its stable action identity.
  *
  * @param {FakeLayerStackElement} row Rendered layer row.
@@ -305,6 +314,18 @@ function actionControl(row, action) {
   visit(row);
   assert.equal(controls.length, 1, `expected one ${action} control`);
   return controls[0];
+}
+
+/** Find the explanation connected to a row action by its accessible description.
+ * @param {FakeLayerStackElement} row Rendered layer row.
+ * @param {string} action Stable action identity.
+ * @return {FakeLayerStackElement} Tooltip describing that action.
+ */
+function actionTooltip(row, action) {
+  const description = actionControl(row, action).getAttribute("aria-describedby");
+  const matches = elementsByClass(row, "map-layer-action-tooltip").filter(tooltip => tooltip.id === description);
+  assert.equal(matches.length, 1, `expected one tooltip for ${action}`);
+  return matches[0];
 }
 
 /**
@@ -407,7 +428,7 @@ test("vector calculators stay visible beside duplication and Catalog actions do 
   assert.equal(catalogCalculator.getAttribute("aria-disabled"), "true");
   catalogCalculator.dispatchEvent(new Event("click"));
   assert.deepEqual(opened, [layer.key]);
-  const tooltip = elementsByClass(doc.querySelector("#raster-layer-stack"), "map-layer-action-tooltip")[0];
+  const tooltip = actionTooltip(view.list.children[0], "field-calculator");
   assert.equal(tooltip.textContent, "Duplicate this vector to calculate custom fields.");
   assert.equal(tooltip.popoverOpen, true);
   view.render([{...layer, datasetKind: "raster"}], layer.key);
@@ -423,7 +444,7 @@ test("calculator help debounces hover but opens immediately for focus and touch"
   const layer = {...LAYERS[0], datasetKind: "vector", canCalculateFields: true};
   view.render([layer], layer.key);
   const calculator = actionControl(view.list.children[0], "field-calculator");
-  const tooltip = elementsByClass(view.root, "map-layer-action-tooltip")[0];
+  const tooltip = actionTooltip(view.list.children[0], "field-calculator");
   calculator.dispatchEvent(new Event("pointerenter"));
   t.mock.timers.tick(99);
   assert.equal(tooltip.hidden, true);
@@ -431,20 +452,23 @@ test("calculator help debounces hover but opens immediately for focus and touch"
   assert.equal(tooltip.hidden, false);
   assert.equal(calculator.getAttribute("aria-describedby"), tooltip.id);
   calculator.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(80);
   assert.equal(tooltip.popoverOpen, false);
   calculator.focus();
   calculator.dispatchEvent(new Event("focus"));
   assert.equal(tooltip.hidden, false);
-  let stopped = false;
-  const escape = interactionEvent("keydown", {key: "Escape", stopPropagation: () => { stopped = true; }});
-  calculator.dispatchEvent(escape);
+  let workspaceEscapes = 0;
+  doc.addEventListener("keydown", () => workspaceEscapes++);
+  const escape = interactionEvent("keydown", {key: "Escape"});
+  doc.dispatchEvent(escape);
   assert.equal(escape.defaultPrevented, true);
-  assert.equal(stopped, true, "dismissing help must not also collapse Map contents");
+  assert.equal(workspaceEscapes, 0, "dismissing help must not also collapse Map contents");
   assert.equal(tooltip.hidden, true);
-  assert.equal(calculator.getAttribute("aria-describedby"), null);
+  assert.equal(calculator.getAttribute("aria-describedby"), tooltip.id);
   const secondEscape = interactionEvent("keydown", {key: "Escape"});
-  calculator.dispatchEvent(secondEscape);
+  doc.dispatchEvent(secondEscape);
   assert.equal(secondEscape.defaultPrevented, false, "with no help open, Escape belongs to the workspace");
+  assert.equal(workspaceEscapes, 1);
   calculator.dispatchEvent(interactionEvent("pointerdown", {pointerType: "touch"}));
   assert.equal(tooltip.hidden, false);
   calculator.dispatchEvent(new Event("blur"));
@@ -456,7 +480,7 @@ test("calculator help cancels when hover ends, rows refresh, geometry changes or
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const layer = {...LAYERS[0], datasetKind: "vector", canCalculateFields: true};
   view.render([layer], layer.key);
-  const tooltip = elementsByClass(view.root, "map-layer-action-tooltip")[0];
+  let tooltip = actionTooltip(view.list.children[0], "field-calculator");
   let calculator = actionControl(view.list.children[0], "field-calculator");
   calculator.dispatchEvent(new Event("pointerenter"));
   calculator.dispatchEvent(new Event("pointerleave"));
@@ -467,8 +491,9 @@ test("calculator help cancels when hover ends, rows refresh, geometry changes or
   t.mock.timers.tick(100);
   assert.equal(tooltip.hidden, true);
   calculator = actionControl(view.list.children[0], "field-calculator");
+  tooltip = actionTooltip(view.list.children[0], "field-calculator");
   calculator.dispatchEvent(new Event("focus"));
-  view.scrollContainer.dispatchEvent(new Event("scroll"));
+  doc.dispatchEvent(new Event("scroll"));
   assert.equal(tooltip.popoverOpen, false);
   calculator.dispatchEvent(new Event("focus"));
   doc.defaultView.dispatchEvent(new Event("resize"));
@@ -477,6 +502,42 @@ test("calculator help cancels when hover ends, rows refresh, geometry changes or
   view.unbind();
   t.mock.timers.tick(100);
   assert.equal(tooltip.hidden, true);
+});
+
+test("calculator and clipboard explanations share focus, dismissal and viewport ownership", t => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layer = {...LAYERS[0], datasetKind: "vector", canCalculateFields: true};
+  view.render([layer], layer.key);
+  const row = view.list.children[0];
+  const paste = actionControl(row, "paste-style"), calculator = actionControl(row, "field-calculator");
+  const pasteHelp = actionTooltip(row, "paste-style"), calculatorHelp = actionTooltip(row, "field-calculator");
+  paste.focus();
+  paste.dispatchEvent(new Event("focus"));
+  assert.equal(pasteHelp.hidden, false);
+  calculator.focus();
+  paste.dispatchEvent(new Event("blur"));
+  calculator.dispatchEvent(new Event("focus"));
+  calculator.dispatchEvent(new Event("pointerenter"));
+  calculator.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(100);
+  assert.equal(pasteHelp.hidden, true);
+  assert.equal(calculatorHelp.hidden, false, "pointer crossing retains the focused calculator explanation");
+  assert.equal(elementsByClass(row, "map-layer-action-tooltip").filter(tooltip => !tooltip.hidden).length, 1);
+  doc.defaultView.dispatchEvent(new Event("resize"));
+  assert.equal(calculatorHelp.hidden, true);
+  doc.querySelector("#map-layers-show-all").focus();
+  calculator.dispatchEvent(new Event("blur"));
+  calculator.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(90);
+  paste.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(80);
+  assert.equal(calculatorHelp.hidden, true, "a clipboard hover cancels the calculator's pending explanation");
+  assert.equal(pasteHelp.hidden, false);
+  view.unbind();
+  t.mock.timers.tick(100);
+  assert.equal(pasteHelp.hidden, true);
+  assert.equal(calculatorHelp.hidden, true);
 });
 
 test("Catalog and Custom rows share one unchanged order and use explicit layer meaning", () => {
@@ -525,14 +586,14 @@ test("full names stay on the card while More actions preserves disclosure and ut
   assert.equal(panel.hidden, false);
   assert.equal(trigger.getAttribute("aria-expanded"), "true");
   const name = elementsByClass(row, "raster-layer-name")[0];
-  assert.equal(name.textContent, layers[0].label);
-  assert.equal(name.children.length, 0);
+  assert.equal(subtreeText(name), layers[0].label);
+  assert.equal(name.children[0].tagName, "LABEL");
   actionControl(row, "zoom").focus();
   view.render([layers[1], layers[0], layers[2]], layers[0].key);
   row = list.children[1];
   panel = elementsByClass(row, "map-layer-details")[0];
   assert.equal(panel.hidden, false);
-  assert.equal(elementsByClass(row, "raster-layer-name")[0].textContent, layers[0].label);
+  assert.equal(subtreeText(elementsByClass(row, "raster-layer-name")[0]), layers[0].label);
   assert.equal(doc.activeElement, actionControl(row, "zoom"));
   panel.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
   assert.equal(panel.hidden, true);
@@ -540,7 +601,8 @@ test("full names stay on the card while More actions preserves disclosure and ut
   view.render([layers[1], layers[0], layers[2]], layers[0].key,
     { key: layers[0].key, action: "rename" });
   row = list.children[1];
-  assert.equal(elementsByClass(row, "map-layer-details")[0].hidden, false);
+  assert.equal(elementsByClass(row, "map-layer-details")[0].hidden, true,
+    "renaming is directly available without reopening More actions");
   assert.equal(doc.activeElement, actionControl(row, "rename"));
   view.render([layers[1], layers[2]], layers[1].key);
   doc.querySelector("#map-layers-show-all").focus();
@@ -740,7 +802,7 @@ test("inline Rename preserves draft text across refreshes, validates, saves and 
   form.dispatchEvent(new Event("submit", { cancelable: true }));
   assert.deepEqual(renamed, [[layer.key, "<b>Forests</b>"]]);
   assert.equal(elementsByClass(list, "map-layer-name-editor").length, 0);
-  assert.equal(elementsByClass(list, "raster-layer-name")[0].textContent, "<b>Forests</b>");
+  assert.equal(subtreeText(elementsByClass(list, "raster-layer-name")[0]), "<b>Forests</b>");
   actionControl(list.children[0], "rename").dispatchEvent(new Event("click"));
   form = elementsByClass(list, "map-layer-name-editor")[0];
   form.children[3].children[1].dispatchEvent(new Event("click"));
@@ -765,7 +827,7 @@ test("named local outputs expose Rename and full keyboard-inspectable names", ()
   const list = doc.querySelector("#raster-layer-list");
   assert.ok(actionControl(list.children[0], "rename"));
   const name = elementsByClass(list, "raster-layer-name")[0];
-  assert.equal(name.textContent, label);
+  assert.equal(subtreeText(name), label);
   assert.equal(name.tabIndex, 0);
   assert.match(name.title, /2026_10_12_14_35_22/);
   const group = elementsByClass(list, "map-layer-group-name")[0];
@@ -810,18 +872,18 @@ test("rows retain identity, map, style, clipboard, and removal actions", () => {
   for (const [index, row] of rows.entries()) {
     assert.equal(row.tagName, "LI");
     assert.equal(row.classList.contains("is-active"), false);
-    assert.equal(elementsByClass(row, "raster-layer-name")[0].textContent, LAYERS[index].label);
+    assert.equal(subtreeText(elementsByClass(row, "raster-layer-name")[0]), LAYERS[index].label);
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
     assert.equal(elementsByClass(row, "raster-layer-opacity").length, 0);
     assert.equal(actionControl(row, "style").getAttribute("aria-haspopup"), "dialog");
     assert.equal(actionControl(row, "style").textContent, "Style");
     assert.match(actionControl(row, "zoom").getAttribute("aria-label"), /^Zoom to /);
-    assert.match(actionControl(row, "info").getAttribute("aria-label"), /^View details for /);
+    assert.match(actionControl(row, "info").getAttribute("aria-label"), /^Raster information for /);
     assert.equal(actionControl(row, "copy-style").disabled, false);
-    assert.equal(actionControl(row, "copy-style").textContent, "Copy style");
-    assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
+    assert.equal(actionControl(row, "copy-style").textContent, "");
+    assert.match(elementsByClass(row, "map-layer-action-tooltip")[0].textContent, /Copy style and opacity/);
     assert.match(actionControl(row, "copy-style").getAttribute("aria-label"), /^Copy style from /);
-    assert.throws(() => actionControl(row, "paste-style"), /expected one paste-style/);
+    assert.equal(actionControl(row, "paste-style").getAttribute("aria-disabled"), "true");
     assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
     assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
     assert.equal(actionControl(row, "visibility").type, "checkbox");
@@ -875,16 +937,16 @@ test("More actions keeps utility actions while frequent actions remain on the co
     assert.ok(strip.contains(actionControl(row, "style")));
     for (const action of ["copy-style", "paste-style"]) {
       assert.ok(strip.contains(actionControl(row, action)));
-      assert.equal(actionControl(row, action).children.length, 0, "frequent style actions have visible text");
+      assert.equal(actionControl(row, action).children[0].tagName, "SVG", "clipboard actions are icons in the joined Style group");
     }
-    assert.match(actionControl(row, "paste-style").getAttribute("aria-label"), /^Paste style from Copied source onto /);
+    assert.match(actionControl(row, "paste-style").getAttribute("aria-label"), /^Paste style onto /);
     assert.ok(strip.contains(actionControl(row, "details")));
     assert.ok(details.contains(utilities));
     actionControl(row, "details").dispatchEvent(new Event("click"));
     assert.equal(details.hidden, false);
-    for (const action of ["zoom", "rename", "info"]) {
+    for (const action of ["zoom", "rename"]) {
       const button = actionControl(row, action);
-      assert.ok(utilities.contains(button), `${action} remains available in More actions`);
+      assert.ok(elementsByClass(row, "map-layer-primary-row")[0].contains(button), `${action} remains directly available`);
       assert.equal(button.tagName, "BUTTON");
       assert.equal(button.hidden, false);
       assert.match(button.getAttribute("aria-label"), /Catalog Item/);
@@ -893,15 +955,114 @@ test("More actions keeps utility actions while frequent actions remain on the co
       assert.equal(button.children[0].getAttribute("aria-hidden"), "true");
       assert.equal(button.children[0].getAttribute("focusable"), "false");
     }
+    const rail = elementsByClass(row, "map-layer-visibility-zoom")[0];
+    assert.deepEqual(rail.children, [actionControl(row, "visibility"), actionControl(row, "zoom")]);
+    const tail = elementsByClass(row, "map-layer-name-tail")[0];
+    assert.ok(tail.contains(actionControl(row, "rename")), "the pencil stays with the last title word");
+    assert.equal(tail.children[0].htmlFor, actionControl(row, "visibility").id);
+    assert.equal(tail.children[0].contains(actionControl(row, "rename")), false, "Rename is not inside the visibility label");
+    assert.ok(utilities.contains(actionControl(row, "info")));
   }
   const [rasterRow, vectorRow] = doc.querySelector("#raster-layer-list").children;
   const strip = elementsByClass(rasterRow, "map-layer-row-actions")[0];
-  assert.ok(strip.contains(actionControl(rasterRow, "calculate")));
+  assert.equal(strip.contains(actionControl(rasterRow, "calculate")), false);
+  assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "calculate")));
+  assert.equal(actionControl(rasterRow, "info").textContent, "Raster information");
+  assert.equal(actionControl(vectorRow, "info").textContent, "Vector information");
+  assert.equal(actionControl(rasterRow, "download").textContent, "Download clip");
   assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "legend")));
   assert.ok(elementsByClass(rasterRow, "map-layer-details")[0].contains(elementsByClass(rasterRow, "map-layer-legend")[0]));
   assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "download")));
   assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].contains(actionControl(vectorRow, "filter")));
   assert.equal(actionControl(vectorRow, "filter").textContent, "Filter");
+});
+
+test("joined clipboard icons explain empty, incompatible and pending states without activating unavailable actions", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), actions = [];
+  view.bind({onCopyStyle: key => actions.push(["copy", key]), onPasteStyle: key => actions.push(["paste", key])});
+  const states = [
+    {canCopy: false, canPaste: false, pasting: false, sourceLabel: null, pasteReason: "Copy a style first."},
+    {canCopy: true, canPaste: false, pasting: false, sourceLabel: "Raster", pasteReason: "A raster style cannot be pasted onto a vector."},
+    {canCopy: true, canPaste: false, pasting: true, sourceLabel: "Raster", pasteReason: "Pasting style onto Temperature."},
+  ];
+  for (const styleClipboard of states) {
+    view.render([{...LAYERS[0], styleClipboard}], null);
+    const row = doc.querySelector("#raster-layer-list").children[0];
+    const group = elementsByClass(row, "map-layer-style-actions")[0];
+    const paste = actionControl(row, "paste-style");
+    const tooltip = elementsByClass(row, "map-layer-action-tooltip")[1];
+    assert.equal(group.getAttribute("role"), "group");
+    assert.equal(group.getAttribute("aria-label"), `Style controls for ${LAYERS[0].label}`);
+    assert.ok(group.contains(actionControl(row, "style")));
+    assert.equal(paste.disabled, false, "unavailable Paste remains keyboard focusable");
+    assert.equal(paste.getAttribute("aria-disabled"), "true");
+    assert.equal(paste.getAttribute("aria-busy"), String(styleClipboard.pasting));
+    assert.equal(paste.getAttribute("aria-describedby"), tooltip.id);
+    assert.equal(tooltip.textContent, styleClipboard.pasteReason);
+    paste.dispatchEvent(new Event("click"));
+    if (!styleClipboard.canCopy) actionControl(row, "copy-style").dispatchEvent(new Event("click"));
+  }
+  assert.deepEqual(actions, []);
+  view.unbind();
+});
+
+test("clipboard explanations debounce hover, open immediately on focus, and clean up on Escape, scrolling and rerender", t => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  view.render([LAYERS[0]], null);
+  let row = doc.querySelector("#raster-layer-list").children[0];
+  let paste = actionControl(row, "paste-style");
+  const tooltip = elementsByClass(row, "map-layer-action-tooltip")[1];
+  paste.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(79);
+  assert.equal(tooltip.hidden, true);
+  t.mock.timers.tick(1);
+  assert.equal(tooltip.popoverOpen, true);
+  paste.dispatchEvent(new Event("pointerleave"));
+  tooltip.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, false, "the explanation remains readable under the pointer");
+  let workspaceEscapes = 0;
+  doc.addEventListener("keydown", () => workspaceEscapes++);
+  const dismiss = interactionEvent("keydown", {key: "Escape"});
+  doc.dispatchEvent(dismiss);
+  assert.equal(tooltip.hidden, true, "Escape dismisses a hover tooltip even when focus is elsewhere");
+  assert.equal(dismiss.defaultPrevented, true);
+  assert.equal(workspaceEscapes, 0, "the same Escape must not collapse the contents panel");
+  doc.dispatchEvent(interactionEvent("keydown", {key: "Escape"}));
+  assert.equal(workspaceEscapes, 1, "a later Escape remains available to the owning workspace");
+  paste.focus();
+  paste.dispatchEvent(new Event("focus"));
+  assert.equal(tooltip.hidden, false, "keyboard focus does not wait for the hover delay");
+  paste.dispatchEvent(new Event("pointerenter"));
+  paste.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, false, "a quick pointer crossing cannot hide a keyboard-focused explanation");
+  tooltip.dispatchEvent(new Event("pointerenter"));
+  tooltip.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, false, "leaving the tooltip also preserves its focused action's explanation");
+  doc.querySelector("#map-layers-show-all").focus();
+  paste.dispatchEvent(new Event("blur"));
+  assert.equal(tooltip.hidden, true, "moving keyboard focus away dismisses the explanation");
+  paste.dispatchEvent(new Event("focus"));
+  doc.dispatchEvent(new Event("scroll"));
+  assert.equal(tooltip.hidden, true);
+  paste.dispatchEvent(new Event("pointerenter"));
+  view.render([LAYERS[0]], null);
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, true, "a removed row cannot display a delayed explanation");
+  row = doc.querySelector("#raster-layer-list").children[0];
+  paste = actionControl(row, "paste-style");
+  const nextTooltip = elementsByClass(row, "map-layer-action-tooltip")[1];
+  paste.dispatchEvent(interactionEvent("pointerdown", {pointerType: "touch"}));
+  assert.equal(nextTooltip.hidden, false);
+  doc.dispatchEvent(new Event("pointerdown"));
+  assert.equal(nextTooltip.hidden, true);
+  paste.dispatchEvent(new Event("pointerenter"));
+  view.unbind();
+  t.mock.timers.tick(100);
+  assert.equal(nextTooltip.hidden, true, "destruction cancels pending hover work");
 });
 
 test("direct utility actions retain focus on refresh and after inline naming", () => {
