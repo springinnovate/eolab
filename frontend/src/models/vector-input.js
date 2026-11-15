@@ -157,7 +157,7 @@ function refreshVectorInput(state, definition, context) {
     if (state.vectorKey && !state.vectors.some(source => source.key === state.vectorKey)) {
         state.vectorKey = "";
         Object.assign(state, createClearedVectorFields(state, definition));
-        state.selectionError = "Add the vector layer to Map layers, or choose another layer.";
+        state.selectionError = "Add the vector dataset to Map contents, or choose another dataset.";
     }
 }
 
@@ -352,7 +352,7 @@ class VectorInputView {
         }
         this.description.textContent = captured ? `Uses the original run's selection. ${this.ui.describeFilter(captured.filter)}` :
             source ? state.featureScope === "all" ? "All features are included, regardless of the layer's map filter or visibility."
-                : `Uses the layer's filter when you run the tool. ${this.ui.describeFilter(source.filter)}` : "Add a vector layer to Map layers to choose it here.";
+                : `Uses the layer's filter when you run the tool. ${this.ui.describeFilter(source.filter)}` : "Add a vector dataset to Map contents to choose it here.";
         this.status.textContent = state.selectionError || (unavailableFields.length ? `No eligible fields are available for: ${unavailableFields.join(", ")}.` : "");
         try { captureVectorInput(state, this.definition); return true; } catch { return false; }
     }

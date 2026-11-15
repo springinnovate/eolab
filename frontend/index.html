@@ -436,7 +436,7 @@
             aria-controls="eomap-map-layers-region"
             aria-expanded="false"
           >
-            <span class="map-layers-heading">Map layers <span id="map-layer-counts">· Empty</span></span>
+            <span class="map-layers-heading">Map contents <span id="map-layer-counts">· Empty</span></span>
           </button>
           <section
             class="eomap-workspace-region map-layers-region"
@@ -453,8 +453,8 @@
                       aria-hidden="false"
                     >
                     <p class="models-help" data-private-result-notice hidden>Result previews are temporary and private. Saved and shared maps omit them. Reopen them from Data tools → Runs.</p>
-                    <div class="map-layer-source-actions" role="group" aria-label="Add polygon layers">
-                    <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a polygon in a private layer saved on this device" disabled>Draw polygon</button>
+                    <div class="map-layer-source-actions" role="group" aria-label="Add polygons">
+                    <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a private polygon saved on this device" disabled>Draw polygon</button>
                     <details class="annotation-layer-tools">
                       <summary>Upload polygons</summary>
                       <div class="annotation-layer-actions" role="group" aria-label="Upload polygons">
@@ -472,15 +472,15 @@
                       </div>
                     </details>
                     </div>
-                    <div class="map-layer-visibility-actions" role="group" aria-label="Map layer controls">
-                      <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map layers" disabled>Show all</button>
-                      <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map layers" disabled>Hide all</button>
-                      <select id="map-layers-sort" aria-label="Sort map layers" title="Sort once. Layers at the top draw above layers below." disabled>
+                    <div class="map-layer-visibility-actions" role="group" aria-label="Map contents controls">
+                      <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map contents" disabled>Show all</button>
+                      <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map contents" disabled>Hide all</button>
+                      <select id="map-layers-sort" aria-label="Sort map contents" title="Sort once. Items at the top draw above items below." disabled>
                         <option value="" selected disabled>Sort…</option>
                         <option value="name-ascending">Name A–Z</option>
                         <option value="name-descending">Name Z–A</option>
                         <option value="visible-first">Visible first</option>
-                        <option value="layer-type">Group by layer type</option>
+                        <option value="layer-type">Group by data type</option>
                       </select>
                     </div>
                     <section class="rendering-availability">
@@ -497,7 +497,7 @@
                     ></p>
                     </section>
                     <p class="map-layers-empty-state">
-                      No map layers yet. Add an item from Catalog, upload polygons, or draw your own polygon.
+                      Nothing on the map yet. Add a dataset from Catalog, upload polygons, or draw your own polygon.
                     </p>
                     <div
                       class="raster-layer-stack"
@@ -505,10 +505,10 @@
                       data-eomap-region="map-layers"
                       hidden
                     >
-                      <ol class="raster-layer-list" id="raster-layer-list" aria-label="Map layers">
+                      <ol class="raster-layer-list" id="raster-layer-list" aria-label="Map contents">
                         <li id="map-layer-removal" class="map-layer-removal" hidden>
                           <span id="map-layer-removal-message" class="raster-layer-name" role="status" aria-live="polite"></span>
-                          <button id="undo-layer-removal" class="secondary-button" type="button" aria-label="Undo remove layer">Undo</button>
+                          <button id="undo-layer-removal" class="secondary-button" type="button" aria-label="Undo removal">Undo</button>
                           <button id="dismiss-layer-removal" class="secondary-button" type="button" aria-label="Dismiss undo" title="Dismiss undo">×</button>
                           <p id="map-layer-removal-error" role="alert" hidden></p>
                         </li>
@@ -829,7 +829,7 @@
               <details id="raster-series-data-settings" class="raster-series-settings">
                 <summary id="raster-series-source-summary">Axis and plot options</summary>
                 <div class="raster-series-controls">
-                  <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
+                  <label>Order by <select id="raster-series-order"><option value="map">Map contents order</option><option value="name">Layer name</option></select></label>
                   <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
                 </div>
                 <div id="raster-series-plot-options"></div>
@@ -857,7 +857,7 @@
             </div>
             <p id="annotation-save-status" role="status" aria-live="polite">Opening local polygons…</p>
             <p id="annotation-file-status" role="status" aria-live="polite"></p>
-            <p id="annotation-panel-empty">Choose a local or shared polygon layer in Map layers to edit its polygons, names and notes.</p>
+            <p id="annotation-panel-empty">Choose a local or shared polygon layer in Map contents to edit its polygons, names and notes.</p>
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>

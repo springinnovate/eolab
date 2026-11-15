@@ -112,7 +112,7 @@ test("published-map editing shows fixed URL, explicit save, busy state and retai
   assert.equal(el("edit-status").textContent, "Save failed");
   view.showPublishedMapEditor({ title: "Amazon", subtitle: "", slug: "amazon" }, false);
   assert.equal(el("save").disabled, false);
-  assert.match(el("edit-status").textContent, /unavailable layers will be omitted/);
+  assert.match(el("edit-status").textContent, /unavailable items will be omitted/);
   view.unbind();
 });
 
@@ -174,7 +174,7 @@ test("successful shared maps dismiss loading without a final click", () => {
   assert.equal(elements.get("#saved-map-view-dialog-title").textContent,
     "Opening map…");
   assert.equal(elements.get("#saved-map-view-dialog-summary").textContent,
-    "Loading 2 map layers…");
+    "Loading 2 map items…");
   assert.equal(elements.get("#saved-map-view-dialog-details").hidden, true);
   assert.equal(dialog.open, true);
 

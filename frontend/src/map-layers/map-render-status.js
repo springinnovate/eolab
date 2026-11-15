@@ -44,14 +44,14 @@ export function addMapRenderStatus(leaflet, map, retry) {
             root.setAttribute("data-phase", phase);
             const count = total ? ` · ${loaded} of ${total} visible tiles loaded` : "";
             const missing = failed ? ` · ${failed} missing` : "";
-            const text = phase === "preparing" ? "Preparing map layers…"
-                : phase === "error" ? `Map layers unavailable. ${status.message || "Try again."}`
-                : phase === "incomplete" ? `Map layers incomplete${count}${missing}`
-                : phase === "complete" ? "Map layers loaded"
-                : `${phase === "retrying" ? "Retrying" : "Loading"} map layers…${count}${missing}`;
+            const text = phase === "preparing" ? "Preparing map contents…"
+                : phase === "error" ? `Map contents unavailable. ${status.message || "Try again."}`
+                : phase === "incomplete" ? `Map contents incomplete${count}${missing}`
+                : phase === "complete" ? "Map contents loaded"
+                : `${phase === "retrying" ? "Retrying" : "Loading"} map contents…${count}${missing}`;
             if (message.textContent !== text) message.textContent = text;
             button.hidden = !(failed > 0 || phase === "error");
-            button.textContent = phase === "error" ? "Retry map layers" : "Retry missing tiles";
+            button.textContent = phase === "error" ? "Retry map contents" : "Retry missing tiles";
         },
         /** Detach the control and its listeners. @return {void} */
         remove() { control.remove(); },

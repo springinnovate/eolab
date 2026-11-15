@@ -106,7 +106,7 @@ test("raster choices separate map layers from completed runs and explain unavail
     h.state.draft = createModelDraft(recipe, {rasters: [raster, result], area}, "private-draft");
     h.state.draft.inputs.raster.raster = result; h.state.nextCursor = "older";
     h.view.render(h.state);
-    assert.deepEqual(h.view.setup.inputs.raster.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
+    assert.deepEqual(h.view.setup.inputs.raster.source.children.slice(1).map(group => group.label), ["Map contents", "Completed runs"]);
     assert.equal(h.view.setup.inputs.raster.reason.hidden, true);
     assert.equal(h.view.setup.inputs.raster.reason.textContent, "");
     assert.equal(h.view.setup.run.disabled, false);
@@ -119,7 +119,7 @@ test("raster choices separate map layers from completed runs and explain unavail
     assert.equal(h.view.setup.inputs.raster.reason.hidden, false);
     assert.match(h.view.setup.inputs.raster.reason.textContent, /no longer available/);
     h.state.draft.inputs.raster.raster = null; h.view.render(h.state);
-    assert.match(h.view.setup.inputs.raster.reason.textContent, /Map layers or a completed run/);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /Map contents or a completed run/);
     assert.match(h.view.setup.inputs.raster.reason.textContent, /do not need to be shown on the map/);
 });
 
@@ -524,11 +524,11 @@ test("setup offers only map layers and explains how to add a missing raster", ()
     assert.equal(h.view.setup.inputs.raster.reason.textContent, "");
     assert.equal(h.view.setup.fields.querySelectorAll("p").find(node => node.id === "models-run-name-help").textContent, "Date and time are added automatically.");
     h.state.draft = createModelDraft(model, {}, "empty-map"); h.view.render(h.state);
-    assert.match(h.view.setup.inputs.raster.reason.textContent, /Add a raster to Map layers/);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /Add a raster to Map contents/);
     assert.equal(h.view.setup.inputs.raster.reason.hidden, false);
     assert.equal(h.view.setup.run.disabled, true);
     h.state.draft.sources = [raster]; h.view.render(h.state);
-    assert.match(h.view.setup.inputs.raster.reason.textContent, /Choose a raster from Map layers/);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /Choose a raster from Map contents/);
 });
 
 
@@ -566,7 +566,7 @@ test("selected features have one prominent count and predicate; removed layers k
     assert.equal(h.view.setup.inputs.area.editFilter.getAttribute("aria-expanded"), "true");
     assert.equal(h.view.setup.run.disabled, true);
     draft.inputs.area.vectors = []; draft.inputs.area.vectorKey = ""; draft.inputs.area.area = null;
-    draft.inputs.area.selectionError = "Add the vector layer to Map layers, or choose another layer."; h.view.render(h.state);
+    draft.inputs.area.selectionError = "Add the vector dataset to Map contents, or choose another dataset."; h.view.render(h.state);
     assert.equal(h.view.setup.inputs.area.selectionCard.hidden, true);
     assert.equal(h.view.setup.inputs.area.areaDescription.hidden, false);
     assert.equal(h.view.setup.inputs.area.areaDescription.textContent, draft.inputs.area.selectionError);
@@ -749,8 +749,8 @@ test("temporal validation and statistic settings remain local to the relevant co
     h.draft.temporal.datesError = "Available dates could not be loaded. Try again."; h.view.render(h.state);
     assert.match(controls.coverage.textContent, /Available dates could not be loaded/);
     assert.equal(h.view.setup.run.disabled, false);
-    h.draft.temporal.error = "The selected dataset is no longer in Map layers."; h.view.render(h.state);
-    assert.match(controls.status.textContent, /no longer in Map layers/); assert.equal(h.view.setup.run.disabled, true);
+    h.draft.temporal.error = "The selected dataset is no longer in Map contents."; h.view.render(h.state);
+    assert.match(controls.status.textContent, /no longer in Map contents/); assert.equal(h.view.setup.run.disabled, true);
 });
 
 test("area-series setup describes spatial statistics and complete overlapping intervals without period-map controls", () => {

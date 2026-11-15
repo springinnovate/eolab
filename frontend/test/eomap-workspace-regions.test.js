@@ -132,7 +132,7 @@ test("compact header owns branding and actions while alerts stay outside hidden 
     assert.match(STYLESHEET, /\.operational-status-notice:not\(\.visually-hidden\)/);
 });
 
-test("Catalog and Map layers are independent sibling disclosures", () => {
+test("Catalog and Map contents are independent sibling disclosures", () => {
     const panel = requireElementRange("control-panel");
     const catalogRegion = requireElementRange("eomap-catalog-region");
     const renderingRegion = requireElementRange("eomap-map-layers-region");
@@ -210,7 +210,7 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
     }
 });
 
-test("Map layers owns compact rows; the bounded map-tool dock owns styling", () => {
+test("Map contents owns compact rows; the bounded map-tool dock owns styling", () => {
     const rendering = requireElementRange("eomap-map-layers-region");
     const editor = requireElementRange("layer-style-editor");
     const panel = requireElementRange("control-panel");
@@ -273,13 +273,13 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 
-test("Map layers has one heading and collapse control with no nested list widget", () => {
+test("Map contents has one heading and collapse control with no nested list widget", () => {
     const rendering = requireElementRange("eomap-map-layers-region");
     const stack = requireElementRange("raster-layer-stack");
     assert.doesNotMatch(rendering.source, /<h[1-6]\b|workspace-region-heading/);
     assert.match(rendering.source, /aria-labelledby="toggle-map-layers"/);
-    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog, upload polygons, or draw your own polygon\./);
-    assert.match(stack.source, /id="raster-layer-list" aria-label="Map layers"/);
+    assert.match(rendering.source, /Nothing on the map yet\. Add a dataset from Catalog, upload polygons, or draw your own polygon\./);
+    assert.match(stack.source, /id="raster-layer-list" aria-label="Map contents"/);
     assert.match(stack.source, /id="raster-layer-stack-status"[^>]*role="status"/s);
     assert.doesNotMatch(stack.source, /aria-expanded|aria-controls/);
     for (const obsolete of [
@@ -294,7 +294,7 @@ test("Map layers has one heading and collapse control with no nested list widget
 });
 
 
-test("successful catalog additions reveal Map layers through composition", () => {
+test("successful catalog additions reveal Map contents through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
         /onAdded:\s*onRenderingWorkspaceRequested/
@@ -497,7 +497,11 @@ test("sidebar panels own deliberate, independent scrolling", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.map-layers-region\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.map-layers-region\s*\{[^}]*overflow:\s*hidden/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.map-layers-body\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
     );
     assert.match(
         STYLESHEET,
@@ -769,13 +773,13 @@ test("compact bulk visibility buttons sit above the map layer list", () => {
         assert.ok(body.start < button.start && button.end < list);
         assert.equal(countMarkupId(id), 1);
         assert.match(button.source, /type="button"/);
-        assert.ok(button.source.includes(`aria-label="${text} map layers"`));
+        assert.ok(button.source.includes(`aria-label="${text} map contents"`));
         assert.ok(button.source.includes(`disabled>${text}</button>`));
     }
     assert.match(STYLESHEET, /\.map-layer-visibility-actions\s*\{[^}]*flex-wrap: wrap/s);
 });
 
-test("shared layer creation and joining live in Map layers without a session toolbar panel", () => {
+test("shared layer creation and joining live in Map contents without a session toolbar panel", () => {
     const layers = requireElementRange("eomap-map-layers-region");
     const annotations = requireElementRange("annotations-panel");
     const inspection = requireElementRange("map-inspection-panels");

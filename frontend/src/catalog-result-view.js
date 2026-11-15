@@ -36,15 +36,14 @@ export function createCatalogResultView({
         context.textContent = presentation.context;
         element.append(context);
     }
+    const actions = documentContext.createElement("div");
+    actions.className = "catalog-result-actions";
     if (presentation.datasetType !== null) {
         const type = documentContext.createElement("small");
         type.className = "catalog-result-type";
         type.textContent = presentation.datasetType;
-        element.append(type);
+        actions.append(type);
     }
-
-    const actions = documentContext.createElement("div");
-    actions.className = "catalog-result-actions";
     const onMap = documentContext.createElement("span");
     onMap.className = "catalog-on-map catalog-result-on-map";
     onMap.hidden = true;
@@ -88,7 +87,10 @@ export function createCatalogResultView({
     detailsButton.setAttribute("aria-controls", "catalog-item-inspector");
     detailsButton.setAttribute("aria-pressed", "false");
     detailsButton.addEventListener("click", () => onDetails(item, detailsButton));
-    actions.append(onMap, mapButton, zoomButton, styleButton, detailsButton);
+    const controls = documentContext.createElement("div");
+    controls.className = "catalog-result-controls";
+    controls.append(mapButton, zoomButton, styleButton, detailsButton);
+    actions.append(onMap, controls);
 
     const status = documentContext.createElement("p");
     status.id = `${id}-status`;

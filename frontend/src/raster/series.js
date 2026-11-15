@@ -140,7 +140,7 @@ export class RasterSeriesController {
 
     /** Restore submitted calculations and their results after reload.
      * Recovered inputs
-     * remain selected even if their sources are no longer in Map layers.
+     * remain selected even if their sources are no longer in Map contents.
      * @return {Promise<void>} Saved jobs and any temporal metadata have been retrieved.
      */
     async start() {
@@ -188,7 +188,7 @@ export class RasterSeriesController {
     /** Select an existing view of an original raster, or add the source when it is not listed.
      * @param {Object} source Labeled original-source descriptor, including hidden sources.
      * @param {Object} [area] Explicit histogram area; omission retains the chosen scope.
-     * @param {string|null} [viewKey=null] Originating retained view, when the action came from Map layers or its histogram.
+     * @param {string|null} [viewKey=null] Originating retained view, when the action came from Map contents or its histogram.
      * @return {void}
      */
     selectSource(source, area, viewKey = null) {
@@ -307,7 +307,7 @@ export class RasterSeriesController {
      * that default. Background calculations retain their captured inputs through map
      * changes; hidden rasters remain selectable.
      * @param {Object[]} sources Ordered map snapshots with original-source references.
-     * @param {Object[]} [datasets=[]] Distinct temporal Catalog identities retained in Map layers.
+     * @param {Object[]} [datasets=[]] Distinct temporal Catalog identities retained in Map contents.
      * @return {void}
      */
     updateAvailableRasters(sources, datasets = []) {
@@ -421,7 +421,7 @@ export class RasterSeriesController {
      */
     temporalSelectionError() {
         const temporal = this.temporal;
-        if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset." : "Add a temporal dataset from Catalog to Map layers.";
+        if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset." : "Add a temporal dataset from Catalog to Map contents.";
         if (temporal.loading) return "Loading dataset variables…";
         if (temporal.error) return temporal.error;
         if (!temporal.item?.properties["cube:variables"][temporal.variable]) return "Choose a variable.";
