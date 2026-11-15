@@ -160,6 +160,11 @@ class SelectCiChecksTests(unittest.TestCase):
         application_processing = {"application", "processing"}
         cases = (
             ("src/eolab_app/raster/models.py", application_processing),
+            (
+                "src/eolab_app/catalog/models.py",
+                {"application", "processing", "catalog"},
+            ),
+            ("src/eolab_app/catalog/scanner.py", application_processing),
             ("tests/test_temporal_source_access.py", application_processing),
             ("frontend/src/catalog/catalog-pane.js", {"application"}),
             ("frontend/package-lock.json", {"application", "reproducibility"}),
