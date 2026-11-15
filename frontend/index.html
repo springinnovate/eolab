@@ -747,8 +747,8 @@
             <p id="models-error" class="models-error" role="alert" hidden></p>
             <div id="models-deletions"></div>
             <div id="models-recovery" hidden>
-              <p>A submission needs confirmation. Recovery uses its original inputs and request ID.</p>
-              <button id="models-recover" class="secondary-button" type="button">Recover submission</button>
+              <p id="models-recovery-message" role="status"></p>
+              <button id="models-recover" class="secondary-button" type="button">Retry starting run</button>
             </div>
             <div id="models-library">
               <label class="models-field" for="models-query">Find a tool<input id="models-query" type="search" placeholder="Search by name or purpose"></label>
@@ -883,8 +883,8 @@
               <button id="raster-clips-create" class="primary-button" type="submit" disabled>Prepare download</button>
             </form>
             <p id="raster-clips-message" role="status" aria-live="polite"></p>
-            <p id="raster-clips-pending" hidden></p>
-            <button id="raster-clips-retry-submission" class="secondary-button" type="button" hidden>Recover submission</button>
+            <p id="raster-clips-pending" role="status" hidden></p>
+            <button id="raster-clips-retry-submission" class="secondary-button" type="button" hidden>Retry download</button>
             <p id="raster-clips-job-message" role="status" aria-live="polite"></p>
             <section id="raster-clips-current" aria-label="Current download" tabindex="-1" hidden></section>
             <button id="raster-clips-new" class="secondary-button" type="button" hidden>Prepare another download</button>

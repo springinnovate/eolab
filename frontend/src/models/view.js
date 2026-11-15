@@ -57,7 +57,7 @@ export class ModelsView {
     constructor(documentContext = globalThis.document) {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
         this.deletionNotices = new Map();
-        this.elements = Object.fromEntries(["heading", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recover", "query",
+        this.elements = Object.fromEntries(["heading", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
             "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
@@ -473,7 +473,7 @@ export class ModelsView {
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
         setupControls.run.disabled = state.submitting || Boolean(state.pending) || !inputsReady || !supported;
-        setupControls.run.textContent = state.submitting ? "Submitting…" : runLabel;
+        setupControls.run.textContent = state.submitting ? "Starting run…" : runLabel;
         setupControls.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         setupControls.details.run.hidden = true;
         setupControls.details.message.textContent = supported ? `Model version ${draft.model.version}. Results are temporary.` : "This tool requires input controls not yet available in this interface.";
@@ -730,6 +730,10 @@ export class ModelsView {
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
         this.elements.recovery.hidden = !state.pending; this.elements.recover.disabled = state.submitting;
+        this.elements.recover.hidden = state.submitting;
+        const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
+            : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs and won’t create a second run.`;
+        if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
         const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
         const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
         if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
