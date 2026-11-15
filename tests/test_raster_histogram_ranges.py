@@ -27,6 +27,8 @@ SAMPLE_VALUES = [
     pytest.param((FLOAT64_MAXIMUM,), id="constant-maximum"),
     pytest.param((-FLOAT64_MAXIMUM,), id="constant-minimum"),
     pytest.param((0.0,), id="constant-zero"),
+    pytest.param((1.0,), id="constant-positive"),
+    pytest.param((-1.0,), id="constant-negative"),
     pytest.param((-FLOAT64_MAXIMUM, 0.0, FLOAT64_MAXIMUM), id="full-finite-span"),
     pytest.param((1.0, 2.0, 3.0), id="ordinary"),
 ]
@@ -59,6 +61,13 @@ def test_single_histogram_keeps_fixed_bins_and_exact_extrema(
     assert numpy.isfinite(edges).all()
     assert numpy.all(edges[1:] > edges[:-1])
     assert edges[0] <= min(values) <= max(values) <= edges[-1]
+    if len(values) == 1 and abs(values[0]) < FLOAT64_MAXIMUM:
+        assert numpy.array_equal(
+            edges,
+            numpy.linspace(
+                result.suggested_range.minimum, result.suggested_range.maximum, 65
+            ),
+        )
     expected_percentiles = numpy.percentile(values, (5, 50, 95))
     assert (
         result.percentiles.p05,
@@ -77,14 +86,16 @@ def test_paired_histogram_keeps_fixed_bins_and_exact_extrema(
         tmp_path: Temporary directory for the two float64 GeoTIFF sources.
         values: Finite samples spanning ordinary or difficult float64 ranges.
     """
+    # Paired center sampling uses odd dimensions; retain both adjacent values.
+    sample_values = (*values, values[0]) if len(values) == 2 else values
     x_source = write_source(
         tmp_path / "x.tif",
-        numpy.array([values], dtype=numpy.float64),
+        numpy.array([sample_values], dtype=numpy.float64),
         transform=from_origin(0, 1, 1, 1),
     )
     y_source = write_source(
         tmp_path / "y.tif",
-        -numpy.array([values], dtype=numpy.float64),
+        -numpy.array([sample_values], dtype=numpy.float64),
         transform=from_origin(0, 1, 1, 1),
     )
 
@@ -96,7 +107,7 @@ def test_paired_histogram_keeps_fixed_bins_and_exact_extrema(
     assert result.y_maximum == -min(values)
     counts = numpy.array(result.histogram.counts)
     assert counts.shape == (32, 32)
-    assert result.paired_sample_count == int(counts.sum()) == len(values)
+    assert result.paired_sample_count == int(counts.sum()) == len(sample_values)
     assert counts.sum(axis=0).tolist() == result.histogram.x_marginal_counts
     assert counts.sum(axis=1).tolist() == result.histogram.y_marginal_counts
     for edge_values, minimum, maximum in (
