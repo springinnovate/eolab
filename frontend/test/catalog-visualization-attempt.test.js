@@ -168,7 +168,9 @@ function harness({ selectedItem = null, prepare = async (item) => item,
       onDetails: () => {}, onPreview: () => {}, onClearPreview: () => {},
     });
     const controls = view.element.children.find(child => child.className === "catalog-result-actions");
-    const [, mapButton, rowZoomButton, rowStyleButton] = controls.children;
+    const mapButton = controls.children.find(child => child.classList.contains("catalog-result-map-action"));
+    const rowZoomButton = controls.children.find(child => child.classList.contains("catalog-result-zoom"));
+    const rowStyleButton = controls.children.find(child => child.classList.contains("catalog-result-style"));
     const row = { ...view, mapButton, zoomButton: rowZoomButton, styleButton: rowStyleButton,
       /** Record and render row state. @param {Object} value Current action state. @return {void} */
       update(value) { this.state = value; view.update(value); } };
