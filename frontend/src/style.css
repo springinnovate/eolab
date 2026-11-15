@@ -2465,6 +2465,7 @@ div.chart-tooltip {
 #app {
   --inspection-width: 420px;
   --inspection-space: 0px;
+  --map-tools-available-width: calc(100vw - 40px);
   --workspace-sidebar-width: clamp(340px, 27vw, 420px);
   --workspace-column-rail-width: 44px;
   --workspace-catalog-region-width: clamp(340px, 27vw, 420px);
@@ -3797,6 +3798,13 @@ article.raster-histogram-summary {
 }
 
 /* One toolbar stays anchored while independent tool panels open beside the map. */
+@media (min-width: 1200px) {
+  #app:not(.is-control-panel-collapsed) {
+    --map-tools-available-width: calc(
+      100vw - var(--active-workspace-width) - var(--workspace-edge) - var(--workspace-gap) - 20px
+    );
+  }
+}
 .map-tool-openers {
   position: fixed;
   top: 16px;
@@ -3805,7 +3813,8 @@ article.raster-histogram-summary {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: min(var(--inspection-width), calc(100vw - 40px));
+  width: min(var(--inspection-width), var(--map-tools-available-width));
+  transition: width 220ms ease;
   padding-bottom: 6px;
   pointer-events: none;
 }
@@ -3915,7 +3924,6 @@ article.raster-histogram-summary {
 
 /* Expanded actions and results share one card; filters remain a separate surface above it. */
 #app[data-inspection-expanded="true"] .map-tool-openers {
-  width: min(var(--inspection-width), calc(100vw - 40px));
   padding-bottom: 0;
 }
 #app[data-inspection-expanded="true"] .map-filter-summary-group { order: -1; }
@@ -4402,12 +4410,10 @@ article.raster-histogram-summary {
   overflow-wrap: anywhere;
 }
 #raster-sampling-tool {
-  position: absolute;
-  top: 0;
-  right: calc(100% + var(--workspace-gap));
+  order: -2;
   pointer-events: auto;
   z-index: 1101;
-  width: min(290px, max(90px, calc(100vw - var(--inspection-width) - 60px)));
+  min-width: 0;
   box-shadow: var(--elevation-panel);
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -4531,11 +4537,12 @@ summary:hover > .raster-disclosure-chevron {
 #map-histogram-panel { padding-top: 4px; }
 #map-histogram-panel .raster-histogram-list { margin-top: 0; }
 #map-histogram-panel .raster-histogram-overview { padding: 0; border: 0; background: transparent; }
+@media (pointer: coarse) {
+  .raster-sampling-disclosure > summary,
+  .raster-sampling-area-option,
+  #raster-sampling-tool .secondary-button { min-height: 44px; }
+}
 @media (max-width: 699px) {
-  .map-tool-openers { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
-  .map-tools-toolbar-actions { grid-area: 1 / 2; height: fit-content; }
-  .map-filter-summary-group { grid-area: 2 / 1 / auto / -1; }
-  #raster-sampling-tool { position: static; grid-area: 1 / 1; width: auto; min-width: 0; }
   #raster-sampling-tool .raster-sample-window-size { grid-template-columns: minmax(0, 1fr); }
 }
 
