@@ -123,3 +123,54 @@ test("refresh bursts use one frame; final removal cancels it and removes all lis
     layout.register("again", () => []);
     assert.equal(listeners.size, 5);
 });
+
+/**
+ * Count reads of a label's left edge through the DOM measurement contract.
+ * Ineligible labels in the work fixture have one viewport read; extra reads are collision work.
+ * @param {Object} shape Polygon double whose tooltip measurement will be observed.
+ * @return {()=>number} Current number of left-edge reads.
+ */
+function countLabelLeftReads(shape) {
+    const rectangle = shape.element.getBoundingClientRect();
+    let reads = 0;
+    shape.element.getBoundingClientRect = () => ({ ...rectangle,
+        get left() { reads += 1; return rectangle.left; },
+    });
+    return () => reads;
+}
+
+test("offscreen and tiny labels skip collision work after many occupied labels", () => {
+    const { layout, layers, flush } = setup();
+    const visible = Array.from({ length: 500 }, (_, index) => {
+        const left = 10 + (index % 25) * 30, top = 10 + Math.floor(index / 25) * 28;
+        const shape = polygon(left);
+        shape.element.getBoundingClientRect = () => ({ left, right: left + 20, top,
+            bottom: top + 12, width: 20, height: 12 });
+        return shape;
+    });
+    const offscreen = Array.from({ length: 1000 }, () => polygon(900));
+    const tiny = polygon(780, 1, 1);
+    const ineligible = [...offscreen, tiny];
+    const readCounts = ineligible.map(countLabelLeftReads);
+    const shapes = [...visible, ...ineligible];
+    shapes.forEach(shape => layers.add(shape));
+    layout.register("visible", () => visible);
+    layout.register("offscreen-first", () => offscreen.slice(0, 500));
+    layout.register("offscreen-second", () => offscreen.slice(500));
+    layout.register("tiny", () => [tiny]); flush();
+    assert.ok(visible.every(shape => shape.element.style.visibility === "visible"));
+    assert.ok(ineligible.every(shape => shape.element.style.visibility === "hidden"));
+    assert.equal(readCounts.reduce((total, count) => total + count(), 0), ineligible.length,
+        "each ineligible label needs only its viewport read, with zero collision comparisons");
+});
+
+test("editing labels skip collision work even when overlapping and outside the viewport", () => {
+    const { layout, layers, flush } = setup();
+    const drafts = [polygon(-200, 1, 1), polygon(-200, 1, 1)];
+    const readCounts = drafts.map(countLabelLeftReads);
+    drafts.forEach(shape => layers.add(shape));
+    layout.register("drafts", () => drafts, true); flush();
+    assert.ok(drafts.every(shape => shape.element.style.visibility === "visible"));
+    assert.deepEqual(readCounts.map(count => count()), [0, 0],
+        "offscreen drafts need neither left-edge viewport reads nor collision comparisons");
+});
