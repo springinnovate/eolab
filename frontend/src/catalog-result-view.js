@@ -87,7 +87,10 @@ export function createCatalogResultView({
     detailsButton.setAttribute("aria-controls", "catalog-item-inspector");
     detailsButton.setAttribute("aria-pressed", "false");
     detailsButton.addEventListener("click", () => onDetails(item, detailsButton));
-    actions.append(onMap, mapButton, zoomButton, styleButton, detailsButton);
+    const controls = documentContext.createElement("div");
+    controls.className = "catalog-result-controls";
+    controls.append(mapButton, zoomButton, styleButton, detailsButton);
+    actions.append(onMap, controls);
 
     const status = documentContext.createElement("p");
     status.id = `${id}-status`;

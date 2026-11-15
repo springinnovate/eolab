@@ -2224,6 +2224,19 @@ div.chart-tooltip {
   margin-top: 0;
 }
 
+.catalog-result-controls {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.catalog-result-actions:has(.catalog-result-on-map:not([hidden])) .catalog-result-controls {
+  flex-basis: 100%;
+}
+
 .catalog-result-map-action,
 .catalog-result-zoom,
 .catalog-result-style {
@@ -2239,9 +2252,11 @@ div.chart-tooltip {
 
 .catalog-result-map-action.is-retained {
   border-color: transparent;
-  padding-inline: 4px;
   color: var(--text-2);
 }
+
+.catalog-result-zoom,
+.catalog-result-style { border-color: transparent; }
 
 .catalog-result-on-map {
   font-size: var(--font-size-support);
