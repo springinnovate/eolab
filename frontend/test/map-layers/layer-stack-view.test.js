@@ -417,8 +417,6 @@ test("vector calculators stay visible beside duplication and Catalog actions do 
   assert.equal(elementsByClass(row, "map-layer-data-actions")[0].contains(calculator), true);
   assert.equal(elementsByClass(row, "map-layer-details")[0].contains(calculator), false);
   assert.equal(actionControl(row, "add-view").textContent, "Duplicate vector");
-  assert.equal(elementsByClass(row, "map-layer-duplicate-help")[0].textContent,
-    "Duplicate to use a different style or calculate custom fields.");
   assert.ok(calculator.getAttribute("aria-label").includes(layer.label));
   calculator.dispatchEvent(new Event("click"));
   assert.deepEqual(opened, [layer.key]);
@@ -563,8 +561,6 @@ test("Catalog and Custom rows share one unchanged order and use explicit layer m
   const details = elementsByClass(rows[0], "map-layer-details")[0];
   assert.equal(details.hidden, true);
   assert.equal(elementsByClass(details, "map-layer-source")[0].textContent, "Based on: temperature.tif");
-  assert.equal(elementsByClass(rows[0], "map-layer-duplicate-help")[0].textContent,
-    "Duplicate to use a different style.");
 });
 
 test("uploaded provenance is visible independently of names, view keys and Custom styling", () => {

@@ -689,15 +689,7 @@ export class MapLayerStackView {
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
-            const help = this.documentContext.createElement("p");
-            help.className = "map-layer-duplicate-help";
-            help.id = `map-layer-duplicate-help-${encodeURIComponent(layer.key)}`;
-            help.textContent = layer.datasetKind === "vector"
-                ? "Duplicate to use a different style or calculate custom fields."
-                : "Duplicate to use a different style.";
-            addView.setAttribute("aria-describedby", help.id);
             layerActions.append(addView);
-            rowActions.append(help);
         }
         if (this.allowRemoval && layer.datasetKind === "vector") {
             const enabled = layer.isCustom && layer.canCalculateFields;

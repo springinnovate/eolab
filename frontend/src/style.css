@@ -1007,7 +1007,6 @@ h5 {
   margin-top: 3px;
   min-width: 0;
 }
-.map-layer-duplicate-help { flex-basis: 100%; margin: 0; color: var(--text-3); font-size: var(--font-size-support); overflow-wrap: anywhere; }
 .map-layer-style-actions { display: inline-flex; flex: none; align-items: stretch; border: 1px solid var(--action-border); border-radius: 2px; background: var(--surface-3); }
 .map-layer-style-actions > .secondary-button { border: 0; border-radius: 0; background: transparent; }
 .map-layer-style-actions > .secondary-button + .secondary-button { border-inline-start: 1px solid var(--action-border); }
