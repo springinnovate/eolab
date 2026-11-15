@@ -2,8 +2,11 @@
 
 from pathlib import Path
 from threading import Event
+from typing import Any
 
 import fiona
+from fastapi import FastAPI, Request, Response
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 import pytest
 from shapely.geometry import box, mapping
@@ -20,7 +23,14 @@ from eolab_app.calculated_fields import (
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from eolab_app.vector.extents import read_selected_extent
 from eolab_app.vector_fields import visit_vector_fields
-
+from eolab_app.routes.vector_sampling import create_vector_sampling_router
+from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from eolab_app.vector.models import ResolvedVectorSource
+from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector_uploads import VectorUploadStore
+from catalog_selection_support import FixtureCatalog
+from test_raster_source_access import FileAuthority, PRIVATE
+from test_vector_uploads import HEADERS, write_layer
 
 @pytest.mark.parametrize(
     "expression,expected",
@@ -240,3 +250,74 @@ def test_native_predicate_never_drops_calculated_alternatives() -> None:
         ogr_predicate(VectorFilter(match="all", rules=rules), frozenset({"computed"}))
         == '("number" IS NOT NULL AND "number" > 2)'
     )
+
+
+@pytest.mark.parametrize("source_kind", ["catalog", "upload", "result"])
+def test_invalid_calculations_return_useful_selection_route_errors(
+    tmp_path: Path, source_kind: str
+) -> None:
+    """Reject invalid view fields through public counts and extent routes before Jobs.
+
+    Args:
+        tmp_path: Isolated immutable source and upload files.
+        source_kind: Catalog source, browser upload or private Processing result.
+    """
+    path = tmp_path / "source.gpkg"
+    body = write_layer(path, geometry="MultiPolygon")
+    catalog = FixtureCatalog(
+        ResolvedVectorSource("mounted", "geopackage", path, "data", "areas")
+    )
+    uploads = VectorUploadStore(tmp_path / "uploads", None)
+    authority = FileAuthority(path, "application/geopackage+sqlite3")
+    sampler = VectorSamplingService(
+        catalog, catalog, uploads=uploads, artifact_files=authority.files
+    )
+
+    def read_result_owner(request: Request, response: Response) -> str:
+        """Supply the already established source owner at the composition boundary.
+
+        Args:
+            request: Incoming request, unused by this fixed test authority.
+            response: Cookie response, unused by this fixed test authority.
+
+        Returns:
+            Owner accepted by the controlled original-file authority.
+        """
+        return "owner"
+
+    app = FastAPI()
+    app.include_router(create_vector_uploads_router(uploads))
+    app.include_router(create_vector_sampling_router(sampler, read_result_owner))
+    with TestClient(app, base_url="https://testserver") as client:
+        source: dict[str, Any]
+        if source_kind == "upload":
+            uploaded = client.post(
+                "/api/vector-uploads",
+                params={"name": "Areas"},
+                headers=HEADERS,
+                content=body,
+            )
+            assert uploaded.status_code == 201, uploaded.text
+            source = {"uploadId": uploaded.json()["id"]}
+        elif source_kind == "result":
+            source = {**PRIVATE, "layerName": "areas"}
+        else:
+            source = {"collectionId": "eolab-mounted-vectors", "itemId": "areas"}
+        for definition, detail in (
+            ({"name": "result", "expression": "'count' +"}, "Finish the expression"),
+            (
+                {"name": "result", "expression": "'absent' * 2"},
+                "Field 'absent' is unavailable",
+            ),
+            ({"name": "count", "expression": "1"}, "Field 'count' already exists"),
+        ):
+            payload = {**source, "filter": {}, "calculatedFields": [definition]}
+            for endpoint in ("areas", "extent"):
+                response = client.post(
+                    f"/api/vector-sampling/{endpoint}", json=payload, headers=HEADERS
+                )
+                assert response.status_code == 409, response.text
+                assert detail in response.json()["detail"]
+                assert response.headers["Cache-Control"] == "private, no-store"
+                assert str(tmp_path) not in response.text
+                assert not authority.leases

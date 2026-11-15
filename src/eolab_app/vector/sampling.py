@@ -185,6 +185,10 @@ class VectorSamplingService:
             resolved = await resolve_selection(
                 self.catalog, self.resolver, selection, self._uploads, source_owner
             )
+        except SelectionUnavailableError:
+            raise
+        except VectorConflictError as error:
+            raise SelectionUnavailableError(error.detail) from error
         except (VectorFeatureError, OSError, ValueError) as error:
             raise SelectionUnavailableError(
                 "The selected vector is unavailable; select it again."

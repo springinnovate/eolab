@@ -43,8 +43,14 @@ from eolab_app.raster.bounded_window import (
 from eolab_app.raster.read_cancellation import require_active_raster_read
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 from eolab_app.raster.models import RasterAreaMask
-from eolab_app.attribute_filter import matches_filter, validate_filter, ogr_predicate
+from eolab_app.attribute_filter import (
+    AttributeFilterError,
+    matches_filter,
+    validate_filter,
+    ogr_predicate,
+)
 from eolab_app.calculated_fields import (
+    CalculatedFieldError,
     evaluate_calculated_fields,
     required_source_fields,
     validate_calculated_fields,
@@ -87,9 +93,8 @@ def resolve_vector_file_selection(
         Original source and validated attribute programs for ordinary vector readers.
 
     Raises:
-        SelectionUnavailableError: If the named native layer cannot be read.
-        CalculatedFieldError: If definitions conflict with the original fields.
-        AttributeFilterError: If the predicate does not match the combined schema.
+        SelectionUnavailableError: If the native layer cannot be read or its
+            calculated fields or predicate do not match the original schema.
     """
     try:
         with fiona.open(
@@ -100,11 +105,14 @@ def resolve_vector_file_selection(
         raise SelectionUnavailableError(
             "The selected vector result could not be read."
         ) from error
-    compiled = validate_calculated_fields(selection.calculated_fields, fields)
-    calculated_names = frozenset(field.definition.name for field in compiled)
-    validate_filter(
-        selection.filter, {**fields, **dict.fromkeys(calculated_names, "float")}
-    )
+    try:
+        compiled = validate_calculated_fields(selection.calculated_fields, fields)
+        calculated_names = frozenset(field.definition.name for field in compiled)
+        validate_filter(
+            selection.filter, {**fields, **dict.fromkeys(calculated_names, "float")}
+        )
+    except (CalculatedFieldError, AttributeFilterError) as error:
+        raise SelectionUnavailableError(str(error)) from error
     return ResolvedCatalogSelection(
         selection,
         path,

@@ -766,6 +766,32 @@ def test_vector_result_statistics_recheck_owner_and_expiry_before_cached_deliver
     asyncio.run(exercise())
 
 
+def test_invalid_vector_result_calculation_returns_an_analysis_conflict(
+    tmp_path: Path,
+) -> None:
+    """Translate invalid result-view fields before numerical work and release the lease.
+
+    Args:
+        tmp_path: Isolated immutable vector and raster files.
+    """
+    path = write_source(tmp_path / "source.tif")
+    sampler, authority, selection = _vector_result_sampler(tmp_path)
+    invalid = selection.model_copy(
+        update={
+            "calculated_fields": (
+                CalculatedField(name="doubled", expression="'missing' * 2"),
+            )
+        }
+    )
+    service = RasterStatisticsService(
+        RasterSourceAccess(CatalogAuthority(path)), 1, 8, sampler
+    )
+    request = CatalogRasterStatisticsRequest(**CATALOG, catalogSelection=invalid)
+    with pytest.raises(RasterConflictError, match="Field 'missing' is unavailable"):
+        asyncio.run(service.get(request, "owner"))
+    assert not authority.leases
+
+
 def test_revocation_during_read_prevents_delivery_and_cache_cannot_restore_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -14,7 +14,7 @@ from eolab_app.catalog_selection import (
     UploadedVectorFilterRequest,
 )
 from eolab_app.attribute_filter import ogr_predicate
-from eolab_app.calculated_fields import validate_calculated_fields
+from eolab_app.calculated_fields import CalculatedFieldError, validate_calculated_fields
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
@@ -56,7 +56,7 @@ async def resolve_selection(
         WHERE expression.
 
     Raises:
-        VectorFeatureError: If identity, source or predicate is unavailable.
+        VectorFeatureError: If identity, calculated fields, source or predicate is invalid.
         VectorUploadError: If the upload is unavailable to this browser.
     """
     if isinstance(request, UploadedVectorFilterRequest):
@@ -67,9 +67,12 @@ async def resolve_selection(
         metadata, source = await asyncio.to_thread(
             resolve_uploaded_vector, uploads, upload_owner, request.uploadId
         )
-        compiled = validate_calculated_fields(
-            request.calculated_fields, metadata.fields
-        )
+        try:
+            compiled = validate_calculated_fields(
+                request.calculated_fields, metadata.fields
+            )
+        except CalculatedFieldError as error:
+            raise VectorConflictError(str(error)) from error
         fields = {
             **metadata.fields,
             **{field.definition.name: "float" for field in compiled},
@@ -100,7 +103,10 @@ async def resolve_selection(
             "reading original features requires a mounted Shapefile or GeoPackage layer."
         )
     fields = catalog_vector_fields(item)
-    compiled = validate_calculated_fields(request.calculated_fields, fields)
+    try:
+        compiled = validate_calculated_fields(request.calculated_fields, fields)
+    except CalculatedFieldError as error:
+        raise VectorConflictError(str(error)) from error
     fields = {**fields, **{field.definition.name: "float" for field in compiled}}
     validated_filter = validate_filter(request.filter, fields)
     selection = CatalogSelection(
