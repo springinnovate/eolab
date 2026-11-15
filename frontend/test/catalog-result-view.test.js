@@ -48,7 +48,9 @@ function fixture(presentation = {}) {
   const actions = view.element.children.find((child) => child.className === "catalog-result-actions");
   const [onMap, mapButton, zoomButton, styleButton] = actions.children;
   const status = view.element.children.at(-1);
-  const update = (state = {}) => view.update({ supported: true, retained: false, canZoom: true, pendingAction: null, feedback: null, ...state });
+  const update = (state = {}) => view.update({ supported: true, retained: false,
+    removalTarget: state.retained ? { key: "wind", label: "wind.tif", count: 1 } : null,
+    canZoom: true, pendingAction: null, feedback: null, ...state });
   update();
   return { view, item, document, calls, actions, onMap, mapButton, zoomButton, styleButton, status, update };
 }
@@ -113,8 +115,8 @@ test("state changes preserve controls/focus and keep On map distinct from Remove
   assert.equal(f.mapButton.getAttribute("aria-describedby"), f.status.id);
   f.update({ retained: true, feedback: { message: "Raster added to the map." } });
   assert.equal(f.onMap.hidden, false);
-  assert.equal(f.mapButton.textContent, "Remove first view");
-  assert.equal(f.mapButton.getAttribute("aria-label"), "Remove first view: future/wind.tif");
+  assert.equal(f.mapButton.textContent, "Remove from map");
+  assert.equal(f.mapButton.getAttribute("aria-label"), "Remove from map: future/wind.tif");
   assert.equal(f.mapButton.disabled, false);
   assert.equal(f.document.activeElement, f.mapButton);
   assert.deepEqual(f.actions.children, originalChildren);

@@ -158,6 +158,20 @@ export class MapLayerStack {
     }
 
     /**
+     * Describe the topmost matching layer removed by a Catalog action.
+     * @param {Object} item Catalog source identity.
+     * @return {{key:string,label:string,count:number}|null} Target and matching view count, or null when absent.
+     */
+    removalTarget(item) {
+        const sourceKey = getCatalogItemKey(item);
+        const matches = this.entries.filter(entry => entry.item !== null &&
+            getCatalogItemKey(entry.item) === sourceKey);
+        return matches.length === 0 ? null : {
+            key: matches[0].key, label: matches[0].label, count: matches.length,
+        };
+    }
+
+    /**
      * Select the retained layer presented as active by its owning adapter.
      *
      * @param {string} key Stable layer key.

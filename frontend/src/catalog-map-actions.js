@@ -152,6 +152,7 @@ export class CatalogMapActionRegistry {
  * @property {{kind:"raster"|"vector",metadata:Object|undefined}|null} visualization Current rendering assessment.
  * @property {boolean} supported Whether the Item has a map visualization adapter.
  * @property {boolean} retained Whether the Item is in Map layers, even if hidden.
+ * @property {{key:string,label:string,count:number}|null} removalTarget Topmost matching view and the number of matches.
  * @property {boolean} canZoom Whether the Item has usable map bounds.
  * @property {{item:Object,key:string,buttonText:string,statusText:string}|null} pendingAction In-flight action for this composite identity.
  * @property {{message:string,isError:boolean,retained:boolean}|null} feedback Outcome matching current map membership.
@@ -172,7 +173,7 @@ export class CatalogMapActions {
      * the current selection when coordinating inspector metadata and analysis.
      *
      * @param {Object} commands Narrow commands supplied by browser composition.
-     * @param {(item:Object)=>boolean} commands.contains Read retained membership.
+     * @param {(item:Object)=>{key:string,label:string,count:number}|null} commands.removalTarget Read the topmost matching view and count.
      * @param {(item:Object)=>Promise<Object>} commands.prepare Assess a vector or pass through a raster.
      * @param {(item:Object)=>Promise<Object|null>} commands.show Publish the prepared Item; null means canceled.
      * @param {(item:Object)=>void} commands.remove Remove with the existing Undo behavior.
@@ -197,7 +198,8 @@ export class CatalogMapActions {
      */
     state(item) {
         const visualization = getCatalogVisualization(item);
-        const retained = item !== null && this.commands.contains(item);
+        const removalTarget = item === null ? null : this.commands.removalTarget(item);
+        const retained = removalTarget !== null;
         const key = item === null ? null : getCatalogItemKey(item);
         let feedback = this.#feedback.get(key) ?? null;
         if (feedback !== null && feedback.retained !== retained) {
@@ -205,7 +207,7 @@ export class CatalogMapActions {
             feedback = null;
         }
         return {
-            visualization, supported: visualization !== null, retained,
+            visualization, supported: visualization !== null, retained, removalTarget,
             canZoom: this.commands.getBounds(item) !== null,
             pendingAction: item === null ? null : this.#pending.get(item),
             feedback,
@@ -248,10 +250,11 @@ export class CatalogMapActions {
         if (visualization === null || this.#pending.get(item) !== null) return;
         const datasetNoun = visualization.metadata?.temporal ? "First dataset view"
             : visualization.kind === "raster" ? "Raster" : "Vector layer";
-        if (this.commands.contains(item)) {
+        const removalTarget = this.commands.removalTarget(item);
+        if (removalTarget !== null) {
             this.commands.remove(item);
             this.commands.onRemoved(item, visualization.kind);
-            this.#setFeedback(item, "First dataset view removed from the map.");
+            this.#setFeedback(item, `“${removalTarget.label}” was removed from the map.`);
             return;
         }
 
@@ -299,7 +302,7 @@ export class CatalogMapActions {
      * @return {void}
      */
     style(item) {
-        if (item === null || !this.commands.contains(item) ||
+        if (item === null || this.commands.removalTarget(item) === null ||
             this.#pending.get(item) !== null) return;
         this.commands.openStyle(getCatalogItemKey(item), item);
     }
@@ -311,7 +314,7 @@ export class CatalogMapActions {
      */
     zoom(item) {
         const bounds = this.commands.getBounds(item);
-        if (bounds === null || !this.commands.contains(item) ||
+        if (bounds === null || this.commands.removalTarget(item) === null ||
             this.#pending.get(item) !== null) return false;
         this.commands.zoomToBounds(bounds);
         return true;
@@ -326,7 +329,7 @@ export class CatalogMapActions {
      */
     #setFeedback(item, message, isError = false) {
         this.#feedback.set(getCatalogItemKey(item), {
-            message, isError, retained: this.commands.contains(item),
+            message, isError, retained: this.commands.removalTarget(item) !== null,
         });
         this.commands.onChange();
     }

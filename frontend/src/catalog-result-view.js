@@ -110,11 +110,10 @@ export function createCatalogResultView({
         /**
          * Mirror this Item's state without selecting it or moving focus.
          *
-         * @param {Object} state Supported kind, membership, usable bounds, pending action,
-         * and optional {message,isError} feedback for this Item only.
+         * @param {import("./catalog-map-actions.js").CatalogMapActionState} state Current per-Item map action and removal target.
          * @return {void}
          */
-        update({ visualization, supported, retained, canZoom, pendingAction, feedback }) {
+        update({ visualization, supported, retained, removalTarget, canZoom, pendingAction, feedback }) {
             onMap.hidden = !retained;
             mapButton.hidden = !supported;
             mapButton.disabled = pendingAction !== null;
@@ -126,13 +125,13 @@ export function createCatalogResultView({
                 : "Zoom unavailable: this item has no usable bounding box.";
             mapButton.classList.toggle("is-retained", retained);
             mapButton.setAttribute("aria-busy", String(pendingAction !== null));
-            mapButton.textContent = pendingAction !== null
-                ? pendingAction.buttonText.startsWith("Adding")
-                    ? "Adding..." : pendingAction.buttonText
-                : retained ? "Remove first view" : "Add to map";
+            const removalLabel = removalTarget?.count > 1
+                ? `Remove topmost: “${removalTarget.label}”` : "Remove from map";
             const actionLabel = pendingAction !== null
                 ? pendingAction.buttonText
-                : retained ? "Remove first view" : "Add to map";
+                : retained ? removalLabel : "Add to map";
+            mapButton.textContent = pendingAction?.buttonText.startsWith("Adding")
+                ? "Adding..." : actionLabel;
             mapButton.setAttribute("aria-label", `${actionLabel}: ${presentation.fullTitle}`);
             const message = pendingAction?.statusText ?? feedback?.message ?? "";
             status.classList.toggle("visually-hidden", pendingAction !== null || feedback?.isError !== true);

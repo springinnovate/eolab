@@ -658,6 +658,12 @@ h5 {
   color: var(--surface-1);
 }
 
+#toggle-catalog-layer,
+.catalog-result-map-action {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .catalog-map-actions[hidden] {
   display: none;
 }

@@ -20,7 +20,7 @@ import { formatCatalogVisualizationReason } from "./catalog.js";
  * @return {void}
  */
 export function renderCatalogMapAction(elements, item, state) {
-    const { visualization, supported, retained, canZoom, pendingAction, feedback } = state;
+    const { visualization, supported, retained, removalTarget, canZoom, pendingAction, feedback } = state;
     elements.container.hidden = !supported;
     elements.container.setAttribute("aria-busy", String(pendingAction !== null));
     elements.toggle.disabled = pendingAction !== null;
@@ -37,8 +37,10 @@ export function renderCatalogMapAction(elements, item, state) {
     }
     elements.onMap.hidden = !retained;
     elements.toggle.classList.toggle("catalog-add-action", !retained);
+    const removalLabel = removalTarget?.count > 1
+        ? `Remove topmost: “${removalTarget.label}”` : "Remove from map";
     elements.toggle.textContent = pendingAction?.buttonText ?? (
-        retained ? "Remove first view" : "Add to map"
+        retained ? removalLabel : "Add to map"
     );
     elements.layerStatus.textContent = [
         formatCatalogVisualizationReason(item, visualization?.metadata?.reason),
