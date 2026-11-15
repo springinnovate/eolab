@@ -166,7 +166,7 @@ export class RasterSeriesView {
         const field = (id, caption, input) => {
             input.id = id; const label = element("label", caption); label.htmlFor = id; label.append(input); return label;
         };
-        this.period = new TemporalPeriodView({element, field, document: this.document,
+        this.period = new TemporalPeriodView({element, field,
             options: (select, choices, value) => this.setOptions(select, choices, value)},
         {onEdit: actions.onTemporalEdit, idPrefix: "raster-series-period", describedBy: "raster-series-status"});
         this.document.querySelector("#raster-series-period").append(this.period.root);

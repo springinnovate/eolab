@@ -39,7 +39,7 @@ export class TemporalModelInputsView {
         this.variable.addEventListener("change", () => handlers.onTemporalVariable(this.variable.value));
         this.sourceRoot.append(field("models-temporal-dataset", "Dataset", this.dataset),
             field("models-temporal-variable", "Variable", this.variable));
-        this.period = new TemporalPeriodView({element, field, options, document}, {onEdit: handlers.onTemporalEdit,
+        this.period = new TemporalPeriodView({element, field, options}, {onEdit: handlers.onTemporalEdit,
             idPrefix: "models-temporal", describedBy: "models-temporal-period-help models-temporal-status"});
         this.sourceRoot.append(this.period.root);
         this.periodHelp = element("p", "", "models-help");

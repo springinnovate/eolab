@@ -26,14 +26,12 @@ export class TemporalPeriodView {
      * @param {(tag:string,text?:string,className?:string)=>HTMLElement} helpers.element Create a text-only element.
      * @param {(id:string,caption:string,input:HTMLElement)=>HTMLLabelElement} helpers.field Create a labelled field.
      * @param {(select:HTMLSelectElement,choices:Object[],selected:string)=>void} helpers.options Update select choices.
-     * @param {Document} helpers.document Owning form document.
      * @param {Object} settings Form-specific identity and callback.
      * @param {(change:Partial<import("./temporal-period.js").TemporalPeriod>)=>void} settings.onEdit Update editable period fields.
      * @param {string} settings.idPrefix Unique prefix for this form's period control IDs.
      * @param {string} settings.describedBy Space-separated IDs of the owning form's period guidance and status.
      */
-    constructor({element, field, options, document}, {onEdit, idPrefix, describedBy}) {
-        this.document = document;
+    constructor({element, field, options}, {onEdit, idPrefix, describedBy}) {
         /** @type {import("./temporal-period.js").TemporalPeriod|null} Last locally emitted period whose raw controls remain authoritative. */
         this.editedPeriod = null;
         /** Retain independent field drafts when the owning controller echoes this edit.
