@@ -779,13 +779,13 @@ test("Details keeps utility actions while frequent actions remain on the compact
     const utilities = elementsByClass(row, "map-layer-utility-actions")[0];
     const details = elementsByClass(row, "map-layer-details")[0];
     assert.equal(elementsByClass(row, "map-layer-actions").length, 0);
-    assert.ok(strip.children.includes(actionControl(row, "style")));
+    assert.ok(strip.contains(actionControl(row, "style")));
     for (const action of ["copy-style", "paste-style"]) {
-      assert.ok(strip.children.includes(actionControl(row, action)));
+      assert.ok(strip.contains(actionControl(row, action)));
       assert.equal(actionControl(row, action).children.length, 0, "frequent style actions have visible text");
     }
     assert.match(actionControl(row, "paste-style").getAttribute("aria-label"), /^Paste style from Copied source onto /);
-    assert.ok(strip.children.includes(actionControl(row, "details")));
+    assert.ok(strip.contains(actionControl(row, "details")));
     assert.ok(details.contains(utilities));
     actionControl(row, "details").dispatchEvent(new Event("click"));
     assert.equal(details.hidden, false);
@@ -803,10 +803,10 @@ test("Details keeps utility actions while frequent actions remain on the compact
   }
   const [rasterRow, vectorRow] = doc.querySelector("#raster-layer-list").children;
   const strip = elementsByClass(rasterRow, "map-layer-row-actions")[0];
-  assert.ok(strip.children.includes(actionControl(rasterRow, "calculate")));
+  assert.ok(strip.contains(actionControl(rasterRow, "calculate")));
   assert.ok(elementsByClass(rasterRow, "map-layer-primary-row")[0].children.includes(actionControl(rasterRow, "legend")));
   assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "download")));
-  assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].children.includes(actionControl(vectorRow, "filter")));
+  assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].contains(actionControl(vectorRow, "filter")));
   assert.equal(actionControl(vectorRow, "filter").textContent, "Filter");
 });
 
@@ -1448,13 +1448,13 @@ test("an owner-supplied details control replaces Info and retains focus", () => 
   const layer = { ...LAYERS[0], detailsControl: editButton };
   view.render([layer], null);
   const list = documentContext.querySelector("#raster-layer-list");
-  assert.equal(elementsByClass(list, "map-layer-row-actions")[0].children[0], editButton);
+  assert.equal(elementsByClass(list, "map-layer-data-actions")[0].children[0], editButton);
   assert.throws(() => actionControl(list.children[0], "info"), "Info must not duplicate Edit");
   assert.ok(elementsByClass(list, "map-layer-primary-row")[0].children.includes(actionControl(list.children[0], "remove")));
   editButton.focus();
   view.render([LAYERS[1], layer], null);
   assert.equal(documentContext.activeElement, editButton);
-  assert.equal(elementsByClass(list, "map-layer-row-actions")[1].children[0], editButton);
+  assert.equal(elementsByClass(list, "map-layer-data-actions")[1].children[0], editButton);
 });
 
 test("layer types and owner style targets distinguish annotations without embedding their editor", () => {

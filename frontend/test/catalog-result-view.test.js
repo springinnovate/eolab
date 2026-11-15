@@ -47,15 +47,16 @@ function fixture(presentation = {}) {
   });
   const actions = view.element.children.find((child) => child.className === "catalog-result-actions");
   const onMap = actions.children.find(child => child.classList.contains("catalog-result-on-map"));
-  const mapButton = actions.children.find(child => child.classList.contains("catalog-result-map-action"));
-  const zoomButton = actions.children.find(child => child.classList.contains("catalog-result-zoom"));
-  const styleButton = actions.children.find(child => child.classList.contains("catalog-result-style"));
+  const controls = actions.children.find(child => child.className === "catalog-result-controls");
+  const mapButton = controls.children.find(child => child.classList.contains("catalog-result-map-action"));
+  const zoomButton = controls.children.find(child => child.classList.contains("catalog-result-zoom"));
+  const styleButton = controls.children.find(child => child.classList.contains("catalog-result-style"));
   const status = view.element.children.at(-1);
   const update = (state = {}) => view.update({ supported: true, retained: false,
     removalTarget: state.retained ? { key: "wind", label: "wind.tif", count: 1 } : null,
     canZoom: true, pendingAction: null, feedback: null, ...state });
   update();
-  return { view, item, document, calls, actions, onMap, mapButton, zoomButton, styleButton, status, update };
+  return { view, item, document, calls, actions, controls, onMap, mapButton, zoomButton, styleButton, status, update };
 }
 
 test("result row has separate native map/details buttons without nested buttons", () => {
@@ -140,7 +141,7 @@ test("Style follows Zoom to only for retained Items and does not invoke map or d
   assert.equal(f.styleButton.textContent, "Style");
   assert.equal(f.styleButton.getAttribute("aria-label"), "Style: future/wind.tif");
   assert.equal(f.styleButton.getAttribute("aria-controls"), "layer-style-editor");
-  assert.deepEqual(f.actions.children.filter(child => child.tagName === "button"),
+  assert.deepEqual(f.controls.children.filter(child => child.tagName === "button"),
     [f.mapButton, f.zoomButton, f.styleButton, f.view.detailsButton]);
   f.styleButton.focus();
   f.styleButton.dispatchEvent(new Event("click"));

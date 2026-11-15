@@ -167,7 +167,8 @@ function harness({ selectedItem = null, prepare = async (item) => item,
       onZoom: requested => actions.zoom(requested),
       onDetails: () => {}, onPreview: () => {}, onClearPreview: () => {},
     });
-    const controls = view.element.children.find(child => child.className === "catalog-result-actions");
+    const actionRow = view.element.children.find(child => child.className === "catalog-result-actions");
+    const controls = actionRow.children.find(child => child.className === "catalog-result-controls");
     const mapButton = controls.children.find(child => child.classList.contains("catalog-result-map-action"));
     const rowZoomButton = controls.children.find(child => child.classList.contains("catalog-result-zoom"));
     const rowStyleButton = controls.children.find(child => child.classList.contains("catalog-result-style"));
