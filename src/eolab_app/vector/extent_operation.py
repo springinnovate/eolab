@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Annotated, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
 
 from eolab_app.attribute_filter import VectorFilter
-from eolab_app.catalog_selection import SelectionUnavailableError, VectorSelection
+from eolab_app.catalog_selection import (
+    ArtifactVectorSelection,
+    SelectionUnavailableError,
+    VectorSelection,
+)
+from eolab_app.calculated_fields import CalculatedField
+from eolab_app.source_files import SourceFileError, resolve_leased_source_path
 
 if TYPE_CHECKING:
     import httpx2
@@ -31,6 +37,7 @@ class ArtifactExtentSelection(BaseModel):
         jobId: Opaque run identity, verified by the file's source authority.
         artifactId: Immutable file identity within that run's published inventory.
         filter: Exact attribute predicate to apply to the original file.
+        calculated_fields: View definitions evaluated from original attributes.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -38,6 +45,9 @@ class ArtifactExtentSelection(BaseModel):
     jobId: OpaqueId
     artifactId: OpaqueId
     filter: VectorFilter
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields", exclude_if=lambda value: not value
+    )
 
 
 class ExtentInput(BaseModel):
@@ -65,28 +75,11 @@ class ExtentInput(BaseModel):
         Raises:
             ValueError: If an artifact lacks a lease or another source supplies one.
         """
-        if isinstance(self.selection, ArtifactExtentSelection) != (
-            self.readLease is not None
-        ):
+        if isinstance(
+            self.selection, (ArtifactExtentSelection, ArtifactVectorSelection)
+        ) != (self.readLease is not None):
             raise ValueError("Only run artifact extents require a read lease")
         return self
-
-
-class ArtifactSourceLocation(BaseModel):
-    """Locate a leased GeoPackage within the worker's read-only result mount.
-
-    This internal response comes from the source authority after it validates
-    the run/file identity and active transfer capability. It is never a browser
-    input or result; the worker still confines the location before opening it.
-
-    Attributes:
-        relativePath: Published file location relative to the processing mount.
-        mediaType: GeoPackage MIME type established at publication.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    relativePath: str = Field(min_length=1)
-    mediaType: Literal["application/geopackage+sqlite3"]
 
 
 class FeatureExtent(BaseModel):
@@ -199,7 +192,9 @@ async def _measure_selected_extent(
     async with httpx2.AsyncClient(
         timeout=5, trust_env=False, follow_redirects=False
     ) as client:
-        if isinstance(inputs.selection, ArtifactExtentSelection):
+        if isinstance(
+            inputs.selection, (ArtifactExtentSelection, ArtifactVectorSelection)
+        ):
             return await _measure_artifact_extent(
                 client, inputs.selection, cast(str, inputs.readLease)
             )
@@ -219,48 +214,10 @@ async def _measure_selected_extent(
         return SelectionExtentResult(extent=extent)
 
 
-def resolve_artifact_path(location: ArtifactSourceLocation) -> Path:
-    """Confine an internal source locator to a regular file below published results.
-
-    Args:
-        location: Validated response from the fixed application source endpoint.
-
-    Returns:
-        Existing local file under the worker's read-only processing mount.
-
-    Raises:
-        SelectionUnavailableError: If the locator is absolute, traverses directories,
-            follows a link, escapes published results or does not name a regular file.
-    """
-    parts = location.relativePath.split("/")
-    if (
-        parts[0] != "results"
-        or any(part in {"", ".", ".."} for part in parts)
-        or "\\" in location.relativePath
-        or ":" in location.relativePath
-    ):
-        raise SelectionUnavailableError("The selected vector result is unavailable.")
-    try:
-        root = PROCESSING_MOUNT.resolve(strict=True)
-        path = root
-        for part in parts:
-            path /= part
-            if path.is_symlink() or path.is_junction():
-                raise ValueError("Linked source component")
-        if (
-            not path.resolve(strict=True).is_relative_to(root / "results")
-            or not path.is_file()
-        ):
-            raise ValueError("Unavailable result file")
-    except (OSError, ValueError) as error:
-        raise SelectionUnavailableError(
-            "The selected vector result is unavailable."
-        ) from error
-    return path
-
-
 async def _measure_artifact_extent(
-    client: "httpx2.AsyncClient", selection: ArtifactExtentSelection, read_lease: str
+    client: "httpx2.AsyncClient",
+    selection: ArtifactExtentSelection | ArtifactVectorSelection,
+    read_lease: str,
 ) -> SelectionExtentResult:
     """Resolve a leased result through its authority and read the original GeoPackage.
 
@@ -278,28 +235,28 @@ async def _measure_artifact_extent(
         OSError: If the process memory limit cannot be applied.
     """
     import fiona
-    import httpx2
     from eolab_app.bounded_geometry import GeometryValidationError
     from eolab_app.bounded_vector import _limit_memory
     from eolab_app.vector.extents import read_file_extent
 
     try:
-        response = await client.get(
-            f"{SOURCE_FILES_URL}/{selection.jobId}/{selection.artifactId}",
-            headers={"Authorization": f"Bearer {read_lease}"},
+        path = await resolve_leased_source_path(
+            client,
+            selection.jobId,
+            selection.artifactId,
+            read_lease,
+            PROCESSING_MOUNT,
+            "application/geopackage+sqlite3",
+            source_url=SOURCE_FILES_URL,
         )
-        response.raise_for_status()
-        path = resolve_artifact_path(
-            ArtifactSourceLocation.model_validate(response.json())
-        )
-    except (httpx2.HTTPError, ValueError) as error:
+    except SourceFileError as error:
         raise SelectionUnavailableError(
             "The selected vector result is unavailable."
         ) from error
     with _limit_memory():
         try:
             extent = FeatureExtent.model_validate(
-                read_file_extent(path, selection.filter)
+                read_file_extent(path, selection.filter, selection.calculated_fields)
             )
         except GeometryValidationError:
             raise

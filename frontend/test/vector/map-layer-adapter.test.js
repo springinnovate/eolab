@@ -52,7 +52,7 @@ test("run artifacts use ordinary vector metadata, style actions and owner lifecy
   adapter.createLayer(record, () => {});
   const described = adapter.describeSource(record);
   assert.deepEqual(described.source, {kind: "runArtifact", jobId: source.jobId, artifactId: source.artifactId});
-  assert.equal(described.selection, null);
+  assert.deepEqual(described.selection, {...described.source, layerName: "processed"});
   assert.deepEqual(described.numericFields.map(field => field.name), ["region_code", "score"]);
   assert.equal(adapter.snapshot(record).canFilter, true);
   await adapter.applyStyle(record, {...PUBLICATION.style, fillColor: "#00ff00"});
@@ -192,6 +192,8 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     datasetKind: "vector",
     canInfo: true,
     canFilter: true,
+    canCalculateFields: true,
+    error: null,
     filterActive: false,
     filterStatus: "",
     legend: {

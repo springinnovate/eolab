@@ -2,6 +2,7 @@
 
 from eolab_app.catalog_selection import (
     CatalogSelectionReader,
+    ArtifactVectorSelection,
     SelectionUnavailableError,
 )
 import asyncio
@@ -76,6 +77,21 @@ from eolab_app.sampling_area import (
     PolygonInputSamplingArea,
     WholeRasterSamplingArea,
 )
+
+
+def _private_vector_area(area: RasterSamplingArea) -> bool:
+    """Identify an area whose original result file needs supervised read cleanup.
+
+    Args:
+        area: Authorized sampling-area value.
+
+    Returns:
+        True when a completed run owns the selected original vector file.
+    """
+    return isinstance(area, CatalogSelectionSamplingArea) and isinstance(
+        area.resolved.selection, ArtifactVectorSelection
+    )
+
 
 _StatisticsResult = RasterStatistics | RasterPairedStatistics
 
@@ -260,27 +276,27 @@ class RasterStatisticsService:
             SourceFileError: If private file access changes before delivery.
             VectorUploadError: If the polygon upload is unavailable to this browser.
         """
-        async with self._source_access.open(
-            raster_source_reference(request), owner
-        ) as source:
-            return await self._get_authorized_statistics(
-                request, source, owner, upload_owner
+        async with AsyncExitStack() as stack:
+            source = await stack.enter_async_context(
+                self._source_access.open(raster_source_reference(request), owner)
             )
+            sampling_area = await stack.enter_async_context(
+                self._open_sampling_area(request, owner, upload_owner)
+            )
+            return await self._get_authorized_statistics(request, source, sampling_area)
 
     async def _get_authorized_statistics(
         self,
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         authorized_raster: RasterReadSource,
-        owner: str | None,
-        upload_owner: str | None,
+        sampling_area: RasterSamplingArea,
     ) -> RasterStatistics:
         """Reuse or calculate statistics for an authorized raster and sampling area.
 
         Args:
             request: Validated raster identity and strict sampling-area union.
             authorized_raster: Source retained by the calling access scope.
-            owner: Server-derived session hash for a temporary polygon area.
-            upload_owner: Browser identity for the selected uploaded polygons.
+            sampling_area: Authorized area retained by the calling access scope.
 
         Returns:
             Cached or newly computed rendering-independent statistics.
@@ -292,12 +308,6 @@ class RasterStatisticsService:
             RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
             VectorUploadError: If the selected upload is unavailable to this browser.
         """
-        try:
-            sampling_area = await self._resolve_sampling_area(
-                request, owner, upload_owner
-            )
-        except SelectionUnavailableError as error:
-            raise RasterConflictError(error.detail) from error
         category_values = (
             tuple(sorted(request.category_values))
             if request.category_values is not None
@@ -381,7 +391,7 @@ class RasterStatisticsService:
                 "The selected raster statistics could not be read"
             ) from error
         finally:
-            if authorized_raster.private:
+            if authorized_raster.private or _private_vector_area(sampling_area):
                 await finish_source_task(
                     asyncio.create_task(self._release_waiter(cache_key, work, True))
                 )
@@ -416,8 +426,11 @@ class RasterStatisticsService:
             y = await stack.enter_async_context(
                 self._source_access.open(request.y_raster, owner)
             )
+            sampling_area = await stack.enter_async_context(
+                self._open_sampling_area(request, owner, upload_owner)
+            )
             return await self._get_authorized_paired_statistics(
-                request, x, y, owner, upload_owner
+                request, x, y, sampling_area
             )
 
     async def _get_authorized_paired_statistics(
@@ -425,8 +438,7 @@ class RasterStatisticsService:
         request: CatalogRasterPairRequest | RasterPairSourceRequest,
         authorized_x: RasterReadSource,
         authorized_y: RasterReadSource,
-        owner: str | None,
-        upload_owner: str | None,
+        sampling_area: RasterSamplingArea,
     ) -> RasterPairedStatistics:
         """Return bounded paired statistics for two authorized original rasters.
 
@@ -438,8 +450,7 @@ class RasterStatisticsService:
             request: Validated ordered source pair and optional WGS 84 bounds.
             authorized_x: Retained X reference-grid source.
             authorized_y: Retained Y source for alignment.
-            owner: Server-derived session hash for a temporary polygon area.
-            upload_owner: Browser identity for the selected uploaded polygons.
+            sampling_area: Authorized area retained by the calling access scope.
 
         Returns:
             Cached or newly computed paired histogram on the X reference grid.
@@ -457,12 +468,6 @@ class RasterStatisticsService:
             if request.selected_bounds is not None
             else None
         )
-        try:
-            sampling_area = await self._resolve_sampling_area(
-                request, owner, upload_owner
-            )
-        except SelectionUnavailableError as error:
-            raise RasterConflictError(error.detail) from error
         cache_key: tuple[object, ...] = (
             "paired",
             authorized_x.cache_identity,
@@ -520,7 +525,11 @@ class RasterStatisticsService:
                 "The selected paired raster statistics could not be read"
             ) from error
         finally:
-            if authorized_x.private or authorized_y.private:
+            if (
+                authorized_x.private
+                or authorized_y.private
+                or _private_vector_area(sampling_area)
+            ):
                 await finish_source_task(
                     asyncio.create_task(self._release_waiter(cache_key, work, True))
                 )
@@ -653,7 +662,11 @@ class RasterStatisticsService:
                     options["polygon_input"] = sampling_area
                 elif isinstance(sampling_area, SamplingBoxArea):
                     options["sampling_box"] = sampling_area.box
-                private = authorized_x.private or authorized_y.private
+                private = (
+                    authorized_x.private
+                    or authorized_y.private
+                    or _private_vector_area(sampling_area)
+                )
                 execute = read_private_raster if private else asyncio.to_thread
                 statistics = await execute(
                     partial(self._paired_statistics_reader, **options),
@@ -752,7 +765,7 @@ class RasterStatisticsService:
                 require_active_raster_read(cancellation_requested.is_set)
                 execute = (
                     read_private_raster
-                    if authorized_raster.private
+                    if authorized_raster.private or _private_vector_area(sampling_area)
                     else asyncio.to_thread
                 )
                 statistics = await execute(
@@ -769,6 +782,7 @@ class RasterStatisticsService:
                     (
                         None
                         if authorized_raster.private
+                        or _private_vector_area(sampling_area)
                         else cancellation_requested.is_set
                     ),
                 )
@@ -813,6 +827,47 @@ class RasterStatisticsService:
         self._cache.move_to_end(cache_key)
         while len(self._cache) > self._cache_entries:
             self._cache.popitem(last=False)
+
+    @asynccontextmanager
+    async def _open_sampling_area(
+        self,
+        request: (
+            CatalogRasterStatisticsRequest
+            | RasterStatisticsSourceRequest
+            | CatalogRasterPairRequest
+            | RasterPairSourceRequest
+        ),
+        owner: str | None,
+        upload_owner: str | None,
+    ) -> AsyncIterator[RasterSamplingArea]:
+        """Keep a selected vector result available through complete native analysis.
+
+        Args:
+            request: Validated raster request with its optional polygon source.
+            owner: Processing session identity for an original vector result.
+            upload_owner: Upload owner for ordinary private polygon inputs.
+
+        Yields:
+            Authorized sampling area, with a renewable lease for result files.
+
+        Raises:
+            RasterConflictError: If the selected polygon source cannot be authorized.
+            SourceFileError: If a result expires or loses its source lease.
+        """
+        try:
+            if isinstance(request.catalog_selection, ArtifactVectorSelection):
+                if self._catalog_selection_reader is None or owner is None:
+                    raise SelectionUnavailableError(
+                        "This vector result is unavailable to this browser."
+                    )
+                async with self._catalog_selection_reader.open_selection(
+                    request.catalog_selection, owner
+                ) as resolved:
+                    yield CatalogSelectionSamplingArea(resolved)
+            else:
+                yield await self._resolve_sampling_area(request, owner, upload_owner)
+        except SelectionUnavailableError as error:
+            raise RasterConflictError(error.detail) from error
 
     async def _resolve_sampling_area(
         self,

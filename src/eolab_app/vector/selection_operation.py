@@ -11,12 +11,19 @@ from pydantic import (
     model_validator,
 )
 
-from eolab_app.catalog_selection import VectorSelection, SelectionUnavailableError
+from eolab_app.catalog_selection import (
+    ArtifactVectorSelection,
+    VectorSelection,
+    SelectionUnavailableError,
+)
+from eolab_app.source_files import SourceFileError, resolve_leased_source_path
 
 # These are internal Compose endpoints, not caller-supplied source locations.
 CATALOG_URL = "http://stac-api:8080"
 SCAN_MOUNT = Path("/scan-source")
 UPLOAD_MOUNT = Path("/vector-uploads")
+PROCESSING_MOUNT = Path("/processing-data")
+SOURCE_FILES_URL = "http://app:8000/api/processing/source-files"
 
 
 class SelectionMeasurementInput(BaseModel):
@@ -25,6 +32,23 @@ class SelectionMeasurementInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     selection: VectorSelection
     uploadOwner: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    readLease: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+
+    @model_validator(mode="after")
+    def require_result_lease(self) -> "SelectionMeasurementInput":
+        """Require a held read capability exactly when reading a generated result.
+
+        Returns:
+            This validated operation input.
+
+        Raises:
+            ValueError: If an artifact lacks a lease or another source supplies one.
+        """
+        if isinstance(self.selection, ArtifactVectorSelection) != (
+            self.readLease is not None
+        ):
+            raise ValueError("Only run artifact selections require a read lease")
+        return self
 
 
 class FeatureMeasurements(BaseModel):
@@ -136,13 +160,30 @@ async def _measure_selected_features(
     ) as client:
         catalog = StacVectorCatalog(client, CATALOG_URL)
         resolver = MountedVectorResolver(SCAN_MOUNT)
-        resolved = await resolve_selection(
-            catalog,
-            resolver,
-            inputs.selection,
-            VectorUploadStore(UPLOAD_MOUNT, max_bytes=None),
-            inputs.uploadOwner,
-        )
+        if isinstance(inputs.selection, ArtifactVectorSelection):
+            from eolab_app.bounded_vector import resolve_vector_file_selection
+
+            try:
+                path = await resolve_leased_source_path(
+                    client,
+                    inputs.selection.jobId,
+                    inputs.selection.artifactId,
+                    inputs.readLease,
+                    PROCESSING_MOUNT,
+                    "application/geopackage+sqlite3",
+                    source_url=SOURCE_FILES_URL,
+                )
+            except SourceFileError as error:
+                raise SelectionUnavailableError(str(error)) from error
+            resolved = resolve_vector_file_selection(path, inputs.selection)
+        else:
+            resolved = await resolve_selection(
+                catalog,
+                resolver,
+                inputs.selection,
+                VectorUploadStore(UPLOAD_MOUNT, max_bytes=None),
+                inputs.uploadOwner,
+            )
         if resolved.selection != inputs.selection:
             raise SelectionUnavailableError(
                 "The selected vector identity changed; select it again."

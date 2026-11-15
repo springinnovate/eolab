@@ -501,6 +501,19 @@ features, then select that polygon layer when choosing your analysis area.
 This is useful for working with one country, watershed or project group without
 preparing another file.
 
+On a custom vector layer, open **Layer tools → Field calculator** to add a
+numeric field. Enter an output name and an expression, or use **Insert field**
+to insert a quoted field name. For example, `'Population' / 'Area km2'` divides
+two existing attributes. Supported operators are `+`, `-`, `*`, `/` and
+parentheses. **Treat numeric text as numbers** also accepts complete numbers
+stored as text. Missing inputs, invalid numbers and division by zero leave a
+missing value; the calculator reports how many features are affected.
+
+Calculated fields belong to that custom layer and work with its styles and
+filters. They are saved with the map; the original file stays unchanged.
+Catalog layers, uploads and vector run results are supported. Private sources
+remain private, and saving a map does not extend a run result's expiry.
+
 ## Run data tools and use their results
 
 Open **Tools → Data tools** to clip data, summarize observations or run

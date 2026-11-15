@@ -22,13 +22,17 @@ class OutlineJobs:
         self.jobs = jobs
 
     async def __call__(
-        self, selection: VectorSelection, upload_owner: str | None = None
+        self,
+        selection: VectorSelection,
+        upload_owner: str | None = None,
+        read_lease: str | None = None,
     ) -> dict[str, Any]:
         """Create a simplified map outline for a vector feature selection.
 
         Args:
             selection: Immutable catalog or upload identity and feature filter.
             upload_owner: Server-derived browser identity, kept inside Jobs.
+            read_lease: Result-file capability held until native work stops.
 
         Returns:
             Validated GeoJSON FeatureCollection and its WGS 84 bounding box.
@@ -44,6 +48,7 @@ class OutlineJobs:
                     "inputs": {
                         "selection": selection.model_dump(mode="json", by_alias=True),
                         "uploadOwner": upload_owner,
+                        **({"readLease": read_lease} if read_lease is not None else {}),
                     },
                     "priority": -10,
                     "executionTimeoutSeconds": 15,
@@ -51,6 +56,7 @@ class OutlineJobs:
                 },
                 timeout_seconds=40,
                 delete_on_completion=True,
+                require_terminal_cleanup=read_lease is not None,
             )
             return OutlineResult.model_validate(result.value).model_dump(mode="json")
         except (httpx2.HTTPError, ValueError, JobFailed, TimeoutError) as error:

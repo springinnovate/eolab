@@ -145,19 +145,20 @@ export class VectorSamplingController {
 }
 
 /**
- * Select filtered polygons from a catalog layer or this browser's uploaded GeoPackage.
- * @param {{collectionId:string,itemId:string}|{uploadId:string}} source Public source identity, optionally with UI metadata.
+ * Select filtered polygons from an original catalog, uploaded or owned run-result layer.
+ * @param {import("./api.js").VectorFieldValueSource} source Source identity with the view's calculated definitions.
  * @param {Object} filter Applied filter.
  * @param {AbortSignal} signal Native read cancellation.
  * @return {Promise<Object>} Immutable selection descriptor and exact feature counts.
  * @throws {Error} If selection fails or the response violates the selection contract.
  */
 export async function createVectorSamplingArea(source, filter, signal) {
-    const identity = source.uploadId ? { uploadId: source.uploadId } : { collectionId: source.collectionId, itemId: source.itemId };
+    const identity = source.kind === "runArtifact" ? {kind: source.kind, jobId: source.jobId, artifactId: source.artifactId}
+        : source.uploadId ? { uploadId: source.uploadId } : { collectionId: source.collectionId, itemId: source.itemId };
     const response = await fetch("/api/vector-sampling/areas", { method: "POST", signal,
-        headers: { "Content-Type": "application/json", ...(source.uploadId ? { "X-EOLab-Uploads": "1" } : {}) },
+        headers: { "Content-Type": "application/json", ...(source.uploadId ? { "X-EOLab-Uploads": "1" } : {}), ...(source.kind === "runArtifact" ? {"X-EOLab-Processing": "1"} : {}) },
         credentials: "same-origin", cache: "no-store",
-        body: JSON.stringify({ ...identity, filter }) });
+        body: JSON.stringify({ ...identity, filter, ...(source.calculatedFields?.length ? {calculatedFields: source.calculatedFields} : {}) }) });
     const value = await response.json();
     if (!response.ok) throw new Error(value.detail ?? "Could not select these features");
     value.selection = validateVectorSelection(value.selection);

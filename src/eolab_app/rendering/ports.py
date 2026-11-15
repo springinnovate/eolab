@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 import httpx2
-
+from eolab_app.calculated_fields import CalculatedField
 
 class MapRenderQueue(Protocol):
     """Admit an authorized HTTP render without exposing queue implementation."""
@@ -105,6 +105,21 @@ class PublishedLayerAuthorization(Protocol):
         """
         ...
 
+    def prepare_feature_info(self, content: bytes, query: Mapping[str, str]) -> bytes:
+        """Apply source-owned attributes to an already authorized inspection response.
+
+        Args:
+            content: Bounded native feature-information response.
+            query: Original normalized parameters already checked by prepare_query.
+
+        Returns:
+            Feature information with the source owner's accepted view attributes.
+
+        Raises:
+            PublishedLayerRequestError: If native feature information is malformed.
+        """
+        ...
+
     def build_composite_sld(
         self,
         layer_name: str,
@@ -112,6 +127,7 @@ class PublishedLayerAuthorization(Protocol):
         style_environment: str | None,
         style_definition: Mapping[str, object] | None,
         opacity: float,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> bytes:
         """Build one authorized layer entry for a composite SLD document.
 
@@ -121,6 +137,7 @@ class PublishedLayerAuthorization(Protocol):
             style_environment: Optional raster dynamic-style environment.
             style_definition: Optional complete feature-owned style definition.
             opacity: Neutral retained-layer opacity from zero through one.
+            calculated_fields: Neutral view-owned arithmetic definitions, if supported.
 
         Returns:
             One complete SLD document containing exactly one named layer.

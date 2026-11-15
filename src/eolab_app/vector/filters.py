@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.attribute_filter import (
     AttributeFilterError,
@@ -18,7 +18,8 @@ from eolab_app.attribute_filter import (
 )
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.models import CatalogVectorRequest
-
+from eolab_app.calculated_fields import CalculatedField
+from eolab_app.vector.styles import calculated_field_expressions, vector_expression_ecql
 
 OGC = "http://www.opengis.net/ogc"
 SLD = "http://www.opengis.net/sld"
@@ -30,11 +31,19 @@ _COMPARISONS = {
 
 
 class VectorFilterRequest(BaseModel):
-    """Specify the attribute rules used to filter a vector layer."""
+    """Specify the attribute rules used to filter a vector layer.
+
+    Attributes:
+        filter: Typed comparison rules for original and calculated attributes.
+        calculated_fields: View definitions retained with the accepted predicate.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     filter: VectorFilter
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields"
+    )
 
 
 class CatalogVectorFilterRequest(CatalogVectorRequest, VectorFilterRequest):
@@ -75,18 +84,24 @@ def validate_filter(candidate: VectorFilter, fields: Mapping[str, str]) -> Vecto
         raise VectorConflictError(str(error)) from error
 
 
-def filter_ecql(candidate: VectorFilter) -> str:
+def filter_ecql(
+    candidate: VectorFilter, calculated_fields: tuple[CalculatedField, ...] = ()
+) -> str:
     """Compile validated literal rules into server-owned ECQL.
 
     Args:
         candidate: Active, Catalog-validated filter.
+        calculated_fields: Source-validated definitions used by the view's rules.
 
     Returns:
         A bounded ECQL expression; user text is always a quoted literal.
     """
     expressions = []
+    calculated = calculated_field_expressions(calculated_fields)
     for rule in candidate.rules:
         field = '"' + rule.field.replace('"', '""') + '"'
+        if rule.field in calculated:
+            field = vector_expression_ecql(calculated[rule.field])
         if rule.operator in {"missing", "present"}:
             expression = f"{field} IS {'NOT ' if rule.operator == 'present' else ''}NULL"
         else:
@@ -134,18 +149,26 @@ def _node(name: str, *children: ET.Element, text: str | None = None) -> ET.Eleme
     return node
 
 
-def filter_ogc(candidate: VectorFilter) -> ET.Element:
+def filter_ogc(
+    candidate: VectorFilter, calculated_fields: tuple[CalculatedField, ...] = ()
+) -> ET.Element:
     """Compile the same validated rules into an OGC predicate tree.
 
     Args:
         candidate: Active, Catalog-validated filter.
+        calculated_fields: Source-validated definitions used by the view's rules.
 
     Returns:
         Detached predicate root for an SLD Filter element.
     """
     expressions = []
+    calculated = calculated_field_expressions(calculated_fields)
     for rule in candidate.rules:
-        field = _node("PropertyName", text=rule.field)
+        field = (
+            deepcopy(calculated[rule.field])
+            if rule.field in calculated
+            else _node("PropertyName", text=rule.field)
+        )
         missing = _node("PropertyIsNull", deepcopy(field))
         present = _node("Not", missing)
         if rule.operator == "missing":
@@ -165,19 +188,24 @@ def filter_ogc(candidate: VectorFilter) -> ET.Element:
     return expressions[0] if len(expressions) == 1 else _node("And" if candidate.match == "all" else "Or", *expressions)
 
 
-def filter_vector_sld(document: bytes, candidate: VectorFilter) -> bytes:
+def filter_vector_sld(
+    document: bytes,
+    candidate: VectorFilter,
+    calculated_fields: tuple[CalculatedField, ...] = (),
+) -> bytes:
     """Restrict every geometry and label rule without changing class ranges.
 
     Args:
         document: Authorized single-layer vector SLD.
         candidate: Active Catalog-validated filter.
+        calculated_fields: Source-validated definitions used by the view's rules.
 
     Returns:
         SLD with selection intersected with each original rule. Else rules
         retain the complement of their sibling class predicates.
     """
     root = ET.fromstring(document)
-    selection = filter_ogc(candidate)
+    selection = filter_ogc(candidate, calculated_fields)
     for feature_style in root.iter(f"{{{SLD}}}FeatureTypeStyle"):
         rules = feature_style.findall(f"{{{SLD}}}Rule")
         alternatives = []

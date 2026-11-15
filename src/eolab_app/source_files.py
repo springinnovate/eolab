@@ -5,7 +5,101 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    import httpx2
+
+
+class PublishedSourceLocation(BaseModel):
+    """A source authority's private locator relative to its read-only result mount."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    relativePath: str = Field(min_length=1)
+    mediaType: str = Field(min_length=1)
+
+
+def resolve_source_location(location: PublishedSourceLocation, mount: Path) -> Path:
+    """Confine an authorized result locator to a regular file in its mounted volume.
+
+    Args:
+        location: Validated internal response from the source authority.
+        mount: Fixed read-only result mount chosen by application composition.
+
+    Returns:
+        Existing original file below the mount's results directory.
+
+    Raises:
+        SourceFileError: If the locator escapes results, follows a link or is absent.
+    """
+    parts = location.relativePath.split("/")
+    if (
+        parts[0] != "results"
+        or any(part in {"", ".", ".."} for part in parts)
+        or "\\" in location.relativePath
+        or ":" in location.relativePath
+    ):
+        raise SourceFileError("The source file is unavailable.")
+    try:
+        root = mount.resolve(strict=True)
+        path = root
+        for part in parts:
+            path /= part
+            if path.is_symlink() or path.is_junction():
+                raise ValueError("Linked source component")
+        if (
+            not path.resolve(strict=True).is_relative_to(root / "results")
+            or not path.is_file()
+        ):
+            raise ValueError("Unavailable result file")
+    except (OSError, ValueError) as error:
+        raise SourceFileError("The source file is unavailable.") from error
+    return path
+
+
+async def resolve_leased_source_path(
+    client: "httpx2.AsyncClient",
+    run_id: str,
+    file_id: str,
+    lease_id: str,
+    mount: Path,
+    media_type: str,
+    *,
+    source_url: str = "http://app:8000/api/processing/source-files",
+) -> Path:
+    """Locate a retained original file through its source authority's read capability.
+
+    Args:
+        client: Internal HTTP client with a bounded timeout.
+        run_id: Validated opaque run identifier.
+        file_id: Validated opaque file identifier.
+        lease_id: Read capability retained by the caller until native work stops.
+        mount: Fixed read-only result mount available to this worker.
+        media_type: File format required by the caller's native reader.
+        source_url: Fixed internal authority endpoint, never supplied by a user.
+
+    Returns:
+        Confined original file after the authority verifies its active read lease.
+
+    Raises:
+        SourceFileError: If authority access, file format or path confinement fails.
+    """
+    import httpx2
+
+    try:
+        response = await client.get(
+            f"{source_url}/{run_id}/{file_id}",
+            headers={"Authorization": f"Bearer {lease_id}"},
+        )
+        response.raise_for_status()
+        location = PublishedSourceLocation.model_validate(response.json())
+        if location.mediaType != media_type:
+            raise ValueError("Unsupported source format")
+        return resolve_source_location(location, mount)
+    except (httpx2.HTTPError, ValueError) as error:
+        raise SourceFileError("The source file is unavailable.") from error
 
 
 class LeasedSourceFile(Protocol):

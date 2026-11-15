@@ -115,6 +115,7 @@ export function buildVectorFeatureInfoUrl({
     if (propertyNames.length > 0) {
         parameters.set("propertyName", propertyNames.join(","));
     }
+    if (publication.calculatedFields?.length) parameters.set("vector_calculated_fields", JSON.stringify(publication.calculatedFields));
     return `${wmsUrl}${wmsUrl.includes("?") ? "&" : "?"}${parameters}`;
 }
 

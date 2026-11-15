@@ -835,6 +835,21 @@ h5 {
 .map-layer-details { grid-column: 2; display: grid; gap: 4px; min-width: 0; padding-top: 5px; border-top: 1px solid var(--border-2); color: var(--text-2); font-size: var(--font-size-support); }
 .map-layer-details[hidden] { display: none; }
 .map-layer-details p { margin: 0; overflow-wrap: anywhere; }
+.vector-field-calculator { width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow: auto; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 20px; background: var(--surface-1); color: var(--text-1); }
+.vector-field-calculator::backdrop { background: rgb(0 0 0 / 35%); }
+.vector-field-calculator h2 { margin-top: 0; }
+.vector-field-calculator form, .vector-field-calculator label { display: grid; gap: 6px; min-width: 0; }
+.vector-field-calculator form { gap: 12px; }
+.vector-field-calculator :is(input[type="text"], select, textarea) { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; font: inherit; background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border-1); border-radius: var(--radius); }
+.vector-field-calculator textarea { resize: vertical; font-family: monospace; }
+.vector-field-calculator :is(p, label) { overflow-wrap: anywhere; }
+.vector-field-calculator-layer { font-weight: 600; }
+.vector-field-calculator-help { margin: 0; color: var(--text-2); font-size: 0.85rem; }
+.vector-field-calculator .vector-field-calculator-conversion { display: flex; align-items: center; }
+.vector-field-calculator-conversion input { order: -1; }
+.vector-field-calculator-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vector-field-calculator .is-error { color: var(--status-danger); }
+.vector-field-calculator progress { width: 100%; }
 .raster-layer-visibility {
   flex: 1;
   display: flex;

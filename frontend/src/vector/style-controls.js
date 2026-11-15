@@ -213,6 +213,7 @@ export class VectorStyleControls {
     show(target) {
         const style = normalizeVectorStyle(target.style);
         const changedTarget = this.target?.key !== target.key;
+        const changedFields = JSON.stringify(this.labelFields) !== JSON.stringify(target.fields);
         if (changedTarget) {
             this.categoryCsv.cancel();
             this.generation += 1;
@@ -232,7 +233,17 @@ export class VectorStyleControls {
         if (changedTarget) this.target = nextTarget;
         else Object.assign(this.target, nextTarget);
         this.root.hidden = false;
-        if (!changedTarget) return;
+        if (!changedTarget) {
+            if (changedFields) {
+                const selected = [this.labelField.value, this.categoryField.value, this.graduatedField.value];
+                this.#renderLabelFields(); this.#renderCategoryFields(); this.#renderGraduatedFields();
+                this.labelField.value = selected[0] || this.labelFields[0]?.name || "";
+                this.categoryField.value = selected[1] || this.categoryFields[0]?.name || "";
+                this.graduatedField.value = selected[2] || this.graduatedFields[0]?.name || "";
+                this.#synchronizeLabelInputs(); this.#renderColorMode();
+            }
+            return;
+        }
         this.heading.textContent = `${style.geometryKind[0].toUpperCase()}${style.geometryKind.slice(1)} style`;
         this.fillGroup.hidden = style.geometryKind === "line";
         this.pointGroup.hidden = style.geometryKind !== "point";

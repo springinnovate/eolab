@@ -28,13 +28,14 @@ from eolab_app.vector.models import (
     VectorLayer,
     PublishedVector,
     original_vector_resource_name,
+    with_calculated_fields,
 )
 from eolab_app.vector.ports import VectorCatalog, VectorPublisher, VectorFieldReader
 from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
 )
-from eolab_app.vector.styles import default_vector_style
+from eolab_app.vector.styles import default_vector_style, calculated_field_expressions
 from eolab_app.vector.artifact_sources import (
     ArtifactVectorSourceResolver,
     parse_artifact_vector_name,
@@ -290,7 +291,10 @@ class VectorPublicationService:
         """
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
-        return get_catalog_vector_layer(item, source, "Filtering")
+        return with_calculated_fields(
+            get_catalog_vector_layer(item, source, "Filtering"),
+            request.calculated_fields,
+        )
 
     def _validate_layer_filter(
         self,
@@ -355,9 +359,16 @@ class VectorPublicationService:
             layer, candidate
         )
         try:
+            calculated_field_expressions(
+                tuple(value.definition for value in layer.source.calculated_fields)
+            )
+        except ValueError as error:
+            raise VectorConflictError(str(error)) from error
+        try:
             layer_name = self._vector_registry.authorize_filter(
                 published_layer_name,
                 validated_filter,
+                tuple(value.definition for value in layer.source.calculated_fields),
             )
         except (PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
             raise VectorConflictError(str(error)) from error

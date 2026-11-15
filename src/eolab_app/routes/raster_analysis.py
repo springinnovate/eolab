@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from eolab_app.catalog_selection import UploadedSelection
+from eolab_app.catalog_selection import ArtifactVectorSelection, UploadedSelection
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.vector_uploads import VectorUploadError
@@ -80,7 +80,10 @@ def create_raster_analysis_router(
         response.headers["Cache-Control"] = "private, no-store"
         context = {}
         if any(
-            isinstance(reference, (RunArtifactReference, PolygonAreaReference))
+            isinstance(
+                reference,
+                (RunArtifactReference, PolygonAreaReference, ArtifactVectorSelection),
+            )
             for reference in references
         ):
             if session_owner is None:

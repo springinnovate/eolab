@@ -3,14 +3,18 @@
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
+from eolab_app.calculated_fields import CalculatedField
 
 MAX_COMPOSITE_MAP_LAYERS = 64
 MAX_COMPOSITE_PLAN_BYTES = 512 * 1024
 
 
 class CompositeMapLayerRequest(BaseModel):
-    """One top-first authorized layer in a composite render plan."""
+    """One top-first authorized layer in a composite render plan.
+
+    The source owner validates ``calculated_fields`` alongside its appearance;
+    these neutral definitions remain separate from transferable style settings.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -38,6 +42,9 @@ class CompositeMapLayerRequest(BaseModel):
     style_definition: dict[str, Any] | None = Field(
         default=None,
         alias="styleDefinition",
+    )
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields"
     )
 
     @model_validator(mode="after")

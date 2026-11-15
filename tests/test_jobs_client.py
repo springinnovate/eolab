@@ -496,7 +496,7 @@ def test_low_level_ownership_idempotency_and_cancellation() -> None:
 
 @pytest.mark.parametrize("cancel", [False, True])
 def test_abandoned_runs_cancel_and_delete(cancel: bool) -> None:
-    """Caller cancellation and client deadline both settle admitted work.
+    """Caller cancellation without a deadline and client timeout settle admitted work.
 
     Args:
         cancel: Explicit task cancellation instead of client timeout.
@@ -511,7 +511,7 @@ def test_abandoned_runs_cancel_and_delete(cancel: bool) -> None:
                         "operation": "diagnostic.v1",
                         "inputs": {"mode": "delay", "seconds": 5},
                     },
-                    timeout_seconds=10 if cancel else 0.3,
+                    timeout_seconds=None if cancel else 0.3,
                     delete_on_completion=True,
                 )
             )

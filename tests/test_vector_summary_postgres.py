@@ -210,6 +210,115 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     client.portal.call(worker.cleanup)
 
 
+def test_calculated_result_fields_survive_parent_deletion_in_processing(
+    upload_boundary: UploadBoundary, store: PostgresJobStore, tmp_path: Path
+) -> None:
+    """Read calculated upload and result fields through durable input retention.
+
+    Args:
+        upload_boundary: Existing HTTP, original-source, database and native composition.
+        store: Explicit disposable PostgreSQL lifecycle database.
+        tmp_path: Directory for inspecting the final published result.
+    """
+    client, worker, _, _, upload = upload_boundary
+    upload = {
+        **upload,
+        "calculatedFields": [
+            {
+                "version": 1,
+                "name": "doubled",
+                "expression": "'count' * 2",
+                "numericText": False,
+            }
+        ],
+    }
+
+    def summary_request(selection: dict[str, Any], value: str) -> dict[str, Any]:
+        """Capture one calculated field in an ordinary vector-summary invocation.
+
+        Args:
+            selection: Path-free upload or result selection with its definitions.
+            value: Calculated numeric field to reduce.
+
+        Returns:
+            Public model request using the existing label grouping field.
+        """
+        return model_request(
+            client,
+            "vector-summary",
+            inputs={
+                "vector": {
+                    "selection": selection,
+                    "fields": {"group": "label"},
+                    "rows": [
+                        {"fields": {"value": value}, "parameters": {"statistic": "sum"}}
+                    ],
+                }
+            },
+            parameters={"boundary_tolerance_m": 0},
+        )
+
+    parent = submit(client, summary_request(upload, "doubled"))
+    assert client.portal.call(worker.run_once)
+    parent_url = f"/api/processing/jobs/{parent['jobId']}"
+    parent = client.get(parent_url).json()
+    assert parent["status"] == "ready", parent
+    artifact = next(
+        file
+        for file in parent["artifacts"]["files"]
+        if file["mediaType"] == "application/geopackage+sqlite3"
+    )
+    selection = {
+        "kind": "runArtifact",
+        "jobId": parent["jobId"],
+        "artifactId": artifact["artifactId"],
+        "layerName": "summary",
+        "filter": {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "scaled", "operator": "eq", "value": 7}],
+        },
+        "calculatedFields": [
+            {
+                "version": 1,
+                "name": "scaled",
+                "expression": "'sum_doubled' / 2",
+                "numericText": False,
+            }
+        ],
+    }
+    request = summary_request(selection, "scaled")
+    request["requestId"] = "retained-calculated-vector"
+    with TestClient(client.app, base_url="https://testserver") as stranger:
+        denied = stranger.post(
+            "/api/processing/model-runs", json=request, headers=HEADERS
+        )
+        assert denied.status_code == 404, denied.text
+    child = submit(client, request)
+    owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+    parent_row = store.get(parent["jobId"], owner)
+    original = (
+        worker.artifacts.root / "results" / parent_row["attempt_id"] / "result.gpkg"
+    )
+    assert client.delete(parent_url, headers=HEADERS).status_code == 200
+    client.portal.call(worker.cleanup)
+    assert original.is_file()
+    assert client.portal.call(worker.run_once)
+    completed = client.get(f"/api/processing/jobs/{child['jobId']}").json()
+    assert completed["status"] == "ready", completed
+    output = tmp_path / "calculated-summary.gpkg"
+    output.write_bytes(client.get(completed["result"]["url"]).content)
+    with fiona.open(output, layer="summary") as dataset:
+        (feature,) = dataset
+        assert feature.properties["sum_scaled"] == 7
+    document = parse_yaml(
+        client.get(f"/api/processing/jobs/{child['jobId']}/run-yaml").content, run=True
+    )
+    assert document["invocation"]["inputs"]["vector"]["selection"] == selection
+    client.portal.call(worker.cleanup)
+    assert not original.exists()
+
+
 def test_summary_rejects_another_browsers_upload_before_queueing(
     upload_boundary: UploadBoundary, store: PostgresJobStore
 ) -> None:

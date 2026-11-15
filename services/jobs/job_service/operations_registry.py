@@ -26,6 +26,11 @@ from eolab_app.vector.selection_operation import (
     SelectionMeasurementResult,
     measure_selected_features,
 )
+from eolab_app.vector.field_calculation import (
+    FieldCalculationInput,
+    FieldCalculationOutcome,
+    calculate_vector_fields,
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,13 @@ class InstalledOperation:
 
 
 OPERATIONS = {
+    "vector.field-calculation.v1": InstalledOperation(
+        "vector.field-calculation.v1",
+        "Calculate whole-layer numeric attributes without changing original sources.",
+        FieldCalculationInput,
+        FieldCalculationOutcome,
+        calculate_vector_fields,
+    ),
     "diagnostic.v1": InstalledOperation(
         "diagnostic.v1",
         "Echo a value, delay then echo, or raise a controlled exception.",

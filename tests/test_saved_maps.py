@@ -43,6 +43,63 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_calculated_fields_and_private_results_round_trip() -> None:
+    """Persist ordered definitions and private references without source data."""
+    candidate = map_request()
+    candidate["view"].update(schemaVersion=4, basemap="detailed")
+    fields = [
+        {
+            "version": 1,
+            "name": "Density",
+            "expression": "'Population' / 'Area km2'",
+            "numericText": False,
+        }
+    ]
+    presentation = {
+        "isCustom": True,
+        "visible": True,
+        "opacity": 1,
+        "calculatedFields": fields,
+        "style": {"kind": "vector", "definition": {"graduated": {"field": "Density"}}},
+        "filter": {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "Density", "operator": "gt", "value": 2}],
+        },
+    }
+    candidate["view"]["layers"] = [
+        {**presentation, "catalogItem": {"collection": "vectors", "id": "regions"}},
+        {
+            **presentation,
+            "runArtifact": {
+                "jobId": "a" * 32,
+                "artifactId": "b" * 32,
+                "layerName": "results",
+            },
+        },
+    ]
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    assert (
+        CreateSavedMap.model_validate_json(
+            parsed.model_dump_json(exclude_unset=True)
+        ).model_dump(mode="json", exclude_unset=True)
+        == candidate
+    )
+    for invalid_field in (
+        {**fields[0], "values": [1, 2]},
+        {**fields[0], "numericText": "true"},
+    ):
+        invalid = deepcopy(candidate)
+        invalid["view"]["layers"][0]["calculatedFields"] = [invalid_field]
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["schemaVersion"] = 3
+    with pytest.raises(ValidationError, match="version four"):
+        CreateSavedMap.model_validate(invalid)
+
+
 def test_repeated_catalog_views_round_trip() -> None:
     """Preserve ordered views of the same raster and vector with distinct appearance."""
     candidate = map_request()
@@ -255,7 +312,7 @@ def test_shared_annotation_reference_contract() -> None:
         CreateSavedMap.model_validate(candidate)
 
 
-@pytest.mark.parametrize("source", ["annotation", "upload"])
+@pytest.mark.parametrize("source", ["annotation", "upload", "artifact"])
 def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
     """Reject private uploads and shared invitations from another EOLab site.
 
@@ -270,6 +327,20 @@ def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
         view["layers"] = [
             {
                 "uploadId": "11111111-1111-4111-8111-111111111111",
+                "visible": True,
+                "opacity": 1,
+                "style": {"kind": "vector", "definition": {}},
+            }
+        ]
+    elif source == "artifact":
+        view.update(schemaVersion=4, basemap="detailed")
+        view["layers"] = [
+            {
+                "runArtifact": {
+                    "jobId": "a" * 32,
+                    "artifactId": "b" * 32,
+                    "layerName": "results",
+                },
                 "visible": True,
                 "opacity": 1,
                 "style": {"kind": "vector", "definition": {}},

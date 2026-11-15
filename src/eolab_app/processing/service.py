@@ -91,6 +91,7 @@ from eolab_app.processing.model_yaml import (
 )
 from eolab_app.source_files import ResolvedSourceFile, finish_source_task
 from eolab_app.catalog_selection import (
+    ArtifactVectorSelection,
     CatalogSelectionReader,
     SelectionUnavailableError,
     UploadedSelection,
@@ -898,6 +899,9 @@ class ProcessingService:
             isinstance(selection, UploadedSelection)
             for selection in selections.values()
         ):
+            prepared = await self._capture_vector_result_inputs(
+                owner, prepared, selections
+            )
             return await asyncio.to_thread(
                 self.jobs.submit, owner, request_key, prepared, request_hash
             )
@@ -911,6 +915,55 @@ class ProcessingService:
         if isinstance(result, ProcessingError):
             raise result
         return result
+
+    async def _capture_vector_result_inputs(
+        self,
+        owner: str,
+        prepared: PreparedJobPlan,
+        selections: dict[str, VectorSelection],
+    ) -> PreparedJobPlan:
+        """Retain each original vector result used by an accepted calculation.
+
+        Args:
+            owner: Browser's Processing session identity.
+            prepared: Operation plan containing any already captured input files.
+            selections: Path-free source descriptors captured by the operation.
+
+        Returns:
+            Plan whose original GeoPackage inputs are checked and retained atomically
+            with job admission, independent of parent deletion or expiry afterward.
+
+        Raises:
+            ProcessingError: If a referenced result is unavailable or not a vector file.
+        """
+        files = list(prepared.input_files)
+        captured = {(file.run_id, file.artifact_id) for file in files}
+        for selection in selections.values():
+            if not isinstance(selection, ArtifactVectorSelection):
+                continue
+            identity = (selection.jobId, selection.artifactId)
+            if identity in captured:
+                continue
+            file = await asyncio.to_thread(
+                self.jobs.inspect_input_file, owner, *identity
+            )
+            if (
+                file.media_type != "application/geopackage+sqlite3"
+                or file.role not in {"result", "intermediate"}
+                or file.size <= 0
+            ):
+                raise ProcessingError(
+                    "invalid_vector_input",
+                    "Choose a published vector GeoPackage result.",
+                    422,
+                )
+            files.append(file)
+            captured.add(identity)
+        return (
+            replace(prepared, input_files=tuple(files), work_key=None)
+            if len(files) != len(prepared.input_files)
+            else prepared
+        )
 
     async def _submit_jobs_with_uploaded_inputs(
         self,
@@ -958,6 +1011,13 @@ class ProcessingService:
             captured = []
             for submission, inputs in zip(submissions, selections, strict=True):
                 prepared = submission.prepared
+                if isinstance(prepared, PreparedJobPlan):
+                    try:
+                        prepared = await self._capture_vector_result_inputs(
+                            owner, prepared, inputs
+                        )
+                    except ProcessingError as error:
+                        prepared = error
                 uploaded = [
                     selection
                     for selection in inputs.values()
@@ -1491,7 +1551,7 @@ class ProcessingService:
         operation = get_model_operation("raster.aggregate.v1")
         selections = [operation.vector_selections(request) for request in requests]
         if any(
-            isinstance(selection, UploadedSelection)
+            isinstance(selection, (UploadedSelection, ArtifactVectorSelection))
             for inputs in selections
             for selection in inputs.values()
         ):

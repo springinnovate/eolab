@@ -205,7 +205,9 @@ def _matches_rule(rule: VectorFilterRule, value: Any) -> bool:
         return False
 
 
-def ogr_predicate(candidate: VectorFilter) -> str | None:
+def ogr_predicate(
+    candidate: VectorFilter, calculated_names: frozenset[str] = frozenset()
+) -> str | None:
     """Build an OGR WHERE clause that narrows reads before exact feature filtering.
 
     This is the existing catalog-selection predicate compiler, shared here with
@@ -217,6 +219,8 @@ def ogr_predicate(candidate: VectorFilter) -> str | None:
 
     Args:
         candidate: Schema-validated immutable predicate.
+        calculated_names: View fields evaluated after reading original attributes;
+            these cannot be passed to the native source as physical columns.
 
     Returns:
         Quoted OGR WHERE text, or no native restriction.
@@ -225,7 +229,11 @@ def ogr_predicate(candidate: VectorFilter) -> str | None:
         return None
     clauses = []
     for rule in candidate.rules:
-        if rule.operator == "contains" or isinstance(rule.value, str):
+        if (
+            rule.field in calculated_names
+            or rule.operator == "contains"
+            or isinstance(rule.value, str)
+        ):
             if candidate.match == "any":
                 return None
             continue

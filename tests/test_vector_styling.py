@@ -9,6 +9,7 @@ from xml.etree import ElementTree
 import httpx2
 import pytest
 from pydantic import ValidationError
+from eolab_app.calculated_fields import CalculatedField
 
 from eolab_app.rendering.geoserver import GEOSERVER_WORKSPACE_NAME
 from eolab_app.vector.errors import VectorConflictError, VectorPublicationError
@@ -49,12 +50,15 @@ class RecordingStyler:
         self,
         resource_name: str,
         style: VectorStyle,
+        *,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> PreparedVectorStyle:
         """Record one style request and return its deterministic name.
 
         Args:
             resource_name: Server-derived layer resource name.
             style: Validated vector style.
+            calculated_fields: Source-validated definitions bound into the style identity.
 
         Returns:
             Style identity and published geometry attribute.
@@ -62,7 +66,13 @@ class RecordingStyler:
         self.requests.append((resource_name, style))
         geometry_name = "shape" if style.label is not None else None
         return PreparedVectorStyle(
-            vector_style_name(resource_name, style, geometry_name=geometry_name), geometry_name,
+            vector_style_name(
+                resource_name,
+                style,
+                geometry_name=geometry_name,
+                calculated_fields=calculated_fields,
+            ),
+            geometry_name,
         )
 
 
@@ -542,7 +552,11 @@ def test_vector_style_identity_includes_generated_rendering_policy(
     before = vector_style_name("polygon-resource", style)
 
     def changed_renderer(
-        style_name: str, style: VectorStyle, *, geometry_name: str | None = None,
+        style_name: str,
+        style: VectorStyle,
+        *,
+        geometry_name: str | None = None,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> bytes:
         """Simulate a deployment changing its generated SLD policy.
 
@@ -550,11 +564,20 @@ def test_vector_style_identity_includes_generated_rendering_policy(
             style_name: Stable style name passed to the generator.
             style: Complete validated appearance to render.
             geometry_name: Authorized geometry carried through the SLD contract.
+            calculated_fields: View-owned arithmetic definitions carried through rendering.
 
         Returns:
             Valid XML with distinct generated content.
         """
-        return build_vector_sld(style_name, style, geometry_name=geometry_name) + b"<!-- updated policy -->"
+        return (
+            build_vector_sld(
+                style_name,
+                style,
+                geometry_name=geometry_name,
+                calculated_fields=calculated_fields,
+            )
+            + b"<!-- updated policy -->"
+        )
 
     monkeypatch.setattr("eolab_app.vector.styles.build_vector_sld", changed_renderer)
     assert vector_style_name("polygon-resource", style) != before
@@ -704,18 +727,25 @@ def test_style_service_reports_source_rebinding_during_preparation(
         """Simulate another publication while the GeoServer preparer is awaited."""
 
         async def prepare_style(
-            self, resource_name: str, style: VectorStyle,
+            self,
+            resource_name: str,
+            style: VectorStyle,
+            *,
+            calculated_fields: tuple[CalculatedField, ...] = (),
         ) -> PreparedVectorStyle:
             """Return prepared metadata after changing the published source.
 
             Args:
                 resource_name: Original server-derived layer identity.
                 style: Appearance approved for the original source.
+                calculated_fields: View definitions bound into the appearance.
 
             Returns:
                 Prepared appearance whose source binding has since changed.
             """
-            prepared = await super().prepare_style(resource_name, style)
+            prepared = await super().prepare_style(
+                resource_name, style, calculated_fields=calculated_fields
+            )
             registry.authorize(layer_name, replacement, "vector-polygon")
             return prepared
 

@@ -3,6 +3,29 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
+test("version four round-trips calculated catalog and private result views without values or credentials", () => {
+  const fields = [{version: 1, name: "Density", expression: "'Population' / 'Area km2'", numericText: false}];
+  const presentation = {isCustom: true, visible: true, opacity: 1, calculatedFields: fields,
+    style: {kind: "vector", definition: {graduated: {field: "Density"}}},
+    filter: {enabled: true, match: "all", rules: [{field: "Density", operator: "gt", value: 2}]}};
+  const view = createSavedMapView({...savedMapCandidate(), layers: [
+    {...presentation, catalogItem: {collection: "vectors", id: "regions"}},
+    {...presentation, runArtifact: {jobId: "a".repeat(32), artifactId: "b".repeat(32), layerName: "results"}},
+  ]});
+  assert.deepEqual(parseSavedMapView(serializeSavedMapView(view)), view);
+  for (const mutate of [
+    value => { value.layers[0].calculatedFields[0].values = [1, 2]; },
+    value => { value.layers[0].calculatedFields[0].numericText = "true"; },
+    value => { value.layers[0].calculatedFields.push({...fields[0]}); },
+    value => { value.layers[1].runArtifact.path = "private/file.gpkg"; },
+    value => { value.layers[1].runArtifact.jobId = "../private"; },
+    value => { value.schemaVersion = 3; },
+  ]) {
+    const invalid = structuredClone(view); mutate(invalid);
+    assert.throws(() => parseSavedMapView(JSON.stringify(invalid)));
+  }
+});
+
 test("version two accepts only portable annotation references and version one stays unchanged", () => {
   const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
   assert.deepEqual(parseSavedMapView(JSON.stringify(fixture)), fixture);
@@ -124,7 +147,7 @@ test("saved map model round trips the versioned bounded contract", () => {
 
   assert.deepEqual(parsed, saved);
   assert.equal(parsed.format, "eolab-map-view");
-  assert.equal(parsed.schemaVersion, 3);
+  assert.equal(parsed.schemaVersion, 4);
   assert.equal(Object.isFrozen(parsed.layers), true);
 });
 
@@ -146,8 +169,8 @@ test("saved map model preserves more than two visible layers", () => {
 test("saved map model rejects incompatible and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
-    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 4 })),
-    /schema 4 is not supported/,
+    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 5 })),
+    /schema 5 is not supported/,
   );
 
   const extended = savedMapCandidate();

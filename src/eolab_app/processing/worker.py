@@ -8,7 +8,7 @@ import asyncio
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import replace
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from threading import Event
 import logging
 from typing import Any
@@ -115,15 +115,40 @@ class ProcessingWorker:
             ProcessingError: If retained upload reading is not configured.
         """
         areas = self.areas
-        if row["input_uploads"]:
-            if areas is None or self.uploads is None:
-                raise ProcessingError(
-                    "uploads_unavailable",
-                    "Uploaded vector source access is unavailable.",
-                    503,
-                )
+        if row["input_uploads"] and (areas is None or self.uploads is None):
+            raise ProcessingError(
+                "uploads_unavailable",
+                "Uploaded vector source access is unavailable.",
+                503,
+            )
+
+        async def retained_file(run_id: str, file_id: str) -> Path:
+            """Locate a published file retained by this worker's accepted input grant.
+
+            Args:
+                run_id: Parent run identity captured by the operation.
+                file_id: Published file identity captured by the operation.
+
+            Returns:
+                Confined immutable file protected until this job stops.
+
+            Raises:
+                ProcessingError: If the grant, active attempt or file is unavailable.
+            """
+            parent_attempt, file = await asyncio.to_thread(
+                self.jobs.read_retained_input,
+                row["id"],
+                row["attempt_id"],
+                run_id,
+                file_id,
+            )
+            return await asyncio.to_thread(
+                self.artifacts.artifact_path, parent_attempt, file.storage_name
+            )
+
+        if areas is not None:
             areas = RetainedVectorSelectionReader(
-                areas, self.uploads, row["input_uploads"]
+                areas, self.uploads, row["input_uploads"], retained_file
             )
 
         async def report_progress(progress: dict[str, Any]) -> None:

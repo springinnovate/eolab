@@ -28,11 +28,12 @@ function fixture(overrides = {}) {
     return {owner, records, calls, run, data, file: artifacts.files[0], api};
 }
 
-test("GeoPackage outputs delegate to ordinary vector layers with run lifetime and restorable filters", async () => {
-    const calls = [], removed = [];
+test("GeoPackage outputs delegate to ordinary vector layers with run lifetime and restorable fields and filters", async () => {
+    const calls = [], removed = [], unavailable = [];
     const h = fixture({describeVector: async source => ({...source, layerName: "processed", featureCount: 2,
         fields: {region_code: "int", score: "float"}, bbox: [0, 0, 1, 1], geometryKind: "polygon"}),
         addVector: async (source, lifecycle, presentation) => { calls.push({source, lifecycle, presentation}); return {}; },
+        onUnavailable: key => {assert.equal(h.owner.layers.has(key), true); unavailable.push(key);},
         removeLayer: key => { removed.push(key); calls.find(call => call.presentation.key === key).lifecycle.removed(); }});
     h.file.mediaType = "application/geopackage+sqlite3";
     h.run.result = {name: h.file.name, defaultNumericField: "score"};
@@ -43,14 +44,18 @@ test("GeoPackage outputs delegate to ordinary vector layers with run lifetime an
     assert.equal(h.owner.layers.get(calls[0].presentation.key).ordinary, true);
     const filter = {enabled: true, match: "all", rules: [{field: "score", operator: "gt", value: 10}]};
     const appearance = {kind: "vector", definition: {graduated: {field: "score"}}};
-    const snapshot = {key: calls[0].presentation.key, visible: false, opacity: 0.5, local: calls[0].lifecycle.copy(appearance, filter)};
+    const fields = [{version: 1, name: "Scaled score", expression: "'score' * 2", numericText: false}];
+    const snapshot = {key: calls[0].presentation.key, visible: false, opacity: 0.5, local: calls[0].lifecycle.copy(appearance, filter, fields)};
     h.owner.removeLayer(snapshot.key);
     await h.owner.restore(snapshot, () => true);
     assert.deepEqual(calls[1].presentation.appearance, appearance);
     assert.deepEqual(calls[1].presentation.filter, filter);
+    assert.deepEqual(calls[1].presentation.calculatedFields, fields);
     assert.equal(calls[1].presentation.visible, false);
+    await assert.rejects(h.owner.restore({...snapshot, key: `${snapshot.key}:mismatched`, local: {...snapshot.local, layerName: "different"}}, () => true), /different layer name/);
     h.owner.updateRun({...h.run, status: "deleted", updatedAt: "2099-01-02T00:00:00Z"});
     assert.equal(h.owner.layers.size, 0); assert.equal(removed.length, 2);
+    assert.deepEqual(unavailable, [snapshot.key]);
 });
 
 test("point and straight-line output bounds use the ordinary vector owner", async () => {

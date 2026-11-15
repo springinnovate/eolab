@@ -116,6 +116,7 @@ export class CatalogVisualizationCoordinator {
             staged = await this.stage(item, snapshot);
             const { record } = staged;
             record.entry.label = snapshot.label;
+            if (snapshot.calculatedFields?.length) await record.adapter.restoreCalculatedFields(record, snapshot.calculatedFields);
             if (record.adapter.restoreRemovedStyle) await record.adapter.restoreRemovedStyle(record, snapshot.style);
             else await record.adapter.applySavedState(record, snapshot.style);
             if (Object.hasOwn(snapshot, "filter")) await record.adapter.applyFilterState(record, snapshot.filter);

@@ -372,6 +372,23 @@ test("the create action names the source layer and disables only its pending add
   assert.equal(actionControl(list.children[0], "add-view").textContent, "Creating…");
 });
 
+test("custom vectors offer the calculator under Layer tools with a stable action identity", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), opened = [];
+  view.bind({onCalculateFields: key => opened.push(key)});
+  const layer = {...LAYERS[0], datasetKind: "vector", isCustom: true, canCalculateFields: true};
+  view.render([layer], layer.key);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  assert.equal(actionControl(row, "details").textContent, "Layer tools");
+  actionControl(row, "details").dispatchEvent(new Event("click"));
+  const calculator = actionControl(row, "field-calculator");
+  assert.equal(calculator.textContent, "Field calculator");
+  assert.ok(calculator.getAttribute("aria-label").includes(layer.label));
+  calculator.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [layer.key]);
+  view.render([{...layer, isCustom: false}], layer.key);
+  assert.throws(() => actionControl(doc.querySelector("#raster-layer-list").children[0], "field-calculator"));
+});
+
 test("Catalog and Custom cards share one unchanged order and use explicit layer meaning", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const layers = [

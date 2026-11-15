@@ -7,6 +7,7 @@ import {
     publishVector,
     styleVector,
     summarizeVectorCategories,
+    calculateVectorFields,
 } from "./api.js";
 import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterStatus } from "./filter.js";
 import { createVectorWmsLayer, vectorMapBounds } from "./leaflet.js";
@@ -44,9 +45,10 @@ import {
  * @return {ReturnType<typeof vectorLabelFields>} Frozen non-geometry field options.
  */
 function getVectorSourceFields(source) {
-    return source.kind === "upload" || source.kind === "runArtifact"
+    const fields = source.kind === "upload" || source.kind === "runArtifact"
         ? Object.freeze(Object.entries(source.fields).map(([name, type]) => Object.freeze({ name, type })))
         : vectorLabelFields(source);
+    return Object.freeze([...fields, ...(source.calculatedFields ?? []).map(({name}) => Object.freeze({name, type: "float64"}))]);
 }
 
 /**
@@ -274,6 +276,31 @@ export function createVectorMapLayerAdapter({
         return accepted;
     }
 
+    /** Refresh optional exact counts for the accepted source and filter.
+     * Replaced or removed views discard replies; count failure never changes selection.
+     * @param {Object} record Retained vector view with its accepted predicate.
+     * @return {void}
+     */
+    function refreshFilterCount(record) {
+        record.state.filterCountAbort?.abort();
+        record.state.filterCount = null;
+        record.state.filterCountError = null;
+        record.state.filterCounting = record.state.filter.enabled && record.state.filter.rules.length > 0;
+        if (!record.state.filterCounting) return;
+        const counter = new AbortController();
+        record.state.filterCountAbort = counter;
+        void countFilter(record.state.source, record.state.filter, counter.signal).then(count => {
+            if (!counter.signal.aborted && !record.state.disposed) record.state.filterCount = count;
+        }).catch(error => {
+            if (!counter.signal.aborted && !record.state.disposed) record.state.filterCountError = error.category ?? null;
+        }).finally(() => {
+            if (counter.signal.aborted || record.state.disposed) return;
+            record.state.filterCounting = false;
+            record.state.filterCountAbort = null;
+            onFilterChange(record);
+        });
+    }
+
     return Object.freeze({
         /**
          * Prepare initial colors with labels off before a new WMS layer is attached.
@@ -362,6 +389,8 @@ export function createVectorMapLayerAdapter({
                 labelFields: getVectorSourceFields(vectorSource),
                 defaultStyleNotice: publication.defaultStyleNotice ?? "",
                 layer: null,
+                fieldRenderingReady: true,
+                fieldRenderingError: null,
             };
         },
         /**
@@ -373,12 +402,13 @@ export function createVectorMapLayerAdapter({
          */
         describeSource(record) {
             const value = record.state.source;
-            const identity = value.kind === "runArtifact" ? {kind: "runArtifact", jobId: value.jobId, artifactId: value.artifactId}
+            const originalIdentity = value.kind === "runArtifact" ? {kind: "runArtifact", jobId: value.jobId, artifactId: value.artifactId}
                 : value.kind === "upload" ? {uploadId: value.id} : {collectionId: value.collection, itemId: value.id};
+            const identity = {...originalIdentity, ...(value.calculatedFields?.length ? {calculatedFields: structuredClone(value.calculatedFields)} : {})};
             const binding = value.properties?.["eolab:vector_source"];
             return {
                 source: Object.freeze(identity),
-                selection: value.kind === "runArtifact" ? null : value.kind === "upload" ? {...identity, layerName: value.layer_name}
+                selection: value.kind === "runArtifact" ? {...identity, layerName: value.layerName} : value.kind === "upload" ? {...identity, layerName: value.layer_name}
                     : binding ? {...identity, assetKey: binding.asset_key, layerName: binding.layer_name} : null,
                 fields: record.state.labelFields,
                 scalarFields: vectorCategoricalFields(record.state.labelFields),
@@ -387,6 +417,72 @@ export function createVectorMapLayerAdapter({
                 primaryGeometry: record.state.source.kind === "upload" || record.state.source.kind === "runArtifact" ? null
                     : record.state.source.properties?.["table:primary_geometry"] ?? null,
             };
+        },
+        /** Export this view's accepted field definitions independently of its appearance.
+         * @param {Object} record Retained vector view.
+         * @return {Array<import("../calculated-fields.js").CalculatedField>} Detached ordered definitions.
+         */
+        exportCalculatedFields(record) { return structuredClone(record.state.source.calculatedFields ?? []); },
+        /** Install accepted fields atomically, then refresh their independent map display.
+         * @param {Object} record Retained vector view.
+         * @param {import("./api.js").FieldCalculationResult} result Accepted calculation result.
+         * @param {AbortSignal} [signal] Cancel an obsolete installation.
+         * @return {Promise<string|null>} Display warning, or null after a successful refresh.
+         * @throws {Error} If the view is removed before installation.
+         * @throws {DOMException} If cancelled.
+         */
+        async installCalculatedFields(record, result, signal) {
+            signal?.throwIfAborted();
+            if (record.state.disposed) throw new Error("This layer was removed while its fields were being calculated.");
+            const source = {...record.state.source, calculatedFields: structuredClone(result.calculatedFields)};
+            this.cancelPendingFilter(record);
+            record.state.filterCountAbort?.abort();
+            record.state.filterRenderAbort?.abort();
+            record.state.source = source;
+            record.state.labelFields = Object.freeze(Object.entries(result.fields).map(([name, type]) => Object.freeze({name, type})));
+            record.state.filterCount = null;
+            record.state.fieldRenderingReady = false;
+            record.state.fieldRenderingError = "Refreshing the map after calculating fields…";
+            refreshFilterCount(record);
+            onFilterChange(record);
+            try {
+                const filtered = await filter(source, record.state.filter, signal);
+                signal?.throwIfAborted();
+                const styled = await style(source, record.state.style);
+                signal?.throwIfAborted();
+                if (record.state.disposed || record.state.source !== source) return null;
+                record.publication = {...record.publication, layerName: filtered.layerName, styleName: styled.styleName,
+                    style: styled.style, calculatedFields: source.calculatedFields};
+                record.state.style = normalizeVectorStyle(styled.style);
+                record.state.layer?.setParams({layers: filtered.layerName, styles: styled.styleName,
+                    vector_style: JSON.stringify(styled.style), vector_calculated_fields: JSON.stringify(source.calculatedFields)});
+                record.state.fieldRenderingReady = true;
+                record.state.fieldRenderingError = null;
+                return null;
+            } catch {
+                const warning = "Field saved. The map could not refresh. Open Field calculator and Calculate again to retry.";
+                if (!record.state.disposed && record.state.source === source) record.state.fieldRenderingError = warning;
+                return warning;
+            } finally {
+                if (!record.state.disposed && record.state.source === source) onFilterChange(record);
+            }
+        },
+        /** Whether this view's map display matches its accepted calculated fields.
+         * @param {Object} record Retained vector view.
+         * @return {boolean} False while display authorization is pending or failed.
+         */
+        renderingAvailable(record) { return record.state.fieldRenderingReady; },
+        /** Reconstruct saved fields before restoring any dependent style or filter.
+         * @param {Object} record Staged or retained vector view.
+         * @param {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} definitions Saved ordered field definitions.
+         * @param {AbortSignal} [signal] Cancellation during restoration.
+         * @return {Promise<void>} Completion after validated fields are installed.
+         * @throws {Error} If source access or calculation fails; display failures remain on the layer.
+         */
+        async restoreCalculatedFields(record, definitions, signal) {
+            if (!definitions?.length) return;
+            const result = await calculateVectorFields(this.describeSource(record).source, definitions, signal);
+            await this.installCalculatedFields(record, result, signal);
         },
         /**
          * Read the applied filter and its current whole-layer count feedback.
@@ -447,6 +543,7 @@ export function createVectorMapLayerAdapter({
                 layerName: record.publication.layerName,
                 styleName: record.publication.styleName,
                 styleDefinition: structuredClone(record.state.style),
+                ...(record.state.source.calculatedFields?.length ? {calculatedFields: this.exportCalculatedFields(record)} : {}),
             };
         },
         /**
@@ -471,6 +568,7 @@ export function createVectorMapLayerAdapter({
             record.state.layer.setParams({
                 styles: result.styleName,
                 vector_style: JSON.stringify(applied),
+                ...(record.state.source.calculatedFields?.length ? {vector_calculated_fields: JSON.stringify(record.state.source.calculatedFields)} : {}),
             });
             return applied;
         },
@@ -511,23 +609,7 @@ export function createVectorMapLayerAdapter({
             record.state.layer?.setParams({ layers: result.layerName });
             const accepted = commitFilterState(record, normalized, null);
             if (record.state.disposed || record.state.filter !== accepted) return null;
-            if (record.state.filterCounting) {
-                const counter = new AbortController();
-                record.state.filterCountAbort = counter;
-                void countFilter(record.state.source, normalized, counter.signal).then((count) => {
-                    if (!counter.signal.aborted && !record.state.disposed) record.state.filterCount = count;
-                }).catch((error) => {
-                    // Counts are optional; the rendering predicate stays applied.
-                    if (!counter.signal.aborted && !record.state.disposed) {
-                        record.state.filterCountError = error.category ?? null;
-                    }
-                }).finally(() => {
-                    if (counter.signal.aborted || record.state.disposed) return;
-                    record.state.filterCounting = false;
-                    record.state.filterCountAbort = null;
-                    onFilterChange(record);
-                });
-            }
+            if (record.state.filterCounting) refreshFilterCount(record);
             return accepted;
         },
         /**
@@ -596,13 +678,14 @@ export function createVectorMapLayerAdapter({
          * @return {Object} Source-owner restoration data, or detached upload metadata, publication, filter and count.
          */
         copyLayerForUndo(record) {
-            if (record.state.lifecycle?.copy) return record.state.lifecycle.copy(this.exportSavedState(record), this.exportFilterState(record));
+            if (record.state.lifecycle?.copy) return record.state.lifecycle.copy(this.exportSavedState(record), this.exportFilterState(record), this.exportCalculatedFields(record));
             return structuredClone({
                 kind: "uploaded-vector",
                 upload: record.state.source,
                 publication: record.publication,
                 filter: record.state.filter,
                 filterCount: record.state.filterCount,
+                calculatedFields: this.exportCalculatedFields(record),
             });
         },
         /**
@@ -701,6 +784,8 @@ export function createVectorMapLayerAdapter({
                 datasetKind: "vector",
                 canInfo: Boolean(record.state.lifecycle?.info) || !["upload", "runArtifact"].includes(record.state.source.kind),
                 canFilter: true,
+                canCalculateFields: true,
+                error: record.state.fieldRenderingError,
                 filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
                 filterStatus: vectorFilterStatus(record.state),
                 legend: vectorStyleLegend(record.state.style),

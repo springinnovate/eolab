@@ -1,1 +1,2 @@
 org.springinnovate.eolab.geoserver.CategoricalRasterFunctionFactory
+org.springinnovate.eolab.geoserver.VectorArithmeticFunctionFactory

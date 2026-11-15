@@ -100,6 +100,7 @@ import {
     validateVectorFeatureFocus,
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
+import { VectorFieldCalculator } from "./vector/field-calculator.js";
 import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { UploadPolygonsDialog } from "./vector-uploads/dialog.js";
@@ -806,6 +807,7 @@ async function initializeCatalog(
     let vectorFeatureInspector = null;
     let mapFeatureHover = null;
     let vectorFilterControls = null;
+    let vectorFieldCalculator = null;
     let vectorSampling = null;
     let summarySampling = null;
     let selectingMapClick = false;
@@ -848,6 +850,7 @@ async function initializeCatalog(
             vectorFeatureInspector?.syncVisibleLayers();
             mapFeatureHover?.hide();
             vectorFilterControls?.refresh();
+            vectorFieldCalculator?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
             models?.refreshMapLayers();
@@ -876,6 +879,7 @@ async function initializeCatalog(
     outputLayers = new ModelOutputLayers({
         api: processingApi,
         onRunObserved: job => processingJobs.accept(job),
+        onUnavailable: key => savedMapViewController?.retainUnavailableLayer(key),
         addRaster: (source, lifecycle, presentation) => rasterVisualization.showSource(source, lifecycle, presentation),
         addVector: (source, lifecycle, presentation) => addGeneratedVector(source, lifecycle, presentation),
         addLayer: (source, adapter) => mapLayerController.addLocal(source, adapter),
@@ -1050,6 +1054,15 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    vectorFieldCalculator = new VectorFieldCalculator({document, getTarget: key => {
+        const record = mapLayerController.getRecord(key);
+        if (!record || record.adapter !== vectorMapLayerAdapter || !record.entry.isCustom) return null;
+        const source = record.adapter.describeSource(record);
+        return {identity: record, label: record.entry.label, source: source.source, fields: source.fields,
+            calculatedFields: record.adapter.exportCalculatedFields(record),
+            apply: (result, signal) => record.adapter.installCalculatedFields(record, result, signal)};
+    }});
+    mapLayerController.onCalculateFields = key => vectorFieldCalculator.open(key);
     /** Find every retained view of this browser's uploaded vector.
      * @param {string} uploadId Stored upload identity.
      * @return {string[]} View keys in map drawing order.
@@ -1091,6 +1104,8 @@ async function initializeCatalog(
             visible: false, canAddView: true}, vectorMapLayerAdapter);
         const isCurrent = () => presentation.isCurrent() && mapLayerController.getRecord(presentation.key) === record;
         try {
+            if (presentation.calculatedFields?.length) await vectorMapLayerAdapter.restoreCalculatedFields(record, presentation.calculatedFields, presentation.signal);
+            if (!isCurrent()) return null;
             if (presentation.appearance) await vectorMapLayerAdapter.restoreRemovedStyle(record, presentation.appearance);
             if (!isCurrent()) return null;
             if (presentation.filter) await vectorMapLayerAdapter.applyFilterState(record, presentation.filter);
@@ -1142,6 +1157,8 @@ async function initializeCatalog(
         /** Check that asynchronous restoration still owns this map layer. @return {boolean} */
         const stillRetained = () => isCurrent() && mapLayerController.getRecord(key) === record;
         try {
+            await vectorMapLayerAdapter.restoreCalculatedFields(record, layer.calculatedFields);
+            if (!stillRetained()) return null;
             await vectorMapLayerAdapter.applyStyle(record, layer.style.definition);
             if (!stillRetained()) return null;
             if (layer.filter) await vectorMapLayerAdapter.applyFilterState(record, layer.filter);
@@ -1215,7 +1232,7 @@ async function initializeCatalog(
         .filter(record => record.adapter === vectorMapLayerAdapter)
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
-            return source.geometryKind === "polygon" && source.source.kind !== "runArtifact" ? [{
+            return source.geometryKind === "polygon" ? [{
                 key: record.entry.key, label: record.entry.label, item: source.source,
                 fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
                 selection: source.selection, filter: record.adapter.exportFilterState(record),
@@ -1508,9 +1525,27 @@ async function initializeCatalog(
                 ...(record.entry.customName ? { customName: record.entry.customName } : {}),
                 style: record.adapter.exportSavedState(record),
                 filter: record.adapter.exportFilterState(record),
+                calculatedFields: record.adapter.exportCalculatedFields(record),
             };
         },
         restoreUpload: restoreSavedUpload,
+        exportArtifact: record => {
+            if (record.adapter !== vectorMapLayerAdapter) return null;
+            const source = record.adapter.describeSource(record);
+            if (source.source.kind !== "runArtifact") return null;
+            const {jobId, artifactId} = source.source;
+            return {runArtifact: {jobId, artifactId, layerName: source.selection.layerName},
+                visible: record.entry.visible, opacity: record.entry.opacity,
+                ...(record.entry.customName ? {customName: record.entry.customName} : {}),
+                style: record.adapter.exportSavedState(record), filter: record.adapter.exportFilterState(record),
+                calculatedFields: record.adapter.exportCalculatedFields(record)};
+        },
+        restoreArtifact: async (layer, isCurrent) => {
+            const key = `local:view:${globalThis.crypto.randomUUID()}`;
+            await outputLayers.restore({...layer, key, local: {kind: "model-output-preview", ...layer.runArtifact,
+                appearance: layer.style, filter: layer.filter, calculatedFields: layer.calculatedFields}}, isCurrent);
+            return isCurrent() && mapLayerController.getRecord(key) ? key : null;
+        },
         exportTemporal: record => rasterVisualization.exportTemporal(record),
         restoreTemporal: async (layer, isCurrent) => {
             const {collectionId, itemId} = layer.temporalSource;
@@ -1577,7 +1612,7 @@ async function initializeCatalog(
     function visibleVectorInspectionTargets() {
         return mapLayerController.retainedRecords
             .filter((record) =>
-                record.entry.visible && record.adapter === vectorMapLayerAdapter
+                record.entry.visible && record.adapter === vectorMapLayerAdapter && record.adapter.renderingAvailable(record)
             )
             .map((record) => {
                 const source = record.adapter.describeSource(record);
@@ -1590,6 +1625,7 @@ async function initializeCatalog(
                         layerName: record.publication.layerName,
                         styleName: record.publication.styleName,
                         style: record.publication.style,
+                        calculatedFields: record.adapter.exportCalculatedFields(record),
                     },
                     geometryKind: source.geometryKind,
                     propertyNames: source.fields.map(({ name }) => name),

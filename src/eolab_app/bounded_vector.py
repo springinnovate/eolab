@@ -5,6 +5,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import math
 from time import monotonic
+from pathlib import Path
 from typing import Any
 import sys
 
@@ -26,6 +27,8 @@ from shapely.geometry import shape
 
 from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.catalog_selection import (
+    ArtifactVectorSelection,
+    UploadedSelection,
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
@@ -40,7 +43,12 @@ from eolab_app.raster.bounded_window import (
 from eolab_app.raster.read_cancellation import require_active_raster_read
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 from eolab_app.raster.models import RasterAreaMask
-from eolab_app.attribute_filter import matches_filter, validate_filter
+from eolab_app.attribute_filter import matches_filter, validate_filter, ogr_predicate
+from eolab_app.calculated_fields import (
+    evaluate_calculated_fields,
+    required_source_fields,
+    validate_calculated_fields,
+)
 
 # Existing native-read and projection budgets now bound actual streamed work
 # and individual retained features, rather than admission by serialized GeoJSON.
@@ -64,6 +72,46 @@ class VectorReadLimits:
     features: int = MAX_SCANNED_FEATURES
     coordinates_per_feature: int = MAX_FEATURE_COORDINATES
     memory_bytes: int = 2 * 1024**3
+
+
+def resolve_vector_file_selection(
+    path: Path, selection: ArtifactVectorSelection | UploadedSelection
+) -> ResolvedCatalogSelection:
+    """Bind a private vector selection to its authorized original GeoPackage schema.
+
+    Args:
+        path: Original file retained and confined by its source owner.
+        selection: Path-free upload/result identity, layer, filter and calculated fields.
+
+    Returns:
+        Original source and validated attribute programs for ordinary vector readers.
+
+    Raises:
+        SelectionUnavailableError: If the named native layer cannot be read.
+        CalculatedFieldError: If definitions conflict with the original fields.
+        AttributeFilterError: If the predicate does not match the combined schema.
+    """
+    try:
+        with fiona.open(
+            path, layer=selection.layerName, enabled_drivers=["GPKG"]
+        ) as dataset:
+            fields = dict(dataset.schema["properties"])
+    except (fiona.errors.FionaError, OSError) as error:
+        raise SelectionUnavailableError(
+            "The selected vector result could not be read."
+        ) from error
+    compiled = validate_calculated_fields(selection.calculated_fields, fields)
+    calculated_names = frozenset(field.definition.name for field in compiled)
+    validate_filter(
+        selection.filter, {**fields, **dict.fromkeys(calculated_names, "float")}
+    )
+    return ResolvedCatalogSelection(
+        selection,
+        path,
+        "GPKG",
+        ogr_predicate(selection.filter, calculated_names),
+        compiled,
+    )
 
 
 @contextmanager
@@ -190,23 +238,37 @@ def polygon_records(
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
         with ExitStack() as sources:
             dataset = sources.enter_context(_source_collection(resolved))
-            if set(property_names) - set(dataset.schema.get("properties", {})):
+            fields = {
+                **dataset.schema["properties"],
+                **{
+                    field.definition.name: "float"
+                    for field in resolved.calculated_fields
+                },
+            }
+            if set(property_names) - set(fields):
                 raise GeometryValidationError(
                     "A requested attribute field is missing from the source"
                 )
-            validate_filter(
-                resolved.selection.filter, dataset.schema.get("properties", {})
-            )
+            validate_filter(resolved.selection.filter, fields)
             if not dataset.crs:
                 raise GeometryValidationError(
                     "The catalog vector has no coordinate reference system"
                 )
             candidates = dataset
             if resolved.driver == "GPKG" and resolved.selection.filter.active:
-                filter_fields = tuple(
-                    dict.fromkeys(
-                        rule.field for rule in resolved.selection.filter.rules
-                    )
+                filter_fields = required_source_fields(
+                    resolved.calculated_fields,
+                    tuple(
+                        dict.fromkeys(
+                            [
+                                *(
+                                    rule.field
+                                    for rule in resolved.selection.filter.rules
+                                ),
+                                *property_names,
+                            ]
+                        )
+                    ),
                 )
                 candidates = sources.enter_context(
                     _source_collection(
@@ -238,9 +300,13 @@ def polygon_records(
                         raise GeometryValidationError(
                             f"Vector reading exceeded its {timeout_seconds:g}-second time budget after {count - 1:,} features"
                         )
-                    if not matches_filter(
-                        resolved.selection.filter, feature.properties
-                    ):
+                    properties = dict(feature.properties)
+                    properties.update(
+                        evaluate_calculated_fields(
+                            resolved.calculated_fields, properties
+                        )
+                    )
+                    if not matches_filter(resolved.selection.filter, properties):
                         continue
                     if candidates is not dataset:
                         feature = dataset.get(feature.id)
@@ -271,9 +337,7 @@ def polygon_records(
                     _validate_native_polygon_coordinates(
                         geometry, max_feature_coordinates, validate_wgs84_bounds=True
                     )
-                    yield geometry, {
-                        name: feature.properties[name] for name in property_names
-                    }
+                    yield geometry, {name: properties[name] for name in property_names}
 
             yield iterate()
 
@@ -368,14 +432,24 @@ def count_selected_features(
         RasterReadCancelled: The caller cancelled the selection.
     """
     deadline = monotonic() + limits.seconds if limits else None
-    fields = tuple(
-        dict.fromkeys(rule.field for rule in resolved.selection.filter.rules)
+    fields = required_source_fields(
+        resolved.calculated_fields,
+        tuple(dict.fromkeys(rule.field for rule in resolved.selection.filter.rules)),
     )
     matched = 0
     with _source_collection(
         resolved, ignore_geometry=True, include_fields=fields
     ) as dataset:
-        validate_filter(resolved.selection.filter, dataset.schema.get("properties", {}))
+        validate_filter(
+            resolved.selection.filter,
+            {
+                **dataset.schema["properties"],
+                **{
+                    field.definition.name: "float"
+                    for field in resolved.calculated_fields
+                },
+            },
+        )
         total = len(dataset)
         options = {"where": resolved.where} if resolved.where else {}
         for count, feature in enumerate(dataset.filter(**options), 1):
@@ -388,9 +462,11 @@ def count_selected_features(
                 raise GeometryValidationError(
                     f"Vector reading exceeded its {limits.seconds:g}-second time budget after {count - 1:,} features"
                 )
-            matched += int(
-                matches_filter(resolved.selection.filter, feature.properties)
+            properties = dict(feature.properties)
+            properties.update(
+                evaluate_calculated_fields(resolved.calculated_fields, properties)
             )
+            matched += int(matches_filter(resolved.selection.filter, properties))
     if not matched:
         raise GeometryValidationError("No matching polygon features; change the filter")
     return {"matched": matched, "total": total}

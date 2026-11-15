@@ -25,13 +25,17 @@ class ExtentJobs:
         self.jobs = jobs
 
     async def __call__(
-        self, selection: VectorSelection, upload_owner: str | None = None
+        self,
+        selection: VectorSelection,
+        upload_owner: str | None = None,
+        read_lease: str | None = None,
     ) -> dict[str, Any]:
         """Queue an original-source read and return projected feature envelopes.
 
         Args:
             selection: Catalog or upload source and filter, with no private path.
             upload_owner: Server-derived browser identity, kept inside Jobs.
+            read_lease: Result-file capability held until native work stops.
 
         Returns:
             Matching count and WGS84 bounds, including an empty successful result.
@@ -44,7 +48,9 @@ class ExtentJobs:
             {
                 "selection": selection.model_dump(mode="json", by_alias=True),
                 "uploadOwner": upload_owner,
-            }
+                **({"readLease": read_lease} if read_lease is not None else {}),
+            },
+            require_terminal_cleanup=read_lease is not None,
         )
 
     async def measure_artifact(
@@ -65,8 +71,8 @@ class ExtentJobs:
         """
         return await self._measure(
             {
-                "selection": selection.model_dump(mode="json"),
-                "readLease": read_lease,
+                "selection": selection.model_dump(mode="json", by_alias=True),
+                **({"readLease": read_lease} if read_lease is not None else {}),
             },
             require_terminal_cleanup=True,
         )

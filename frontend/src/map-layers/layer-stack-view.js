@@ -42,6 +42,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string|null} error Visible layer failure, when present.
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
+ * @property {boolean} [canCalculateFields] Owner supports view-owned numeric fields.
  * @property {boolean} [canInfo] Omit the details action when false.
  * @property {boolean} [canAddView] Offer an independent view of the same source.
  * @property {boolean} [addingView] The requested additional view is being prepared.
@@ -77,6 +78,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
+ * @property {(key: string) => void} [onCalculateFields] Open the vector field calculator through composition.
  * @property {(key: string) => void} [onDownload] Review a raster clip through composition.
  * @property {(key: string) => void} [onCalculate] Open raster summarization through composition.
  * @property {(key: string) => void} [onAddView] Add an independent view of the same source.
@@ -621,6 +623,10 @@ export class MapLayerStackView {
         utilities.className = "map-layer-utility-actions";
         utilities.append(
             zoom,
+            ...(this.allowRemoval && layer.isCustom && layer.canCalculateFields ? [this.#button(
+                "Field calculator", `Field calculator for ${layer.label}`, layer.key, "field-calculator",
+                () => this.handlers?.onCalculateFields?.(layer.key), focusTargets,
+            )] : []),
             ...(layer.item !== null || layer.sourceName ? [this.#iconButton(
                 "rename", `Rename ${accessibleName}`, layer.key, "rename",
                 () => this.#openRenameEditor(layer), focusTargets,
@@ -673,7 +679,7 @@ export class MapLayerStackView {
         panel.className = "map-layer-details";
         panel.id = `map-layer-details-${encodeURIComponent(layer.key)}`;
         panel.setAttribute("role", "group");
-        panel.setAttribute("aria-label", `Details for ${layer.label}`);
+        panel.setAttribute("aria-label", `Layer tools for ${layer.label}`);
         const type = this.documentContext.createElement("p");
         type.className = "map-layer-type";
         type.textContent = typeLabel;
@@ -697,7 +703,7 @@ export class MapLayerStackView {
             panel.append(attribution);
         }
         panel.append(utilities);
-        const trigger = this.#button("Details", `Details for ${layer.label}`, layer.key, "details",
+        const trigger = this.#button("Layer tools", `Layer tools for ${layer.label}`, layer.key, "details",
             () => this.#toggleDetails(layer.key, !this.details.get(layer.key)?.expanded), focusTargets);
         trigger.setAttribute("aria-controls", panel.id);
         const state = { expanded: this.details.get(layer.key)?.expanded ?? false, trigger, panel };

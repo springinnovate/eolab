@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 from secrets import token_bytes
 from eolab_app.vector.filters import VectorFilter
+from eolab_app.calculated_fields import CalculatedField
 from typing import Any
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
@@ -365,7 +366,10 @@ class PublishedVectorRegistry:
 
     def __init__(self) -> None:
         """Create an empty process-local vector authorization registry."""
-        self._filters: OrderedDict[str, tuple[str, ResolvedVectorSource, VectorFilter]] = OrderedDict()
+        self._filters: OrderedDict[
+            str,
+            tuple[str, ResolvedVectorSource, VectorFilter, tuple[CalculatedField, ...]],
+        ] = OrderedDict()
         self._filter_lock = Lock()
         self._sources: dict[str, PublishedVectorAuthorization] = {}
 
@@ -496,12 +500,18 @@ class PublishedVectorRegistry:
             self._sources[layer_name] = authorization
         return authorization.sign_style_name(style_name)
 
-    def authorize_filter(self, layer_name: str, candidate: VectorFilter) -> str:
+    def authorize_filter(
+        self,
+        layer_name: str,
+        candidate: VectorFilter,
+        calculated_fields: tuple[CalculatedField, ...] = (),
+    ) -> str:
         """Retain a bounded immutable per-map view of a current publication.
 
         Args:
             layer_name: Original authorized vector publication identity.
             candidate: Catalog-validated filter state.
+            calculated_fields: Source-validated view definitions needed by the predicate.
 
         Returns:
             Opaque filtered identity, or the original identity when inactive.
@@ -511,12 +521,20 @@ class PublishedVectorRegistry:
             PublishedLayerNotAuthorizedError: If the source is not published.
         """
         authorization = self.require_current(layer_name)
-        if not candidate.active:
+        if not candidate.active and not calculated_fields:
             return layer_name
-        identity = repr((layer_name, authorization.source)) + candidate.model_dump_json()
+        identity = (
+            repr((layer_name, authorization.source, calculated_fields))
+            + candidate.model_dump_json()
+        )
         alias = "eolab:filtered-" + sha256(identity.encode("utf-8")).hexdigest()
         with self._filter_lock:
-            self._filters[alias] = (layer_name, authorization.source, candidate)
+            self._filters[alias] = (
+                layer_name,
+                authorization.source,
+                candidate,
+                calculated_fields,
+            )
             self._filters.move_to_end(alias)
             while len(self._filters) > 256:
                 self._filters.popitem(last=False)
@@ -546,11 +564,16 @@ class PublishedVectorRegistry:
                 if view is None:
                     raise PublishedLayerChangedError("The vector filter expired; reapply it or reload the map")
                 self._filters.move_to_end(layer_name)
-            base_name, source, candidate = view
+            base_name, source, candidate, calculated_fields = view
             authorization = self.require_current(base_name)
             if authorization.source != source:
                 raise PublishedLayerChangedError("The filtered layer binding changed; reapply the filter")
-            return replace(authorization, upstream_layer_name=base_name, filter=candidate)
+            return replace(
+                authorization,
+                upstream_layer_name=base_name,
+                filter=candidate if candidate.active else None,
+                calculated_fields=calculated_fields,
+            )
         authorization = self._sources.get(layer_name)
         if authorization is None:
             raise PublishedLayerNotAuthorizedError(

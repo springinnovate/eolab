@@ -241,6 +241,7 @@ class CompositeMapRenderingService:
             layer.style_environment,
             layer.style_definition,
             layer.opacity,
+            calculated_fields=layer.calculated_fields,
         )
         return (
             document,

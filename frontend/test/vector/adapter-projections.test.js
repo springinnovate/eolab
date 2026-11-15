@@ -11,6 +11,40 @@ const FIELDS = [
     { name: "protected", type: "bool" },
 ];
 
+test("calculated fields stay view-owned and available to analysis when map refresh fails", async () => {
+    const h = createFixture();
+    const original = h.record.state.source;
+    const other = {...h.record, state: h.adapter.createState({item: original, publication: h.record.publication})};
+    const definition = {version: 1, name: "scaled_year", expression: "'year' * 2", numericText: false};
+    const result = {calculatedFields: [definition], fields: {...Object.fromEntries(FIELDS.map(field => [field.name, field.type])), scaled_year: "float"}};
+    const installation = h.adapter.installCalculatedFields(h.record, result);
+    assert.equal(h.adapter.renderingAvailable(h.record), false, "stale tiles are suppressed immediately");
+    assert.deepEqual(h.adapter.describeSource(h.record).selection.calculatedFields, [definition]);
+    assert.ok(h.adapter.describeSource(h.record).numericFields.some(field => field.name === "scaled_year"));
+    assert.equal(original.calculatedFields, undefined);
+    assert.deepEqual(h.adapter.exportCalculatedFields(other), []);
+    h.requests.at(-1).reject(new Error("GeoServer unavailable"));
+    assert.match(await installation, /Field saved.*could not refresh/);
+    assert.equal(h.adapter.renderingAvailable(h.record), false);
+    assert.match(h.adapter.snapshot(h.record).error, /Field saved/);
+    assert.deepEqual(h.adapter.exportCalculatedFields(h.record), [definition]);
+    const retry = h.adapter.installCalculatedFields(h.record, result);
+    h.requests.at(-1).resolve({layerName: "eolab:calculated"});
+    assert.equal(await retry, null);
+    assert.equal(h.adapter.renderingAvailable(h.record), true);
+    assert.deepEqual(h.adapter.renderDescriptor(h.record).calculatedFields, [definition]);
+    assert.deepEqual(h.record.publication.calculatedFields, [definition]);
+});
+
+test("cancelled installation leaves previous calculated fields unchanged", async () => {
+    const h = createFixture();
+    const abort = new AbortController(); abort.abort();
+    await assert.rejects(h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields: {}}, abort.signal), {name: "AbortError"});
+    assert.deepEqual(h.adapter.exportCalculatedFields(h.record), []);
+    assert.equal(h.adapter.describeSource(h.record).fields.length, FIELDS.length);
+    assert.deepEqual(h.requests, []);
+});
+
 /**
  * Create a vector with controlled API replies and no attached map layer.
  * @param {Object} [options] Source and publication variants.
