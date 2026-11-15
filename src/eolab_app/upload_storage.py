@@ -112,6 +112,19 @@ class StorageUsage:
     retained: dict[str | None, set[str]]
 
 
+@dataclass
+class ActiveUploadRead:
+    """Keep one stable original-file link while its authorized readers remain.
+
+    Attributes:
+        path: Confined hard link shared by all active readers of this original.
+        readers: Number of open read scopes that still protect the shared path.
+    """
+
+    path: Path
+    readers: int = 0
+
+
 async def finish_upload_disk_operation(operation: Callable[[], T]) -> T:
     """Finish an owned disk operation before cancellation releases its files.
 
@@ -158,6 +171,7 @@ class UploadStorage:
         self._admission = asyncio.Lock()
         self._disk_lock = RLock()
         self._incoming_usage: StorageUsage | None = None
+        self._active_reads: dict[tuple[str, UUID, UploadKind], ActiveUploadRead] = {}
 
     def initialize(self) -> None:
         """Clean interrupted API writes and reads, then remove expired originals.
@@ -804,7 +818,11 @@ class UploadStorage:
     async def open_source(
         self, owner: str, identifier: UUID, kind: UploadKind
     ) -> AsyncIterator[tuple[UploadRecord, Path]]:
-        """Retain an authorized original until a short or long native read finishes.
+        """Retain one stable original path until all its authorized reads finish.
+
+        Concurrent scopes share a hard link so a computation reused by several
+        readers keeps the same path when its first requester leaves. Every new
+        scope still checks browser ownership and expiry before joining the link.
 
         Args:
             owner: Browser identity supplied by the access boundary.
@@ -812,7 +830,8 @@ class UploadStorage:
             kind: Format family accepted by the source adapter.
 
         Yields:
-            Admission metadata and a temporary hard link unaffected by deletion.
+            Admission metadata and the original's shared read link. Deletion
+            withdraws new access but leaves this path until the last scope exits.
 
         Raises:
             UploadError: If authorization, retention or cleanup fails.
@@ -820,17 +839,37 @@ class UploadStorage:
         """
         with self._disk_lock:
             metadata, source = self.get_upload_source(owner, identifier, kind)
-            token = self._retain(source, ".reading")
-            link = self._link_directory(".reading") / f"{token}{source.suffix}"
+            key = (owner, identifier, kind)
+            read = self._active_reads.get(key)
+            if read is None:
+                token = self._retain(source, ".reading")
+                link = self._link_directory(".reading") / f"{token}{source.suffix}"
+                read = ActiveUploadRead(link)
+                self._active_reads[key] = read
+            read.readers += 1
         try:
-            yield metadata, link
+            yield metadata, read.path
         finally:
 
             def release() -> None:
-                """Remove this completed reader's link and its quota metadata."""
+                """Release this reader and unlink only after the final scope exits.
+
+                Raises:
+                    UploadError: If the unused link or its metadata cannot be removed.
+                """
                 with self._disk_lock:
-                    link.unlink(missing_ok=True)
-                    link.with_suffix(".json").unlink(missing_ok=True)
-                    self._incoming_usage = None
+                    read.readers -= 1
+                    if read.readers:
+                        return
+                    self._active_reads.pop(key)
+                    try:
+                        read.path.unlink(missing_ok=True)
+                        read.path.with_suffix(".json").unlink(missing_ok=True)
+                    except OSError as error:
+                        raise UploadError(
+                            503, "The completed upload read could not be cleaned up."
+                        ) from error
+                    finally:
+                        self._incoming_usage = None
 
             await finish_upload_disk_operation(release)

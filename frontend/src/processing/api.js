@@ -4,13 +4,15 @@ import { normalizeRasterSamplingArea, validatePolygonAreaReference, validateVect
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./calculation-session.js";
 import { csvParse } from "d3";
+import { rasterSourceReference } from "../raster-source.js";
 
 /** Serialize one raster identity without carrying display state or file paths.
- * @param {Object} source Catalog item, exact temporal observation or owned run-file source.
+ * @param {Object} source Catalog item, exact temporal observation, uploaded raster or owned run-file source.
  * @return {Object} Path-free source accepted by Processing operations.
  * @throws {Error} If a private source has invalid opaque identifiers.
  */
 function processingRasterReference(source) {
+    if (source.kind === "uploadedRaster") return rasterSourceReference(source);
     return source.kind === "runArtifact" ? {kind: "runArtifact", jobId: validateProcessingId(source.jobId), artifactId: validateProcessingId(source.artifactId)} :
         {collectionId: source.collectionId, itemId: source.itemId,
             ...(source.variable === undefined ? {} : {variable: source.variable, time: source.time})};
@@ -301,7 +303,7 @@ export class ProcessingApiClient {
         const selected = normalizeRasterSamplingArea(submission.area);
         if (!["selectedArea", "samplingBox", "catalogSelection"].includes(selected.kind)) throw new Error("Select a box or vector layer first.");
         const reference = processingRasterReference(source);
-        const raster = reference.kind === "runArtifact" || reference.variable !== undefined
+        const raster = reference.kind !== undefined || reference.variable !== undefined
             ? {source: reference} : reference;
         await this.ensureSession();
         return validateJob(await this.request("/raster-clips", "POST", {

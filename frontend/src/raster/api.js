@@ -89,7 +89,8 @@ export async function publishRasterSource(
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
-                "X-EOLab-Processing": "1"
+                "X-EOLab-Processing": "1",
+                ...(rasterSourceReference(item).kind === "uploadedRaster" ? {"X-EOLab-Uploads": "1"} : {})
             },
             body: JSON.stringify(item.source ? {source: rasterSourceReference(item)} : rasterSourceReference(item))
         }

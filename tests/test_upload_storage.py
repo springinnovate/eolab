@@ -376,6 +376,62 @@ def test_restart_cleans_abandoned_read_and_staging_but_keeps_job_input(
     assert not restarted.is_available(record.id, "raster")
 
 
+def test_concurrent_reads_share_one_path_until_the_last_scope_exits(
+    tmp_path: Path,
+) -> None:
+    """Keep a coalesced read's original path after its first requester cancels.
+
+    Args:
+        tmp_path: Disposable shared upload volume.
+    """
+    storage = UploadStorage(tmp_path)
+    owner = "a" * 64
+
+    async def exercise() -> None:
+        """Delete an original and cancel its first reader while a second keeps reading."""
+        record = await admit(storage, owner, "raster")
+        first_entered = asyncio.Event()
+        paths: list[Path] = []
+
+        async def first_reader() -> None:
+            """Hold the first authorized read until the requester is cancelled."""
+            async with storage.open_source(owner, record.id, "raster") as (_, path):
+                paths.append(path)
+                first_entered.set()
+                await asyncio.Event().wait()
+
+        first = asyncio.create_task(first_reader())
+        try:
+            await first_entered.wait()
+            initial_bytes = storage.summary(owner).used_bytes
+            async with storage.open_source(owner, record.id, "raster") as (
+                _,
+                second_path,
+            ):
+                assert paths == [second_path]
+                assert storage.summary(owner).used_bytes == initial_bytes
+                storage.delete(owner, record.id)
+                first.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await first
+                assert paths[0].read_bytes() == b"original"
+                assert second_path.read_bytes() == b"original"
+                storage.remove_unretained_sources(set())
+                assert storage.summary(owner).retained_files == 1
+                assert storage.summary(owner).used_files == 1
+                with pytest.raises(UploadError):
+                    async with storage.open_source(owner, record.id, "raster"):
+                        pytest.fail("A retained path must not authorize a new reader")
+            assert not second_path.exists()
+            assert storage.summary(owner).used_files == 0
+            assert storage.summary(owner).used_bytes == 0
+        finally:
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
 def test_retention_during_stream_updates_remaining_byte_budget(tmp_path: Path) -> None:
     """Account for concurrent retention metadata before accepting another chunk.
 

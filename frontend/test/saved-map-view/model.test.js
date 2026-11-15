@@ -52,7 +52,9 @@ test("private upload references preserve appearance without accepting data or cr
   assert.throws(() => parseSavedMapView(JSON.stringify(invalidId)), /identifier/);
   const raster = structuredClone(candidate);
   raster.layers[0].style = savedMapCandidate().layers[0].style;
-  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /vector style/);
+  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /cannot have polygon filters/);
+  delete raster.layers[0].filter;
+  assert.deepEqual(parseSavedMapView(JSON.stringify(raster)), raster);
 });
 
 test("saved map serialization preserves vector CSV rules as an opaque owner definition", async () => {

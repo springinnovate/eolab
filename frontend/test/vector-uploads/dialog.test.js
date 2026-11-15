@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { UploadsDialog } from "../../src/vector-uploads/dialog.js";
-import { deleteUpload, getUpload, getUploadStorageSummary, listUploads, uploadPolygons } from "../../src/vector-uploads/api.js";
+import { UploadsDialog } from "../../src/uploads/dialog.js";
+import { deleteUpload, deleteUploadedFile, getUpload, getRasterUpload, getUploadStorageSummary, listUploads, uploadPolygons, uploadFile } from "../../src/uploads/api.js";
 
 /** Minimal dialog elements that expose user actions and the component's rendered state. */
 class Element extends EventTarget {
@@ -63,7 +63,7 @@ function storageSummary(uploads, changes = {}) {
 /**
  * Build a dialog connected to real upload transport with controlled HTTP and map completion.
  * @param {typeof fetch} fetcher Upload response provider.
- * @param {(upload:import('../../src/vector-uploads/api.js').VectorUpload)=>Promise<void>} addToMap Map composition callback.
+ * @param {(upload:import('../../src/uploads/api.js').VectorUpload)=>Promise<void>} addToMap Map composition callback.
  * @param {Object} [options] Upload listing, deletion and map callbacks.
  * @return {Promise<{dialog:UploadsDialog,document:Object,file:File}>} Selected upload form.
  */
@@ -76,6 +76,30 @@ async function setup(fetcher, addToMap, options = {}) {
     dialog.file.dispatchEvent(new Event("change"));
     return { dialog, document, file };
 }
+
+test("raster upload, reopening and deletion use the raster endpoint with the browser's ownership cookie", async () => {
+    const upload = {id: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", kind: "raster", name: "Reference mask"};
+    const file = new File(["TIFF bytes"], "mask.TIFF", {type: "image/tiff"}), requests = [];
+    const fetcher = async (url, options) => {
+        requests.push({url, options});
+        return options.method === "DELETE" ? new Response(null, {status: 204}) : new Response(JSON.stringify(upload));
+    };
+    assert.deepEqual(await uploadFile(file, upload.name, fetcher), upload);
+    assert.equal(requests[0].url, "/api/raster-uploads?name=Reference+mask");
+    assert.equal(requests[0].options.body, file);
+    assert.equal(requests[0].options.headers["Content-Type"], "image/tiff");
+    assert.equal(requests[0].options.headers["X-EOLab-Uploads"], "1");
+    assert.deepEqual(await getRasterUpload(upload.id, fetcher), upload);
+    await deleteUploadedFile(upload, fetcher);
+    assert.equal(requests[2].options.method, "DELETE");
+    assert.equal(requests[2].options.headers["X-EOLab-Uploads"], "1");
+    for (const request of requests.slice(1)) assert.equal(request.url, `/api/raster-uploads/${upload.id}`);
+    for (const request of requests) {
+        assert.equal(request.options.credentials, "same-origin"); assert.equal(request.options.cache, "no-store");
+    }
+    await assert.rejects(uploadFile(new File(["x"], "unknown.zip"), "Unknown", fetcher), /Choose a polygon GeoPackage/);
+    assert.equal(requests.length, 3);
+});
 
 test("upload form sends the original file and chosen name, then adds the returned record to the map", async () => {
     const admitted = { id: "opaque-upload", name: "Floodplain & wetlands", fields: { label: "str" }, geometry_type: "Polygon" };
@@ -99,7 +123,7 @@ test("upload form sends the original file and chosen name, then adds the returne
     assert.equal(request.options.credentials, "same-origin");
     assert.equal(request.options.cache, "no-store");
     assert.deepEqual(request.options.headers, { "Content-Type": "application/geopackage+sqlite3", "X-EOLab-Uploads": "1" });
-    assert.equal(dialog.status.textContent, "Uploading polygons…");
+    assert.equal(dialog.status.textContent, "Uploading file…");
     assert.equal(dialog.progress.hidden, false);
     assert.equal(dialog.cancel.disabled, true);
     assert.equal(dialog.dialog.dispatchEvent(new Event("cancel", { cancelable: true })), false);
@@ -351,7 +375,7 @@ test("deleting a file requires confirmation and preserves the map until server s
     let finish;
     const { dialog, document } = await setup(() => assert.fail("No upload"), () => assert.fail("No map addition"), {
         list: async () => deleted.length ? [] : [upload], isOnMap: () => true, onDeleted: id => deleted.push(id),
-        deleteFile: id => deleteUpload(id, async (url, options) => {
+        deleteFile: upload => deleteUpload(upload.id, async (url, options) => {
             attempts++;
             assert.equal(url, "/api/vector-uploads/stored-upload");
             assert.equal(options.method, "DELETE");

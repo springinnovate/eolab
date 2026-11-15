@@ -1,5 +1,5 @@
 /** Manage this browser's uploaded files and their independent map layers. */
-import { deleteUpload, getUploadStorageSummary, uploadPolygons } from "./api.js";
+import { deleteUploadedFile, getUploadStorageSummary, uploadFile } from "./api.js";
 
 /** Present stored uploads, their shared allowance and ordinary map actions. */
 export class UploadsDialog {
@@ -12,12 +12,12 @@ export class UploadsDialog {
      * @param {(uploadId:string)=>boolean} options.isOnMap Whether an upload already has a map layer.
      * @param {(uploadId:string)=>void} options.removeFromMap Remove map views while keeping the uploaded file.
      * @param {(uploadId:string)=>void} options.onDeleted Remove deleted upload references from the map and its Undo.
-     * @param {typeof uploadPolygons} [options.upload=uploadPolygons] Upload transport.
+     * @param {typeof uploadFile} [options.upload=uploadFile] Upload transport.
      * @param {typeof getUploadStorageSummary} [options.list=getUploadStorageSummary] Browser-owned files and shared allowance.
-     * @param {typeof deleteUpload} [options.deleteFile=deleteUpload] Server-side deletion transport.
+     * @param {typeof deleteUploadedFile} [options.deleteFile=deleteUploadedFile] Server-side deletion transport.
      */
     constructor({ document, appTitle, addToMap, isOnMap, removeFromMap, onDeleted,
-        upload = uploadPolygons, list = getUploadStorageSummary, deleteFile = deleteUpload }) {
+        upload = uploadFile, list = getUploadStorageSummary, deleteFile = deleteUploadedFile }) {
         this.document = document;
         this.addToMap = addToMap;
         this.isOnMap = isOnMap;
@@ -89,13 +89,13 @@ export class UploadsDialog {
         fileLabel.textContent = "Choose file";
         this.file = document.createElement("input");
         this.file.type = "file";
-        this.file.accept = ".gpkg";
+        this.file.accept = ".gpkg,.tif,.tiff";
         this.file.required = true;
         this.file.setAttribute("aria-describedby", "upload-polygons-file-help");
         fileLabel.append(this.file);
         this.fileHelp = document.createElement("p");
         this.fileHelp.id = "upload-polygons-file-help";
-        this.fileHelp.textContent = "GeoPackage containing one polygon layer";
+        this.fileHelp.textContent = "Polygon GeoPackage (.gpkg), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored.";
         this.quotaHelp = document.createElement("p");
         this.quotaHelp.hidden = true;
         const nameLabel = document.createElement("label");
@@ -129,7 +129,7 @@ export class UploadsDialog {
         this.trigger.addEventListener("click", () => void this.open());
         this.file.addEventListener("change", () => {
             const selected = this.file.files[0];
-            this.name.value = selected ? selected.name.replace(/\.gpkg$/i, "").slice(0, 200) : "";
+            this.name.value = selected ? selected.name.replace(/\.(gpkg|tiff?)$/i, "").slice(0, 200) : "";
         });
         this.form.addEventListener("submit", event => {
             event.preventDefault();
@@ -231,7 +231,7 @@ export class UploadsDialog {
             ...(summary.retained_files ? [`${summary.retained_files} deleted or expired file${summary.retained_files === 1 ? " is" : "s are"} still used by calculations. Those slots become available when the calculations stop.`] : []),
             ...(pendingFiles ? [`${pendingFiles} file${pendingFiles === 1 ? " is" : "s are"} being uploaded or removed and still ${pendingFiles === 1 ? "uses a slot" : "use slots"}.`] : []),
         ].join(" ");
-        this.fileHelp.textContent = `GeoPackage containing one polygon layer · Up to ${formatUploadBytes(summary.max_file_bytes)} per file`;
+        this.fileHelp.textContent = `Polygon GeoPackage (.gpkg), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored. Up to ${formatUploadBytes(summary.max_file_bytes)} per file.`;
         this.quotaHelp.textContent = `All ${summary.max_files} file slots are used. Delete an uploaded file to make room. Files still used by calculations keep their slots until those calculations stop.`;
     }
 
@@ -244,7 +244,7 @@ export class UploadsDialog {
             name.textContent = upload.name;
             const description = this.document.createElement("p");
             description.className = "upload-file-description";
-            description.textContent = `${upload.kind === "raster" ? "Raster" : "Polygons"} · ${formatUploadBytes(upload.size_bytes)} · Expires ${new Date(upload.expires_at).toLocaleString()}`;
+            description.textContent = `${upload.kind === "raster" ? "Raster mask" : "Polygons"} · ${formatUploadBytes(upload.size_bytes)} · Expires ${new Date(upload.expires_at).toLocaleString()}`;
             const actions = this.document.createElement("div");
             actions.className = "upload-polygons-actions";
             const add = this.document.createElement("button");
@@ -303,7 +303,7 @@ export class UploadsDialog {
         this.setBusy(true);
         this.message(`Deleting ${upload.name}…`);
         try {
-            await this.deleteFile(upload.id);
+            await this.deleteFile(upload);
             this.onDeleted(upload.id);
             this.uploads = this.uploads.filter(candidate => candidate.id !== upload.id);
             this.confirming = null;
@@ -328,7 +328,7 @@ export class UploadsDialog {
         this.setBusy(true);
         try {
             if (this.uploaded === null) {
-                this.message("Uploading polygons…");
+                this.message("Uploading file…");
                 this.uploaded = await this.upload(this.file.files[0], this.name.value.trim());
                 await this.refreshUsage();
             }

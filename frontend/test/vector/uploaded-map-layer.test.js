@@ -115,14 +115,14 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
         numericFields: adapter.describeSource(record).numericFields, selection: {uploadId: UPLOAD.id, layerName: "areas"},
         filter }], "Hidden uploads remain selectable with their applied filter");
     // Exercise the composition callbacks with the real layer and vector owners.
-    const callbacksSource = main.slice(main.indexOf("function getUploadedVectorKeys("),
+    const callbacksSource = main.slice(main.indexOf("function getUploadedLayerKeys("),
         main.indexOf("if (!isSharedViewer) {", main.indexOf("function removeDeletedUpload(")));
     const callbacks = new Function(
         "mapLayerController", "vectorMapLayerAdapter", "getUpload",
-        `${callbacksSource}; return {restoreUploadedVector, restoreSavedUpload, removeDeletedUpload, getUploadedVectorKeys};`
+        `${callbacksSource}; return {restoreUploadedVector, restoreSavedUpload, removeDeletedUpload, getUploadedLayerKeys};`
     )(controller, adapter, async id => { assert.equal(id, UPLOAD.id); return UPLOAD; });
     restoreUploadedVector = callbacks.restoreUploadedVector;
-    const {restoreSavedUpload, removeDeletedUpload, getUploadedVectorKeys} = callbacks;
+    const {restoreSavedUpload, removeDeletedUpload, getUploadedLayerKeys} = callbacks;
 
     const snapshot = controller.captureLayerSnapshot(key);
     assert.equal(snapshot.local.kind, "uploaded-vector");
@@ -173,7 +173,7 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     waitForRestoredStyle = new Promise(resolve => { releaseStyle = resolve; });
     const reopening = restoreSavedUpload(saved, () => true);
     await new Promise(resolve => setImmediate(resolve));
-    const reopeningKey = getUploadedVectorKeys(UPLOAD.id)[0];
+    const reopeningKey = getUploadedLayerKeys(UPLOAD.id)[0];
     assert.notEqual(reopeningKey, key);
     assert.equal(controller.getRecord(reopeningKey).entry.visible, false, "Restoration stays hidden until its appearance and filter are applied");
     releaseStyle();
@@ -196,20 +196,20 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     assert.equal(adapter.describeStyle(reopened).style.fillColor, "#abcdef");
     assert.deepEqual(adapter.exportFilterState(reopened), filter);
     const thirdKey = await restoreSavedUpload({...saved, customName: "Third wetlands"}, () => true);
-    assert.deepEqual(new Set(getUploadedVectorKeys(UPLOAD.id)), new Set([reopeningKey, secondKey, thirdKey]));
+    assert.deepEqual(new Set(getUploadedLayerKeys(UPLOAD.id)), new Set([reopeningKey, secondKey, thirdKey]));
     controller.removeWithUndo(secondKey);
     removeDeletedUpload(UPLOAD.id);
     await controller.undoLayerRemoval();
-    assert.deepEqual(getUploadedVectorKeys(UPLOAD.id), [], "Deleted uploads cannot be restored by map-removal Undo");
+    assert.deepEqual(getUploadedLayerKeys(UPLOAD.id), [], "Deleted uploads cannot be restored by map-removal Undo");
 
     failFilter = true;
     await assert.rejects(restoreSavedUpload(saved, () => true), /Filter failed/);
-    assert.deepEqual(getUploadedVectorKeys(UPLOAD.id), [], "Filter failure leaves no unfiltered layer");
+    assert.deepEqual(getUploadedLayerKeys(UPLOAD.id), [], "Filter failure leaves no unfiltered layer");
     failFilter = false;
     waitForRestoredStyle = new Promise(resolve => { releaseStyle = resolve; });
     const obsolete = restoreSavedUpload(saved, () => true);
     await new Promise(resolve => setImmediate(resolve));
-    const obsoleteKey = getUploadedVectorKeys(UPLOAD.id)[0];
+    const obsoleteKey = getUploadedLayerKeys(UPLOAD.id)[0];
     controller.removeKey(obsoleteKey);
     const replacement = controller.addLocal({ key: obsoleteKey, label: UPLOAD.name, upload: UPLOAD,
         publication, visible: false }, adapter);

@@ -27,6 +27,7 @@ from eolab_app.raster.source_models import (
     RasterAnalysisSourceReference,
     TemporalRasterSelection,
     RunArtifactReference,
+    UploadedRasterReference,
     TemporalIntervalSelection,
 )
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
@@ -37,6 +38,7 @@ from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.vector_uploads import VectorUploadStore
+from eolab_app.upload_storage import UploadStorage, UploadError
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunSpec
 from eolab_app.processing.model_runs import (
@@ -67,6 +69,7 @@ class ProcessingWorker:
         native: ReusableProcess | None = None,
         areas: CatalogSelectionReader | None = None,
         uploads: VectorUploadStore | None = None,
+        upload_storage: UploadStorage | None = None,
         operation_settings: Mapping[str, object] | None = None,
     ) -> None:
         """Configure source access, job storage, result files and calculation limits.
@@ -79,11 +82,13 @@ class ProcessingWorker:
             native: Lifecycle-managed execution lane supplied by composition.
             areas: Catalog vector reader used to resolve filtered calculation areas.
             uploads: Storage for original uploaded vectors retained by accepted jobs.
+            upload_storage: Read-only shared storage for uploaded raster inputs retained by jobs.
             operation_settings: Server-only dependencies keyed by operation ID;
                 passed unchanged to the owning operation, never persisted.
         """
         self.areas = areas
         self.uploads = uploads
+        self.upload_storage = upload_storage
         self.operation_settings = operation_settings or {}
         self.authorizer = authorizer
         self.jobs = jobs
@@ -116,15 +121,16 @@ class ProcessingWorker:
         """
         areas = self.areas
         if row["input_uploads"]:
-            if areas is None or self.uploads is None:
+            if self.upload_storage is None and (areas is None or self.uploads is None):
                 raise ProcessingError(
                     "uploads_unavailable",
-                    "Uploaded vector source access is unavailable.",
+                    "Uploaded source access is unavailable.",
                     503,
                 )
-            areas = RetainedVectorSelectionReader(
-                areas, self.uploads, row["input_uploads"]
-            )
+            if areas is not None and self.uploads is not None:
+                areas = RetainedVectorSelectionReader(
+                    areas, self.uploads, row["input_uploads"]
+                )
 
         async def report_progress(progress: dict[str, Any]) -> None:
             """Persist preparation progress while this attempt may continue working.
@@ -171,17 +177,36 @@ class ProcessingWorker:
 
         Args:
             row: Claimed computation with its current attempt token.
-            source: Operation-owned catalog raster, temporal observation/interval
-                or published-file reference.
+            source: Operation-owned catalog raster, temporal observation/interval,
+                upload or published-file reference.
 
         Returns:
             Confined raster input or temporal observations, and a checksum only for
             a private published file. A retained file survives parent expiry/deletion.
 
         Raises:
-            ProcessingError: If the accepted grant or confined file is unavailable.
+            ProcessingError: If an accepted source's retained file is unavailable.
             RasterFeatureError: If catalog authorization fails.
         """
+        if isinstance(source, UploadedRasterReference):
+            if self.upload_storage is None:
+                raise ProcessingError(
+                    "uploads_unavailable",
+                    "Uploaded raster source access is unavailable.",
+                    503,
+                )
+            try:
+                token = row["input_uploads"][str(source.upload_id)]
+                path = await asyncio.to_thread(
+                    self.upload_storage.get_retained_source, token
+                )
+            except (UploadError, KeyError) as error:
+                raise ProcessingError(
+                    "source_unavailable",
+                    "This calculation's uploaded raster is unavailable. Submit a new run.",
+                    409,
+                ) from error
+            return AuthorizedRaster(path, None), None
         if isinstance(source, TemporalIntervalSelection):
             return await self.authorizer.get_temporal_interval(source), None
         if isinstance(source, TemporalRasterSelection):

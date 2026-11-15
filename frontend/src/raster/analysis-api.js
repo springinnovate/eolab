@@ -100,7 +100,8 @@ export async function sampleRasterPixel(
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
-                "X-EOLab-Processing": "1"
+                "X-EOLab-Processing": "1",
+                ...(rasterSourceReference(item).kind === "uploadedRaster" ? {"X-EOLab-Uploads": "1"} : {})
             },
             body: JSON.stringify({
                 ...analysisSourceBody(item),
@@ -158,7 +159,7 @@ export async function loadRasterStatistics(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
-                ...(normalizedArea.catalogSelection?.uploadId ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(normalizedArea.catalogSelection?.uploadId || rasterSourceReference(item).kind === "uploadedRaster" ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"
@@ -216,7 +217,7 @@ export async function loadRasterPairedStatistics(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
-                ...(normalizedArea.catalogSelection?.uploadId ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(normalizedArea.catalogSelection?.uploadId || [requestDocument.xRaster, requestDocument.yRaster].some(source => source.kind === "uploadedRaster") ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"
@@ -241,5 +242,5 @@ export async function loadRasterPairedStatistics(
  */
 function analysisSourceBody(value) {
     const source = rasterSourceReference(value);
-    return source.kind === "runArtifact" || source.variable !== undefined ? {source} : {...source};
+    return source.kind !== undefined || source.variable !== undefined ? {source} : {...source};
 }

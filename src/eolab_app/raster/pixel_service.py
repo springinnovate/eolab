@@ -77,6 +77,7 @@ class RasterPixelService:
         self,
         request: CatalogPixelRequest | RasterPixelSourceRequest,
         owner: str | None = None,
+        upload_owner: str | None = None,
     ) -> RasterPixel:
         """Authorize an original raster and read one cell through the shared reader.
 
@@ -87,6 +88,7 @@ class RasterPixelService:
         Args:
             request: Existing catalog request or explicit source and coordinate.
             owner: Server-derived session hash for a private source.
+            upload_owner: Separate browser hash authorizing an uploaded raster.
 
         Returns:
             Band-one value and the source cell containing the requested coordinate.
@@ -96,7 +98,7 @@ class RasterPixelService:
             SourceFileError: If private ownership, expiry or file resolution fails.
         """
         source = await self._source_access.resolve(
-            raster_source_reference(request), owner
+            raster_source_reference(request), owner, upload_owner
         )
         return await self._read_with_concurrency_limit(request, source)
 
