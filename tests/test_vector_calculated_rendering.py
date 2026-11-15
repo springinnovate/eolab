@@ -75,7 +75,7 @@ def test_native_sld_fixture_uses_production_compiler() -> None:
         Path(__file__).parents[1]
         / "geoserver/reader-assessment/src/test/resources/vector-calculated-fields.sld"
     )
-    assert fixture.read_bytes() == document
+    assert fixture.read_text(encoding="utf-8") == document.decode("utf-8")
 
 
 def test_calculated_source_read_classification_filter_and_source_identity(
