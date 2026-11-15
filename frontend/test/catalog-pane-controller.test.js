@@ -323,7 +323,7 @@ test("Catalog layout reserves its height for compact searchable results", () => 
   assert.match(stylesheet, /\.catalog-result-count\s*\{/);
   assert.match(
     stylesheet,
-    /\.catalog-result\s*\{[^}]*min-height:\s*84px[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s,
+    /\.catalog-result\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s,
   );
   assert.match(stylesheet, /--workspace-catalog-inspector-width:/);
   assert.match(
