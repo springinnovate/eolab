@@ -380,8 +380,18 @@ test("ready downloads show the server deadline and preserve direct owned exports
 });
 
 test("uncertain download recovery stays visible with original inputs after map context changes", async () => {
-    const h = fixture({ submitClip: async value => { h.requests.push(value); throw Error("Response lost"); } }, new Map(), true);
-    h.controller.open(); await h.controller.submit();
+    let loseResponse;
+    const h = fixture({ submitClip: value => { h.requests.push(value); return new Promise((_, reject) => { loseResponse = reject; }); } }, new Map(), true);
+    h.controller.open(); const sending = h.controller.submit();
+    assert.equal(h.view.elements.create.textContent, "Preparing download…");
+    assert.equal(h.view.elements.pending.textContent, `Preparing download for “${source.label}”…`);
+    assert.match(markup, /id="raster-clips-pending"[^>]*role="status"/);
+    assert.equal(h.view.elements.message.textContent, "");
+    assert.equal(h.view.elements["retry-submission"].hidden, true);
+    loseResponse(Error("Response lost")); await sending;
+    assert.equal(h.view.elements.message.textContent, "Response lost");
+    assert.ok(h.view.elements.pending.textContent.includes(`couldn’t confirm whether the download for “${source.label}” started`));
+    assert.match(markup, /id="raster-clips-retry-submission"[^>]*>Retry download</);
     const saved = h.storage.read();
     h.controller.setSelection({ ...box, selectedBounds: { ...box.selectedBounds, west: 76 } });
     assert.deepEqual(h.storage.read(), saved);
@@ -394,9 +404,31 @@ test("uncertain download recovery stays visible with original inputs after map c
     assert.equal(h.view.elements.create.disabled, true);
     assert.match(h.contexts.at(-1).scope, /W 77.0000/);
     h.controller.destroy();
-    const restored = fixture({ listJobs: async () => [ready], submitClip: async value => { restored.requests.push(value); return ready; } }, h.data, true);
-    restored.setContext({ sources: [], area: null }); await restored.controller.start(); restored.controller.open();
-    assert.deepEqual(restored.requests[0], saved);
+    let acceptRetry, loseRetry;
+    const restored = fixture({ listJobs: async () => [ready], submitClip: value => {
+        restored.requests.push(value);
+        return new Promise((resolve, reject) => { acceptRetry = resolve; loseRetry = reject; });
+    } }, h.data, true);
+    restored.setContext({ sources: [], area: null }); restored.controller.open();
+    assert.ok(restored.view.elements.pending.textContent.includes(`couldn’t confirm whether the download for “${source.label}” started`));
+    const retry = restored.view.elements["retry-submission"];
+    retry.focus();
+    const restarting = restored.controller.start(); await flush();
+    assert.equal(restored.view.elements.pending.textContent, `Preparing download for “${source.label}”…`);
+    assert.equal(retry.hidden, false);
+    assert.equal(retry.disabled, false, "native disabled would remove keyboard focus");
+    assert.equal(retry.getAttribute("aria-disabled"), "true");
+    retry.dispatchEvent(new Event("click"));
+    assert.equal(restored.requests.length, 1, "repeated activation cannot submit again while waiting");
+    loseRetry(Error("Response lost again")); await restarting;
+    assert.equal(restored.doc.activeElement, retry);
+    assert.equal(retry.hidden, false);
+    assert.equal(retry.getAttribute("aria-disabled"), "false");
+    assert.equal(restored.view.elements.message.textContent, "Response lost again");
+    assert.ok(restored.view.elements.pending.textContent.includes(`couldn’t confirm whether the download for “${source.label}” started`));
+    const completing = restored.controller.submit();
+    acceptRetry(ready); await completing;
+    assert.deepEqual(restored.requests, [saved, saved]);
     assert.equal(restored.storage.read(), null);
     assert.equal(restored.view.elements.current.hidden, false);
     assert.equal(restored.view.elements.form.hidden, true);

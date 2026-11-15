@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { ModelsView } from "../../src/models/view.js";
-import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
+import { SummaryControlDocument, SUMMARY_MARKUP } from "../../test-support/processing/summary-document.js";
 import { ModelsController } from "../../src/models/controller.js";
 import { VectorFilterControls } from "../../src/vector/filter-controls.js";
 import { createVectorMapLayerAdapter } from "../../src/vector/map-layer-adapter.js";
@@ -897,17 +897,59 @@ test("Run captures the current box while later map edits and closing leave accep
     assert.deepEqual(h.cancelled, []); assert.equal(h.values.size, 0);
 });
 
-test("a lost submission response survives reload and retries the exact captured request", async () => {
-    const h = fixture({submitModelRun: async () => { throw new TypeError("Connection lost"); }});
-    h.controller.chooseModel(model); await h.controller.submit();
+test("run sending and uncertain recovery name the original request through reload and retry", async t => {
+    let loseResponse;
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({submitModelRun: () => new Promise((_, reject) => { loseResponse = reject; })}, view);
+    t.after(() => h.controller.destroy());
+    h.controller.chooseModel(model); h.controller.editDraft({label: "KAZA 2018"});
+    const sending = h.controller.submit();
+    assert.equal(view.setup.run.textContent, "Starting run…");
+    assert.equal(view.elements["recovery-message"].textContent, "Starting run “KAZA 2018”…");
+    assert.match(SUMMARY_MARKUP, /id="models-recovery-message"[^>]*role="status"/);
+    assert.equal(view.elements.error.hidden, true);
+    assert.equal(view.elements.recover.hidden, true);
+    loseResponse(new TypeError("Connection lost")); await sending;
     const captured = structuredClone(h.controller.state.pending); assert.ok(captured);
     assert.equal(captured.utcOffsetMinutes, 0 - new Date().getTimezoneOffset());
-    assert.equal(captured.label, model.title);
+    assert.equal(captured.label, "KAZA 2018");
+    assert.equal(view.elements.error.textContent, "Connection lost");
+    assert.match(view.elements["recovery-message"].textContent, /couldn’t confirm whether “KAZA 2018” started/);
+    assert.equal(view.elements.recover.hidden, false);
+    assert.match(SUMMARY_MARKUP, /id="models-recover"[^>]*>Retry starting run</);
     h.controller.chooseModel(model); h.controller.editDraft({label: "Different draft"});
-    const next = fixture(); next.controller.storage = h.storage; next.controller.start();
-    await next.controller.submit(true);
-    assert.deepEqual(next.submitted[0], captured); assert.equal(next.controller.state.pending, null);
+    assert.match(view.elements["recovery-message"].textContent, /KAZA 2018/);
+    const nextView = new ModelsView(new SummaryControlDocument());
+    let acceptRetry, loseRetry;
+    const next = fixture({submitModelRun: value => {
+        next.submitted.push(value);
+        return new Promise((resolve, reject) => { acceptRetry = resolve; loseRetry = reject; });
+    }}, nextView); t.after(() => next.controller.destroy());
+    next.controller.storage = h.storage; next.controller.start();
+    assert.equal(nextView.elements.error.hidden, true);
+    assert.match(nextView.elements["recovery-message"].textContent, /couldn’t confirm whether “KAZA 2018” started/);
+    const retry = nextView.elements.recover;
+    retry.focus();
+    const retrying = next.controller.submit(true);
+    assert.equal(nextView.elements["recovery-message"].textContent, "Starting run “KAZA 2018”…");
+    assert.equal(retry.hidden, false);
+    assert.equal(retry.disabled, false, "native disabled would remove keyboard focus");
+    assert.equal(retry.getAttribute("aria-disabled"), "true");
+    retry.dispatchEvent(new Event("click"));
+    assert.equal(next.submitted.length, 1, "repeated activation cannot submit again while waiting");
+    loseRetry(new TypeError("Connection lost again"));
+    await retrying;
+    assert.equal(nextView.document.activeElement, retry);
+    assert.equal(retry.hidden, false);
+    assert.equal(retry.getAttribute("aria-disabled"), "false");
+    assert.equal(nextView.elements.error.textContent, "Connection lost again");
+    assert.match(nextView.elements["recovery-message"].textContent, /couldn’t confirm whether “KAZA 2018” started/);
+    const completing = next.controller.submit(true);
+    acceptRetry(job()); await completing;
+    assert.deepEqual(next.submitted, [captured, captured]); assert.equal(next.controller.state.pending, null);
     assert.equal(next.controller.state.page, "run");
+    assert.equal(nextView.elements.recovery.hidden, true);
+    assert.equal(nextView.elements["recovery-message"].textContent, "");
 });
 
 test("captured timezone offsets survive the recovery storage JSON round trip", () => {
