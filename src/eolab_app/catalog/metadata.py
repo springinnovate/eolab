@@ -48,7 +48,11 @@ class MetadataPipeline:
         self,
         dataset_candidates: list[DatasetCandidate],
     ) -> AsyncIterator[DatasetMetadataResult]:
-        """Yield metadata results while owning all worker resources.
+        """Yield metadata results and propagate failures after worker cleanup.
+
+        Producer and worker failures interrupt queue consumption. Closing or
+        cancelling the iterator waits for owned native work to exit before
+        releasing the executor.
 
         Args:
             dataset_candidates: Deterministically ordered datasets to inspect.
@@ -57,7 +61,7 @@ class MetadataPipeline:
             One success or captured per-dataset failure for every candidate.
 
         Raises:
-            RuntimeError: If a worker or executor fails outside an individual
+            Exception: If a producer, worker or executor fails outside an individual
                 dataset builder call.
         """
         path_queue: asyncio.Queue[DatasetCandidate | None] = asyncio.Queue(
@@ -86,19 +90,35 @@ class MetadataPipeline:
             )
             for _ in range(self.worker_count)
         ]
+        active_tasks = {path_producer, *metadata_workers}
+        next_result = asyncio.create_task(result_queue.get())
         completed_workers = 0
         try:
             while completed_workers < self.worker_count:
-                metadata_result = await result_queue.get()
+                completed_tasks, _ = await asyncio.wait(
+                    {next_result, *active_tasks},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for completed_task in completed_tasks & active_tasks:
+                    completed_task.result()
+                    active_tasks.remove(completed_task)
+                if next_result not in completed_tasks:
+                    continue
+                metadata_result = next_result.result()
                 if metadata_result is None:
                     completed_workers += 1
                 else:
                     yield metadata_result
+                if completed_workers < self.worker_count:
+                    next_result = asyncio.create_task(result_queue.get())
+            await asyncio.gather(path_producer, *metadata_workers)
         finally:
+            next_result.cancel()
             path_producer.cancel()
             for metadata_worker in metadata_workers:
                 metadata_worker.cancel()
             await asyncio.gather(
+                next_result,
                 path_producer,
                 *metadata_workers,
                 return_exceptions=True,
