@@ -85,6 +85,38 @@ test("an aborted older display retry cannot overwrite a newer successful retry",
     assert.equal(h.requests.length, requests);
 });
 
+test("a pending style cannot restore a reference to a deleted calculated field", async () => {
+    let holdStyle = false;
+    let finishStyle;
+    const h = createFixture({style: async (_source, candidate) => {
+        if (holdStyle) return new Promise(resolve => { finishStyle = () => resolve({styleName: "obsolete", style: candidate}); });
+        return {styleName: "current", style: candidate};
+    }});
+    h.adapter.createLayer(h.record, () => {});
+    const definition = {version: 1, name: "scaled_year", expression: "'year' * 2", numericText: false};
+    const fields = Object.fromEntries(FIELDS.map(field => [field.name, field.type]));
+    const installation = h.adapter.installCalculatedFields(h.record,
+        {calculatedFields: [definition], fields: {...fields, scaled_year: "float"}});
+    h.requests.at(-1).resolve({layerName: "eolab:calculated"});
+    await installation;
+    const candidate = {...h.adapter.describeStyle(h.record).style, categorical: {
+        field: definition.name, limit: 2,
+        rules: [{value: {kind: "number", value: 4000}, color: "#00ff00", label: null, opacity: 1}],
+        otherColor: "#ffffff", missingColor: null,
+    }};
+    holdStyle = true;
+    const oldStyle = h.adapter.applyStyle(h.record, candidate);
+    holdStyle = false;
+    const deletion = h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields});
+    finishStyle();
+    await assert.rejects(oldStyle, /layer changed.*Reopen Style/);
+    h.requests.at(-1).resolve({layerName: "eolab:original"});
+    await deletion;
+    assert.equal(h.adapter.describeStyle(h.record).style.categorical, null);
+    assert.equal(h.record.publication.styleName, "current");
+    assert.deepEqual(h.adapter.exportCalculatedFields(h.record), []);
+});
+
 test("cancelled installation leaves previous calculated fields unchanged", async () => {
     const h = createFixture();
     const abort = new AbortController(); abort.abort();
@@ -177,6 +209,7 @@ test("unused calculated fields can be removed while a field in use is updated", 
  * @param {"point"|"line"|"polygon"} [options.geometryKind="polygon"] Geometry class.
  * @param {Object} [options.properties] Catalog field and geometry metadata.
  * @param {(record:Object)=>void} [options.onFilterChange] Optional synchronous composition callback.
+ * @param {(source:Object,candidate:Object)=>Promise<Object>} [options.style] Optional controlled style transport.
  * @return {{adapter:Object,record:Object,requests:Object[],counts:Object[],calls:string[],updates:Object[],notifications:Object[]}}
  * Adapter, retained record, pending requests, and observed external work.
  */
@@ -184,7 +217,7 @@ function createFixture({ geometryKind = "polygon", properties = {
     "table:primary_geometry": "geometry",
     "eolab:vector_source": { asset_key: "data", layer_name: "parcels" },
     "table:columns": [{ name: "geometry", type: "geometry" }, ...FIELDS],
-}, onFilterChange = () => {} } = {}) {
+}, onFilterChange = () => {}, style = async (_source, candidate) => ({styleName: "changed-style", style: candidate}) } = {}) {
     const calls = [], requests = [], counts = [], updates = [], notifications = [];
     const item = { collection: "vectors", id: "parcels", properties };
     const publication = {
@@ -207,7 +240,7 @@ function createFixture({ geometryKind = "polygon", properties = {
         publish: async () => { calls.push("publish"); return publication; },
         style: async (_item, candidate) => {
             calls.push("apply style");
-            return { styleName: "changed-style", style: candidate };
+            return style(_item, candidate);
         },
         summarize: async () => { calls.push("summarize"); return {}; },
         classify: async () => { calls.push("classify"); return {}; },

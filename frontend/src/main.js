@@ -1118,6 +1118,7 @@ async function initializeCatalog(
             onRenderingWorkspaceRequested();
             return record;
         } catch (error) {
+            if (!isCurrent()) return null;
             if (mapLayerController.getRecord(presentation.key) === record) mapLayerController.removeKey(presentation.key);
             throw error;
         } finally {
@@ -1169,6 +1170,7 @@ async function initializeCatalog(
             mapLayerController.setVisible(key, layer.visible);
             return key;
         } catch (error) {
+            if (!stillRetained()) return null;
             if (mapLayerController.getRecord(key) === record) mapLayerController.removeKey(key);
             throw error;
         } finally {

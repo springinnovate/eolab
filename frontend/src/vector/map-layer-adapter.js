@@ -605,11 +605,15 @@ export function createVectorMapLayerAdapter({
          * @param {Object} record Neutral retained-layer record.
          * @param {Object} candidate Complete geometry-specific style state.
          * @return {Promise<Object>} Normalized applied style state.
-         * @throws {Error} If the style cannot be validated or applied.
+         * @throws {Error} If the style cannot be applied or the layer's fields change before it is accepted.
          */
         async applyStyle(record, candidate) {
             const normalized = normalizeVectorStyle(candidate);
-            const result = await style(record.state.source, normalized);
+            const source = record.state.source;
+            const result = await style(source, normalized);
+            if (record.state.disposed || record.state.source !== source) {
+                throw new Error("This layer changed while its style was updating. Reopen Style and try again.");
+            }
             const applied = normalizeVectorStyle(result.style);
             record.publication = {
                 ...record.publication,
