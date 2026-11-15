@@ -10,7 +10,8 @@ class Element extends EventTarget {
     constructor(document, tag) {
         super();
         Object.assign(this, {document, tagName: tag, children: [], value: "", textContent: "", hidden: false,
-            disabled: false, open: false, checked: false, selectionStart: 0, selectionEnd: 0, isConnected: true});
+            disabled: false, open: false, checked: false, selectionStart: 0, selectionEnd: 0, isConnected: true,
+            style: {}, popoverOpen: false, bounds: {top: 80, bottom: 260, left: 160, right: 500, height: 180}});
         this.attributes = new Map();
         this.classes = new Set();
         this.classList = {toggle: (name, enabled) => enabled ? this.classes.add(name) : this.classes.delete(name)};
@@ -33,6 +34,12 @@ class Element extends EventTarget {
     click() { if (!this.disabled) this.dispatchEvent(new Event("click")); }
     /** Open the dialog. @return {void} */
     showModal() { this.open = true; }
+    /** Place the picker above clipping containers. @return {void} */
+    showPopover() { this.popoverOpen = true; }
+    /** Remove the picker from the browser's overlay stack. @return {void} */
+    hidePopover() { this.popoverOpen = false; }
+    /** Return controlled browser layout geometry. @return {Object} Element bounds. */
+    getBoundingClientRect() { return this.bounds; }
     /** Close the dialog and dispatch its browser event. @return {void} */
     close() { this.open = false; this.dispatchEvent(new Event("close")); }
     /** Focus an enabled control, as native form controls do. @return {void} */
@@ -75,7 +82,8 @@ function calculationResult(definitions) {
  */
 function calculatorFixture(t, {calculate = async (_source, definitions) => calculationResult(definitions),
     validate = async () => {}} = {}) {
-    const document = {createElement: tag => new Element(document, tag), querySelector: () => null};
+    const document = {createElement: tag => new Element(document, tag), querySelector: () => null,
+        defaultView: Object.assign(new EventTarget(), {innerWidth: 800, innerHeight: 600})};
     document.body = document.createElement("body");
     document.activeElement = document.createElement("button");
     const targets = new Map(["a", "b"].map(key => {
@@ -157,6 +165,7 @@ test("searchable field insertion preserves selection, quoting and drafts across 
     c.expression.selectionStart = 4; c.expression.selectionEnd = 11;
     c.insert.click();
     assert.equal(c.picker.hidden, false);
+    assert.equal(c.picker.popoverOpen, true);
     assert.equal(document.activeElement, c.search);
     c.search.value = "OWNER";
     c.search.dispatchEvent(new Event("input"));
@@ -167,6 +176,7 @@ test("searchable field insertion preserves selection, quoting and drafts across 
     assert.equal(c.expression.value, "2 * 'Owner''s score' / 10");
     assert.equal(c.expression.selectionStart, 20);
     assert.equal(c.picker.hidden, true);
+    assert.equal(c.picker.popoverOpen, false);
     assert.equal(document.activeElement, c.expression);
     c.numericText.checked = true;
     c.numericText.dispatchEvent(new Event("input"));
@@ -182,6 +192,29 @@ test("searchable field insertion preserves selection, quoting and drafts across 
     c.search.value = "not present"; c.search.dispatchEvent(new Event("input"));
     assert.equal(c.optionButtons.length, 0);
     assert.equal(c.options.textContent, "No matching fields.");
+});
+
+test("the picker stays within the viewport and closes with its dialog or a scrolled-away anchor", t => {
+    const {calculator: c, document} = calculatorFixture(t);
+    c.dialog.bounds = {top: 10, bottom: 590};
+    c.insert.bounds = {top: 400, bottom: 424, right: 500};
+    c.insert.click();
+    assert.equal(c.picker.getAttribute("popover"), "manual");
+    assert.equal(c.picker.style.top, "216px", "short space below uses the space above");
+    assert.equal(c.picker.style.left, "160px");
+    document.defaultView.innerWidth = 320;
+    c.insert.bounds = {top: 100, bottom: 124, right: 300};
+    document.defaultView.dispatchEvent(new Event("resize"));
+    assert.equal(c.picker.style.width, "304px");
+    assert.equal(c.picker.style.left, "8px");
+    assert.equal(c.picker.style.top, "128px");
+    c.dialog.close();
+    assert.equal(c.picker.popoverOpen, false);
+    c.open("a"); c.insert.click();
+    c.insert.bounds = {top: -40, bottom: -16, right: 300};
+    c.dialog.dispatchEvent(new Event("scroll"));
+    assert.equal(c.picker.popoverOpen, false);
+    assert.equal(c.insert.getAttribute("aria-expanded"), "false");
 });
 
 test("Calculate retries failed advisory validation without requiring an input change", async t => {

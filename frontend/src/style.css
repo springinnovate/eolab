@@ -886,6 +886,7 @@ h5 {
 .vector-field-calculator .fc-numeric input { width: 13px; height: 13px; margin: 0; accent-color: var(--brand); }
 .vector-field-calculator .fc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-left: auto; }
 .vector-field-calculator .fc-calculate-control { position: relative; display: flex; }
+.vector-field-calculator .fc-calculate { min-height: 22px; padding: 1px 5px; font-size: 11px; }
 .vector-field-calculator .fc-disabled-reason { display: none; position: absolute; z-index: 5; right: 0; bottom: calc(100% + 6px); width: max-content; max-width: min(260px, calc(100vw - 64px)); padding: 6px 8px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); box-shadow: var(--elevation-panel); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
 .vector-field-calculator .fc-calculate-control:hover .fc-disabled-reason, .vector-field-calculator .fc-calculate-control:focus-within .fc-disabled-reason { display: block; }
 .vector-field-calculator .fc-notice { padding: 4px 8px; border-top: 1px solid var(--border-1); color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
@@ -906,10 +907,11 @@ h5 {
 .vector-field-calculator .fc-field-actions button { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
 .vector-field-calculator .fc-field-actions svg { width: 12px; height: 12px; color: var(--text-3); }
 .vector-field-calculator .fc-deleted { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 8px 5px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
-.vector-field-calculator .fc-picker { position: absolute; z-index: 4; top: calc(100% + 2px); right: 4px; width: min(calc(100% - 8px), 340px); padding: 6px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); box-shadow: var(--elevation-panel); }
+.vector-field-calculator .fc-picker { position: fixed; inset: auto; margin: 0; display: flex; flex-direction: column; width: 340px; padding: 6px; overflow: hidden; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); box-shadow: var(--elevation-panel); }
+.vector-field-calculator .fc-picker:not(:popover-open) { display: none; }
 .vector-field-calculator .fc-search { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; padding-left: 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-3); color: var(--text-3); }
 .vector-field-calculator .fc-search input { width: 100%; min-width: 0; padding: 5px 7px 5px 0; border: 0; background: transparent; font-size: 12px; }
-.vector-field-calculator .fc-options { display: flex; flex-direction: column; gap: 1px; max-height: min(210px, 35dvh); overflow-y: auto; }
+.vector-field-calculator .fc-options { display: flex; flex-direction: column; gap: 1px; min-height: 0; max-height: min(210px, 35dvh); overflow-y: auto; overscroll-behavior: contain; }
 .vector-field-calculator .fc-option { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; min-height: 27px; padding: 4px 6px; border-color: transparent; background: transparent; text-align: left; white-space: normal; }
 .vector-field-calculator .fc-option code { min-width: 0; }
 .vector-field-calculator .fc-type { flex: none; color: var(--text-3); font-size: 11px; }
@@ -933,7 +935,7 @@ h5 {
   .vector-field-calculator .fc-body { padding-right: 8px; padding-left: 8px; }
 }
 @media (pointer: coarse) {
-  .vector-field-calculator :is(button, .fc-insert, .fc-option, .fc-numeric, summary) { min-height: 44px; }
+  .vector-field-calculator :is(button, .fc-insert, .fc-option, .fc-calculate, .fc-numeric, summary) { min-height: 44px; }
   .vector-field-calculator .fc-close { width: 44px; }
   .vector-field-calculator .fc-header { grid-template-columns: auto minmax(0, 1fr) 44px; }
   .vector-field-calculator .fc-close { grid-column: 3; grid-row: 1; }
@@ -987,8 +989,10 @@ h5 {
   border-radius: 2px;
   background: var(--surface-3);
 }
-.raster-layer-row .secondary-button:hover:not(:disabled),
+.raster-layer-row .secondary-button:hover:not(:disabled):not([aria-disabled="true"]),
 .raster-layer-row .secondary-button:focus-visible { border-color: var(--brand); background: var(--surface-selected); }
+.raster-layer-row .secondary-button[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; }
+.raster-layer-row .secondary-button[aria-disabled="true"] svg { opacity: .5; }
 .map-layer-row-actions {
   grid-column: 1 / -1;
   display: grid;
@@ -996,6 +1000,8 @@ h5 {
   margin-top: 3px;
   min-width: 0;
 }
+.map-layer-duplicate-help { margin: 0; color: var(--text-3); font-size: var(--font-size-support); overflow-wrap: anywhere; }
+.map-layer-action-tooltip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: min(280px, calc(100vw - 16px)); padding: 5px 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); box-shadow: var(--elevation-panel); font: 400 12px/1.4 var(--font-sans); overflow-wrap: anywhere; }
 .map-layer-style-actions,
 .map-layer-data-actions {
   display: flex;
