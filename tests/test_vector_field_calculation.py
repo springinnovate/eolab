@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,10 @@ from pydantic import ValidationError
 
 from eolab_app.calculated_fields import CalculatedField
 from eolab_app.routes.processing import COOKIE, get_processing_session_owner_hash
-from eolab_app.routes.vector_calculations import create_vector_calculation_router
+from eolab_app.routes.vector_calculations import (
+    FieldCalculationResponse,
+    create_vector_calculation_router,
+)
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.field_calculation import (
     FieldCalculationJobs,
@@ -354,5 +358,98 @@ def test_cancelled_calculation_waits_for_native_exit_before_releasing_source(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert not authority.leases
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_long_calculation_streams_only_whitespace_before_its_final_result(
+    fails: bool,
+) -> None:
+    """Keep the HTTP connection active without exposing partially calculated fields.
+
+    Args:
+        fails: Whether the native work rejects its input after streaming begins.
+    """
+
+    async def scenario() -> None:
+        """Observe a heartbeat before allowing the controlled calculation to finish."""
+        heartbeat, finish = asyncio.Event(), asyncio.Event()
+        messages: list[dict[str, Any]] = []
+
+        async def calculate() -> FieldCalculationResult:
+            """Wait for the test's completion signal and return the whole result."""
+            await finish.wait()
+            if fails:
+                raise VectorConflictError("Unknown field 'missing'.")
+            return FieldCalculationResult(
+                calculatedFields=(), fields={}, featureCount=4, missingCounts={}
+            )
+
+        async def receive() -> dict[str, Any]:
+            """Keep the requesting browser connected throughout the calculation."""
+            await asyncio.Future()
+
+        async def send(message: dict[str, Any]) -> None:
+            """Record response frames and acknowledge the first whitespace heartbeat."""
+            messages.append(message)
+            if message.get("body") == b"\n":
+                heartbeat.set()
+
+        response = FieldCalculationResponse(calculate, {}, heartbeat_seconds=0.01)
+        pending = asyncio.create_task(response({"type": "http"}, receive, send))
+        await asyncio.wait_for(heartbeat.wait(), 1)
+        assert not pending.done()
+        assert messages[0]["status"] == 200
+        headers = dict(messages[0]["headers"])
+        assert headers[b"x-accel-buffering"] == b"no"
+        assert b"no-transform" in headers[b"cache-control"]
+        assert b"content-length" not in headers
+        assert b"".join(message.get("body", b"") for message in messages).strip() == b""
+        finish.set()
+        await asyncio.wait_for(pending, 1)
+        result = json.loads(b"".join(message.get("body", b"") for message in messages))
+        if fails:
+            assert result == {"detail": "Unknown field 'missing'."}
+        else:
+            assert result["featureCount"] == 4
+
+    asyncio.run(scenario())
+
+
+def test_stream_disconnect_waits_for_calculation_cleanup() -> None:
+    """Do not return from a disconnected stream until cancelled native work exits."""
+
+    async def scenario() -> None:
+        """Disconnect after a heartbeat and hold the native cleanup acknowledgement."""
+        heartbeat, disconnect = asyncio.Event(), asyncio.Event()
+        stopping, stopped = asyncio.Event(), asyncio.Event()
+
+        async def calculate() -> FieldCalculationResult:
+            """Model an operation that releases its source only after native exit."""
+            try:
+                await asyncio.Future()
+            finally:
+                stopping.set()
+                await stopped.wait()
+
+        async def receive() -> dict[str, Any]:
+            """Signal the browser disconnect after a heartbeat has been observed."""
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            """Acknowledge the first streamed body without changing task ownership."""
+            if message.get("body") == b"\n":
+                heartbeat.set()
+
+        response = FieldCalculationResponse(calculate, {}, heartbeat_seconds=0.01)
+        pending = asyncio.create_task(response({"type": "http"}, receive, send))
+        await asyncio.wait_for(heartbeat.wait(), 1)
+        disconnect.set()
+        await asyncio.wait_for(stopping.wait(), 1)
+        assert not pending.done()
+        stopped.set()
+        await asyncio.wait_for(pending, 1)
 
     asyncio.run(scenario())

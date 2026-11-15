@@ -171,6 +171,7 @@ export async function calculateVectorFields(source, calculatedFields, signal, fe
     });
     if (!response.ok) throw await vectorRenderingError(response, "field calculation");
     const result = await response.json();
+    if (typeof result.detail === "string") throw new Error(result.detail);
     const definitions = validateCalculatedFields(result.calculatedFields);
     if (!result.fields || typeof result.fields !== "object" || Array.isArray(result.fields) ||
         Object.values(result.fields).some(type => typeof type !== "string") ||

@@ -197,4 +197,9 @@ test("calculator transport sends only authorized identity and definitions and re
     assert.equal(result.featureCount, 4);
     await assert.rejects(calculateVectorFields(source, definitions, undefined, async () =>
         new Response(JSON.stringify({...response, missingCounts: {Density: 5}}))), /invalid field calculation/);
+    await assert.rejects(calculateVectorFields(source, definitions, undefined, async () =>
+        new Response('\n\n' + JSON.stringify({detail: "Unknown field 'missing'."}))), /Unknown field 'missing'/);
+    const streamed = await calculateVectorFields(source, definitions, undefined, async () =>
+        new Response('\n\n' + JSON.stringify(response)));
+    assert.equal(streamed.featureCount, 4);
 });
