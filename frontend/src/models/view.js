@@ -715,6 +715,7 @@ export class ModelsView {
     }
 
     /** Present the selected Data tools page, promoting raster creation among search matches.
+     * An offered retry remains visible and focusable while its request is in progress.
      * @param {Object} state Controller snapshot.
      * @return {void}
      */
@@ -728,8 +729,9 @@ export class ModelsView {
         const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
-        this.elements.recovery.hidden = !state.pending; this.elements.recover.disabled = state.submitting;
-        this.elements.recover.hidden = state.submitting;
+        this.elements.recovery.hidden = !state.pending;
+        this.elements.recover.setAttribute("aria-disabled", String(state.submitting));
+        if (!state.submitting) this.elements.recover.hidden = !state.pending;
         const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
             : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs and won’t create a second run.`;
         if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
