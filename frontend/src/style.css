@@ -3354,7 +3354,7 @@ article.raster-histogram-summary {
 }
 
 /* Stack the workspaces when neighboring tools leave too little room for columns. */
-@container workspace-sidebar (max-width: 699px) {
+@container workspace-sidebar (max-width: 639px) {
   .panel-content {
     display: flex;
     flex-direction: column;
