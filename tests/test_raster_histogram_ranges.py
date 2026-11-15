@@ -11,7 +11,6 @@ from eolab_app.raster.statistics import read_raster_statistics
 from eolab_app.sampling_area import WholeRasterSamplingArea
 from raster_fixture_support import write_source
 
-
 FLOAT64_MAXIMUM = float(numpy.finfo(numpy.float64).max)
 SAMPLE_VALUES = [
     pytest.param((1.0, numpy.nextafter(1.0, 2.0)), id="adjacent-positive"),
