@@ -70,8 +70,9 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     assert.equal(h.surface.open, true);
     assert.equal(
         h.doc.querySelector('#map-inspection-tab-style').textContent,
-        'Style · a.tif',
+        'Style',
     );
+    assert.equal(h.doc.querySelector('#map-inspection-tab-style').getAttribute('aria-label'), 'Style a.tif');
     assert.equal(h.doc.activeElement, h.editor.closeButton);
     h.setLayers([...h.layers].reverse());
     h.editor.refresh();
@@ -115,7 +116,8 @@ test('renaming a layer refreshes an open style tab without changing the active t
     h.layers[0].label = 'Human impact';
     h.editor.refresh();
     assert.equal(h.editor.title.textContent, 'Human impact');
-    assert.equal(h.doc.querySelector('#map-inspection-tab-style').textContent, 'Style · Human impact');
+    assert.equal(h.doc.querySelector('#map-inspection-tab-style').textContent, 'Style');
+    assert.equal(h.doc.querySelector('#map-inspection-tab-style').getAttribute('aria-label'), 'Style Human impact');
     assert.equal(h.inspection.activeTool, activeTool);
     assert.equal(h.doc.activeElement, focused);
     h.editor.destroy();

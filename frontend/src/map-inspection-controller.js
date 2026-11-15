@@ -269,7 +269,7 @@ export class MapInspectionController {
         }
         this.#setToolLabel(
             "style",
-            layerLabel === null ? "Style" : `Style · ${layerLabel}`,
+            "Style",
             layerLabel === null ? "" : `Style ${layerLabel}`
         );
         this.setToolContext("style", { source: layerLabel ?? "Selected layer", scope: "" });
@@ -277,7 +277,7 @@ export class MapInspectionController {
     }
 
     /**
-     * Update an existing layer editor's tab without opening it or changing focus.
+     * Update a layer editor's full accessible target without opening it or changing focus.
      * @param {"style"|"filter"} editor Layer editor whose target was renamed.
      * @param {string} layerLabel Current map-layer display name.
      * @return {void}
@@ -288,7 +288,7 @@ export class MapInspectionController {
             throw new TypeError("A style or filter editor and a non-empty layer name are required.");
         }
         const action = editor === "style" ? "Style" : "Filter";
-        this.#setToolLabel(editor, `${action} · ${layerLabel}`, `${action} ${layerLabel}`);
+        this.#setToolLabel(editor, action, `${action} ${layerLabel}`);
         this.setToolContext(editor, { source: layerLabel, scope: "" });
     }
 
@@ -299,7 +299,7 @@ export class MapInspectionController {
      * @throws {TypeError} When the layer label is not a string.
      */
     showFilter(layerLabel) {
-        this.#setToolLabel("filter", `Filter · ${layerLabel}`, `Filter ${layerLabel}`);
+        this.#setToolLabel("filter", "Filter", `Filter ${layerLabel}`);
         this.setToolContext("filter", { source: layerLabel, scope: "" });
         this.#showTool("filter");
     }
@@ -650,13 +650,14 @@ export class MapInspectionController {
      *
      * @param {string} name Stable presentation name.
      * @param {string} label Visible retained-tab label; raster navigation keeps its stable caption.
-     * @param {string} [title=""] Optional full hover label.
+     * @param {string} [title=""] Full hover label, also the accessible name for compact layer-editor tabs.
      * @return {void}
      */
     #setToolLabel(name, label, title = "") {
         const { tab, raster } = this.#tool(name);
         if (!raster) tab.textContent = label;
         tab.title = title;
+        if (name === "style" || name === "filter") tab.setAttribute("aria-label", title || label);
     }
 
     /**
@@ -819,7 +820,7 @@ export class MapInspectionController {
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
         this.dockTitle.textContent = tool === null ? "Explore data" : `${tool.task} · ${tool.label}`;
         this.dockTitle.title = this.dockTitle.textContent;
-        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations", "models"].includes(this.activeTool);
+        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations", "models", "style", "filter"].includes(this.activeTool);
         const context = tool?.context ?? (this.activeTool === "feature"
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });
