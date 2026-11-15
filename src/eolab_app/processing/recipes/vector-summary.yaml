@@ -50,6 +50,7 @@ steps:
       boundary_tolerance_m: {parameter: boundary_tolerance_m}
 outputs:
   summary:
+    label: Vector summary
     source: calculate.summary
     role: result
     presentation: map

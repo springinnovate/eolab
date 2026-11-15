@@ -28,6 +28,7 @@ steps:
       expression: {parameter: summary}
 outputs:
   statistics:
+    label: Statistics
     source: calculate.statistics
     role: result
     presentation: table

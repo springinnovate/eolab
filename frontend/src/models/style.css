@@ -56,7 +56,6 @@
 .models-card-open { padding: 0; border: 0; background: transparent; color: var(--brand-hover); font: inherit; text-align: left; cursor: pointer; }
 /* Extend the title's native button to the card without adding another tab stop. */
 .models-card-open::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
-.models-card-hint { color: var(--brand-hover); font-size: 0.78rem; }
 .models-result { display: grid; gap: 5px; }
 .models-result-value { font: 500 1.25rem/1.4 monospace; }
 .models-result h5 { margin: 0; font-size: 0.88rem; }
