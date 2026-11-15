@@ -176,6 +176,7 @@ test("tool cards show output names while full descriptions remain searchable and
     const h = fixture();
     const recipe = {...model, description: "Valid pixels have equal weight; missing values are excluded.",
         outputs: {summary_result: {...model.outputs.statistics, label: "Summary statistic"},
+            masked_values: {...model.outputs.statistics},
             "valid-pixel_count": {...model.outputs.statistics, label: null}}};
     Object.assign(h.state, {page: "library", library: [recipe], query: "EQUAL WEIGHT",
         draft: createModelDraft(recipe, {rasters: [raster], area}, "compact-card")});
@@ -184,7 +185,7 @@ test("tool cards show output names while full descriptions remain searchable and
     assert.equal(cards.length, 1);
     assert.equal(cards[0].children.length, 2);
     assert.equal(cards[0].children[0].children[0].textContent, recipe.title);
-    assert.equal(cards[0].children[1].textContent, "Outputs: Summary statistic · valid pixel count");
+    assert.equal(cards[0].children[1].textContent, "Outputs: Summary statistic · masked values · valid pixel count");
     cards[0].children[0].children[0].dispatchEvent(new Event("click"));
     assert.deepEqual(h.actions.at(-1), ["Choose", recipe]);
 
