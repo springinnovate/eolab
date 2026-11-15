@@ -56,6 +56,7 @@ from eolab_app.raster.source_contract import (
 )
 from eolab_app.raster.statistics import (
     NoValidRasterSamplesError,
+    build_raster_histogram_edges,
     selected_raster_area_for_catalog_selection,
     selected_raster_area_for_polygon_input,
     RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
@@ -260,36 +261,6 @@ def _aligned_y_positions(
     return tuple(aligned)
 
 
-def _strict_histogram_range(
-    minimum: float,
-    maximum: float,
-) -> tuple[float, float]:
-    """Return an ordered finite histogram range for varying or constant data.
-
-    Args:
-        minimum: Finite sample minimum.
-        maximum: Finite sample maximum no lower than ``minimum``.
-
-    Returns:
-        Strict lower and upper histogram bounds containing the sample.
-    """
-    if minimum < maximum:
-        return minimum, maximum
-    padding = max(abs(minimum) * 1e-6, 1e-12)
-    lower = minimum - padding
-    upper = maximum + padding
-    if not math.isfinite(lower):
-        lower = minimum
-    if not math.isfinite(upper):
-        upper = maximum
-    if lower < upper:
-        return lower, upper
-    return (
-        math.nextafter(minimum, -math.inf),
-        math.nextafter(maximum, math.inf),
-    )
-
-
 def read_raster_paired_statistics(
     x_source: RasterData,
     y_source: RasterData,
@@ -469,13 +440,17 @@ def read_raster_paired_statistics(
     x_maximum = float(numpy.max(x_values))
     y_minimum = float(numpy.min(y_values))
     y_maximum = float(numpy.max(y_values))
-    x_range = _strict_histogram_range(x_minimum, x_maximum)
-    y_range = _strict_histogram_range(y_minimum, y_maximum)
     counts_xy, x_edges, y_edges = numpy.histogram2d(
         x_values,
         y_values,
-        bins=RASTER_PAIRED_STATISTICS_BIN_COUNT,
-        range=(x_range, y_range),
+        bins=(
+            build_raster_histogram_edges(
+                x_minimum, x_maximum, RASTER_PAIRED_STATISTICS_BIN_COUNT
+            ),
+            build_raster_histogram_edges(
+                y_minimum, y_maximum, RASTER_PAIRED_STATISTICS_BIN_COUNT
+            ),
+        ),
     )
     counts_yx = counts_xy.astype(numpy.int64).T
     x_marginals = numpy.sum(counts_yx, axis=0)
