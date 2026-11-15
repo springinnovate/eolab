@@ -1,8 +1,9 @@
-"""Manual/CI smoke test for an already-running Job service, not runtime code.
+"""Build-time native and manual/CI HTTP smoke tests for the Job service.
 
 Creates and deletes diagnostic jobs through HTTP to verify the deployed image's
 startup, execution, error and cancellation paths. Called explicitly by the
 application-build workflow or an operator; the service never imports this script.
+The image build also runs ``--native`` against its packaged attribute reader.
 """
 
 import json
@@ -12,6 +13,91 @@ import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
+
+
+def native_smoke() -> None:
+    """Read four real features and calculate fields using the packaged OGR bindings.
+
+    A temporary GeoPackage exercises numeric text, division, chained arithmetic,
+    and missing values through the same native Arrow reader used by Jobs.
+
+    Raises:
+        AssertionError: If source reading or calculated values disagree.
+        ImportError: If the image omits a required native dependency.
+    """
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from threading import Event
+
+    import fiona
+
+    from eolab_app.calculated_fields import CalculatedField, validate_calculated_fields
+    from eolab_app.vector.field_calculation_operation import scan_calculated_fields
+    from eolab_app.vector_fields import visit_vector_fields
+
+    fields = {"Population": "float", "Area km2": "float", "Numeric text": "str"}
+    definitions = (
+        CalculatedField(name="Density", expression="'Population' / 'Area km2'"),
+        CalculatedField(name="Scaled", expression="'Density' * 10 + 2"),
+        CalculatedField(
+            name="Converted", expression="'Numeric text'", numericText=True
+        ),
+    )
+    with TemporaryDirectory(prefix="eolab-jobs-smoke-") as directory:
+        path = Path(directory) / "regions.gpkg"
+        with fiona.open(
+            path,
+            "w",
+            driver="GPKG",
+            layer="regions",
+            crs="EPSG:4326",
+            schema={"geometry": "Point", "properties": fields},
+        ) as dataset:
+            rows = (
+                (100.0, 2.0, " 1e2 "),
+                (10.0, 0.0, "12abc"),
+                (None, 4.0, ""),
+                (9.0, 3.0, "-2.5e1"),
+            )
+            for index, values in enumerate(rows):
+                dataset.write(
+                    {
+                        "geometry": {"type": "Point", "coordinates": (index, index)},
+                        "properties": dict(zip(fields, values)),
+                    }
+                )
+        result = scan_calculated_fields(path, "regions", fields, definitions)
+        assert result.featureCount == 4, result
+        assert result.missingCounts == {
+            "Density": 2,
+            "Scaled": 2,
+            "Converted": 2,
+        }, result
+        assert result.calculatedFields == definitions, result
+        assert result.fields == {
+            **fields,
+            "Density": "float",
+            "Scaled": "float",
+            "Converted": "float",
+        }, result
+        observed: list[tuple[float | None, ...]] = []
+        complete = visit_vector_fields(
+            str(path),
+            "regions",
+            ("Density", "Scaled", "Converted"),
+            None,
+            Event(),
+            lambda properties: observed.append(tuple(properties.values())),
+            calculated_fields=validate_calculated_fields(definitions, fields),
+        )
+        assert complete
+        assert observed == [
+            (50.0, 502.0, 100.0),
+            (None, None, None),
+            (None, None, None),
+            (3.0, 32.0, -25.0),
+        ], observed
+    print("Job container: native Arrow reading and four-feature arithmetic passed")
 
 
 def request(
@@ -93,4 +179,7 @@ def main(base: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    if sys.argv[1] == "--native":
+        native_smoke()
+    else:
+        main(sys.argv[1])
