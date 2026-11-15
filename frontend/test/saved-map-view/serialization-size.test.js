@@ -117,3 +117,68 @@ test("oversized remembering preserves the last valid map and later saves recover
   assert.equal(writes, 1);
   assert.deepEqual(parseSavedMapView(remembered), initial);
 });
+
+test("undo restores an oversized live map and completes its controls without replacing valid storage", async () => {
+  const oversized = categoricalMap(20, "x".repeat(256));
+  let remembered;
+  let scheduled;
+  let undoVisible = false;
+  const mapLayers = {
+    retainedRecords: oversized.layers.map(layer => ({
+      entry: { item: layer.catalogItem, isCustom: false, visible: true, opacity: 1 },
+      adapter: { exportSavedState: () => layer.style },
+    })),
+    commitStaged(staged) { this.retainedRecords = staged.map(({ record }) => record); },
+    setLegendIncluded() {},
+  };
+  const controller = new SavedMapViewController({
+    view: {
+      bind() {}, setBusy() {}, setUnavailableLayerCount() {},
+      showUndoReset() { undoVisible = true; },
+      hideUndoReset() { undoVisible = false; },
+      showError(error) { assert.fail(error.message); },
+    },
+    viewport: { snapshot: () => oversized.viewport, restore() {} },
+    initialViewport: oversized.viewport,
+    mapLayers,
+    catalogVisualization: {
+      clear() { mapLayers.retainedRecords = []; },
+      prepare: async item => item,
+      stage: async (item, presentation) => ({ record: {
+        entry: { item, ...presentation },
+        adapter: {
+          applySavedState() {},
+          exportSavedState: () => oversized.layers[0].style,
+        },
+      } }),
+    },
+    catalogItems: { get: async identity => identity },
+    viewerVersion: oversized.viewer.version, viewerOrigin: oversized.viewer.origin,
+    exportTemporal: () => null, exportUpload: () => null,
+    restoreTemporal: async () => null, restoreUpload: async () => null,
+    storage: {
+      read: () => remembered,
+      write(value) { remembered = value; return true; },
+      clear() { assert.fail("Undo must not clear valid storage"); },
+    },
+    setTimer(handler) { scheduled = handler; return 1; },
+    clearTimer() { scheduled = undefined; },
+    clock: () => new Date(oversized.createdAt),
+  });
+
+  await controller.resetView();
+  assert.equal(mapLayers.retainedRecords.length, 0);
+  assert.equal(undoVisible, true);
+  const resetSnapshot = remembered;
+  assert.deepEqual(parseSavedMapView(resetSnapshot).layers, []);
+
+  await controller.undoReset();
+  assert.equal(mapLayers.retainedRecords.length, 20);
+  assert.equal(undoVisible, false);
+  assert.equal(remembered, resetSnapshot);
+  assert.doesNotThrow(() => scheduled());
+  assert.equal(remembered, resetSnapshot);
+  await controller.resetView();
+  assert.equal(mapLayers.retainedRecords.length, 0);
+  assert.equal(undoVisible, true);
+});

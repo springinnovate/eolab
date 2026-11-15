@@ -493,6 +493,7 @@ export class SavedMapViewController {
     /**
      * Restore and consume the validated view captured immediately before reset.
      * Report any layers that can no longer be opened, including deleted uploads.
+     * Local persistence failures do not interrupt the restored map or its controls.
      *
      * @return {Promise<void>} Completion after the atomic restore transaction.
      */
@@ -507,7 +508,11 @@ export class SavedMapViewController {
             const report = await this.#restore(savedMapView, restoreGeneration);
             if (report === null) return;
             this.undoView = null;
-            this.storage?.write(serializeSavedMapView(savedMapView));
+            try {
+                this.storage?.write(serializeSavedMapView(savedMapView));
+            } catch {
+                // A live map can exceed the save limit and still be restored by undo.
+            }
             this.view.hideUndoReset();
             if (report.loaded !== report.total || report.details.length > 0) this.view.showResults(report);
             this.rememberPending = true;
