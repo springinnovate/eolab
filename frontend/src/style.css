@@ -2490,19 +2490,19 @@ div.chart-tooltip {
 
 #app.is-expanded-catalog-workspace {
   --workspace-catalog-allocation: var(--workspace-catalog-region-width);
-  --workspace-catalog-track: 1.15fr;
+  --workspace-catalog-track: minmax(340px, 1.15fr);
 }
 
 #app.is-expanded-map-layers-workspace {
   --workspace-map-layers-allocation: var(--workspace-map-layers-region-width);
-  --workspace-map-layers-track: 1fr;
+  --workspace-map-layers-track: minmax(300px, 1fr);
 }
 
 #app.is-expanded-catalog-workspace:has(
     .catalog-layout.is-catalog-inspector-visible
   ) {
   --workspace-catalog-allocation: var(--workspace-catalog-inspector-width);
-  --workspace-catalog-track: 2.1fr;
+  --workspace-catalog-track: minmax(340px, 2.1fr);
 }
 
 #app.is-control-panel-collapsed #map {
@@ -2754,8 +2754,7 @@ div.chart-tooltip {
   grid-column: 1;
   grid-row: 3;
   grid-template-columns:
-    minmax(var(--workspace-column-rail-width), var(--workspace-catalog-track))
-    minmax(var(--workspace-column-rail-width), var(--workspace-map-layers-track));
+    var(--workspace-catalog-track) var(--workspace-map-layers-track);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--surface-3);
@@ -3344,7 +3343,10 @@ article.raster-histogram-summary {
       calc(100vw - 32px)
     );
   }
+}
 
+/* Stack the workspaces when neighboring tools leave too little room for columns. */
+@container workspace-sidebar (max-width: 699px) {
   .panel-content {
     display: flex;
     flex-direction: column;
