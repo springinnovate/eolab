@@ -1512,6 +1512,64 @@ test("changed view filters cancel stale reads and cannot leave an older model ar
 });
 
 
+test("live model areas follow formula-only edits while captured areas keep their definitions", async t => {
+    const recipe = {...model, inputs: {raster: model.inputs.raster, live: model.inputs.area, captured: model.inputs.area}};
+    const h = fixture(); t.after(() => h.controller.destroy());
+    const original = {...selection, filter: {enabled: true, match: "all", rules: [{field: "computed", operator: "gt", value: 5}]},
+        calculatedFields: [{version: 1, name: "computed", expression: "10", numericText: false}]};
+    h.context.vectors = [{...original, key: "view:computed", selection: original}];
+    h.context.area = {kind: "catalogSelection", catalogSelection: original};
+    const reads = [];
+    h.controller.prepareVector = async source => {
+        reads.push(source);
+        return {selection: {...source.selection, filter: source.filter, calculatedFields: source.calculatedFields}, matched: 3, total: 8};
+    };
+    h.controller.chooseModel(recipe); h.controller.editInput("raster", {raster});
+    h.controller.chooseArea("live", "vector"); await h.controller.chooseVector("live", "view:computed");
+    const changed = [{...original.calculatedFields[0], expression: "20"}];
+    h.context.vectors[0] = {...h.context.vectors[0], calculatedFields: changed, selection: {...original, calculatedFields: changed}};
+    h.controller.refreshMapLayers(); h.controller.refreshMapLayers();
+    assert.equal(reads.length, 2, "one formula change starts one replacement selection");
+    assert.equal(h.controller.state.draft.inputs.live.area, null, "obsolete arithmetic cannot remain runnable during the read");
+    await new Promise(resolve => setImmediate(resolve));
+    const submitted = captureModelSubmission(h.controller.state.draft, "updated-formula");
+    assert.deepEqual(submitted.inputs.live.selection.calculatedFields, changed);
+    assert.deepEqual(submitted.inputs.captured.selection.calculatedFields, original.calculatedFields);
+    assert.equal(h.controller.state.draft.inputs.captured.areaMode, "captured");
+});
+
+test("failed formula changes cannot restore an older live model area", async t => {
+    const h = fixture(); t.after(() => h.controller.destroy());
+    const original = {...selection, calculatedFields: [{version: 1, name: "computed", expression: "10", numericText: false}]};
+    h.context.vectors = [{...original, key: "view:computed", selection: original}];
+    h.controller.prepareVector = async source => ({selection: source.selection, matched: 3, total: 8});
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", "view:computed");
+    const changed = [{...original.calculatedFields[0], expression: "0"}];
+    h.context.vectors[0] = {...h.context.vectors[0], calculatedFields: changed, selection: {...original, calculatedFields: changed}};
+    h.controller.prepareVector = async () => { throw new Error("No polygons match this filter"); };
+    h.controller.refreshMapLayers();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.controller.state.draft.inputs.area.area, null);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "failed-formula"), /No polygons match/);
+});
+
+test("an edited filter may preserve its prior area only while the calculated definitions match", async t => {
+    const h = fixture(); t.after(() => h.controller.destroy());
+    const original = {...selection, calculatedFields: [{version: 1, name: "computed", expression: "10", numericText: false}]};
+    h.context.vectors = [{...original, key: "view:computed", selection: original}];
+    h.controller.prepareVector = async source => ({selection: source.selection, matched: 3, total: 8});
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", "view:computed");
+    const input = h.controller.state.draft.inputs.area;
+    input.vectors[0].calculatedFields = [{...original.calculatedFields[0], expression: "0"}];
+    h.controller.prepareVector = async () => { throw new Error("No polygons match this filter"); };
+    await assert.rejects(h.controller.selectVectorFeatures("area", "view:computed", selection.filter), /No polygons match/);
+    assert.equal(input.area, null);
+    assert.doesNotMatch(input.selectionError, /previous selection is unchanged/);
+});
+
+
 test("removed raster and vector inputs must be added to Map layers again before Run", async () => {
     const h = fixture(); h.controller.chooseModel(model);
     h.context.rasters = []; h.controller.refreshMapLayers();
