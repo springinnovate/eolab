@@ -88,7 +88,7 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     ], scalarFields: [
         { name: "label", type: "str:80" }, { name: "count", type: "int" }, { name: "weight", type: "float" },
     ], numericFields: [{ name: "count", type: "int" }, { name: "weight", type: "float" }],
-    geometryKind: "polygon", primaryGeometry: null });
+    origin: "upload", geometryKind: "polygon", primaryGeometry: null });
     assert.equal(adapter.describeStyle(record).style.graduated.field, "count");
     assert.equal(adapter.describeStyle(record).style.label, null);
     assert.equal(adapter.snapshot(record).canInfo, false);
@@ -110,13 +110,13 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
     const targetsSource = main.slice(main.indexOf("const getPolygonTargets ="), main.indexOf("models = new ModelsController({"));
     const getPolygonTargets = new Function("mapLayerController", "vectorMapLayerAdapter", `${targetsSource}; return getPolygonTargets;`)(controller, adapter);
-    assert.deepEqual(getPolygonTargets(), [{ key, label: "My wetlands", item: { uploadId: UPLOAD.id },
+    assert.deepEqual(getPolygonTargets(), [{ key, label: "My wetlands", item: { uploadId: UPLOAD.id }, sourceOrigin: "upload",
         fields: adapter.describeSource(record).fields, scalarFields: adapter.describeSource(record).scalarFields,
         numericFields: adapter.describeSource(record).numericFields, selection: {uploadId: UPLOAD.id, layerName: "areas"},
         filter }], "Hidden uploads remain selectable with their applied filter");
     // Exercise the composition callbacks with the real layer and vector owners.
     const callbacksSource = main.slice(main.indexOf("function getUploadedVectorKeys("),
-        main.indexOf("if (!isSharedViewer) new UploadPolygonsDialog"));
+        main.indexOf("if (!isSharedViewer) {", main.indexOf("function removeDeletedUpload(")));
     const callbacks = new Function(
         "mapLayerController", "vectorMapLayerAdapter", "getUpload",
         `${callbacksSource}; return {restoreUploadedVector, restoreSavedUpload, removeDeletedUpload, getUploadedVectorKeys};`

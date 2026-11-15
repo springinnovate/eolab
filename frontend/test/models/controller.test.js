@@ -1269,8 +1269,8 @@ for (const source of [
     const north = structuredClone(selection.filter), south = structuredClone(selection.filter), west = structuredClone(selection.filter);
     south.rules[0].value = "South"; west.rules[0].value = "West";
     h.context.vectors = [
-        {...source, key: "view:north", label: "Northern basins", filter: north},
-        {...source, key: "view:south", label: "Southern basins", filter: south},
+        {...source, key: "view:north", label: "Northern basins", sourceOrigin: source.uploadId ? "upload" : "catalog", filter: north},
+        {...source, key: "view:south", label: "Southern basins", sourceOrigin: source.uploadId ? "upload" : "catalog", filter: south},
     ];
     const selectedSource = source.uploadId ? source : selection;
     h.controller.prepareVector = async value => ({selection: {...selectedSource, filter: structuredClone(value.filter)}, matched: 1, total: 8});
@@ -1278,7 +1278,7 @@ for (const source of [
     const controls = view.setup.inputs.area;
     assert.deepEqual(controls.source.querySelectorAll("option").filter(option => option.value.startsWith("vector:"))
         .map(option => [option.value, option.textContent]), [
-        ["vector:view:north", "Northern basins"], ["vector:view:south", "Southern basins"],
+        ["vector:view:north", "Northern basins · Polygons"], ["vector:view:south", "Southern basins · Polygons"],
     ]);
     controls.source.value = "vector:view:south"; controls.source.dispatchEvent(new Event("change"));
     await new Promise(resolve => setImmediate(resolve));

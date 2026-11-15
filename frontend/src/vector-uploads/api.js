@@ -6,11 +6,46 @@
  * @property {string} name User's display name for the layer.
  * @property {number} size_bytes Original file size.
  * @property {string} created_at Server creation timestamp.
+ * @property {string} expires_at Fixed server expiry, seven days after admission.
+ * @property {"vector"} kind Uploaded file type.
  * @property {string} layer_name GeoPackage layer name.
  * @property {"Polygon"|"MultiPolygon"} geometry_type Admitted geometry type.
  * @property {string} crs_wkt Layer coordinate reference system.
  * @property {Object<string,string>} fields Attribute names and Fiona field types.
  */
+
+/**
+ * A stored file listed by the shared upload manager, without its source schema.
+ * @typedef {Object} UploadSummary
+ * @property {string} id Opaque upload identifier.
+ * @property {"vector"|"raster"} kind Uploaded file type.
+ * @property {string} name User's display name.
+ * @property {number} size_bytes Original file size.
+ * @property {string} created_at Server admission timestamp.
+ * @property {string} expires_at Fixed server expiry timestamp.
+ */
+
+/**
+ * This browser's files and authoritative shared storage allowance.
+ * @typedef {Object} UploadStorageSummary
+ * @property {UploadSummary[]} uploads Available uploaded files, including files removed from the map.
+ * @property {number} used_files Files using slots, including pending and retained files.
+ * @property {number} max_files Shared file allowance across polygons and rasters.
+ * @property {number} retained_files Deleted or expired files still needed by calculations.
+ * @property {number} used_bytes Stored bytes charged to this browser.
+ * @property {number} max_bytes This browser's storage allowance.
+ * @property {number} max_file_bytes Maximum bytes in one uploaded file.
+ */
+
+/**
+ * Return this browser's files and shared polygon/raster upload allowance.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin HTTP transport.
+ * @return {Promise<UploadStorageSummary>} Current files, usage and server limits.
+ * @throws {Error} If the server cannot return the upload summary.
+ */
+export async function getUploadStorageSummary(fetchImplementation = globalThis.fetch) {
+    return requestUploads("", {method: "GET"}, fetchImplementation, "/api/uploads");
+}
 
 /**
  * Store one GeoPackage and return its admitted layer metadata.
@@ -68,13 +103,14 @@ export async function deleteUpload(uploadId, fetchImplementation = globalThis.fe
  * @param {string} suffix Path or query after the upload API root.
  * @param {RequestInit} options Method, headers and optional file body.
  * @param {typeof fetch} fetchImplementation Same-origin HTTP transport.
- * @return {Promise<VectorUpload|VectorUpload[]|null>} Response metadata, or null after deletion.
+ * @param {string} [root="/api/vector-uploads"] Upload endpoint owned by this client.
+ * @return {Promise<VectorUpload|VectorUpload[]|UploadStorageSummary|null>} Response metadata, or null after deletion.
  * @throws {Error} If transport, server operation or JSON decoding fails.
  */
-async function requestUploads(suffix, options, fetchImplementation) {
+async function requestUploads(suffix, options, fetchImplementation, root = "/api/vector-uploads") {
     let response;
     try {
-        response = await fetchImplementation(`/api/vector-uploads${suffix}`, {
+        response = await fetchImplementation(`${root}${suffix}`, {
             ...options,
             credentials: "same-origin",
             cache: "no-store",

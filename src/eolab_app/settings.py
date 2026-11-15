@@ -178,9 +178,12 @@ class Settings:
         admin_password: Optional server-only password for /admin-eolab (user admin).
             Blank disables administration; never included in browser configuration.
         processing_data_path: Persistent private clip volume shared with the worker.
-        vector_upload_data_path: Persistent private GeoPackage upload directory.
-        vector_upload_max_bytes: Optional administrator-set maximum bytes per
-            GeoPackage upload; None means no application file-size cap.
+        vector_upload_data_path: Persistent private vector and raster upload directory.
+        vector_upload_max_bytes: Optional stricter maximum bytes per GeoPackage;
+            shared upload limits apply even when this value is None.
+        upload_max_bytes: Maximum original bytes per new upload across formats.
+        upload_owner_max_bytes: Maximum stored upload bytes for one browser owner.
+        upload_global_max_bytes: Maximum stored upload bytes for the application.
         jobs_token: Server-only bearer credential identifying the
             application as a Jobs caller. Jobs uses that identity to restrict
             status, result, cancellation and deletion to the owning caller.
@@ -222,6 +225,9 @@ class Settings:
     processing_data_path: Path = Path("/processing-data").absolute()
     vector_upload_data_path: Path = Path("/vector-uploads").absolute()
     vector_upload_max_bytes: int | None = None
+    upload_max_bytes: int = 100 * 1024**2
+    upload_owner_max_bytes: int = 500 * 1024**2
+    upload_global_max_bytes: int = 10 * 1024**3
     jobs_token: str = field(default="", repr=False)
     admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
@@ -295,6 +301,13 @@ class Settings:
             raise ValueError("VECTOR_UPLOAD_DATA_PATH must be an absolute path")
         if self.vector_upload_max_bytes is not None and self.vector_upload_max_bytes < 1:
             raise ValueError("VECTOR_UPLOAD_MAX_BYTES must be greater than zero")
+        for name, value in (
+            ("UPLOAD_MAX_BYTES", self.upload_max_bytes),
+            ("UPLOAD_OWNER_MAX_BYTES", self.upload_owner_max_bytes),
+            ("UPLOAD_GLOBAL_MAX_BYTES", self.upload_global_max_bytes),
+        ):
+            if value < 1:
+                raise ValueError(f"{name} must be greater than zero")
         if not -180 <= self.initial_longitude <= 180:
             raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
         if not 0 <= self.initial_zoom <= 22:
@@ -600,4 +613,7 @@ def load_settings(
         vector_upload_max_bytes=(
             int(raw_upload_max_bytes) if raw_upload_max_bytes else None
         ),
+        upload_max_bytes=int(os.environ.get("UPLOAD_MAX_BYTES", str(100 * 1024**2))),
+        upload_owner_max_bytes=int(os.environ.get("UPLOAD_OWNER_MAX_BYTES", str(500 * 1024**2))),
+        upload_global_max_bytes=int(os.environ.get("UPLOAD_GLOBAL_MAX_BYTES", str(10 * 1024**3))),
     )
