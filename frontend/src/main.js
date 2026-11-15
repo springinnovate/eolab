@@ -1,4 +1,7 @@
-import { createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink } from "./catalog-curated-metadata.js";
+import {
+    createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink,
+    catalogReferenceIdentity, createCatalogDisclosure,
+} from "./catalog-curated-metadata.js";
 import { rasterSamplingAreaBounds } from "./selected-area.js";
 import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
@@ -479,53 +482,72 @@ function renderCatalogItemInspector(
         inspectorContent.append(description);
     }
     const curated = item.properties["eolab:metadata"];
-    if (curated) {
-        inspectorContent.append(createCuratedMetadataView(curated));
-        const technicalHeading = document.createElement("h4");
-        technicalHeading.textContent = "Technical details";
-        inspectorContent.append(technicalHeading);
+    // Data actions own their destinations even when a citation repeats the URL.
+    const dataReferenceOwners = new Map();
+    for (const asset of inspector.assets ?? []) {
+        const sourceAsset = item.assets[asset.key];
+        if (!sourceAsset.roles?.includes("data")) continue;
+        const reference = catalogAssetReference(item, asset.key, sourceAsset);
+        if (reference?.external !== true) continue;
+        const identity = catalogReferenceIdentity(reference.href);
+        if (!dataReferenceOwners.has(identity)) dataReferenceOwners.set(identity, asset.key);
     }
-    inspectorContent.append(createCatalogMetadataList([
+    const references = new Set(dataReferenceOwners.keys());
+    if (curated) inspectorContent.append(createCuratedMetadataView(curated, {
+        section: "context", references,
+    }));
+    // Reserve canonical source links before checking duplicate Asset references.
+    const sourceReferences = curated ? createCuratedMetadataView(curated, {
+        section: "references", references,
+    }) : null;
+    const technicalDetails = curated
+        ? createCatalogDisclosure(document, "Technical details") : document.createElement("div");
+    technicalDetails.append(createCatalogMetadataList([
         { label: "Item title", value: inspector.title },
         ...inspector.metadata,
     ]));
-
     if (inspector.fields.length > 0) {
         const fieldsHeading = document.createElement("h4");
         fieldsHeading.textContent = "Fields";
-        inspectorContent.append(
-            fieldsHeading,
-            createCatalogMetadataList(inspector.fields)
-        );
+        technicalDetails.append(fieldsHeading, createCatalogMetadataList(inspector.fields));
     }
 
-    // Announce the selected Item to assistive technologies.
+    if (!curated) inspectorContent.append(technicalDetails);
+
+    // Announce selection without changing the independent map or analysis actions.
     inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
-    if (inspector.assets === null) return;
-
-    // Introduce the Item's Asset records or their empty state.
-    const assetsHeading = document.createElement("h4");
-    assetsHeading.textContent = curated ? "Data and supporting files" : "Assets";
-    inspectorContent.append(assetsHeading);
-    if (inspector.assets.length === 0) {
-        const noAssetsMessage = document.createElement("p");
-        noAssetsMessage.className = "catalog-inspector-note";
-        noAssetsMessage.textContent = "No Assets are recorded for this Item.";
-        inspectorContent.append(noAssetsMessage);
+    if (inspector.assets !== null) {
+        const assetsHeading = document.createElement("h4");
+        assetsHeading.textContent = "Data and supporting files";
+        inspectorContent.append(assetsHeading);
+        if (inspector.assets.length === 0) {
+            const noAssetsMessage = document.createElement("p");
+            noAssetsMessage.className = "catalog-inspector-note";
+            noAssetsMessage.textContent = "No files are recorded for this dataset.";
+            inspectorContent.append(noAssetsMessage);
+        }
     }
 
-    // Render the metadata for each Asset.
-    for (const asset of inspector.assets) {
+    for (const asset of inspector.assets ?? []) {
+        const sourceAsset = item.assets[asset.key];
+        const assetCurated = sourceAsset["eolab:metadata"];
+        const reference = catalogAssetReference(item, asset.key, sourceAsset);
+        const referenceIdentity = reference?.external === true
+            ? catalogReferenceIdentity(reference.href) : null;
+        const repeatedReference = referenceIdentity !== null
+            && references.has(referenceIdentity)
+            && dataReferenceOwners.get(referenceIdentity) !== asset.key;
         const assetCard = document.createElement("article");
         assetCard.className = "catalog-asset";
         const assetHeading = document.createElement("h5");
         assetHeading.textContent = asset.title;
-        const assetKey = document.createElement("p");
-        assetKey.className = "catalog-asset-key";
-        assetKey.textContent = `Asset key: ${asset.key}`;
         assetCard.append(assetHeading);
-        const sourceAsset = item.assets[asset.key];
-        const assetCurated = sourceAsset["eolab:metadata"];
+        if (reference !== null && !repeatedReference) {
+            const link = createCatalogReferenceLink(document, reference);
+            link.setAttribute("aria-label", reference.label + ": " + asset.title);
+            assetCard.append(link);
+            if (reference.external) references.add(catalogReferenceIdentity(reference.href));
+        }
         const assetDescription = assetCurated ? assetCurated.description : sourceAsset.description;
         if (assetDescription != null) {
             const description = document.createElement("p");
@@ -533,18 +555,19 @@ function renderCatalogItemInspector(
             description.textContent = assetDescription;
             assetCard.append(description);
         }
-        const reference = catalogAssetReference(item, asset.key, sourceAsset);
-        if (reference !== null) {
-            const link = createCatalogReferenceLink(document, reference);
-            link.setAttribute("aria-label", reference.label + ": " + asset.title);
-            assetCard.append(link);
-        }
         if (assetCurated) assetCard.append(createCuratedMetadataView(assetCurated, {
-            scope: "file", headingLevel: 6,
+            scope: "file", headingLevel: 6, section: "context", references,
         }));
-        assetCard.append(assetKey, createCatalogMetadataList(asset.metadata));
-
-        // Render Raster extension band metadata when the Asset supplies it.
+        const fileDetails = curated
+            ? createCatalogDisclosure(document, "File details") : document.createElement("div");
+        fileDetails.append(createCatalogMetadataList([
+            { label: "Asset key", value: asset.key },
+            ...(repeatedReference ? [{ label: "Source reference", value: reference.href }] : []),
+            ...asset.metadata,
+        ]));
+        if (assetCurated) fileDetails.append(createCuratedMetadataView(assetCurated, {
+            scope: "file", headingLevel: 6, section: "references", references,
+        }));
         if (asset.bands.length > 0) {
             const bandsHeading = document.createElement("strong");
             bandsHeading.className = "catalog-bands-heading";
@@ -557,18 +580,19 @@ function renderCatalogItemInspector(
                 bandHeading.textContent = band.title;
                 const bandDetails = document.createElement("span");
                 bandDetails.textContent = band.metadata
-                    .map(
-                        (metadataEntry) =>
-                            `${metadataEntry.label}: ${metadataEntry.value}`
-                    )
+                    .map((metadataEntry) => `${metadataEntry.label}: ${metadataEntry.value}`)
                     .join(" · ");
                 bandItem.append(bandHeading, bandDetails);
                 bandList.append(bandItem);
             }
-            assetCard.append(bandsHeading, bandList);
+            fileDetails.append(bandsHeading, bandList);
         }
-        inspectorContent.append(assetCard);
+        assetCard.append(fileDetails);
+        // Keep every Asset record available without repeating a source action.
+        (repeatedReference ? technicalDetails : inspectorContent).append(assetCard);
     }
+    if (sourceReferences !== null) inspectorContent.append(sourceReferences);
+    if (curated) inspectorContent.append(technicalDetails);
 
 }
 
