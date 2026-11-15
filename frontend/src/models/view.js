@@ -622,8 +622,8 @@ export class ModelsView {
         r.inputs.hidden = job?.status === "deleted";
         r.expiry.textContent = job ? `Temporary run in this browser. Clearing cookies or losing this browser session loses access.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
             (job.metadataExpiresAt ? ` Saved inputs expire ${new Date(job.metadataExpiresAt).toLocaleString()}.` : "") : "";
-        if (invocation && r.invocation !== invocation) {
-            r.invocation = invocation;
+        if (invocation && (r.invocation !== invocation || r.datasetLabels !== state.habitatDatasetLabels)) {
+            r.invocation = invocation; r.datasetLabels = state.habitatDatasetLabels;
             const list = this.element("dl");
             for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
                 const value = invocation.inputs[name];
@@ -631,7 +631,8 @@ export class ModelsView {
                     if (value.kind === "earthEngine") {
                         list.append(this.element("dt", input.label), this.element("dd", `Original model inputs from Earth Engine · Assessment year ${value.year}`));
                         for (const [field, label] of [["predictorDatasets", "Predictor datasets"], ["responseDatasets", "Observed response datasets"]])
-                            list.append(this.element("dt", label), this.element("dd", value[field] == null ? "All configured datasets" : `${value[field].length} selected`));
+                            list.append(this.element("dt", label), this.element("dd", value[field] == null ? "All configured datasets"
+                                : value[field].map(id => state.habitatDatasetLabels?.get(id) ?? id).join(", ")));
                         continue;
                     }
                     for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {

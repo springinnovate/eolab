@@ -540,8 +540,8 @@ test("Earth Engine runs capture and duplicate dataset choices, year, area and re
     assert.deepEqual(expected.preparation, {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], resampling: {}});
     const summary = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
     assert.ok(summary.includes("Original model inputs from Earth Engine · Assessment year 2017"));
-    assert.ok(summary.includes("Predictor datasets")); assert.ok(summary.includes("2 selected"));
-    assert.ok(summary.includes("Observed response datasets")); assert.ok(summary.includes("1 selected"));
+    assert.ok(summary.includes("Predictor datasets")); assert.ok(summary.includes("MODIS phenology, SRTM landforms"));
+    assert.ok(summary.includes("Observed response datasets")); assert.ok(summary.includes("Landsat NDVI"));
     await h.controller.duplicateRun();
     h.context.viewportBounds.west = -110; h.controller.refreshMapArea();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "duplicate-auto").inputs, expected);
@@ -578,6 +578,58 @@ test("dataset roles remain independent and keep focus and disclosure state throu
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "all-datasets").inputs.stack,
     {kind: "earthEngine", year: 2019, predictorDatasets: ["era5_daily", "modis_phenology", "srtm_landforms"],
         responseDatasets: ["modis_phenology", "landsat_ndvi"]});
+});
+
+test("saved run dataset identities appear before optional labels and distinguish equal-size selections", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await choosePreparationSelection(h);
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    const saved = captureModelSubmission(h.controller.state.draft, "saved-datasets");
+    saved.inputs.stack.predictorDatasets = ["modis_phenology", "srtm_landforms"];
+    saved.inputs.stack.responseDatasets = ["landsat_ndvi"];
+    h.api.readModelInvocation = async () => ({...structuredClone(saved), model: {...habitat, definition: habitat}});
+    let finishLabels;
+    let labelReads = 0;
+    h.api.getHabitatEarthEngineOptions = () => {
+        labelReads++;
+        return new Promise(resolve => { finishLabels = resolve; });
+    };
+    const summary = () => h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    await h.controller.showRun("1".repeat(32));
+    assert.ok(summary().includes("modis_phenology, srtm_landforms"));
+    assert.ok(summary().includes("landsat_ndvi"));
+    finishLabels(earthEngineOptions); await settle();
+    assert.ok(summary().includes("MODIS phenology, SRTM landforms"));
+    assert.ok(summary().includes("Landsat NDVI"));
+
+    saved.inputs.stack.predictorDatasets = ["era5_daily", "srtm_landforms"];
+    saved.inputs.stack.responseDatasets = ["retired_observation"];
+    await h.controller.showRun("1".repeat(32));
+    assert.ok(summary().includes("ERA5 daily aggregates, SRTM landforms"));
+    assert.ok(!summary().includes("MODIS phenology, SRTM landforms"));
+    assert.ok(summary().includes("retired_observation"));
+    assert.equal(labelReads, 1);
+});
+
+test("optional dataset label failures and obsolete reads leave saved inputs and navigation intact", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await choosePreparationSelection(h);
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    const saved = captureModelSubmission(h.controller.state.draft, "saved-datasets");
+    h.api.readModelInvocation = async () => ({...structuredClone(saved), model: {...habitat, definition: habitat}});
+    h.api.getHabitatEarthEngineOptions = async () => { throw new Error("Metadata unavailable"); };
+    await h.controller.showRun("1".repeat(32)); await settle();
+    assert.equal(h.controller.state.invocationError, "");
+    assert.equal(h.controller.state.error, "");
+    assert.ok(h.view.run.inputsBody.children[0].children.some(child => child.textContent === "modis_phenology, landsat_ndvi"));
+
+    let finishLabels;
+    h.api.getHabitatEarthEngineOptions = () => new Promise(resolve => { finishLabels = resolve; });
+    await h.controller.showRun("1".repeat(32));
+    h.controller.navigate("library");
+    finishLabels(earthEngineOptions); await settle();
+    assert.equal(h.controller.state.page, "library");
+    assert.equal(h.controller.state.habitatDatasetLabels, null);
 });
 
 test("saved API runs with omitted dataset choices display and duplicate the configured defaults", async t => {
