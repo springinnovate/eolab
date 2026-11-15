@@ -26,6 +26,7 @@ from eolab_app.raster.source_models import (
     RasterSourceReference,
     RasterAnalysisSourceReference,
     RunArtifactReference,
+    UploadedRasterReference,
     TemporalIntervalSelection,
     TemporalVariableMetadata,
 )
@@ -98,6 +99,7 @@ from eolab_app.catalog_selection import (
     VectorSelection,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
+from eolab_app.upload_storage import UploadStorage, UploadRecord, UploadError
 
 HABITAT_PREPARATION_OPERATIONS = (
     HABITAT_PREPARATION_OPERATION,
@@ -291,6 +293,7 @@ class ProcessingService:
         model_registry: ModelRegistry | None = None,
         model_authorizer: RasterSourceAuthorizer | None = None,
         uploads: VectorUploadStore | None = None,
+        upload_storage: UploadStorage | None = None,
         areas: CatalogSelectionReader | None = None,
         operation_submission_dependencies: Mapping[str, object] | None = None,
     ) -> None:
@@ -308,6 +311,7 @@ class ProcessingService:
             model_authorizer: Catalog-only source authority for capturing model
                 inputs at admission. Existing raster endpoints retain their behavior.
             uploads: Original GeoPackages and retained links for accepted jobs.
+            upload_storage: Shared upload authority retaining raster originals alongside vectors.
             areas: Existing reader authorizing Catalog and uploaded vector selections.
             operation_submission_dependencies: Server-only dependencies keyed by
                 installed operation ID. Only that operation's before_queue callback
@@ -330,6 +334,7 @@ class ProcessingService:
         )
         self.model_authorizer = model_authorizer
         self.uploads = uploads
+        self.upload_storage = upload_storage
         self.areas = areas
         self.operation_submission_dependencies = dict(
             operation_submission_dependencies or {}
@@ -739,7 +744,7 @@ class ProcessingService:
         Args:
             owner: Hash of the requesting browser's Processing session cookie.
             request: The chosen model, input datasets, area, parameters and run label.
-            upload_owner: Separate browser identity authorizing private GeoPackages.
+            upload_owner: Separate browser identity authorizing uploaded originals.
 
         Returns:
             The newly queued run, or the original run for an unchanged retry.
@@ -782,7 +787,11 @@ class ProcessingService:
             polygons[role] = polygons_by_reference[reference]
         operation_plan = operation.queue(calculation, polygons)
         source_metadata: (
-            tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile | None
+            tuple[int, int, int, int]
+            | TemporalVariableMetadata
+            | JobInputFile
+            | UploadRecord
+            | None
         ) = None
         if isinstance(source, TemporalIntervalSelection):
             if self.model_authorizer is None:
@@ -794,15 +803,20 @@ class ProcessingService:
             source_metadata = await self.model_authorizer.get_temporal_metadata(source)
         elif source is not None:
             operation_plan, source_metadata = await self._capture_model_raster_metadata(
-                owner, source, operation_plan
+                owner, source, operation_plan, upload_owner
             )
-        additional_sources: dict[str, tuple[int, int, int, int] | JobInputFile] = {}
-        if operation.extra_sources:
-            for name, additional_source in operation.extra_sources(calculation).items():
+        additional_sources: dict[
+            str, tuple[int, int, int, int] | JobInputFile | UploadRecord
+        ] = {}
+        additional_references = (
+            operation.extra_sources(calculation) if operation.extra_sources else {}
+        )
+        if additional_references:
+            for name, additional_source in additional_references.items():
                 try:
                     operation_plan, additional_sources[name] = (
                         await self._capture_model_raster_metadata(
-                            owner, additional_source, operation_plan
+                            owner, additional_source, operation_plan, upload_owner
                         )
                     )
                 except RasterFeatureError as error:
@@ -827,6 +841,11 @@ class ProcessingService:
             request_hash,
             operation.vector_selections(calculation),
             upload_owner,
+            tuple(
+                reference
+                for reference in (source, *additional_references.values())
+                if reference is not None
+            ),
         )
         return serialize_processing_job(row)
 
@@ -835,13 +854,17 @@ class ProcessingService:
         owner: str,
         source: RasterSourceReference,
         prepared: PreparedJobPlan,
-    ) -> tuple[PreparedJobPlan, tuple[int, int, int, int] | JobInputFile]:
+        upload_owner: str | None = None,
+    ) -> tuple[
+        PreparedJobPlan, tuple[int, int, int, int] | JobInputFile | UploadRecord
+    ]:
         """Authorize a model raster, returning its metadata and updated job inputs.
 
         Args:
             owner: Processing session requesting the model run.
-            source: Catalog raster or owned published-file reference.
+            source: Catalog raster, browser upload or owned published-file reference.
             prepared: Queued plan containing any previously captured inputs.
+            upload_owner: Separate browser identity for uploaded raster sources.
 
         Returns:
             Plan retaining the private input when needed, and this source's
@@ -852,6 +875,25 @@ class ProcessingService:
                 published file cannot be used by this session.
             RasterFeatureError: If the Catalog raster cannot be authorized.
         """
+        if isinstance(source, UploadedRasterReference):
+            if self.upload_storage is None or upload_owner is None:
+                raise ProcessingError(
+                    "source_unavailable",
+                    "This raster upload is unavailable to this browser.",
+                    404,
+                )
+            try:
+                metadata, _ = await asyncio.to_thread(
+                    self.upload_storage.get_upload_source,
+                    upload_owner,
+                    source.upload_id,
+                    "raster",
+                )
+            except UploadError as error:
+                raise ProcessingError(
+                    "source_unavailable", str(error), error.status
+                ) from error
+            return prepared, metadata
         if isinstance(source, RunArtifactReference):
             prepared = await self.capture_input_file(owner, source, prepared)
             file = next(
@@ -878,8 +920,11 @@ class ProcessingService:
         request_hash: str,
         selections: dict[str, VectorSelection],
         upload_owner: str | None,
+        raster_sources: tuple[
+            RasterAnalysisSourceReference | TemporalIntervalSelection, ...
+        ] = (),
     ) -> dict[str, Any]:
-        """Queue one job after retaining all its uploaded polygon inputs.
+        """Queue one job after retaining all its uploaded raster and polygon inputs.
 
         Args:
             owner: Processing session that owns the submitted job.
@@ -887,7 +932,8 @@ class ProcessingService:
             prepared: Queued operation data and captured raster inputs.
             request_hash: Complete public request identity.
             selections: Vector selections keyed by the operation's input names.
-            upload_owner: Browser identity for private GeoPackage access.
+            upload_owner: Browser identity for private uploaded originals.
+            raster_sources: Primary and additional raster inputs requiring upload retention.
 
         Returns:
             The accepted job or its previously accepted retry.
@@ -896,6 +942,8 @@ class ProcessingService:
             ProcessingError: If source access or job admission fails.
         """
         if not any(
+            isinstance(source, UploadedRasterReference) for source in raster_sources
+        ) and not any(
             isinstance(selection, UploadedSelection)
             for selection in selections.values()
         ):
@@ -910,6 +958,7 @@ class ProcessingService:
             [JobSubmission(request_key, request_hash, prepared.operation, prepared)],
             [selections],
             upload_owner,
+            [raster_sources],
         )
         result = results[0]
         if isinstance(result, ProcessingError):
@@ -971,10 +1020,13 @@ class ProcessingService:
         submissions: list[JobSubmission],
         selections: list[dict[str, VectorSelection]],
         upload_owner: str | None,
+        raster_sources: list[
+            tuple[RasterAnalysisSourceReference | TemporalIntervalSelection, ...]
+        ],
     ) -> list[dict[str, Any] | ProcessingError]:
-        """Submit jobs and keep their uploaded polygon files available until they stop.
+        """Submit jobs and keep their uploaded original files available until they stop.
 
-        A hard link to each authorized GeoPackage lets an accepted job read the
+        A hard link to each authorized original lets an accepted job read the
         file even if the user deletes the upload. Cleanup removes that link once
         the job stops. A batch may also contain jobs without uploaded inputs.
 
@@ -990,6 +1042,7 @@ class ProcessingService:
                 predicate is authorized; selections sharing an upload retain one
                 file per job.
             upload_owner: Browser identity used only while authorizing uploads.
+            raster_sources: Each job's primary and additional raster identities, in submission order.
 
         Returns:
             Accepted jobs or per-item errors, including unchanged retry results.
@@ -1000,7 +1053,7 @@ class ProcessingService:
         """
 
         async def retain_and_submit() -> list[dict[str, Any] | ProcessingError]:
-            """Create hard links to uploaded GeoPackages, then submit the batch.
+            """Create hard links to uploaded originals, then submit the batch.
 
             Returns:
                 The store's accepted jobs and per-item failures.
@@ -1009,7 +1062,9 @@ class ProcessingService:
                 ProcessingError: If the admission transaction fails.
             """
             captured = []
-            for submission, inputs in zip(submissions, selections, strict=True):
+            for submission, inputs, rasters in zip(
+                submissions, selections, raster_sources, strict=True
+            ):
                 prepared = submission.prepared
                 if isinstance(prepared, PreparedJobPlan):
                     try:
@@ -1023,17 +1078,39 @@ class ProcessingService:
                     for selection in inputs.values()
                     if isinstance(selection, UploadedSelection)
                 ]
-                if uploaded and isinstance(prepared, PreparedJobPlan):
+                raster_uploads = [
+                    source
+                    for source in rasters
+                    if isinstance(source, UploadedRasterReference)
+                ]
+                if (uploaded or raster_uploads) and isinstance(
+                    prepared, PreparedJobPlan
+                ):
                     try:
                         if (
-                            self.uploads is None
-                            or self.areas is None
-                            or upload_owner is None
+                            upload_owner is None
+                            or (
+                                uploaded
+                                and (self.uploads is None or self.areas is None)
+                            )
+                            or (raster_uploads and self.upload_storage is None)
                         ):
                             raise VectorUploadError(
                                 404, "This upload is not available to this browser."
                             )
                         retained: dict[str, str] = {}
+                        for source in raster_uploads:
+                            upload_id = str(source.upload_id)
+                            if upload_id not in retained:
+                                _, path = await asyncio.to_thread(
+                                    self.upload_storage.get_upload_source,
+                                    upload_owner,
+                                    source.upload_id,
+                                    "raster",
+                                )
+                                retained[upload_id] = await asyncio.to_thread(
+                                    self.upload_storage.retain_source, path
+                                )
                         for selection in uploaded:
                             resolved = await self.areas.resolve_for_sampling(
                                 selection, upload_owner
@@ -1048,7 +1125,7 @@ class ProcessingService:
                             input_uploads=retained,
                             work_key=None,
                         )
-                    except VectorUploadError as error:
+                    except (VectorUploadError, UploadError) as error:
                         prepared = ProcessingError(
                             "source_unavailable", str(error), error.status
                         )
@@ -1075,9 +1152,11 @@ class ProcessingService:
 
         Raises:
             ProcessingError: If active job inputs cannot be read.
-            VectorUploadError: If retained files cannot be removed.
+            UploadError: If shared retained files cannot be removed.
+            VectorUploadError: If a vector-only store cannot remove retained files.
         """
-        if self.uploads is None:
+        storage = self.upload_storage or self.uploads
+        if storage is None:
             return
 
         async def release_unused() -> None:
@@ -1085,10 +1164,11 @@ class ProcessingService:
 
             Raises:
                 ProcessingError: If the job snapshot is unavailable.
-                VectorUploadError: If the upload directory cannot be cleaned.
+                UploadError: If the shared upload directory cannot be cleaned.
+                VectorUploadError: If a vector-only upload directory cannot be cleaned.
             """
             retained = await asyncio.to_thread(self.jobs.active_input_uploads)
-            await asyncio.to_thread(self.uploads.remove_unretained_sources, retained)
+            await asyncio.to_thread(storage.remove_unretained_sources, retained)
 
         async with self._upload_admission_lock:
             task = asyncio.create_task(release_unused())
@@ -1357,7 +1437,7 @@ class ProcessingService:
             request: Validated raster or exact temporal observation, explicit area
                 and retry key. Direct callers must construct ClipJobRequest through
                 its normal validation, just as the HTTP boundary does.
-            upload_owner: Browser identity authorizing an uploaded clipping area.
+            upload_owner: Browser identity authorizing an uploaded raster or clipping area.
 
         Returns:
             The caller's handle for shared/new work, or the same handle on retry.
@@ -1398,6 +1478,7 @@ class ProcessingService:
             request_hash,
             operation.vector_selections(request),
             upload_owner,
+            (operation.source(request),),
         )
         require_operation(row, operation.id)
         return serialize_processing_job(row)
@@ -1412,7 +1493,7 @@ class ProcessingService:
             request: Validated raster reference, selected area, formulas and stable
                 retry key. Direct callers must construct AggregateJobRequest
                 through its normal validation, just as the HTTP boundary does.
-            upload_owner: Browser identity authorizing an uploaded summary area.
+            upload_owner: Browser identity authorizing uploaded rasters and summary areas.
 
         Returns:
             The caller's observed job and labels, or the same handle after a retry.
@@ -1456,6 +1537,7 @@ class ProcessingService:
                 request_hash,
                 get_model_operation("raster.aggregate.v1").vector_selections(request),
                 upload_owner,
+                (get_model_operation("raster.aggregate.v1").source(request),),
             )
         return (
             await self._observe_submitted_calculations(
@@ -1532,7 +1614,7 @@ class ProcessingService:
         Args:
             owner: Current browser-session hash.
             requests: One to fifty requests validated at the HTTP boundary.
-            upload_owner: Browser identity authorizing uploaded summary areas.
+            upload_owner: Browser identity authorizing uploaded rasters and summary areas.
 
         Returns:
             Public job snapshots or sanitized per-item rejections, in input order.
@@ -1550,13 +1632,18 @@ class ProcessingService:
         ]
         operation = get_model_operation("raster.aggregate.v1")
         selections = [operation.vector_selections(request) for request in requests]
+        raster_sources = [(operation.source(request),) for request in requests]
         if any(
+            isinstance(source, UploadedRasterReference)
+            for sources in raster_sources
+            for source in sources
+        ) or any(
             isinstance(selection, (UploadedSelection, ArtifactVectorSelection))
             for inputs in selections
             for selection in inputs.values()
         ):
             results = await self._submit_jobs_with_uploaded_inputs(
-                owner, submissions, selections, upload_owner
+                owner, submissions, selections, upload_owner, raster_sources
             )
         else:
             results = await asyncio.to_thread(

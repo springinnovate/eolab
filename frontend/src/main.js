@@ -103,8 +103,8 @@ import { VectorFilterControls } from "./vector/filter-controls.js";
 import { VectorFieldCalculator } from "./vector/field-calculator.js";
 import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
-import { UploadPolygonsDialog } from "./vector-uploads/dialog.js";
-import { getUpload } from "./vector-uploads/api.js";
+import { UploadsDialog } from "./uploads/dialog.js";
+import { getUpload, getRasterUpload } from "./uploads/api.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
@@ -871,6 +871,7 @@ async function initializeCatalog(
                 if (isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
             }) : snapshot.local?.kind === "temporal" ? restoreRemovedTemporal(snapshot, isCurrent)
             : snapshot.local?.kind === "uploaded-vector" ? restoreUploadedVector(snapshot, isCurrent)
+            : snapshot.local?.kind === "uploaded-raster" ? restoreUploadedRaster(snapshot, isCurrent)
             : snapshot.item === null ? annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
@@ -1069,23 +1070,25 @@ async function initializeCatalog(
             apply: (result, signal) => record.adapter.installCalculatedFields(record, result, signal)};
     }});
     mapLayerController.onCalculateFields = key => vectorFieldCalculator.open(key);
-    /** Find every retained view of this browser's uploaded vector.
+    /** Find every retained vector or raster view of this browser's uploaded file.
      * @param {string} uploadId Stored upload identity.
      * @return {string[]} View keys in map drawing order.
      */
-    function getUploadedVectorKeys(uploadId) {
-        return mapLayerController.retainedRecords.filter(record => record.adapter === vectorMapLayerAdapter &&
+    function getUploadedLayerKeys(uploadId) {
+        const vectors = mapLayerController.retainedRecords.filter(record => record.adapter === vectorMapLayerAdapter &&
             record.adapter.describeSource(record).source.uploadId === uploadId).map(record => record.entry.key);
+        return [...vectors, ...mapLayerController.snapshots().filter(layer => layer.source?.kind === "uploadedRaster" &&
+            layer.source.uploadId === uploadId).map(layer => layer.key)];
     }
     /** Publish an admitted upload and add it with the ordinary vector controls.
      * An upload already on the map keeps its current appearance.
-     * @param {import("./vector-uploads/api.js").VectorUpload} upload This browser's stored polygon layer.
+     * @param {import("./uploads/api.js").VectorUpload} upload This browser's stored polygon layer.
      * @return {Promise<void>} Completion after the layer joins the map.
      * @throws {Error} If publication or map construction fails.
      */
     async function addUploadedVector(upload) {
-        if (getUploadedVectorKeys(upload.id).length) return;
-        const source = { kind: "upload", ...upload };
+        if (getUploadedLayerKeys(upload.id).length) return;
+        const source = { ...upload, kind: "upload" };
         const publication = await vectorMapLayerAdapter.publish(source);
         const record = mapLayerController.addLocal({
             key: `local:upload:${upload.id}`, label: upload.name, sourceName: upload.name,
@@ -1094,6 +1097,51 @@ async function initializeCatalog(
         onRenderingWorkspaceRequested();
         vectorMapLayerAdapter.added(record);
         mapLayerStackView.announceStatus(`${upload.name} added to map.`);
+    }
+    /** Describe and display an owned raster through ordinary tiles, style and analysis.
+     * Reopening, Undo and additional views recheck ownership and availability.
+     * @param {import("./uploads/api.js").UploadSummary} upload Available raster file.
+     * @param {Object} [presentation={}] Restored key, appearance, visibility and current-request callback.
+     * @return {Promise<Object|null>} Retained raster record, or null after supersession.
+     * @throws {Error} If metadata, publication or display fails.
+     */
+    async function addUploadedRaster(upload, presentation = {}) {
+        const source = {kind: "uploadedRaster", uploadId: upload.id};
+        const metadata = await describeRasterSource(source);
+        if (presentation.isCurrent?.() === false) return null;
+        if (!metadata.bounds) throw new Error("This raster cannot be placed on the map. Choose a GeoTIFF with a valid geographic extent.");
+        const raster = {source, version: metadata.version, label: upload.name, bbox: metadata.bounds,
+            capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
+                calculations: true, modelInput: true}};
+        const record = await rasterVisualization.showSource(raster, {
+            /** Open the file manager for this private source. @return {void} */
+            info: uploadsDialog === null ? undefined : () => { void uploadsDialog.open(); },
+            /** Capture the original upload identity and ordinary raster style for Undo.
+             * @param {Object} appearance Current raster style.
+             * @return {Object} Private restoration descriptor without bytes or credentials.
+             */
+            copy: appearance => ({kind: "uploaded-raster", uploadId: upload.id, appearance}),
+            /** Removing a map view keeps its uploaded file. @return {void} */
+            removed: () => {},
+        }, {sourceName: upload.name, canAddView: true, ...presentation});
+        if (record) {
+            onRenderingWorkspaceRequested();
+            mapLayerStackView.announceStatus(`${upload.name} added to map.`);
+        }
+        return record;
+    }
+    /** Restore a removed raster upload or create an additional view with its appearance.
+     * @param {import("./map-layers/controller.js").RemovedMapLayer} snapshot Removed private view.
+     * @param {()=>boolean} isCurrent Whether the map action still wants this view.
+     * @return {Promise<void>} Completion after ownership is checked and the view is restored.
+     * @throws {Error} If the upload is unavailable or restoration fails.
+     */
+    async function restoreUploadedRaster(snapshot, isCurrent) {
+        const upload = await getRasterUpload(snapshot.local.uploadId);
+        const record = await addUploadedRaster(upload, {key: snapshot.key, label: snapshot.label,
+            customName: snapshot.customName, visible: snapshot.visible, opacity: snapshot.opacity,
+            isCustom: snapshot.isCustom, appearance: snapshot.local.appearance, isCurrent});
+        if (record) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
     }
     /** Display a generated vector through the same adapter as catalog layers and uploads.
      * The run owner supplies lifecycle actions; this composition function connects them.
@@ -1153,7 +1201,14 @@ async function initializeCatalog(
      * @throws {Error} If the upload is unavailable or its saved appearance cannot be applied.
      */
     async function restoreSavedUpload(layer, isCurrent) {
-        const upload = { kind: "upload", ...await getUpload(layer.uploadId) };
+        if (layer.style.kind === "raster") {
+            const upload = await getRasterUpload(layer.uploadId);
+            const record = await addUploadedRaster(upload, {key: `local:view:${globalThis.crypto.randomUUID()}`,
+                customName: layer.customName, visible: layer.visible, opacity: layer.opacity,
+                isCustom: layer.isCustom ?? true, appearance: layer.style, isCurrent});
+            return record?.entry.key ?? null;
+        }
+        const upload = { ...await getUpload(layer.uploadId), kind: "upload" };
         const publication = await vectorMapLayerAdapter.publish(upload);
         if (!isCurrent()) return null;
         const key = `local:view:${globalThis.crypto.randomUUID()}`;
@@ -1186,14 +1241,25 @@ async function initializeCatalog(
      * @return {void}
      */
     function removeDeletedUpload(uploadId) {
-        mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.kind === "uploaded-vector" && snapshot.local.upload.id === uploadId);
-        for (const key of getUploadedVectorKeys(uploadId)) mapLayerController.removeKey(key);
+        mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.kind === "uploaded-vector" && snapshot.local.upload.id === uploadId ||
+            snapshot.local?.kind === "uploaded-raster" && snapshot.local.uploadId === uploadId);
+        for (const key of getUploadedLayerKeys(uploadId)) mapLayerController.removeKey(key);
     }
-    if (!isSharedViewer) new UploadPolygonsDialog({
-        document, addToMap: addUploadedVector,
-        isOnMap: id => getUploadedVectorKeys(id).length > 0,
-        onDeleted: removeDeletedUpload,
-    });
+    let uploadsDialog = null;
+    if (!isSharedViewer) {
+        uploadsDialog = new UploadsDialog({
+            document, appTitle: appGlobalConfiguration.appTitle,
+            addToMap: async upload => {
+                if (getUploadedLayerKeys(upload.id).length) return;
+                if (upload.kind === "raster") await addUploadedRaster(await getRasterUpload(upload.id));
+                else await addUploadedVector(await getUpload(upload.id));
+            },
+            isOnMap: id => getUploadedLayerKeys(id).length > 0,
+            removeFromMap: id => { for (const key of getUploadedLayerKeys(id)) mapLayerController.removeKey(key); },
+            onDeleted: removeDeletedUpload,
+        });
+        void uploadsDialog.refreshUsage();
+    }
     let modelFilterControls = null;
     /** @type {symbol} Distinguish explicit statistics-area edits from passive map-filter updates. */
     const statisticsAreaFilterIntent = Symbol("statistics-area-filter");
@@ -1231,7 +1297,7 @@ async function initializeCatalog(
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
     /** Read polygon choices for Models, histogram and summary controls.
      * Visibility and WMS publication do not determine numerical selection.
-     * @return {Array<{key:string,label:string,item:import("./vector/sampling.js").VectorSamplingSource,
+     * @return {Array<{key:string,label:string,sourceOrigin:"catalog"|"upload"|"runArtifact",item:import("./vector/sampling.js").VectorSamplingSource,
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
      * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
      * Retained source identities, immutable fields and applied filter snapshots.
@@ -1241,7 +1307,7 @@ async function initializeCatalog(
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
             return source.geometryKind === "polygon" ? [{
-                key: record.entry.key, label: record.entry.label,
+                key: record.entry.key, label: record.entry.label, sourceOrigin: source.origin,
                 item: source.source.kind === "runArtifact" ? source.selection : source.source,
                 fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
                 selection: source.selection, filter: record.adapter.exportFilterState(record),
@@ -1319,7 +1385,7 @@ async function initializeCatalog(
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields,
+                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, sourceOrigin: target.sourceOrigin, filter: target.filter, fields: target.fields,
                     scalarFields: target.scalarFields, numericFields: target.numericFields,
                     selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
                 drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({
@@ -1519,6 +1585,9 @@ async function initializeCatalog(
         },
         beforeRestore: () => {
             clearCatalogSelection();
+            for (const layer of mapLayerController.snapshots()) {
+                if (layer.source?.kind === "uploadedRaster") mapLayerController.removeKey(layer.key);
+            }
             for (const record of mapLayerController.retainedRecords) {
                 if (record.adapter === vectorMapLayerAdapter && record.entry.item === null) {
                     mapLayerController.removeKey(record.entry.key);
@@ -1527,6 +1596,12 @@ async function initializeCatalog(
             return annotationsReady;
         },
         exportUpload: record => {
+            const raster = mapLayerController.snapshots().find(layer => layer.key === record.entry.key)?.source;
+            if (raster?.kind === "uploadedRaster") return {
+                uploadId: raster.uploadId, visible: record.entry.visible, opacity: record.entry.opacity,
+                ...(record.entry.customName ? {customName: record.entry.customName} : {}),
+                style: record.adapter.exportSavedState(record),
+            };
             if (record.adapter !== vectorMapLayerAdapter || record.entry.item !== null) return null;
             if (!record.adapter.describeSource(record).source.uploadId) return null;
             return {

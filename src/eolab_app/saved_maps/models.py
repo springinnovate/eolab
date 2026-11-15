@@ -297,7 +297,7 @@ class MapTemporalLayer(MapDocumentPart):
 
 
 class MapUploadLayer(MapStyledLayer):
-    """One map view of a private upload, without access credentials or data.
+    """One raster or polygon upload view, without access credentials or data.
 
     Opening this reference still requires the browser that owns the upload.
     """
@@ -308,7 +308,21 @@ class MapUploadLayer(MapStyledLayer):
             pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         ),
     ]
-    style: MapVectorStyle
+    style: Annotated[MapRasterStyle | MapVectorStyle, Field(discriminator="kind")]
+
+    @model_validator(mode="after")
+    def validate_upload_style(self) -> Self:
+        """Keep vector predicates out of uploaded raster views.
+
+        Returns:
+            This view with an appearance matching its uploaded source type.
+
+        Raises:
+            ValueError: If a raster view contains a vector filter.
+        """
+        if isinstance(self.style, MapRasterStyle) and "filter" in self.model_fields_set:
+            raise ValueError("Raster uploads do not support vector filters.")
+        return self
 
 
 class MapVectorArtifactReference(MapDocumentPart):

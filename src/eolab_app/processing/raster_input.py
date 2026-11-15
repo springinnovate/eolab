@@ -14,6 +14,7 @@ from eolab_app.processing.models import ProcessingError
 from eolab_app.raster.source_models import (
     RasterAnalysisSourceReference,
     RunArtifactReference,
+    UploadedRasterReference,
 )
 from eolab_app.raster.reader import RasterData
 from eolab_app.raster.bounded_window import (
@@ -31,7 +32,7 @@ from eolab_app.raster.source_contract import (
 
 
 def raster_source_filename_prefix(source: RasterAnalysisSourceReference) -> str:
-    """Name a derived file using its catalog item or published artifact identity.
+    """Name a derived file using its opaque original raster identity.
 
     Args:
         source: Validated path-free raster reference.
@@ -39,6 +40,8 @@ def raster_source_filename_prefix(source: RasterAnalysisSourceReference) -> str:
     Returns:
         A portable filename prefix containing no server path or user-supplied label.
     """
+    if isinstance(source, UploadedRasterReference):
+        return source.upload_id.hex
     return (
         source.artifact_id
         if isinstance(source, RunArtifactReference)

@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
-test("version four round-trips calculated catalog and private result views without values or credentials", () => {
+test("version four round-trips calculated vectors and raster uploads without values or credentials", () => {
   const fields = [{version: 1, name: "Density", expression: "'Population' / 'Area km2'", numericText: false}];
   const presentation = {isCustom: true, visible: true, opacity: 1, calculatedFields: fields,
     style: {kind: "vector", definition: {graduated: {field: "Density"}}},
@@ -11,6 +11,9 @@ test("version four round-trips calculated catalog and private result views witho
   const view = createSavedMapView({...savedMapCandidate(), layers: [
     {...presentation, catalogItem: {collection: "vectors", id: "regions"}},
     {...presentation, runArtifact: {jobId: "a".repeat(32), artifactId: "b".repeat(32), layerName: "results"}},
+    {...presentation, uploadId: "11111111-1111-4111-8111-111111111111"},
+    {uploadId: "22222222-2222-4222-8222-222222222222", visible: false, opacity: 0.5,
+      style: savedMapCandidate().layers[0].style},
   ]});
   assert.deepEqual(parseSavedMapView(serializeSavedMapView(view)), view);
   for (const mutate of [
@@ -23,6 +26,11 @@ test("version four round-trips calculated catalog and private result views witho
   ]) {
     const invalid = structuredClone(view); mutate(invalid);
     assert.throws(() => parseSavedMapView(JSON.stringify(invalid)));
+  }
+  for (const layer of view.layers.slice(0, 3)) {
+    const raster = structuredClone(layer);
+    raster.style = savedMapCandidate().layers[0].style;
+    assert.throws(() => createSavedMapView({...savedMapCandidate(), layers: [raster]}), /require a vector style/);
   }
 });
 
@@ -75,7 +83,11 @@ test("private upload references preserve appearance without accepting data or cr
   assert.throws(() => parseSavedMapView(JSON.stringify(invalidId)), /identifier/);
   const raster = structuredClone(candidate);
   raster.layers[0].style = savedMapCandidate().layers[0].style;
-  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /vector style/);
+  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /cannot have polygon filters/);
+  delete raster.layers[0].filter;
+  assert.deepEqual(parseSavedMapView(JSON.stringify(raster)), raster);
+  raster.layers[0].calculatedFields = [{version: 1, name: "Weight", expression: "2", numericText: false}];
+  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /require a vector style/);
 });
 
 test("saved map serialization preserves vector CSV rules as an opaque owner definition", async () => {

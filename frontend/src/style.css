@@ -482,6 +482,8 @@ h5 {
 .upload-polygons-list { list-style: none; padding: 0; margin: 0; }
 .upload-polygons-list li { display: grid; gap: 0.5rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border-2); }
 .upload-polygons-list strong { overflow-wrap: anywhere; }
+.upload-polygons-list .upload-file-description { margin: 0; color: var(--text-2); }
+.upload-storage-usage { font-weight: 600; }
 .upload-polygons-confirmation { padding: 0.75rem; border: 1px solid var(--status-danger); margin-top: 0.75rem; }
 .upload-polygons-confirmation button { margin-right: 0.5rem; }
 
@@ -844,6 +846,7 @@ h5 {
 .map-layer-visibility-zoom input { width: 13px; height: 13px; margin: 0; }
 .map-layer-title { display: inline; }
 .map-layer-kind { display: block; margin: 1px 0 0 21px; color: var(--text-3); font-size: var(--font-size-support); line-height: 1.4; }
+.map-layer-source-origin { display: inline-block; margin-inline-start: 0.45rem; color: var(--text-2); font-size: var(--font-size-support); font-weight: 400; }
 
 .map-layer-name-editor { grid-column: 2; display: grid; gap: 6px; min-width: 0; }
 .map-layer-name-editor label { display: grid; gap: 4px; }

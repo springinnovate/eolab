@@ -28,6 +28,7 @@ from eolab_app.raster.source_models import (
     RasterStatisticsSourceRequest,
     RasterPairSourceRequest,
     RunArtifactReference,
+    UploadedRasterReference,
     raster_source_reference,
 )
 from eolab_app.source_files import SourceFileError
@@ -100,7 +101,10 @@ def create_raster_analysis_router(
                     headers={"Cache-Control": "private, no-store"},
                 )
             context["owner"] = session_owner(request, response)
-        if any(isinstance(reference, UploadedSelection) for reference in references):
+        if any(
+            isinstance(reference, (UploadedSelection, UploadedRasterReference))
+            for reference in references
+        ):
             context["upload_owner"] = get_browser_owner_hash(
                 request, response, mutation_header="X-EOLab-Uploads"
             )

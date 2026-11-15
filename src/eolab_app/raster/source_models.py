@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Literal
+from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
@@ -27,6 +28,14 @@ class RunArtifactReference(BaseModel):
     kind: Literal["runArtifact"]
     job_id: str = Field(alias="jobId", strict=True, pattern=r"^[a-f0-9]{32}$")
     artifact_id: str = Field(alias="artifactId", strict=True, pattern=r"^[a-f0-9]{32}$")
+
+
+class UploadedRasterReference(BaseModel):
+    """Identify an immutable GeoTIFF owned by the requesting upload browser."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["uploadedRaster"]
+    upload_id: UUID = Field(alias="uploadId")
 
 
 class TemporalVariableSelection(BaseModel):
@@ -136,12 +145,14 @@ class TemporalIntervalSelection(TemporalVariableSelection):
         return self
 
 
-RasterSourceReference = CatalogRasterRequest | RunArtifactReference
+RasterSourceReference = (
+    CatalogRasterRequest | RunArtifactReference | UploadedRasterReference
+)
 RasterAnalysisSourceReference = RasterSourceReference | TemporalRasterSelection
 
 
 class RasterSourceRequest(BaseModel):
-    """Request WMS publication of a catalog raster, run file or observation."""
+    """Request WMS publication of a catalog raster, upload, run file or observation."""
 
     model_config = ConfigDict(extra="forbid")
     source: RasterSourceReference | TemporalRasterSelection

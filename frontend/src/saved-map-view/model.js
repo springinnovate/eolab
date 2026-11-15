@@ -295,8 +295,11 @@ function validateLayer(candidate) {
             "Saved layer style kind must be raster or vector."
         );
     }
-    if ((isUpload || isArtifact || Object.hasOwn(candidate, "calculatedFields")) && candidate.style.kind !== "vector") {
-        throw new SavedMapViewValidationError("Uploaded layers require a vector style.");
+    if ((isArtifact || Object.hasOwn(candidate, "calculatedFields")) && candidate.style.kind !== "vector") {
+        throw new SavedMapViewValidationError("Calculated fields and vector run results require a vector style.");
+    }
+    if (isUpload && candidate.style.kind === "raster" && Object.hasOwn(candidate, "filter")) {
+        throw new SavedMapViewValidationError("Uploaded raster layers cannot have polygon filters.");
     }
     if (isTemporal && candidate.style.kind !== "raster") {
         throw new SavedMapViewValidationError("Temporal layers require a raster style.");

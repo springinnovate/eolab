@@ -567,6 +567,20 @@ test("Catalog and Custom rows share one unchanged order and use explicit layer m
     "Duplicate to use a different style.");
 });
 
+test("uploaded provenance is visible independently of names, view keys and Custom styling", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layers = [
+    {...LAYERS[0], key: "catalog-shaped-id", datasetKind: "vector", sourceOrigin: "upload", isCustom: true, label: "Renamed study sites"},
+    {...LAYERS[1], key: "local:upload:misleading", datasetKind: "vector", sourceOrigin: "catalog", isCustom: true},
+  ];
+  view.render(layers, null);
+  const rows = doc.querySelector("#raster-layer-list").children;
+  assert.deepEqual(rows.map(row => row.dataset.layerKey), layers.map(layer => layer.key));
+  assert.equal(elementsByClass(rows[0], "map-layer-source-origin")[0].textContent, "Uploaded by you");
+  assert.equal(elementsByClass(rows[1], "map-layer-source-origin").length, 0);
+  assert.equal(elementsByClass(rows[0], "map-layer-kind")[0].textContent, "Custom · Vector");
+});
+
 test("full names stay on the card while More actions preserves disclosure and utility focus through refresh and reorder", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const layers = LAYERS.map(layer => ({ ...layer, isCustom: false }));

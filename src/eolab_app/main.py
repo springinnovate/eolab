@@ -6,6 +6,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 import logging
 import signal
+from uuid import UUID
 
 import httpx2
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -23,6 +24,14 @@ from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from eolab_app.routes.raster_uploads import create_raster_uploads_router
+from eolab_app.raster_uploads import RasterUploadStore
+from eolab_app.routes.uploads import create_uploads_router
+from eolab_app.upload_storage import (
+    UploadError,
+    UploadStorage,
+    finish_upload_disk_operation,
+)
 from eolab_app.routes.vector_artifacts import create_artifact_vector_router
 from eolab_app.routes.vector_calculations import create_vector_calculation_router
 from eolab_app.vector.field_calculation import FieldCalculationJobs
@@ -67,6 +76,7 @@ from eolab_app.raster.publication import (
     RasterPublicationService,
     is_temporal_raster_layer,
     temporary_raster_source,
+    uploaded_raster_source,
 )
 from eolab_app.raster.source_authorization import (
     CatalogRasterSourceAuthorizer,
@@ -231,9 +241,16 @@ def create_app(
         app_global_configuration.scan_mount_path
     )
     vector_jobs = JobsClient(jobs_client, app_global_configuration.jobs_token)
+    upload_storage = UploadStorage(
+        app_global_configuration.vector_upload_data_path,
+        app_global_configuration.upload_max_bytes,
+        app_global_configuration.upload_owner_max_bytes,
+        app_global_configuration.upload_global_max_bytes,
+    )
     vector_uploads = VectorUploadStore(
         app_global_configuration.vector_upload_data_path,
         app_global_configuration.vector_upload_max_bytes,
+        storage=upload_storage,
     )
     vector_selection_reader = VectorSamplingService(
         vector_catalog,
@@ -262,6 +279,7 @@ def create_app(
         changes=processing_events,
         model_authorizer=raster_source_authorizer,
         uploads=vector_uploads,
+        upload_storage=upload_storage,
         areas=vector_selection_reader,
         operation_submission_dependencies={
             HABITAT_CONDITION_OPERATION: habitat_submission_dependencies,
@@ -270,7 +288,9 @@ def create_app(
     )
     source_files = create_model_source_files(processing_service)
     artifact_vectors = ArtifactVectorSourceResolver(source_files)
-    raster_sources = RasterSourceAccess(raster_source_authorizer, source_files)
+    raster_sources = RasterSourceAccess(
+        raster_source_authorizer, source_files, uploads=upload_storage
+    )
     processing_session_ttl = max(
         7 * 86_400,
         processing_limits.result_ttl_seconds,
@@ -324,6 +344,20 @@ def create_app(
         queue_wait_seconds=app_global_configuration.raster_statistics_queue_wait_seconds,
         max_waiters=app_global_configuration.raster_statistics_max_waiters,
     )
+    async def raster_upload_is_available(identifier: UUID) -> bool:
+        """Check whether a raster upload still needs its GeoServer publication.
+
+        Args:
+            identifier: Opaque upload ID recovered from a server-owned layer name.
+
+        Returns:
+            Whether its admitted original remains available and unexpired.
+
+        Raises:
+            UploadError: If storage cannot establish the file's lifetime.
+        """
+        return await asyncio.to_thread(upload_storage.is_available, identifier, "raster")
+
     raster_publication = RasterPublicationService(
         raster_catalog,
         raster_source_resolver,
@@ -334,6 +368,7 @@ def create_app(
         published_rasters,
         source_access=raster_sources,
         source_available=processing_service.model_artifact_is_available,
+        upload_available=raster_upload_is_available,
     )
     raster_feature = create_raster_feature(
         raster_publication,
@@ -364,21 +399,28 @@ def create_app(
                 for name in layer_names
                 if (identifier := published_vectors.get_upload_id(name)) is not None
             }
-            private = bool(upload_ids)
-            if upload_ids:
-                owner = get_browser_owner_hash(
+            has_raster_uploads = any(uploaded_raster_source(name) for name in layer_names)
+            private = bool(upload_ids) or has_raster_uploads
+            upload_owner = None
+            if upload_ids or has_raster_uploads:
+                upload_owner = get_browser_owner_hash(
                     request, Response(), mutation_header="X-EOLab-Uploads"
                 )
                 for identifier in upload_ids:
                     await asyncio.to_thread(
-                        vector_uploads.get_upload_source, owner, identifier
+                        vector_uploads.get_upload_source, upload_owner, identifier
                     )
-            if any(temporary_raster_source(name) for name in layer_names):
-                owner = get_processing_session_owner_hash(
-                    request, Response(), processing_session_ttl
+            has_run_rasters = any(temporary_raster_source(name) for name in layer_names)
+            if has_run_rasters or has_raster_uploads:
+                owner = (
+                    get_processing_session_owner_hash(
+                        request, Response(), processing_session_ttl
+                    ) if has_run_rasters else None
                 )
                 private = (
-                    await raster_publication.authorize_layers(layer_names, owner)
+                    await raster_publication.authorize_layers(
+                        layer_names, owner, upload_owner
+                    )
                     or private
                 )
             if any(
@@ -392,7 +434,7 @@ def create_app(
                     or private
                 )
             return private
-        except (SourceFileError, VectorUploadError) as error:
+        except (SourceFileError, VectorUploadError, UploadError) as error:
             raise HTTPException(
                 error.status, str(error), headers={"Cache-Control": "private, no-store"}
             ) from error
@@ -466,11 +508,13 @@ def create_app(
                         "Temporary publication cleanup will retry."
                     )
 
-    async def release_finished_upload_inputs() -> None:
-        """Remove retained uploads after their Processing jobs have stopped.
+    async def remove_expired_uploads_and_unused_inputs() -> None:
+        """Delete expired originals and release files no calculation still needs.
 
         Reconciles every five seconds, including unfinished cleanup after a
-        restart. Admission shares the service's lock; database outages keep files.
+        restart. Original-file expiry does not require the job database. Retained
+        input cleanup shares Processing's admission lock; database outages keep
+        those files until active calculations can be identified safely.
 
         Raises:
             asyncio.CancelledError: After in-flight cleanup stops on shutdown.
@@ -478,8 +522,14 @@ def create_app(
         while True:
             await asyncio.sleep(5)
             try:
+                await finish_upload_disk_operation(upload_storage.sweep_expired)
+            except (OSError, UploadError):
+                logging.getLogger(__name__).warning(
+                    "Expired upload cleanup will retry."
+                )
+            try:
                 await processing_service.reconcile_upload_inputs()
-            except (ProcessingError, VectorUploadError):
+            except (ProcessingError, VectorUploadError, UploadError):
                 logging.getLogger(__name__).warning(
                     "Retained upload cleanup will retry."
                 )
@@ -575,7 +625,9 @@ def create_app(
                 client_stack.push_async_callback(client.aclose)
             client_stack.push_async_callback(render_queue.close)
             publication_cleanup = asyncio.create_task(reconcile_output_publications())
-            upload_cleanup = asyncio.create_task(release_finished_upload_inputs())
+            upload_cleanup = asyncio.create_task(
+                remove_expired_uploads_and_unused_inputs()
+            )
             try:
                 yield
             finally:
@@ -599,6 +651,16 @@ def create_app(
     )
     application.include_router(create_annotation_sessions_router(annotation_sessions))
     application.include_router(create_vector_uploads_router(vector_uploads))
+    application.include_router(create_uploads_router(upload_storage))
+    application.include_router(
+        create_raster_uploads_router(
+            RasterUploadStore(
+                upload_storage,
+                app_global_configuration.raster_upload_max_decoded_bytes,
+                app_global_configuration.raster_upload_max_block_bytes,
+            )
+        )
+    )
     application.include_router(
         create_vector_calculation_router(
             FieldCalculationJobs(vector_jobs), source_files,
@@ -789,6 +851,7 @@ def create_app(
             use_layers=use_map_layers,
             hidden_layer=lambda name: (
                 temporary_raster_source(name) is not None
+                or uploaded_raster_source(name) is not None
                 or is_temporal_raster_layer(name)
                 or published_vectors.get_upload_id(name) is not None
                 or published_vectors.get_artifact_reference(name) is not None
@@ -923,6 +986,7 @@ async def run_processing_worker() -> None:
                     native=execution_native,
                     areas=areas,
                     uploads=uploads,
+                    upload_storage=uploads.storage,
                     operation_settings={
                         "habitat.condition.v1": (
                             settings.processing_data_path / "habitat-cache"

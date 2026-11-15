@@ -465,12 +465,12 @@
                       aria-hidden="false"
                     >
                     <p class="models-help" data-private-result-notice hidden>Result previews are temporary and private. Reopen them from Data tools → Runs.</p>
-                    <div class="map-layer-source-actions" role="group" aria-label="Add polygons">
+                    <div class="map-layer-source-actions" role="group" aria-label="Add or manage your layers">
+                    <button class="secondary-button" id="upload-polygons" type="button">Your uploads</button>
                     <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a private polygon saved on this device" disabled>Draw polygon</button>
                     <details class="annotation-layer-tools">
-                      <summary>Upload polygons</summary>
-                      <div class="annotation-layer-actions" role="group" aria-label="Upload polygons">
-                      <button class="secondary-button" id="upload-polygons" type="button">GeoPackage uploads…</button>
+                      <summary>Import polygons</summary>
+                      <div class="annotation-layer-actions" role="group" aria-label="Import polygons">
                       <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON…</button>
                       <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import polygons from a GeoJSON file" hidden>
                       </div>

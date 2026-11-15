@@ -17,8 +17,13 @@ from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
     run_until_http_disconnect,
 )
-from eolab_app.raster.source_models import RasterSourceRequest, RunArtifactReference
+from eolab_app.raster.source_models import (
+    RasterSourceRequest,
+    RunArtifactReference,
+    UploadedRasterReference,
+)
 from eolab_app.source_files import SourceFileError
+from eolab_app.routes.browser_identity import get_browser_owner_hash
 
 
 @dataclass(frozen=True)
@@ -63,7 +68,7 @@ def create_raster_feature(
         """Publish an authorized raster source while its HTTP client remains connected.
 
         Args:
-            request: Catalog raster, session-owned run file or temporal observation.
+            request: Catalog raster, browser upload, run file or temporal observation.
             http_request: HTTP session and connection cancellation context.
             response: Private response headers for temporary publications.
 
@@ -75,6 +80,7 @@ def create_raster_feature(
         """
         try:
             owner = None
+            upload_owner = None
             if isinstance(request, RasterSourceRequest) and isinstance(
                 request.source, RunArtifactReference
             ):
@@ -83,10 +89,21 @@ def create_raster_feature(
                         "Temporary raster publication is unavailable.", 503
                     )
                 owner = session_owner(http_request, response)
+            if isinstance(request, RasterSourceRequest) and isinstance(
+                request.source, UploadedRasterReference
+            ):
+                upload_owner = get_browser_owner_hash(
+                    http_request, response, mutation_header="X-EOLab-Uploads"
+                )
+                response.headers["Cache-Control"] = "private, no-store"
             operation = (
-                publication_service.publish(request)
-                if owner is None
-                else publication_service.publish(request, owner)
+                publication_service.publish(request, owner, upload_owner)
+                if upload_owner is not None
+                else (
+                    publication_service.publish(request)
+                    if owner is None
+                    else publication_service.publish(request, owner)
+                )
             )
             return await run_until_http_disconnect(http_request, operation)
         except HttpClientDisconnectedError as error:

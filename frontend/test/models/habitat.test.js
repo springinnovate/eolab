@@ -84,8 +84,8 @@ async function fixture(contextOverrides = {}) {
     const context = {
         rasters: ["Environment", "Habitat class", "Productivity", "Reference mask", "Assessment mask"].map((label, index) =>
             ({collectionId: "eolab-mounted-geotiffs", itemId: `geotiff-${index.toString(16).padStart(24, "0")}`, label, visible: false})),
-        vectors: [{...selection, key: "view:basins", label: "Catalog basins", fields: [{name: "BASIN", type: "str"}]},
-            {key: "view:sites", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "reference_sites", label: "Uploaded sites",
+        vectors: [{...selection, key: "view:basins", label: "Catalog basins", sourceOrigin: "catalog", fields: [{name: "BASIN", type: "str"}]},
+            {key: "view:sites", sourceOrigin: "upload", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "reference_sites", label: "Uploaded sites",
                 filter: structuredClone(selection.filter), fields: [{name: "BASIN", type: "str"}]}],
         area: {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}},
         ...contextOverrides,
@@ -272,6 +272,48 @@ for (const [label, areaIndex, referenceIndex, withMask] of [
     }
     assert.deepEqual(request.inputs.habitat_mask, withMask ? sources[4] : null);
     assert.deepEqual(request.parameters, {});
+    h.controller.destroy();
+});
+
+test("reference choices retain upload provenance after selection and a display-name change", async () => {
+    const h = await fixture();
+    const references = h.view.setup.inputs.references;
+    const groups = references.source.querySelectorAll("optgroup");
+    assert.equal(groups.find(group => group.label === "Your uploads").children[0].textContent, "Uploaded sites · Polygons");
+    assert.equal(groups.find(group => group.label === "Catalog layers").children[0].textContent, "Catalog basins · Polygons");
+    await chooseVector(h, "references", h.context.vectors[1], "South");
+    assert.equal(references.sourceOrigin.textContent, "Uploaded by you · Polygons");
+    assert.equal(references.sourceOrigin.hidden, false);
+    h.context.vectors[1].label = "Trusted reference sites";
+    h.controller.refreshMapLayers();
+    assert.equal(references.sourceOrigin.textContent, "Uploaded by you · Polygons");
+    assert.equal(references.source.getAttribute("aria-describedby"), references.sourceOrigin.id);
+    h.controller.destroy();
+});
+
+test("uploaded raster reference sites keep their origin in choices, saved runs and duplication", async () => {
+    const h = await fixture(); chooseStack(h);
+    const source = {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"};
+    const mask = {...source, label: "Trusted mask", visible: false};
+    h.context.rasters.push(mask); h.controller.refreshMapLayers();
+    const controls = h.view.setup.inputs.references;
+    const uploadGroup = controls.source.querySelectorAll("optgroup").find(group => group.label === "Your uploads");
+    assert.deepEqual(uploadGroup.children.map(option => option.textContent), ["Uploaded sites · Polygons", "Trusted mask · Raster mask (hidden on map)"]);
+    edit(controls.source, `raster:${modelSourceKey(mask)}`); await settle();
+    assert.equal(controls.sourceOrigin.textContent, "Uploaded by you · Raster mask");
+    assert.match(controls.source.getAttribute("aria-describedby"), /source-origin/);
+    assert.equal(h.view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.deepEqual(h.requests[0].inputs.references, {kind: "raster", source});
+    const saved = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    assert.ok(saved.includes("Uploaded by you · Raster mask · cells equal to 1"));
+    assert.ok(saved.every(text => !text.includes("undefined")));
+    await h.controller.duplicateRun(); await settle();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-upload").inputs.references, {kind: "raster", source});
+    h.context.rasters = h.context.rasters.filter(value => value !== mask); h.controller.refreshMapLayers();
+    assert.equal(h.view.setup.run.disabled, true);
+    assert.equal(h.controller.state.draft.inputs.references.maskRaster.available, false);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "removed-upload"), /no longer available/);
     h.controller.destroy();
 });
 

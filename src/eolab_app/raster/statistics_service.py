@@ -266,7 +266,7 @@ class RasterStatisticsService:
         Args:
             request: Existing catalog request or explicit raster source and area.
             owner: Server-derived session hash for a private raster or polygon area.
-            upload_owner: Server-derived browser hash for uploaded polygon selections.
+            upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
             Counts, ranges, percentiles and a histogram with sampling details.
@@ -278,7 +278,9 @@ class RasterStatisticsService:
         """
         async with AsyncExitStack() as stack:
             source = await stack.enter_async_context(
-                self._source_access.open(raster_source_reference(request), owner)
+                self._source_access.open(
+                    raster_source_reference(request), owner, upload_owner
+                )
             )
             sampling_area = await stack.enter_async_context(
                 self._open_sampling_area(request, owner, upload_owner)
@@ -409,7 +411,7 @@ class RasterStatisticsService:
         Args:
             request: Ordered raster references and optional sampling area.
             owner: Server-derived session hash for a private raster or polygon area.
-            upload_owner: Server-derived browser hash for uploaded polygon selections.
+            upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
             Joint and marginal histograms on the X raster's sampling grid.
@@ -421,10 +423,10 @@ class RasterStatisticsService:
         """
         async with AsyncExitStack() as stack:
             x = await stack.enter_async_context(
-                self._source_access.open(request.x_raster, owner)
+                self._source_access.open(request.x_raster, owner, upload_owner)
             )
             y = await stack.enter_async_context(
-                self._source_access.open(request.y_raster, owner)
+                self._source_access.open(request.y_raster, owner, upload_owner)
             )
             sampling_area = await stack.enter_async_context(
                 self._open_sampling_area(request, owner, upload_owner)

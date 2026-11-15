@@ -37,12 +37,13 @@ export function describeModelArea(area) {
     return "Saved polygon selection";
 }
 
-/** Describe a saved raster using its Catalog identity or completed-run file label.
- * @param {Object} source Catalog or owned run-file reference.
+/** Describe a saved raster using its Catalog identity, private upload origin or completed-run label.
+ * @param {Object} source Catalog, uploaded raster or owned run-file reference.
  * @param {Object[]} runs Loaded run statuses and artifact manifests.
  * @return {string} Readable source identity without a filesystem path.
  */
 function describeModelRaster(source, runs) {
+    if (source.kind === "uploadedRaster") return "Uploaded by you · Raster mask";
     if (source.kind !== "runArtifact") return `${source.collectionId} / ${source.itemId}`;
     const run = runs.find(value => value.jobId === source.jobId);
     const file = run?.artifacts?.files.find(value => value.artifactId === source.artifactId);
@@ -204,6 +205,10 @@ export class ModelsView {
         sourceField.id = `models-${name}-source-label`;
         group.setAttribute("role", "group"); group.setAttribute("aria-labelledby", sourceField.id);
         group.append(sourceField); fields.append(group);
+        const sourceOrigin = this.element("p", "", "models-help");
+        sourceOrigin.id = `models-${name}-source-origin`;
+        sourceOrigin.hidden = true;
+        group.append(sourceOrigin);
         const maskGroup = this.element("div", "", "models-vector");
         const preparation = references ? this.buildRasterResampling(maskGroup, name,
             resampling => this.handlers.onInput(name, {resampling})) : {resampling: null, resamplingField: null};
@@ -233,7 +238,7 @@ export class ModelsView {
         const mapHelp = this.element("p", "", "models-help");
         group.append(vectorGroup, areaDescription, mapHelp);
         if (input.type === "mask_source") group.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
-        return {group, source, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
+        return {group, source, sourceOrigin, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
 
@@ -337,13 +342,14 @@ export class ModelsView {
         const optional = input.type === "optional_raster";
         const sources = state.draft.sources.filter(source => acceptsResults || source.kind !== "runArtifact");
         this.options(controls.source, [{value: "", label: optional ? "None" : "Choose a raster…"}, ...sources.map(source => ({value: modelSourceKey(source),
-            group: acceptsResults ? source.kind === "runArtifact" ? "Completed runs" : "Map contents" : undefined,
+            group: source.kind === "uploadedRaster" ? "Your uploads" : source.kind === "runArtifact" ? "Completed runs" : "Map contents",
             disabled: source.available === false,
             label: source.label + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : "")}))], value.raster ? modelSourceKey(value.raster) : "");
         if (value.raster?.available === false) {
             controls.reason.textContent = "This raster is no longer available. Choose another input.";
         } else if (value.raster) {
-            controls.reason.textContent = value.copiedFromRun ? "Copied from the original run; choose another raster to change it." : "";
+            controls.reason.textContent = [value.raster.kind === "uploadedRaster" ? "Uploaded by you · Raster mask" : "",
+                value.copiedFromRun ? "Copied from the original run; choose another raster to change it." : ""].filter(Boolean).join(". ");
         } else {
             controls.reason.textContent = optional ? "Leave None selected to run without this optional input." : acceptsResults
                 ? "Choose a raster from Map contents or a completed run. Results do not need to be shown on the map."
@@ -382,7 +388,8 @@ export class ModelsView {
             const originalLabel = references && value.capturedArea.kind === "polygonArea" ? "Reference sites from original run" : "Area from original run";
             areaChoices.push({value: "captured", label: value.areaOrigin === "run" ? originalLabel : "Selected features"});
         }
-        areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: source.label, group: "Vector layers"})));
+        areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: `${source.label} · Polygons`,
+            group: source.sourceOrigin === "upload" ? "Your uploads" : source.sourceOrigin === "runArtifact" ? "Completed runs" : "Catalog layers"})));
         if (references || input.type === "summary_area") {
             areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
@@ -390,8 +397,8 @@ export class ModelsView {
             const rasters = draft.sources.filter(source => references || source.kind !== "runArtifact");
             if (value.maskRaster && !rasters.some(source => modelSourceKey(source) === modelSourceKey(value.maskRaster))) rasters.push({...value.maskRaster, available: false});
             areaChoices.push(...rasters.map(source => ({value: `raster:${modelSourceKey(source)}`,
-                label: (source.label ?? "Previously selected raster") + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : ""),
-                group: source.kind === "runArtifact" ? "Completed runs" : "Raster layers", disabled: source.available === false})));
+                label: `${source.label ?? "Previously selected raster"} · ${source.kind === "uploadedRaster" ? "Raster mask" : "Raster"}` + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : ""),
+                group: source.kind === "uploadedRaster" ? "Your uploads" : source.kind === "runArtifact" ? "Completed runs" : "Catalog layers", disabled: source.available === false})));
         }
         let selected = value.areaMode;
         if (drawn) selected = drawnLayer ? `drawn:${drawnLayer.key}` : "";
@@ -400,7 +407,15 @@ export class ModelsView {
         this.options(controls.source, areaChoices, selected);
         const rasterActive = usesRasterOrVector && value.areaMode === "raster";
         controls.maskGroup.hidden = !rasterActive;
-        controls.source.setAttribute("aria-describedby", rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : "");
+        const selectedVector = value.areaMode === "vector" ? value.vectors.find(source => source.key === value.vectorKey) : null;
+        controls.sourceOrigin.textContent = selectedVector ? selectedVector.sourceOrigin === "upload" ? "Uploaded by you · Polygons"
+            : selectedVector.sourceOrigin === "runArtifact" ? "Completed run · Polygons" : "Catalog · Polygons"
+            : rasterActive && value.maskRaster ? value.maskRaster.kind === "uploadedRaster" ? "Uploaded by you · Raster mask"
+                : value.maskRaster.kind === "runArtifact" ? "Completed run · Raster" : "Catalog · Raster"
+            : drawn && drawnLayer ? "Drawn polygons" : "";
+        controls.sourceOrigin.hidden = !controls.sourceOrigin.textContent;
+        controls.source.setAttribute("aria-describedby", [controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id,
+            rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : ""].filter(Boolean).join(" "));
         if (controls.resampling) {
             controls.resampling.value = value.resampling;
             controls.resampling.disabled = !rasterActive;

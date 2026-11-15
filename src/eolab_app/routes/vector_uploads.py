@@ -6,29 +6,13 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
 
-from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.routes.uploads import upload_browser
 from eolab_app.routes.vector_http import PrivateVectorRoute
 from eolab_app.vector.sources import resolve_uploaded_vector
 from eolab_app.vector_uploads import VectorUpload, VectorUploadError, VectorUploadStore
 from eolab_app.vector_field_values import VectorFieldValuePage, VectorFieldValueQuery
-
-
-def upload_browser(request: Request, response: Response) -> str:
-    """Recognize the browser and require the upload API's same-origin mutation header.
-
-    Args:
-        request: Incoming browser request.
-        response: Response renewing the existing private browser cookie.
-
-    Returns:
-        Hashed browser identity used to locate only its uploads.
-
-    Raises:
-        HTTPException: If a mutation lacks X-EOLab-Uploads: 1 or is cross-origin.
-    """
-    return get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads")
 
 
 def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:

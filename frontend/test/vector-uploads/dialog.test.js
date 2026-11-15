@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { UploadPolygonsDialog } from "../../src/vector-uploads/dialog.js";
-import { deleteUpload, getUpload, listUploads, uploadPolygons } from "../../src/vector-uploads/api.js";
+import { UploadsDialog } from "../../src/uploads/dialog.js";
+import { deleteUpload, deleteUploadedFile, getUpload, getRasterUpload, getUploadStorageSummary, listUploads, uploadPolygons, uploadFile } from "../../src/uploads/api.js";
 
 /** Minimal dialog elements that expose user actions and the component's rendered state. */
 class Element extends EventTarget {
@@ -30,24 +30,42 @@ class Element extends EventTarget {
 /**
  * Create a closed dialog with controllable upload and map operations.
  * @param {Object} [options] Upload listing, deletion and map callbacks.
- * @return {{dialog:UploadPolygonsDialog,document:Object}} Dialog and focus-tracking document.
+ * @return {{dialog:UploadsDialog,document:Object}} Dialog and focus-tracking document.
  */
 function createDialog(options = {}) {
     const document = { createElement: tag => new Element(document, tag) };
     document.body = document.createElement("body");
     const trigger = document.createElement("button");
     document.querySelector = selector => { assert.equal(selector, "#upload-polygons"); return trigger; };
-    const dialog = new UploadPolygonsDialog({ document, addToMap: async () => {},
-        isOnMap: () => false, onDeleted() {}, list: async () => [], ...options });
+    const list = options.list ?? (async () => []);
+    const dialog = new UploadsDialog({ document, appTitle: "EOLab", addToMap: async () => {},
+        isOnMap: () => false, removeFromMap() {}, onDeleted() {}, ...options,
+        list: async () => storageSummary(await list()) });
     return { dialog, document };
+}
+
+/** Supply the complete server allowance around controlled stored-file fixtures.
+ * @param {Object[]} uploads Available uploads.
+ * @param {Object} [changes] Server counts or limits to override.
+ * @return {Object} Shared upload summary.
+ */
+function storageSummary(uploads, changes = {}) {
+    for (const upload of uploads) {
+        upload.kind ??= "vector";
+        upload.size_bytes ??= 1024;
+        upload.created_at ??= "2026-11-15T00:00:00Z";
+        upload.expires_at ??= "2026-11-22T00:00:00Z";
+    }
+    return {uploads, used_files: uploads.length, max_files: 5, used_bytes: uploads.length * 1024,
+        max_bytes: 500 * 1024 * 1024, max_file_bytes: 100 * 1024 * 1024, retained_files: 0, ...changes};
 }
 
 /**
  * Build a dialog connected to real upload transport with controlled HTTP and map completion.
  * @param {typeof fetch} fetcher Upload response provider.
- * @param {(upload:import('../../src/vector-uploads/api.js').VectorUpload)=>Promise<void>} addToMap Map composition callback.
+ * @param {(upload:import('../../src/uploads/api.js').VectorUpload)=>Promise<void>} addToMap Map composition callback.
  * @param {Object} [options] Upload listing, deletion and map callbacks.
- * @return {Promise<{dialog:UploadPolygonsDialog,document:Object,file:File}>} Selected upload form.
+ * @return {Promise<{dialog:UploadsDialog,document:Object,file:File}>} Selected upload form.
  */
 async function setup(fetcher, addToMap, options = {}) {
     const { dialog, document } = createDialog({ addToMap,
@@ -58,6 +76,30 @@ async function setup(fetcher, addToMap, options = {}) {
     dialog.file.dispatchEvent(new Event("change"));
     return { dialog, document, file };
 }
+
+test("raster upload, reopening and deletion use the raster endpoint with the browser's ownership cookie", async () => {
+    const upload = {id: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", kind: "raster", name: "Reference mask"};
+    const file = new File(["TIFF bytes"], "mask.TIFF", {type: "image/tiff"}), requests = [];
+    const fetcher = async (url, options) => {
+        requests.push({url, options});
+        return options.method === "DELETE" ? new Response(null, {status: 204}) : new Response(JSON.stringify(upload));
+    };
+    assert.deepEqual(await uploadFile(file, upload.name, fetcher), upload);
+    assert.equal(requests[0].url, "/api/raster-uploads?name=Reference+mask");
+    assert.equal(requests[0].options.body, file);
+    assert.equal(requests[0].options.headers["Content-Type"], "image/tiff");
+    assert.equal(requests[0].options.headers["X-EOLab-Uploads"], "1");
+    assert.deepEqual(await getRasterUpload(upload.id, fetcher), upload);
+    await deleteUploadedFile(upload, fetcher);
+    assert.equal(requests[2].options.method, "DELETE");
+    assert.equal(requests[2].options.headers["X-EOLab-Uploads"], "1");
+    for (const request of requests.slice(1)) assert.equal(request.url, `/api/raster-uploads/${upload.id}`);
+    for (const request of requests) {
+        assert.equal(request.options.credentials, "same-origin"); assert.equal(request.options.cache, "no-store");
+    }
+    await assert.rejects(uploadFile(new File(["x"], "unknown.zip"), "Unknown", fetcher), /Choose a polygon GeoPackage/);
+    assert.equal(requests.length, 3);
+});
 
 test("upload form sends the original file and chosen name, then adds the returned record to the map", async () => {
     const admitted = { id: "opaque-upload", name: "Floodplain & wetlands", fields: { label: "str" }, geometry_type: "Polygon" };
@@ -81,7 +123,7 @@ test("upload form sends the original file and chosen name, then adds the returne
     assert.equal(request.options.credentials, "same-origin");
     assert.equal(request.options.cache, "no-store");
     assert.deepEqual(request.options.headers, { "Content-Type": "application/geopackage+sqlite3", "X-EOLab-Uploads": "1" });
-    assert.equal(dialog.status.textContent, "Uploading polygons…");
+    assert.equal(dialog.status.textContent, "Uploading file…");
     assert.equal(dialog.progress.hidden, false);
     assert.equal(dialog.cancel.disabled, true);
     assert.equal(dialog.dialog.dispatchEvent(new Event("cancel", { cancelable: true })), false);
@@ -173,8 +215,8 @@ test("existing uploads reopen from the server list without uploading again", asy
     assert.equal(dialog.dialog.open, false);
     await dialog.open();
     assert.equal(lists, 2);
-    assert.equal(dialog.rows[0].add.textContent, "On map");
-    assert.equal(dialog.rows[0].add.disabled, true);
+    assert.equal(dialog.rows[0].add.textContent, "Remove from map");
+    assert.equal(dialog.rows[0].add.disabled, false);
     assert.equal(dialog.rows[0].remove.disabled, false);
     assert.equal(document.activeElement, dialog.cancel);
 });
@@ -219,7 +261,7 @@ test("initial and retry list requests remain dismissible by Close and Escape", a
                 } else dialog.cancel.dispatchEvent(new Event("click"));
                 assert.equal(dialog.dialog.open, false);
                 assert.equal(document.activeElement, dialog.trigger);
-                finishList([{ id: "late-upload", name: "Late response" }]);
+                finishList(storageSummary([{ id: "late-upload", name: "Late response" }]));
                 await loading;
                 assert.equal(dialog.rows.length, 0);
                 assert.equal(document.activeElement, dialog.trigger);
@@ -241,7 +283,7 @@ test("initial list success and failure leave focus on Close", async t => {
             await opening;
             assert.equal(document.activeElement, dialog.cancel);
             assert.equal(dialog.cancel.disabled, false);
-            assert.equal(dialog.file.disabled, false);
+            assert.equal(dialog.file.disabled, fail);
         });
     }
 });
@@ -332,8 +374,8 @@ test("deleting a file requires confirmation and preserves the map until server s
     let attempts = 0;
     let finish;
     const { dialog, document } = await setup(() => assert.fail("No upload"), () => assert.fail("No map addition"), {
-        list: async () => [upload], isOnMap: () => true, onDeleted: id => deleted.push(id),
-        deleteFile: id => deleteUpload(id, async (url, options) => {
+        list: async () => deleted.length ? [] : [upload], isOnMap: () => true, onDeleted: id => deleted.push(id),
+        deleteFile: upload => deleteUpload(upload.id, async (url, options) => {
             attempts++;
             assert.equal(url, "/api/vector-uploads/stored-upload");
             assert.equal(options.method, "DELETE");
@@ -388,4 +430,77 @@ test("reopening saved upload identifiers uses the current browser's credentials 
             detail: "This upload is not available to this browser.",
         }), { status: 404 })), /deleted or belong to another browser.*browser that uploaded the file.*upload it again/);
     }
+});
+
+test("shared usage names the configured service and blocks new files at five slots", async () => {
+    const uploads = Array.from({length: 4}, (_, index) => ({id: String(index), name: `File ${index}`}));
+    const {dialog} = createDialog({appTitle: "Resilience"});
+    dialog.list = async () => storageSummary(uploads, {used_files: 5, retained_files: 1});
+    await dialog.open();
+    assert.equal(dialog.trigger.textContent, "Your uploads · 5 of 5");
+    assert.match(dialog.usage.textContent, /5 of 5 files used/);
+    assert.match(dialog.retention.textContent, /1 deleted or expired file is still used by calculations/);
+    assert.equal(dialog.file.disabled, true);
+    assert.equal(dialog.submit.disabled, true);
+    assert.equal(dialog.quotaHelp.hidden, false);
+    assert.equal(dialog.rows[0].remove.disabled, false);
+    assert.equal(dialog.cancel.disabled, false);
+    const notice = dialog.dialog.children.find(child => child.textContent.startsWith("Other users"));
+    assert.equal(notice.textContent, "Other users cannot access your uploads. Resilience stores and processes them on its servers. Files are deleted after 7 days, or when you delete them. Files in use are kept until the calculation stops.");
+    assert.match(dialog.fileHelp.textContent, /100 MiB per file/);
+});
+
+test("removing a map layer preserves its file slot and focuses its new Add action", async () => {
+    let onMap = true;
+    const upload = {id: "wetlands", name: "Wetlands"};
+    const {dialog, document} = createDialog({list: async () => [upload], isOnMap: () => onMap,
+        removeFromMap: id => {assert.equal(id, upload.id); onMap = false;}, deleteFile: () => assert.fail("Map removal must not delete a file")});
+    await dialog.open();
+    dialog.rows[0].add.dispatchEvent(new Event("click"));
+    assert.equal(dialog.rows[0].add.textContent, "Add to map");
+    assert.equal(dialog.trigger.textContent, "Your uploads · 1 of 5");
+    assert.equal(document.activeElement, dialog.rows[0].add);
+    assert.match(dialog.status.textContent, /still uses an upload slot/);
+});
+
+test("a deleted active input keeps its slot until the server reports native work stopped", async () => {
+    const upload = {id: "active", name: "Active reference sites"};
+    const {dialog} = createDialog({deleteFile: async () => {}});
+    let deleted = false, stopped = false;
+    dialog.list = async () => storageSummary(deleted ? [] : [upload], {used_files: stopped ? 0 : 1, retained_files: deleted && !stopped ? 1 : 0});
+    dialog.onDeleted = () => { deleted = true; };
+    await dialog.open();
+    dialog.rows[0].remove.dispatchEvent(new Event("click"));
+    await dialog.deleteSelectedUpload();
+    assert.equal(dialog.rows.length, 0);
+    assert.equal(dialog.trigger.textContent, "Your uploads · 1 of 5");
+    assert.equal(dialog.retention.hidden, false);
+    stopped = true;
+    await dialog.loadUploads();
+    assert.equal(dialog.trigger.textContent, "Your uploads · 0 of 5");
+    assert.equal(dialog.retention.hidden, true);
+});
+
+test("an older toolbar request cannot overwrite a newly opened upload manager", async () => {
+    const {dialog} = createDialog();
+    let finishOld;
+    dialog.list = () => new Promise(resolve => { finishOld = resolve; });
+    const old = dialog.refreshUsage();
+    dialog.list = async () => storageSummary([{id: "current", name: "Current"}]);
+    await dialog.open();
+    finishOld(storageSummary([], {used_files: 5, retained_files: 5}));
+    assert.equal(await old, false);
+    assert.equal(dialog.trigger.textContent, "Your uploads · 1 of 5");
+    assert.equal(dialog.file.disabled, false);
+});
+
+test("shared summary transport retains browser ownership and does not cache usage", async () => {
+    const summary = storageSummary([{id: "original", name: "Original"}]);
+    assert.deepEqual(await getUploadStorageSummary(async (url, options) => {
+        assert.equal(url, "/api/uploads");
+        assert.equal(options.credentials, "same-origin");
+        assert.equal(options.cache, "no-store");
+        assert.equal(options.method, "GET");
+        return new Response(JSON.stringify(summary));
+    }), summary);
 });

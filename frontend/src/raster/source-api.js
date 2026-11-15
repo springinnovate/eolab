@@ -12,7 +12,8 @@ import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
  */
 async function fetchRasterMetadata(url, body, signal, fetcher) {
     const response = await fetcher(url, {method: "POST", credentials: "same-origin", cache: "no-store",
-        headers: {"Content-Type": "application/json", "X-EOLab-Processing": "1"}, body: JSON.stringify(body),
+        headers: {"Content-Type": "application/json", "X-EOLab-Processing": "1",
+            ...(body.source.kind === "uploadedRaster" ? {"X-EOLab-Uploads": "1"} : {})}, body: JSON.stringify(body),
         signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(45000)])});
     const reader = response.body.getReader(), chunks = []; let bytes = 0;
     try {
@@ -31,7 +32,7 @@ async function fetchRasterMetadata(url, body, signal, fetcher) {
 }
 
 /** Read source metadata, optionally describing its pixel size in another CRS.
- * @param {Object} source Catalog or run-file identity.
+ * @param {Object} source Catalog, uploaded raster or run-file identity.
  * @param {AbortSignal} signal Cancellation of an obsolete layer request.
  * @param {typeof fetch} [fetcher=globalThis.fetch] HTTP implementation.
  * @param {string|null} [targetCrs=null] Optional output CRS for projected grid information; null requests only original metadata.

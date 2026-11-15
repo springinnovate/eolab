@@ -6,7 +6,7 @@ import { getCatalogItemKey } from "./catalog-item-identity.js";
  * Capabilities describe supported operations; each server request still authorizes
  * the source and checks its lifetime, validity and resource limits independently.
  * @typedef {Object} RasterDescriptor
- * @property {{collectionId:string,itemId:string}|{collectionId:string,itemId:string,variable:string,time:string}|{kind:"runArtifact",jobId:string,artifactId:string}} source Path-free original identity.
+ * @property {{collectionId:string,itemId:string}|{collectionId:string,itemId:string,variable:string,time:string}|{kind:"runArtifact",jobId:string,artifactId:string}|{kind:"uploadedRaster",uploadId:string}} source Path-free original identity.
  * @property {string} [version] Server source identity when metadata has been requested.
  * @property {string} label Readable file name.
  * @property {number[]} bbox Original extent in WGS84 west/south/east/north order.
@@ -16,11 +16,17 @@ import { getCatalogItemKey } from "./catalog-item-identity.js";
 
 /** Copy a source identity from a raster descriptor, catalog Item or API reference.
  * @param {Object} value Source-bearing presentation or identity.
- * @return {Readonly<Object>} Validated catalog, temporal observation or owned run-file reference.
+ * @return {Readonly<Object>} Validated catalog, temporal observation, uploaded raster or owned run-file reference.
  * @throws {TypeError} If the source identity is missing or malformed.
  */
 export function rasterSourceReference(value) {
     const source = value?.source ?? value?.item ?? value;
+    if (source?.kind === "uploadedRaster") {
+        if (typeof source.uploadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.uploadId)) {
+            throw new TypeError("Choose an available uploaded raster.");
+        }
+        return Object.freeze({kind: "uploadedRaster", uploadId: source.uploadId});
+    }
     if (source?.kind === "runArtifact") {
         if (![source.jobId, source.artifactId].every(id => typeof id === "string" && /^[a-f0-9]{32}$/.test(id))) {
             throw new TypeError("Choose an available raster result.");
@@ -46,6 +52,7 @@ export function rasterSourceReference(value) {
 export function rasterSourceKey(value) {
     const source = rasterSourceReference(value);
     if (source.kind === "runArtifact") return `local:artifact:${source.jobId}:${source.artifactId}`;
+    if (source.kind === "uploadedRaster") return `local:raster-upload:${source.uploadId}`;
     return source.variable === undefined ? getCatalogItemKey({collection: source.collectionId, id: source.itemId}) :
         JSON.stringify([source.collectionId, source.itemId, source.variable, source.time]);
 }

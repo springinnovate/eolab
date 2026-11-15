@@ -145,7 +145,7 @@ class GeoServerRasterPublisher:
         """Read temporary coverage-store names, including interrupted publications.
 
         Returns:
-            Names in the model_ and slice_ namespaces; callers validate IDs.
+            Names in the model_, slice_ and raster_upload_ namespaces; callers validate IDs.
 
         Raises:
             RasterPublicationError: If resource discovery fails.
@@ -169,7 +169,7 @@ class GeoServerRasterPublisher:
         return tuple(
             entry["name"]
             for entry in names
-            if entry["name"].startswith(("model_", "slice_"))
+            if entry["name"].startswith(("model_", "slice_", "raster_upload_"))
         )
 
     async def remove(self, resource_name: str) -> None:

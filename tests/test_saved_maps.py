@@ -71,6 +71,10 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
         {**presentation, "catalogItem": {"collection": "vectors", "id": "regions"}},
         {
             **presentation,
+            "uploadId": "12345678-1234-1234-1234-123456789abc",
+        },
+        {
+            **presentation,
             "runArtifact": {
                 "jobId": "a" * 32,
                 "artifactId": "b" * 32,
@@ -98,6 +102,44 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
     invalid["view"]["schemaVersion"] = 3
     with pytest.raises(ValidationError, match="version four"):
         CreateSavedMap.model_validate(invalid)
+
+
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_raster_upload_view_round_trip_preserves_private_source_and_style(
+    schema_version: int,
+) -> None:
+    """Persist an opaque raster upload without publishing data or vector predicates.
+
+    Args:
+        schema_version: Supported saved-map version admitting private uploads.
+    """
+    candidate = map_request()
+    view = candidate["view"]
+    view.update(schemaVersion=schema_version, basemap="none")
+    layer = view["layers"][0]
+    layer.pop("catalogItem")
+    layer.update(uploadId="12345678-1234-1234-1234-123456789abc", isCustom=True)
+    view["layers"] = [layer]
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    layer["calculatedFields"] = [
+        {
+            "version": 1,
+            "name": "Density",
+            "expression": "'Population' / 'Area km2'",
+            "numericText": False,
+        }
+    ]
+    with pytest.raises(
+        ValidationError, match="Calculated fields require a vector layer"
+    ):
+        CreateSavedMap.model_validate(candidate)
+    del layer["calculatedFields"]
+    layer["filter"] = {"field": "class", "value": 1}
+    with pytest.raises(
+        ValidationError, match="Raster uploads do not support vector filters"
+    ):
+        CreateSavedMap.model_validate(candidate)
 
 
 def test_repeated_catalog_views_round_trip() -> None:
@@ -252,7 +294,10 @@ def test_custom_layer_name_round_trip() -> None:
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(candidate)
     layer["customName"] = "🌲" * 160
-    assert CreateSavedMap.model_validate(candidate).view.layers[0].customName == layer["customName"]
+    assert (
+        CreateSavedMap.model_validate(candidate).view.layers[0].customName
+        == layer["customName"]
+    )
     layer["customName"] = None
     assert CreateSavedMap.model_validate(candidate).view.layers[0].customName is None
 

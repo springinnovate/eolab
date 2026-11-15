@@ -7,6 +7,7 @@ import json
 from pydantic import ValidationError
 
 from eolab_app.sampling_box import sampling_box_bounds
+from eolab_app.raster.source_models import UploadedRasterReference
 from eolab_app.processing.aggregate_models import (
     AggregateSpec,
     AggregateValue,
@@ -29,9 +30,9 @@ def calculation_result_cache_keys(
     Args:
         calculation: Validated request before planning, or a completed job plan.
         source_signature: Captured metadata for a catalog raster request.
-            Private files use their published checksum; stored plans carry the
-            identity appropriate to their source.
-        source_checksum: Published checksum when the input is a private file.
+            Uploaded rasters carry their immutable UUID in the source reference;
+            stored plans carry the identity appropriate to their source.
+        source_checksum: Published checksum when the input is a run file.
 
     Returns:
         One hash per formula. Identity includes the immutable raster, exact
@@ -40,7 +41,7 @@ def calculation_result_cache_keys(
         formula whitespace and resource estimates do not affect matching.
 
     Raises:
-        ValueError: If a request has neither catalog identity nor a published checksum.
+        ValueError: If a request lacks its required catalog or published-file identity.
         ProcessingError: If a stored expression is invalid.
     """
     alias, source = next(iter(calculation.sources.items()))
@@ -55,8 +56,14 @@ def calculation_result_cache_keys(
             area.pop("bounds", None)
         target_chunk_pixels = calculation.grid.execution.targetChunkPixels
     else:
-        if source_signature is None and source_checksum is None:
-            raise ValueError("Catalog identity or a published checksum is required")
+        if (
+            source_signature is None
+            and source_checksum is None
+            and not isinstance(source, UploadedRasterReference)
+        ):
+            raise ValueError(
+                "Catalog metadata, an upload ID or a published checksum is required"
+            )
         if calculation.polygonArea is not None:
             area = {"kind": "polygons", "geometryHash": calculation.polygonArea.sha256}
         elif calculation.samplingBox is not None:

@@ -462,11 +462,11 @@ starts sharing it; on a shared layer it copies the code for someone else to join
 If you arrived through a shared map link, choose **Draw polygon** on its shared
 layer and enter your contributor name when asked to add your own polygons.
 
-**Upload polygons → Import GeoJSON…** brings simple polygons into an editable
+**Import polygons → Import GeoJSON…** brings simple polygons into an editable
 local layer saved on your device. It accepts WGS84 longitude/latitude Polygon
 features without holes, including names and notes. Other file attributes and
 styles are not imported.
-Use **Upload polygons → GeoPackage uploads…** for a GeoPackage whose attributes
+Use **Your uploads** for a GeoPackage whose attributes
 you want to retain.
 
 To sample histograms or calculate raster statistics using a drawing, save it,
@@ -483,22 +483,35 @@ or **Cancel** to leave without downloading. The `.geojson` extension is added if
 Map links omit private local polygons. Share
 them in a shared layer when collaborators need to see them.
 
-#### Bring your own polygons
+#### Bring your own polygons and reference masks
 
-Open **Map contents → Upload polygons → GeoPackage uploads…** to add a GeoPackage
+Open **Map contents → Your uploads** to add a GeoPackage
 (`.gpkg`) containing one polygon layer. Choose the file, give the layer a name,
 then select **Upload and add to map**. You can style it, inspect its attributes and filter features,
 then use the supported polygon selection in raster analyses or model inputs.
 
-![The polygon upload form with file, layer name and Upload and add to map controls](docs/images/eolab-polygon-uploads.jpg)
+**Your uploads** shows your five-file allowance, stored files and expiry dates.
+Files are private to the browser that uploaded them, on that site. The application
+stores and processes them on its servers. Uploads expire seven days after upload;
+**Delete uploaded file** removes access sooner. A file used by an accepted
+calculation is kept until that calculation stops, then deleted. Removing a layer
+from the map keeps its uploaded file. Duplicating a map view uses no additional
+file slot. A saved map link does not give other browsers access to your uploads.
 
-*Bring project boundaries into the same workspace as the shared data.*
+Upload byte budgets are configured in [.env.example](.env.example). They apply
+to upload storage, including files retained by calculations; they do not limit
+the size or duration of Processing calculations.
 
-Files are stored on the server and available only to the browser that uploaded
-them, on that site. **Your uploads** lets you reopen a file. Removing its layer
-from the map keeps the file; **Delete uploaded file** removes it. Remembered
-maps can restore your upload references, but sending someone a map link does
-not give their browser access to your private files.
+For Ecosystem Condition reference sites, open **Your uploads** and select a
+single-band Byte GeoTIFF with a coordinate reference system. Use
+`1` for reference sites and `0` for other cells; NoData is ignored. Crop large
+masks to the region you need before uploading. The file must contain its own
+georeferencing and validity information; separate sidecars and archives are not
+accepted. Polygon files and raster masks share the same five-file allowance.
+
+Add the mask to the map, then choose it under **Your uploads** for **Reference sites**.
+It uses the ordinary raster style and analysis controls. The calculation reads
+the original mask independently of map visibility or rendering availability.
 
 For an existing Catalog vector or uploaded layer, use **Filter** to narrow the
 features, then select that polygon layer when choosing your analysis area.

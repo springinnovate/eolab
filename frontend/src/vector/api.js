@@ -98,7 +98,7 @@ export async function getVectorFilterExtent(source, filter, signal, fetchImpleme
 
 /**
  * Admitted upload metadata tagged for the ordinary vector rendering pipeline.
- * @typedef {import("../vector-uploads/api.js").VectorUpload & {kind:"upload"}} UploadedVectorSource
+ * @typedef {Omit<import("../uploads/api.js").VectorUpload,"kind"> & {kind:"upload"}} UploadedVectorSource
  */
 
 /**

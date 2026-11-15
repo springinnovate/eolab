@@ -5609,6 +5609,62 @@ test("private sources use the same style, histogram, percentile, pixel and paire
     assert.equal(removed, 1); h.destroy();
 });
 
+test("uploaded raster composition uses ordinary styling, analysis, saved views and removal Undo", async () => {
+    const source = {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"};
+    const upload = {kind: "raster", id: source.uploadId, name: "Reference mask"};
+    const reads = [], pixels = [], publications = [], metadataReads = [], clock = createManualClock();
+    let callbacks, available = true;
+    const h = visibleLayerFixture(async (item, area, _signal, _fetch, codes) => {
+        reads.push(item); return createCategoryStatistics(item, area, codes);
+    }, {clock, publishRaster: async raster => {publications.push(raster); return {layerName: "eolab:raster_upload", bbox: raster.bbox};},
+        sampleCursorPixel: async raster => {pixels.push(raster); return {inBounds: true, value: 1};}}, {},
+    {restoreRemovedLayer: (snapshot, isCurrent) => callbacks.restoreUploadedRaster(snapshot, isCurrent)});
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const callbackSource = main.slice(main.indexOf("function getUploadedLayerKeys("), main.indexOf("let uploadsDialog = null;"));
+    callbacks = new Function("mapLayerController", "vectorMapLayerAdapter", "rasterVisualization", "getRasterUpload", "describeRasterSource", "onRenderingWorkspaceRequested", "mapLayerStackView", "uploadsDialog",
+        `${callbackSource}; return {addUploadedRaster, restoreUploadedRaster, restoreSavedUpload, removeDeletedUpload, getUploadedLayerKeys};`)(h.mapLayers, {}, h.viewer,
+        async id => {assert.equal(id, upload.id); if (!available) throw new Error("Upload is unavailable"); return upload;},
+        async identity => {metadataReads.push(identity); return {source, version: "c".repeat(64), bounds: [77, 20, 79, 24],
+            capabilities: {pixels: {supported: true}, statistics: {supported: true}}};}, () => {}, {announceStatus() {}}, {open() {}});
+    try {
+        const record = await callbacks.addUploadedRaster(upload); await flushPromises();
+        const key = record.entry.key;
+        assert.equal(key, `local:raster-upload:${upload.id}`);
+        assert.equal(h.mapLayers.snapshots()[0].sourceOrigin, "upload");
+        h.viewer.exploreAt({lng: 78, lat: 22}); await flushPromises();
+        assert.ok(reads.some(item => item.source?.uploadId === upload.id));
+        h.leafletMap.emit("mousemove", {latlng: {lng: 78, lat: 22}, originalEvent: {clientX: 100, clientY: 100}});
+        clock.flush(); await flushPromises();
+        assert.ok(pixels.some(item => item.source?.uploadId === upload.id));
+        editCategoricalAppearance(h, key); await flushPromises();
+        assert.equal(record.state.layer.wmsParams.layers, "eolab:raster_upload");
+        assert.ok(record.state.layer.wmsParams.raster_style);
+        h.mapLayers.renameLayer(key, "Trusted sites"); h.mapLayers.setOpacity(key, .45); h.mapLayers.setVisible(key, false);
+        const appearance = record.adapter.exportSavedState(record);
+        h.mapLayers.removeWithUndo(key);
+        await h.mapLayers.undoLayerRemoval();
+        const restored = h.mapLayers.getRecord(key);
+        assert.equal(restored.entry.label, "Trusted sites"); assert.equal(restored.entry.visible, false);
+        assert.deepEqual(restored.adapter.exportSavedState(restored), appearance);
+        const document = createSavedMapView({viewer: {version: "test", origin: "https://example.test"}, createdAt: "2026-11-15T00:00:00Z",
+            viewport: {center: {latitude: 0, longitude: 0}, zoom: 2}, layers: [{uploadId: upload.id, customName: "Saved mask",
+                visible: false, opacity: .45, style: appearance}]});
+        const saved = parseSavedMapView(serializeSavedMapView(document));
+        const savedKey = await callbacks.restoreSavedUpload(saved.layers[0], () => true);
+        const savedRecord = h.mapLayers.getRecord(savedKey);
+        assert.equal(savedRecord.entry.label, "Saved mask"); assert.equal(savedRecord.entry.visible, false);
+        assert.deepEqual(savedRecord.adapter.exportSavedState(savedRecord), appearance);
+        const anotherKey = await h.mapLayers.addAnotherView(savedKey);
+        assert.equal(callbacks.getUploadedLayerKeys(upload.id).length, 3);
+        h.mapLayers.removeWithUndo(anotherKey); available = false; callbacks.removeDeletedUpload(upload.id);
+        await h.mapLayers.undoLayerRemoval();
+        assert.deepEqual(callbacks.getUploadedLayerKeys(upload.id), []);
+        await assert.rejects(callbacks.restoreSavedUpload(saved.layers[0], () => true), /unavailable/);
+        assert.ok(metadataReads.every(identity => JSON.stringify(identity) === JSON.stringify(source)));
+        assert.ok(publications.every(raster => raster.source.kind === "uploadedRaster"));
+    } finally {h.destroy();}
+});
+
 test("pixel-capable outputs remain pickable when their format cannot provide distributions", async () => {
     const pixels=[], clock=createManualClock();
     const h=visibleLayerFixture(async () => {throw new Error("Distributions are unsupported");}, {

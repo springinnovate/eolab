@@ -206,7 +206,7 @@ export class RasterClipsView {
         const details = this.element("details", "");
         const summary = this.element("summary", "Download details"); summary.setAttribute("data-download-action", `${job.jobId}-details`); details.append(summary);
         const identity = job.source ?? Object.values(job.sources ?? {})[0];
-        if (identity) details.append(this.element("p", identity.kind === "runArtifact" ? `Model result: run ${identity.jobId}, file ${identity.artifactId}` : `Catalog source: ${identity.collectionId} / ${identity.itemId}`));
+        if (identity) details.append(this.element("p", identity.kind === "uploadedRaster" ? "Uploaded by you · Raster mask" : identity.kind === "runArtifact" ? `Model result: run ${identity.jobId}, file ${identity.artifactId}` : `Catalog source: ${identity.collectionId} / ${identity.itemId}`));
         if (job.grid) details.append(this.element("p", `${job.grid.width} × ${job.grid.height} pixels · ${describeClipCrs(job.grid.crs)}`),
             this.element("p", `COG · native resolution · ${formatDownloadBytes(job.grid.estimatedRawBytes)} estimated uncompressed`));
         const actions = this.element("div", ""); actions.className = "downloads-actions";

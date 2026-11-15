@@ -610,9 +610,9 @@ export class ModelsController {
         for (const {state, field, optional} of getModelRasterFields(draft)) {
             const selected = state[field];
             state[field] = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
-            if (!state[field] && selected && (optional || selected.kind === "runArtifact")) {
+            if (!state[field] && selected && (optional || selected.kind === "runArtifact" || selected.kind === "uploadedRaster")) {
                 state[field] = {...selected, available: false,
-                    label: selected.label ?? (selected.kind === "runArtifact" ? "Raster from original run" : `${selected.collectionId} / ${selected.itemId}`)};
+                    label: selected.label ?? (selected.kind === "uploadedRaster" ? "Uploaded raster" : selected.kind === "runArtifact" ? "Raster from original run" : `${selected.collectionId} / ${selected.itemId}`)};
                 draft.sources.push(state[field]);
             }
         }

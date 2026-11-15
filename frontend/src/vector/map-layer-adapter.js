@@ -31,6 +31,7 @@ import {
  * Source identity, attributes and geometry needed by vector consumers.
  * @typedef {Object} VectorSourceDescription
  * @property {import("./api.js").VectorFieldValueSource} source Original source identity.
+ * @property {"upload"|"catalog"|"runArtifact"} origin Original file owner, independent of its customizable map view.
  * @property {Object|null} selection Source/layer identity for calculation inputs, excluding its predicate; null when unsupported.
  * @property {ReturnType<typeof vectorLabelFields>} fields Frozen non-geometry fields.
  * @property {ReturnType<typeof vectorCategoricalFields>} scalarFields Fields supporting scalar grouping.
@@ -409,6 +410,7 @@ export function createVectorMapLayerAdapter({
             const binding = value.properties?.["eolab:vector_source"];
             return {
                 source: Object.freeze(identity),
+                origin: value.kind === "upload" || value.kind === "runArtifact" ? value.kind : "catalog",
                 selection: value.kind === "runArtifact" ? {...identity, layerName: value.layerName} : value.kind === "upload" ? {...identity, layerName: value.layer_name}
                     : binding ? {...identity, assetKey: binding.asset_key, layerName: binding.layer_name} : null,
                 fields: record.state.labelFields,
@@ -832,13 +834,14 @@ export function createVectorMapLayerAdapter({
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{datasetKind:"vector",canInfo:boolean,canFilter:boolean,
+         * @return {{datasetKind:"vector",sourceOrigin:"upload"|"catalog"|"runArtifact",canInfo:boolean,canFilter:boolean,
          * filterActive:boolean,filterStatus:string,legend:Object}} Layer actions,
          * filter status and fixed, categorical or graduated legend.
          */
         snapshot(record) {
             return {
                 datasetKind: "vector",
+                sourceOrigin: record.state.source.kind === "upload" || record.state.source.kind === "runArtifact" ? record.state.source.kind : "catalog",
                 canInfo: Boolean(record.state.lifecycle?.info) || !["upload", "runArtifact"].includes(record.state.source.kind),
                 canFilter: true,
                 canCalculateFields: true,
