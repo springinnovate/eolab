@@ -504,17 +504,17 @@ test("direct pastes retain the current action through concurrent completion and 
         pending.delete(key); await new Promise(resolve => setImmediate(resolve));
     };
 
-    assert.equal(action(first, "paste-style"), undefined);
+    assert.equal(action(first, "paste-style").getAttribute("aria-disabled"), "true");
     controller.setOpacity(source, 0.37);
     click(source, "copy-style");
     assert.equal(doc.activeElement, action(source, "copy-style"));
-    assert.equal(action(incompatible, "paste-style"), undefined);
-    assert.equal(action(first, "paste-style").textContent, "Paste style");
-    assert.match(action(first, "paste-style").getAttribute("aria-label"), /from raster source onto raster first/);
+    assert.equal(action(incompatible, "paste-style").getAttribute("aria-disabled"), "true");
+    assert.equal(action(first, "paste-style").textContent, "");
+    assert.match(action(first, "paste-style").getAttribute("aria-label"), /^Paste style onto raster first/);
 
     click(first, "paste-style");
     assert.equal(doc.activeElement, action(first, "paste-style"));
-    assert.equal(action(first, "paste-style").textContent, "Pasting…");
+    assert.equal(action(first, "paste-style").textContent, "");
     assert.equal(action(first, "paste-style").getAttribute("aria-disabled"), "true");
     assert.equal(action(first, "paste-style").getAttribute("aria-busy"), "true");
     assert.equal(action(first, "paste-style").disabled, false);
@@ -523,7 +523,7 @@ test("direct pastes retain the current action through concurrent completion and 
     click(second, "paste-style");
     await complete(second);
     assert.equal(doc.activeElement, action(second, "paste-style"));
-    assert.equal(action(second, "paste-style").textContent, "Paste style");
+    assert.equal(action(second, "paste-style").getAttribute("aria-busy"), "false");
     await complete(first);
     assert.equal(doc.activeElement, action(second, "paste-style"), "the earlier paste cannot steal focus back");
     for (const key of [first, second]) {
@@ -537,7 +537,7 @@ test("direct pastes retain the current action through concurrent completion and 
     click(second, "copy-style");
     click(first, "paste-style");
     assert.equal(applyCalls, 3);
-    assert.equal(view.status.textContent, "Pasting style onto raster first.");
+    assert.equal(action(first, "paste-style").getAttribute("aria-busy"), "true");
     const outside = doc.querySelector("#models-query"); outside.focus();
     await complete(first);
     assert.equal(doc.activeElement, outside);
@@ -547,20 +547,20 @@ test("direct pastes retain the current action through concurrent completion and 
     click(first, "paste-style");
     await complete(first);
     assert.equal(controller.getRecord(first).state.style.color, "green", "the copied style survives source removal");
-    assert.equal(action(first, "paste-style").textContent, "Paste style");
+    assert.equal(action(first, "paste-style").getAttribute("aria-busy"), "false");
 
     click(first, "paste-style");
     click(incompatible, "copy-style");
     action(first, "paste-style").focus();
     await complete(first);
-    assert.equal(action(first, "paste-style"), undefined);
-    assert.equal(doc.activeElement, action(first, "style"), "a finished paste that is no longer offered returns to its row's Style action");
+    assert.equal(action(first, "paste-style").getAttribute("aria-disabled"), "true");
+    assert.equal(doc.activeElement, action(first, "paste-style"), "an incompatible finished paste retains its discoverable action and focus");
 
     click(source, "copy-style");
     click(first, "paste-style");
     await complete(first, new Error("Style service unavailable"));
     assert.equal(doc.activeElement, action(first, "paste-style"));
-    assert.equal(action(first, "paste-style").textContent, "Paste style");
+    assert.equal(action(first, "paste-style").getAttribute("aria-busy"), "false");
     assert.match(view.status.textContent, /Style service unavailable/);
     assert.equal(controller.getRecord(first).state.style.color, "green");
     click(first, "paste-style");
