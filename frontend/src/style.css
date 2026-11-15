@@ -2259,6 +2259,7 @@ div.chart-tooltip {
 .catalog-result-style { border-color: transparent; }
 
 .catalog-result-on-map {
+  margin-inline-start: 4px;
   font-size: var(--font-size-support);
 }
 
