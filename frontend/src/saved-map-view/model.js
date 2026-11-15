@@ -68,11 +68,11 @@ export function parseSavedMapView(serialized) {
 /**
  * Serialize one already validated saved-map document.
  *
- * @param {Object} savedMapView Canonical saved-map document.
+ * @param {Readonly<Object>} savedMapView Document returned by createSavedMapView or parseSavedMapView.
  * @return {string} Indented UTF-8 JSON text.
  */
 export function serializeSavedMapView(savedMapView) {
-    return `${JSON.stringify(validateSavedMapView(savedMapView), null, 2)}\n`;
+    return `${JSON.stringify(savedMapView, null, 2)}\n`;
 }
 
 /**
