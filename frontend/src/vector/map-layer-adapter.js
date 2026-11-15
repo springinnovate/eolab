@@ -391,6 +391,7 @@ export function createVectorMapLayerAdapter({
                 layer: null,
                 fieldRenderingReady: true,
                 fieldRenderingError: null,
+                fieldRenderingGeneration: 0,
             };
         },
         /**
@@ -423,17 +424,38 @@ export function createVectorMapLayerAdapter({
          * @return {Array<import("../calculated-fields.js").CalculatedField>} Detached ordered definitions.
          */
         exportCalculatedFields(record) { return structuredClone(record.state.source.calculatedFields ?? []); },
+        /** Explain which layer setting must change before deleting a calculated field.
+         * @param {Object} record Retained vector view with accepted filter and style state.
+         * @param {string} name Installed calculated field name.
+         * @return {string|null} Actionable deletion error, or null when no layer setting uses the field.
+         */
+        getCalculatedFieldRemovalError(record, name) {
+            if (record.state.filter.rules.some(rule => rule.field === name)) {
+                return `Remove “${name}” from this layer's filter rules before deleting it.`;
+            }
+            const {label, categorical, graduated} = record.state.style;
+            if (label?.field === name) return `Choose another label field in Style before deleting “${name}”.`;
+            if (categorical?.field === name) return `Choose another category field in Style before deleting “${name}”.`;
+            if (graduated?.field === name) return `Choose another numeric field in Style before deleting “${name}”.`;
+            return null;
+        },
         /** Install accepted fields synchronously, then refresh their independent map display.
          * @param {Object} record Retained vector view.
          * @param {import("./api.js").FieldCalculationResult} result Accepted calculation result.
          * @param {AbortSignal} [signal] Cancel an obsolete installation.
          * @return {Promise<string|null>} Display warning, or null after a successful refresh.
-         * @throws {Error} If the view is removed before installation.
+         * @throws {Error} If the view is removed or a deleted field is still used by its filter or style.
          * @throws {DOMException} If cancelled.
          */
-        async installCalculatedFields(record, result, signal) {
+        installCalculatedFields(record, result, signal) {
             signal?.throwIfAborted();
             if (record.state.disposed) throw new Error("This layer was removed while its fields were being calculated.");
+            const retainedNames = new Set(result.calculatedFields.map(field => field.name));
+            for (const {name} of record.state.source.calculatedFields ?? []) {
+                if (retainedNames.has(name)) continue;
+                const removalError = this.getCalculatedFieldRemovalError(record, name);
+                if (removalError) throw new Error(removalError);
+            }
             const source = {...record.state.source, calculatedFields: structuredClone(result.calculatedFields)};
             this.cancelPendingFilter(record);
             record.state.filterCountAbort?.abort();
@@ -442,15 +464,26 @@ export function createVectorMapLayerAdapter({
             record.state.labelFields = Object.freeze(Object.entries(result.fields).map(([name, type]) => Object.freeze({name, type})));
             record.state.filterCount = null;
             record.state.fieldRenderingReady = false;
-            record.state.fieldRenderingError = "Refreshing the map after calculating fields…";
+            record.state.fieldRenderingError = null;
             refreshFilterCount(record);
             onFilterChange(record);
+            return this.refreshCalculatedFieldRendering(record, source, signal);
+        },
+        /** Refresh this view's map after its calculated fields have been committed.
+         * @param {Object} record Retained vector view.
+         * @param {Object} source Source descriptor installed by this calculation.
+         * @param {AbortSignal} [signal] Cancellation during map refresh.
+         * @return {Promise<string|null>} Display warning, or null after successful refresh.
+         */
+        async refreshCalculatedFieldRendering(record, source, signal) {
+            const generation = ++record.state.fieldRenderingGeneration;
             try {
                 const filtered = await filter(source, record.state.filter, signal);
                 signal?.throwIfAborted();
+                if (record.state.disposed || record.state.source !== source || record.state.fieldRenderingGeneration !== generation) return null;
                 const styled = await style(source, record.state.style);
                 signal?.throwIfAborted();
-                if (record.state.disposed || record.state.source !== source) return null;
+                if (record.state.disposed || record.state.source !== source || record.state.fieldRenderingGeneration !== generation) return null;
                 record.publication = {...record.publication, layerName: filtered.layerName, styleName: styled.styleName,
                     style: styled.style, calculatedFields: source.calculatedFields};
                 record.state.style = normalizeVectorStyle(styled.style);
@@ -460,12 +493,32 @@ export function createVectorMapLayerAdapter({
                 record.state.fieldRenderingError = null;
                 return null;
             } catch {
-                const warning = "Field saved. The map could not refresh. Open Field calculator and Calculate again to retry.";
-                if (!record.state.disposed && record.state.source === source) record.state.fieldRenderingError = warning;
+                const warning = "Fields saved. The map could not refresh. Use Retry map refresh.";
+                if (!record.state.disposed && record.state.source === source && record.state.fieldRenderingGeneration === generation) record.state.fieldRenderingError = warning;
                 return warning;
             } finally {
-                if (!record.state.disposed && record.state.source === source) onFilterChange(record);
+                if (!record.state.disposed && record.state.source === source && record.state.fieldRenderingGeneration === generation) onFilterChange(record);
             }
+        },
+        /** Read the last map-refresh failure independently of accepted field values.
+         * @param {Object} record Retained vector view.
+         * @return {string|null} Actionable warning, or null while pending or successfully displayed.
+         */
+        getCalculatedFieldDisplayWarning(record) { return record.state.fieldRenderingError; },
+        /** Retry displaying accepted fields without recalculating their source values.
+         * @param {Object} record Retained vector view, including a view with no calculated fields.
+         * @param {AbortSignal} [signal] Cancellation during the display retry.
+         * @return {Promise<string|null>} Display warning, or null after successful refresh.
+         * @throws {Error} If the layer was removed before the retry.
+         * @throws {DOMException} If cancelled before the retry.
+         */
+        retryCalculatedFieldRendering(record, signal) {
+            signal?.throwIfAborted();
+            if (record.state.disposed) throw new Error("This layer was removed. Add it again before retrying the map refresh.");
+            record.state.fieldRenderingReady = false;
+            record.state.fieldRenderingError = null;
+            onFilterChange(record);
+            return this.refreshCalculatedFieldRendering(record, record.state.source, signal);
         },
         /** Whether this view's map display matches its accepted calculated fields.
          * @param {Object} record Retained vector view.
@@ -552,11 +605,15 @@ export function createVectorMapLayerAdapter({
          * @param {Object} record Neutral retained-layer record.
          * @param {Object} candidate Complete geometry-specific style state.
          * @return {Promise<Object>} Normalized applied style state.
-         * @throws {Error} If the style cannot be validated or applied.
+         * @throws {Error} If the style cannot be applied or the layer's fields change before it is accepted.
          */
         async applyStyle(record, candidate) {
             const normalized = normalizeVectorStyle(candidate);
-            const result = await style(record.state.source, normalized);
+            const source = record.state.source;
+            const result = await style(source, normalized);
+            if (record.state.disposed || record.state.source !== source) {
+                throw new Error("This layer changed while its style was updating. Reopen Style and try again.");
+            }
             const applied = normalizeVectorStyle(result.style);
             record.publication = {
                 ...record.publication,

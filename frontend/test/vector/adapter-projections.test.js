@@ -24,11 +24,11 @@ test("calculated fields stay view-owned and available to analysis when map refre
     assert.equal(original.calculatedFields, undefined);
     assert.deepEqual(h.adapter.exportCalculatedFields(other), []);
     h.requests.at(-1).reject(new Error("GeoServer unavailable"));
-    assert.match(await installation, /Field saved.*could not refresh/);
+    assert.match(await installation, /Fields saved.*could not refresh/);
     assert.equal(h.adapter.renderingAvailable(h.record), false);
-    assert.match(h.adapter.snapshot(h.record).error, /Field saved/);
+    assert.match(h.adapter.snapshot(h.record).error, /Fields saved/);
     assert.deepEqual(h.adapter.exportCalculatedFields(h.record), [definition]);
-    const retry = h.adapter.installCalculatedFields(h.record, result);
+    const retry = h.adapter.retryCalculatedFieldRendering(h.record);
     h.requests.at(-1).resolve({layerName: "eolab:calculated"});
     assert.equal(await retry, null);
     assert.equal(h.adapter.renderingAvailable(h.record), true);
@@ -36,13 +36,171 @@ test("calculated fields stay view-owned and available to analysis when map refre
     assert.deepEqual(h.record.publication.calculatedFields, [definition]);
 });
 
+test("map refresh can be retried after deleting the last calculated field", async () => {
+    const h = createFixture();
+    const definition = {version: 1, name: "scaled_year", expression: "'year' * 2", numericText: false};
+    const fields = Object.fromEntries(FIELDS.map(field => [field.name, field.type]));
+    const installation = h.adapter.installCalculatedFields(h.record,
+        {calculatedFields: [definition], fields: {...fields, scaled_year: "float"}});
+    h.requests.at(-1).resolve({layerName: "eolab:calculated"});
+    await installation;
+    const deletion = h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields});
+    h.requests.at(-1).reject(new Error("GeoServer unavailable"));
+    await deletion;
+    const source = h.record.state.source;
+    const countRequests = h.counts.length;
+    assert.match(h.adapter.getCalculatedFieldDisplayWarning(h.record), /Retry map refresh/);
+    assert.deepEqual(h.adapter.exportCalculatedFields(h.record), []);
+
+    const retry = h.adapter.retryCalculatedFieldRendering(h.record);
+    assert.equal(h.adapter.getCalculatedFieldDisplayWarning(h.record), null);
+    assert.equal(h.adapter.renderingAvailable(h.record), false);
+    h.requests.at(-1).resolve({layerName: "eolab:original"});
+    assert.equal(await retry, null);
+    assert.equal(h.record.state.source, source, "retry keeps the accepted source and definitions");
+    assert.equal(h.counts.length, countRequests, "display retry does not recount features");
+    assert.equal(h.adapter.renderingAvailable(h.record), true);
+    assert.equal(h.adapter.getCalculatedFieldDisplayWarning(h.record), null);
+    assert.equal(h.adapter.renderDescriptor(h.record).calculatedFields, undefined);
+    assert.deepEqual(h.record.publication.calculatedFields, []);
+});
+
+test("an aborted older display retry cannot overwrite a newer successful retry", async () => {
+    const h = createFixture();
+    const abort = new AbortController();
+    const oldRetry = h.adapter.retryCalculatedFieldRendering(h.record, abort.signal);
+    const oldRequest = h.requests.at(-1);
+    abort.abort();
+    const currentRetry = h.adapter.retryCalculatedFieldRendering(h.record);
+    h.requests.at(-1).resolve({layerName: "eolab:current"});
+    await currentRetry;
+    oldRequest.reject(new DOMException("Cancelled", "AbortError"));
+    await oldRetry;
+    assert.equal(h.adapter.renderingAvailable(h.record), true);
+    assert.equal(h.adapter.getCalculatedFieldDisplayWarning(h.record), null);
+    assert.equal(h.record.publication.layerName, "eolab:current");
+    h.adapter.removed(h.record);
+    const requests = h.requests.length;
+    assert.throws(() => h.adapter.retryCalculatedFieldRendering(h.record), /removed/);
+    assert.equal(h.requests.length, requests);
+});
+
+test("a pending style cannot restore a reference to a deleted calculated field", async () => {
+    let holdStyle = false;
+    let finishStyle;
+    const h = createFixture({style: async (_source, candidate) => {
+        if (holdStyle) return new Promise(resolve => { finishStyle = () => resolve({styleName: "obsolete", style: candidate}); });
+        return {styleName: "current", style: candidate};
+    }});
+    h.adapter.createLayer(h.record, () => {});
+    const definition = {version: 1, name: "scaled_year", expression: "'year' * 2", numericText: false};
+    const fields = Object.fromEntries(FIELDS.map(field => [field.name, field.type]));
+    const installation = h.adapter.installCalculatedFields(h.record,
+        {calculatedFields: [definition], fields: {...fields, scaled_year: "float"}});
+    h.requests.at(-1).resolve({layerName: "eolab:calculated"});
+    await installation;
+    const candidate = {...h.adapter.describeStyle(h.record).style, categorical: {
+        field: definition.name, limit: 2,
+        rules: [{value: {kind: "number", value: 4000}, color: "#00ff00", label: null, opacity: 1}],
+        otherColor: "#ffffff", missingColor: null,
+    }};
+    holdStyle = true;
+    const oldStyle = h.adapter.applyStyle(h.record, candidate);
+    holdStyle = false;
+    const deletion = h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields});
+    finishStyle();
+    await assert.rejects(oldStyle, /layer changed.*Reopen Style/);
+    h.requests.at(-1).resolve({layerName: "eolab:original"});
+    await deletion;
+    assert.equal(h.adapter.describeStyle(h.record).style.categorical, null);
+    assert.equal(h.record.publication.styleName, "current");
+    assert.deepEqual(h.adapter.exportCalculatedFields(h.record), []);
+});
+
 test("cancelled installation leaves previous calculated fields unchanged", async () => {
     const h = createFixture();
     const abort = new AbortController(); abort.abort();
-    await assert.rejects(h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields: {}}, abort.signal), {name: "AbortError"});
+    assert.throws(() => h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields: {}}, abort.signal), {name: "AbortError"});
     assert.deepEqual(h.adapter.exportCalculatedFields(h.record), []);
     assert.equal(h.adapter.describeSource(h.record).fields.length, FIELDS.length);
     assert.deepEqual(h.requests, []);
+});
+
+test("calculated field deletion preserves layers that still use the field", async t => {
+    const definition = {version: 1, name: "scaled_year", expression: "'year' * 2", numericText: false};
+    const fields = Object.fromEntries(FIELDS.map(field => [field.name, field.type]));
+    const filter = {enabled: true, match: "all", rules: [{field: definition.name, operator: "gt", value: 4000}]};
+    const uses = [
+        {name: "active filter", filter, error: /filter rules/},
+        {name: "disabled filter", filter: {...filter, enabled: false}, error: /filter rules/},
+        {name: "label", style: {label: {field: definition.name, fontFamily: "SansSerif", fontSize: 12,
+            fontWeight: "normal", fontColor: "#111111", haloColor: "#ffffff", haloWidth: 1,
+            placement: "center", minimumZoom: 0}}, error: /label field/},
+        {name: "category style", style: {categorical: {field: definition.name, limit: 2,
+            rules: [{value: {kind: "number", value: 4000}, color: "#00ff00", label: null, opacity: 1}],
+            otherColor: "#ffffff", missingColor: null}}, error: /category field/},
+        {name: "numeric style", style: {graduated: {field: definition.name, method: "equal-interval",
+            classCount: 2, palette: "blues", rules: [
+                {minimum: null, maximum: 4000, color: "#0000ff"},
+                {minimum: 4000, maximum: null, color: "#ffffff"}], missingColor: null}}, error: /numeric field/},
+    ];
+    for (const usage of uses) {
+        await t.test(usage.name, async () => {
+            const h = createFixture();
+            h.adapter.createLayer(h.record, () => {});
+            const installation = h.adapter.installCalculatedFields(h.record,
+                {calculatedFields: [definition], fields: {...fields, scaled_year: "float"}});
+            h.requests.at(-1).resolve({layerName: "eolab:calculated"});
+            await installation;
+            if (usage.filter) await applyFilter(h, usage.filter);
+            if (usage.style) await h.adapter.applyStyle(h.record, {...h.adapter.describeStyle(h.record).style, ...usage.style});
+
+            const pendingFilter = h.adapter.applyFilterState(h.record, yearFilter(2024));
+            const pendingRequest = h.requests.at(-1);
+            const state = {...h.record.state}, publication = h.record.publication;
+            const calls = [...h.calls], notifications = [...h.notifications];
+            assert.match(h.adapter.getCalculatedFieldRemovalError(h.record, definition.name), usage.error);
+            assert.throws(() => h.adapter.installCalculatedFields(h.record, {calculatedFields: [], fields}), usage.error);
+            assert.deepEqual(h.record.state, state);
+            assert.equal(h.record.publication, publication);
+            assert.equal(pendingRequest.signal.aborted, false, "rejected deletion does not cancel a pending filter");
+            for (const count of h.counts) assert.equal(count.signal.aborted, false);
+            assert.deepEqual(h.calls, calls);
+            assert.deepEqual(h.notifications, notifications);
+            assert.deepEqual(h.adapter.exportCalculatedFields(h.record), [definition]);
+            assert.equal(h.adapter.renderingAvailable(h.record), true);
+
+            h.adapter.cancelPendingFilter(h.record);
+            pendingRequest.reject(new DOMException("Cancelled", "AbortError"));
+            await pendingFilter;
+        });
+    }
+});
+
+test("unused calculated fields can be removed while a field in use is updated", async () => {
+    const h = createFixture();
+    const originalSource = h.record.state.source;
+    const scaled = {version: 1, name: "scaled_year", expression: "'year' * 2", numericText: false};
+    const offset = {...scaled, name: "offset_year", expression: "'year' + 1"};
+    const fields = Object.fromEntries(FIELDS.map(field => [field.name, field.type]));
+    const installation = h.adapter.installCalculatedFields(h.record,
+        {calculatedFields: [scaled, offset], fields: {...fields, scaled_year: "float", offset_year: "float"}});
+    h.requests.at(-1).resolve({layerName: "eolab:calculated"});
+    await installation;
+    const filter = {enabled: false, match: "all", rules: [{field: scaled.name, operator: "gt", value: 4000}]};
+    await applyFilter(h, filter);
+    assert.equal(h.adapter.getCalculatedFieldRemovalError(h.record, offset.name), null);
+
+    const updated = {...scaled, expression: "'year' * 3"};
+    const removal = h.adapter.installCalculatedFields(h.record,
+        {calculatedFields: [updated], fields: {...fields, scaled_year: "float"}});
+    h.requests.at(-1).resolve({layerName: "eolab:updated"});
+    assert.equal(await removal, null);
+    assert.deepEqual(h.adapter.exportCalculatedFields(h.record), [updated]);
+    assert.deepEqual(h.adapter.describeFilter(h.record).filter, filter);
+    assert.equal(h.adapter.describeSource(h.record).fields.some(field => field.name === offset.name), false);
+    assert.equal(h.adapter.renderingAvailable(h.record), true);
+    assert.equal(originalSource.calculatedFields, undefined);
 });
 
 /**
@@ -51,6 +209,7 @@ test("cancelled installation leaves previous calculated fields unchanged", async
  * @param {"point"|"line"|"polygon"} [options.geometryKind="polygon"] Geometry class.
  * @param {Object} [options.properties] Catalog field and geometry metadata.
  * @param {(record:Object)=>void} [options.onFilterChange] Optional synchronous composition callback.
+ * @param {(source:Object,candidate:Object)=>Promise<Object>} [options.style] Optional controlled style transport.
  * @return {{adapter:Object,record:Object,requests:Object[],counts:Object[],calls:string[],updates:Object[],notifications:Object[]}}
  * Adapter, retained record, pending requests, and observed external work.
  */
@@ -58,7 +217,7 @@ function createFixture({ geometryKind = "polygon", properties = {
     "table:primary_geometry": "geometry",
     "eolab:vector_source": { asset_key: "data", layer_name: "parcels" },
     "table:columns": [{ name: "geometry", type: "geometry" }, ...FIELDS],
-}, onFilterChange = () => {} } = {}) {
+}, onFilterChange = () => {}, style = async (_source, candidate) => ({styleName: "changed-style", style: candidate}) } = {}) {
     const calls = [], requests = [], counts = [], updates = [], notifications = [];
     const item = { collection: "vectors", id: "parcels", properties };
     const publication = {
@@ -81,7 +240,7 @@ function createFixture({ geometryKind = "polygon", properties = {
         publish: async () => { calls.push("publish"); return publication; },
         style: async (_item, candidate) => {
             calls.push("apply style");
-            return { styleName: "changed-style", style: candidate };
+            return style(_item, candidate);
         },
         summarize: async () => { calls.push("summarize"); return {}; },
         classify: async () => { calls.push("classify"); return {}; },

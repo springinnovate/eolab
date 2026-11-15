@@ -11,12 +11,45 @@ import {
     publishVector,
     styleVector,
     summarizeVectorCategories,
+    validateVectorFieldCalculation,
     VectorRenderingRequestError,
 } from "../../src/vector/api.js";
 
 const VECTOR_ITEM = Object.freeze({
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
+});
+
+test("formula validation sends original metadata and definitions without source access", async () => {
+    const fields = [{name: "Population total", type: "integer64"}, {name: "Owner's score", type: "str"}];
+    const calculatedFields = [{version: 1, name: "Scaled", expression: "'Population total' * 2", numericText: false}];
+    const abort = new AbortController();
+    await validateVectorFieldCalculation(fields, calculatedFields, abort.signal, async (url, options) => {
+        assert.equal(url, "/api/vector-calculations/validate");
+        assert.equal(options.method, "POST");
+        assert.equal(options.credentials, "same-origin");
+        assert.equal(options.cache, "no-store");
+        assert.equal(options.signal, abort.signal);
+        assert.deepEqual(JSON.parse(options.body), {
+            fields: {"Population total": "integer64", "Owner's score": "str"}, calculatedFields,
+        });
+        return new Response(null, {status: 204});
+    });
+});
+
+test("formula validation exposes syntax and name errors while preserving cancellation", async () => {
+    for (const detail of ["Finish the expression with a number.", [{msg: "Choose another output field name."}]]) {
+        await assert.rejects(validateVectorFieldCalculation([], [], undefined, async () =>
+            Response.json({detail}, {status: 422})), typeof detail === "string" ? /Finish the expression/ : /output field name/);
+    }
+    await assert.rejects(validateVectorFieldCalculation([], [], undefined, async () => {
+        throw new TypeError("Failed to fetch");
+    }), /Could not check the expression/);
+    await assert.rejects(validateVectorFieldCalculation([], [], undefined, async () =>
+        new Response("unexpected response")), /invalid expression check/);
+    const cancelled = new DOMException("Aborted", "AbortError");
+    await assert.rejects(validateVectorFieldCalculation([], [], undefined, async () => { throw cancelled; }),
+        error => error === cancelled);
 });
 
 test("generated vectors use run-owned metadata, rendering, values and extent endpoints", async () => {

@@ -186,6 +186,32 @@ export async function calculateVectorFields(source, calculatedFields, signal, fe
     return {...result, calculatedFields: definitions};
 }
 
+/** Check candidate formulas against the original field metadata shown by the browser.
+ * This advisory check does not read or authorize a source; calculation rechecks its actual schema.
+ * @param {ReadonlyArray<{name:string,type:string}>} fields Original fields, excluding calculated fields.
+ * @param {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} calculatedFields Complete candidate definitions in evaluation order.
+ * @param {AbortSignal} [signal] Cancellation when the draft changes.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
+ * @return {Promise<void>} Completion after the supplied formulas pass validation.
+ * @throws {Error} If a formula is invalid or validation is unavailable.
+ * @throws {DOMException} If cancelled.
+ */
+export async function validateVectorFieldCalculation(fields, calculatedFields, signal, fetchImplementation = globalThis.fetch) {
+    let response;
+    try {
+        response = await fetchImplementation("/api/vector-calculations/validate", {
+            method: "POST", credentials: "same-origin", cache: "no-store", signal,
+            headers: {"Content-Type": "application/json", Accept: "application/json"},
+            body: JSON.stringify({fields: Object.fromEntries(fields.map(({name, type}) => [name, type])), calculatedFields}),
+        });
+    } catch (error) {
+        if (error.name === "AbortError") throw error;
+        throw new Error("Could not check the expression. Check your connection, then choose Calculate to retry.");
+    }
+    if (!response.ok) throw await vectorRenderingError(response, "expression check");
+    if (response.status !== 204) throw new Error("The server returned an invalid expression check. Try again.");
+}
+
 const VECTOR_FAILURE_CATEGORIES = new Set([
     "reader_rejection",
     "connectivity",

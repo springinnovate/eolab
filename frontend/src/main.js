@@ -1060,6 +1060,9 @@ async function initializeCatalog(
         const source = record.adapter.describeSource(record);
         return {identity: record, label: record.entry.label, source: source.source, fields: source.fields,
             calculatedFields: record.adapter.exportCalculatedFields(record),
+            removalError: name => record.adapter.getCalculatedFieldRemovalError(record, name),
+            displayWarning: record.adapter.getCalculatedFieldDisplayWarning(record),
+            retryDisplay: signal => record.adapter.retryCalculatedFieldRendering(record, signal),
             apply: (result, signal) => record.adapter.installCalculatedFields(record, result, signal)};
     }});
     mapLayerController.onCalculateFields = key => vectorFieldCalculator.open(key);
@@ -1115,6 +1118,7 @@ async function initializeCatalog(
             onRenderingWorkspaceRequested();
             return record;
         } catch (error) {
+            if (!isCurrent()) return null;
             if (mapLayerController.getRecord(presentation.key) === record) mapLayerController.removeKey(presentation.key);
             throw error;
         } finally {
@@ -1166,6 +1170,7 @@ async function initializeCatalog(
             mapLayerController.setVisible(key, layer.visible);
             return key;
         } catch (error) {
+            if (!stillRetained()) return null;
             if (mapLayerController.getRecord(key) === record) mapLayerController.removeKey(key);
             throw error;
         } finally {
