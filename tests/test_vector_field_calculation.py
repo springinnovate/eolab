@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import fiona
 import pytest
@@ -21,6 +22,7 @@ from eolab_app.routes.vector_calculations import (
     FieldCalculationResponse,
     create_vector_calculation_router,
 )
+from eolab_app.source_files import LeasedSourceFiles
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.field_calculation import (
     FieldCalculationJobs,
@@ -155,6 +157,63 @@ def test_request_boundary_rejects_paths_and_browser_owned_credentials() -> None:
             FieldCalculationRequest(source=source, calculatedFields=[])
     with pytest.raises(ValidationError):
         FieldCalculationRequest(source=PRIVATE, calculatedFields=[], readLease="a" * 32)
+
+
+@pytest.mark.parametrize(
+    ("definitions", "expected_detail"),
+    [
+        ([], None),
+        (
+            [
+                {
+                    "name": "Scaled",
+                    "expression": "'Population total' * 2 + 'Owner''s score'",
+                    "numericText": True,
+                },
+                {"name": "Adjusted", "expression": "'Scaled' / 10"},
+            ],
+            None,
+        ),
+        ([{"name": "Scaled", "expression": "'Population total' *"}], "Finish"),
+        ([{"name": "Adjusted", "expression": "'Scaled' / 10"}], "unavailable"),
+        ([{"name": "Score", "expression": "'Owner''s score'"}], "Treat numeric text"),
+        ([{"name": "geometry", "expression": "2"}], "reserved"),
+    ],
+)
+def test_advisory_validation_uses_arithmetic_contract_without_source_access(
+    definitions: list[dict[str, Any]], expected_detail: str | None
+) -> None:
+    """Validate editor drafts without authorizing, opening or calculating a source.
+
+    Args:
+        definitions: Candidate formulas using the original fields shown in the editor.
+        expected_detail: Rejection detail, or None for accepted formulas.
+    """
+    calculations = Mock(spec=FieldCalculationJobs)
+    files = Mock(spec=LeasedSourceFiles)
+    read_owner = Mock()
+    app = FastAPI()
+    app.include_router(
+        create_vector_calculation_router(calculations, files, read_owner)
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/vector-calculations/validate",
+            json={
+                "fields": {"Population total": "integer64", "Owner's score": "str"},
+                "calculatedFields": definitions,
+            },
+        )
+    assert response.headers["cache-control"] == "private, no-store"
+    if expected_detail is None:
+        assert response.status_code == 204, response.text
+        assert response.content == b""
+    else:
+        assert response.status_code == 422, response.text
+        assert expected_detail in response.text
+    calculations.calculate.assert_not_called()
+    files.open.assert_not_called()
+    read_owner.assert_not_called()
 
 
 def test_uploaded_calculation_reads_admitted_fields_without_rendering(

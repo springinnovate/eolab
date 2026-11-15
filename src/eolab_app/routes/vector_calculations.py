@@ -2,12 +2,18 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import cast
+from typing import Annotated, cast
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
+from eolab_app.calculated_fields import (
+    CalculatedField,
+    CalculatedFieldError,
+    validate_calculated_fields,
+)
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
@@ -27,6 +33,20 @@ from eolab_app.vector.field_calculation_operation import (
     UploadedCalculationSource,
 )
 from eolab_app.vector_uploads import VectorUploadError
+
+
+class FieldCalculationValidationRequest(BaseModel):
+    """Check formulas against supplied metadata without reading a vector source.
+
+    Attributes:
+        fields: Original attribute names and types shown by the browser, excluding
+            calculated fields. This advisory schema does not authorize calculation.
+        calculatedFields: Complete candidate definitions in evaluation order.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    fields: dict[StrictStr, StrictStr]
+    calculatedFields: Annotated[tuple[CalculatedField, ...], Field(max_length=64)]
 
 
 class FieldCalculationResponse(Response):
@@ -158,13 +178,34 @@ def create_vector_calculation_router(
         read_result_owner: Composition-supplied Processing session boundary.
 
     Returns:
-        A private endpoint whose aborted requests cancel native work before cleanup.
+        Private advisory validation and calculation endpoints. Aborted calculations
+        cancel native work before cleanup.
     """
     router = APIRouter(
         prefix="/api/vector-calculations",
         tags=["vector calculations"],
         route_class=PrivateVectorRoute,
     )
+
+    @router.post("/validate", status_code=204, response_class=Response)
+    async def validate_fields(body: FieldCalculationValidationRequest) -> Response:
+        """Check expression syntax and field references without starting a job.
+
+        Args:
+            body: Browser-visible original metadata and complete candidate formulas.
+
+        Returns:
+            Empty success response. Calculation still checks the actual authorized
+            source schema before accepting any fields.
+
+        Raises:
+            HTTPException: If a formula cannot use the supplied field metadata.
+        """
+        try:
+            validate_calculated_fields(body.calculatedFields, body.fields)
+        except CalculatedFieldError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return Response(status_code=204)
 
     @router.post("", response_model=FieldCalculationResult)
     async def calculate_fields(

@@ -1060,6 +1060,9 @@ async function initializeCatalog(
         const source = record.adapter.describeSource(record);
         return {identity: record, label: record.entry.label, source: source.source, fields: source.fields,
             calculatedFields: record.adapter.exportCalculatedFields(record),
+            removalError: name => record.adapter.getCalculatedFieldRemovalError(record, name),
+            displayWarning: record.adapter.getCalculatedFieldDisplayWarning(record),
+            retryDisplay: signal => record.adapter.retryCalculatedFieldRendering(record, signal),
             apply: (result, signal) => record.adapter.installCalculatedFields(record, result, signal)};
     }});
     mapLayerController.onCalculateFields = key => vectorFieldCalculator.open(key);
