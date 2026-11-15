@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {VectorFieldCalculator} from "../../src/vector/field-calculator.js";
 import {calculateVectorFields} from "../../src/vector/api.js";
+import {createFakeResizeObservers} from "../../test-support/raster/fakes.js";
 
 /** DOM controls supporting the calculator's actual text editing and events. */
 class Element extends EventTarget {
@@ -82,8 +83,9 @@ function calculationResult(definitions) {
  */
 function calculatorFixture(t, {calculate = async (_source, definitions) => calculationResult(definitions),
     validate = async () => {}} = {}) {
+    const {ResizeObserver, instances: resizeObservers} = createFakeResizeObservers();
     const document = {createElement: tag => new Element(document, tag), querySelector: () => null,
-        defaultView: Object.assign(new EventTarget(), {innerWidth: 800, innerHeight: 600})};
+        defaultView: Object.assign(new EventTarget(), {innerWidth: 800, innerHeight: 600, ResizeObserver})};
     document.body = document.createElement("body");
     document.activeElement = document.createElement("button");
     const targets = new Map(["a", "b"].map(key => {
@@ -103,7 +105,7 @@ function calculatorFixture(t, {calculate = async (_source, definitions) => calcu
         validate: (...args) => { validations.push(args); return validate(...args); }});
     t.after(() => calculator.stopValidation());
     calculator.open("a");
-    return {calculator, targets, document, calculations, validations};
+    return {calculator, targets, document, calculations, validations, resizeObservers};
 }
 
 /** Type form values through their input events.
@@ -215,6 +217,27 @@ test("the picker stays within the viewport and closes with its dialog or a scrol
     c.dialog.dispatchEvent(new Event("scroll"));
     assert.equal(c.picker.popoverOpen, false);
     assert.equal(c.insert.getAttribute("aria-expanded"), "false");
+});
+
+test("the open picker follows the dialog's final layout after a viewport resize", t => {
+    const {calculator: c, document, resizeObservers} = calculatorFixture(t);
+    c.dialog.bounds = {top: 70, bottom: 410};
+    c.insert.bounds = {top: 230, bottom: 254, right: 286};
+    c.insert.click();
+    document.defaultView.innerWidth = 1280;
+    document.defaultView.innerHeight = 800;
+    document.defaultView.dispatchEvent(new Event("resize"));
+    c.dialog.bounds = {top: 280, bottom: 510};
+    c.insert.bounds = {top: 364, bottom: 388, right: 1000};
+    assert.equal(resizeObservers[0].target, c.dialog);
+    resizeObservers[0].resize(760);
+    assert.equal(c.picker.style.left, "660px");
+    assert.equal(c.picker.style.top, "392px");
+    assert.equal(c.picker.popoverOpen, true);
+    assert.equal(document.activeElement, c.search, "reflow preserves typing focus");
+    c.dialog.close();
+    resizeObservers[0].resize(760);
+    assert.equal(c.picker.popoverOpen, false, "a later layout notification does not reopen the picker");
 });
 
 test("tabbing out of field choices uncovers the focused editor without changing its text", t => {
