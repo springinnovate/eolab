@@ -227,22 +227,23 @@ export class OnMapLegend {
     /**
      * Fit the legend inside the map while keeping long entry lists scrollable.
      * Use extra columns for separate layers when their keys grow tall; leave
-     * room for map tools and retain the existing scroll region across updates.
+     * room for the shell's measured toolbar on narrow maps and retain the
+     * existing scroll region across updates.
      * @return {void}
      */
     updateLayout() {
         const { x: width, y: height } = this.map.getSize();
         const available = Math.max(80, Math.min(660, width - (width >= 900 ? 400 : 40)));
-        const topMargin = width < 900 ? 70 : 10;
+        const topMargin = width < 900 ? "calc(var(--map-tools-height, 60px) + 10px)" : "10px";
         const contentHeight = [...this.contents.children].reduce((total, node) => total + node.offsetHeight + 12, 0);
         const columns = Math.min(Math.max(1, this.contents.childElementCount),
             Math.max(1, Math.floor(available / 216)),
             Math.max(1, Math.ceil(contentHeight / Math.max(180, height * 0.45))));
         this.root.style.maxWidth = `${available}px`;
         this.root.style.width = this.collapsed ? "auto" : `${columns * 216}px`;
-        this.root.style.maxHeight = `${Math.max(0, height - topMargin - 20)}px`;
+        this.root.style.maxHeight = `max(0px, calc(${height - 20}px - ${topMargin}))`;
         this.contents.style.columnCount = String(columns);
-        this.root.style.marginTop = `${topMargin}px`;
+        this.root.style.marginTop = topMargin;
     }
 
     /** @return {{visible:boolean,collapsed:boolean}} Portable legend presentation preferences. */
