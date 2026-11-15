@@ -511,7 +511,6 @@ export class MapLayerStackView {
         const kind = this.documentContext.createElement("span");
         kind.className = "map-layer-kind";
         kind.textContent = layer.isCustom ? "Custom" : "Catalog";
-        title.append(kind);
         if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
             const roleBadge = this.documentContext.createElement("span");
             roleBadge.className = "map-layer-role-badge";
@@ -587,6 +586,16 @@ export class MapLayerStackView {
         }
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
+        const styleActions = this.documentContext.createElement("div");
+        styleActions.className = "map-layer-style-actions";
+        styleActions.append(
+            style,
+            ...(copyStyle ? [copyStyle] : []),
+            ...(pasteStyle ? [pasteStyle] : []),
+            kind,
+        );
+        const layerActions = this.documentContext.createElement("div");
+        layerActions.className = "map-layer-data-actions";
         const filter = layer.canFilter ? this.#button(
             "Filter", `${layer.filterActive ? "Edit active filter for" : "Filter"} ${accessibleName}`,
             layer.key, "filter", () => this.handlers?.onFilter?.(layer.key), focusTargets,
@@ -596,14 +605,11 @@ export class MapLayerStackView {
             filter.classList.toggle("has-active-filter", Boolean(layer.filterActive));
         }
         // Local editors supply their own Edit/Details action instead of the catalog Info action.
-        rowActions.append(
+        layerActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
-            style,
-            ...(copyStyle ? [copyStyle] : []),
-            ...(pasteStyle ? [pasteStyle] : []),
             ...(filter ? [filter] : []),
             ...(layer.capabilities?.calculations ? [this.#button(
-                "Raster statistics", "Calculate statistics for " + accessibleName, layer.key,
+                "Statistics", "Calculate statistics for " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : [])
         );
@@ -615,7 +621,7 @@ export class MapLayerStackView {
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
-            rowActions.append(addView);
+            layerActions.append(addView);
         }
         const utilities = this.documentContext.createElement("div");
         utilities.className = "map-layer-utility-actions";
@@ -632,7 +638,8 @@ export class MapLayerStackView {
             )] : [])
         );
         const details = this.#buildDetails(layer, typeLabel, utilities, focusTargets);
-        rowActions.append(details.trigger);
+        layerActions.append(details.trigger);
+        rowActions.append(styleActions, layerActions);
         row.append(reorder);
         row.append(primary);
         if (layer.primaryControl) row.append(layer.primaryControl);
