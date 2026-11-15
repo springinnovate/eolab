@@ -153,6 +153,37 @@ def test_scan_catalogs_original_and_ordinary_sibling_without_display_duplicates(
     assert build_stac_items(tmp_path, output) == items
 
 
+def test_preparation_finalizes_wal_source_as_one_read_only_artifact(
+    original_package: Path,
+    tmp_path: Path,
+) -> None:
+    """Read a prepared WAL source without requiring writable mount sidecars.
+
+    Args:
+        original_package: Native source switched to persistent WAL journal mode.
+        tmp_path: Isolated output directory.
+    """
+    from osgeo import gdal
+
+    with closing(sqlite3.connect(original_package)) as original:
+        assert original.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+    output = tmp_path / "portable.gpkg"
+    prepare_vector_overviews(original_package, output, "areas", [10])
+
+    with closing(sqlite3.connect(output.as_uri() + "?mode=ro", uri=True)) as prepared:
+        assert prepared.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+        assert prepared.execute("SELECT COUNT(*) FROM areas").fetchone() == (2,)
+    assert read_geopackage_overviews(output)["areas"] == (
+        GeoPackageOverview("areas__overview_1", 10.0, "shape"),
+    )
+    with gdal.OpenEx(str(output), gdal.OF_VECTOR | gdal.OF_READONLY) as dataset:
+        assert dataset.GetLayerByName("areas__overview_1").GetFeatureCount() == 2
+    assert not output.with_name(output.name + "-wal").exists()
+    assert not output.with_name(output.name + "-shm").exists()
+    with closing(sqlite3.connect(original_package)) as original:
+        assert original.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+
+
 @pytest.mark.parametrize(
     "mutation,message",
     [

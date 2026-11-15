@@ -179,6 +179,9 @@ def prepare_vector_overviews(
                 progress(f"Prepared {tolerance:g} m display level")
 
         with closing(sqlite3.connect(temporary)) as connection:
+            # A copied WAL database would need writable sidecars on the data mount.
+            # Finalize this artifact as one portable file before publishing it.
+            connection.execute("PRAGMA journal_mode=DELETE")
             connection.execute(
                 "CREATE TABLE eolab_vector_overviews (version INTEGER NOT NULL, "
                 "source_layer TEXT NOT NULL, overview_layer TEXT NOT NULL UNIQUE, "
