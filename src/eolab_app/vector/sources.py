@@ -435,6 +435,8 @@ class PublishedVectorRegistry:
         layer_name: str,
         source: ResolvedVectorSource,
         style_name: str,
+        *,
+        inspection_layer_name: str | None = None,
     ) -> None:
         """Authorize a published source and its fixed default appearance.
 
@@ -446,12 +448,21 @@ class PublishedVectorRegistry:
             layer_name: Workspace-qualified GeoServer WMS layer name.
             source: Exact mounted source and native layer identity.
             style_name: Initialized fixed default WMS style.
+            inspection_layer_name: Hidden original-geometry publication for
+                display-level sources; ordinary sources use their map layer.
         """
         previous = self._sources.get(layer_name)
-        if previous is not None and previous.source == source:
+        if (
+            previous is not None
+            and previous.source == source
+            and previous.inspection_layer_name == inspection_layer_name
+        ):
             return
         self._sources[layer_name] = PublishedVectorAuthorization(
-            source, style_name, token_bytes(32)
+            source,
+            style_name,
+            token_bytes(32),
+            inspection_layer_name=inspection_layer_name,
         )
 
     def authorize_style(

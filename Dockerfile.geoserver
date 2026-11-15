@@ -35,9 +35,15 @@ ADD --checksum=sha256:08e1c95e0f753fa6b63f815d3314764d891d9cf1bee418dcae6ea5bf25
     https://downloads.sourceforge.net/project/geoserver/GeoServer/3.0.1/extensions/geoserver-3.0.1-control-flow-plugin.zip \
     /tmp/control-flow.zip
 
+ADD --checksum=sha256:bc1e0260009d0256ffe03a362e9d7d483c499609c4f28ca8c824d4f331e5f83f \
+    https://downloads.sourceforge.net/project/geoserver/GeoServer/3.0.1/extensions/geoserver-3.0.1-feature-pregeneralized-plugin.zip?download=1 \
+    /tmp/feature-pregeneralized.zip
+
 RUN unzip -q /tmp/control-flow.zip "*.jar" \
         -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
-    && rm /tmp/control-flow.zip \
+    && unzip -q /tmp/feature-pregeneralized.zip "*.jar" \
+        -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
+    && rm /tmp/control-flow.zip /tmp/feature-pregeneralized.zip \
     && chmod 0444 /opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar
 
 COPY --chmod=0555 deployment/require-geoserver-vector-datastores.sh \

@@ -4,15 +4,20 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 import httpx2
+import pytest
 
 from eolab_app.catalog.geopackage import build_stac_items as build_geopackage_items
+from eolab_app.catalog.geopackage_overviews import GeoPackageOverview
 from eolab_app.catalog.shapefile import build_stac_item as build_shapefile_item
 from eolab_app.vector.assessment import VectorAssessmentFinalizer
+from eolab_app.vector.errors import VectorPublicationError
 from eolab_app.vector.geoserver import GeoServerVectorPublisher
 from eolab_app.vector.models import (
     CatalogVectorRequest,
+    original_vector_resource_name,
 )
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import (
@@ -57,6 +62,7 @@ class RecordingPublisher:
     def __init__(self) -> None:
         """Create an empty request log."""
         self.requests: list[tuple[str, str, Path, str, str]] = []
+        self.display_levels: list[tuple[GeoPackageOverview, ...]] = []
 
     async def publish(
         self,
@@ -65,6 +71,8 @@ class RecordingPublisher:
         source_path: Path,
         layer_name: str,
         geometry_kind: str,
+        *,
+        display_levels: tuple[GeoPackageOverview, ...] = (),
     ) -> str:
         """Record one publication and return its fixed style.
 
@@ -74,6 +82,7 @@ class RecordingPublisher:
             source_path: Canonical mounted source file.
             layer_name: Exact native layer name.
             geometry_kind: Default style family.
+            display_levels: Admitted display tables associated with this source.
 
         Returns:
             Fixed style name.
@@ -85,6 +94,7 @@ class RecordingPublisher:
             layer_name,
             geometry_kind,
         ))
+        self.display_levels.append(display_levels)
         return f"vector-{geometry_kind}"
 
 
@@ -176,6 +186,203 @@ class VectorGeoServerScenario:
             self.layer = False
             return httpx2.Response(200)
         raise AssertionError(f"Unexpected GeoServer request: {request.method} {path}")
+
+
+class OverviewGeoServerScenario:
+    """Route one overview publication to its public and original REST resources."""
+
+    def __init__(self, resource_name: str) -> None:
+        """Create empty public, original and generated-configuration state.
+
+        Args:
+            resource_name: Public overview datastore and layer identity.
+        """
+        self.public = VectorGeoServerScenario(resource_name)
+        self.original = VectorGeoServerScenario(
+            original_vector_resource_name(resource_name)
+        )
+        self.configuration: bytes | None = None
+        self.configuration_writes = 0
+        self.reject_display_feature_type = False
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        """Dispatch real adapter calls and optionally reject wrapper publication.
+
+        Args:
+            request: HTTP request emitted by the production publisher.
+
+        Returns:
+            Simulated REST response from the selected owned resource.
+        """
+        if "/resource/eolab-vector-overviews/" in request.url.path:
+            if request.method == "PUT":
+                self.configuration = request.content
+                self.configuration_writes += 1
+                return httpx2.Response(201)
+            if request.method == "DELETE":
+                self.configuration = None
+                return httpx2.Response(200)
+        if request.method == "POST" and request.url.path.endswith("/datastores"):
+            name = json.loads(request.content)["dataStore"]["name"]
+            scenario = (
+                self.original if name == self.original.resource_name else self.public
+            )
+        else:
+            scenario = (
+                self.original
+                if self.original.resource_name in request.url.path
+                else self.public
+            )
+        if (
+            self.reject_display_feature_type
+            and scenario is self.public
+            and request.method == "POST"
+            and request.url.path.endswith("/featuretypes")
+        ):
+            return httpx2.Response(500)
+        return scenario(request)
+
+
+def test_geoserver_publishes_stored_levels_and_reuses_original(tmp_path: Path) -> None:
+    """Generate one stock selector while keeping an unadvertised exact layer.
+
+    Args:
+        tmp_path: Isolated source-file directory.
+    """
+    name = "geopackage-0123456789abcdef01234567"
+    scenario = OverviewGeoServerScenario(name)
+    levels = (
+        GeoPackageOverview("display & 10", 10.0, "shape"),
+        GeoPackageOverview("display_100", 100.0, "shape"),
+    )
+
+    async def publish_twice() -> None:
+        """Exercise creation and subsequent immutable publication reuse."""
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(scenario)
+        ) as client:
+            publisher = GeoServerVectorPublisher(client, "http://geoserver/geoserver")
+            for _ in range(2):
+                assert (
+                    await publisher.publish(
+                        name,
+                        "geopackage",
+                        tmp_path / "source.gpkg",
+                        "selected & source",
+                        "polygon",
+                        display_levels=levels,
+                    )
+                    == "vector-polygon"
+                )
+
+    asyncio.run(publish_twice())
+    assert scenario.configuration_writes == 1
+    assert scenario.configuration is not None
+    root = ElementTree.fromstring(scenario.configuration)
+    assert root.attrib == {
+        "version": "1.0",
+        "dataSourceName": original_vector_resource_name(name),
+        "dataSourceNameSpace": "eolab",
+    }
+    feature = root.find("GeneralizationInfo")
+    assert feature is not None
+    assert feature.attrib == {
+        "featureName": "selected & source",
+        "baseFeatureName": "selected & source",
+        "geomPropertyName": "shape",
+    }
+    assert [entry.attrib for entry in feature] == [
+        {
+            "distance": "10.0",
+            "featureName": "display & 10",
+            "geomPropertyName": "shape",
+        },
+        {
+            "distance": "100.0",
+            "featureName": "display_100",
+            "geomPropertyName": "shape",
+        },
+    ]
+    stores = [
+        json.loads(request.content)["dataStore"]
+        for request in scenario.public.requests
+        if request.method == "POST" and request.url.path.endswith("/datastores")
+    ]
+    assert len(stores) == 1
+    assert {
+        entry["@key"]: entry["$"]
+        for entry in stores[0]["connectionParameters"]["entry"]
+    } == {
+        "RepositoryClassName": "org.geoserver.data.gen.DSFinderRepository",
+        "GeneralizationInfosProviderClassName": "org.geoserver.data.gen.info.GeneralizationInfosProviderImpl",
+        "GeneralizationInfosProviderParam": f"eolab-vector-overviews/{name}.xml",
+    }
+    assert any(
+        json.loads(request.content) == {"layer": {"advertised": False}}
+        for request in scenario.original.requests
+        if request.method == "PUT" and request.url.path.endswith(".json")
+    )
+    assert (
+        scenario.public.native_name
+        == scenario.original.native_name
+        == "selected & source"
+    )
+
+
+def test_failed_overview_publication_cleans_configuration_and_retries(
+    tmp_path: Path,
+) -> None:
+    """Remove an incomplete wrapper while retaining its complete reusable original.
+
+    Args:
+        tmp_path: Isolated source-file directory.
+    """
+    name = "geopackage-0123456789abcdef01234567"
+    scenario = OverviewGeoServerScenario(name)
+    levels = (GeoPackageOverview("display_10", 10.0, "geom"),)
+
+    async def publish_with_retry() -> None:
+        """Fail wrapper creation once, then recover through the public contract."""
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(scenario)
+        ) as client:
+            publisher = GeoServerVectorPublisher(client, "http://geoserver/geoserver")
+            scenario.reject_display_feature_type = True
+            with pytest.raises(VectorPublicationError):
+                await publisher.publish(
+                    name,
+                    "geopackage",
+                    tmp_path / "source.gpkg",
+                    "selected",
+                    "polygon",
+                    display_levels=levels,
+                )
+            assert scenario.configuration is None
+            assert not scenario.public.datastore
+            assert scenario.original.datastore and scenario.original.layer
+            scenario.reject_display_feature_type = False
+            await publisher.publish(
+                name,
+                "geopackage",
+                tmp_path / "source.gpkg",
+                "selected",
+                "polygon",
+                display_levels=levels,
+            )
+
+    asyncio.run(publish_with_retry())
+    assert scenario.public.layer
+    assert scenario.configuration_writes == 2
+    assert (
+        len(
+            [
+                request
+                for request in scenario.original.requests
+                if request.method == "POST" and request.url.path.endswith("/datastores")
+            ]
+        )
+        == 1
+    )
 
 
 def assessed_geopackage_item(tmp_path: Path) -> tuple[dict[str, Any], Path]:

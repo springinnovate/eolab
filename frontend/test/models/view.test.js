@@ -107,6 +107,8 @@ test("raster choices separate map layers from completed runs and explain unavail
     h.state.draft.inputs.raster.raster = result; h.state.nextCursor = "older";
     h.view.render(h.state);
     assert.deepEqual(h.view.setup.inputs.raster.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
+    assert.equal(h.view.setup.inputs.raster.reason.hidden, true);
+    assert.equal(h.view.setup.inputs.raster.reason.textContent, "");
     assert.equal(h.view.setup.run.disabled, false);
     assert.equal(h.view.setup.form.querySelectorAll("button").some(button =>
         ["Refresh results", "Load older results"].includes(button.textContent)), false);
@@ -114,6 +116,11 @@ test("raster choices separate map layers from completed runs and explain unavail
     assert.equal(h.view.setup.run.disabled, true);
     assert.match(h.view.setup.inputs.raster.source.children[2].children[0].textContent, /unavailable/);
     assert.equal(h.view.setup.inputs.raster.source.children[2].children[0].disabled, true);
+    assert.equal(h.view.setup.inputs.raster.reason.hidden, false);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /no longer available/);
+    h.state.draft.inputs.raster.raster = null; h.view.render(h.state);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /Map layers or a completed run/);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /do not need to be shown on the map/);
 });
 
 test("removed history entries leave the DOM while unrelated run cards retain their controls", () => {
@@ -488,8 +495,15 @@ test("area choices use histogram terminology and follow the map without Update c
     assert.equal(labels().at(-1), "Area from original run"); assert.match(h.view.setup.inputs.area.mapHelp.textContent, /exact area from the original run/);
     h.state.draft = createModelDraft(model, {rasters: [raster]}, "no-selected-area"); h.view.render(h.state);
     assert.ok(labels().includes("Sampling box"));
+    assert.equal(h.view.setup.inputs.area.source.value, "whole");
+    assert.equal(h.view.setup.inputs.area.areaDescription.hidden, true);
+    h.state.draft.inputs.area.selectionError = "Area check failed."; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.areaDescription.hidden, false);
+    assert.equal(h.view.setup.inputs.area.areaDescription.textContent, "Area check failed.");
+    h.state.draft.inputs.area.selectionError = "";
     h.state.draft.inputs.area.areaMode = "viewport"; h.state.draft.inputs.area.area = area; h.view.render(h.state);
     assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.inputs.area.mapHelp.textContent, /Pan or zoom/);
+    assert.equal(h.view.setup.inputs.area.areaDescription.hidden, false);
     h.state.draft.inputs.area.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);
 });
 
@@ -510,9 +524,15 @@ test("vector setup offers Edit filter and describes the predicate belonging to t
 test("setup offers only map layers and explains how to add a missing raster", () => {
     const h = fixture();
     assert.equal(h.view.setup.rasterSearch, undefined); assert.equal(h.view.setup.vectorSearch, undefined);
+    assert.equal(h.view.setup.inputs.raster.reason.hidden, true);
+    assert.equal(h.view.setup.inputs.raster.reason.textContent, "");
+    assert.equal(h.view.setup.fields.querySelectorAll("p").find(node => node.id === "models-run-name-help").textContent, "Date and time are added automatically.");
     h.state.draft = createModelDraft(model, {}, "empty-map"); h.view.render(h.state);
     assert.match(h.view.setup.inputs.raster.reason.textContent, /Add a raster to Map layers/);
+    assert.equal(h.view.setup.inputs.raster.reason.hidden, false);
     assert.equal(h.view.setup.run.disabled, true);
+    h.state.draft.sources = [raster]; h.view.render(h.state);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /Choose a raster from Map layers/);
 });
 
 

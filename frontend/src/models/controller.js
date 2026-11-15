@@ -153,7 +153,7 @@ export class ModelsController {
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
-        this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
+        this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusPage();
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
         this.bindModelSetup(draft);
@@ -184,6 +184,7 @@ export class ModelsController {
     }
 
     /** Change one named input and update its dependent grid or area choices.
+     * An explicit raster choice replaces its copied-run provenance.
      * @param {string} name Input name declared by the recipe.
      * @param {Object} change Edited source, acquisition mode, mask or grid fields.
      * @return {void}
@@ -201,6 +202,7 @@ export class ModelsController {
                 Object.assign(input, {pixelSize: [...choice.grid.pixelSize], origin: [...choice.grid.origin], unit: choice.grid.unit});
             }
         }
+        if ("raster" in change) input.copiedFromRun = false;
         Object.assign(input, change);
         this.setupSession?.inputChanged(name, change);
         this.editDraft({});
@@ -605,13 +607,7 @@ export class ModelsController {
             const definition = draft.model.inputs[name], type = definition.type;
             const handler = getModelInputHandler(type);
             if (handler) { handler.refresh(input, definition, context); continue; }
-            if (["raster", "catalog_raster", "optional_raster"].includes(type)) {
-                input.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this tool.";
-                if (type !== "catalog_raster") input.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
-                if (input.raster?.available === false) input.sourceReason = "This raster is no longer available. Choose another input.";
-                continue;
-            }
-            if (["habitat_stack", "raster_preparation"].includes(type)) continue;
+            if (["raster", "catalog_raster", "optional_raster", "habitat_stack", "raster_preparation"].includes(type)) continue;
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
             const selected = input.vectors.find(source => source.key === input.vectorKey);
@@ -717,7 +713,7 @@ export class ModelsController {
             this.revision += 1;
             this.state.selectedRun = null; this.state.invocation = null; this.state.invocationError = "";
             this.state.yaml = null; this.state.deleteConfirmation = null;
-            if (this.state.page === "run") { this.state.page = "runs"; this.view.focusHeading("runs"); }
+            if (this.state.page === "run") { this.state.page = "runs"; this.view.focusPage("runs"); }
         }
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" &&
             this.state.draft && getModelRasterFields(this.state.draft).some(({state, field}) => state[field]?.jobId === job.jobId))) {
@@ -771,7 +767,7 @@ export class ModelsController {
         this.state.selectedRun = id; this.state.page = "run"; this.state.invocation = null; this.state.invocationError = "";
         this.state.deleteConfirmation = null; this.state.actionMessage = "";
         this.state.error = ""; this.state.yaml = null; this.jobs.tracked.add(id); this.tracked.add(id); this.jobs.schedule();
-        this.render(); this.view.focusHeading();
+        this.render(); this.view.focusPage();
         try {
             const [job, invocation] = await Promise.all([this.api.getJob(id), this.api.readModelInvocation(id).catch(error => ({readError: error.message}))]);
             if (revision !== this.revision || this.destroyed) return;
@@ -986,7 +982,7 @@ export class ModelsController {
             if (handler) handler.restore(input, saved.inputs[name], definition);
             else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
                 input.raster = structuredClone(saved.inputs[name]);
-                input.sourceReason = "Copied from the original run; choose another raster to change it.";
+                input.copiedFromRun = true;
             } else if (definition.type === "raster_preparation") {
                 const {crs, pixelSize, origin} = saved.inputs[name];
                 Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});
@@ -1016,7 +1012,7 @@ export class ModelsController {
             for (const source of getRasterPreparationSources(draft)) source.state.resampling = saved.inputs[preparationName].resampling[source.key];
         }
         this.refreshMapLayers();
-        this.render(); this.view.focusHeading();
+        this.render(); this.view.focusPage();
         this.bindModelSetup(draft);
         await this.setupSession?.start();
         if (draft.temporal?.datasetKey) await this.loadTemporalDates(undefined, true);

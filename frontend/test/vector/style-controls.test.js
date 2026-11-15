@@ -4,6 +4,7 @@ import test from "node:test";
 import { VectorStyleControls } from "../../src/vector/style-controls.js";
 import { classifyVectorNumbers, summarizeVectorCategories } from "../../src/vector/api.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
+import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 
 /**
  * Create a deterministic timeout queue for debounce assertions.
@@ -60,9 +61,11 @@ async function settleStyle(fixture) {
     await new Promise(resolve => setTimeout(resolve, 0));
 }
 
-/** @return {Object} Style controls, deterministic clock and narrow test target. */
-function styleFixture() {
-    const documentContext = new FakeRasterControlDocument();
+/** Create style controls with a deterministic clock and narrow test target.
+ * @param {FakeRasterControlDocument} [documentContext] Test DOM, optionally checked against current markup.
+ * @return {Object} Controls, document, clock, applied styles and target factory.
+ */
+function styleFixture(documentContext = new FakeRasterControlDocument()) {
     const clock = debounceClock();
     const controls = new VectorStyleControls(documentContext, {
         schedule: clock.schedule,
@@ -334,6 +337,9 @@ test("vector controls start labels off, suggest a name field, and allow labels o
     const target = { ...fixture.target("polygon", style), notice: "Numeric coloring unavailable." };
     fixture.controls.show(target);
     assert.equal(fixture.controls.labelEnabled.checked, false);
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, true);
+    assert.equal(fixture.controls.labelNote.hidden, true);
+    assert.equal(fixture.controls.labelNote.textContent, "");
     assert.equal(fixture.controls.labelField.value, "name");
     assert.equal(fixture.controls.labelMinimumZoom.value, "0");
     assert.equal(fixture.controls.graduatedPalette.value, "blue-yellow-red");
@@ -341,6 +347,7 @@ test("vector controls start labels off, suggest a name field, and allow labels o
     assert.equal(fixture.controls.status.textContent, target.notice);
     fixture.controls.labelEnabled.checked = true;
     fixture.controls.labelEnabled.dispatchEvent(new Event("change"));
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, false);
     await settleStyle(fixture);
     assert.equal(fixture.applied[0].label.field, "name");
     assert.equal(fixture.applied[0].strokeWidth, 0.75);
@@ -369,8 +376,8 @@ test("vector style controls coalesce rapid edits into the latest style", async (
     fixture.controls.destroy();
 });
 
-test("vector style controls apply a field-backed optional label", async () => {
-    const fixture = styleFixture();
+test("label settings retain controls, values and toggle focus through off/on cycles", async () => {
+    const fixture = styleFixture(new SummaryControlDocument());
     fixture.controls.show(fixture.target("line", {
         geometryKind: "line",
         strokeColor: "#f97316",
@@ -407,6 +414,61 @@ test("vector style controls apply a field-backed optional label", async () => {
         "Labels use value at zoom 7 and closer. Labels may overlap to keep names visible. " +
             "Centered and point labels wrap across lines and stay anchored as you zoom.",
     );
+    assert.equal(fixture.controls.labelNote.hidden, false);
+    const savedLabel = fixture.applied[0].label;
+    const labelInputs = [...fixture.controls.labelInputs];
+    fixture.controls.labelEnabled.focus();
+    fixture.controls.labelEnabled.checked = false;
+    fixture.controls.labelEnabled.dispatchEvent(new Event("change"));
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, true);
+    assert.equal(fixture.controls.labelNote.hidden, true);
+    assert.equal(fixture.controls.labelNote.textContent, "");
+    assert.ok(labelInputs.every(input => input.disabled));
+    assert.equal(fixture.documentContext.activeElement, fixture.controls.labelEnabled);
+    await settleStyle(fixture);
+    assert.equal(fixture.applied[1].label, null);
+
+    fixture.controls.labelEnabled.checked = true;
+    fixture.controls.labelEnabled.dispatchEvent(new Event("change"));
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, false);
+    assert.equal(fixture.controls.labelNote.hidden, false);
+    assert.ok(labelInputs.every((input, index) => input === fixture.controls.labelInputs[index] && !input.disabled));
+    assert.equal(fixture.documentContext.activeElement, fixture.controls.labelEnabled);
+    await settleStyle(fixture);
+    assert.deepEqual(fixture.applied[2].label, savedLabel);
+    fixture.controls.destroy();
+});
+
+test("saved labels reveal settings while unavailable label fields retain useful guidance", () => {
+    const fixture = styleFixture(new SummaryControlDocument());
+    const target = fixture.target("line", {
+        geometryKind: "line", strokeColor: "#f97316", strokeOpacity: 1, strokeWidth: 3,
+        label: {field: "value", fontFamily: "Serif", fontSize: 18, fontWeight: "bold",
+            fontColor: "#112233", haloColor: "#ffffff", haloWidth: 2, placement: "follow-line", minimumZoom: 7},
+    });
+    fixture.controls.show(target);
+    assert.equal(fixture.controls.labelEnabled.checked, true);
+    assert.equal(fixture.controls.labelEnabled.disabled, false);
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, false);
+    assert.equal(fixture.controls.labelField.value, "value");
+    assert.equal(fixture.controls.labelFontFamily.value, "Serif");
+    assert.equal(fixture.controls.labelFontSize.value, "18");
+    assert.equal(fixture.controls.labelNote.hidden, false);
+
+    fixture.controls.show({...target, key: "without-fields", fields: []});
+    assert.equal(fixture.controls.labelEnabled.checked, false);
+    assert.equal(fixture.controls.labelEnabled.disabled, true);
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, true);
+    assert.equal(fixture.controls.labelNote.hidden, false);
+    assert.equal(fixture.controls.labelNote.textContent, "This Item has no cataloged attribute fields.");
+
+    fixture.controls.show({...target, key: "missing-saved-field", fields: [{name: "name", type: "str"}]});
+    assert.equal(fixture.controls.labelEnabled.checked, false);
+    assert.equal(fixture.controls.labelEnabled.disabled, false);
+    assert.equal(fixture.controls.labelFieldsRoot.hidden, true);
+    assert.equal(fixture.controls.labelField.value, "name");
+    assert.equal(fixture.controls.labelNote.hidden, true);
+    assert.equal(fixture.applied.length, 0);
     fixture.controls.destroy();
 });
 

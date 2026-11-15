@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -129,6 +130,92 @@ def utc_timestamp(seconds: int) -> str:
     )
 
 
+def _parse_observation_grid(
+    variable: Any, crs_value: Any, transform_value: Any, height: Any, width: Any
+) -> tuple[CRS, Affine, int, int]:
+    """Validate and normalize the grid fields of one external observation.
+
+    Args:
+        variable: Raw variable name used in admission errors.
+        crs_value: SQLite CRS value accepted by Rasterio.
+        transform_value: JSON-encoded GDAL transform from SQLite.
+        height: Raw raster row count, required to be a positive integer.
+        width: Raw raster column count, required to be a positive integer.
+
+    Returns:
+        Canonical CRS, north-up transform, height and width for grid comparison.
+
+    Raises:
+        ValueError: If the grid is malformed or unsupported.
+        TypeError: If external values cannot be parsed as grid metadata.
+        rasterio.errors.CRSError: If Rasterio cannot parse the CRS.
+    """
+    crs = CRS.from_user_input(crs_value)
+    transform = Affine.from_gdal(*json.loads(transform_value))
+    if (
+        not isinstance(height, int)
+        or height <= 0
+        or not isinstance(width, int)
+        or width <= 0
+        or not all(math.isfinite(value) for value in transform)
+        or transform.a <= 0
+        or transform.e >= 0
+        or transform.b != 0
+        or transform.d != 0
+    ):
+        raise ValueError(f"Unsupported raster grid for {variable}")
+    return crs, transform, height, width
+
+
+def _parse_variable_metadata(
+    variable: Any, name: Any, units: Any, dtype: Any, nodata: Any, temporal_type: Any
+) -> dict[str, Any]:
+    """Validate external variable fields and normalize their Catalog metadata.
+
+    Args:
+        variable: Raw variable identifier, required to be a nonempty string.
+        name: Raw descriptive name, required to be a nonempty string.
+        units: Raw unit label, required to be a nonempty string.
+        dtype: NumPy numeric dtype supplied by the observation catalog.
+        nodata: Optional numeric NoData value, including the published NaN string.
+        temporal_type: Published instant, mean or accumulation semantics.
+
+    Returns:
+        The variable's normalized data-cube metadata, preserving its native dtype.
+
+    Raises:
+        ValueError: If metadata is unsupported or NoData cannot be parsed.
+        TypeError: If the external dtype or NoData value cannot be interpreted.
+    """
+    supports = {
+        "instant": "instantaneous",
+        "mean": "mean_rate",
+        "accumulation": "accumulation",
+    }
+    if (
+        not isinstance(variable, str)
+        or not variable.strip()
+        or not isinstance(name, str)
+        or not name.strip()
+        or not isinstance(units, str)
+        or not units.strip()
+        or numpy.dtype(dtype).kind not in "iuf"
+        or temporal_type not in supports
+    ):
+        raise ValueError(f"Unsupported variable metadata: {variable}")
+    if nodata is not None:
+        float(nodata)
+    return {
+        "dimensions": ["time", "y", "x"],
+        "type": "data",
+        "description": name,
+        "unit": units,
+        "data_type": dtype,
+        "nodata": "nan" if nodata == "NaN" else nodata,
+        "eolab:time_support": supports[temporal_type],
+    }
+
+
 def build_temporal_items(
     source_root: Path, candidate: DatasetCandidate
 ) -> tuple[dict[str, Any], ...]:
@@ -138,6 +225,9 @@ def build_temporal_items(
     variable metadata and observation intervals. The producer owns TIFF
     publication integrity; native file errors are reported when an observation
     is used. Partial coverage is valid and no missing observations are invented.
+    Every scan reads the current published rows. Consecutive identical grid and
+    variable descriptions reuse one parsed result each within this call only;
+    changed descriptions are validated and compared in their normalized form.
 
     Args:
         source_root: Source mount; confinement was established during preparation.
@@ -161,11 +251,8 @@ def build_temporal_items(
     support_start: int | None = None
     support_end: int | None = None
     previous: tuple[str, int] | None = None
-    supports = {
-        "instant": "instantaneous",
-        "mean": "mean_rate",
-        "accumulation": "accumulation",
-    }
+    parse_grid = lru_cache(maxsize=1, typed=True)(_parse_observation_grid)
+    parse_variable = lru_cache(maxsize=1, typed=True)(_parse_variable_metadata)
     catalog_uri = archive.catalog.as_uri()
     if archive.catalog.drive.startswith("\\\\"):
         catalog_uri = catalog_uri.replace("file://", "file:////", 1)
@@ -178,39 +265,22 @@ def build_temporal_items(
         )
         for row in rows:
             variable, time = row["variable"], row["valid_time"]
-            crs = CRS.from_user_input(row["crs"])
-            transform = Affine.from_gdal(*json.loads(row["transform"]))
-            height, width = row["height"], row["width"]
-            if (
-                row["band"] != 1
-                or not isinstance(height, int)
-                or height <= 0
-                or not isinstance(width, int)
-                or width <= 0
-                or not all(math.isfinite(value) for value in transform)
-                or transform.a <= 0
-                or transform.e >= 0
-                or transform.b != 0
-                or transform.d != 0
-            ):
+            current_grid = parse_grid(
+                variable, row["crs"], row["transform"], row["height"], row["width"]
+            )
+            if row["band"] != 1:
                 raise ValueError(f"Unsupported raster grid for {variable}")
-            current_grid = (crs, transform, height, width)
             if grid is not None and current_grid != grid:
                 raise ValueError("Temporal observations must share one raster grid")
             grid = current_grid
-            if (
-                not isinstance(variable, str)
-                or not variable.strip()
-                or not isinstance(row["name"], str)
-                or not row["name"].strip()
-                or not isinstance(row["units"], str)
-                or not row["units"].strip()
-                or numpy.dtype(row["dtype"]).kind not in "iuf"
-                or row["temporal_type"] not in supports
-            ):
-                raise ValueError(f"Unsupported variable metadata: {variable}")
-            if row["nodata"] is not None:
-                float(row["nodata"])
+            metadata = parse_variable(
+                variable,
+                row["name"],
+                row["units"],
+                row["dtype"],
+                row["nodata"],
+                row["temporal_type"],
+            )
             start, end = row["interval_start"], row["interval_end"]
             if (
                 any(not isinstance(value, int) for value in (time, start, end))
@@ -228,15 +298,6 @@ def build_temporal_items(
             if identity == previous:
                 raise ValueError(f"Duplicate observation for {variable} at {time}")
             previous = identity
-            metadata = {
-                "dimensions": ["time", "y", "x"],
-                "type": "data",
-                "description": row["name"],
-                "unit": row["units"],
-                "data_type": row["dtype"],
-                "nodata": "nan" if row["nodata"] == "NaN" else row["nodata"],
-                "eolab:time_support": supports[row["temporal_type"]],
-            }
             if variable in variables and variables[variable] != metadata:
                 raise ValueError(
                     f"Variable metadata differs between observations: {variable}"

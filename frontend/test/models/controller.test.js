@@ -28,7 +28,7 @@ function fixture(overrides = {}, viewOverride = null) {
     const jobs = new ProcessingJobs(api, clock);
     const context = {rasters: [structuredClone(raster)], area: structuredClone(area)};
     let sequence = 0; let handlers;
-    const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
+    const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusPage: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
         getCatalogItem: source => api.getCatalogItem(source),
@@ -572,7 +572,6 @@ test("published results are explicit model choices without previews or map layer
     h.controller.rememberRun({...parent, status: "expired", artifacts: {...artifacts, availability: "unavailable", files: []}});
     h.controller.refreshMapLayers();
     assert.equal(draft.inputs.habitat.raster.available, false);
-    assert.match(draft.inputs.habitat.sourceReason, /no longer available/);
     assert.throws(() => captureModelSubmission(draft, "request-expired-result"), /no longer available/);
 });
 
@@ -689,7 +688,36 @@ test("inline deletion returns focus on Keep or Escape and keeps a failed confirm
     h.api.deleteModelRun = async () => ({...ready, status: "deleted", updatedAt: "2026-10-10T00:00:00Z"});
     await h.controller.deleteRun();
     assert.equal(h.controller.state.page, "runs"); assert.deepEqual(h.controller.state.runs, []);
-    assert.equal(doc.activeElement, view.elements.heading);
+    assert.equal(doc.activeElement, view.navigation.runs);
+    assert.equal(view.navigation.runs.disabled, false);
+    assert.equal(view.navigation.runs.getAttribute("aria-pressed"), "true");
+    assert.equal(view.elements.run.hidden, true);
+});
+
+test("expired focused Undo notices return to visible list navigation", async t => {
+    for (const [page, action] of [["library", "undo"], ["runs", "dismiss"]]) {
+        const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+        const h = fixture({}, view);
+        t.after(() => h.controller.destroy());
+        await h.controller.navigate(page);
+        let expireNotice;
+        h.controller.clock.setTimeout = callback => { expireNotice = callback; return 1; };
+        const deleted = job({status: "deleted", deletionUndo: {
+            deletionId: "d".repeat(32), expiresAt: new Date(Date.now() + 30000).toISOString(),
+        }});
+        h.controller.rememberRun(deleted);
+        h.controller.render();
+        view.deletionNotices.get(deleted.deletionUndo.deletionId)[action].focus();
+        h.controller.deletions.get(deleted.jobId).expiresAt = new Date(Date.now() - 1).toISOString();
+        expireNotice();
+        assert.equal(view.deletionNotices.size, 0);
+        assert.equal(h.controller.state.page, page);
+        assert.equal(doc.activeElement, view.navigation[page]);
+        assert.equal(view.navigation[page].disabled, false);
+        assert.equal(view.navigation[page].getAttribute("aria-pressed"), "true");
+        h.controller.render();
+        assert.equal(doc.activeElement, view.navigation[page], "subsequent rendering retains visible focus");
+    }
 });
 
 test("Undo restores its run and captured displays without extending expiry or changing the user's setup", async () => {
@@ -775,7 +803,7 @@ test("multiple map rasters require a choice; catalog-only inputs cannot become s
     let draft = createModelDraft(model, {rasters: [raster, {...raster, itemId: "second"}, hidden]}, "draft");
     assert.equal(draft.inputs.raster.raster, null); assert.equal(draft.sources.length, 3);
     draft = createModelDraft(model, {rasters: [raster], selectedRaster: hidden}, "draft");
-    assert.equal(draft.inputs.raster.raster.itemId, "population"); assert.equal(draft.sources.length, 1); assert.match(draft.inputs.raster.sourceReason, /Map layers/);
+    assert.equal(draft.inputs.raster.raster.itemId, "population"); assert.equal(draft.sources.length, 1);
 });
 
 test("named raster and vector controls preserve distinct inputs through refresh, submission and duplication", async () => {
@@ -826,6 +854,16 @@ test("named raster and vector controls preserve distinct inputs through refresh,
     assert.equal(view.setup.inputs.reference.source.value, "captured");
     assert.match(view.setup.inputs.study.areaDescription.textContent, /BASIN equals "North"/);
     assert.match(view.setup.inputs.reference.areaDescription.textContent, /BASIN equals "South"/);
+    for (const name of ["observed", "expected"]) {
+        assert.equal(view.setup.inputs[name].reason.hidden, false);
+        assert.match(view.setup.inputs[name].reason.textContent, /Copied from the original run/);
+    }
+    view.setup.inputs.observed.source.value = modelSourceKey(h.context.rasters[1]);
+    view.setup.inputs.observed.source.dispatchEvent(new Event("change"));
+    h.controller.refreshMapLayers();
+    assert.equal(view.setup.inputs.observed.reason.hidden, true);
+    assert.equal(view.setup.inputs.observed.reason.textContent, "");
+    assert.match(view.setup.inputs.expected.reason.textContent, /Copied from the original run/);
     assert.equal(h.submitted.length, 1);
     h.controller.destroy();
 });
