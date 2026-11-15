@@ -54,8 +54,8 @@ export class PolygonLabelLayout {
     /**
      * Measure labels once, then scan collisions only for eligible saved labels.
      * Apply visibility without changing polygons or tooltip content.
-     * Hide saved labels only when the polygon's longest screen dimension is below
-     * 24 pixels, or the label overlaps an earlier label. Names may extend beyond
+     * Hide saved labels when offscreen, when the polygon's longest screen dimension
+     * is below 24 pixels, or when the label overlaps an earlier label. Names may extend beyond
      * their polygon. Drafts take priority; other ties use renderer and polygon order.
      * Hidden labels retain their dimensions so zooming back in can reveal them.
      * @return {void}
