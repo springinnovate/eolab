@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import math
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,10 @@ from eolab_app.catalog.vector import (
     TABLE_EXTENSION,
     build_vector_source_properties,
     read_vector_table_properties,
+)
+from eolab_app.catalog.geopackage_overviews import (
+    OVERVIEW_METADATA_KEY,
+    read_geopackage_overviews,
 )
 
 
@@ -67,11 +72,12 @@ def build_stac_items(
     source_root: Path,
     geopackage_path: Path,
 ) -> tuple[dict[str, Any], ...]:
-    """Build one STAC Item per catalogable GeoPackage vector layer.
+    """Build one STAC Item per original catalogable GeoPackage vector layer.
 
     Fiona supplies names, schemas, counts, bounds and coordinate reference
     systems; geometry-free OGR reads prepare up to 255 choices per string field.
-    Nonspatial tables are ignored.
+    Nonspatial tables and declared display levels are ignored. Embedded display
+    relationships are admitted once and attached to their original layer's Item.
     Expected failures in one layer are logged and do not discard valid sibling
     layers. When every spatial layer fails, the source becomes a normal
     per-dataset scan error.
@@ -90,6 +96,7 @@ def build_stac_items(
         OSError: If filesystem metadata for the GeoPackage cannot be read.
         fiona.errors.FionaError: If GDAL cannot inspect the GeoPackage
             container or list its layers.
+        sqlite3.Error: If embedded display metadata cannot be read.
     """
 
     relative_path_text = geopackage_path.relative_to(source_root).as_posix()
@@ -98,7 +105,11 @@ def build_stac_items(
         file_status.st_mtime,
         tz=timezone.utc,
     )
-    layer_names = sorted(fiona.listlayers(geopackage_path))
+    overviews = read_geopackage_overviews(geopackage_path)
+    display_layers = {
+        overview.layer_name for levels in overviews.values() for overview in levels
+    }
+    layer_names = sorted(set(fiona.listlayers(geopackage_path)) - display_layers)
     items: list[dict[str, Any]] = []
     layer_errors: list[tuple[str, Exception]] = []
 
@@ -128,6 +139,10 @@ def build_stac_items(
             )
             continue
         if item is not None:
+            if layer_name in overviews:
+                item["properties"][OVERVIEW_METADATA_KEY] = [
+                    asdict(overview) for overview in overviews[layer_name]
+                ]
             items.append(item)
 
     if items:

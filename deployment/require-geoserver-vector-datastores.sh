@@ -17,3 +17,5 @@ require_module() {
 
 require_module 'gt-shapefile-*.jar' 'Shapefile'
 require_module 'gt-geopkg-*.jar' 'GeoPackage'
+require_module 'gt-feature-pregeneralized-*.jar' 'pregeneralized features'
+require_module 'gs-feature-pregeneralized-*.jar' 'pregeneralized GeoServer integration'

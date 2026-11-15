@@ -32,6 +32,8 @@ class PublishedVectorAuthorization:
         geometry_name: GeoServer geometry attribute resolved for fixed labels.
         upstream_layer_name: Original authorized publication for a filtered view.
         filter: Validated per-view predicate, never an arbitrary expression.
+        inspection_layer_name: Original-geometry publication used for feature
+            inspection and ID-specific highlights when the map uses overviews.
     """
 
     source: ResolvedVectorSource
@@ -40,6 +42,7 @@ class PublishedVectorAuthorization:
     geometry_name: str | None = None
     upstream_layer_name: str | None = None
     filter: VectorFilter | None = None
+    inspection_layer_name: str | None = None
 
     def sign_style_name(self, style_name: str) -> str:
         """Sign a validated content identity for this immutable vector source.
@@ -111,6 +114,12 @@ class PublishedVectorAuthorization:
                 or differs from the approved signed identity.
         """
         normalized = {key.lower(): value for key, value in query}
+        upstream_layer = (
+            self.inspection_layer_name
+            if self.inspection_layer_name is not None
+            and (operation == "getfeatureinfo" or "featureid" in normalized)
+            else self.upstream_layer_name
+        )
         style_parameter = "style" if operation == "getlegendgraphic" else "styles"
         style_name = normalized.get(style_parameter, "").removeprefix("eolab:")
         definition = normalized.get("vector_style")
@@ -128,7 +137,7 @@ class PublishedVectorAuthorization:
             document = build_vector_sld(
                 style_name,
                 style,
-                layer_name=self.upstream_layer_name or layer_name,
+                layer_name=upstream_layer or layer_name,
                 geometry_name=geometry_name,
             )
             query = [
@@ -147,14 +156,28 @@ class PublishedVectorAuthorization:
         ):
             raise PublishedLayerRequestError("Vector appearance is required for this style")
         if self.filter is None:
-            return query
+            return [
+                (
+                    key,
+                    upstream_layer
+                    if upstream_layer is not None
+                    and key.lower() in {"layer", "layers", "query_layers"}
+                    else value,
+                )
+                for key, value in query
+            ]
         predicate = filter_ecql(self.filter)
         feature_id = normalized.get("featureid")
         if feature_id is not None:
             # The public boundary already restricts this to one safe feature ID.
             predicate = f"({predicate}) AND IN ('{feature_id}')"
         forwarded = [
-            (key, self.upstream_layer_name if key.lower() in {"layer", "layers", "query_layers"} else value)
+            (
+                key,
+                upstream_layer
+                if key.lower() in {"layer", "layers", "query_layers"}
+                else value,
+            )
             for key, value in query
             if key.lower() not in {"tiled", "tilesorigin", "featureid"}
         ]
