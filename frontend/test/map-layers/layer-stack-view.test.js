@@ -435,9 +435,16 @@ test("calculator help debounces hover but opens immediately for focus and touch"
   calculator.focus();
   calculator.dispatchEvent(new Event("focus"));
   assert.equal(tooltip.hidden, false);
-  calculator.dispatchEvent(interactionEvent("keydown", {key: "Escape"}));
+  let stopped = false;
+  const escape = interactionEvent("keydown", {key: "Escape", stopPropagation: () => { stopped = true; }});
+  calculator.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(stopped, true, "dismissing help must not also collapse Map contents");
   assert.equal(tooltip.hidden, true);
   assert.equal(calculator.getAttribute("aria-describedby"), null);
+  const secondEscape = interactionEvent("keydown", {key: "Escape"});
+  calculator.dispatchEvent(secondEscape);
+  assert.equal(secondEscape.defaultPrevented, false, "with no help open, Escape belongs to the workspace");
   calculator.dispatchEvent(interactionEvent("pointerdown", {pointerType: "touch"}));
   assert.equal(tooltip.hidden, false);
   calculator.dispatchEvent(new Event("blur"));

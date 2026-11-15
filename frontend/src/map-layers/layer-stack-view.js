@@ -1249,7 +1249,11 @@ export class MapLayerStackView {
             if (event.pointerType === "touch") this.#showActionTooltip(trigger, text, 0);
         });
         trigger.addEventListener("keydown", event => {
-            if (event.key === "Escape") this.#hideActionTooltip();
+            if (event.key === "Escape" && this.actionTooltipTrigger === trigger) {
+                event.preventDefault();
+                event.stopPropagation();
+                this.#hideActionTooltip();
+            }
         });
     }
 
