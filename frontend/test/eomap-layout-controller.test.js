@@ -374,6 +374,10 @@ test("workspace panels save and restore all four combinations through existing s
             reloaded.notifyLayoutChange();
             assert.equal(restored.catalogRegion.hidden, !catalogOpen);
             assert.equal(restored.renderingRegion.hidden, !mapLayersOpen);
+            assert.equal(restored.app.classList.contains("is-expanded-catalog-workspace"), catalogOpen);
+            assert.equal(restored.app.classList.contains("is-expanded-map-layers-workspace"), mapLayersOpen);
+            assert.equal(restored.panel.classList.contains("is-collapsed"), false,
+                "closing both sections does not minimize the whole workspace");
             assert.equal(restored.catalogTab.getAttribute("aria-expanded"), String(catalogOpen));
             assert.equal(restored.renderingTab.getAttribute("aria-expanded"), String(mapLayersOpen));
             assert.equal(restored.document.activeElement, null);
