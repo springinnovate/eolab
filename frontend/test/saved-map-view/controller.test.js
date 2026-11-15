@@ -930,11 +930,13 @@ for (const destroyDuringLoad of [false, true]) {
     const appearanceCalls = [];
     let position = emptySavedMap(0, 0, 2).viewport;
     let background = "detailed", legend = { visible: true, collapsed: false };
-    let finishLayer, finishBasemap;
+    let finishReadiness, finishLayer, finishBasemap;
+    const pendingReadiness = new Promise(resolve => { finishReadiness = resolve; });
     const pendingLayer = new Promise(resolve => { finishLayer = resolve; });
     const pendingBasemap = new Promise(resolve => { finishBasemap = resolve; });
     const controller = createController({
       view, storage, viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+      beforeRestore: () => pendingReadiness,
       setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
       viewport: {
         snapshot: () => position,
@@ -977,13 +979,19 @@ for (const destroyDuringLoad of [false, true]) {
     assert.deepEqual(position, saved.viewport);
     assert.equal(background, saved.basemap);
     assert.deepEqual(legend, saved.mapLegend);
-    assert.deepEqual(requested, ["slow", "missing", "fast"], "layer preparation starts while the basemap is pending");
+    assert.equal(storage.reads, 1, "capture the saved document before waiting for other startup work");
+    assert.deepEqual(requested, [], "layer preparation waits for composition readiness");
     assert.equal(view.loading, null, "private startup does not open a blocking progress dialog");
 
     position = emptySavedMap(50, 60, 10).viewport;
     background = "none";
     legend = { visible: true, collapsed: false };
     controller.scheduleRemember();
+    assert.equal(timers.scheduled.size, 0, "do not autosave an incomplete map while startup is waiting");
+    assert.deepEqual(storage.writes, []);
+    finishReadiness();
+    await flushAsyncWork();
+    assert.deepEqual(requested, ["slow", "missing", "fast"], "ready layers load while the basemap is still pending");
     if (destroyDuringLoad) controller.destroy();
     finishLayer();
     finishBasemap(null);
@@ -1008,11 +1016,69 @@ for (const destroyDuringLoad of [false, true]) {
       assert.deepEqual(remembered.viewport, position);
       assert.equal(remembered.basemap, background);
       assert.deepEqual(remembered.mapLegend, legend);
+      assert.deepEqual(remembered.layers.map(layer => layer.catalogItem.id), ["slow", "fast"]);
     }
     assert.equal(storage.clears, 0);
     controller.destroy();
   });
 }
+
+test("destroyed startup cannot prepare or commit layers after composition becomes ready", async t => {
+  for (const shared of [false, true]) {
+    await t.test(shared ? "shared" : "private", async () => {
+      const saved = { ...emptySavedMap(10, 20, 6), layers: [{
+        catalogItem: { collection: "vectors", id: "waiting" },
+        visible: true, opacity: 1, style: { kind: "vector", definition: {} },
+      }] };
+      const storage = createStorage(serializeSavedMapView(saved));
+      let finishReadiness;
+      const pendingReadiness = new Promise(resolve => { finishReadiness = resolve; });
+      let markRestoreStarted;
+      const restoreStarted = new Promise(resolve => { markRestoreStarted = resolve; });
+      const positions = [];
+      const requested = [];
+      let cleared = 0;
+      const view = createView();
+      const controller = createController({ view, storage,
+        beforeRestore: () => { markRestoreStarted(); return pendingReadiness; },
+        viewport: { restore: value => positions.push(value) },
+        catalogItems: { get(identity) { requested.push(identity); return identity; } },
+        catalogVisualization: { clear() { cleared++; } },
+        mapLayers: { retainedRecords: [], commitStaged() { assert.fail("Stale startup must not commit layers"); } },
+      });
+      const fragment = shared ? await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 }) : "";
+      const restoring = controller.restoreStartupView(fragment);
+      await restoreStarted;
+      assert.deepEqual(positions, shared ? [] : [saved.viewport]);
+      assert.equal(cleared, 1, "clear at the explicit restore request, before waiting");
+      controller.destroy();
+      finishReadiness();
+      await restoring;
+      assert.deepEqual(positions, shared ? [] : [saved.viewport]);
+      assert.equal(cleared, 1, "never clear again after waiting");
+      assert.deepEqual(requested, [], "stale startup must not prepare layers");
+      assert.deepEqual(storage.writes, []);
+      assert.equal(storage.clears, 0);
+      assert.equal(view.error, null);
+    });
+  }
+});
+
+test("startup without a remembered view leaves readiness and current appearance alone", async () => {
+  const storage = createStorage();
+  const view = createView();
+  const controller = createController({ view, storage,
+    beforeRestore() { assert.fail("No saved view needs a layer restoration"); },
+    viewport: { restore() { assert.fail("Keep the current viewport"); } },
+    catalogVisualization: { clear() { assert.fail("Keep the current map"); } },
+    mapLayers: { retainedRecords: [] },
+  });
+  await controller.restoreStartupView("");
+  assert.equal(storage.reads, 1);
+  assert.deepEqual(view.busy, []);
+  assert.deepEqual(storage.writes, []);
+  controller.destroy();
+});
 
 test("startup discards corrupt remembered content without blocking the map", async () => {
   const storage = createStorage("not valid saved-map JSON");

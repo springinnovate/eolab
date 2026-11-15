@@ -35,8 +35,9 @@ export class SavedMapViewController {
      * viewport used by Reset view.
      * @param {boolean} [configuration.restoreSharedMap=false] Reset to the opening
      * shared fragment, ignore private autosave, and leave personal storage untouched.
-     * @param {()=>void} [configuration.beforeRestore] Composition-owned cleanup
-     * for transient map presentations excluded from the portable contract.
+     * @param {()=>void|Promise<void>} [configuration.beforeRestore] Composition-owned
+     * readiness and cleanup before restoring layers. Private startup appearance
+     * does not wait for this callback; explicit map actions commit appearance later.
      * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
@@ -547,51 +548,55 @@ export class SavedMapViewController {
      * Per-layer restoration report, or null after supersession.
      */
     async #restore(savedMapView, restoreGeneration, { restoreAppearanceEarly = false } = {}) {
-        this.beforeRestore();
+        const restoreReady = this.beforeRestore();
         this.catalogVisualization.clear();
         const initialAppearance = restoreAppearanceEarly
             ? this.#restoreViewportAndBasemap(savedMapView) : null;
         if (restoreAppearanceEarly) {
             this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
         }
-        const preparingLayers = mapWithConcurrencyLimit(
-            savedMapView.layers,
-            RESTORE_CONCURRENCY,
-            async (layer) => {
-                if (layer.temporalSource) {
-                    try {
-                        const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                        return { key, staged: null, detail: null };
-                    } catch (error) {
-                        return { staged: null, detail: `${layer.customName ?? layer.temporalSource.variable}: ${asError(error).message}` };
+        const preparingLayers = Promise.resolve(restoreReady).then(() => {
+            if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
+            return mapWithConcurrencyLimit(
+                savedMapView.layers,
+                RESTORE_CONCURRENCY,
+                async (layer) => {
+                    if (layer.temporalSource) {
+                        try {
+                            const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                            return { key, staged: null, detail: null };
+                        } catch (error) {
+                            return { staged: null, detail: `${layer.customName ?? layer.temporalSource.variable}: ${asError(error).message}` };
+                        }
                     }
-                }
-                if (layer.uploadId) {
+                    if (layer.uploadId) {
+                        try {
+                            if (savedMapView.viewer.origin !== this.viewerOrigin) {
+                                throw new Error("Private uploaded layers can only be opened on their original EOLab site.");
+                            }
+                            const key = await this.restoreUpload(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                            return { key, staged: null, detail: null };
+                        } catch (error) {
+                            return { staged: null, detail: `${layer.customName ?? "Private uploaded layer"}: ${asError(error).message}` };
+                        }
+                    }
+                    if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
                     try {
                         if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                            throw new Error("Private uploaded layers can only be opened on their original EOLab site.");
+                            throw new Error("Shared layers can only be opened on their original EOLab site.");
                         }
-                        const key = await this.restoreUpload(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                        const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
                         return { key, staged: null, detail: null };
                     } catch (error) {
-                        return { staged: null, detail: `${layer.customName ?? "Private uploaded layer"}: ${asError(error).message}` };
+                        return { staged: null, detail: `Shared layer ${layer.sharedAnnotation.id}: ${asError(error).message}` };
                     }
                 }
-                if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
-                try {
-                    if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                        throw new Error("Shared layers can only be opened on their original EOLab site.");
-                    }
-                    const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                    return { key, staged: null, detail: null };
-                } catch (error) {
-                    return { staged: null, detail: `Shared layer ${layer.sharedAnnotation.id}: ${asError(error).message}` };
-                }
-            }
-        );
+            );
+        });
         const [preparations, initialBasemapWarning] = await Promise.all([
             preparingLayers, initialAppearance,
         ]);
+        if (preparations === null) return null;
         const stagedLayers = preparations
             .filter(({ staged }) => staged !== null)
             .map(({ staged }) => staged);
