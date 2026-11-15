@@ -1,6 +1,7 @@
 """Run Habitat model requests through native calculation and result publication."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +50,9 @@ from eolab_app.processing.service import serialize_processing_job
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_identity import RasterSourceIdentity
+from eolab_app.raster.source_models import UploadedRasterReference
+from eolab_app.raster_uploads import RasterUploadStore
+from eolab_app.upload_storage import UploadStorage
 from eolab_app.vector.filters import VectorFilter
 from catalog_selection_support import write_selection
 from test_processing_worker_results import configure_prepared_job_store
@@ -159,19 +163,22 @@ def test_whole_raster_aoi_preserves_curved_projected_edges(tmp_path: Path) -> No
     assert aoi.bounds[3] == pytest.approx(y[1])
 
 
-@pytest.mark.parametrize("reference_kind", ["raster", "vector", "polygonArea"])
+@pytest.mark.parametrize(
+    "reference_kind", ["raster", "uploadedRaster", "vector", "polygonArea"]
+)
 def test_habitat_worker_matches_library_and_publishes_outputs(
     tmp_path: Path,
     habitat_definition: ModelDefinition,
-    reference_kind: Literal["raster", "vector", "polygonArea"],
+    reference_kind: Literal["raster", "uploadedRaster", "vector", "polygonArea"],
 ) -> None:
     """Align mismatched inputs and match an independently prepared library run.
 
     Args:
         tmp_path: Isolated source files, direct library outputs and worker artifacts.
         habitat_definition: Installed recipe with settings suitable for this fixture.
-        reference_kind: Coarse raster, filtered vector, or admitted drawing.
+        reference_kind: Coarse catalog/uploaded raster, filtered vector, or drawing.
             The drawn case uses independent polygons for both area and references.
+            The upload case admits a Byte mask and deletes its public source before execution.
     """
     rows, columns = np.indices((16, 24))
     environment = rows * 0.3 + columns * 0.07
@@ -190,7 +197,9 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         - 0.15 * habitat_type
         + 0.03 * np.cos(rows * 2 + columns)
         + 0.1 * (rows % 3) * ~references,
-        "references": np.where(references, 1, 2),
+        "references": np.where(
+            references, 1, 0 if reference_kind == "uploadedRaster" else 2
+        ),
         "assessment": np.where(columns < 22, 1, 2),
     }
     grid = from_origin(0, 16000, 1000, 1000)
@@ -222,6 +231,11 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         elif name in {"habitat_type", "references", "assessment"}:
             data = data[::2, ::2]
             spacing = 2000
+        source_dtype = (
+            "uint8"
+            if reference_kind == "uploadedRaster" and name == "references"
+            else "float64"
+        )
         with rasterio.open(
             paths[name],
             "w",
@@ -229,11 +243,11 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             count=1,
             width=data.shape[1],
             height=data.shape[0],
-            dtype="float64",
+            dtype=source_dtype,
             crs="EPSG:6933",
             transform=from_origin(0, 16000, spacing, spacing),
         ) as destination:
-            destination.write(data.astype("float64"), 1)
+            destination.write(data.astype(source_dtype), 1)
     sources = {
         name: {
             "collectionId": "eolab-mounted-geotiffs",
@@ -242,6 +256,32 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         for index, name in enumerate(paths)
     }
     catalog_paths = {sources[name]["itemId"]: path for name, path in paths.items()}
+    upload_storage: UploadStorage | None = None
+    retained_uploads: dict[str, str] = {}
+    if reference_kind == "uploadedRaster":
+        upload_storage = UploadStorage(tmp_path / "uploads")
+        upload_storage.initialize()
+
+        async def mask_chunks() -> AsyncIterator[bytes]:
+            """Stream the fixture's original Byte GeoTIFF through real upload admission.
+
+            Yields:
+                Complete bytes from the closed, single-band mask fixture.
+            """
+            yield paths["references"].read_bytes()
+
+        uploaded = asyncio.run(
+            RasterUploadStore(upload_storage).create(
+                "c" * 64, "Reference sites", mask_chunks()
+            )
+        )
+        upload_record, uploaded_path = upload_storage.get_upload_source(
+            "c" * 64, uploaded.id, "raster"
+        )
+        sources["references"] = {"kind": "uploadedRaster", "uploadId": str(uploaded.id)}
+        retained_uploads[str(uploaded.id)] = upload_storage.retain_source(uploaded_path)
+        upload_storage.delete("c" * 64, uploaded.id)
+        assert not upload_storage.is_available(uploaded.id, "raster")
     area = write_selection(tmp_path / "area.gpkg", [mapping(aoi)], crs="EPSG:6933")
     selected_references = write_selection(
         tmp_path / "references.gpkg",
@@ -254,7 +294,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             rules=[{"field": "selected", "operator": "eq", "value": 1}],
         ),
     )
-    uses_assessment_mask = reference_kind != "raster"
+    uses_assessment_mask = reference_kind in {"vector", "polygonArea"}
     selections = {item.selection.item_id: item for item in (area, selected_references)}
     inputs = {
         "stack": {
@@ -352,7 +392,11 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         invocation,
         None,
         {
-            name: tuple(identities[source.item_id].to_catalog())
+            name: (
+                upload_record
+                if isinstance(source, UploadedRasterReference)
+                else tuple(identities[source.item_id].to_catalog())
+            )
             for name, source in operation.extra_sources(calculation).items()
         },
     )
@@ -390,7 +434,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     now = datetime.now(timezone.utc)
     row: dict[str, Any] = {
         "id": "a" * 32,
-        "input_uploads": {},
+        "input_uploads": retained_uploads,
         "attempt_id": "b" * 32,
         "operation": "model.run.v1",
         "spec": submission.specification,
@@ -421,6 +465,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         limits,
         native=native,
         areas=SimpleNamespace(resolve_for_sampling=resolve_selection),
+        upload_storage=upload_storage,
     )
 
     async def execute() -> bool:

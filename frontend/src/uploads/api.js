@@ -1,4 +1,4 @@
-/** Store, reopen and delete this browser's original polygon GeoPackages. */
+/** Store, reopen and delete this browser's original polygon and raster files. */
 
 /**
  * @typedef {Object} VectorUpload
@@ -98,13 +98,71 @@ export async function deleteUpload(uploadId, fetchImplementation = globalThis.fe
     }, fetchImplementation);
 }
 
+/** Store one binary Byte GeoTIFF mask using the shared file allowance.
+ * Values of 1 identify reference sites, 0 excludes cells, and NoData is ignored.
+ * @param {File} file User-selected single-band GeoTIFF.
+ * @param {string} name User's display name.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<UploadSummary>} Admitted raster metadata.
+ * @throws {Error} If admission, storage or transport fails.
+ */
+export async function uploadRasterMask(file, name, fetchImplementation = globalThis.fetch) {
+    return requestUploads(`?${new URLSearchParams({name})}`, {method: "POST",
+        headers: {"Content-Type": "image/tiff", "X-EOLab-Uploads": "1"}, body: file}, fetchImplementation, "/api/raster-uploads");
+}
+
+/** Return one owned raster's metadata without exposing its server path.
+ * @param {string} uploadId Opaque uploaded raster identifier.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<UploadSummary>} Available raster metadata.
+ * @throws {Error} If unavailable or the request fails.
+ */
+export async function getRasterUpload(uploadId, fetchImplementation = globalThis.fetch) {
+    return requestUploads(`/${encodeURIComponent(uploadId)}`, {method: "GET"}, fetchImplementation, "/api/raster-uploads");
+}
+
+/** Delete one owned raster while accepted calculations retain their input.
+ * @param {string} uploadId Opaque uploaded raster identifier.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<void>} Completion when the file is no longer available for new use.
+ * @throws {Error} If deletion or transport fails.
+ */
+export async function deleteRasterUpload(uploadId, fetchImplementation = globalThis.fetch) {
+    await requestUploads(`/${encodeURIComponent(uploadId)}`, {method: "DELETE",
+        headers: {"X-EOLab-Uploads": "1"}}, fetchImplementation, "/api/raster-uploads");
+}
+
+/** Choose the file admission endpoint from the user's selected extension.
+ * Server inspection remains authoritative for format, contents and storage limits.
+ * @param {File} file User-selected GeoPackage or GeoTIFF.
+ * @param {string} name User's display name.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<UploadSummary|VectorUpload>} Admitted file metadata.
+ * @throws {Error} If the file type is unsupported or admission fails.
+ */
+export async function uploadFile(file, name, fetchImplementation = globalThis.fetch) {
+    if (/\.gpkg$/i.test(file.name)) return uploadPolygons(file, name, fetchImplementation);
+    if (/\.tiff?$/i.test(file.name)) return uploadRasterMask(file, name, fetchImplementation);
+    throw new Error("Choose a polygon GeoPackage (.gpkg) or raster mask GeoTIFF (.tif or .tiff).");
+}
+
+/** Delete a manager row through the endpoint that owns its original file.
+ * @param {UploadSummary} upload Available file from the server summary.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<void>} Completion when deletion succeeds.
+ * @throws {Error} If deletion or transport fails.
+ */
+export async function deleteUploadedFile(upload, fetchImplementation = globalThis.fetch) {
+    return upload.kind === "raster" ? deleteRasterUpload(upload.id, fetchImplementation) : deleteUpload(upload.id, fetchImplementation);
+}
+
 /**
  * Send an upload-storage request with the private cookie and report server failures.
  * @param {string} suffix Path or query after the upload API root.
  * @param {RequestInit} options Method, headers and optional file body.
  * @param {typeof fetch} fetchImplementation Same-origin HTTP transport.
  * @param {string} [root="/api/vector-uploads"] Upload endpoint owned by this client.
- * @return {Promise<VectorUpload|VectorUpload[]|UploadStorageSummary|null>} Response metadata, or null after deletion.
+ * @return {Promise<VectorUpload|VectorUpload[]|UploadSummary|UploadStorageSummary|null>} Response metadata, or null after deletion.
  * @throws {Error} If transport, server operation or JSON decoding fails.
  */
 async function requestUploads(suffix, options, fetchImplementation, root = "/api/vector-uploads") {

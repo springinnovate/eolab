@@ -2268,7 +2268,7 @@ export function initializeRasterViewer(
          * Saves shared analysis state first when this record is active.
          *
          * @param {Object} record Retained raster entry and interaction state.
-         * @return {{datasetKind:"raster",opacityLocked:boolean,effectiveOpacity:number,
+         * @return {{datasetKind:"raster",sourceOrigin:"upload"|"runArtifact"|"catalog",canInfo:boolean,opacityLocked:boolean,effectiveOpacity:number,
          * roleBadge:({label:"X"|"Y",description:string}|null),
          * legend:import("../map-layers/layer-stack-view.js").LayerLegend}}
          * Opacity in [0, 1], an optional paired-axis badge, and either a
@@ -2280,6 +2280,8 @@ export function initializeRasterViewer(
             }
             const source = rasterSourceReference(record.state.item);
             const metadata = {source, bounds: record.state.item.bbox,
+                sourceOrigin: source.kind === "uploadedRaster" ? "upload" : source.kind === "runArtifact" ? "runArtifact" : "catalog",
+                canInfo: record.entry.item !== null || Boolean(record.state.temporal) || Boolean(record.state.lifecycle?.info),
                 ...(record.state.temporal ? {controls: record.state.temporal.controls.element} : {}),
                 group: record.state.item.group,
                 capabilities: record.state.item.capabilities ?? {pixels: true, statistics: true, calculations: true, modelInput: true}};

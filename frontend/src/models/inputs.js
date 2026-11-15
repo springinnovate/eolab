@@ -3,6 +3,7 @@ import { getModelSetupIntegration } from "./model-setup.js";
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
 import { getModelInputHandler } from "./input-handlers.js";
+import { rasterSourceReference } from "../raster-source.js";
 
 /** @typedef {{key:string,label:string,polygons:Array<{type:"Polygon",coordinates:number[][][]}>,total:number}} DrawnPolygonLayer */
 
@@ -22,11 +23,12 @@ import { getModelInputHandler } from "./input-handlers.js";
 export function modelHasInput(model, type) { return Object.values(model.inputs).some(input => input.type === type); }
 
 /** Identify a raster or vector choice without using its label or map visibility.
- * @param {Object} source Catalog identity, uploaded vector identity or owned run-file reference.
+ * @param {Object} source Catalog identity, uploaded vector or raster identity, or owned run-file reference.
  * @return {string} Composite identity for a choice list.
  */
 export function modelSourceKey(source) {
     return JSON.stringify(source.kind === "runArtifact" ? [source.kind, source.jobId, source.artifactId]
+        : source.kind === "uploadedRaster" ? [source.kind, source.uploadId]
         : source.uploadId ? ["upload", source.uploadId] : [source.collectionId, source.itemId]);
 }
 
@@ -106,10 +108,10 @@ export function captureRasterPreparation(value, draft) {
 }
 
 /** Capture an available raster choice using the ordinary path-free source contract.
- * @param {Object|null} raster Selected map raster or owned run result.
+ * @param {Object|null} raster Selected map raster, uploaded raster or owned run result.
  * @param {Object[]} sources Current source choices in this model setup.
  * @param {string} [type="raster"] Input type; catalog_raster and mask_source exclude run results.
- * @return {Object} Catalog identity or owned run-artifact reference.
+ * @return {Object} Path-free original raster identity.
  * @throws {Error} If the source is absent, expired or ineligible for this input.
  */
 export function captureModelRaster(raster, sources, type = "raster") {
@@ -120,8 +122,7 @@ export function captureModelRaster(raster, sources, type = "raster") {
         throw new Error(startingMask ? "Choose a starting raster from Map contents." : "This recipe requires a raster from Map contents.");
     if (raster.available === false || raster.kind === "runArtifact" && Date.parse(raster.expiresAt) <= Date.now())
         throw new Error("This raster is no longer available. Choose another input.");
-    return raster.kind === "runArtifact" ?
-        {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
+    return rasterSourceReference(raster);
 }
 
 /** Explain the saved polygon selection without exposing server paths.

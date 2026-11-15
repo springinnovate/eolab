@@ -250,7 +250,7 @@ class RasterStatisticsService:
         Args:
             request: Existing catalog request or explicit raster source and area.
             owner: Server-derived session hash for a private raster or polygon area.
-            upload_owner: Server-derived browser hash for uploaded polygon selections.
+            upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
             Counts, ranges, percentiles and a histogram with sampling details.
@@ -261,7 +261,7 @@ class RasterStatisticsService:
             VectorUploadError: If the polygon upload is unavailable to this browser.
         """
         async with self._source_access.open(
-            raster_source_reference(request), owner
+            raster_source_reference(request), owner, upload_owner
         ) as source:
             return await self._get_authorized_statistics(
                 request, source, owner, upload_owner
@@ -399,7 +399,7 @@ class RasterStatisticsService:
         Args:
             request: Ordered raster references and optional sampling area.
             owner: Server-derived session hash for a private raster or polygon area.
-            upload_owner: Server-derived browser hash for uploaded polygon selections.
+            upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
             Joint and marginal histograms on the X raster's sampling grid.
@@ -411,10 +411,10 @@ class RasterStatisticsService:
         """
         async with AsyncExitStack() as stack:
             x = await stack.enter_async_context(
-                self._source_access.open(request.x_raster, owner)
+                self._source_access.open(request.x_raster, owner, upload_owner)
             )
             y = await stack.enter_async_context(
-                self._source_access.open(request.y_raster, owner)
+                self._source_access.open(request.y_raster, owner, upload_owner)
             )
             return await self._get_authorized_paired_statistics(
                 request, x, y, owner, upload_owner

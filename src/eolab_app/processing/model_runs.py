@@ -56,6 +56,7 @@ from eolab_app.processing.artifact_manifest import (
 )
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.raster.source_models import TemporalVariableMetadata
+from eolab_app.upload_storage import UploadRecord
 
 
 def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
@@ -275,18 +276,27 @@ def build_model_calculation_request(
 
 
 def describe_model_raster_source(
-    metadata: tuple[int, int, int, int] | JobInputFile,
+    metadata: tuple[int, int, int, int] | JobInputFile | UploadRecord,
 ) -> dict[str, str | int]:
-    """Return a raster's source signature and published-file identity for Run YAML.
+    """Describe an admitted raster's immutable identity for Run YAML.
 
     Args:
-        metadata: Scanner-provided Catalog metadata or a private file's published
-            identity, captured while authorizing that source.
+        metadata: Catalog metadata, an upload record or a published run-file identity,
+            captured while authorizing that source.
 
     Returns:
-        Source signature and band, plus the published checksum and byte count
-        for a private raster. No source files are opened or hashed.
+        Source signature and band, plus the byte count for a private raster and
+        published checksum for a run file. Upload identity uses its immutable UUID
+        and admitted byte count. No source files are opened or hashed.
     """
+    if isinstance(metadata, UploadRecord):
+        return {
+            "sourceSignature": compute_document_checksum(
+                {"uploadId": str(metadata.id), "bytes": metadata.size_bytes}
+            ),
+            "bytes": metadata.size_bytes,
+            "band": 1,
+        }
     if isinstance(metadata, JobInputFile):
         return {
             "sourceSignature": compute_document_checksum({"sha256": metadata.sha256}),
@@ -301,10 +311,14 @@ def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
     source_metadata: (
-        tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile | None
+        tuple[int, int, int, int]
+        | TemporalVariableMetadata
+        | JobInputFile
+        | UploadRecord
+        | None
     ),
     additional_sources: (
-        dict[str, tuple[int, int, int, int] | JobInputFile] | None
+        dict[str, tuple[int, int, int, int] | JobInputFile | UploadRecord] | None
     ) = None,
 ) -> PreparedJobPlan:
     """Create a model job submission and save its recipe, inputs and software identity.
@@ -313,10 +327,11 @@ def build_model_job_submission(
         prepared: The operation submission, including any polygons already copied for this run.
         invocation: The model definition, selected inputs and effective parameter values.
         source_metadata: Primary source's Catalog raster identity, temporal
-            metadata, or retained published-file identity. None for an operation
-            that declares no primary source.
+            metadata, admitted upload record or retained published-file identity.
+            Uploads use their immutable UUID and byte count; run files use their
+            published checksum. None for an operation with no primary source.
         additional_sources: Additional raster identities keyed by operation input
-            name, including each private file's own checksum and byte count.
+            name, using the same upload or published-file identities as the primary source.
 
     Returns:
         A model job ready to queue, with the information needed for later Run YAML

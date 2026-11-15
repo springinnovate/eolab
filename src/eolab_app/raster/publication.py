@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import cast
 import re
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from rasterio.errors import RasterioError
 
@@ -29,6 +29,7 @@ from eolab_app.raster.source_access import (
 from eolab_app.raster.source_models import (
     RasterSourceRequest,
     RunArtifactReference,
+    UploadedRasterReference,
     TemporalRasterSelection,
 )
 from eolab_app.raster.temporal import TemporalObservation
@@ -69,6 +70,23 @@ def temporary_raster_source(layer_name: str) -> RunArtifactReference | None:
     )
 
 
+def uploaded_raster_source(layer_name: str) -> UploadedRasterReference | None:
+    """Recover an uploaded raster ID from its private GeoServer layer name.
+
+    Args:
+        layer_name: Qualified layer or unqualified coverage-store name.
+
+    Returns:
+        The opaque upload reference, or None for another publication namespace.
+    """
+    match = re.fullmatch(r"(?:eolab:)?raster_upload_([a-f0-9]{32})", layer_name)
+    return (
+        UploadedRasterReference(kind="uploadedRaster", uploadId=UUID(hex=match[1]))
+        if match
+        else None
+    )
+
+
 @dataclass
 class _TemporalPublication:
     """Track a temporal layer's identity and in-flight renders until unpublication.
@@ -85,7 +103,7 @@ class _TemporalPublication:
 
 
 class RasterPublicationService:
-    """Publish mounted rasters and model outputs through GeoServer."""
+    """Publish catalog rasters, uploaded originals and model outputs through GeoServer."""
 
     def __init__(
         self,
@@ -96,6 +114,7 @@ class RasterPublicationService:
         *,
         source_access: RasterSourceAccess | None = None,
         source_available: Callable[[str, str], Awaitable[bool]] | None = None,
+        upload_available: Callable[[UUID], Awaitable[bool]] | None = None,
     ) -> None:
         """Configure publication and cleanup of expired or refreshed layers.
 
@@ -106,6 +125,7 @@ class RasterPublicationService:
             raster_registry: Process-local WMS authorization registry.
             source_access: Original-file and temporal-observation source authority.
             source_available: Composition-supplied lifetime check for cleanup only.
+            upload_available: Upload-authority lifetime check for publication cleanup.
         """
         self._catalog = catalog
         self._source_resolver = source_resolver
@@ -114,6 +134,7 @@ class RasterPublicationService:
         self._publish_lock = asyncio.Lock()
         self._source_access = source_access
         self._source_available = source_available
+        self._upload_available = upload_available
         self._observations: dict[TemporalRasterSelection, _TemporalPublication] = {}
         self._temporal_layers: dict[str, _TemporalPublication] = {}
 
@@ -121,12 +142,14 @@ class RasterPublicationService:
         self,
         request: CatalogRasterRequest | RasterSourceRequest,
         owner: str | None = None,
+        upload_owner: str | None = None,
     ) -> PublishedRaster:
         """Publish an authorized raster file or selected temporal observation.
 
         Args:
             request: Validated catalog identity or explicit original-source reference.
             owner: Server-derived session identity for a temporary output.
+            upload_owner: Separate browser identity authorizing an uploaded raster.
 
         Returns:
             Browser-safe WMS layer identity and WGS 84 bounding box.
@@ -137,8 +160,12 @@ class RasterPublicationService:
         """
         async with self._publish_lock:
             if isinstance(request, RasterSourceRequest):
-                if isinstance(request.source, RunArtifactReference):
-                    return await self._publish_temporary(request.source, owner)
+                if isinstance(
+                    request.source, (RunArtifactReference, UploadedRasterReference)
+                ):
+                    return await self._publish_temporary(
+                        request.source, owner, upload_owner
+                    )
                 if isinstance(request.source, TemporalRasterSelection):
                     return await self._publish_observation(request.source)
                 request = request.source
@@ -298,13 +325,17 @@ class RasterPublicationService:
             self._temporal_layers.pop(layer_name, None)
 
     async def _publish_temporary(
-        self, reference: RunArtifactReference, owner: str | None
+        self,
+        reference: RunArtifactReference | UploadedRasterReference,
+        owner: str | None,
+        upload_owner: str | None = None,
     ) -> PublishedRaster:
-        """Resolve one run output and reuse ordinary GeoServer publication and styling.
+        """Publish a private original through ordinary GeoServer rendering and styling.
 
         Args:
             reference: Opaque original-file identity, never a client path.
             owner: Server-derived session identity.
+            upload_owner: Separate browser identity for uploaded rasters.
 
         Returns:
             Normal WMS publication details for the original raster.
@@ -316,32 +347,40 @@ class RasterPublicationService:
         """
         if self._source_access is None:
             raise SourceFileError("Temporary raster publication is unavailable.", 503)
-        source = await self._source_access.resolve(reference, owner)
+        source = await self._source_access.resolve(reference, owner, upload_owner)
         try:
             metadata = await asyncio.to_thread(describe_raster_data, source.data)
         except (OSError, ValueError, RasterioError) as error:
             raise RasterConflictError(
-                "This raster could not be opened. Reopen the run and try again."
+                "This raster could not be opened. Reopen its source and try again."
             ) from error
         if metadata["bounds"] is None:
             raise RasterConflictError("This raster cannot be placed on the map.")
-        resource_name = f"model_{reference.job_id}_{reference.artifact_id}"
+        resource_name = (
+            f"raster_upload_{reference.upload_id.hex}"
+            if isinstance(reference, UploadedRasterReference)
+            else f"model_{reference.job_id}_{reference.artifact_id}"
+        )
         await self._publisher.publish(
             resource_name, cast(Path, source.data), advertised=False
         )
-        await self._source_access.resolve(reference, owner)
+        await self._source_access.resolve(reference, owner, upload_owner)
         layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"
         self._raster_registry.authorize(layer_name)
         return PublishedRaster(layerName=layer_name, bbox=metadata["bounds"])
 
     async def authorize_layers(
-        self, layer_names: tuple[str, ...], owner: str | None
+        self,
+        layer_names: tuple[str, ...],
+        owner: str | None,
+        upload_owner: str | None = None,
     ) -> bool:
-        """Check current output ownership before normal WMS or cached composite delivery.
+        """Check private source ownership before normal WMS or cached composite delivery.
 
         Args:
             layer_names: Requested server publication names.
             owner: Current server-derived session identity, never supplied in the URL.
+            upload_owner: Separate current upload-browser identity.
 
         Returns:
             Whether any layer requires a private, non-cacheable browser response.
@@ -351,17 +390,17 @@ class RasterPublicationService:
         """
         private = False
         for name in layer_names:
-            reference = temporary_raster_source(name)
+            reference = temporary_raster_source(name) or uploaded_raster_source(name)
             if reference is None:
                 continue
             private = True
             if self._source_access is None:
                 raise SourceFileError("This raster result is unavailable.", 404)
-            await self._source_access.resolve(reference, owner)
+            await self._source_access.resolve(reference, owner, upload_owner)
         return private
 
     async def cleanup(self) -> None:
-        """Remove obsolete output and temporal publications, including restart leftovers.
+        """Remove obsolete private and temporal publications, including restart leftovers.
 
         Original file deletion remains with each source owner. This service only
         removes GeoServer resources. Unavailable GeoServer leaves cleanup retryable.
@@ -372,11 +411,20 @@ class RasterPublicationService:
         async with self._publish_lock:
             names = await self._publisher.temporary_layers()
             await self._cleanup_temporal_publications(names)
-            if self._source_available is None:
-                return
             for name in names:
+                upload = uploaded_raster_source(name)
+                if upload is not None:
+                    if (
+                        self._upload_available is not None
+                        and not await self._upload_available(upload.upload_id)
+                    ):
+                        await self._publisher.remove(name)
+                        self._raster_registry.revoke(
+                            f"{GEOSERVER_WORKSPACE_NAME}:{name}"
+                        )
+                    continue
                 reference = temporary_raster_source(name)
-                if reference is None:
+                if reference is None or self._source_available is None:
                     continue
                 if not await self._source_available(
                     reference.job_id, reference.artifact_id

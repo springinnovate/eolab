@@ -184,6 +184,9 @@ class Settings:
         upload_max_bytes: Maximum original bytes per new upload across formats.
         upload_owner_max_bytes: Maximum stored upload bytes for one browser owner.
         upload_global_max_bytes: Maximum stored upload bytes for the application.
+        raster_upload_max_decoded_bytes: Maximum uncompressed Byte mask size at upload.
+        raster_upload_max_block_bytes: Maximum native data and validity block bytes
+            during raster upload inspection, independent of Processing limits.
         jobs_token: Server-only bearer credential identifying the
             application as a Jobs caller. Jobs uses that identity to restrict
             status, result, cancellation and deletion to the owning caller.
@@ -228,6 +231,8 @@ class Settings:
     upload_max_bytes: int = 100 * 1024**2
     upload_owner_max_bytes: int = 500 * 1024**2
     upload_global_max_bytes: int = 10 * 1024**3
+    raster_upload_max_decoded_bytes: int = 256 * 1024**2
+    raster_upload_max_block_bytes: int = 16 * 1024**2
     jobs_token: str = field(default="", repr=False)
     admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
@@ -305,6 +310,8 @@ class Settings:
             ("UPLOAD_MAX_BYTES", self.upload_max_bytes),
             ("UPLOAD_OWNER_MAX_BYTES", self.upload_owner_max_bytes),
             ("UPLOAD_GLOBAL_MAX_BYTES", self.upload_global_max_bytes),
+            ("RASTER_UPLOAD_MAX_DECODED_BYTES", self.raster_upload_max_decoded_bytes),
+            ("RASTER_UPLOAD_MAX_BLOCK_BYTES", self.raster_upload_max_block_bytes),
         ):
             if value < 1:
                 raise ValueError(f"{name} must be greater than zero")
@@ -616,4 +623,10 @@ def load_settings(
         upload_max_bytes=int(os.environ.get("UPLOAD_MAX_BYTES", str(100 * 1024**2))),
         upload_owner_max_bytes=int(os.environ.get("UPLOAD_OWNER_MAX_BYTES", str(500 * 1024**2))),
         upload_global_max_bytes=int(os.environ.get("UPLOAD_GLOBAL_MAX_BYTES", str(10 * 1024**3))),
+        raster_upload_max_decoded_bytes=int(
+            os.environ.get("RASTER_UPLOAD_MAX_DECODED_BYTES", str(256 * 1024**2))
+        ),
+        raster_upload_max_block_bytes=int(
+            os.environ.get("RASTER_UPLOAD_MAX_BLOCK_BYTES", str(16 * 1024**2))
+        ),
     )

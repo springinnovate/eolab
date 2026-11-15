@@ -43,6 +43,24 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> None:
+    """Persist an opaque raster upload without publishing data or vector predicates."""
+    candidate = map_request()
+    view = candidate["view"]
+    view.update(schemaVersion=3, basemap="none")
+    layer = view["layers"][0]
+    layer.pop("catalogItem")
+    layer.update(uploadId="12345678-1234-1234-1234-123456789abc", isCustom=True)
+    view["layers"] = [layer]
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    layer["filter"] = {"field": "class", "value": 1}
+    with pytest.raises(
+        ValidationError, match="Raster uploads do not support vector filters"
+    ):
+        CreateSavedMap.model_validate(candidate)
+
+
 def test_repeated_catalog_views_round_trip() -> None:
     """Preserve ordered views of the same raster and vector with distinct appearance."""
     candidate = map_request()

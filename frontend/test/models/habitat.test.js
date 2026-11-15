@@ -291,6 +291,32 @@ test("reference choices retain upload provenance after selection and a display-n
     h.controller.destroy();
 });
 
+test("uploaded raster reference sites keep their origin in choices, saved runs and duplication", async () => {
+    const h = await fixture(); chooseStack(h);
+    const source = {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"};
+    const mask = {...source, label: "Trusted mask", visible: false};
+    h.context.rasters.push(mask); h.controller.refreshMapLayers();
+    const controls = h.view.setup.inputs.references;
+    const uploadGroup = controls.source.querySelectorAll("optgroup").find(group => group.label === "Your uploads");
+    assert.deepEqual(uploadGroup.children.map(option => option.textContent), ["Uploaded sites · Polygons", "Trusted mask · Raster mask (hidden on map)"]);
+    edit(controls.source, `raster:${modelSourceKey(mask)}`); await settle();
+    assert.equal(controls.sourceOrigin.textContent, "Uploaded by you · Raster mask");
+    assert.match(controls.source.getAttribute("aria-describedby"), /source-origin/);
+    assert.equal(h.view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.deepEqual(h.requests[0].inputs.references, {kind: "raster", source});
+    const saved = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    assert.ok(saved.includes("Uploaded by you · Raster mask · cells equal to 1"));
+    assert.ok(saved.every(text => !text.includes("undefined")));
+    await h.controller.duplicateRun(); await settle();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-upload").inputs.references, {kind: "raster", source});
+    h.context.rasters = h.context.rasters.filter(value => value !== mask); h.controller.refreshMapLayers();
+    assert.equal(h.view.setup.run.disabled, true);
+    assert.equal(h.controller.state.draft.inputs.references.maskRaster.available, false);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "removed-upload"), /no longer available/);
+    h.controller.destroy();
+});
+
 test("Habitat stack edits preserve other rows and require unambiguous roles before Run", async () => {
     const h = await fixture(), controls = h.view.setup.inputs.stack;
     assert.equal(h.view.setup.run.disabled, true);

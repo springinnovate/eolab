@@ -460,7 +460,7 @@ starts sharing it; on a shared layer it copies the code for someone else to join
 If you arrived through a shared map link, choose **Draw polygon** on its shared
 layer and enter your contributor name when asked to add your own polygons.
 
-**Upload polygons → Import GeoJSON…** brings simple polygons into an editable
+**Import polygons → Import GeoJSON…** brings simple polygons into an editable
 local layer saved on your device. It accepts WGS84 longitude/latitude Polygon
 features without holes, including names and notes. Other file attributes and
 styles are not imported.
@@ -481,7 +481,7 @@ or **Cancel** to leave without downloading. The `.geojson` extension is added if
 Map links omit private local polygons. Share
 them in a shared layer when collaborators need to see them.
 
-#### Bring your own polygons
+#### Bring your own polygons and reference masks
 
 Open **Map contents → Your uploads** to add a GeoPackage
 (`.gpkg`) containing one polygon layer. Choose the file, give the layer a name,
@@ -499,6 +499,17 @@ file slot. A saved map link does not give other browsers access to your uploads.
 Upload byte budgets are configured in [.env.example](.env.example). They apply
 to upload storage, including files retained by calculations; they do not limit
 the size or duration of Processing calculations.
+
+For Ecosystem Condition reference sites, open **Your uploads** and select a
+single-band Byte GeoTIFF with a coordinate reference system. Use
+`1` for reference sites and `0` for other cells; NoData is ignored. Crop large
+masks to the region you need before uploading. The file must contain its own
+georeferencing and validity information; separate sidecars and archives are not
+accepted. Polygon files and raster masks share the same five-file allowance.
+
+Add the mask to the map, then choose it under **Your uploads** for **Reference sites**.
+It uses the ordinary raster style and analysis controls. The calculation reads
+the original mask independently of map visibility or rendering availability.
 
 For an existing Catalog vector or uploaded layer, use **Filter** to narrow the
 features, then select that polygon layer when choosing your analysis area.

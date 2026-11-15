@@ -14,6 +14,38 @@ const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repe
 const raster = {source, label: "Coverage", version: "c".repeat(64), bbox: [0,0,1,1]};
 const area = {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}};
 
+test("uploaded rasters use opaque identities through ordinary metadata, rendering and analysis clients", async () => {
+    const reference = {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"};
+    const descriptor = {source: reference, label: "Reference mask", bbox: [0, 0, 1, 1], path: "/private/mask.tif"};
+    const metadata = {source: reference, version: "c".repeat(64), bounds: descriptor.bbox, width: 2, height: 2, bands: 1,
+        capabilities: {pixels: {supported: true}, statistics: {supported: true}}};
+    const requests = [], signal = new AbortController().signal;
+    const fetcher = async (url, options) => {
+        requests.push({url, ...options, body: JSON.parse(options.body)});
+        return new Response(JSON.stringify(url.endsWith("/sources") ? metadata : url.endsWith("/layers") ? {layerName: "eolab:raster_upload"}
+            : url.endsWith("/pixels") ? {inBounds: true, value: 1} : RASTER_STATISTICS));
+    };
+    assert.deepEqual(rasterSourceReference(descriptor), reference);
+    assert.equal(rasterSourceKey(descriptor), `local:raster-upload:${reference.uploadId}`);
+    assert.throws(() => rasterSourceReference({...reference, uploadId: "/private/mask.tif"}), /available uploaded raster/);
+    assert.deepEqual(await describeRasterSource(descriptor, signal, fetcher), metadata);
+    await publishRasterSource(descriptor, fetcher, signal);
+    assert.equal((await sampleRasterPixel(descriptor, {longitude: .5, latitude: .5}, signal, fetcher)).value, 1);
+    await loadRasterStatistics(descriptor, {kind: "wholeRaster"}, signal, fetcher);
+    // Exercise both source positions; the deliberately single-source response is rejected downstream.
+    await assert.rejects(loadRasterPairedStatistics(descriptor, raster, {kind: "wholeOverlap"}, signal, fetcher));
+    await assert.rejects(loadRasterPairedStatistics(raster, descriptor, {kind: "wholeOverlap"}, signal, fetcher));
+    for (const request of requests) {
+        assert.equal(request.credentials, "same-origin"); assert.equal(request.cache, "no-store");
+        assert.equal(request.headers["X-EOLab-Uploads"], "1");
+        const uploaded = request.body.source ?? (request.body.xRaster.kind === "uploadedRaster" ? request.body.xRaster : request.body.yRaster);
+        assert.deepEqual(uploaded, reference);
+        assert.doesNotMatch(JSON.stringify(request.body), /private\/|path|label|bbox/);
+    }
+    const intent = calculationIntent({source: labeledRasterSource(descriptor, descriptor.label), area, calculations: [{label: "Total", expression: "sum(a)"}]});
+    assert.deepEqual(intent.source, {...reference, label: descriptor.label});
+});
+
 test("source identity is independent of display fields and cannot become a file path", () => {
     assert.deepEqual(rasterSourceReference({...raster, preview: [99], path: "/private/file.tif"}), source);
     assert.equal(rasterSourceKey(raster), `local:artifact:${source.jobId}:${source.artifactId}`);

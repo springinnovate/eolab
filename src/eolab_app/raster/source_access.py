@@ -33,10 +33,12 @@ from eolab_app.raster.source_models import (
     TemporalRasterSelection,
     TemporalIntervalSelection,
     ProjectedRasterGrid,
+    UploadedRasterReference,
 )
 from eolab_app.raster.temporal import TemporalObservation
 from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.source_files import LeasedSourceFiles, SourceFileError
+from eolab_app.upload_storage import UploadStorage, UploadError
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class RasterReadSource:
         data: Confined file or observation consumed only by native readers.
         cache_identity: Source selection identity, including private access when needed.
         version: Public source selection identity, without credentials or paths.
-        private: Whether this raster is a session-owned run file.
+        private: Whether this raster is a browser-owned upload or run file.
     """
 
     data: RasterData
@@ -254,26 +256,35 @@ class RasterSourceAccess:
     """Open original raster data through its catalog or private file authority."""
 
     def __init__(
-        self, catalog: RasterSourceAuthorizer, files: LeasedSourceFiles | None = None
+        self,
+        catalog: RasterSourceAuthorizer,
+        files: LeasedSourceFiles | None = None,
+        uploads: UploadStorage | None = None,
     ) -> None:
-        """Configure source access for catalog rasters and private run files.
+        """Configure original-source access for catalog rasters, uploads and run files.
 
         Args:
             catalog: Resolves admitted raster files and temporal observations.
             files: Optional private immutable-file access composed by the application.
+            uploads: Optional shared authority for browser-owned uploaded files.
         """
         self.catalog, self.files = catalog, files
+        self.uploads = uploads
         self._metadata_slots = asyncio.Semaphore(2)
 
     @asynccontextmanager
     async def open(
-        self, reference: RasterAnalysisSourceReference, owner: str | None = None
+        self,
+        reference: RasterAnalysisSourceReference,
+        owner: str | None = None,
+        upload_owner: str | None = None,
     ) -> AsyncIterator[RasterReadSource]:
         """Return original raster data, retaining private files for the complete read.
 
         Args:
             reference: Validated file identity or temporal observation selection.
-            owner: Server-derived session hash required only for private references.
+            owner: Server-derived Processing session hash for private run files.
+            upload_owner: Separate browser hash authorizing uploaded rasters.
 
         Yields:
             Authorized original raster with an ownership-aware cache identity.
@@ -283,6 +294,24 @@ class RasterSourceAccess:
             SourceFileError: If private source access is unavailable or changes.
             Exception: If the owning authority rejects access.
         """
+        if isinstance(reference, UploadedRasterReference):
+            if self.uploads is None or upload_owner is None:
+                raise SourceFileError(
+                    "This raster upload is unavailable to this browser.", 404
+                )
+            try:
+                async with self.uploads.open_source(
+                    upload_owner, reference.upload_id, "raster"
+                ) as (metadata, path):
+                    yield RasterReadSource(
+                        path,
+                        ("uploadedRaster", upload_owner, str(metadata.id)),
+                        str(metadata.id),
+                        True,
+                    )
+            except UploadError as error:
+                raise SourceFileError(str(error), error.status) from error
+            return
         if isinstance(reference, (CatalogRasterRequest, TemporalRasterSelection)):
             yield await self.resolve(reference, owner)
             return
@@ -310,13 +339,17 @@ class RasterSourceAccess:
             )
 
     async def resolve(
-        self, reference: RasterAnalysisSourceReference, owner: str | None = None
+        self,
+        reference: RasterAnalysisSourceReference,
+        owner: str | None = None,
+        upload_owner: str | None = None,
     ) -> RasterReadSource:
         """Authorize an original raster for the ordinary short-read pipeline.
 
         Args:
             reference: Validated file identity or temporal observation selection.
             owner: Server-derived session hash for a private output.
+            upload_owner: Separate browser hash authorizing uploaded rasters.
 
         Returns:
             Original file or observation and its selection identity, without a retention lease.
@@ -325,6 +358,26 @@ class RasterSourceAccess:
             RasterFeatureError: If catalog authorization or the format fails.
             SourceFileError: If ownership, expiry or file resolution fails.
         """
+        if isinstance(reference, UploadedRasterReference):
+            if self.uploads is None or upload_owner is None:
+                raise SourceFileError(
+                    "This raster upload is unavailable to this browser.", 404
+                )
+            try:
+                metadata, path = await asyncio.to_thread(
+                    self.uploads.get_upload_source,
+                    upload_owner,
+                    reference.upload_id,
+                    "raster",
+                )
+            except UploadError as error:
+                raise SourceFileError(str(error), error.status) from error
+            return RasterReadSource(
+                path,
+                ("uploadedRaster", upload_owner, str(metadata.id)),
+                str(metadata.id),
+                True,
+            )
         if isinstance(reference, TemporalRasterSelection):
             (observation,) = await self.catalog.get_observations(reference)
             identity = (
@@ -374,6 +427,7 @@ class RasterSourceAccess:
         self,
         reference: RasterAnalysisSourceReference,
         owner: str | None = None,
+        upload_owner: str | None = None,
         *,
         target_crs: str | None = None,
     ) -> dict[str, Any]:
@@ -382,6 +436,7 @@ class RasterSourceAccess:
         Args:
             reference: Requested file identity or temporal observation selection.
             owner: Server-derived private session hash when required.
+            upload_owner: Separate browser hash authorizing uploaded rasters.
             target_crs: Optional output CRS for a pixel-size suggestion.
 
         Returns:
@@ -395,7 +450,10 @@ class RasterSourceAccess:
             raise SourceFileError(
                 "Raster metadata checks are busy. Try again shortly.", 429
             )
-        async with self._metadata_slots, self.open(reference, owner) as source:
+        async with (
+            self._metadata_slots,
+            self.open(reference, owner, upload_owner) as source,
+        ):
             try:
                 metadata = await read_private_raster(
                     describe_raster_data, source.data, target_crs

@@ -907,7 +907,8 @@ test("a mixed raster recipe offers completed results only to fields that accept 
         processed: {type: "raster", label: "Processed raster"}, area: model.inputs.area}};
     h.controller.rememberRun(parent); h.controller.chooseModel(recipe);
     const controls = view.setup.inputs, draft = h.controller.state.draft;
-    assert.deepEqual(controls.original.source.children.map(option => option.value), ["", modelSourceKey(raster)]);
+    assert.equal(controls.original.source.children[0].value, "");
+    assert.deepEqual(controls.original.source.children[1].children.map(option => option.value), [modelSourceKey(raster)]);
     assert.deepEqual(controls.processed.source.children.slice(1).map(group => group.label), ["Map contents", "Completed runs"]);
     const source = draft.sources.find(value => value.kind === "runArtifact");
     controls.processed.source.value = modelSourceKey(source); controls.processed.source.dispatchEvent(new Event("change"));
