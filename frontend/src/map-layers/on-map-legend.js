@@ -234,7 +234,7 @@ export class OnMapLegend {
     updateLayout() {
         const { x: width, y: height } = this.map.getSize();
         const available = Math.max(80, Math.min(660, width - (width >= 900 ? 400 : 40)));
-        const topMargin = width < 900 ? "calc(var(--map-tools-height, 60px) + 10px)" : "10px";
+        const topMargin = width < 900 ? "calc(var(--map-tools-top-offset, 0px) + var(--map-tools-height, 60px) + 10px)" : "10px";
         const contentHeight = [...this.contents.children].reduce((total, node) => total + node.offsetHeight + 12, 0);
         const columns = Math.min(Math.max(1, this.contents.childElementCount),
             Math.max(1, Math.floor(available / 216)),

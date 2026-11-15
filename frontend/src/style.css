@@ -3313,6 +3313,7 @@ article.raster-histogram-summary {
   }
 
   #map {
+    --map-tools-top-offset: 16px;
     inset: 0;
   }
 
