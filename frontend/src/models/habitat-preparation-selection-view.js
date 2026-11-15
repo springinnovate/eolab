@@ -22,14 +22,14 @@ export class HabitatPreparationSelectionView {
         this.source = element("select"); this.source.required = true;
         this.source.addEventListener("change", () => handlers.onHabitatPreparationSelection(
             this.source.value === "" ? null : this.selections[Number(this.source.value)]));
-        this.help = element("p", "Choose Catalog features used by the administrator for input preparation. The listed filters define each analysis area.", "models-help");
+        this.help = element("p", "Areas are configured by your administrator.", "models-help");
         this.selectionDetails = element("p", "", "models-help"); this.selectionDetails.id = "models-" + name + "-preparation-selection-details";
         this.status = element("p", "", "models-help"); this.status.setAttribute("role", "status");
         this.status.id = "models-" + name + "-prepared-coverage";
         this.source.setAttribute("aria-describedby", this.selectionDetails.id + " " + this.status.id);
-        this.refresh = button("Refresh preparation selections", handlers.onRefreshHabitatPreparationSelections, "models-action");
+        this.refresh = button("Refresh areas", handlers.onRefreshHabitatPreparationSelections, "models-action");
         this.retry = button("Check coverage again", handlers.onRefreshHabitatCoverage, "models-action");
-        this.root.append(field("models-" + name + "-preparation-selection", "Prepared " + label.toLowerCase(), this.source),
+        this.root.append(field("models-" + name + "-preparation-selection", label, this.source),
             this.help, this.selectionDetails, this.status, this.refresh, this.retry);
     }
 
@@ -42,17 +42,30 @@ export class HabitatPreparationSelectionView {
         const value = draft.setupState;
         this.selections = value.selections;
         const selectedIndex = value.selections.findIndex(selection => vectorSelectionsEqual(selection, value.selectedSelection));
-        const labels = value.selections.map(selection => (value.titles[this.sourceKey(selection)] ?? selection.itemId) +
-            " · " + selection.layerName + " · " + this.describeFilter(selection.filter));
-        this.options(this.source, [{value: "", label: "Choose Catalog features with prepared inputs…"},
-            ...labels.map((label, index) => ({value: String(index), label}))], selectedIndex < 0 ? "" : String(selectedIndex));
-        this.selectionDetails.textContent = selectedIndex < 0 ? "" : labels[selectedIndex];
+        const identities = value.selections.map(selection =>
+            `${selection.collectionId} / ${selection.itemId} / ${selection.assetKey}`);
+        const labels = value.selections.map(selection => {
+            const title = value.titles[this.sourceKey(selection)];
+            const name = title && title !== selection.itemId ? title : selection.layerName;
+            return [name, name === selection.layerName ? null : selection.layerName, this.describeFilter(selection.filter)]
+                .filter(part => part !== null).join(" · ");
+        });
+        const labelCounts = new Map();
+        for (const label of labels) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+        this.options(this.source, [{value: "", label: "Choose an area…"},
+            ...labels.map((label, index) => ({value: String(index),
+                label: labelCounts.get(label) > 1 ? `${label} · Source: ${identities[index]}` : label}))], selectedIndex < 0 ? "" : String(selectedIndex));
+        this.selectionDetails.textContent = selectedIndex < 0 ? "" : `${labels[selectedIndex]} · Source: ${identities[selectedIndex]}`;
         this.selectionDetails.hidden = selectedIndex < 0;
         this.source.disabled = value.loading || !value.loaded || Boolean(value.error) || !value.selections.length;
         this.refresh.disabled = value.loading;
-        this.refresh.textContent = value.loading ? "Loading preparation selections…" : "Refresh preparation selections";
+        this.refresh.textContent = value.loading ? "Loading areas…" : "Refresh areas";
         this.retry.hidden = selectedIndex < 0 || value.loading || Boolean(value.error);
         this.retry.disabled = value.coverageLoading;
+        const choosingArea = value.loaded && !value.loading && !value.error && value.selections.length > 0 &&
+            selectedIndex < 0 && !value.unavailable;
+        this.status.hidden = choosingArea;
+        if (choosingArea) { this.status.textContent = ""; return false; }
         let error = "";
         try { this.captureSelection(draft); } catch (problem) { error = problem.message; }
         const coverage = value.coverage;

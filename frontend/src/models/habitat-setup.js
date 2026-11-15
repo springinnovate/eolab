@@ -208,7 +208,7 @@ class HabitatSetupSession {
     }
 
     /** Read each distinct Catalog Item's title without gating a preparation selection.
-     * Unavailable metadata leaves the Item ID as the display fallback. Late replies
+     * Unavailable metadata leaves the layer name as the display fallback. Late replies
      * cannot replace titles after refresh, mode changes or draft replacement.
      * @param {Object} draft Habitat draft receiving presentation-only titles.
      * @param {Object[]} selections Validated Catalog selections, possibly sharing an Item.
