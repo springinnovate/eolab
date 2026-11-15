@@ -13,10 +13,12 @@ from eolab_app.routes.http_disconnect import (
 from eolab_app.routes.vector_http import PrivateVectorRoute
 from eolab_app.source_files import LeasedSourceFiles
 from eolab_app.vector.field_calculation import (
-    ArtifactCalculationSource,
-    FieldCalculationInput,
     FieldCalculationJobs,
     FieldCalculationRequest,
+)
+from eolab_app.vector.field_calculation_operation import (
+    ArtifactCalculationSource,
+    FieldCalculationInput,
     FieldCalculationResult,
     UploadedCalculationSource,
 )

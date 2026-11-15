@@ -18,11 +18,13 @@ from eolab_app.routes.processing import COOKIE, get_processing_session_owner_has
 from eolab_app.routes.vector_calculations import create_vector_calculation_router
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.field_calculation import (
+    FieldCalculationJobs,
+    FieldCalculationRequest,
+)
+from eolab_app.vector.field_calculation_operation import (
     ArtifactCalculationSource,
     FieldCalculationInput,
-    FieldCalculationJobs,
     FieldCalculationOutcome,
-    FieldCalculationRequest,
     FieldCalculationResult,
     calculate_vector_fields,
     scan_calculated_fields,
@@ -194,7 +196,9 @@ def test_uploaded_calculation_reads_admitted_fields_without_rendering(
         yield path.read_bytes()
 
     upload = asyncio.run(store.create("a" * 64, "Regions", chunks()))
-    monkeypatch.setattr("eolab_app.vector.field_calculation.UPLOAD_MOUNT", root)
+    monkeypatch.setattr(
+        "eolab_app.vector.field_calculation_operation.UPLOAD_MOUNT", root
+    )
     inputs = FieldCalculationInput(
         source={"uploadId": upload.id},
         uploadOwner="a" * 64,

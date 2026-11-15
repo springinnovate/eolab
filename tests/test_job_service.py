@@ -2,6 +2,8 @@
 
 import ast
 import json
+import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
@@ -290,6 +292,59 @@ def test_jobs_outage_is_local(
     assert "private hostname" not in response.text
 
 
+def test_operation_discovery_does_not_require_application_client_or_native_libraries() -> (
+    None
+):
+    """Start Jobs discovery with the app client and GIS imports explicitly unavailable."""
+    root = Path(__file__).parents[1]
+    script = '''
+import sys
+from importlib.abc import MetaPathFinder
+
+class WorkerImportBoundary(MetaPathFinder):
+    """Reject app-only and native packages during operation discovery."""
+
+    def find_spec(self, fullname: str, path: object = None, target: object = None) -> None:
+        """Allow only imports available before a Jobs native operation executes.
+
+        Args:
+            fullname: Fully qualified package requested by the importer.
+            path: Parent package search path, unused by this boundary.
+            target: Reload target, unused by this boundary.
+
+        Returns:
+            None so ordinary finders locate permitted modules.
+
+        Raises:
+            ModuleNotFoundError: If discovery imports the app client or native GIS.
+        """
+        if fullname.split(".", 1)[0] in {
+            "eolab_jobs", "fiona", "rasterio", "osgeo", "numpy", "pyproj", "shapely"
+        }:
+            raise ModuleNotFoundError(f"Unavailable in worker discovery: {fullname}")
+        return None
+
+sys.meta_path.insert(0, WorkerImportBoundary())
+from job_service.operations_registry import OPERATIONS
+from job_service.app import create_app
+
+operation = OPERATIONS["vector.field-calculation.v1"]
+source = {"collectionId": "eolab-mounted-vectors", "itemId": "areas"}
+inputs = operation.input_model.model_validate({"source": source, "calculatedFields": []})
+assert inputs.source.item_id == "areas"
+assert operation.describe().name == "vector.field-calculation.v1"
+assert create_app().openapi()["info"]["title"]
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root / "services/jobs",
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_scheduler_has_only_explicit_operation_registration_edge() -> None:
     """Only registration imports the approved domain operation, never services."""
     root = Path(__file__).parents[1]
@@ -309,7 +364,7 @@ def test_scheduler_has_only_explicit_operation_registration_edge() -> None:
                         "eolab_app.vector.outline_operation",
                         "eolab_app.vector.selection_operation",
                         "eolab_app.vector.extent_operation",
-                        "eolab_app.vector.field_calculation",
+                        "eolab_app.vector.field_calculation_operation",
                     }
                 ]
             assert not any(
