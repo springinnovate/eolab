@@ -11,17 +11,13 @@
 }
 #models-panel h2 { font-size: 1rem; margin: 0; }
 #models-panel h3 { font-size: 1rem; margin: 0 0 6px; }
-.models-header > h2 { flex: 0 0 auto; }
+.models-header > .models-navigation { flex: 1; min-width: 0; }
 .models-header > .analysis-panel-close { margin-inline-start: auto; }
 .models-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border-1); border-radius: var(--radius); }
 .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .models-navigation button { min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--brand); font: inherit; font-size: var(--font-size-ui); cursor: pointer; }
 .models-navigation button:hover:not(:disabled) { background: var(--surface-hover); }
 .models-navigation button[aria-pressed="true"] { border-color: var(--brand); background: var(--surface-selected); color: var(--text-1); font-weight: 600; }
-@container map-inspection (max-width: 380px) {
-  .models-header > .models-navigation { order: 1; flex-basis: 100%; }
-  .models-navigation button { flex: 1; }
-}
 .models-navigation button:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .models-field { display: grid; gap: 3px; min-width: 0; font-size: var(--font-size-ui); }
 #models-panel input, #models-panel select, #models-panel textarea { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }

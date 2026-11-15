@@ -737,7 +737,6 @@ h5 {
 .raster-layer-row:hover,
 .raster-layer-row:focus-within {
   border-color: var(--border-2);
-  background: var(--surface-1);
 }
 
 .raster-layer-row.is-custom-layer {

@@ -340,7 +340,8 @@ test("shared viewer omits removal but retains included-layer interaction tools",
   const view = new MapLayerStackView(documentContext, { allowRemoval: false });
   const calls = [];
   view.bind({ onStyle: key => calls.push(key), onAllVisibility: visible => calls.push(visible) });
-  view.render(LAYERS.map(layer => ({...layer, canAddView: true})), LAYERS[0].key);
+  view.render(LAYERS.map(layer => ({...layer, canAddView: true,
+    styleClipboard: {...layer.styleClipboard, canPaste: true, sourceLabel: "Copied source"}})), LAYERS[0].key);
   const list = documentContext.querySelector("#raster-layer-list");
   assert.equal(elementsByClass(list, "map-layer-remove-button").length, 0);
   assert.throws(() => actionControl(list, "add-view"), /expected one add-view/);
@@ -411,12 +412,12 @@ test("Details preserves disclosure and utility focus through refresh and reorder
   trigger.dispatchEvent(new Event("click"));
   assert.equal(panel.hidden, false);
   assert.equal(trigger.getAttribute("aria-expanded"), "true");
-  actionControl(row, "copy-style").focus();
+  actionControl(row, "zoom").focus();
   view.render([layers[1], layers[0], layers[2]], layers[0].key);
   row = list.children[1];
   panel = elementsByClass(row, "map-layer-details")[0];
   assert.equal(panel.hidden, false);
-  assert.equal(doc.activeElement, actionControl(row, "copy-style"));
+  assert.equal(doc.activeElement, actionControl(row, "zoom"));
   panel.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
   assert.equal(panel.hidden, true);
   assert.equal(doc.activeElement, actionControl(row, "details"));
@@ -532,6 +533,7 @@ const LAYERS = [
     styleClipboard: {
       canCopy: true,
       canPaste: false,
+      pasting: false,
       sourceLabel: null,
       pasteReason: "Copy a layer style before pasting.",
     },
@@ -555,6 +557,7 @@ const LAYERS = [
     styleClipboard: {
       canCopy: true,
       canPaste: false,
+      pasting: false,
       sourceLabel: null,
       pasteReason: "Copy a layer style before pasting.",
     },
@@ -578,6 +581,7 @@ const LAYERS = [
     styleClipboard: {
       canCopy: true,
       canPaste: false,
+      pasting: false,
       sourceLabel: null,
       pasteReason: "Copy a layer style before pasting.",
     },
@@ -698,14 +702,10 @@ test("rows retain identity, map, style, clipboard, and removal actions", () => {
     assert.match(actionControl(row, "zoom").getAttribute("aria-label"), /^Zoom to /);
     assert.match(actionControl(row, "info").getAttribute("aria-label"), /^View details for /);
     assert.equal(actionControl(row, "copy-style").disabled, false);
+    assert.equal(actionControl(row, "copy-style").textContent, "Copy style");
     assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
     assert.match(actionControl(row, "copy-style").getAttribute("aria-label"), /^Copy style from /);
-    assert.equal(actionControl(row, "paste-style").disabled, true);
-    assert.equal(
-      actionControl(row, "paste-style").title,
-      "Copy a layer style before pasting.",
-    );
-    assert.match(actionControl(row, "paste-style").getAttribute("aria-label"), /^Paste copied style onto /);
+    assert.throws(() => actionControl(row, "paste-style"), /expected one paste-style/);
     assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
     assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
     assert.equal(actionControl(row, "visibility").type, "checkbox");
@@ -749,18 +749,24 @@ test("Details keeps utility actions while frequent actions remain on the compact
   const view = new MapLayerStackView(doc);
   const raster = { ...LAYERS[0], datasetKind: "raster", capabilities: {calculations: true}, legend: { kind: "fixed", label: "Raster" } };
   const vector = { ...LAYERS[1], datasetKind: "vector", canFilter: true };
-  view.render([raster, vector], null);
+  view.render([raster, vector].map(layer => ({...layer,
+    styleClipboard: {...layer.styleClipboard, canPaste: true, sourceLabel: "Copied source"}})), null);
   for (const row of doc.querySelector("#raster-layer-list").children) {
     const strip = elementsByClass(row, "map-layer-row-actions")[0];
     const utilities = elementsByClass(row, "map-layer-utility-actions")[0];
     const details = elementsByClass(row, "map-layer-details")[0];
     assert.equal(elementsByClass(row, "map-layer-actions").length, 0);
     assert.ok(strip.children.includes(actionControl(row, "style")));
+    for (const action of ["copy-style", "paste-style"]) {
+      assert.ok(strip.children.includes(actionControl(row, action)));
+      assert.equal(actionControl(row, action).children.length, 0, "frequent style actions have visible text");
+    }
+    assert.match(actionControl(row, "paste-style").getAttribute("aria-label"), /^Paste style from Copied source onto /);
     assert.ok(strip.children.includes(actionControl(row, "details")));
     assert.ok(details.contains(utilities));
     actionControl(row, "details").dispatchEvent(new Event("click"));
     assert.equal(details.hidden, false);
-    for (const action of ["zoom", "rename", "info", "copy-style", "paste-style"]) {
+    for (const action of ["zoom", "rename", "info"]) {
       const button = actionControl(row, action);
       assert.ok(utilities.contains(button), `${action} remains available in Details`);
       assert.equal(button.tagName, "BUTTON");
@@ -996,6 +1002,7 @@ test("direct row actions forward stable identity", () => {
       styleClipboard: {
         canCopy: true,
         canPaste: true,
+        pasting: false,
         sourceLabel: "Vegetation health index",
         pasteReason: "Paste the copied style.",
       },
@@ -1166,7 +1173,7 @@ test("the layer list leaves Escape to its owning workspace", () => {
   view.unbind();
 });
 
-test("visibility and background updates keep the visible row stationary across layout changes", () => {
+test("visibility, clipboard and background updates keep the visible row stationary across layout changes", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const list = doc.querySelector("#raster-layer-list"), scroller = doc.layerScrollContainer;
   let extraHeight = 0;
@@ -1195,6 +1202,14 @@ test("visibility and background updates keep the visible row stationary across l
     assert.equal(list.children[1].getBoundingClientRect().top, originalTop);
     assert.equal(doc.activeElement.dataset.layerAction, "visibility");
     assert.deepEqual(doc.activeElement.lastFocusOptions, { preventScroll: true });
+  }
+  const copied = LAYERS.map(layer => ({...layer, styleClipboard: {...layer.styleClipboard, canPaste: true, sourceLabel: "Copied source"}}));
+  for (const action of ["copy-style", "paste-style"]) {
+    view.render(copied, null, {key: LAYERS[1].key, action});
+    assert.equal(scroller.scrollTop, 120);
+    assert.equal(list.children[1].getBoundingClientRect().top, originalTop);
+    assert.equal(doc.activeElement.dataset.layerAction, action);
+    assert.deepEqual(doc.activeElement.lastFocusOptions, {preventScroll: true});
   }
   // A status row above the viewport grows during rebuilding; preserve the row, not just scrollTop.
   list.replaceChildren = (...rows) => { replaceChildren(...rows); extraHeight = 20; scroller.scrollTop = 0; };

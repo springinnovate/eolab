@@ -670,6 +670,7 @@ export class MapLayerController {
      * Adapter validation occurs before neutral opacity changes, so rejected
      * portable styles leave the target opacity untouched. Rendering and
      * observer notification remain within the retained-layer lifecycle.
+     * Completion preserves current focus so users can paste onto other layers meanwhile.
      *
      * @param {string} key Stable retained-layer key.
      * @return {Promise<boolean>} Whether the complete appearance was applied.
@@ -707,7 +708,7 @@ export class MapLayerController {
         } finally {
             this.pendingStylePastes.delete(key);
             if (this.records.get(key) === record) {
-                this.render({ key, action: "paste-style" });
+                this.render();
             }
         }
     }
@@ -1421,7 +1422,7 @@ export class MapLayerController {
      * the shared portable-style protocol.
      *
      * @param {Object} record Retained map-layer record.
-     * @return {{canCopy:boolean,canPaste:boolean,sourceLabel:string|null,
+     * @return {{canCopy:boolean,canPaste:boolean,pasting:boolean,sourceLabel:string|null,
      * pasteReason:string}} Presentation-ready clipboard availability.
      */
     #styleClipboardSnapshot(record) {
@@ -1431,6 +1432,7 @@ export class MapLayerController {
             return Object.freeze({
                 canCopy,
                 canPaste: false,
+                pasting: false,
                 sourceLabel,
                 pasteReason: "Copy a layer style before pasting.",
             });
@@ -1439,8 +1441,9 @@ export class MapLayerController {
             return Object.freeze({
                 canCopy,
                 canPaste: false,
+                pasting: true,
                 sourceLabel,
-                pasteReason: `Pasting the style from ${sourceLabel}.`,
+                pasteReason: `Pasting style onto ${record.entry.label}.`,
             });
         }
         if (
@@ -1450,6 +1453,7 @@ export class MapLayerController {
             return Object.freeze({
                 canCopy,
                 canPaste: false,
+                pasting: false,
                 sourceLabel,
                 pasteReason: "Pasting styles is unavailable for this layer.",
             });
@@ -1467,6 +1471,7 @@ export class MapLayerController {
             return Object.freeze({
                 canCopy,
                 canPaste: reason === null,
+                pasting: false,
                 sourceLabel,
                 pasteReason: reason ??
                     `Paste the style copied from ${sourceLabel}.`,
@@ -1475,6 +1480,7 @@ export class MapLayerController {
             return Object.freeze({
                 canCopy,
                 canPaste: false,
+                pasting: false,
                 sourceLabel,
                 pasteReason: `Copied style is invalid: ${asErrorMessage(error)}`,
             });

@@ -28,7 +28,7 @@ function fixture(overrides = {}, viewOverride = null) {
     const jobs = new ProcessingJobs(api, clock);
     const context = {rasters: [structuredClone(raster)], area: structuredClone(area)};
     let sequence = 0; let handlers;
-    const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
+    const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusPage: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
         getCatalogItem: source => api.getCatalogItem(source),
@@ -689,7 +689,36 @@ test("inline deletion returns focus on Keep or Escape and keeps a failed confirm
     h.api.deleteModelRun = async () => ({...ready, status: "deleted", updatedAt: "2026-10-10T00:00:00Z"});
     await h.controller.deleteRun();
     assert.equal(h.controller.state.page, "runs"); assert.deepEqual(h.controller.state.runs, []);
-    assert.equal(doc.activeElement, view.elements.heading);
+    assert.equal(doc.activeElement, view.navigation.runs);
+    assert.equal(view.navigation.runs.disabled, false);
+    assert.equal(view.navigation.runs.getAttribute("aria-pressed"), "true");
+    assert.equal(view.elements.run.hidden, true);
+});
+
+test("expired focused Undo notices return to visible list navigation", async t => {
+    for (const [page, action] of [["library", "undo"], ["runs", "dismiss"]]) {
+        const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+        const h = fixture({}, view);
+        t.after(() => h.controller.destroy());
+        await h.controller.navigate(page);
+        let expireNotice;
+        h.controller.clock.setTimeout = callback => { expireNotice = callback; return 1; };
+        const deleted = job({status: "deleted", deletionUndo: {
+            deletionId: "d".repeat(32), expiresAt: new Date(Date.now() + 30000).toISOString(),
+        }});
+        h.controller.rememberRun(deleted);
+        h.controller.render();
+        view.deletionNotices.get(deleted.deletionUndo.deletionId)[action].focus();
+        h.controller.deletions.get(deleted.jobId).expiresAt = new Date(Date.now() - 1).toISOString();
+        expireNotice();
+        assert.equal(view.deletionNotices.size, 0);
+        assert.equal(h.controller.state.page, page);
+        assert.equal(doc.activeElement, view.navigation[page]);
+        assert.equal(view.navigation[page].disabled, false);
+        assert.equal(view.navigation[page].getAttribute("aria-pressed"), "true");
+        h.controller.render();
+        assert.equal(doc.activeElement, view.navigation[page], "subsequent rendering retains visible focus");
+    }
 });
 
 test("Undo restores its run and captured displays without extending expiry or changing the user's setup", async () => {

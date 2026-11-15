@@ -187,11 +187,12 @@ def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
 def test_geoserver_requires_supported_vector_datastore_modules(
     tmp_path: Path,
 ) -> None:
-    """Fail the image contract unless both required GeoTools modules exist.
+    """Fail the image contract unless vector readers and overview support exist.
 
     Args:
         tmp_path: Isolated fake GeoServer library directory.
     """
+
     repository_root = COMPOSE_PATH.parent
     guard_path = (
         repository_root
@@ -212,6 +213,14 @@ def test_geoserver_requires_supported_vector_datastore_modules(
         check=False,
     )
     (tmp_path / "gt-geopkg-35.1.jar").touch()
+    missing_overviews = subprocess.run(
+        ["sh", str(guard_path), shell_tmp_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    (tmp_path / "gt-feature-pregeneralized-35.1.jar").touch()
+    (tmp_path / "gs-feature-pregeneralized-3.0.1.jar").touch()
     complete = subprocess.run(
         ["sh", str(guard_path), shell_tmp_path],
         capture_output=True,
@@ -221,6 +230,8 @@ def test_geoserver_requires_supported_vector_datastore_modules(
 
     assert missing_geopackage.returncode == 1
     assert "GeoPackage datastore module is missing" in missing_geopackage.stderr
+    assert missing_overviews.returncode == 1
+    assert "pregeneralized features" in missing_overviews.stderr
     assert complete.returncode == 0
 
 

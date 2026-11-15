@@ -645,7 +645,8 @@ test("Raster statistics omits retained Style context without closing its editor"
     h.controller.hideRasterSeries();
     assert.equal(h.controller.activeTool, "style");
     assert.equal(h.styleTab.hidden, false);
-    assert.equal(h.styleTab.textContent, `Style · ${renamed}`);
+    assert.equal(h.styleTab.textContent, "Style");
+    assert.equal(h.styleTab.getAttribute("aria-label"), `Style ${renamed}`);
     h.controller.showRasterSeries();
     h.controller.showStyle(renamed);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
@@ -658,7 +659,8 @@ test("histogram and style have independent visibility on one persistent surface"
     h.controller.showStyle("Coastal resistance.tif");
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
-    assert.equal(h.styleTab.textContent, "Style · Coastal resistance.tif");
+    assert.equal(h.styleTab.textContent, "Style");
+    assert.equal(h.styleTab.getAttribute("aria-label"), "Style Coastal resistance.tif");
     assert.equal(h.styleTab.title, "Style Coastal resistance.tif");
     h.controller.showHistogram(2);
     assert.equal(h.style.hidden, false);
@@ -726,7 +728,8 @@ test("combined map results prefer counted features and retain style context", ()
     h.controller.hideFeatureInspector();
     assert.equal(h.featureTab.textContent, "Features");
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
-    assert.equal(h.styleTab.textContent, "Style · Parcels");
+    assert.equal(h.styleTab.textContent, "Style");
+    assert.equal(h.styleTab.getAttribute("aria-label"), "Style Parcels");
     h.controller.hideStyle();
     assert.equal(h.styleTab.textContent, "Style");
     h.controller.destroy();
@@ -1126,7 +1129,7 @@ test("sampling widget retains disclosure and area through Models, tool switches 
     view.unbind();
 });
 
-test("Data tools keeps its tool entry while its compact header provides the visible title", () => {
+test("Data tools keeps its visible tool title when alone and alongside another editor", () => {
     const h = fixture(), models = h.doc.querySelector("#models-panel"), tab = h.doc.querySelector("#map-inspection-tab-models");
     h.controller.showModels();
     assert.equal(h.dockTitle.hidden, true);
@@ -1136,10 +1139,47 @@ test("Data tools keeps its tool entry while its compact header provides the visi
     assert.equal(tab.getAttribute("aria-selected"), "true");
     assert.equal(models.getAttribute("data-map-inspection-active"), "true");
     h.controller.showStyle("Population");
-    assert.equal(h.dockTitle.hidden, false);
+    assert.equal(h.dockTitle.hidden, true);
     assert.equal(tab.hidden, false);
     tab.dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "models");
     assert.equal(h.dockTitle.hidden, true);
+    h.controller.destroy();
+});
+
+test("compact layer-editor tabs retain full targets through rename, switching and close", () => {
+    const h = fixture(), context = h.doc.querySelector("#map-inspection-context");
+    const label = "Sabah habitat condition across coastal and inland administrative regions · 2025";
+    h.controller.showStyle(label);
+    h.controller.showFilter(label);
+    h.map.focus();
+    for (const [editor, action, show, hide] of [
+        ["style", "Style", "showStyle", "hideStyle"],
+        ["filter", "Filter", "showFilter", "hideFilter"],
+    ]) {
+        const tab = h.doc.querySelector(`#map-inspection-tab-${editor}`);
+        assert.equal(tab.textContent, action);
+        assert.equal(tab.getAttribute("aria-label"), `${action} ${label}`);
+        assert.equal(tab.title, `${action} ${label}`);
+        const active = h.controller.activeTool;
+        const renamed = `${label} renamed`;
+        h.controller.updateLayerEditorName(editor, renamed);
+        assert.equal(h.controller.activeTool, active, "renaming never activates an editor");
+        assert.equal(h.doc.activeElement, h.map);
+        assert.equal(tab.textContent, action);
+        assert.equal(tab.getAttribute("aria-label"), `${action} ${renamed}`);
+        assert.equal(tab.title, `${action} ${renamed}`);
+        tab.dispatchEvent(new Event("click"));
+        assert.equal(h.controller.activeTool, editor);
+        assert.equal(h.dockTitle.hidden, true);
+        assert.equal(context.hidden, true, "the editor owns the visible target");
+        h.controller[hide]();
+        assert.equal(tab.getAttribute("aria-label"), action, "closing clears the target");
+        assert.equal(tab.title, "");
+        h.controller[show]("New target");
+        assert.equal(tab.getAttribute("aria-label"), `${action} New target`);
+        assert.equal(tab.title, `${action} New target`);
+        h.map.focus();
+    }
     h.controller.destroy();
 });
