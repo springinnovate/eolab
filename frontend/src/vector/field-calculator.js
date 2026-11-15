@@ -155,6 +155,14 @@ export class VectorFieldCalculator {
         this.dialog.addEventListener("click", event => {
             if (!this.picker.contains(event.target) && !this.insert.contains(event.target)) this.closePicker();
         });
+        this.dialog.addEventListener("focusin", event => {
+            if (!this.picker.contains(event.target) && event.target !== this.insert) this.closePicker();
+        });
+        this.dialog.addEventListener("keydown", event => {
+            if (event.key === "Escape" && !this.picker.hidden) {
+                event.preventDefault(); event.stopPropagation(); this.closePicker(); this.insert.focus();
+            }
+        });
         this.cancelEdit.addEventListener("click", () => { this.restoreNewDraft(); this.name.focus(); });
         this.undo.addEventListener("click", () => { void this.undoDeletion(); });
         this.retry.addEventListener("click", () => { void this.retryMapRefresh(); });
@@ -371,7 +379,6 @@ export class VectorFieldCalculator {
      * @param {KeyboardEvent} event Picker key event. @return {void}
      */
     navigatePicker(event) {
-        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); this.closePicker(); this.insert.focus(); }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
             const index = this.optionButtons.indexOf(this.document.activeElement);

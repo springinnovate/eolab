@@ -217,6 +217,37 @@ test("the picker stays within the viewport and closes with its dialog or a scrol
     assert.equal(c.insert.getAttribute("aria-expanded"), "false");
 });
 
+test("tabbing out of field choices uncovers the focused editor without changing its text", t => {
+    const {calculator: c} = calculatorFixture(t);
+    enterDraft(c, "Density", "'Population total' / 10");
+    c.insert.click();
+    for (const target of [c.search, c.optionButtons[0], c.insert, c.expression]) {
+        const event = new Event("focusin");
+        Object.defineProperty(event, "target", {value: target});
+        c.dialog.dispatchEvent(event);
+        assert.equal(c.picker.popoverOpen, target !== c.expression);
+    }
+    assert.equal(c.expression.value, "'Population total' / 10");
+    assert.equal(c.insert.getAttribute("aria-expanded"), "false");
+});
+
+test("Escape from Insert field dismisses its choices before the dialog", t => {
+    const {calculator: c, document} = calculatorFixture(t);
+    c.insert.click();
+    c.insert.focus();
+    const escape = new Event("keydown", {cancelable: true});
+    Object.defineProperty(escape, "key", {value: "Escape"});
+    c.dialog.dispatchEvent(escape);
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(c.picker.popoverOpen, false);
+    assert.equal(c.dialog.open, true);
+    assert.equal(document.activeElement, c.insert);
+    const secondEscape = new Event("keydown", {cancelable: true});
+    Object.defineProperty(secondEscape, "key", {value: "Escape"});
+    c.dialog.dispatchEvent(secondEscape);
+    assert.equal(secondEscape.defaultPrevented, false);
+});
+
 test("Calculate retries failed advisory validation without requiring an input change", async t => {
     let attempts = 0, finishRetry;
     const {calculator: c, calculations} = calculatorFixture(t, {
