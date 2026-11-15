@@ -622,6 +622,7 @@ export class MapLayerStackView {
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
+            addView.title = "Create an independently styled copy without changing the original data.";
             layerActions.append(addView);
         }
         const utilities = this.documentContext.createElement("div");
@@ -639,7 +640,7 @@ export class MapLayerStackView {
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
             )] : [])
         );
-        const details = this.#buildDetails(layer, typeLabel, utilities, focusTargets);
+        const details = this.#buildDetails(layer, utilities, focusTargets);
         if (legend) details.panel.append(legend.panel);
         layerActions.append(details.trigger);
         rowActions.append(styleActions, layerActions);
@@ -669,40 +670,25 @@ export class MapLayerStackView {
     }
 
     /**
-     * Build a collapsed full layer name, source description and utility actions.
-     * The explicit layer kind controls presentation only; source identity,
-     * owner-specific attribution and action permissions remain unchanged.
+     * Build More actions with distinct source information and owner attribution.
+     * The card already shows the full name and data type; repeat neither here.
+     * Source identity and action permissions remain unchanged.
      * @param {MapLayerStackSnapshot} layer Current owner-supplied presentation.
-     * @param {string} typeLabel Readable source type, such as Raster or Shared layer.
      * @param {HTMLDivElement} utilities Existing zoom, naming, metadata and download actions.
      * @param {Map<string,Element>} focusTargets Controls keyed for focus restoration.
      * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}} Details controls and current expansion state.
      */
-    #buildDetails(layer, typeLabel, utilities, focusTargets) {
+    #buildDetails(layer, utilities, focusTargets) {
         const panel = this.documentContext.createElement("div");
         panel.className = "map-layer-details";
         panel.id = `map-layer-details-${encodeURIComponent(layer.key)}`;
         panel.setAttribute("role", "group");
         panel.setAttribute("aria-label", `More actions for ${layer.label}`);
-        const name = this.documentContext.createElement("strong");
-        name.className = "map-layer-details-name";
-        name.textContent = layer.label;
-        panel.append(name);
-        const type = this.documentContext.createElement("p");
-        type.className = "map-layer-type";
-        type.textContent = typeLabel;
-        panel.append(type);
-        if (layer.sourceName) {
+        if (layer.sourceName && layer.sourceName !== layer.label) {
             const source = this.documentContext.createElement("p");
             source.className = "map-layer-source";
             source.textContent = `${layer.isCustom ? "Based on" : "Source"}: ${layer.sourceName}`;
             panel.append(source);
-        }
-        if (layer.item !== null) {
-            const notice = this.documentContext.createElement("p");
-            notice.className = "map-layer-source-notice";
-            notice.textContent = "The original Catalog dataset stays unchanged.";
-            panel.append(notice);
         }
         if (layer.attribution) {
             const attribution = this.documentContext.createElement("p");

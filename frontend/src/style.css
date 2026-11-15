@@ -851,7 +851,6 @@ h5 {
 .map-layer-details { grid-column: 1 / -1; display: grid; gap: 3px; min-width: 0; margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border-2); color: var(--text-2); font-size: var(--font-size-support); }
 .map-layer-details[hidden] { display: none; }
 .map-layer-details p { margin: 0; overflow-wrap: anywhere; }
-.map-layer-details-name { overflow-wrap: anywhere; }
 .raster-layer-visibility {
   flex: 1;
   display: flow-root;

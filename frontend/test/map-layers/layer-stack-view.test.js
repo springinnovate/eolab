@@ -395,11 +395,10 @@ test("Catalog and Custom rows share one unchanged order and use explicit layer m
   const details = elementsByClass(rows[0], "map-layer-details")[0];
   assert.equal(details.hidden, true);
   assert.equal(elementsByClass(details, "map-layer-source")[0].textContent, "Based on: temperature.tif");
-  assert.equal(elementsByClass(details, "map-layer-source-notice")[0].textContent,
-    "The original Catalog dataset stays unchanged.");
+  assert.match(actionControl(rows[0], "add-view").title, /without changing the original data/);
 });
 
-test("More actions exposes full names and preserves disclosure and utility focus through refresh and reorder", () => {
+test("full names stay on the card while More actions preserves disclosure and utility focus through refresh and reorder", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const layers = LAYERS.map(layer => ({ ...layer, isCustom: false }));
   layers[0].label = "A long temperature dataset name with <literal> text and no abbreviation";
@@ -417,7 +416,7 @@ test("More actions exposes full names and preserves disclosure and utility focus
   trigger.dispatchEvent(new Event("click"));
   assert.equal(panel.hidden, false);
   assert.equal(trigger.getAttribute("aria-expanded"), "true");
-  const name = elementsByClass(panel, "map-layer-details-name")[0];
+  const name = elementsByClass(row, "raster-layer-name")[0];
   assert.equal(name.textContent, layers[0].label);
   assert.equal(name.children.length, 0);
   actionControl(row, "zoom").focus();
@@ -425,7 +424,7 @@ test("More actions exposes full names and preserves disclosure and utility focus
   row = list.children[1];
   panel = elementsByClass(row, "map-layer-details")[0];
   assert.equal(panel.hidden, false);
-  assert.equal(elementsByClass(panel, "map-layer-details-name")[0].textContent, layers[0].label);
+  assert.equal(elementsByClass(row, "raster-layer-name")[0].textContent, layers[0].label);
   assert.equal(doc.activeElement, actionControl(row, "zoom"));
   panel.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
   assert.equal(panel.hidden, true);
@@ -1506,7 +1505,7 @@ test("layer types and owner style targets distinguish annotations without embedd
     const shared = { ...LAYERS[0], key: "shared", item: null, isCustom: true, datasetKind: "annotation", typeLabel: "Shared annotation", stylePanelId: "annotations-panel" };
     view.render([shared], null);
     const row = doc.querySelector("#raster-layer-list").children[0];
-    assert.equal(elementsByClass(row, "map-layer-type")[0].textContent, "Shared annotation");
+    assert.equal(elementsByClass(row, "map-layer-kind")[0].textContent, "Custom · Shared annotation");
     assert.match(row.getAttribute("aria-label"), /shared annotation layer/);
     assert.match(row.getAttribute("aria-label"), /; Custom$/);
     assert.equal(actionControl(row, "style").getAttribute("aria-controls"), "annotations-panel");
@@ -1517,12 +1516,13 @@ test("More actions retains owner provenance while the primary action remains dir
   const view = new MapLayerStackView(documentContext);
   const primaryControl = documentContext.createElement("div");
   const draw = documentContext.createElement("button"); primaryControl.append(draw);
-  const layer = { ...LAYERS[0], attribution: "Shared by Maria · Watersheds", primaryControl };
+  const layer = { ...LAYERS[0], sourceName: LAYERS[0].label, attribution: "Shared by Maria · Watersheds", primaryControl };
   view.render([layer], null);
   const row = documentContext.querySelector("#raster-layer-list").children[0];
   const attribution = elementsByClass(row, "map-layer-attribution")[0];
   const details = elementsByClass(row, "map-layer-details")[0];
   assert.equal(attribution.textContent, layer.attribution);
+  assert.equal(elementsByClass(details, "map-layer-source").length, 0, "the displayed name is not repeated as source information");
   assert.ok(details.contains(attribution));
   assert.equal(details.hidden, true);
   assert.equal(row.children.includes(attribution), false);
