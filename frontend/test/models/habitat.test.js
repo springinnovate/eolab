@@ -210,11 +210,23 @@ for (const area of [undefined, {kind: "wholeRaster"}]) test(`Habitat retains a s
 
 test("Default GEE setup requires a preparation selection even when the map cannot supply one", async () => {
     const h = await fixture({area: undefined});
+    const areaChoice = h.view.setup.inputs.area.preparationSelection;
+    assert.equal(areaChoice.source.parentElement.textContent, "Analysis area");
+    assert.equal(areaChoice.source.children[0].textContent, "Choose an area…");
+    assert.equal(areaChoice.help.textContent, "Areas are configured by your administrator.");
+    assert.equal(areaChoice.status.textContent, "");
+    assert.equal(areaChoice.status.hidden, true);
+    assert.equal(areaChoice.sourceDetails.hidden, true);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     assert.equal(h.controller.state.draft.inputs.area.area, null);
     assert.equal(h.view.setup.run.disabled, true);
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "no-area"), /Catalog selection/i);
     await choosePreparationSelection(h);
+    assert.equal(areaChoice.status.hidden, false);
+    assert.equal(areaChoice.sourceDetails.hidden, false);
+    assert.equal(Boolean(areaChoice.sourceDetails.open), false);
+    assert.equal(areaChoice.sourceDetails.children[0].textContent, "Area source");
+    assert.equal(areaChoice.selectionDetails.parentElement, areaChoice.sourceDetails);
     assert.equal(h.view.setup.run.disabled, false);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "preparation-selection").inputs.area,
         {kind: "catalogSelection", selection: preparationSelections[0]});
@@ -919,7 +931,8 @@ for (const cachedTiles of [0, 2, 4]) test("preparation selection with " + cached
     await choosePreparationSelection(h);
     const controls = h.view.setup.inputs.area.preparationSelection;
     assert.equal(controls.status.getAttribute("role"), "status");
-    assert.equal(controls.source.getAttribute("aria-describedby"), controls.selectionDetails.id + " " + controls.status.id);
+    assert.equal(controls.status.hidden, false);
+    assert.equal(controls.source.getAttribute("aria-describedby"), controls.status.id);
     assert.equal(h.view.setup.run.disabled, cachedTiles === 0);
     if (cachedTiles === 0) {
         assert.match(controls.status.textContent, /No prepared inputs.*area and year/);
@@ -1066,7 +1079,7 @@ test("switching to preparation selections closes a hidden manual area editor whi
     edit(h.view.setup.inputs.stack.source, "earthEngine");
     assert.equal(h.controller.state.draft.inputs.area.filterEditing, false);
     await choosePreparationSelection(h);
-    assert.equal(h.view.setup.inputs.area.preparationSelection.source.parentElement.textContent, "Prepared analysis area");
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.parentElement.textContent, "Analysis area");
     await h.controller.submit(); assert.equal(h.requests.length, 1);
     await h.controller.duplicateRun();
     await chooseVector(h, "references", h.context.vectors[1], "South");
@@ -1086,8 +1099,8 @@ test("off-map preparation selections show authoritative titles, layers and disti
     h.controller.chooseModel(habitat); await settle();
     const controls = h.view.setup.inputs.area.preparationSelection;
     assert.equal(requests.length, 1, "Selections sharing an Item use one metadata read");
-    assert.match(controls.source.children[1].textContent, /watersheds.*basins.*North/);
-    assert.match(controls.source.children[2].textContent, /watersheds.*basins.*South/);
+    assert.equal(controls.source.children[1].textContent, 'basins · BASIN equals "North"');
+    assert.equal(controls.source.children[2].textContent, 'basins · BASIN equals "South"');
     await choosePreparationSelection(h, 1);
     edit(h.view.setup.inputs.references.source, "raster:" + modelSourceKey(h.context.rasters[3])); await settle();
     assert.equal(h.view.setup.run.disabled, false, "Title retrieval does not gate selection or coverage");
@@ -1095,6 +1108,7 @@ test("off-map preparation selections show authoritative titles, layers and disti
     requests[0].resolve({collection: selection.collectionId, id: selection.itemId, properties: {title: "River basins <img src=x>"}}); await settle();
     assert.equal(h.doc.activeElement, source);
     assert.match(controls.selectionDetails.textContent, /River basins <img src=x>.*basins.*South/);
+    assert.ok(controls.selectionDetails.textContent.includes("Source: eolab-mounted-vectors / watersheds / data"));
     assert.equal(controls.root.querySelectorAll("img").length, 0);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "exact-selection").inputs.area,
         {kind: "catalogSelection", selection: preparationSelections[1]});
@@ -1106,7 +1120,8 @@ test("failed or stale Catalog title reads never block or rename a later preparat
     h.controller.chooseModel(habitat); await settle();
     await choosePreparationSelection(h); await chooseVector(h, "references", h.context.vectors[0], "North");
     assert.equal(h.view.setup.run.disabled, false);
-    assert.match(h.view.setup.inputs.area.preparationSelection.selectionDetails.textContent, /^watersheds/);
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.children[1].textContent, 'basins · BASIN equals "North"');
+    assert.match(h.view.setup.inputs.area.preparationSelection.selectionDetails.textContent, /^basins.*watersheds/);
     let finish, signal;
     h.api.getCatalogItem = (_source, requestSignal) => new Promise(resolve => { finish = resolve; signal = requestSignal; });
     h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
@@ -1114,6 +1129,49 @@ test("failed or stale Catalog title reads never block or rename a later preparat
     assert.equal(signal.aborted, true);
     finish({id: selection.itemId, properties: {title: "Stale title"}}); await settle();
     assert.equal(h.controller.state.draft.model.id, model.id);
+});
+
+test("matching area labels identify their sources and assets without repeating the layer name", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    const choices = [
+        {...structuredClone(selection), itemId: "area-a"},
+        {...structuredClone(selection), itemId: "area-b"},
+        {...structuredClone(selection), itemId: "area-a", assetKey: "other-polygons"},
+    ];
+    h.api.getHabitatPreparationSelections = async () => ({selections: choices});
+    h.api.getCatalogItem = async source => ({id: source.itemId, properties: {title: "study.gpkg — basins"}});
+    h.controller.chooseModel(habitat); await settle();
+    const controls = h.view.setup.inputs.area.preparationSelection;
+    assert.deepEqual(controls.source.children.slice(1).map(option => option.textContent), choices.map(choice =>
+        `study.gpkg — basins · BASIN equals "North" · Source: eolab-mounted-vectors / ${choice.itemId} / ${choice.assetKey}`));
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    await choosePreparationSelection(h, 2);
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "distinct-source").inputs.area.selection, choices[2]);
+    assert.ok(controls.selectionDetails.textContent.endsWith("Source: eolab-mounted-vectors / area-a / other-polygons"));
+    h.api.getHabitatPreparationSelections = async () => ({selections: [...choices].reverse()});
+    controls.refresh.dispatchEvent(new Event("click")); await settle();
+    assert.equal(controls.source.value, "0");
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "reordered-source").inputs.area.selection, choices[2]);
+});
+
+test("area titles preserve their text without appending an already named layer", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    for (const [title, label] of [
+        ["basins", "basins"],
+        ["workshop/regions.gpkg — basins", "workshop/regions.gpkg — basins"],
+        ["Authored study — basins", "Authored study — basins"],
+        ["Authored basin study", "Authored basin study · basins"],
+        ["Authored study — basins expanded", "Authored study — basins expanded · basins"],
+    ]) {
+        h.api.getCatalogItem = async source => ({id: source.itemId, properties: {title}});
+        h.controller.chooseModel(habitat); await settle();
+        const controls = h.view.setup.inputs.area.preparationSelection;
+        assert.equal(controls.source.children[1].textContent, `${label} · BASIN equals "North"`);
+        await choosePreparationSelection(h, 1);
+        assert.equal(controls.selectionDetails.textContent,
+            `${label} · BASIN equals "South" · Source: eolab-mounted-vectors / watersheds / data`);
+        assert.deepEqual(h.controller.state.draft.setupState.selectedSelection, preparationSelections[1]);
+    }
 });
 
 test("preparation refresh matches descriptors across option reorder without selecting another filter", async t => {
