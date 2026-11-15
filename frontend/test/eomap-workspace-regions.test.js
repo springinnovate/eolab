@@ -481,7 +481,7 @@ test("sidebar panels own deliberate, independent scrolling", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.panel-content\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:[^}]*var\(--workspace-column-rail-width\)[^}]*var\(--workspace-catalog-track\)[^}]*var\(--workspace-map-layers-track\)[^}]*overflow:\s*hidden/s
+        /\.panel-content\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*var\(--workspace-catalog-track\)\s+var\(--workspace-map-layers-track\)[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
@@ -568,7 +568,7 @@ test("CSS allocates wide space and intentional medium and narrow overlays", () =
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 899px\)\s*\{[\s\S]*?\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[\s\S]*?\.workspace-disclosure\s*\{[^}]*width:\s*100%[^}]*writing-mode:\s*horizontal-tb/s
+        /@container workspace-sidebar \(max-width: 699px\)\s*\{[\s\S]*?\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[\s\S]*?\.workspace-disclosure\s*\{[^}]*width:\s*100%[^}]*writing-mode:\s*horizontal-tb/s
     );
     assert.match(
         STYLESHEET,
