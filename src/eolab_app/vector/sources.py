@@ -260,13 +260,9 @@ class MountedVectorResolver:
             )
         relative_path = Path(asset_uri_path[len(mount_uri_path) + 1:])
         try:
-            source_path = (self._scan_mount_path / relative_path).resolve(
-                strict=True
-            )
+            source_path = (self._scan_mount_path / relative_path).resolve(strict=True)
         except OSError as error:
-            raise VectorConflictError(
-                "The cataloged vector source is no longer available"
-            ) from error
+            raise VectorConflictError("This vector source is unavailable.") from error
         if not source_path.is_relative_to(self._scan_mount_path.resolve()):
             raise VectorAssetError(
                 "The vector Asset is outside the mounted scan source"
