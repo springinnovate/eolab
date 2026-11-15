@@ -163,6 +163,121 @@ test("checkbox selection history does not change mixed profile chart or table or
     .map(element => element.getAttribute("aria-label")), ["A2: 2", "M: 3", "Z1: 1"]);
 });
 
+test("field selection, search and bulk actions retain focused checkbox controls", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation());
+  const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  const originalRows = [...list.children];
+  const checkbox = originalRows.find(row => row.children[0].value === "R2000").children[0];
+  checkbox.focus();
+  checkbox.checked = false;
+  checkbox.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(checkbox), true);
+  assert.ok(h.documentContext.activeElement === checkbox);
+  assert.ok(list.children.every((row, index) => row === originalRows[index]));
+  const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
+  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R1999", "R2001"]);
+
+  let createdElements = 0;
+  const createElement = h.documentContext.createElement.bind(h.documentContext);
+  h.documentContext.createElement = tag => {
+    createdElements++;
+    return createElement(tag);
+  };
+  const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
+  search.focus();
+  search.value = "R20";
+  search.dispatchEvent(new Event("input"));
+  assert.equal(createdElements, 0);
+  assert.ok(h.documentContext.activeElement === search);
+  assert.ok(list.children.every((row, index) => row === originalRows[index]));
+  assert.deepEqual(list.children.filter(row => !row.hidden).map(row => row.children[0].value), ["R2000", "R2001"]);
+
+  h.documentContext.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
+  assert.equal(checkbox.checked, true);
+  h.documentContext.querySelector("#vector-feature-profile-clear-fields").dispatchEvent(new Event("click"));
+  assert.ok(list.children.every(row => !row.children[0].checked));
+  checkbox.focus();
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new Event("change"));
+  assert.ok(h.documentContext.activeElement === checkbox);
+  assert.ok(list.children.every((row, index) => row === originalRows[index]));
+  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R2000"]);
+});
+
+test("retained field controls follow current feature values and source selections", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation());
+  const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  const r2000 = list.children.find(row => row.children[0].value === "R2000");
+  h.controller.setCurrentObservation(observation({ properties: { R2000: null, R2001: 8, A2: 2 } }));
+  assert.ok(list.children.find(row => row.children[0].value === "R2000") === r2000);
+  assert.equal(r2000.children[2].textContent, "No value");
+  assert.equal(r2000.children[0].checked, true);
+  assert.deepEqual(list.children.map(row => row.children[0].value), ["A2", "R1999", "R2000", "R2001"]);
+
+  h.controller.setCurrentObservation(observation({ sourceId: "other", properties: { R2000: 20, R2002: 22 } }));
+  assert.ok(list.children.find(row => row.children[0].value === "R2000") === r2000);
+  assert.equal(r2000.children[2].textContent, "20");
+  r2000.children[0].checked = false;
+  r2000.children[0].dispatchEvent(new Event("change"));
+  const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
+  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R2002"]);
+  h.controller.setCurrentObservation(observation());
+  assert.equal(r2000.children[0].checked, true);
+  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R1999", "R2000", "R2001"]);
+
+  h.controller.setCurrentObservation(null);
+  assert.equal(list.children.length, 0);
+  h.controller.setCurrentObservation(observation({ sourceId: "other", properties: { R2000: 30, R2002: 32 } }));
+  assert.deepEqual(list.children.map(row => [row.children[0].value, row.children[0].checked]), [["R2000", false], ["R2002", true]]);
+});
+
+test("removing focused missing fields moves to a visible neighbor, then Find fields", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation({ properties: { R1999: 1, R2000: 2, R2001: 3 } }));
+  h.controller.setCurrentObservation(observation({ properties: {} }));
+  const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
+  const [first, middle, last] = list.children.map(row => row.children[0]);
+
+  middle.focus();
+  middle.checked = false;
+  middle.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(middle), false);
+  assert.ok(h.documentContext.activeElement === last);
+  assert.equal(list.contains(h.documentContext.activeElement), true);
+
+  last.checked = false;
+  last.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(last), false);
+  assert.ok(h.documentContext.activeElement === first);
+  assert.equal(list.contains(h.documentContext.activeElement), true);
+
+  first.checked = false;
+  first.dispatchEvent(new Event("change"));
+  assert.equal(list.children.length, 0);
+  assert.ok(h.documentContext.activeElement === search);
+});
+
+test("removing a focused missing field never focuses a filtered-out neighbor", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation({ properties: { R1999: 1, R2000: 2 } }));
+  h.controller.setCurrentObservation(observation({ properties: { R2000: 3 } }));
+  const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
+  const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
+  search.value = "1999";
+  search.dispatchEvent(new Event("input"));
+  const missing = list.children[0].children[0];
+  missing.focus();
+  missing.checked = false;
+  missing.dispatchEvent(new Event("change"));
+  assert.equal(list.contains(missing), false);
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].hidden, true);
+  assert.ok(h.documentContext.activeElement === search);
+});
+
 test("controller plots suggested fields and updates from partial search actions", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
