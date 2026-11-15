@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { FakeRasterControlDocument } from "../raster/fake-controls-document.js";
+import { createFakeResizeObservers } from "../raster/fakes.js";
 
 /** Current application markup used by every summary-view interaction test. */
 export const SUMMARY_MARKUP = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
@@ -9,7 +10,8 @@ export class SummaryControlDocument extends FakeRasterControlDocument {
     /** @param {string} [markup=SUMMARY_MARKUP] Current HTML, optionally mutated to test the contract. */
     constructor(markup = SUMMARY_MARKUP) {
         super();
-        this.defaultView = Object.assign(new EventTarget(), this.defaultView);
+        this.defaultView = Object.assign(new EventTarget(), this.defaultView,
+            {ResizeObserver: createFakeResizeObservers().ResizeObserver});
         this.controlIds = new Set([...markup.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]));
         this.queries = new Set();
     }

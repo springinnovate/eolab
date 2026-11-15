@@ -151,6 +151,9 @@ export class VectorFieldCalculator {
         this.search.addEventListener("input", () => this.renderOptions());
         this.picker.addEventListener("keydown", event => this.navigatePicker(event));
         this.document.defaultView.addEventListener("resize", () => this.positionPicker());
+        /** @type {ResizeObserver} Align the open picker after the retained dialog finishes reflowing. */
+        this.pickerLayoutObserver = new this.document.defaultView.ResizeObserver(() => this.positionPicker());
+        this.pickerLayoutObserver.observe(this.dialog);
         this.dialog.addEventListener("scroll", () => this.positionPicker(), true);
         this.dialog.addEventListener("click", event => {
             if (!this.picker.contains(event.target) && !this.insert.contains(event.target)) this.closePicker();
