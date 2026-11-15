@@ -2184,3 +2184,74 @@ test("shared category members retain independent inclusion, visibility, disclosu
   assert.equal(elementsByClass(legend.contents, "map-layer-legend-list").length, 0);
   assert.equal(legend.choices.children.length, 3);
 });
+
+
+test("opacity-only rendering retains controls, rename text, disclosures and scroll with constant row work", t => {
+  const measurements = [];
+  for (const size of [1, 10, 50, 100]) {
+    const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+    let layers = Array.from({ length: size }, (_, index) => ({ ...LAYERS[0], key: `layer-${index}`, label: `Layer ${index}` }));
+    view.render(layers, layers[0].key);
+    const key = layers[0].key;
+    actionControl(view.list.children[0], "details").dispatchEvent(new Event("click"));
+    actionControl(view.list.children[0], "legend").dispatchEvent(new Event("click"));
+    actionControl(view.list.children.at(-1), "rename").dispatchEvent(new Event("click"));
+    const rename = view.renameEditor.input;
+    rename.value = "Unfinished layer name";
+    rename.focus();
+    view.scrollContainer.scrollTop = 137;
+    const rows = [...view.list.children];
+    const controls = rows.map(row => ["visibility", "style", "rename", "legend-inclusion"].map(action => actionControl(row, action)));
+    let elements = 0, listeners = 0;
+    const createElement = doc.createElement.bind(doc);
+    doc.createElement = tag => {
+      elements++;
+      const element = createElement(tag), addEventListener = element.addEventListener.bind(element);
+      element.addEventListener = (...args) => { listeners++; return addEventListener(...args); };
+      return element;
+    };
+    for (let index = 0; index < 20; index++) {
+      layers = [{ ...layers[0], opacity: index / 20 }, ...layers.slice(1)];
+      view.render(layers, key, null, key);
+    }
+    assert.deepEqual([...view.list.children], rows);
+    for (let index = 0; index < rows.length; index++) {
+      assert.deepEqual(["visibility", "style", "rename", "legend-inclusion"].map(action => actionControl(rows[index], action)), controls[index]);
+    }
+    assert.equal(view.renameEditor.input, rename);
+    assert.equal(rename.value, "Unfinished layer name");
+    assert.equal(doc.activeElement, rename);
+    assert.equal(view.scrollContainer.scrollTop, 137);
+    assert.equal(view.details.get(key).expanded, true);
+    assert.equal(view.legends.get(key).expanded, true);
+    const ramps = elementsByClass(rows[0], "map-layer-legend-gradient");
+    assert.equal(ramps.length, 2);
+    assert.ok(ramps.every(ramp => ramp.children[0].style.opacity === "0.95"));
+    measurements.push({ layers: size, elements, listeners });
+    assert.equal(listeners, 0, "decorative updates attach no interaction listeners");
+    assert.equal(elements, measurements[0].elements, "work does not scale with unrelated rows");
+    view.unbind();
+  }
+  t.diagnostic(JSON.stringify(measurements));
+});
+
+test("opacity-only rendering preserves legend controls for fixed, classified and locked presentation", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const symbol = { shape: "polygon", fill: "#123456", fillOpacity: 0.4, stroke: "#654321", strokeOpacity: 0.8, strokeWidth: 2 };
+  for (const legend of [{ kind: "fixed", label: "Sites", symbol }, { kind: "categories", label: "Risk", entries: [{ label: "High", symbol }] }]) {
+    const layer = { ...LAYERS[0], legend }, key = layer.key;
+    view.render([layer], key);
+    const row = view.list.children[0], inclusion = actionControl(row, "legend-inclusion");
+    inclusion.focus();
+    for (const [opacity, effectiveOpacity, expected] of [[0, undefined, 0], [0.25, undefined, 0.25], [0.25, 1, 1]]) {
+      view.render([{ ...layer, opacity, effectiveOpacity }], key, null, key);
+      const shape = elementsByClass(row, "map-layer-legend-swatch")[0].children[0].children[0];
+      assert.equal(shape.getAttribute("fill-opacity"), String(0.4 * expected));
+      assert.equal(shape.getAttribute("stroke-opacity"), String(0.8 * expected));
+      assert.equal(doc.activeElement, inclusion);
+      assert.equal(actionControl(row, "legend-inclusion"), inclusion);
+      if (legend.kind === "categories") assert.equal(elementsByClass(row, "map-layer-legend-palette")[0].children[0].style.opacity, String(0.4 * expected));
+    }
+  }
+  view.unbind();
+});

@@ -92,8 +92,8 @@ export class MapLayerController {
      * @param {Object} configuration Controller collaborators.
      * @param {Object} configuration.leafletMap Leaflet-compatible map.
      * @param {MapLayerStackView} [configuration.view] Layer-list DOM adapter.
-     * @param {(layers:Object[])=>void} [configuration.onLayersChange]
-     * Presentation change observer.
+     * @param {(layers:Object[],change?:{kind:"opacity",key:string}|null)=>void} [configuration.onLayersChange]
+     * Presentation observer; an opacity hint lets composition skip consumers whose inputs did not change.
      * @param {(layers:Object[])=>void} [configuration.onOrderChange]
      * Observer for explicit reorders, excluding restoration and asynchronous layer additions.
      * @param {(item:Object)=>void} [configuration.onItemZoom] Requests that a
@@ -614,7 +614,7 @@ export class MapLayerController {
         this.view.setStatus(
             `${entry.label} opacity is ${Math.round(opacity * 100)} percent.`
         );
-        this.render();
+        this.render(null, key);
     }
 
     /**
@@ -1165,9 +1165,11 @@ export class MapLayerController {
      * Render and publish current retained-layer state.
      *
      * @param {{key:string,action:string}|null} [requestedFocus=null] Focus hint.
+     * @param {string|null} [opacityKey=null] Retained key when only its opacity changed;
+     * preserves row controls while still updating the complete rendering plan.
      * @return {void}
      */
-    render(requestedFocus = null) {
+    render(requestedFocus = null, opacityKey = null) {
         const layers = this.snapshots();
         this.leafletLayers.render(
             this.stack.entries.map((entry) => {
@@ -1180,8 +1182,8 @@ export class MapLayerController {
                 };
             })
         );
-        this.view.render(layers, this.presentationActiveKey, requestedFocus);
-        this.onLayersChange(layers);
+        this.view.render(layers, this.presentationActiveKey, requestedFocus, opacityKey);
+        this.onLayersChange(layers, opacityKey === null ? null : { kind: "opacity", key: opacityKey });
     }
 
     /**

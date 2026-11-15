@@ -309,7 +309,7 @@ test("successful catalog additions reveal Map contents through composition", () 
     );
     assert.match(
         COMPOSITION_SOURCE,
-        /onLayersChange: \(layers\) => \{[\s\S]*?!layers\.some\(\(layer\) =>[\s\S]*?layer\.capabilities\?\.statistics && layer\.visible[\s\S]*?mapInspection\.closeHistogram\(false\);/
+        /onLayersChange: \(layers, change\) => \{[\s\S]*?!layers\.some\(\(layer\) =>[\s\S]*?layer\.capabilities\?\.statistics && layer\.visible[\s\S]*?mapInspection\.closeHistogram\(false\);/
     );
     assert.doesNotMatch(COMPOSITION_SOURCE, /layoutController\.showWorkspace\("histogram"\)/);
     assert.match(COMPOSITION_SOURCE, /new MapInspectionController\(/);

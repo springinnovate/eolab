@@ -840,8 +840,14 @@ async function initializeCatalog(
         leafletMap,
         view: mapLayerStackView,
         leafletLayers,
-        onLayersChange: (layers) => {
+        onLayersChange: (layers, change) => {
             mapLegend.update(layers);
+            if (change?.kind === "opacity") {
+                layerStyleEditor?.refresh();
+                mapFeatureHover?.hide();
+                savedMapViewController?.scheduleRemember();
+                return;
+            }
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
             rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.capabilities?.calculations), temporalDatasets(layers));
