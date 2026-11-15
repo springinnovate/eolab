@@ -577,14 +577,6 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div id="map-tools-toolbar" class="map-tool-openers" role="region" aria-label="Map tools">
-        <div class="map-tools-toolbar-actions">
-          <button id="toggle-map-inspection-dock" class="analysis-panel-action"
-            type="button" aria-controls="map-inspection"
-            aria-expanded="true" hidden>Minimize</button>
-          <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
-            popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
-            aria-label="Map and analysis tools">Tools <span aria-hidden="true">▾</span></button>
-        </div>
         <section id="raster-sampling-tool" aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
@@ -662,6 +654,14 @@
                       Select a raster to choose its sample area.
                     </p>
         </section>
+        <div class="map-tools-toolbar-actions">
+          <button id="toggle-map-inspection-dock" class="analysis-panel-action"
+            type="button" aria-controls="map-inspection"
+            aria-expanded="true" hidden>Minimize</button>
+          <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
+            popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
+            aria-label="Map and analysis tools">Tools <span aria-hidden="true">▾</span></button>
+        </div>
         <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
