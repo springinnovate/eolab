@@ -4,10 +4,11 @@ import {
     normalizeVectorCategorySummary,
     normalizeVectorNumericClassification,
 } from "./style.js";
+import { validateCalculatedFields } from "../calculated-fields.js";
 
 /**
  * Path-free identity supplied by vector source selection.
- * @typedef {{collectionId:string,itemId:string}|{uploadId:string}|{kind:"runArtifact",jobId:string,artifactId:string}} VectorFieldValueSource
+ * @typedef {({collectionId:string,itemId:string}|{uploadId:string}|{kind:"runArtifact",jobId:string,artifactId:string}) & {calculatedFields?:ReadonlyArray<import("../calculated-fields.js").CalculatedField>}} VectorFieldValueSource
  */
 
 /**
@@ -76,7 +77,8 @@ export async function getVectorFilterExtent(source, filter, signal, fetchImpleme
             headers: { Accept: "application/json", "Content-Type": "application/json",
                 ...(uploaded ? {"X-EOLab-Uploads": "1"} : artifact ? {"X-EOLab-Processing": "1"} : {}) },
             body: JSON.stringify({ ...(artifact ? {} : uploaded ? {uploadId: source.uploadId}
-                : {collectionId: source.collectionId, itemId: source.itemId}), filter }),
+                : {collectionId: source.collectionId, itemId: source.itemId}), filter,
+                ...(source.calculatedFields?.length ? {calculatedFields: source.calculatedFields} : {}) }),
         });
     } catch (error) {
         if (error.name === "AbortError") throw error;
@@ -101,7 +103,7 @@ export async function getVectorFilterExtent(source, filter, signal, fetchImpleme
 
 /**
  * Catalog identity or private source metadata used by vector rendering.
- * @typedef {{collection:string,id:string,properties?:Object}|UploadedVectorSource|RunArtifactVectorSource} VectorSource
+ * @typedef {({collection:string,id:string,properties?:Object}|UploadedVectorSource|RunArtifactVectorSource) & {calculatedFields?:ReadonlyArray<import("../calculated-fields.js").CalculatedField>}} VectorSource
  */
 
 /** Metadata for a generated vector read through its run owner's access boundary.
@@ -139,6 +141,75 @@ export async function describeVectorArtifact(source, signal, fetchImplementation
         throw new Error("The server returned invalid vector result metadata.");
     }
     return result;
+}
+
+/** Accepted view definitions and the metadata needed to use their values.
+ * @typedef {Object} FieldCalculationResult
+ * @property {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} calculatedFields Accepted definitions in evaluation order.
+ * @property {Object<string,string>} fields Original and calculated attribute types.
+ * @property {number} featureCount Number of original features evaluated.
+ * @property {Object<string,number>} missingCounts Number of empty results for each calculated field.
+ */
+
+/** Calculate a complete ordered set of fields over an authorized original vector.
+ * Aborting cancels server work; no field is installed by this request.
+ * @param {VectorFieldValueSource} source Path-free original source identity.
+ * @param {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} calculatedFields Complete candidate definitions.
+ * @param {AbortSignal} [signal] Cancellation of the calculation.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
+ * @return {Promise<FieldCalculationResult>} Accepted definitions, combined metadata and whole-source counts.
+ * @throws {Error} If validation or calculation fails.
+ * @throws {DOMException} If cancelled.
+ */
+export async function calculateVectorFields(source, calculatedFields, signal, fetchImplementation = globalThis.fetch) {
+    const identity = source.kind === "runArtifact" ? {kind: source.kind, jobId: source.jobId, artifactId: source.artifactId}
+        : source.uploadId ? {uploadId: source.uploadId} : {collectionId: source.collectionId, itemId: source.itemId};
+    const response = await fetchImplementation("/api/vector-calculations", {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal,
+        headers: {"Content-Type": "application/json", Accept: "application/json", "X-EOLab-Uploads": "1", "X-EOLab-Processing": "1"},
+        body: JSON.stringify({source: identity, calculatedFields}),
+    });
+    if (!response.ok) throw await vectorRenderingError(response, "field calculation");
+    const result = await response.json();
+    if (typeof result.detail === "string") throw new Error(result.detail);
+    const definitions = validateCalculatedFields(result.calculatedFields);
+    if (!result.fields || typeof result.fields !== "object" || Array.isArray(result.fields) ||
+        Object.values(result.fields).some(type => typeof type !== "string") ||
+        !Number.isSafeInteger(result.featureCount) || result.featureCount < 0 ||
+        !result.missingCounts || typeof result.missingCounts !== "object" ||
+        definitions.length !== calculatedFields.length || definitions.some((field, index) =>
+            Object.keys(field).some(key => field[key] !== calculatedFields[index][key]) ||
+            typeof result.fields[field.name] !== "string" || !Number.isSafeInteger(result.missingCounts[field.name]) ||
+            result.missingCounts[field.name] < 0 || result.missingCounts[field.name] > result.featureCount)) {
+        throw new Error("The server returned an invalid field calculation. Try again.");
+    }
+    return {...result, calculatedFields: definitions};
+}
+
+/** Check candidate formulas against the original field metadata shown by the browser.
+ * This advisory check does not read or authorize a source; calculation rechecks its actual schema.
+ * @param {ReadonlyArray<{name:string,type:string}>} fields Original fields, excluding calculated fields.
+ * @param {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} calculatedFields Complete candidate definitions in evaluation order.
+ * @param {AbortSignal} [signal] Cancellation when the draft changes.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
+ * @return {Promise<void>} Completion after the supplied formulas pass validation.
+ * @throws {Error} If a formula is invalid or validation is unavailable.
+ * @throws {DOMException} If cancelled.
+ */
+export async function validateVectorFieldCalculation(fields, calculatedFields, signal, fetchImplementation = globalThis.fetch) {
+    let response;
+    try {
+        response = await fetchImplementation("/api/vector-calculations/validate", {
+            method: "POST", credentials: "same-origin", cache: "no-store", signal,
+            headers: {"Content-Type": "application/json", Accept: "application/json"},
+            body: JSON.stringify({fields: Object.fromEntries(fields.map(({name, type}) => [name, type])), calculatedFields}),
+        });
+    } catch (error) {
+        if (error.name === "AbortError") throw error;
+        throw new Error("Could not check the expression. Check your connection, then choose Calculate to retry.");
+    }
+    if (!response.ok) throw await vectorRenderingError(response, "expression check");
+    if (response.status !== 204) throw new Error("The server returned an invalid expression check. Try again.");
 }
 
 const VECTOR_FAILURE_CATEGORIES = new Set([
@@ -195,6 +266,7 @@ async function vectorRenderingError(response, action) {
     if (typeof detail === "string" && detail.length > 0) {
         return new VectorRenderingRequestError(detail);
     }
+    if (Array.isArray(detail)) return new VectorRenderingRequestError(detail.map(error => error.msg).join("; "));
     return new VectorRenderingRequestError(
         `Vector ${action} returned ${response.status}.`
     );
@@ -238,6 +310,7 @@ async function postVectorAction(
             },
             body: JSON.stringify({
                 ...(uploaded || artifact ? {} : { collectionId: source.collection, itemId: source.id }),
+                ...(source.calculatedFields?.length ? {calculatedFields: source.calculatedFields} : {}),
                 ...additionalBody,
             }),
         });

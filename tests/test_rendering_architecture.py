@@ -41,8 +41,16 @@ def test_shared_rendering_has_no_dataset_feature_dependency() -> None:
     }
 
     assert all(
-        module.startswith("eolab_app.rendering.") for module in application_imports
+        module.startswith("eolab_app.rendering.")
+        or module == "eolab_app.calculated_fields"
+        for module in application_imports
     )
+
+
+def test_calculated_attribute_contract_has_no_feature_dependency() -> None:
+    """Keep shared arithmetic independent of source lifecycles and rendering implementations."""
+    imports = imported_modules(Path("src/eolab_app/calculated_fields.py"))
+    assert not any(module.startswith("eolab_app.") for module in imports)
 
 
 def test_artifact_previews_use_only_authorized_delivery_and_neutral_reading() -> None:

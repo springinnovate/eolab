@@ -28,6 +28,7 @@ function normalizeCustomLayerName(value) {
  * Leaflet-compatible layer for one publication.
  * @property {(record:Object)=>Object} renderDescriptor Return an authorized
  * feature-owned composite-rendering descriptor.
+ * @property {(record:Object)=>boolean} [renderingAvailable] Whether current source values have an authorized matching display; false suppresses stale tiles without changing visibility or analysis.
  * @property {(record:Object)=>Object} snapshot Return presentation-ready
  * datasetKind ("raster", "vector" or "annotation"), legend, optional role badge, and other
  * feature-owned snapshot fields.
@@ -147,6 +148,7 @@ export class MapLayerController {
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
             onFilter: (key) => this.onFilter?.(key),
+            onCalculateFields: (key) => this.onCalculateFields?.(key),
             onDownload: (key) => this.onDownload?.(key),
             onCalculate: (key) => this.onCalculate?.(key),
             onZoom: (key) => {
@@ -838,6 +840,7 @@ export class MapLayerController {
             visible: entry.visible, opacity: entry.opacity,
             ...(entry.legendIncluded === false ? {legendIncluded: false} : {}),
             item: entry.item === null ? null : {collection: entry.item.collection, id: entry.item.id},
+            ...(adapter.exportCalculatedFields ? {calculatedFields: adapter.exportCalculatedFields(record)} : {}),
             ...(entry.item === null ? {local: adapter.copyLayerForUndo(record)}
                 : {style: structuredClone(adapter.exportSavedState(record)),
                     ...(adapter.exportFilterState ? {filter: structuredClone(adapter.exportFilterState(record))} : {})}),
@@ -1126,16 +1129,17 @@ export class MapLayerController {
     snapshots() {
         return this.stack.entries.map((entry) => {
             const record = this.#requireRecord(entry.key);
+            const presentation = record.adapter.snapshot(record);
             return {
                 ...entry,
-                ...record.adapter.snapshot(record),
+                ...presentation,
                 isCustom: entry.isCustom,
                 ...(entry.group ? {group: entry.group} : {}),
                 sourceName: entry.item === null ? entry.sourceName ?? null : record.adapter.label(entry.item),
                 styleClipboard: this.#styleClipboardSnapshot(record),
                 canAddView: entry.item !== null || record.canAddView === true,
                 addingView: this.pendingAdditionalViews.has(entry.key),
-                error: record.error,
+                error: presentation.error ?? record.error,
             };
         });
     }
@@ -1170,7 +1174,7 @@ export class MapLayerController {
                 const record = this.#requireRecord(entry.key);
                 return {
                     key: entry.key,
-                    visible: entry.visible,
+                    visible: entry.visible && record.adapter.renderingAvailable?.(record) !== false,
                     opacity: entry.opacity,
                     descriptor: record.publication === null ? null : record.adapter.renderDescriptor(record),
                 };

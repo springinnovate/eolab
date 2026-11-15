@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from eolab_app.calculated_fields import CalculatedField
+
 MAX_VIEW_BYTES = 512 * 1024
 MAX_REQUEST_BYTES = MAX_VIEW_BYTES + 4096
 MAX_APPEARANCE_DEFINITION_BYTES = 65_536
@@ -194,6 +196,8 @@ class MapStyledLayer(MapDocumentPart):
     Omitted legendIncluded means to include a visible layer in the map legend.
     isCustom records the card presentation without changing its source or access.
     When omitted, the browser uses the source owner's ordinary presentation.
+    calculatedFields preserves ordered numeric definitions independently of style;
+    source access and field bindings are revalidated before restoring the view.
     """
 
     customName: Title | None = None
@@ -203,16 +207,20 @@ class MapStyledLayer(MapDocumentPart):
     opacity: Annotated[float, Field(ge=0, le=1)]
     style: Annotated[MapRasterStyle | MapVectorStyle, Field(discriminator="kind")]
     filter: dict[str, JsonValue] | None = None
+    calculatedFields: Annotated[list[CalculatedField], Field(max_length=64)] | None = (
+        None
+    )
 
     @model_validator(mode="after")
     def validate_optional_filter(self) -> Self:
-        """Match the browser's optional-object and 8,192-character filter limit.
+        """Validate optional filters and view-owned numeric definitions.
 
         Returns:
-            This layer if its filter is absent or a bounded JSON object.
+            This layer with a bounded filter and unique vector field definitions.
 
         Raises:
-            ValueError: If an explicit filter is null or exceeds the limit.
+            ValueError: If a filter is null or oversized, or calculated fields
+                are missing, duplicated or attached to a raster.
         """
         if "filter" in self.model_fields_set:
             if self.filter is None:
@@ -222,6 +230,14 @@ class MapStyledLayer(MapDocumentPart):
             )
             if len(serialized.encode("utf-16-le")) // 2 > 8192:
                 raise ValueError("A layer filter must fit within 8,192 characters.")
+        if "calculatedFields" in self.model_fields_set:
+            if self.calculatedFields is None or self.style.kind != "vector":
+                raise ValueError(
+                    "Calculated fields require a vector layer and a definition list."
+                )
+            names = [field.name for field in self.calculatedFields]
+            if len(set(names)) != len(names):
+                raise ValueError("Calculated field names must be unique within a view.")
         return self
 
 
@@ -309,6 +325,24 @@ class MapUploadLayer(MapStyledLayer):
         return self
 
 
+class MapVectorArtifactReference(MapDocumentPart):
+    """Opaque run and vector-file identifiers; source access remains browser-owned."""
+
+    jobId: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    artifactId: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    layerName: Annotated[str, StringConstraints(min_length=1, max_length=256)]
+
+
+class MapVectorArtifactLayer(MapStyledLayer):
+    """A private run-result view whose fields and appearance survive reopening.
+
+    This reference never extends run expiry or grants another browser access.
+    """
+
+    runArtifact: MapVectorArtifactReference
+    style: MapVectorStyle
+
+
 class MapAnnotationReference(MapDocumentPart):
     """Same-site invitation to a live shared layer; contains no edit credentials."""
 
@@ -360,18 +394,25 @@ class SavedMapView(MapDocumentPart):
     Catalog items, uploads and observations may appear more than once; each
     entry preserves its place in the layer order and its own appearance.
     Version three includes a basemap provider, private uploads and temporal views.
+    Version four includes calculated fields and private vector run-result views.
     Older maps without mapLegend open with the legend visible and expanded.
     """
 
     format: Literal["eolab-map-view"]
-    schemaVersion: Annotated[int, Field(ge=1, le=3)]
+    schemaVersion: Annotated[int, Field(ge=1, le=4)]
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
     basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"] | None = None
     mapLegend: MapLegendAppearance | None = None
     layers: Annotated[
-        list[MapLayer | MapUploadLayer | MapAnnotationLayer | MapTemporalLayer],
+        list[
+            MapLayer
+            | MapUploadLayer
+            | MapVectorArtifactLayer
+            | MapAnnotationLayer
+            | MapTemporalLayer
+        ],
         Field(max_length=50),
     ]
 
@@ -409,7 +450,7 @@ class SavedMapView(MapDocumentPart):
             ValueError: If fields do not match the schema version, a shared layer
                 repeats, or the document exceeds the size limit.
         """
-        if self.schemaVersion == 3:
+        if self.schemaVersion >= 3:
             if self.basemap is None:
                 raise ValueError("Saved-map version three requires a basemap provider.")
         elif "basemap" in self.model_fields_set:
@@ -418,8 +459,16 @@ class SavedMapView(MapDocumentPart):
             raise ValueError("Map legend preferences must be an object when supplied.")
         shared_layer_ids = []
         for layer in self.layers:
+            if (
+                isinstance(layer, MapVectorArtifactLayer)
+                or isinstance(layer, MapStyledLayer)
+                and "calculatedFields" in layer.model_fields_set
+            ) and self.schemaVersion < 4:
+                raise ValueError(
+                    "Calculated fields and run results require saved-map version four."
+                )
             if isinstance(layer, MapTemporalLayer):
-                if self.schemaVersion != 3:
+                if self.schemaVersion < 3:
                     raise ValueError("Temporal layers require saved-map version three.")
             elif isinstance(layer, MapAnnotationLayer):
                 if self.schemaVersion == 1:
@@ -428,7 +477,7 @@ class SavedMapView(MapDocumentPart):
                     )
                 shared_layer_ids.append(layer.sharedAnnotation.id)
             elif isinstance(layer, MapUploadLayer):
-                if self.schemaVersion != 3:
+                if self.schemaVersion < 3:
                     raise ValueError("Uploaded layers require saved-map version three.")
         if len(set(shared_layer_ids)) != len(shared_layer_ids):
             raise ValueError("A saved map cannot contain duplicate shared layers.")

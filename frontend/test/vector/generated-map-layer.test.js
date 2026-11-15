@@ -63,9 +63,10 @@ test("generated vectors retain ordinary styling, filters and run ownership acros
     assert.equal(copy.entry.label, "My processed regions");
     assert.equal(copy.entry.visible, false);
     assert.deepEqual(adapter.describeSource(copy).source, {kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId});
+    assert.equal(adapter.describeSource(copy).origin, "runArtifact");
     assert.deepEqual(adapter.describeStyle(copy).style, edited);
     assert.deepEqual(adapter.exportFilterState(copy), predicate);
-    assert.equal(adapter.describeSource(copy).selection, null);
+    assert.deepEqual(adapter.describeSource(copy).selection, {kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, layerName: "processed"});
     adapter.info(copy);
     assert.deepEqual(inspected, [run.jobId]);
     layers.removeWithUndo(copyKey);

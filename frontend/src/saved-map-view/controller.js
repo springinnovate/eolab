@@ -42,6 +42,8 @@ export class SavedMapViewController {
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreUpload Open this browser's upload with its saved appearance and return its map key, or null after supersession.
+     * @param {(record:Object)=>Object|null} [configuration.exportArtifact] Export a private vector result reference and view definitions.
+     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreArtifact] Reauthorize and restore a private vector result through its run owner.
      * @param {(record:Object)=>Object|null} configuration.exportTemporal Export a temporal selection and raster appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreTemporal Retain an independent temporal row with saved appearance; return its key, including unavailable observations shown with a row error, or null after supersession.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
@@ -73,6 +75,8 @@ export class SavedMapViewController {
         restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
         exportUpload,
         restoreUpload,
+        exportArtifact = () => null,
+        restoreArtifact = async () => { throw new Error("Run-result layers are unavailable."); },
         exportTemporal,
         restoreTemporal,
         publicationApi = null,
@@ -114,6 +118,10 @@ export class SavedMapViewController {
         this.restoreAnnotation = restoreAnnotation;
         this.exportUpload = exportUpload;
         this.restoreUpload = restoreUpload;
+        this.exportArtifact = exportArtifact;
+        this.restoreArtifact = restoreArtifact;
+        /** @type {Array<{index:number,layer:Object,origin:string}>} Failed calculated views retained for the next save or retry. */
+        this.unavailableLayers = [];
         this.exportTemporal = exportTemporal;
         this.restoreTemporal = restoreTemporal;
         this.publicationApi = publicationApi;
@@ -153,6 +161,8 @@ export class SavedMapViewController {
             onReset: () => void this.resetView(),
             onUndo: () => void this.undoReset(),
             onSavePublishedMap: fields => void this.savePublishedMapChanges(fields),
+            onShowUnavailableLayers: () => this.showUnavailableLayers(),
+            onRemoveUnavailableLayer: index => this.removeUnavailableLayer(index),
         });
     }
 
@@ -399,6 +409,54 @@ export class SavedMapViewController {
         this.#queueRemember();
     }
 
+    /** Preserve a result view's calculated definitions before its source owner removes it.
+     * The source remains inaccessible; only its identity, expressions and presentation are saved.
+     * @param {string} key Retained view about to be removed because its source is unavailable.
+     * @return {void}
+     */
+    retainUnavailableLayer(key) {
+        const records = this.mapLayers.retainedRecords;
+        const index = records.findIndex(record => record.entry.key === key);
+        if (index < 0) return;
+        const record = records[index];
+        const layer = this.exportArtifact(record);
+        if (!layer?.calculatedFields?.length) return;
+        let savedIndex = index;
+        for (const entry of this.unavailableLayers) if (entry.index <= savedIndex) savedIndex += 1;
+        this.unavailableLayers.push({index: savedIndex, origin: this.viewerOrigin, layer: {...structuredClone(layer),
+            isCustom: record.entry.isCustom, ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})}});
+        this.unavailableLayers.sort((left, right) => left.index - right.index);
+        this.view.setUnavailableLayerCount(this.unavailableLayers.length);
+        this.view.showResults({loaded: records.length - 1, total: records.length,
+            details: [`${record.entry.label} is unavailable. Its calculated fields remain saved.`]});
+        this.scheduleRemember();
+    }
+
+    /** Present saved unavailable layers without attempting to read their sources.
+     * @return {void}
+     */
+    showUnavailableLayers() {
+        if (this.busy || this.destroyed) return;
+        this.view.showUnavailableLayers(this.unavailableLayers.map(({index, layer, origin}) => ({index,
+            label: layer.customName ?? layer.catalogItem?.id ?? (layer.uploadId ? "Private uploaded layer" : "Private run result"),
+            sourceSite: origin === this.viewerOrigin ? null : origin,
+            fields: (layer.calculatedFields ?? []).map(field => field.name)})));
+    }
+
+    /** Discard one unavailable view's saved settings after an explicit remove action.
+     * @param {number} index Saved drawing position supplied by the current unavailable-layer list.
+     * @return {void}
+     */
+    removeUnavailableLayer(index) {
+        if (this.busy || this.destroyed) return;
+        if (!this.unavailableLayers.some(entry => entry.index === index)) return;
+        this.unavailableLayers = this.unavailableLayers.filter(entry => entry.index !== index);
+        for (const entry of this.unavailableLayers) if (entry.index > index) entry.index -= 1;
+        this.view.setUnavailableLayerCount(this.unavailableLayers.length);
+        this.showUnavailableLayers();
+        this.scheduleRemember();
+    }
+
     /**
      * Restore the opening shared map, or reset the authoring map with one-step undo.
      *
@@ -486,23 +544,30 @@ export class SavedMapViewController {
         const viewport = this.viewport.snapshot();
         const layers = records.map((record) => {
             const layer = this.exportTemporal(record) ?? (record.entry.item === null
-                ? this.exportUpload(record) ?? this.exportAnnotation(record)
+                ? this.exportUpload(record) ?? this.exportArtifact(record) ?? this.exportAnnotation(record)
                 : this.#exportLayer(record));
             return layer === null ? null : {
                 ...layer, isCustom: record.entry.isCustom,
                 ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}),
             };
         });
+        const retainedLayers = layers.filter(layer => layer !== null);
+        const privateOrigins = new Set(retainedLayers.some(layer => layer.uploadId || layer.runArtifact || layer.sharedAnnotation) ? [this.viewerOrigin] : []);
+        for (const entry of this.unavailableLayers) {
+            if (entry.layer.uploadId || entry.layer.runArtifact) privateOrigins.add(entry.origin);
+        }
+        if (privateOrigins.size > 1) throw new Error("This map includes private layers from another EOLab site. Open Unavailable layers and remove those saved layers, or remove this site's private layers before saving.");
+        for (const entry of this.unavailableLayers) retainedLayers.splice(Math.min(entry.index, retainedLayers.length), 0, structuredClone(entry.layer));
         return createSavedMapView({
             viewer: {
                 version: this.viewerVersion,
-                origin: this.viewerOrigin,
+                origin: privateOrigins.values().next().value ?? this.viewerOrigin,
             },
             createdAt: this.clock().toISOString(),
             viewport,
             basemap: this.basemap.snapshot(),
             ...(this.mapLegend ? { mapLegend: this.mapLegend.snapshot() } : {}),
-            layers: layers.filter(layer => layer !== null),
+            layers: retainedLayers,
         });
     }
 
@@ -529,6 +594,7 @@ export class SavedMapViewController {
             ...(record.entry.customName ? { customName: record.entry.customName } : {}),
             style: record.adapter.exportSavedState(record),
             ...(record.adapter.exportFilterState ? { filter: record.adapter.exportFilterState(record) } : {}),
+            ...(record.adapter.exportCalculatedFields ? {calculatedFields: record.adapter.exportCalculatedFields(record)} : {}),
         };
     }
 
@@ -561,6 +627,15 @@ export class SavedMapViewController {
                 savedMapView.layers,
                 RESTORE_CONCURRENCY,
                 async (layer) => {
+                    if (layer.runArtifact) {
+                        try {
+                            if (savedMapView.viewer.origin !== this.viewerOrigin) throw new Error("Private run results can only be opened on their original EOLab site.");
+                            const key = await this.restoreArtifact(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                            return {key, staged: null, detail: null};
+                        } catch (error) {
+                            return {staged: null, detail: `${layer.customName ?? "Private run result"}: ${asError(error).message}`};
+                        }
+                    }
                     if (layer.temporalSource) {
                         try {
                             const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
@@ -611,6 +686,7 @@ export class SavedMapViewController {
         for (const [index, result] of preparations.entries()) {
             if (result.key && !retainedKeys.has(result.key)) {
                 result.key = null;
+                result.removed = true;
                 result.detail = `${savedMapView.layers[index].customName ?? "A saved layer"} was removed from the map while it was opening.`;
             }
             const key = result.key ?? result.staged?.record.entry.key;
@@ -623,6 +699,12 @@ export class SavedMapViewController {
             this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
         }
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
+        this.unavailableLayers = preparations.flatMap((result, index) => {
+            const layer = savedMapView.layers[index];
+            return !result.key && !result.staged && !result.removed && (layer.calculatedFields?.length || layer.runArtifact)
+                ? [{index, layer: structuredClone(layer), origin: savedMapView.viewer.origin}] : [];
+        });
+        this.view.setUnavailableLayerCount(this.unavailableLayers.length);
         // Older callers may expose only catalog staging; mixed maps require explicit ordering.
         if (preparations.some(result => result.key)) {
             const otherKeys = this.mapLayers.retainedRecords.map(record => record.entry.key).filter(key => !keys.includes(key));
@@ -631,7 +713,8 @@ export class SavedMapViewController {
         return {
             loaded: stagedLayers.length + preparations.filter(result => result.key).length,
             total: savedMapView.layers.length,
-            details: [...(basemapWarning ? [basemapWarning] : []), ...preparations
+            details: [...(basemapWarning ? [basemapWarning] : []),
+                ...(this.unavailableLayers.length ? ["Unavailable layers remain saved. Use Unavailable layers to review or remove them, or reopen this map to retry."] : []), ...preparations
                 .map(({ detail }) => detail)
                 .filter((detail) => detail !== null)],
         };
@@ -676,9 +759,11 @@ export class SavedMapViewController {
                 throw new Error("Layer style restoration is unavailable.");
             }
             let styleWarning = null;
+            if (layer.calculatedFields?.length) await record.adapter.restoreCalculatedFields(record, layer.calculatedFields);
             try {
                 await record.adapter.applySavedState(record, layer.style);
             } catch (error) {
+                if (layer.calculatedFields?.length) throw error;
                 styleWarning = asError(error).message;
             }
             // A failed filter must never restore an unexpectedly unfiltered layer.

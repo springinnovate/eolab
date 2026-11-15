@@ -1,5 +1,6 @@
 /** Validate and copy geographic areas used by raster sampling and downloads. */
 import { normalizeSamplingBox, samplingBoxBounds } from "./sampling-box.js";
+import { validateCalculatedFields } from "./calculated-fields.js";
 /**
  * Build the stable validation error used for malformed selected bounds.
  *
@@ -118,16 +119,20 @@ export function polygonAreaReferencesEqual(left, right) {
 }
 
 /** Validate and copy the source identity and filter for selected vector features.
- * @param {Object} value Public catalog or upload identity and typed predicate.
+ * @param {Object} value Public catalog, upload or owned run-result identity and typed predicate.
  * @return {Readonly<Object>} Deeply immutable source identity, layer and filter.
  * @throws {TypeError} For paths, geometry, malformed identity or filter fields.
  */
 export function validateVectorSelection(value) {
     const uploaded = value?.uploadId !== undefined;
-    const keys = uploaded ? ["filter", "layerName", "uploadId"] : ["assetKey", "collectionId", "filter", "itemId", "layerName"];
-    if (!value || typeof value !== "object" || Object.keys(value).sort().join() !== keys.join() ||
+    const artifact = value?.kind === "runArtifact";
+    const keys = artifact ? ["artifactId", "filter", "jobId", "kind", "layerName"] : uploaded ? ["filter", "layerName", "uploadId"] : ["assetKey", "collectionId", "filter", "itemId", "layerName"];
+    if (value && Object.hasOwn(value, "calculatedFields")) keys.push("calculatedFields");
+    if (!value || typeof value !== "object" || Object.keys(value).sort().join() !== keys.sort().join() ||
         typeof value.layerName !== "string" || !value.layerName) throw new TypeError("Invalid vector selection identity");
-    if (uploaded ? typeof value.uploadId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.uploadId) :
+    if (artifact ? typeof value.jobId !== "string" || !/^[0-9a-f]{32}$/.test(value.jobId) ||
+        typeof value.artifactId !== "string" || !/^[0-9a-f]{32}$/.test(value.artifactId) || value.layerName.length > 256 :
+        uploaded ? typeof value.uploadId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.uploadId) :
         value.collectionId !== "eolab-mounted-vectors" ||
         typeof value.itemId !== "string" || value.itemId.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(value.itemId) ||
         typeof value.assetKey !== "string" || !value.assetKey || value.assetKey.length > 256 || value.layerName.length > 256)
@@ -146,11 +151,14 @@ export function validateVectorSelection(value) {
         return Object.freeze({ field: rule.field, operator: rule.operator, value: rule.value });
     });
     const filter = Object.freeze({ enabled: input.enabled, match: input.match, rules: Object.freeze(rules) });
-    return Object.freeze(uploaded ? { uploadId: value.uploadId, layerName: value.layerName, filter } : { collectionId: value.collectionId, itemId: value.itemId,
-        assetKey: value.assetKey, layerName: value.layerName, filter });
+    const identity = artifact ? {kind: "runArtifact", jobId: value.jobId, artifactId: value.artifactId, layerName: value.layerName}
+        : uploaded ? {uploadId: value.uploadId, layerName: value.layerName}
+            : {collectionId: value.collectionId, itemId: value.itemId, assetKey: value.assetKey, layerName: value.layerName};
+    return Object.freeze({...identity, filter,
+        ...(Object.hasOwn(value, "calculatedFields") ? {calculatedFields: validateCalculatedFields(value.calculatedFields)} : {})});
 }
 
-/** Compare the source, layer and filter of catalog or uploaded vector selections.
+/** Compare the source, layer, definitions and filter of original-source vector selections.
  * @param {Object|null|undefined} left First selection descriptor.
  * @param {Object|null|undefined} right Second selection descriptor.
  * @return {boolean} Whether both descriptors identify the same exact selection.

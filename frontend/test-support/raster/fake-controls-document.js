@@ -1,5 +1,11 @@
 /** Minimal DOM element used by focused raster-control adapter tests. */
 export class FakeRasterControlElement extends EventTarget {
+    /** Display the element as a native popover without moving focus. @return {void} */
+    showPopover() { this.popoverOpen = true; }
+
+    /** Dismiss the native popover without moving focus. @return {void} */
+    hidePopover() { this.popoverOpen = false; }
+
     /**
      * Create an element with mutable DOM-like presentation state.
      *

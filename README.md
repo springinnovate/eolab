@@ -115,8 +115,8 @@ the map to that item. The pencil beside its title renames it. Its **Style**
 control includes a color preview and opens the full style editor; the adjacent
 copy and paste icons transfer styles between compatible items. Paste stays
 visible when unavailable; hover or focus it to see why.
-**Create copy** gives the same dataset independent display choices without
-changing the original data; **Duplicate** makes another custom copy. These kinds
+**Duplicate vector** and **Duplicate raster** make a custom copy with independent
+display choices. Custom vectors also support calculated fields. These copies
 and their appearances are saved with the map. Open **More actions** for source
 information, **Legend**, **Statistics**, **Download clip**, and other available actions.
 
@@ -253,8 +253,8 @@ the same layer, so the chart updates instead of making you configure it again.
 A data time cube brings observations from different dates together as one
 dataset. Search with `type:temporal`, add a dataset, and choose its **Variable**,
 **Month** and **Date and time (UTC)** in Map contents. Only available observations
-are listed. **Create copy** lets you compare dates or variables with
-independent styles; use **Duplicate** for further custom copies.
+are listed. **Duplicate raster** lets you compare dates or variables with
+independent styles.
 
 ![Blue hourly precipitation over the Atlantic and Africa, with controls for the variable, month and UTC observation time](docs/images/eolab-temporal-map.jpg)
 
@@ -517,6 +517,19 @@ For an existing Catalog vector or uploaded layer, use **Filter** to narrow the
 features, then select that polygon layer when choosing your analysis area.
 This is useful for working with one country, watershed or project group without
 preparing another file.
+
+On a custom vector in **Map contents**, use the calculator icon to add a
+numeric field. Enter an output name and an expression, or use **Insert field**
+to insert a quoted field name. For example, `'Population' / 'Area km2'` divides
+two existing attributes. Supported operators are `+`, `-`, `*`, `/` and
+parentheses. **Treat numeric text as numbers** also accepts complete numbers
+stored as text. Missing inputs, invalid numbers and division by zero leave a
+missing value; the calculator reports how many features are affected.
+
+Calculated fields belong to that custom layer and work with its styles and
+filters. They are saved with the map; the original file stays unchanged.
+Catalog layers, uploads and vector run results are supported. Private sources
+remain private, and saving a map does not extend a run result's expiry.
 
 ## Run data tools and use their results
 

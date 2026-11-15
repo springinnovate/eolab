@@ -5,6 +5,11 @@ from datetime import date
 from threading import Event
 from typing import Any
 
+from eolab_app.calculated_fields import (
+    CompiledCalculatedField,
+    evaluate_calculated_fields,
+    required_source_fields,
+)
 
 class VectorFieldMissingError(ValueError):
     """A requested attribute is absent from the native layer schema."""
@@ -19,6 +24,7 @@ def visit_vector_fields(
     visit: Callable[[Mapping[str, Any]], None],
     *,
     open_options: tuple[str, ...] = (),
+    calculated_fields: tuple[CompiledCalculatedField, ...] = (),
 ) -> bool:
     """Visit selected scalar properties without retaining features or geometry.
 
@@ -30,6 +36,8 @@ def visit_vector_fields(
         cancel_event: Cancellation checked before reads and callbacks.
         visit: Accumulator called once for each visited row.
         open_options: Format-owned GDAL options preserving the admitted schema.
+        calculated_fields: Programs bound to the original schema by the source owner.
+            Requested calculated fields are evaluated from original columns per row.
 
     Returns:
         Whether the source was exhausted without cancellation. Limited reads
@@ -63,20 +71,21 @@ def visit_vector_fields(
                 .GetTypeName()
                 for index in range(definition.GetFieldCount())
             }
-            if any(field not in field_types for field in fields):
+            native_fields = required_source_fields(calculated_fields, fields)
+            if any(field not in field_types for field in native_fields):
                 raise VectorFieldMissingError(
                     "The selected field is not present in the source layer"
                 )
             layer.SetIgnoredFields(
                 [
                     "OGR_GEOMETRY",
-                    *(field for field in field_types if field not in fields),
+                    *(field for field in field_types if field not in native_fields),
                 ]
             )
             batch_size = 4096 if feature_limit is None else min(4096, feature_limit + 1)
             options = [
                 f"MAX_FEATURES_IN_BATCH={batch_size}",
-                f"INCLUDE_FID={'NO' if fields else 'YES'}",
+                f"INCLUDE_FID={'NO' if native_fields else 'YES'}",
             ]
             visited = 0
             with layer.GetArrowStreamAsNumPy(options) as stream:
@@ -85,20 +94,22 @@ def visit_vector_fields(
                     if batch is None:
                         return not cancel_event.is_set()
                     row_count = len(next(iter(batch.values())))
-                    columns = {field: batch[field].tolist() for field in fields}
+                    columns = {field: batch[field].tolist() for field in native_fields}
                     for index in range(row_count):
                         if cancel_event.is_set():
                             return False
                         if feature_limit is not None and visited == feature_limit:
                             return False
-                        visit(
-                            {
-                                field: normalize_vector_field_value(
-                                    columns[field][index], field_types[field]
-                                )
-                                for field in fields
-                            }
+                        properties = {
+                            field: normalize_vector_field_value(
+                                columns[field][index], field_types[field]
+                            )
+                            for field in native_fields
+                        }
+                        properties.update(
+                            evaluate_calculated_fields(calculated_fields, properties)
                         )
+                        visit({field: properties[field] for field in fields})
                         visited += 1
                     del batch, columns
             return False

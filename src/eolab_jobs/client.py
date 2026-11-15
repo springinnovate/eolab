@@ -391,7 +391,7 @@ class JobsClient:
         self,
         payload: dict[str, JsonValue],
         *,
-        timeout_seconds: float,
+        timeout_seconds: float | None,
         delete_on_completion: bool,
         idempotency_key: str | None = None,
         require_terminal_cleanup: bool = False,
@@ -400,7 +400,8 @@ class JobsClient:
 
         Args:
             payload: Submission fields, frozen before the first await.
-            timeout_seconds: Total client wait budget, excluding cleanup.
+            timeout_seconds: Total client wait budget, excluding cleanup, or None
+                to wait until completion or caller cancellation.
             delete_on_completion: True deletes terminal records; false retains
                 them, including failed/cancelled jobs, until explicit deletion
                 or server expiry. Abandoned work is cancelled in either mode.
@@ -422,7 +423,9 @@ class JobsClient:
             TimeoutError: When the client wait budget expires.
             asyncio.CancelledError: After the requested cleanup on caller cancellation.
         """
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        if timeout_seconds is not None and (
+            not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+        ):
             raise ValueError("Run deadline must be finite and positive")
         key = idempotency_key if idempotency_key is not None else str(uuid4())
         body = self._submission(payload, key)

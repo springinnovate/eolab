@@ -57,6 +57,7 @@ export function createVectorWmsLayer(
         layers: publishedVector.layerName,
         styles: publishedVector.styleName,
         vector_style: JSON.stringify(publishedVector.style),
+        ...(publishedVector.calculatedFields?.length ? {vector_calculated_fields: JSON.stringify(publishedVector.calculatedFields)} : {}),
         format: "image/png",
         transparent: true,
         tiled: true,

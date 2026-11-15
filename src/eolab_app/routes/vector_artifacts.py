@@ -29,6 +29,7 @@ from eolab_app.vector.models import (
     VectorNumericClassificationRequest,
     VectorNumericClassificationSummary,
     VectorStyleRequest,
+    with_calculated_fields,
 )
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.styling import VectorStyleService
@@ -211,7 +212,9 @@ def create_artifact_vector_router(
         return await apply_to_layer(
             identity,
             request,
-            lambda value: styles.apply_layer_style(value.layer, body.style),
+            lambda value: styles.apply_layer_style(
+                with_calculated_fields(value.layer, body.calculated_fields), body.style
+            ),
         )
 
     @router.post("/category-summaries", response_model=VectorCategorySummary)
@@ -235,7 +238,9 @@ def create_artifact_vector_router(
         return await apply_to_layer(
             identity,
             request,
-            lambda value: styles.summarize_layer_categories(value.layer, body.field),
+            lambda value: styles.summarize_layer_categories(
+                with_calculated_fields(value.layer, body.calculated_fields), body.field
+            ),
         )
 
     @router.post(
@@ -262,7 +267,10 @@ def create_artifact_vector_router(
             identity,
             request,
             lambda value: styles.classify_layer_numeric(
-                value.layer, body.field, body.method, body.class_count
+                with_calculated_fields(value.layer, body.calculated_fields),
+                body.field,
+                body.method,
+                body.class_count,
             ),
         )
 
@@ -287,7 +295,9 @@ def create_artifact_vector_router(
         return await apply_to_layer(
             identity,
             request,
-            lambda value: publication.apply_layer_filter(value.layer, body.filter),
+            lambda value: publication.apply_layer_filter(
+                with_calculated_fields(value.layer, body.calculated_fields), body.filter
+            ),
         )
 
     @router.post("/filter-counts", response_model=VectorFilterCount)
@@ -311,7 +321,9 @@ def create_artifact_vector_router(
         return await apply_to_layer(
             identity,
             request,
-            lambda value: publication.count_layer_filter(value.layer, body.filter),
+            lambda value: publication.count_layer_filter(
+                with_calculated_fields(value.layer, body.calculated_fields), body.filter
+            ),
         )
 
     @router.post("/extent", response_model=FeatureExtent)
@@ -349,6 +361,7 @@ def create_artifact_vector_router(
                         jobId=identity[1],
                         artifactId=identity[2],
                         filter=body.filter,
+                        calculatedFields=body.calculated_fields,
                     ),
                     source.lease_id,
                 )

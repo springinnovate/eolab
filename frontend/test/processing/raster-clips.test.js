@@ -519,9 +519,10 @@ test("Downloads and sampling share only neutral selection values; peers never im
         assert.doesNotMatch(source,/\.blob\(|createObjectURL/);
     }
     const selectedArea=readFileSync(new URL("selected-area.js",root),"utf8");
-    assert.deepEqual([...selectedArea.matchAll(/from\s+["']([^"']+)["']/g)].map(match=>match[1]),["./sampling-box.js"]);
+    assert.deepEqual([...selectedArea.matchAll(/from\s+["']([^"']+)["']/g)].map(match=>match[1]),["./sampling-box.js", "./calculated-fields.js"]);
     assert.doesNotMatch(selectedArea,/\bfetch\b|\bdocument\b/);
     assert.doesNotMatch(readFileSync(new URL("sampling-box.js",root),"utf8"),/\bimport\b|\bfetch\b|\bdocument\b/);
+    assert.doesNotMatch(readFileSync(new URL("calculated-fields.js",root),"utf8"),/\bimport\b|\bfetch\b|\bdocument\b/);
 });
 
 

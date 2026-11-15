@@ -11,6 +11,12 @@ from rasterio.errors import RasterioError
 from rasterio.warp import transform_bounds
 
 from eolab_app.attribute_filter import matches_filter, validate_filter, ogr_predicate
+from eolab_app.calculated_fields import (
+    CalculatedField,
+    CompiledCalculatedField,
+    evaluate_calculated_fields,
+    validate_calculated_fields,
+)
 from eolab_app.vector.filters import VectorFilter
 from eolab_app.bounded_geometry import (
     GeometryValidationError,
@@ -52,16 +58,26 @@ def read_selected_extent(
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
         with _source_collection(resolved) as dataset:
             return _read_dataset_extent(
-                dataset, resolved.selection.filter, resolved.where, limits, deadline
+                dataset,
+                resolved.selection.filter,
+                resolved.where,
+                limits,
+                deadline,
+                resolved.calculated_fields,
             )
 
 
-def read_file_extent(path: Path, candidate: VectorFilter) -> dict[str, Any]:
+def read_file_extent(
+    path: Path,
+    candidate: VectorFilter,
+    calculated_fields: tuple[CalculatedField, ...] = (),
+) -> dict[str, Any]:
     """Measure an authorized result layer using the ordinary interactive extent budget.
 
     Args:
         path: Authorized single-layer GeoPackage retained by the source owner.
         candidate: Attribute filter to validate against the original field schema.
+        calculated_fields: View definitions to bind to the original native schema.
 
     Returns:
         Exact matching count and WGS84 envelopes without retaining geometry.
@@ -81,8 +97,18 @@ def read_file_extent(path: Path, candidate: VectorFilter) -> dict[str, Any]:
             layer=layer_name,
             enabled_drivers=["GPKG"],
         ) as dataset:
+            compiled = validate_calculated_fields(
+                calculated_fields, dataset.schema["properties"]
+            )
             return _read_dataset_extent(
-                dataset, candidate, ogr_predicate(candidate), limits, deadline
+                dataset,
+                candidate,
+                ogr_predicate(
+                    candidate, frozenset(field.definition.name for field in compiled)
+                ),
+                limits,
+                deadline,
+                compiled,
             )
 
 
@@ -92,6 +118,7 @@ def _read_dataset_extent(
     where: str | None,
     limits: VectorReadLimits,
     deadline: float,
+    calculated_fields: tuple[CompiledCalculatedField, ...] = (),
 ) -> dict[str, Any]:
     """Measure filtered feature envelopes from an already authorized open dataset.
 
@@ -101,6 +128,7 @@ def _read_dataset_extent(
         where: Driver-level candidate predicate or None.
         limits: Ordinary interactive source-reading budgets.
         deadline: Monotonic deadline established before opening the original file.
+        calculated_fields: Programs already validated against the original schema.
 
     Returns:
         Matching count and transformed bounds without source geometry.
@@ -112,7 +140,13 @@ def _read_dataset_extent(
     """
     matched = 0
     bounds = None
-    validate_filter(candidate, dataset.schema.get("properties", {}))
+    validate_filter(
+        candidate,
+        {
+            **dataset.schema["properties"],
+            **{field.definition.name: "float" for field in calculated_fields},
+        },
+    )
     if not dataset.crs:
         raise GeometryValidationError(
             "The selected vector has no coordinate reference system"
@@ -127,7 +161,9 @@ def _read_dataset_extent(
             raise GeometryValidationError(
                 "Vector extent reading exceeded its time budget"
             )
-        if not matches_filter(candidate, feature.properties):
+        properties = dict(feature.properties)
+        properties.update(evaluate_calculated_fields(calculated_fields, properties))
+        if not matches_filter(candidate, properties):
             continue
         matched += 1
         if feature.geometry is None:

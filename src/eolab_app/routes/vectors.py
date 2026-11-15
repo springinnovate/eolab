@@ -26,6 +26,7 @@ from eolab_app.vector.models import (
     VectorLayer,
     VectorNumericClassificationRequest,
     VectorStyleRequest,
+    with_calculated_fields,
 )
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import PublishedVectorRegistry
@@ -296,7 +297,9 @@ def create_uploaded_vector_router(
         Raises:
             VectorFeatureError: If the style or published layer is unavailable.
         """
-        return await style_service.apply_layer_style(layer, request.style)
+        return await style_service.apply_layer_style(
+            with_calculated_fields(layer, request.calculated_fields), request.style
+        )
 
     @router.post("/category-summaries", response_model=VectorCategorySummary)
     async def summarize_upload_categories(
@@ -314,7 +317,9 @@ def create_uploaded_vector_router(
         Raises:
             VectorFeatureError: If the field or bounded native read fails.
         """
-        return await style_service.summarize_layer_categories(layer, request.field)
+        return await style_service.summarize_layer_categories(
+            with_calculated_fields(layer, request.calculated_fields), request.field
+        )
 
     @router.post("/numeric-classifications", response_model=VectorNumericClassificationSummary)
     async def classify_upload_numbers(
@@ -333,7 +338,10 @@ def create_uploaded_vector_router(
             VectorFeatureError: If field validation or bounded native reading fails.
         """
         return await style_service.classify_layer_numeric(
-            layer, request.field, request.method, request.class_count
+            with_calculated_fields(layer, request.calculated_fields),
+            request.field,
+            request.method,
+            request.class_count,
         )
 
     @router.post("/filters", response_model=AppliedVectorFilter)
@@ -350,7 +358,9 @@ def create_uploaded_vector_router(
         Raises:
             VectorFeatureError: If the predicate or published layer is invalid.
         """
-        return await publication_service.apply_layer_filter(layer, request.filter)
+        return await publication_service.apply_layer_filter(
+            with_calculated_fields(layer, request.calculated_fields), request.filter
+        )
 
     @router.post("/filter-counts", response_model=VectorFilterCount)
     async def count_upload_filter(
@@ -372,7 +382,11 @@ def create_uploaded_vector_router(
         """
         try:
             return await run_until_http_disconnect(
-                http_request, publication_service.count_layer_filter(layer, request.filter)
+                http_request,
+                publication_service.count_layer_filter(
+                    with_calculated_fields(layer, request.calculated_fields),
+                    request.filter,
+                ),
             )
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "The filter count request was canceled") from error

@@ -6,6 +6,7 @@ from xml.etree import ElementTree
 
 import httpx2
 import pytest
+from eolab_app.calculated_fields import CalculatedField
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -99,6 +100,7 @@ class _TestAuthorization:
         style_environment: str | None,
         style_definition: Mapping[str, object] | None,
         opacity: float,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> bytes:
         """Build one inspectable single-layer SLD.
 
@@ -108,6 +110,7 @@ class _TestAuthorization:
             style_environment: Unused raster representation.
             style_definition: Required test representation.
             opacity: Neutral layer opacity.
+            calculated_fields: Unused neutral view definitions for this fixed-style fake.
 
         Returns:
             Complete one-layer SLD containing the opacity as its title.

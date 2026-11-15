@@ -38,6 +38,8 @@ export class SavedMapViewDomView {
         this.undoButton = documentContext.querySelector(
             "#undo-reset-map-view"
         );
+        this.unavailableButton = documentContext.querySelector("#show-unavailable-map-layers");
+        this.unavailableLabel = documentContext.querySelector("#unavailable-map-layers-label");
         this.dialog = documentContext.querySelector("#saved-map-view-dialog");
         this.dialogTitle = documentContext.querySelector(
             "#saved-map-view-dialog-title"
@@ -83,14 +85,18 @@ export class SavedMapViewDomView {
      * @param {()=>void} handlers.onUndo Restore the pre-reset view.
      * @param {(fields:Object)=>void} handlers.onPublish Save the captured map under the entered name.
      * @param {(fields:Object)=>void} [handlers.onSavePublishedMap] Save administrator changes at the existing URL.
+     * @param {()=>void} handlers.onShowUnavailableLayers Review saved layers whose sources could not open.
+     * @param {(index:number)=>void} handlers.onRemoveUnavailableLayer Discard one retained view's saved settings, without deleting its source.
      * @return {void}
      */
-    bind({ onCopy, onReset, onUndo, onPublish, onSavePublishedMap }) {
+    bind({ onCopy, onReset, onUndo, onPublish, onSavePublishedMap, onShowUnavailableLayers, onRemoveUnavailableLayer }) {
         this.unbind();
         this.handlers = {
             copy: () => onCopy(),
             reset: () => onReset(),
             undo: () => onUndo(),
+            showUnavailable: () => onShowUnavailableLayers(),
+            removeUnavailable: index => onRemoveUnavailableLayer(index),
             savePublishedMap: event => {
                 event.preventDefault();
                 onSavePublishedMap({
@@ -116,6 +122,7 @@ export class SavedMapViewDomView {
         this.copyButton.addEventListener("click", this.handlers.copy);
         this.resetButton.addEventListener("click", this.handlers.reset);
         this.undoButton.addEventListener("click", this.handlers.undo);
+        this.unavailableButton.addEventListener("click", this.handlers.showUnavailable);
         this.publishForm.addEventListener("submit", this.handlers.publish);
         this.publishTitle.addEventListener("input", this.handlers.title);
         this.publishSlug.addEventListener("input", this.handlers.slug);
@@ -139,7 +146,7 @@ export class SavedMapViewDomView {
         link.href = `/maps/${encodeURIComponent(saved.slug)}`;
         link.textContent = link.href;
         this.document.querySelector("#published-map-save").disabled = false;
-        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some map contents or settings could not load. Saving will publish the contents and settings currently on this map; unavailable items will be omitted.");
+        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some map contents or settings could not load. Review the map and any Unavailable layers before saving.");
     }
 
     /**
@@ -243,6 +250,55 @@ export class SavedMapViewDomView {
     hideUndoReset() {
         this.resetButton.hidden = false;
         this.undoButton.hidden = true;
+    }
+
+    /** Keep unavailable saved layers reachable after a restore warning is dismissed.
+     * @param {number} count Number of retained unavailable views.
+     * @return {void}
+     */
+    setUnavailableLayerCount(count) {
+        this.unavailableButton.hidden = count === 0;
+        this.unavailableLabel.textContent = `Unavailable layers (${count})`;
+    }
+
+    /** Show retained layer settings with an explicit action to discard each view.
+     * @param {Array<{index:number,label:string,sourceSite:string|null,fields:string[]}>} layers Saved order, layer name, foreign source site and calculated field names.
+     * @return {void}
+     */
+    showUnavailableLayers(layers) {
+        this.#setCancelBlocked(false);
+        this.#prepareDialog("Unavailable saved layers", layers.length
+            ? "Settings for these layers are still saved. Removing a saved layer does not delete its source data."
+            : "No unavailable saved layers remain.", []);
+        this.dialogDetails.hidden = layers.length === 0;
+        for (const layer of layers) {
+            const item = this.document.createElement("li");
+            const label = this.document.createElement("p");
+            label.textContent = layer.label;
+            item.append(label);
+            if (layer.sourceSite) {
+                const site = this.document.createElement("p");
+                site.textContent = `Site: ${layer.sourceSite}`;
+                item.append(site);
+            }
+            if (layer.fields.length) {
+                const fields = this.document.createElement("p");
+                fields.textContent = `Calculated fields: ${layer.fields.join(", ")}`;
+                item.append(fields);
+            }
+            const remove = this.document.createElement("button");
+            remove.type = "button";
+            remove.className = "secondary-button";
+            remove.textContent = "Remove saved layer";
+            remove.setAttribute("aria-label", `Remove saved layer ${layer.label}`);
+            remove.addEventListener("click", () => this.handlers?.removeUnavailable(layer.index));
+            item.append(remove);
+            this.dialogDetails.append(item);
+        }
+        this.cancelButton.textContent = "Close";
+        this.cancelButton.value = "close";
+        this.dialog.showModal();
+        this.cancelButton.focus();
     }
 
     /**
@@ -399,6 +455,7 @@ export class SavedMapViewDomView {
         this.copyButton.disabled = busy;
         this.resetButton.disabled = busy;
         this.undoButton.disabled = busy;
+        this.unavailableButton.disabled = busy;
         this.copyButton.setAttribute("aria-busy", String(busy));
         this.resetButton.setAttribute("aria-busy", String(busy));
         this.undoButton.setAttribute("aria-busy", String(busy));
@@ -415,6 +472,7 @@ export class SavedMapViewDomView {
             this.copyButton.removeEventListener("click", this.handlers.copy);
             this.resetButton.removeEventListener("click", this.handlers.reset);
             this.undoButton.removeEventListener("click", this.handlers.undo);
+            this.unavailableButton.removeEventListener("click", this.handlers.showUnavailable);
             this.publishForm.removeEventListener("submit", this.handlers.publish);
             this.publishTitle.removeEventListener("input", this.handlers.title);
             this.publishSlug.removeEventListener("input", this.handlers.slug);

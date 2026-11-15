@@ -28,6 +28,7 @@ from eolab_app.vector.models import (
     original_vector_resource_name,
 )
 from eolab_app.vector.styles import vector_style_name
+from eolab_app.calculated_fields import CalculatedField
 
 GEOSERVER_VECTOR_STYLE_NAMES: dict[VectorGeometryKind, str] = {
     "point": "vector-point",
@@ -299,6 +300,8 @@ class GeoServerVectorPublisher:
         self,
         resource_name: str,
         style: VectorStyle,
+        *,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> PreparedVectorStyle:
         """Identify an inline appearance and resolve any required label geometry.
 
@@ -308,6 +311,7 @@ class GeoServerVectorPublisher:
         Args:
             resource_name: Stable server-derived WMS layer resource name.
             style: Complete validated geometry-specific symbol state.
+            calculated_fields: Source-validated view definitions bound into its style identity.
 
         Returns:
             Deterministic style identity and geometry attribute used for labels.
@@ -332,7 +336,12 @@ class GeoServerVectorPublisher:
             or (style.geometry_kind == "line" and style.label.placement == "center")
         ):
             geometry_name = await self._label_geometry_name(resource_name)
-        style_name = vector_style_name(resource_name, style, geometry_name=geometry_name)
+        style_name = vector_style_name(
+            resource_name,
+            style,
+            geometry_name=geometry_name,
+            calculated_fields=calculated_fields,
+        )
         return PreparedVectorStyle(style_name, geometry_name)
 
     async def _label_geometry_name(self, resource_name: str) -> str:

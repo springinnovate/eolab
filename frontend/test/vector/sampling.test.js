@@ -1,7 +1,10 @@
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import { VectorSamplingController, createVectorSamplingArea } from "../../src/vector/sampling.js";
+import {createVectorMapLayerAdapter} from "../../src/vector/map-layer-adapter.js";
+import {EMPTY_VECTOR_FILTER} from "../../src/vector/filter.js";
 
 const filter = { enabled: true, match: "all", rules: [{field:"iso3",operator:"eq",value:"PER"}] };
 const ready = { selection:CATALOG_SELECTION, filter, label:"Countries", matched:1, total:200 };
@@ -147,6 +150,52 @@ test("catalog and uploaded count-only responses activate the accepted source and
         assert.equal(request.options.headers["X-EOLab-Uploads"],source.uploadId?"1":undefined);
         assert.equal(request.options.credentials,"same-origin");assert.equal(request.options.cache,"no-store");
         assert.deepEqual(h.events,[["activate",selection]]);
+    }
+});
+
+
+test("run-result polygon pickers and Models retain the native layer, formulas and filter", async t => {
+    const calculatedFields = [{version: 1, name: "Doubled", expression: "'score' * 2", numericText: false}];
+    const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32),
+        layerName: "processed regions", calculatedFields};
+    const predicate = {enabled: true, match: "all", rules: [{field: "Doubled", operator: "gt", value: 5}]};
+    const selection = {...source, filter: predicate};
+    const adapter = createVectorMapLayerAdapter({onTileError() {}});
+    const record = {adapter, entry: {key: "processed-view", label: "Processed regions", visible: false},
+        state: {source, style: {geometryKind: "polygon"}, filter: predicate,
+            labelFields: [{name: "score", type: "float"}, {name: "Doubled", type: "float"}]}};
+    const layers = {retainedRecords: [record], snapshots: () => []};
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const targetsSource = main.slice(main.indexOf("const getPolygonTargets ="), main.indexOf("models = new ModelsController({"));
+    const {getPolygonTargets, createPolygonSamplingArea} = new Function(
+        "mapLayerController", "vectorMapLayerAdapter", "createVectorSamplingArea",
+        `${targetsSource}; return {getPolygonTargets, createPolygonSamplingArea};`
+    )(layers, adapter, createVectorSamplingArea);
+    const modelOptionsSource = main.slice(main.indexOf("getContext: ({includeDrawnPolygons"),
+        main.indexOf("/** Open the existing rule editor inside setup"));
+    const modelOptions = new Function("getPolygonTargets", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", `
+        const leafletMap = {getBounds: () => ({getWest: () => -1, getSouth: () => -1, getEast: () => 1, getNorth: () => 1})};
+        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "";
+        return {${modelOptionsSource}};
+    `)(getPolygonTargets, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER);
+    const requests = [];
+    t.mock.method(globalThis, "fetch", async (url, options) => {
+        requests.push({url, options});
+        return new Response(JSON.stringify({selection, matched: 1, total: 2}));
+    });
+    const target = getPolygonTargets()[0], signal = new AbortController().signal;
+    const pickerArea = await createPolygonSamplingArea(target.item, target.filter, signal, target);
+    const modelSource = modelOptions.getContext().vectors[0];
+    const modelArea = await modelOptions.prepareVector(modelSource, signal);
+    assert.deepEqual(pickerArea.selection, selection);
+    assert.deepEqual(modelArea.selection, selection);
+    assert.equal(requests.length, 2);
+    for (const {url, options} of requests) {
+        assert.equal(url, "/api/vector-sampling/areas");
+        assert.deepEqual(JSON.parse(options.body), selection);
+        assert.equal(options.headers["X-EOLab-Processing"], "1");
+        assert.equal(options.signal, signal);
+        assert.equal(options.credentials, "same-origin");
     }
 });
 

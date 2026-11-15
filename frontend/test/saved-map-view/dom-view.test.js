@@ -62,6 +62,8 @@ function viewFixture() {
     ["#copy-map-link-label", element()],
     ["#reset-map-view", element()],
     ["#undo-reset-map-view", element()],
+    ["#show-unavailable-map-layers", element()],
+    ["#unavailable-map-layers-label", element()],
     ["#saved-map-view-dialog", element()],
     ["#saved-map-view-dialog-title", element()],
     ["#saved-map-view-dialog-summary", element()],
@@ -112,7 +114,7 @@ test("published-map editing shows fixed URL, explicit save, busy state and retai
   assert.equal(el("edit-status").textContent, "Save failed");
   view.showPublishedMapEditor({ title: "Amazon", subtitle: "", slug: "amazon" }, false);
   assert.equal(el("save").disabled, false);
-  assert.match(el("edit-status").textContent, /unavailable items will be omitted/);
+  assert.match(el("edit-status").textContent, /Review the map and any Unavailable layers before saving/);
   view.unbind();
 });
 
@@ -244,4 +246,36 @@ test("saved map controls bind reset and one-step undo accessibly", () => {
   ]) {
     assert.equal(elements.get(selector).disabled, true);
   }
+});
+
+test("unavailable saved layers remain reachable after closing the dialog and remove only on an explicit action", () => {
+  const {elements, view} = viewFixture();
+  const actions = [];
+  const layers = [{index: 2, label: "Wetland density", sourceSite: "https://other.example", fields: ["Density"]}];
+  view.bind({onShowUnavailableLayers: () => {actions.push("open"); view.showUnavailableLayers(layers);},
+    onRemoveUnavailableLayer: index => actions.push(index)});
+  view.setUnavailableLayerCount(1);
+  const entry = elements.get("#show-unavailable-map-layers");
+  assert.equal(entry.hidden, false);
+  assert.equal(elements.get("#unavailable-map-layers-label").textContent, "Unavailable layers (1)");
+  entry.click();
+  const dialog = elements.get("#saved-map-view-dialog");
+  assert.equal(dialog.open, true);
+  const row = elements.get("#saved-map-view-dialog-details").children[0];
+  assert.equal(row.children[0].textContent, "Wetland density");
+  assert.equal(row.children[1].textContent, "Site: https://other.example");
+  assert.equal(row.children[2].textContent, "Calculated fields: Density");
+  dialog.close();
+  entry.click();
+  assert.deepEqual(actions, ["open", "open"]);
+  elements.get("#saved-map-view-dialog-details").children[0].children[3].click();
+  assert.deepEqual(actions, ["open", "open", 2]);
+  view.setBusy(true);
+  assert.equal(entry.disabled, true);
+  view.setUnavailableLayerCount(0);
+  view.showUnavailableLayers([]);
+  assert.equal(entry.hidden, true);
+  assert.equal(elements.get("#saved-map-view-dialog-details").hidden, true);
+  assert.match(elements.get("#saved-map-view-dialog-summary").textContent, /No unavailable/);
+  view.unbind();
 });

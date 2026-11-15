@@ -857,6 +857,102 @@ h5 {
 .map-layer-details { grid-column: 1 / -1; display: grid; gap: 3px; min-width: 0; margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border-2); color: var(--text-2); font-size: var(--font-size-support); }
 .map-layer-details[hidden] { display: none; }
 .map-layer-details p { margin: 0; overflow-wrap: anywhere; }
+.vector-field-calculator { --fc-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; --action-border: color-mix(in srgb, var(--text-3) 45%, var(--surface-2)); width: min(760px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 0; background: var(--surface-2); color: var(--text-1); font: 400 13px/1.4 var(--font-sans); box-shadow: var(--elevation-panel); }
+.vector-field-calculator::backdrop { background: rgb(0 0 0 / 35%); }
+.vector-field-calculator :is(h2, p) { margin: 0; }
+.vector-field-calculator :is(button, input, textarea) { font: inherit; color: var(--text-1); }
+.vector-field-calculator button { min-height: 24px; margin: 0; padding: 2px 6px; border: 1px solid var(--action-border); border-radius: 2px; background: var(--surface-3); color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 1.2; white-space: nowrap; cursor: pointer; }
+.vector-field-calculator button:hover:not(:disabled):not([aria-disabled="true"]), .vector-field-calculator button:focus-visible { border-color: var(--brand); background: var(--surface-selected); }
+.vector-field-calculator button[aria-disabled="true"] { cursor: not-allowed; }
+.vector-field-calculator svg { width: 13px; height: 13px; flex: none; }
+.vector-field-calculator .fc-header { display: grid; grid-template-columns: auto minmax(120px, 1fr) minmax(190px, 1.2fr) 26px; align-items: center; gap: 8px; min-height: 39px; padding: 6px 9px; border-bottom: 1px solid var(--border-1); background: var(--surface-3); }
+.vector-field-calculator h2 { font: 500 13px/1.4 var(--font-sans); white-space: nowrap; }
+.vector-field-calculator .fc-layer { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--border-1); }
+.vector-field-calculator .fc-layer > span { color: var(--text-3); font-size: 12px; }
+.vector-field-calculator .fc-layer strong { font-weight: 500; overflow-wrap: anywhere; }
+.vector-field-calculator .fc-close { display: flex; align-items: center; justify-content: center; width: 26px; margin-left: auto; padding: 3px; border-color: transparent; background: transparent; color: var(--text-3); }
+.vector-field-calculator .fc-body { display: grid; gap: 6px; margin: 0; padding: 6px 10px; }
+.vector-field-calculator .fc-form { min-width: 0; margin: 0; padding: 0; }
+.vector-field-calculator .fc-output-row { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--border-1); }
+.vector-field-calculator .fc-output-row label { flex: none; color: var(--text-3); font-size: 12px; }
+.vector-field-calculator .fc-output { flex: 1; width: 100%; min-width: 0; min-height: 28px; padding: 4px 6px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); font: 400 12px/1.4 var(--fc-mono); }
+.vector-field-calculator .fc-output::placeholder { font-family: var(--font-sans); color: var(--text-3); opacity: 1; }
+.vector-field-calculator .fc-editing { color: var(--brand-hover); font-size: 11px; }
+.vector-field-calculator .fc-editor { position: relative; min-width: 0; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); }
+.vector-field-calculator .fc-editor-bar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; border-bottom: 1px solid var(--border-1); }
+.vector-field-calculator .fc-editor-bar, .vector-field-calculator .fc-fields summary { min-height: 28px; padding: 2px 8px; border-radius: 2px 2px 0 0; background: var(--surface-3); color: var(--text-1); font: 500 12px/24px var(--font-sans); }
+.vector-field-calculator .fc-insert { display: flex; align-items: center; gap: 4px; min-height: 23px; padding: 2px 4px; border-color: transparent; background: transparent; color: var(--brand-hover); }
+.vector-field-calculator .fc-insert[aria-expanded="true"] { border-color: var(--action-border); background: var(--surface-selected); }
+.vector-field-calculator .fc-expression { display: block; width: 100%; height: 52px; min-height: 52px; padding: 6px 8px; border: 0; border-radius: 0; background: var(--surface-2); resize: vertical; font: 400 13px/20px var(--fc-mono); }
+.vector-field-calculator .fc-expression:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.vector-field-calculator .fc-editor-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; padding: 3px 5px 3px 8px; border-top: 1px solid var(--border-1); border-radius: 0 0 2px 2px; background: var(--surface-3); }
+.vector-field-calculator .fc-operators { display: flex; align-items: center; gap: 9px; min-height: 24px; color: var(--text-3); font-size: 11px; }
+.vector-field-calculator code { padding: 0; background: transparent; color: var(--text-1); font: 400 12px/1.4 var(--fc-mono); overflow-wrap: anywhere; }
+.vector-field-calculator .fc-numeric { display: flex; align-items: center; justify-self: end; gap: 5px; min-height: 23px; color: var(--text-3); font-size: 11px; font-weight: 400; line-height: 1.4; white-space: nowrap; }
+.vector-field-calculator .fc-numeric input { width: 13px; height: 13px; margin: 0; accent-color: var(--brand); }
+.vector-field-calculator .fc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.vector-field-calculator .fc-calculate-control { position: relative; display: flex; }
+.vector-field-calculator .fc-calculate { min-height: 22px; padding: 1px 5px; font-size: 11px; }
+.vector-field-calculator .fc-disabled-reason { display: none; position: absolute; z-index: 5; right: 0; bottom: calc(100% + 6px); width: max-content; max-width: min(260px, calc(100vw - 64px)); padding: 6px 8px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); box-shadow: var(--elevation-panel); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.vector-field-calculator .fc-calculate-control:hover .fc-disabled-reason, .vector-field-calculator .fc-calculate-control:focus-within .fc-disabled-reason { display: block; }
+.vector-field-calculator .fc-notice { padding: 4px 8px; border-top: 1px solid var(--border-1); color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.vector-field-calculator .is-error { color: var(--status-danger); }
+.vector-field-calculator .fc-progress { display: block; width: calc(100% - 16px); height: 5px; margin: 5px 8px; }
+.vector-field-calculator .fc-fields { min-width: 0; margin: 0; padding: 0; border: 1px solid var(--border-1); border-radius: var(--radius); }
+.vector-field-calculator .fc-fields summary { list-style-position: inside; border-bottom: 1px solid transparent; border-radius: 2px; cursor: pointer; }
+.vector-field-calculator .fc-fields[open] summary { border-bottom-color: var(--border-1); border-radius: 2px 2px 0 0; }
+.vector-field-calculator .fc-fields summary:hover { background: var(--surface-hover); }
+.vector-field-calculator .fc-field-list { display: flex; flex-direction: column; gap: 5px; padding: 6px; }
+.vector-field-calculator .fc-field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px 8px; padding: 5px 6px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); }
+.vector-field-calculator .fc-field-name { grid-column: 1; grid-row: 1; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.vector-field-calculator .fc-field-formula { grid-column: 1 / -1; grid-row: 2; padding: 3px 6px; border-left: 2px solid var(--border-1); border-radius: 2px; background: var(--surface-3); white-space: pre-wrap; }
+.vector-field-calculator .fc-field-ref { color: var(--brand-hover); }
+.vector-field-calculator .fc-field-number { color: #7a4594; }
+.vector-field-calculator .fc-field-operator { color: var(--text-3); }
+.vector-field-calculator .fc-field-actions { display: flex; grid-column: 2; grid-row: 1; align-items: center; flex-wrap: wrap; gap: 4px; }
+.vector-field-calculator .fc-field-actions button { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.vector-field-calculator .fc-field-actions svg { width: 12px; height: 12px; color: var(--text-3); }
+.vector-field-calculator .fc-deleted { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 8px 5px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.vector-field-calculator .fc-picker { position: fixed; inset: auto; margin: 0; display: flex; flex-direction: column; width: 340px; padding: 6px; overflow: hidden; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); box-shadow: var(--elevation-panel); }
+.vector-field-calculator .fc-picker:not(:popover-open) { display: none; }
+.vector-field-calculator .fc-search { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; padding-left: 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-3); color: var(--text-3); }
+.vector-field-calculator .fc-search input { width: 100%; min-width: 0; padding: 5px 7px 5px 0; border: 0; background: transparent; font-size: 12px; }
+.vector-field-calculator .fc-options { display: flex; flex-direction: column; gap: 1px; min-height: 0; max-height: min(210px, 35dvh); overflow-y: auto; overscroll-behavior: contain; }
+.vector-field-calculator .fc-option { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; min-height: 27px; padding: 4px 6px; border-color: transparent; background: transparent; text-align: left; white-space: normal; }
+.vector-field-calculator .fc-option code { min-width: 0; }
+.vector-field-calculator .fc-type { flex: none; color: var(--text-3); font-size: 11px; }
+.vector-field-calculator .fc-empty { padding: 5px; color: var(--text-3); font-size: 12px; }
+.vector-field-calculator [hidden] { display: none !important; }
+@media (max-width: 620px) {
+  .vector-field-calculator .fc-header { grid-template-columns: auto minmax(0, 1fr) 26px; gap: 5px 8px; }
+  .vector-field-calculator .fc-close { grid-column: 3; grid-row: 1; }
+  .vector-field-calculator .fc-output-row { grid-column: 1 / -1; grid-row: 2; padding-left: 0; border-left: 0; }
+  .vector-field-calculator .fc-output { max-width: 280px; }
+}
+@media (max-width: 520px) {
+  .vector-field-calculator .fc-numeric { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+  .vector-field-calculator .fc-insert { grid-column: 3; grid-row: 1; }
+}
+@media (max-width: 460px) {
+  .vector-field-calculator .fc-header { grid-template-columns: minmax(0, 1fr) 26px; gap: 5px 6px; }
+  .vector-field-calculator .fc-layer { grid-column: 1; grid-row: 2; padding-left: 0; border-left: 0; }
+  .vector-field-calculator .fc-output-row { grid-column: 1 / -1; grid-row: 3; }
+  .vector-field-calculator .fc-close { grid-column: 2; grid-row: 1; }
+  .vector-field-calculator .fc-body { padding-right: 8px; padding-left: 8px; }
+}
+@media (pointer: coarse) {
+  .vector-field-calculator :is(button, .fc-insert, .fc-option, .fc-calculate, .fc-numeric, summary) { min-height: 44px; }
+  .vector-field-calculator .fc-close { width: 44px; }
+  .vector-field-calculator .fc-header { grid-template-columns: auto minmax(0, 1fr) 44px; }
+  .vector-field-calculator .fc-close { grid-column: 3; grid-row: 1; }
+  .vector-field-calculator .fc-output-row { grid-column: 1 / -1; grid-row: 2; padding-left: 0; border-left: 0; }
+  .vector-field-calculator .fc-output, .vector-field-calculator .fc-expression, .vector-field-calculator .fc-search input { font-size: 16px; }
+}
+@media (pointer: coarse) and (max-width: 460px) {
+  .vector-field-calculator .fc-header { grid-template-columns: minmax(0, 1fr) 44px; }
+  .vector-field-calculator .fc-close { grid-column: 2; }
+  .vector-field-calculator .fc-output-row { grid-row: 3; }
+}
 .raster-layer-visibility {
   display: inline;
   font-size: var(--font-size-title);
@@ -901,6 +997,7 @@ h5 {
 .raster-layer-row .secondary-button:hover:not(:disabled):not([aria-disabled="true"]),
 .raster-layer-row .secondary-button:focus-visible { border-color: var(--brand); background: var(--surface-selected); }
 .raster-layer-row .secondary-button[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; }
+.raster-layer-row [data-layer-action="field-calculator"][aria-disabled="true"] svg { opacity: .5; }
 .map-layer-row-actions {
   grid-column: 1 / -1;
   display: flex;
@@ -910,6 +1007,7 @@ h5 {
   margin-top: 3px;
   min-width: 0;
 }
+.map-layer-duplicate-help { flex-basis: 100%; margin: 0; color: var(--text-3); font-size: var(--font-size-support); overflow-wrap: anywhere; }
 .map-layer-style-actions { display: inline-flex; flex: none; align-items: stretch; border: 1px solid var(--action-border); border-radius: 2px; background: var(--surface-3); }
 .map-layer-style-actions > .secondary-button { border: 0; border-radius: 0; background: transparent; }
 .map-layer-style-actions > .secondary-button + .secondary-button { border-inline-start: 1px solid var(--action-border); }
@@ -4283,6 +4381,11 @@ article.raster-histogram-summary {
 }
 
 #raster-series { padding-top: 0; }
+
+/* Background results may arrive after a modal has entered the top layer. */
+:root:has(dialog:modal) :is(#map-inspection, #workspace-tool-actions, #catalog-search-suggestions):not(dialog:modal *) {
+  display: none;
+}
 
 #map-inspection:not(:popover-open),
 #map-tools-more-summary[hidden],

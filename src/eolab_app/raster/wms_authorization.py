@@ -11,7 +11,7 @@ from eolab_app.raster.styles import (
     parse_categorical_raster_style_json,
 )
 from eolab_app.rendering.errors import PublishedLayerRequestError
-
+from eolab_app.calculated_fields import CalculatedField
 
 RASTER_WMS_STYLE_NAME = "dynamic-raster"
 _STYLE_ENVIRONMENT_KEYS = frozenset(
@@ -137,7 +137,7 @@ class PublishedRasterAuthorization:
             raise PublishedLayerRequestError(
                 "featureid is supported only for vector layers"
             )
-        if "vector_style" in query:
+        if "vector_style" in query or "vector_calculated_fields" in query:
             raise PublishedLayerRequestError("vector_style is not supported for raster layers")
         if "env" in query:
             validate_raster_style_environment(query["env"])
@@ -196,6 +196,18 @@ class PublishedRasterAuthorization:
         """
         return "nearest neighbor" if style_definition is not None else None
 
+    def prepare_feature_info(self, content: bytes, query: Mapping[str, str]) -> bytes:
+        """Preserve native raster feature information without vector attributes.
+
+        Args:
+            content: Bounded response from the native renderer.
+            query: Already authorized original WMS parameters.
+
+        Returns:
+            The unchanged response; vector attribute context is rejected at admission.
+        """
+        return content
+
     def build_composite_sld(
         self,
         layer_name: str,
@@ -203,6 +215,7 @@ class PublishedRasterAuthorization:
         style_environment: str | None,
         style_definition: Mapping[str, object] | None,
         opacity: float,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> bytes:
         """Build one authorized inline raster layer for composite rendering.
 
@@ -212,6 +225,7 @@ class PublishedRasterAuthorization:
             style_environment: Ramp environment, mutually exclusive with a table.
             style_definition: Bounded categorical appearance, or None for a ramp.
             opacity: Neutral retained-layer opacity from zero through one.
+            calculated_fields: Unsupported vector attribute definitions.
 
         Returns:
             Complete single-layer SLD document.
@@ -220,6 +234,10 @@ class PublishedRasterAuthorization:
             PublishedLayerRequestError: If the appearance is not a complete
                 authorized dynamic raster style.
         """
+        if calculated_fields:
+            raise PublishedLayerRequestError(
+                "Calculated vector fields are not supported for raster layers"
+            )
         if not self.is_style_authorized(style_name):
             raise PublishedLayerRequestError(
                 "Composite raster rendering requires its dynamic raster style"

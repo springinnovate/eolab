@@ -14,6 +14,7 @@ from eolab_app.catalog_selection import (
     UploadedVectorFilterRequest,
 )
 from eolab_app.attribute_filter import ogr_predicate
+from eolab_app.calculated_fields import CalculatedFieldError, validate_calculated_fields
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
@@ -55,7 +56,7 @@ async def resolve_selection(
         WHERE expression.
 
     Raises:
-        VectorFeatureError: If identity, source or predicate is unavailable.
+        VectorFeatureError: If identity, calculated fields, source or predicate is invalid.
         VectorUploadError: If the upload is unavailable to this browser.
     """
     if isinstance(request, UploadedVectorFilterRequest):
@@ -66,16 +67,30 @@ async def resolve_selection(
         metadata, source = await asyncio.to_thread(
             resolve_uploaded_vector, uploads, upload_owner, request.uploadId
         )
-        validated_filter = validate_filter(request.filter, metadata.fields)
+        try:
+            compiled = validate_calculated_fields(
+                request.calculated_fields, metadata.fields
+            )
+        except CalculatedFieldError as error:
+            raise VectorConflictError(str(error)) from error
+        fields = {
+            **metadata.fields,
+            **{field.definition.name: "float" for field in compiled},
+        }
+        validated_filter = validate_filter(request.filter, fields)
         return ResolvedCatalogSelection(
             UploadedSelection(
                 uploadId=request.uploadId,
                 layerName=metadata.layer_name,
                 filter=validated_filter,
+                calculatedFields=request.calculated_fields,
             ),
             source.source_path,
             "GPKG",
-            ogr_predicate(validated_filter),
+            ogr_predicate(
+                validated_filter, frozenset(field.definition.name for field in compiled)
+            ),
+            compiled,
         )
     item = await catalog.get_item(request)
     source = resolver.resolve(item)
@@ -87,17 +102,27 @@ async def resolve_selection(
             f"The selected source is {source.source_kind} {source.source_format}; "
             "reading original features requires a mounted Shapefile or GeoPackage layer."
         )
-    validated_filter = validate_filter(request.filter, catalog_vector_fields(item))
+    fields = catalog_vector_fields(item)
+    try:
+        compiled = validate_calculated_fields(request.calculated_fields, fields)
+    except CalculatedFieldError as error:
+        raise VectorConflictError(str(error)) from error
+    fields = {**fields, **{field.definition.name: "float" for field in compiled}}
+    validated_filter = validate_filter(request.filter, fields)
     selection = CatalogSelection(
         collectionId=request.collection_id,
         itemId=request.item_id,
         assetKey=source.asset_key,
         layerName=source.layer_name,
         filter=validated_filter,
+        calculatedFields=request.calculated_fields,
     )
     return ResolvedCatalogSelection(
         selection,
         source.source_path,
         "GPKG" if source.source_format == "geopackage" else "ESRI Shapefile",
-        ogr_predicate(validated_filter),
+        ogr_predicate(
+            validated_filter, frozenset(field.definition.name for field in compiled)
+        ),
+        compiled,
     )

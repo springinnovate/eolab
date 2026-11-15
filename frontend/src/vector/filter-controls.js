@@ -149,6 +149,7 @@ export class VectorFilterControls {
         if (this.key === null) return;
         const target = this.getTarget(this.key);
         if (!target) { this.close(); return; }
+        if (this.fieldSignature !== JSON.stringify(target.fields)) this.#renderRules();
         this.zoomButton.hidden = !this.onZoom || !!this.host || !!this.action || !target.source;
         if (this.zoomRequest && !this.#isZoomCurrent(this.zoomRequest)) {
             this.cancelZoom("The applied filter changed. Zoom again to find its features.");
@@ -352,6 +353,7 @@ export class VectorFilterControls {
         this.#clearValuePickers();
         const target = this.getTarget(this.key);
         const fields = target?.fields ?? [];
+        this.fieldSignature = JSON.stringify(fields);
         const source = target?.source, key = this.key;
         this.rules.replaceChildren(...this.draft.rules.map((rule, index) => {
             const row = this.document.createElement("div"); row.className = "vector-filter-rule";

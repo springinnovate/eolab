@@ -23,10 +23,13 @@ from eolab_app.main import create_app
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.extent_operation import (
     ArtifactExtentSelection,
-    ArtifactSourceLocation,
     FeatureExtent,
     SelectionExtentResult,
-    resolve_artifact_path,
+)
+from eolab_app.source_files import (
+    PublishedSourceLocation,
+    SourceFileError,
+    resolve_source_location,
 )
 from eolab_app.vector.extents import read_selected_extent
 from eolab_jobs.client import JobResult, JobsClient
@@ -315,11 +318,11 @@ from eolab_app.vector import extent_operation as op, extents
 op.SOURCE_FILES_URL = 'http://127.0.0.1:{server.server_port}/source-files'
 op.PROCESSING_MOUNT = Path({str(tmp_path)!r})
 original_read = extents.read_file_extent
-def check_memory_and_read(path, candidate):
+def check_memory_and_read(path, candidate, calculated_fields=()):
     if sys.platform == 'linux':
         import resource
         assert 0 < resource.getrlimit(resource.RLIMIT_AS)[0] <= 2 * 1024**3
-    return original_read(path, candidate)
+    return original_read(path, candidate, calculated_fields)
 extents.read_file_extent = check_memory_and_read
 from job_service.runner import main
 main()
@@ -380,38 +383,32 @@ main()
     ],
 )
 def test_internal_artifact_locator_confines_the_native_reader(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+    tmp_path: Path, relative: str
 ) -> None:
     """Reject absolute, traversing, missing and non-file internal source locations.
 
     Args:
         tmp_path: Shared mount containing only a results directory.
-        monkeypatch: Configure the worker mount without changing a public input.
         relative: Invalid internal source authority response.
     """
-    from eolab_app.catalog_selection import SelectionUnavailableError
-
     (tmp_path / "results").mkdir()
-    monkeypatch.setattr("eolab_app.vector.extent_operation.PROCESSING_MOUNT", tmp_path)
-    with pytest.raises(SelectionUnavailableError, match="unavailable"):
-        resolve_artifact_path(
-            ArtifactSourceLocation(
+    with pytest.raises(SourceFileError, match="unavailable"):
+        resolve_source_location(
+            PublishedSourceLocation(
                 relativePath=relative, mediaType="application/geopackage+sqlite3"
-            )
+            ),
+            tmp_path,
         )
 
 
 def test_internal_artifact_locator_rejects_linked_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """Reject a symbolic link even when its target stays inside published results.
 
     Args:
         tmp_path: Shared mount containing an immutable file and a linked alias.
-        monkeypatch: Configure the worker mount for the filesystem boundary.
     """
-    from eolab_app.catalog_selection import SelectionUnavailableError
-
     directory = tmp_path / "results"
     directory.mkdir()
     original = directory / "original.gpkg"
@@ -420,13 +417,13 @@ def test_internal_artifact_locator_rejects_linked_file(
         (directory / "linked.gpkg").symlink_to(original)
     except OSError:
         pytest.skip("This host does not permit symbolic-link creation")
-    monkeypatch.setattr("eolab_app.vector.extent_operation.PROCESSING_MOUNT", tmp_path)
-    with pytest.raises(SelectionUnavailableError, match="unavailable"):
-        resolve_artifact_path(
-            ArtifactSourceLocation(
+    with pytest.raises(SourceFileError, match="unavailable"):
+        resolve_source_location(
+            PublishedSourceLocation(
                 relativePath="results/linked.gpkg",
                 mediaType="application/geopackage+sqlite3",
-            )
+            ),
+            tmp_path,
         )
 
 

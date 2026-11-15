@@ -25,6 +25,123 @@ function createController(configuration) {
   });
 }
 
+test("calculated fields restore before dependent styles and filters and unavailable definitions survive the next save", async () => {
+  const fields = [{version: 1, name: "Density", expression: "'Population' / 10", numericText: false}];
+  const layer = {catalogItem: {collection: "vectors", id: "available"}, isCustom: true, visible: true, opacity: 1,
+    calculatedFields: fields, style: {kind: "vector", definition: {field: "Density"}},
+    filter: {enabled: true, match: "all", rules: [{field: "Density", operator: "gt", value: 2}]}};
+  const missing = {...structuredClone(layer), catalogItem: {collection: "vectors", id: "missing"}};
+  const artifact = {...structuredClone(layer), runArtifact: {jobId: "a".repeat(32), artifactId: "b".repeat(32), layerName: "results"}};
+  delete artifact.catalogItem;
+  const saved = {...emptySavedMap(0, 0, 2), layers: [missing, layer, artifact]};
+  const view = createView(), records = [], order = [];
+  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+    viewport: {restore() {}, snapshot: () => saved.viewport},
+    mapLayers: {retainedRecords: records, commitStaged(staged) {records.push(...staged.map(value => value.record));},
+      setLegendIncluded() {}},
+    catalogVisualization: {clear() {records.length = 0;}, prepare: async item => item,
+      stage: async (item, presentation) => {
+        const record = {entry: {item, ...presentation}, definitions: [], adapter: {
+          restoreCalculatedFields: async (_record, definitions) => {order.push("fields"); record.definitions = definitions;},
+          applySavedState: async () => {assert.deepEqual(record.definitions, fields); order.push("style");},
+          applyFilterState: async () => {assert.deepEqual(record.definitions, fields); order.push("filter");},
+          exportCalculatedFields: () => record.definitions,
+          exportSavedState: () => layer.style, exportFilterState: () => layer.filter,
+        }};
+        return {record};
+      }},
+    catalogItems: {get: async identity => {if (identity.id === "missing") throw new Error("Source unavailable"); return identity;}},
+    restoreArtifact: async () => {throw new Error("Result expired");},
+  });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  assert.deepEqual(order, ["fields", "style", "filter"]);
+  assert.equal(view.result.loaded, 1);
+  assert.match(view.result.details.join(" "), /remain saved/);
+  await controller.copyMapLink();
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(copied.layers, saved.layers);
+});
+
+test("live unavailable results retain only identities and definitions in the next saved view", async () => {
+  const saved = emptySavedMap(0, 0, 2), view = createView();
+  const fields = [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}];
+  const layers = ["a", "b"].map(id => ({runArtifact: {jobId: "c".repeat(32), artifactId: id.repeat(32), layerName: "results"},
+    visible: true, opacity: 1, calculatedFields: fields, style: {kind: "vector", definition: {}}}));
+  const records = layers.map((layer, index) => ({entry: {key: String(index), label: `Result ${index}`, item: null, isCustom: true}, layer}));
+  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+    viewport: {snapshot: () => saved.viewport}, mapLayers: {retainedRecords: records}, exportArtifact: record => record.layer});
+  for (const key of ["0", "1"]) {
+    controller.retainUnavailableLayer(key);
+    records.splice(records.findIndex(record => record.entry.key === key), 1);
+  }
+  assert.match(view.result.details[0], /Result 1.*remain saved/);
+  await controller.copyMapLink();
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(copied.layers, layers.map(layer => ({...layer, isCustom: true})));
+  assert.equal(records.length, 0);
+});
+
+test("unavailable private references keep their origin and can be explicitly removed to save this site's private layers", async () => {
+  const saved = {...emptySavedMap(0, 0, 2), layers: [{runArtifact: {jobId: "a".repeat(32), artifactId: "b".repeat(32), layerName: "results"},
+    visible: true, opacity: 1, calculatedFields: [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}],
+    style: {kind: "vector", definition: {}}}]};
+  const view = createView(), records = [];
+  const controller = createController({view, viewerVersion: "1", viewerOrigin: "https://other.example",
+    viewport: {snapshot: () => saved.viewport, restore() {}}, mapLayers: {retainedRecords: records, commitStaged() {}},
+    catalogVisualization: {clear() {}}, restoreArtifact: async () => assert.fail("foreign private source was requested"),
+    exportArtifact: record => record.layer});
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  assert.match(view.result.details.join(" "), /original EOLab site/);
+  await controller.copyMapLink();
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.equal(copied.viewer.origin, saved.viewer.origin);
+  assert.deepEqual(copied.layers, saved.layers);
+  records.push({entry: {key: "local-result", item: null, isCustom: true}, layer: saved.layers[0]});
+  await controller.copyMapLink();
+  assert.match(view.error.message, /private layers from another EOLab site/);
+  assert.equal(view.unavailableCount, 1);
+  view.handlers.onShowUnavailableLayers();
+  assert.deepEqual(view.unavailableLayers, [{index: 0, label: "Private run result", sourceSite: saved.viewer.origin, fields: ["Scaled"]}]);
+  view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
+  assert.equal(view.unavailableCount, 0);
+  assert.deepEqual(view.unavailableLayers, []);
+  await controller.copyMapLink();
+  const afterRemoval = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.equal(afterRemoval.viewer.origin, "https://other.example");
+  assert.deepEqual(afterRemoval.layers, [{...saved.layers[0], isCustom: true}]);
+  assert.equal(records.length, 1);
+});
+
+test("removing an unavailable saved layer preserves the order of remaining live and unavailable layers", async () => {
+  const fields = [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}];
+  const layers = ["A", "B", "C", "D"].map(name => ({catalogItem: {collection: "vectors", id: name},
+    visible: true, opacity: 1, isCustom: true, calculatedFields: fields, style: {kind: "vector", definition: {}}}));
+  const saved = {...emptySavedMap(0, 0, 2), layers}, view = createView(), records = [];
+  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+    viewport: {restore() {}, snapshot: () => saved.viewport},
+    mapLayers: {retainedRecords: records, commitStaged(staged) {records.push(...staged.map(value => value.record));}, setLegendIncluded() {}},
+    catalogVisualization: {clear() {}, prepare: async item => item,
+      stage: async (item, presentation) => ({record: {entry: {...presentation, item}, adapter: {
+        restoreCalculatedFields() {}, applySavedState() {}, exportSavedState: () => layers[0].style, exportCalculatedFields: () => fields,
+      }}})},
+    catalogItems: {get: async identity => {
+      if (["A", "C"].includes(identity.id)) throw new Error("Source unavailable");
+      return identity;
+    }},
+  });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  view.handlers.onShowUnavailableLayers();
+  assert.deepEqual(view.unavailableLayers.map(layer => layer.label), ["A", "C"]);
+  view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
+  await controller.copyMapLink();
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(copied.layers.map(layer => layer.catalogItem.id), ["B", "C", "D"]);
+  view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
+  await controller.copyMapLink();
+  const afterBothRemoved = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(afterBothRemoved.layers.map(layer => layer.catalogItem.id), ["B", "D"]);
+});
+
 test("published drafts ignore personal autosave and only write on explicit save", async () => {
   const view = createView(), storage = createStorage("private"), submissions = [], headings = [];
   view.showPublishedMapEditor = (saved, complete) => { view.editor = { saved, complete }; };
@@ -325,6 +442,8 @@ function createView() {
     showCopied() { this.copied = true; },
     showCopyFallback(url) { this.copyFallback = url; },
     showResults(result) { this.result = result; },
+    setUnavailableLayerCount(count) { this.unavailableCount = count; },
+    showUnavailableLayers(layers) { this.unavailableLayers = layers; },
     showLoading(layerCount) { this.loading = layerCount; },
     showError(error, operation) {
       this.error = error;

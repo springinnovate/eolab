@@ -43,6 +43,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string|null} error Visible layer failure, when present.
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
+ * @property {boolean} [canCalculateFields] Owner supports view-owned numeric fields.
  * @property {boolean} [canInfo] Omit the details action when false.
  * @property {boolean} [canAddView] Offer an independent view of the same source.
  * @property {boolean} [addingView] The requested additional view is being prepared.
@@ -78,6 +79,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
+ * @property {(key: string) => void} [onCalculateFields] Open the vector field calculator through composition.
  * @property {(key: string) => void} [onDownload] Review a raster clip through composition.
  * @property {(key: string) => void} [onCalculate] Open raster summarization through composition.
  * @property {(key: string) => void} [onAddView] Add an independent view of the same source.
@@ -180,6 +182,8 @@ export class MapLayerStackView {
         };
         /** @type {()=>void} Dismiss explanations whose anchor moved during scrolling. */
         this.onTooltipScroll = () => this.#hideActionTooltip();
+        /** @type {()=>void} Dismiss explanations when their viewport geometry changes. */
+        this.onTooltipResize = () => this.#hideActionTooltip();
         /** @type {(event:PointerEvent)=>void} Dismiss an explanation when another control is pressed. */
         this.onTooltipPointerdown = event => {
             if (!this.actionTooltip?.contains(event.target)) this.#hideActionTooltip();
@@ -187,6 +191,7 @@ export class MapLayerStackView {
         documentContext.addEventListener("keydown", this.onTooltipKeydown, true);
         documentContext.addEventListener("scroll", this.onTooltipScroll, true);
         documentContext.addEventListener("pointerdown", this.onTooltipPointerdown);
+        documentContext.defaultView?.addEventListener("resize", this.onTooltipResize);
     }
 
     /**
@@ -243,6 +248,7 @@ export class MapLayerStackView {
         this.documentContext.removeEventListener("keydown", this.onTooltipKeydown, true);
         this.documentContext.removeEventListener("scroll", this.onTooltipScroll, true);
         this.documentContext.removeEventListener("pointerdown", this.onTooltipPointerdown);
+        this.documentContext.defaultView?.removeEventListener("resize", this.onTooltipResize);
         this.pointerDrag = null;
         this.keyboardDrag = null;
         this.handlers = null;
@@ -621,7 +627,6 @@ export class MapLayerStackView {
         );
         copyStyle.classList.add("map-layer-clipboard-action");
         copyStyle.setAttribute("aria-disabled", String(!clipboard.canCopy));
-        copyStyle.removeAttribute("title");
         const pasteStyle = this.#iconButton(
             "paste",
             `Paste style onto ${accessibleName}`,
@@ -631,7 +636,6 @@ export class MapLayerStackView {
             focusTargets
         );
         pasteStyle.classList.add("map-layer-clipboard-action");
-        pasteStyle.removeAttribute("title");
         pasteStyle.setAttribute("aria-disabled", String(!clipboard.canPaste || clipboard.pasting));
         pasteStyle.setAttribute("aria-busy", String(clipboard.pasting));
         const legend = this.#buildLegend(layer, focusTargets);
@@ -678,15 +682,38 @@ export class MapLayerStackView {
             ...(filter ? [filter] : []),
         );
         if (this.allowRemoval && layer.canAddView) {
-            const actionLabel = layer.isCustom ? "Duplicate" : "Create copy";
+            const actionLabel = `Duplicate ${layer.datasetKind}`;
             const addView = this.#button(
-                layer.addingView ? "Creating…" : actionLabel,
-                `${layer.isCustom ? "Duplicate" : "Create copy of"} ${accessibleName}`, layer.key, "add-view",
+                layer.addingView ? "Duplicating…" : actionLabel,
+                `${actionLabel}: ${accessibleName}`, layer.key, "add-view",
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
-            addView.title = "Create an independently styled copy without changing the original data.";
+            const help = this.documentContext.createElement("p");
+            help.className = "map-layer-duplicate-help";
+            help.id = `map-layer-duplicate-help-${encodeURIComponent(layer.key)}`;
+            help.textContent = layer.datasetKind === "vector"
+                ? "Duplicate to use a different style or calculate custom fields."
+                : "Duplicate to use a different style.";
+            addView.setAttribute("aria-describedby", help.id);
             layerActions.append(addView);
+            rowActions.append(help);
+        }
+        if (this.allowRemoval && layer.datasetKind === "vector") {
+            const enabled = layer.isCustom && layer.canCalculateFields;
+            const help = !layer.isCustom ? "Duplicate this vector to calculate custom fields."
+                : enabled ? "Field calculator" : "Field calculator is unavailable for this vector.";
+            const calculator = this.#iconButton(
+                "calculator", `Field calculator for ${layer.label}`, layer.key, "field-calculator",
+                () => {
+                    if (enabled) {
+                        this.#hideActionTooltip();
+                        this.handlers?.onCalculateFields?.(layer.key);
+                    }
+                }, focusTargets,
+            );
+            calculator.setAttribute("aria-disabled", String(!enabled));
+            layerActions.append(calculator, this.#buildActionTooltip(calculator, help, 100));
         }
         const utilities = this.documentContext.createElement("div");
         utilities.className = "map-layer-utility-actions";
@@ -705,7 +732,7 @@ export class MapLayerStackView {
         const details = this.#buildDetails(layer, utilities, focusTargets);
         if (legend) details.panel.append(legend.panel);
         layerActions.append(details.trigger);
-        rowActions.append(styleActions, layerActions);
+        rowActions.prepend(styleActions, layerActions);
         row.append(reorder);
         row.append(primary);
         if (layer.primaryControl) row.append(layer.primaryControl);
@@ -795,9 +822,10 @@ export class MapLayerStackView {
      * explanation is visible; leaving the trigger briefly permits entering the tooltip.
      * @param {HTMLButtonElement} button Named action, including focusable aria-disabled controls.
      * @param {string} explanation Current owner-supplied action or unavailability explanation.
+     * @param {number} [hoverDelay=80] Delay in milliseconds before a pointer hover opens the explanation.
      * @return {HTMLDivElement} Tooltip to append beside the action in the row.
      */
-    #buildActionTooltip(button, explanation) {
+    #buildActionTooltip(button, explanation, hoverDelay = 80) {
         const tooltip = this.documentContext.createElement("div");
         tooltip.className = "map-layer-action-tooltip";
         tooltip.id = `map-layer-tooltip-${encodeURIComponent(button.dataset.layerKey)}-${button.dataset.layerAction}`;
@@ -805,6 +833,7 @@ export class MapLayerStackView {
         tooltip.setAttribute("popover", "manual");
         tooltip.hidden = true;
         tooltip.textContent = explanation;
+        button.removeAttribute("title");
         button.setAttribute("aria-describedby", tooltip.id);
         /** Show this explanation beside its action without changing keyboard focus. @return {void} */
         const show = () => {
@@ -829,13 +858,16 @@ export class MapLayerStackView {
         button.addEventListener("pointerenter", () => {
             if (this.documentContext.activeElement === button) { show(); return; }
             this.#hideActionTooltip();
-            this.actionTooltipTimer = setTimeout(show, 80);
+            this.actionTooltipTimer = setTimeout(show, hoverDelay);
         });
         button.addEventListener("pointerleave", leave);
         button.addEventListener("focus", show);
         button.addEventListener("blur", () => this.#hideActionTooltip());
         button.addEventListener("pointerdown", event => {
             if (event.pointerType === "touch") { event.stopPropagation(); show(); }
+        });
+        button.addEventListener("click", () => {
+            if (button.getAttribute("aria-disabled") === "true") show();
         });
         tooltip.addEventListener("pointerenter", () => clearTimeout(this.actionTooltipHideTimer));
         tooltip.addEventListener("pointerleave", leave);
@@ -1317,7 +1349,7 @@ export class MapLayerStackView {
     /**
      * Create a direct utility action with a decorative SVG and explicit accessible name.
      * Tooltips describe the same intent; callers may supply a disabled-state reason.
-     * @param {"zoom"|"rename"|"copy"|"paste"|"collapse"} icon Local utility symbol.
+     * @param {"zoom"|"rename"|"copy"|"paste"|"collapse"|"calculator"} icon Local utility symbol.
      * @param {string} accessibleName Complete layer-specific action description.
      * @param {string} key Stable layer identity.
      * @param {string} action Stable intent/focus identity.
@@ -1332,6 +1364,7 @@ export class MapLayerStackView {
             copy: "M9 9h12v12H9ZM15 9V3H3v12h6",
             paste: "M9 3H6v18h14V3h-3M9 2h8v4H9Zm2 8h5m-5 4h5",
             collapse: "m6 15 6-6 6 6",
+            calculator: "M5 2h14v20H5ZM8 5h8v4H8ZM8 13h1m6 0h1m-8 4h1m6 0h1",
         };
         const button = this.#button("", accessibleName, key, action, callback, focusTargets);
         button.classList.add("map-layer-icon-button");

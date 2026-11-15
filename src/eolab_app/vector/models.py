@@ -1,6 +1,6 @@
 """Public requests, responses, and internal vector value objects."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from math import isfinite
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -24,7 +24,13 @@ from eolab_app.catalog.geopackage_overviews import GeoPackageOverview
 from eolab_app.catalog.vector import (
     VECTOR_SOURCE_METADATA_KEY,
 )
-
+from eolab_app.calculated_fields import (
+    CalculatedField,
+    CalculatedFieldError,
+    CompiledCalculatedField,
+    validate_calculated_fields,
+)
+from eolab_app.vector.errors import VectorConflictError
 
 VECTOR_RENDERING_POLICY = "vector-v1"
 VECTOR_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-vector-v1"
@@ -104,6 +110,8 @@ class ResolvedVectorSource:
         layer_name: Exact native layer name, or ``None`` for single-layer
             formats without a named inner layer.
         component_paths: Canonical files forming a mounted Shapefile.
+        calculated_fields: Validated view-owned attribute programs. They do not
+            change the original file's identity or ownership.
     """
 
     source_kind: VectorSourceKind
@@ -112,6 +120,9 @@ class ResolvedVectorSource:
     asset_key: str
     layer_name: str | None
     component_paths: tuple[Path, ...] = ()
+    calculated_fields: tuple[CompiledCalculatedField, ...] = field(
+        default=(), compare=False
+    )
 
 
 @dataclass(frozen=True)
@@ -139,6 +150,35 @@ class VectorLayer:
     bbox: tuple[float, float, float, float]
     geometry_kind: VectorGeometryKind
     display_levels: tuple[GeoPackageOverview, ...] = ()
+
+
+def with_calculated_fields(
+    layer: VectorLayer, definitions: tuple[CalculatedField, ...]
+) -> VectorLayer:
+    """Bind a view's expressions to authorized original metadata for vector readers.
+
+    Args:
+        layer: Original source and schema supplied by its owning access boundary.
+        definitions: Ordered view-owned fields received with the request.
+
+    Returns:
+        A new layer with numeric calculated fields and their validated programs.
+
+    Raises:
+        VectorConflictError: If an expression cannot use the original schema.
+    """
+    try:
+        compiled = validate_calculated_fields(definitions, layer.fields)
+    except CalculatedFieldError as error:
+        raise VectorConflictError(str(error)) from error
+    return replace(
+        layer,
+        source=replace(layer.source, calculated_fields=compiled),
+        fields={
+            **layer.fields,
+            **{definition.name: "float" for definition in definitions},
+        },
+    )
 
 
 class ArtifactVectorDescription(BaseModel):
@@ -208,11 +248,19 @@ class VectorNumericRead:
 
 
 class VectorCategoryRequest(BaseModel):
-    """Choose the attribute field whose category values should be summarized."""
+    """Choose the attribute field whose category values should be summarized.
+
+    Attributes:
+        field: Original or calculated attribute to summarize.
+        calculated_fields: Ordered view definitions, bound to the authorized source.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1, max_length=256, strict=True)
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields"
+    )
 
     @field_validator("field")
     @classmethod
@@ -238,11 +286,21 @@ class CatalogVectorCategoryRequest(CatalogVectorRequest, VectorCategoryRequest):
 
 
 class VectorNumericClassificationRequest(BaseModel):
-    """Choose a numeric field, classification method and number of classes."""
+    """Choose a numeric field, classification method and number of classes.
+
+    Attributes:
+        field: Original or calculated numeric attribute.
+        calculated_fields: Ordered view definitions, bound to the authorized source.
+        method: Existing numeric classification algorithm.
+        class_count: Requested number of classes within the interactive style contract.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1, max_length=256, strict=True)
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields"
+    )
     method: VectorClassificationMethod
     class_count: int = Field(
         alias="classCount",
@@ -985,11 +1043,19 @@ class VectorStyle(BaseModel):
 
 
 class VectorStyleRequest(BaseModel):
-    """Specify the complete appearance to apply to a vector layer."""
+    """Specify an appearance and its separate source-bound calculated attributes.
+
+    Attributes:
+        style: Complete vector appearance; copying it does not copy formulas.
+        calculated_fields: View definitions bound into the approved rendering identity.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     style: VectorStyle
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields"
+    )
 
 
 class CatalogVectorStyleRequest(CatalogVectorRequest, VectorStyleRequest):

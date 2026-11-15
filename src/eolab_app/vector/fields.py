@@ -240,8 +240,13 @@ class OgrVectorFieldReader:
             raise ValueError("feature_limit must be positive")
         try:
             return visit_vector_fields(
-                str(source.source_path), source.layer_name, fields,
-                feature_limit, cancel_event, visit,
+                str(source.source_path),
+                source.layer_name,
+                fields,
+                feature_limit,
+                cancel_event,
+                visit,
+                calculated_fields=source.calculated_fields,
             )
         except VectorFieldMissingError as error:
             raise VectorConflictError(
@@ -253,7 +258,6 @@ class OgrVectorFieldReader:
                 "Field summary unavailable: the current vector source "
                 "could not be read safely."
             ) from error
-
 
 
 def _bounded_category_value(value: Any) -> VectorCategoryScalar | object:

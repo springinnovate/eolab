@@ -3,6 +3,7 @@
 from pathlib import Path
 from threading import Event
 from typing import Any, Protocol
+from eolab_app.calculated_fields import CalculatedField
 
 from eolab_app.catalog.geopackage_overviews import GeoPackageOverview
 from eolab_app.vector.filters import VectorFilter, VectorFilterCount
@@ -213,12 +214,15 @@ class VectorStyler(Protocol):
         self,
         resource_name: str,
         style: VectorStyle,
+        *,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> PreparedVectorStyle:
         """Identify an inline appearance without storing a GeoServer style.
 
         Args:
             resource_name: Server-derived GeoServer feature type identity.
             style: Complete validated vector style state.
+            calculated_fields: Source-validated definitions bound into the style identity.
 
         Returns:
             Style identity and authoritative geometry attribute used for labels.

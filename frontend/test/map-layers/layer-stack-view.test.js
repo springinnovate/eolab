@@ -206,7 +206,7 @@ class FakeLayerStackDocument extends EventTarget {
   constructor() {
     super();
     this.activeElement = null;
-    this.defaultView = { innerWidth: 1024, innerHeight: 768 };
+    this.defaultView = Object.assign(new EventTarget(), {innerWidth: 1024, innerHeight: 768});
     this.layerScrollContainer = new FakeLayerStackElement("div", this);
     this.elements = new Map([
       ["#raster-layer-stack", new FakeLayerStackElement("div", this)],
@@ -316,6 +316,18 @@ function actionControl(row, action) {
   return controls[0];
 }
 
+/** Find the explanation connected to a row action by its accessible description.
+ * @param {FakeLayerStackElement} row Rendered layer row.
+ * @param {string} action Stable action identity.
+ * @return {FakeLayerStackElement} Tooltip describing that action.
+ */
+function actionTooltip(row, action) {
+  const description = actionControl(row, action).getAttribute("aria-describedby");
+  const matches = elementsByClass(row, "map-layer-action-tooltip").filter(tooltip => tooltip.id === description);
+  assert.equal(matches.length, 1, `expected one tooltip for ${action}`);
+  return matches[0];
+}
+
 /**
  * Create a cancelable synthetic event with read-only interaction fields.
  *
@@ -375,21 +387,157 @@ test("shared viewer omits removal but retains included-layer interaction tools",
   assert.equal(documentContext.querySelector("#map-layer-removal").hidden, true);
 });
 
-test("the create action names the source layer and disables only its pending addition", () => {
+test("duplication names the data type and disables only its pending addition", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), added = [];
   view.bind({onAddView: key => added.push(key)});
   const layers = [{...LAYERS[0], canAddView: true}, {...LAYERS[1], canAddView: false}];
   view.render(layers, layers[0].key);
   const list = doc.querySelector("#raster-layer-list");
   const button = actionControl(list.children[0], "add-view");
-  assert.equal(button.textContent, "Create copy");
+  assert.equal(button.textContent, "Duplicate raster");
   assert.ok(button.getAttribute("aria-label").includes(layers[0].label));
   button.dispatchEvent(new Event("click"));
   assert.deepEqual(added, [layers[0].key]);
   assert.throws(() => actionControl(list.children[1], "add-view"), /expected one add-view/);
   view.render([{...layers[0], addingView: true}], layers[0].key);
   assert.equal(actionControl(list.children[0], "add-view").disabled, true);
-  assert.equal(actionControl(list.children[0], "add-view").textContent, "Creating…");
+  assert.equal(actionControl(list.children[0], "add-view").textContent, "Duplicating…");
+});
+
+test("vector calculators stay visible beside duplication and Catalog actions do not calculate", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), opened = [];
+  view.bind({onCalculateFields: key => opened.push(key)});
+  const layer = {...LAYERS[0], datasetKind: "vector", isCustom: true, canCalculateFields: true, canAddView: true};
+  view.render([layer], layer.key);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  assert.equal(actionControl(row, "details").textContent, "More actions");
+  const calculator = actionControl(row, "field-calculator");
+  assert.equal(calculator.textContent, "");
+  assert.equal(calculator.getAttribute("aria-disabled"), "false");
+  assert.equal(elementsByClass(row, "map-layer-data-actions")[0].contains(calculator), true);
+  assert.equal(elementsByClass(row, "map-layer-details")[0].contains(calculator), false);
+  assert.equal(actionControl(row, "add-view").textContent, "Duplicate vector");
+  assert.equal(elementsByClass(row, "map-layer-duplicate-help")[0].textContent,
+    "Duplicate to use a different style or calculate custom fields.");
+  assert.ok(calculator.getAttribute("aria-label").includes(layer.label));
+  calculator.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [layer.key]);
+  view.render([{...layer, isCustom: false}], layer.key);
+  const catalogCalculator = actionControl(doc.querySelector("#raster-layer-list").children[0], "field-calculator");
+  assert.equal(catalogCalculator.disabled, false);
+  assert.equal(catalogCalculator.getAttribute("aria-disabled"), "true");
+  catalogCalculator.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [layer.key]);
+  const tooltip = actionTooltip(view.list.children[0], "field-calculator");
+  assert.equal(tooltip.textContent, "Duplicate this vector to calculate custom fields.");
+  assert.equal(tooltip.popoverOpen, true);
+  view.render([{...layer, datasetKind: "raster"}], layer.key);
+  assert.throws(() => actionControl(doc.querySelector("#raster-layer-list").children[0], "field-calculator"));
+  const sharedView = new MapLayerStackView(new FakeLayerStackDocument(), {allowRemoval: false});
+  sharedView.render([layer], layer.key);
+  assert.throws(() => actionControl(sharedView.list.children[0], "field-calculator"));
+});
+
+test("calculator help debounces hover but opens immediately for focus and touch", t => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layer = {...LAYERS[0], datasetKind: "vector", canCalculateFields: true};
+  view.render([layer], layer.key);
+  const calculator = actionControl(view.list.children[0], "field-calculator");
+  const tooltip = actionTooltip(view.list.children[0], "field-calculator");
+  calculator.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(99);
+  assert.equal(tooltip.hidden, true);
+  t.mock.timers.tick(1);
+  assert.equal(tooltip.hidden, false);
+  assert.equal(calculator.getAttribute("aria-describedby"), tooltip.id);
+  calculator.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(80);
+  assert.equal(tooltip.popoverOpen, false);
+  calculator.focus();
+  calculator.dispatchEvent(new Event("focus"));
+  assert.equal(tooltip.hidden, false);
+  let workspaceEscapes = 0;
+  doc.addEventListener("keydown", () => workspaceEscapes++);
+  const escape = interactionEvent("keydown", {key: "Escape"});
+  doc.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(workspaceEscapes, 0, "dismissing help must not also collapse Map contents");
+  assert.equal(tooltip.hidden, true);
+  assert.equal(calculator.getAttribute("aria-describedby"), tooltip.id);
+  const secondEscape = interactionEvent("keydown", {key: "Escape"});
+  doc.dispatchEvent(secondEscape);
+  assert.equal(secondEscape.defaultPrevented, false, "with no help open, Escape belongs to the workspace");
+  assert.equal(workspaceEscapes, 1);
+  calculator.dispatchEvent(interactionEvent("pointerdown", {pointerType: "touch"}));
+  assert.equal(tooltip.hidden, false);
+  calculator.dispatchEvent(new Event("blur"));
+  assert.equal(tooltip.hidden, true);
+});
+
+test("calculator help cancels when hover ends, rows refresh, geometry changes or the view unbinds", t => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layer = {...LAYERS[0], datasetKind: "vector", canCalculateFields: true};
+  view.render([layer], layer.key);
+  let tooltip = actionTooltip(view.list.children[0], "field-calculator");
+  let calculator = actionControl(view.list.children[0], "field-calculator");
+  calculator.dispatchEvent(new Event("pointerenter"));
+  calculator.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, true);
+  calculator.dispatchEvent(new Event("pointerenter"));
+  view.render([layer], layer.key);
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, true);
+  calculator = actionControl(view.list.children[0], "field-calculator");
+  tooltip = actionTooltip(view.list.children[0], "field-calculator");
+  calculator.dispatchEvent(new Event("focus"));
+  doc.dispatchEvent(new Event("scroll"));
+  assert.equal(tooltip.popoverOpen, false);
+  calculator.dispatchEvent(new Event("focus"));
+  doc.defaultView.dispatchEvent(new Event("resize"));
+  assert.equal(tooltip.popoverOpen, false);
+  calculator.dispatchEvent(new Event("pointerenter"));
+  view.unbind();
+  t.mock.timers.tick(100);
+  assert.equal(tooltip.hidden, true);
+});
+
+test("calculator and clipboard explanations share focus, dismissal and viewport ownership", t => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const layer = {...LAYERS[0], datasetKind: "vector", canCalculateFields: true};
+  view.render([layer], layer.key);
+  const row = view.list.children[0];
+  const paste = actionControl(row, "paste-style"), calculator = actionControl(row, "field-calculator");
+  const pasteHelp = actionTooltip(row, "paste-style"), calculatorHelp = actionTooltip(row, "field-calculator");
+  paste.focus();
+  paste.dispatchEvent(new Event("focus"));
+  assert.equal(pasteHelp.hidden, false);
+  calculator.focus();
+  paste.dispatchEvent(new Event("blur"));
+  calculator.dispatchEvent(new Event("focus"));
+  calculator.dispatchEvent(new Event("pointerenter"));
+  calculator.dispatchEvent(new Event("pointerleave"));
+  t.mock.timers.tick(100);
+  assert.equal(pasteHelp.hidden, true);
+  assert.equal(calculatorHelp.hidden, false, "pointer crossing retains the focused calculator explanation");
+  assert.equal(elementsByClass(row, "map-layer-action-tooltip").filter(tooltip => !tooltip.hidden).length, 1);
+  doc.defaultView.dispatchEvent(new Event("resize"));
+  assert.equal(calculatorHelp.hidden, true);
+  doc.querySelector("#map-layers-show-all").focus();
+  calculator.dispatchEvent(new Event("blur"));
+  calculator.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(90);
+  paste.dispatchEvent(new Event("pointerenter"));
+  t.mock.timers.tick(80);
+  assert.equal(calculatorHelp.hidden, true, "a clipboard hover cancels the calculator's pending explanation");
+  assert.equal(pasteHelp.hidden, false);
+  view.unbind();
+  t.mock.timers.tick(100);
+  assert.equal(pasteHelp.hidden, true);
+  assert.equal(calculatorHelp.hidden, true);
 });
 
 test("Catalog and Custom rows share one unchanged order and use explicit layer meaning", () => {
@@ -408,14 +556,15 @@ test("Catalog and Custom rows share one unchanged order and use explicit layer m
   assert.deepEqual(rows.map(row => elementsByClass(row, "map-layer-kind")[0].textContent),
     ["Custom · Raster", "Catalog · Raster", "Custom · Raster"]);
   assert.deepEqual(rows.map(row => actionControl(row, "add-view").textContent),
-    ["Duplicate", "Create copy", "Duplicate"]);
+    ["Duplicate raster", "Duplicate raster", "Duplicate raster"]);
   actionControl(rows[0], "add-view").dispatchEvent(new Event("click"));
   assert.deepEqual(added, [layers[0].key]);
   assert.match(actionControl(rows[0], "add-view").getAttribute("aria-label"), /^Duplicate /);
   const details = elementsByClass(rows[0], "map-layer-details")[0];
   assert.equal(details.hidden, true);
   assert.equal(elementsByClass(details, "map-layer-source")[0].textContent, "Based on: temperature.tif");
-  assert.match(actionControl(rows[0], "add-view").title, /without changing the original data/);
+  assert.equal(elementsByClass(rows[0], "map-layer-duplicate-help")[0].textContent,
+    "Duplicate to use a different style.");
 });
 
 test("uploaded provenance is visible independently of names, view keys and Custom styling", () => {

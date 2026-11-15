@@ -37,6 +37,7 @@ from eolab_app.vector.models import (
     VectorNumericClassificationSummary,
     VectorNumericRead,
     VectorStyle,
+    with_calculated_fields,
 )
 from eolab_app.vector.ports import (
     VectorCatalog,
@@ -47,7 +48,6 @@ from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
 )
-
 
 _FieldRead = TypeVar("_FieldRead", VectorCategoryRead, VectorNumericRead)
 
@@ -102,7 +102,9 @@ class VectorStyleService:
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
         layer = get_catalog_vector_layer(item, source, "Category summary")
-        return await self.summarize_layer_categories(layer, request.field)
+        return await self.summarize_layer_categories(
+            with_calculated_fields(layer, request.calculated_fields), request.field
+        )
 
     async def summarize_layer_categories(
         self,
@@ -200,7 +202,10 @@ class VectorStyleService:
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
         return await self.classify_layer_numeric(
-            get_catalog_vector_layer(item, source, "Numeric classification"),
+            with_calculated_fields(
+                get_catalog_vector_layer(item, source, "Numeric classification"),
+                request.calculated_fields,
+            ),
             request.field,
             request.method,
             request.class_count,
@@ -344,7 +349,9 @@ class VectorStyleService:
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
         layer = get_catalog_vector_layer(item, source, "Style")
-        return await self.apply_layer_style(layer, request.style)
+        return await self.apply_layer_style(
+            with_calculated_fields(layer, request.calculated_fields), request.style
+        )
 
     async def apply_layer_style(
         self,
@@ -368,6 +375,9 @@ class VectorStyleService:
         """
         async with self._style_lock:
             source = layer.source
+            calculated_fields = tuple(
+                value.definition for value in source.calculated_fields
+            )
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{layer.resource_name}"
             try:
                 authorization = self._vector_registry.require_current(layer_name)
@@ -435,10 +445,14 @@ class VectorStyleService:
                         "Style unavailable: this numeric field has no missing "
                         "values to style."
                     )
-            prepared = await self._styler.prepare_style(
-                layer.resource_name,
-                style,
-            )
+            try:
+                prepared = await self._styler.prepare_style(
+                    layer.resource_name,
+                    style,
+                    calculated_fields=calculated_fields,
+                )
+            except ValueError as error:
+                raise VectorConflictError(str(error)) from error
             try:
                 style_name = self._vector_registry.authorize_style(
                     layer_name,

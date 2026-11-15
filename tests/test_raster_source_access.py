@@ -41,6 +41,12 @@ from eolab_app.source_files import (
     finish_source_task,
 )
 from test_raster_statistics_service import _statistics
+from catalog_selection_support import FixtureCatalog, write_selection
+from eolab_app.calculated_fields import CalculatedField
+from eolab_app.catalog_selection import ArtifactVectorSelection
+from eolab_app.vector.models import ResolvedVectorSource
+from eolab_app.vector.sampling import VectorSamplingService
+from shapely.geometry import box, mapping
 
 CATALOG = {
     "collectionId": "eolab-mounted-geotiffs",
@@ -188,13 +194,15 @@ class FileLease:
 class FileAuthority:
     """Track ownership, immutable metadata and active leases without a database fake reader."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, media_type: str = "image/tiff") -> None:
         """Record one published source's metadata.
 
         Args:
-            path: Completed source GeoTIFF.
+            path: Completed immutable source file.
+            media_type: Published native format used by its reader.
         """
         self.path = path
+        self.media_type = media_type
         self.size = path.stat().st_size
         self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         self.ready = True
@@ -242,7 +250,7 @@ class FileAuthority:
         self.sequence += 1
         lease = str(self.sequence)
         self.leases.add(lease)
-        return FileLease(self.path, self.size, self.sha256, lease)
+        return FileLease(self.path, self.size, self.sha256, lease, self.media_type)
 
     async def resolve(self, owner: str, run: str, file: str) -> ResolvedSourceFile:
         """Authorize a short read of the original file without retaining it.
@@ -259,7 +267,7 @@ class FileAuthority:
             SourceFileError: If current access is denied.
         """
         await self.check(owner, run, file)
-        return ResolvedSourceFile(self.path, self.size, self.sha256, "image/tiff")
+        return ResolvedSourceFile(self.path, self.size, self.sha256, self.media_type)
 
     async def release(self, lease: str) -> bool:
         """Release one completed read's retention token.
@@ -607,6 +615,291 @@ def test_coalesced_private_read_retains_files_until_its_last_waiter_stops(
         assert stopped.is_set() and not authority.leases and calls == 1
 
     asyncio.run(exercise())
+
+
+def _vector_result_sampler(
+    directory: Path,
+) -> tuple[VectorSamplingService, FileAuthority, ArtifactVectorSelection]:
+    """Compose original vector reading with real file leases and calculated filtering.
+
+    Args:
+        directory: Isolated directory for one immutable GeoPackage.
+
+    Returns:
+        Production sampler, controlled source authority and result selection.
+    """
+    resolved = write_selection(directory / "polygons.gpkg", [mapping(box(0, 0, 2, 2))])
+    authority = FileAuthority(resolved.path, "application/geopackage+sqlite3")
+    catalog = FixtureCatalog(
+        ResolvedVectorSource("mounted", "geopackage", resolved.path, "data", "polygons")
+    )
+    sampler = VectorSamplingService(catalog, catalog, artifact_files=authority.files)
+    selection = ArtifactVectorSelection(
+        **PRIVATE,
+        layerName="polygons",
+        filter={"rules": [{"field": "doubled", "operator": "gt", "value": 1}]},
+        calculatedFields=[CalculatedField(name="doubled", expression="'selected' * 2")],
+    )
+    return sampler, authority, selection
+
+
+@pytest.mark.parametrize("lease_lost", [False, True])
+def test_vector_metadata_cancellation_retains_file_until_native_read_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_lost: bool
+) -> None:
+    """Keep native metadata reads leased after disconnect or renewal failure.
+
+    Args:
+        tmp_path: Isolated original GeoPackage.
+        monkeypatch: Delay the native metadata reader at its actual thread boundary.
+        lease_lost: Lose lease renewal instead of cancelling the caller twice.
+    """
+    from eolab_app.bounded_vector import resolve_vector_file_selection
+    from eolab_app.catalog_selection import ResolvedCatalogSelection
+
+    original_sampler, authority, selection = _vector_result_sampler(tmp_path)
+
+    async def exercise() -> None:
+        """Cancel an active native thread and observe file release ordering."""
+        entered, renewal_failed = asyncio.Event(), asyncio.Event()
+        finish, stopped = Event(), Event()
+        loop = asyncio.get_running_loop()
+        files = authority.files(renewal_seconds=0.01)
+        release = files.release
+
+        def read_metadata(
+            path: Path, selected: ArtifactVectorSelection
+        ) -> ResolvedCatalogSelection:
+            """Read the real schema after the test allows the native thread to finish.
+
+            Args:
+                path: Original file retained by the production source lease.
+                selected: Validated selection passed by the sampling service.
+
+            Returns:
+                Original-source metadata including the calculated attribute program.
+            """
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                assert finish.wait(5)
+                assert authority.leases
+                return resolve_vector_file_selection(path, selected)
+            finally:
+                stopped.set()
+
+        async def release_after_read(lease: str) -> bool:
+            """Release a retained file only after its native reader has stopped.
+
+            Args:
+                lease: Source lease issued to the metadata reader.
+
+            Returns:
+                Whether the authority released the source lease.
+            """
+            assert stopped.is_set()
+            return await release(lease)
+
+        async def lose_renewal(lease: str) -> bool:
+            """Reject renewal after the reader enters its native operation.
+
+            Args:
+                lease: Active source lease whose renewal fails.
+
+            Returns:
+                False to trigger the production source-lifecycle cancellation.
+            """
+            await entered.wait()
+            assert lease in authority.leases
+            renewal_failed.set()
+            return False
+
+        files.release = release_after_read
+        if lease_lost:
+            files.renew = lose_renewal
+        sampler = VectorSamplingService(
+            original_sampler.catalog,
+            original_sampler.resolver,
+            artifact_files=lambda: files,
+        )
+        monkeypatch.setattr(
+            "eolab_app.bounded_vector.resolve_vector_file_selection", read_metadata
+        )
+
+        async def open_selection() -> None:
+            """Request metadata that must never be delivered after cancellation."""
+            async with sampler.open_selection(selection, "owner"):
+                pytest.fail("Cancelled metadata was delivered")
+
+        request = asyncio.create_task(open_selection())
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            if lease_lost:
+                await asyncio.wait_for(renewal_failed.wait(), 5)
+            else:
+                request.cancel()
+                await asyncio.sleep(0)
+                request.cancel()
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(request), 0.02)
+            assert authority.leases and not stopped.is_set()
+        finally:
+            finish.set()
+            with pytest.raises(
+                SourceFileError if lease_lost else asyncio.CancelledError
+            ):
+                await asyncio.wait_for(request, 5)
+        assert stopped.is_set() and not authority.leases
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_vector_result_lease_outlives_coalesced_statistics_and_native_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, paired: bool
+) -> None:
+    """Hold vector results until the final ordinary or paired native read has stopped.
+
+    Args:
+        tmp_path: Isolated original raster and vector files.
+        monkeypatch: Control only the native subprocess execution boundary.
+        paired: Exercise either ordinary or paired statistics over catalog rasters.
+    """
+    path = write_source(tmp_path / "source.tif")
+    sampler, authority, selection = _vector_result_sampler(tmp_path)
+
+    async def exercise() -> None:
+        """Cancel coalesced callers and ensure native stop precedes the final release."""
+        entered, stopped = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def native(reader: Any, *arguments: Any) -> Any:
+            """Keep a native read active until its final waiter leaves.
+
+            Args:
+                reader: Ordinary or paired production reader selected by the service.
+                arguments: Original catalog rasters and the leased vector selection.
+
+            Raises:
+                asyncio.CancelledError: When the service stops its final native read.
+            """
+            nonlocal calls
+            calls += 1
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                assert authority.leases
+                await asyncio.sleep(0.02)
+                assert authority.leases
+                stopped.set()
+
+        monkeypatch.setattr(
+            "eolab_app.raster.statistics_service.read_private_raster", native
+        )
+        service = RasterStatisticsService(
+            RasterSourceAccess(CatalogAuthority(path)), 1, 8, sampler
+        )
+        request = (
+            CatalogRasterPairRequest(
+                xRaster=CATALOG, yRaster=CATALOG, catalogSelection=selection
+            )
+            if paired
+            else CatalogRasterStatisticsRequest(**CATALOG, catalogSelection=selection)
+        )
+        read = service.get_paired if paired else service.get
+        first = asyncio.create_task(read(request, "owner"))
+        await asyncio.wait_for(entered.wait(), 10)
+        second = asyncio.create_task(read(request, "owner"))
+        async with asyncio.timeout(10):
+            while service._waiter_count != 2:
+                await asyncio.sleep(0.01)
+        assert len(authority.leases) == 2
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert len(authority.leases) == 1 and not stopped.is_set()
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        assert stopped.is_set() and not authority.leases and calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_vector_result_statistics_recheck_owner_and_expiry_before_cached_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached calculation cannot bypass private vector authorization or expiry.
+
+    Args:
+        tmp_path: Isolated immutable source files.
+        monkeypatch: Replace only numerical execution, retaining source boundaries.
+    """
+    path = write_source(tmp_path / "source.tif")
+    sampler, authority, selection = _vector_result_sampler(tmp_path)
+    calls = 0
+
+    async def native(reader: Any, *arguments: Any) -> Any:
+        """Return a completed result under an active original-vector lease.
+
+        Args:
+            reader: Production statistics reader.
+            arguments: Authorized original sources and analysis parameters.
+
+        Returns:
+            Valid statistics used to exercise the service's cache delivery.
+        """
+        nonlocal calls
+        calls += 1
+        assert authority.leases
+        return _statistics(4)
+
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics_service.read_private_raster", native
+    )
+    service = RasterStatisticsService(
+        RasterSourceAccess(CatalogAuthority(path)), 1, 8, sampler
+    )
+
+    async def exercise() -> None:
+        """Read once, reuse while authorized and reject foreign or expired requests."""
+        request = CatalogRasterStatisticsRequest(**CATALOG, catalogSelection=selection)
+        first = await service.get(request, "owner")
+        assert await service.get(request, "owner") is first
+        with pytest.raises(SourceFileError):
+            await service.get(request, "other-owner")
+        authority.ready = False
+        with pytest.raises(SourceFileError):
+            await service.get(request, "owner")
+        assert not authority.leases and calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_invalid_vector_result_calculation_returns_an_analysis_conflict(
+    tmp_path: Path,
+) -> None:
+    """Translate invalid result-view fields before numerical work and release the lease.
+
+    Args:
+        tmp_path: Isolated immutable vector and raster files.
+    """
+    path = write_source(tmp_path / "source.tif")
+    sampler, authority, selection = _vector_result_sampler(tmp_path)
+    invalid = selection.model_copy(
+        update={
+            "calculated_fields": (
+                CalculatedField(name="doubled", expression="'missing' * 2"),
+            )
+        }
+    )
+    service = RasterStatisticsService(
+        RasterSourceAccess(CatalogAuthority(path)), 1, 8, sampler
+    )
+    request = CatalogRasterStatisticsRequest(**CATALOG, catalogSelection=invalid)
+    with pytest.raises(RasterConflictError, match="Field 'missing' is unavailable"):
+        asyncio.run(service.get(request, "owner"))
+    assert not authority.leases
 
 
 def test_revocation_during_read_prevents_delivery_and_cache_cannot_restore_access(

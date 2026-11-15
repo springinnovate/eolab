@@ -26,7 +26,11 @@ from eolab_app.vector.selection_operation import (
     SelectionMeasurementResult,
     measure_selected_features,
 )
-
+from eolab_app.vector.field_calculation_operation import (
+    FieldCalculationInput,
+    FieldCalculationOutcome,
+    calculate_vector_fields,
+)
 
 @dataclass(frozen=True)
 class InstalledOperation:
@@ -85,5 +89,12 @@ OPERATIONS = {
         SelectionMeasurementInput,
         SelectionMeasurementResult,
         measure_selected_features,
+    ),
+    "vector.field-calculation.v1": InstalledOperation(
+        "vector.field-calculation.v1",
+        "Calculate whole-layer numeric attributes without changing original sources.",
+        FieldCalculationInput,
+        FieldCalculationOutcome,
+        calculate_vector_fields,
     ),
 }

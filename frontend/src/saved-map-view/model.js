@@ -1,7 +1,8 @@
 /** Versioned, portable saved-map document validation and construction. */
+import { validateCalculatedFields } from "../calculated-fields.js";
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
-export const SAVED_MAP_VIEW_SCHEMA_VERSION = 3;
+export const SAVED_MAP_VIEW_SCHEMA_VERSION = 4;
 export const MAX_SAVED_MAP_VIEW_BYTES = 512 * 1024;
 export const MAX_SAVED_MAP_VIEW_LAYERS = 50;
 
@@ -32,7 +33,7 @@ export function createSavedMapView(candidate) {
     return validateSavedMapView({
         format: SAVED_MAP_VIEW_FORMAT,
         schemaVersion: SAVED_MAP_VIEW_SCHEMA_VERSION,
-        ...(!candidate.schemaVersion || candidate.schemaVersion === 3 ? { basemap: "detailed" } : {}),
+        ...(!candidate.schemaVersion || candidate.schemaVersion >= 3 ? { basemap: "detailed" } : {}),
         ...candidate,
     });
 }
@@ -82,7 +83,7 @@ export function serializeSavedMapView(savedMapView) {
  */
 function validateSavedMapView(candidate) {
     requirePlainObject(candidate, "Saved map");
-    if (![1, 2, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
+    if (![1, 2, 3, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
         throw new SavedMapViewValidationError(
             `Saved map schema ${String(candidate.schemaVersion)} is not supported.`
         );
@@ -90,7 +91,7 @@ function validateSavedMapView(candidate) {
     requireExactKeys(
         candidate,
         ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers",
-            ...(candidate.schemaVersion === 3 ? ["basemap"] : []),
+            ...(candidate.schemaVersion >= 3 ? ["basemap"] : []),
             ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : [])],
         "Saved map"
     );
@@ -109,7 +110,7 @@ function validateSavedMapView(candidate) {
     const origin = validateOrigin(candidate.viewer.origin);
     const createdAt = validateTimestamp(candidate.createdAt);
     const viewport = validateViewport(candidate.viewport);
-    if (candidate.schemaVersion === 3 && !["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
+    if (candidate.schemaVersion >= 3 && !["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
         throw new SavedMapViewValidationError("Saved basemap provider is invalid.");
     }
     if (!Array.isArray(candidate.layers)) {
@@ -139,11 +140,14 @@ function validateSavedMapView(candidate) {
             if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
         }
-        if (Object.hasOwn(layer, "temporalSource") && candidate.schemaVersion !== 3) {
+        if (Object.hasOwn(layer, "temporalSource") && candidate.schemaVersion < 3) {
             throw new SavedMapViewValidationError("Temporal layers require saved-map version three.");
         }
-        if (Object.hasOwn(layer, "uploadId") && candidate.schemaVersion !== 3) {
+        if (Object.hasOwn(layer, "uploadId") && candidate.schemaVersion < 3) {
             throw new SavedMapViewValidationError("Uploaded layers require saved-map version three.");
+        }
+        if ((Object.hasOwn(layer, "runArtifact") || Object.hasOwn(layer, "calculatedFields")) && candidate.schemaVersion < 4) {
+            throw new SavedMapViewValidationError("Calculated fields and run results require saved-map version four.");
         }
         return validateLayer(layer);
     });
@@ -164,7 +168,7 @@ function validateSavedMapView(candidate) {
         viewer: Object.freeze({ version, origin }),
         createdAt,
         viewport,
-        ...(candidate.schemaVersion === 3 ? { basemap: candidate.basemap } : {}),
+        ...(candidate.schemaVersion >= 3 ? { basemap: candidate.basemap } : {}),
         layers: Object.freeze(layers),
         ...(candidate.mapLegend ? { mapLegend: Object.freeze({ ...candidate.mapLegend }) } : {}),
     });
@@ -215,13 +219,15 @@ function validateLayer(candidate) {
     requirePlainObject(candidate, "Saved layer");
     const isUpload = Object.hasOwn(candidate, "uploadId");
     const isTemporal = Object.hasOwn(candidate, "temporalSource");
+    const isArtifact = Object.hasOwn(candidate, "runArtifact");
     requireExactKeys(
         candidate,
-        [isTemporal ? "temporalSource" : isUpload ? "uploadId" : "catalogItem", "visible", "opacity", "style",
+        [isTemporal ? "temporalSource" : isUpload ? "uploadId" : isArtifact ? "runArtifact" : "catalogItem", "visible", "opacity", "style",
             ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
             ...(Object.hasOwn(candidate, "isCustom") ? ["isCustom"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
-            ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
+            ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : []),
+            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : [])],
         "Saved layer"
     );
     let customName;
@@ -249,6 +255,15 @@ function validateLayer(candidate) {
             variable: requireBoundedString(source.variable, MAX_IDENTITY_LENGTH, "Variable"),
             time: new Date(source.time).toISOString(),
         }) };
+    } else if (isArtifact) {
+        const source = candidate.runArtifact;
+        requirePlainObject(source, "Run result");
+        requireExactKeys(source, ["jobId", "artifactId", "layerName"], "Run result");
+        if (typeof source.jobId !== "string" || !/^[0-9a-f]{32}$/.test(source.jobId) ||
+            typeof source.artifactId !== "string" || !/^[0-9a-f]{32}$/.test(source.artifactId)) {
+            throw new SavedMapViewValidationError("Run result identifiers are invalid.");
+        }
+        identity = {runArtifact: Object.freeze({...source, layerName: requireBoundedString(source.layerName, 256, "Vector layer name")})};
     } else if (isUpload) {
         if (typeof candidate.uploadId !== "string" ||
             !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(candidate.uploadId)) {
@@ -280,6 +295,9 @@ function validateLayer(candidate) {
             "Saved layer style kind must be raster or vector."
         );
     }
+    if ((isArtifact || Object.hasOwn(candidate, "calculatedFields")) && candidate.style.kind !== "vector") {
+        throw new SavedMapViewValidationError("Calculated fields and vector run results require a vector style.");
+    }
     if (isUpload && candidate.style.kind === "raster" && Object.hasOwn(candidate, "filter")) {
         throw new SavedMapViewValidationError("Uploaded raster layers cannot have polygon filters.");
     }
@@ -302,6 +320,7 @@ function validateLayer(candidate) {
         opacity: candidate.opacity,
         style: structuredClone(candidate.style),
         ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
+        ...(Object.hasOwn(candidate, "calculatedFields") ? {calculatedFields: validateCalculatedFields(candidate.calculatedFields)} : {}),
     });
 }
 

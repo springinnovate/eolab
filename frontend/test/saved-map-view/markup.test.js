@@ -15,5 +15,6 @@ test("saved map controls expose share, reset, undo, and open dialog", async () =
   assert.doesNotMatch(markup, /id="open-map-view-file"/);
   assert.match(markup, /<dialog[^>]*id="saved-map-view-dialog"/s);
   assert.match(markup, /id="saved-map-view-dialog-url"[^>]*readonly[^>]*hidden/s);
+  assert.match(markup, /id="show-unavailable-map-layers"[^>]*title="Review unavailable saved layers"[^>]*hidden/s);
   assert.doesNotMatch(markup, /id="confirm-open-map-view"/);
 });

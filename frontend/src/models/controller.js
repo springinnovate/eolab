@@ -10,6 +10,16 @@ import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";
 
+/** Compare the filter and calculated fields captured from the same vector view.
+ * @param {Object|null|undefined} left Previous view or accepted selection.
+ * @param {Object|null|undefined} right Current view or accepted selection.
+ * @return {boolean} Whether both use the same predicate and arithmetic definitions.
+ */
+function vectorAreaInputsEqual(left, right) {
+    return JSON.stringify([left?.filter, left?.calculatedFields ?? []]) ===
+        JSON.stringify([right?.filter, right?.calculatedFields ?? []]);
+}
+
 /** Keep editable model drafts separate from accepted, session-owned runs. */
 export class ModelsController {
     /** Connect the Models view to API transport and composed catalog inputs.
@@ -456,8 +466,9 @@ export class ModelsController {
     }
 
     /** Read matching features and commit their predicate only after a successful selection.
-     * Failed candidate edits preserve the previous selection. A changed view filter
-     * invalidates the old selection until its replacement has been read successfully.
+     * Failed candidate edits preserve the previous selection while its calculated
+     * fields still match. Changed view filters or formulas invalidate the old area
+     * until its replacement has been read successfully.
      * @param {string} name Input name declared by the recipe.
      * @param {string} key Map view identity from the vector choice list.
      * @param {Object|null} [filter=null] Candidate edited filter, otherwise the view's current filter.
@@ -471,8 +482,10 @@ export class ModelsController {
         const source = input.vectors.find(value => value.key === key);
         if (input.vectorKey !== key) { if (input.filterEditing) this.closeVectorFilter(); input.mapFilterMessage = ""; }
         this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
-        const previous = input.vectorKey === key && (filter !== null ||
-            JSON.stringify(input.area?.selection?.filter) === JSON.stringify(source?.filter))
+        const sameCalculatedFields = JSON.stringify(input.area?.selection?.calculatedFields ?? []) ===
+            JSON.stringify(source?.calculatedFields ?? []);
+        const previous = input.vectorKey === key &&
+            (filter !== null ? sameCalculatedFields : vectorAreaInputsEqual(input.area?.selection, source))
             ? {area: input.area, info: input.vectorInfo} : {area: null, info: null};
         input.vectorKey = source ? key : ""; input.area = source ? previous.area : null; input.vectorInfo = source ? previous.info : null; input.selectionError = "";
         if (!source) { input.selecting = false; this.render(); return null; }
@@ -574,9 +587,9 @@ export class ModelsController {
         return {...context, rasters: [...new Map(choices.map(source => [modelSourceKey(source), source])).values()]};
     }
 
-    /** Refresh map choices and recheck live vector inputs when their view filter changes.
+    /** Refresh map choices and recheck live vector inputs when their filter or formulas change.
      * Drawn layer choices read the latest committed shapes matching the layer filter.
-     * Captured run areas and accepted submissions retain their original predicates.
+     * Captured run areas and accepted submissions retain their original filters and formulas.
      * Removed live inputs must be added to the map again or replaced before a new run.
      * @return {void}
      */
@@ -617,8 +630,8 @@ export class ModelsController {
                 input.vectorKey = ""; input.area = null; input.vectorInfo = null; input.selecting = false;
                 input.selectionError = "Add the vector dataset to Map contents, or choose another dataset.";
             } else if (input.areaMode === "vector" && selected &&
-                JSON.stringify(previous?.filter) !== JSON.stringify(selected.filter) &&
-                JSON.stringify(input.area?.selection?.filter) !== JSON.stringify(selected.filter)) {
+                !vectorAreaInputsEqual(previous, selected) &&
+                !vectorAreaInputsEqual(input.area?.selection, selected)) {
                 void this.chooseVector(name, selected.key);
             }
         }

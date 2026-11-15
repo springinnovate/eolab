@@ -56,6 +56,7 @@ PUBLIC_WMS_MAP_QUERY_PARAMETERS = PUBLIC_WMS_COMMON_QUERY_PARAMETERS | {
     "srs",
     "styles",
     "vector_style",
+    "vector_calculated_fields",
     "time",
     "transparent",
     "width",
@@ -89,6 +90,7 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
         "scale",
         "style",
         "vector_style",
+        "vector_calculated_fields",
         "transparent",
         "width",
     },
@@ -439,6 +441,26 @@ def create_wms_proxy_router(
                 raise HTTPException(
                     status_code=502,
                     detail="The rendering service returned too much feature information",
+                )
+            if "vector_calculated_fields" in normalized_query:
+                try:
+                    content = authorization.prepare_feature_info(
+                        geoserver_response.content, normalized_query
+                    )
+                except PublishedLayerRequestError as error:
+                    raise HTTPException(502, str(error)) from error
+                if len(content) > MAX_FEATURE_INFO_RESPONSE_BYTES:
+                    raise HTTPException(
+                        502,
+                        "The rendering service returned too much feature information",
+                    )
+                geoserver_response = httpx2.Response(
+                    200,
+                    content=content,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Cache-Control": "no-store",
+                    },
                 )
 
         if (

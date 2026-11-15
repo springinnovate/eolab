@@ -38,6 +38,7 @@ export class ModelOutputLayers {
      * @param {(jobId:string)=>void} dependencies.openRun Open the originating run's details.
      * @param {()=>void} dependencies.onChange Refresh output buttons and the private-map notice.
      * @param {(job:Object)=>void} [dependencies.onRunObserved] Share revalidated run state through composition.
+     * @param {(key:string)=>void} [dependencies.onUnavailable] Preserve view definitions before an inaccessible result is removed.
      * @param {(raster:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addRaster Attach through the common raster owner.
      * @param {(vector:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addVector Attach through the common vector owner.
      * @param {Function} [dependencies.describe=describeRasterSource] Original-source metadata reader.
@@ -45,8 +46,8 @@ export class ModelOutputLayers {
      * @param {(jobId:string,file:Object,signal:AbortSignal)=>Promise<Object>} [dependencies.read=readArtifactPreview] Bounded GeoJSON preview reader.
      * @param {Object} [dependencies.clock=globalThis] Timer and wall-clock provider.
      */
-    constructor({api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, addVector, onRunObserved = () => {}, describe = describeRasterSource, describeVector = describeVectorArtifact, read = readArtifactPreview, clock = globalThis}) {
-        Object.assign(this, {api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, addVector, onRunObserved, describe, describeVector, read, clock});
+    constructor({api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, addVector, onRunObserved = () => {}, onUnavailable = () => {}, describe = describeRasterSource, describeVector = describeVectorArtifact, read = readArtifactPreview, clock = globalThis}) {
+        Object.assign(this, {api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, addVector, onRunObserved, onUnavailable, describe, describeVector, read, clock});
         this.layers = new Map(); this.pending = new Map(); this.messages = new Map(); this.timer = null; this.expiryTimer = null; this.destroyed = false;
         this.runStates = new Map();
     }
@@ -64,7 +65,7 @@ export class ModelOutputLayers {
             error: this.messages.get(key) ?? ""};
     }
 
-    /** Identify private result views, including attachment still in progress, for saved-map exclusion.
+    /** Identify private result views, including attachment still in progress.
      * @param {string} key Map view identity. @return {boolean} Whether this owner retains or is adding the view.
      */
     ownsLayer(key) { return this.layers.has(key) || this.pending.has(key); }
@@ -113,6 +114,7 @@ export class ModelOutputLayers {
                 const source = {kind: "runArtifact", jobId: job.jobId, artifactId: file.artifactId};
                 const metadata = await (vector ? this.describeVector : this.describe)(source, abort.signal);
                 if (this.destroyed || abort.signal.aborted || !isCurrent()) return;
+                if (vector && restore?.local.layerName && metadata.layerName !== restore.local.layerName) throw new Error("This vector result has a different layer name. Reopen the run and choose its result again.");
                 if (!vector && metadata.version !== file.sha256) throw new Error("This raster result changed. Reopen the run and try again.");
                 if (Date.parse(this.runStates.get(job.jobId).expiresAt) <= Date.now()) throw new Error("This result expired. Run the tool again.");
                 const bbox = vector ? metadata.bbox : metadata.bounds;
@@ -130,13 +132,15 @@ export class ModelOutputLayers {
                     /** Copy source identity and appearance for Undo or another authorized view.
                      * @param {Object} appearance Ordinary layer appearance.
                      * @param {Object} [filter] Accepted vector predicate, when the source is a vector.
+                     * @param {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} [calculatedFields] Accepted definitions owned by this vector view.
                      * @return {Object} Restoration data without file bytes or credentials.
                      */
-                    copy: (appearance, filter) => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance,
-                        ...(filter ? {filter} : {})}),
+                    copy: (appearance, filter, calculatedFields) => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance,
+                        ...(vector ? {layerName: metadata.layerName} : {}), ...(filter ? {filter} : {}), ...(calculatedFields?.length ? {calculatedFields} : {})}),
                     /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
                     removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
                 }, {...presentation, key, canAddView: true, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, filter: restore?.local.filter, signal: abort.signal,
+                    calculatedFields: restore?.local.calculatedFields,
                     customName: restore?.customName ?? null,
                     isCurrent: () => !this.destroyed && !abort.signal.aborted && isCurrent() &&
                         this.runStates.get(job.jobId)?.status === "ready" && Date.parse(this.runStates.get(job.jobId).expiresAt) > Date.now()});
@@ -280,6 +284,7 @@ export class ModelOutputLayers {
             }
             else {
                 this.messages.set(artifactLayerKey(state.jobId, state.file.artifactId), "Map layer removed because the result is no longer available. Reopen the run to check it.");
+                this.onUnavailable(state.key);
                 this.removeLayer(state.key);
                 changed = true;
             }
@@ -321,6 +326,7 @@ export class ModelOutputLayers {
             this.messages.set(artifactLayerKey(state.jobId, state.file.artifactId), Date.parse(state.expiresAt) <= Date.now()
                 ? "This result expired and its map layer was removed. Run the tool again."
                 : "Map layer removed because the result is no longer available. Reopen the run to check it.");
+            this.onUnavailable(state.key);
             this.removeLayer(state.key);
         }
         this.schedule(); this.onChange();

@@ -33,6 +33,8 @@ from eolab_app.upload_storage import (
     finish_upload_disk_operation,
 )
 from eolab_app.routes.vector_artifacts import create_artifact_vector_router
+from eolab_app.routes.vector_calculations import create_vector_calculation_router
+from eolab_app.vector.field_calculation import FieldCalculationJobs
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
@@ -257,6 +259,7 @@ def create_app(
         selection_executor=SelectionJobs(vector_jobs),
         extent_executor=ExtentJobs(vector_jobs),
         uploads=vector_uploads,
+        artifact_files=lambda: source_files,
     )
     processing_limits = load_processing_limits()
     processing_events = PostgresJobEvents()
@@ -659,6 +662,14 @@ def create_app(
         )
     )
     application.include_router(
+        create_vector_calculation_router(
+            FieldCalculationJobs(vector_jobs), source_files,
+            lambda request, response: get_processing_session_owner_hash(
+                request, response, processing_session_ttl
+            ),
+        )
+    )
+    application.include_router(
         create_artifact_vector_router(
             artifact_vectors, vector_publication, vector_styles,
             lambda request, response: get_processing_session_owner_hash(
@@ -731,7 +742,14 @@ def create_app(
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
-    application.include_router(create_vector_sampling_router(vector_selection_reader))
+    application.include_router(
+        create_vector_sampling_router(
+            vector_selection_reader,
+            read_artifact_owner=lambda request, response: get_processing_session_owner_hash(
+                request, response, processing_session_ttl
+            ),
+        )
+    )
     application.include_router(
         create_habitat_router(
             habitat_preparation_selections,

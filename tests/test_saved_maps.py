@@ -43,17 +43,98 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
-def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> None:
-    """Persist an opaque raster upload without publishing data or vector predicates."""
+def test_calculated_fields_and_private_results_round_trip() -> None:
+    """Persist ordered definitions and private references without source data."""
+    candidate = map_request()
+    candidate["view"].update(schemaVersion=4, basemap="detailed")
+    fields = [
+        {
+            "version": 1,
+            "name": "Density",
+            "expression": "'Population' / 'Area km2'",
+            "numericText": False,
+        }
+    ]
+    presentation = {
+        "isCustom": True,
+        "visible": True,
+        "opacity": 1,
+        "calculatedFields": fields,
+        "style": {"kind": "vector", "definition": {"graduated": {"field": "Density"}}},
+        "filter": {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "Density", "operator": "gt", "value": 2}],
+        },
+    }
+    candidate["view"]["layers"] = [
+        {**presentation, "catalogItem": {"collection": "vectors", "id": "regions"}},
+        {
+            **presentation,
+            "uploadId": "12345678-1234-1234-1234-123456789abc",
+        },
+        {
+            **presentation,
+            "runArtifact": {
+                "jobId": "a" * 32,
+                "artifactId": "b" * 32,
+                "layerName": "results",
+            },
+        },
+    ]
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    assert (
+        CreateSavedMap.model_validate_json(
+            parsed.model_dump_json(exclude_unset=True)
+        ).model_dump(mode="json", exclude_unset=True)
+        == candidate
+    )
+    for invalid_field in (
+        {**fields[0], "values": [1, 2]},
+        {**fields[0], "numericText": "true"},
+    ):
+        invalid = deepcopy(candidate)
+        invalid["view"]["layers"][0]["calculatedFields"] = [invalid_field]
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["schemaVersion"] = 3
+    with pytest.raises(ValidationError, match="version four"):
+        CreateSavedMap.model_validate(invalid)
+
+
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_raster_upload_view_round_trip_preserves_private_source_and_style(
+    schema_version: int,
+) -> None:
+    """Persist an opaque raster upload without publishing data or vector predicates.
+
+    Args:
+        schema_version: Supported saved-map version admitting private uploads.
+    """
     candidate = map_request()
     view = candidate["view"]
-    view.update(schemaVersion=3, basemap="none")
+    view.update(schemaVersion=schema_version, basemap="none")
     layer = view["layers"][0]
     layer.pop("catalogItem")
     layer.update(uploadId="12345678-1234-1234-1234-123456789abc", isCustom=True)
     view["layers"] = [layer]
     parsed = CreateSavedMap.model_validate(candidate)
     assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    layer["calculatedFields"] = [
+        {
+            "version": 1,
+            "name": "Density",
+            "expression": "'Population' / 'Area km2'",
+            "numericText": False,
+        }
+    ]
+    with pytest.raises(
+        ValidationError, match="Calculated fields require a vector layer"
+    ):
+        CreateSavedMap.model_validate(candidate)
+    del layer["calculatedFields"]
     layer["filter"] = {"field": "class", "value": 1}
     with pytest.raises(
         ValidationError, match="Raster uploads do not support vector filters"
@@ -213,7 +294,10 @@ def test_custom_layer_name_round_trip() -> None:
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(candidate)
     layer["customName"] = "🌲" * 160
-    assert CreateSavedMap.model_validate(candidate).view.layers[0].customName == layer["customName"]
+    assert (
+        CreateSavedMap.model_validate(candidate).view.layers[0].customName
+        == layer["customName"]
+    )
     layer["customName"] = None
     assert CreateSavedMap.model_validate(candidate).view.layers[0].customName is None
 
@@ -273,7 +357,7 @@ def test_shared_annotation_reference_contract() -> None:
         CreateSavedMap.model_validate(candidate)
 
 
-@pytest.mark.parametrize("source", ["annotation", "upload"])
+@pytest.mark.parametrize("source", ["annotation", "upload", "artifact"])
 def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
     """Reject private uploads and shared invitations from another EOLab site.
 
@@ -288,6 +372,20 @@ def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
         view["layers"] = [
             {
                 "uploadId": "11111111-1111-4111-8111-111111111111",
+                "visible": True,
+                "opacity": 1,
+                "style": {"kind": "vector", "definition": {}},
+            }
+        ]
+    elif source == "artifact":
+        view.update(schemaVersion=4, basemap="detailed")
+        view["layers"] = [
+            {
+                "runArtifact": {
+                    "jobId": "a" * 32,
+                    "artifactId": "b" * 32,
+                    "layerName": "results",
+                },
                 "visible": True,
                 "opacity": 1,
                 "style": {"kind": "vector", "definition": {}},

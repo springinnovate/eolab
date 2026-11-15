@@ -102,6 +102,18 @@
               <span class="panel-header-action-label">Status</span>
             </button>
             <button
+              class="secondary-button saved-map-view-action"
+              id="show-unavailable-map-layers"
+              type="button"
+              title="Review unavailable saved layers"
+              hidden
+            >
+              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m12 3 10 18H2L12 3Z"></path><path d="M12 9v4m0 4h.01"></path>
+              </svg>
+              <span class="panel-header-action-label" id="unavailable-map-layers-label">Unavailable layers</span>
+            </button>
+            <button
               class="icon-button"
               id="collapse-panel"
               type="button"
@@ -452,7 +464,7 @@
                       id="eomap-map-layers-body"
                       aria-hidden="false"
                     >
-                    <p class="models-help" data-private-result-notice hidden>Result previews are temporary and private. Saved and shared maps omit them. Reopen them from Data tools → Runs.</p>
+                    <p class="models-help" data-private-result-notice hidden>Result previews are temporary and private. Reopen them from Data tools → Runs.</p>
                     <div class="map-layer-source-actions" role="group" aria-label="Add or manage your layers">
                     <button class="secondary-button" id="upload-polygons" type="button">Your uploads</button>
                     <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a private polygon saved on this device" disabled>Draw polygon</button>

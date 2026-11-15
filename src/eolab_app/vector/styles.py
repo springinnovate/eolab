@@ -5,6 +5,7 @@ import math
 from copy import deepcopy
 from hashlib import sha256
 from xml.etree import ElementTree
+from eolab_app.calculated_fields import CalculatedField, compile_field_expression
 
 from eolab_app.vector.models import (
     VectorCategoricalStyle,
@@ -64,6 +65,7 @@ def vector_style_name(
     style: VectorStyle,
     *,
     geometry_name: str | None = None,
+    calculated_fields: tuple[CalculatedField, ...] = (),
 ) -> str:
     """Address one layer's validated settings and generated rendering content.
 
@@ -71,12 +73,14 @@ def vector_style_name(
         resource_name: Authoritative server-side vector resource identity.
         style: Complete validated vector style state.
         geometry_name: Authorized GeoServer geometry attribute for fixed labels.
+        calculated_fields: View-owned definitions bound into the appearance identity.
 
     Returns:
         Safe unqualified style name whose identity changes with rendering.
 
     Raises:
-        ValueError: If fixed labels have no authorized geometry attribute.
+        ValueError: If fixed labels lack geometry or calculated expressions exceed
+            the interactive rendering budget.
     """
     resource_digest = sha256(resource_name.encode("utf-8")).hexdigest()[:24]
     style_document = json.dumps(
@@ -86,7 +90,18 @@ def vector_style_name(
     ).encode("utf-8")
     # Include generated policy so a deployment cannot reuse tiles rendered with
     # older label-placement rules even when the saved settings are unchanged.
-    rendered_style = build_vector_sld("vector-style", style, geometry_name=geometry_name)
+    rendered_style = build_vector_sld(
+        "vector-style",
+        style,
+        geometry_name=geometry_name,
+        calculated_fields=calculated_fields,
+    )
+    if calculated_fields:
+        style_document += json.dumps(
+            [value.model_dump() for value in calculated_fields],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     style_digest = sha256(style_document + b"\0" + rendered_style).hexdigest()[:12]
     return f"vector-style-{resource_digest}-{style_digest}"
 
@@ -113,6 +128,7 @@ def build_vector_sld(
     layer_name: str | None = None,
     opacity_multiplier: float = 1,
     geometry_name: str | None = None,
+    calculated_fields: tuple[CalculatedField, ...] = (),
 ) -> bytes:
     """Serialize one validated vector style as an SLD 1.0 document.
 
@@ -123,6 +139,7 @@ def build_vector_sld(
         opacity_multiplier: Neutral whole-layer opacity from zero through one.
             Category opacity also multiplies each explicit rule's whole symbol.
         geometry_name: Authorized GeoServer geometry attribute for fixed labels.
+        calculated_fields: Source-validated view definitions for numeric expressions.
 
     Returns:
         UTF-8 XML for GeoServer's inline WMS style. Categorical
@@ -130,7 +147,8 @@ def build_vector_sld(
         geometry and label rules without changing category membership.
 
     Raises:
-        ValueError: If fixed labels have no authorized geometry attribute.
+        ValueError: If fixed labels lack geometry or calculated expressions exceed
+            the interactive rendering budget.
     """
 
     root = ElementTree.Element(
@@ -245,11 +263,123 @@ def build_vector_sld(
             opacity_multiplier,
             geometry_name,
         )
+    if calculated_fields:
+        expressions = calculated_field_expressions(calculated_fields)
+        for parent in root.iter():
+            for index, child in enumerate(parent):
+                if (
+                    child.tag == f"{{{OGC_NAMESPACE}}}PropertyName"
+                    and child.text in expressions
+                ):
+                    parent[index] = deepcopy(expressions[child.text])
     return ElementTree.tostring(
         root,
         encoding="utf-8",
         xml_declaration=True,
     )
+
+
+def calculated_field_expressions(
+    definitions: tuple[CalculatedField, ...],
+) -> dict[str, ElementTree.Element]:
+    """Translate approved arithmetic programs to native GeoTools expressions.
+
+    Args:
+        definitions: Ordered source-validated definitions bound to the view.
+
+    Returns:
+        OGC expression roots using the strict arithmetic function in GeoServer.
+
+    Raises:
+        ValueError: If expanded expressions exceed 16,384 nodes in total or
+            128 nested function levels, the interactive rendering budget.
+    """
+    expressions: dict[str, ElementTree.Element] = {}
+    sizes: dict[str, tuple[int, int]] = {}
+    total_nodes = 0
+    for definition in definitions:
+        stack: list[tuple[ElementTree.Element, int, int]] = []
+        for instruction in compile_field_expression(definition.expression):
+            operation = instruction.operator
+            if operation == "literal":
+                node = ElementTree.Element(f"{{{OGC_NAMESPACE}}}Literal")
+                node.text = str(instruction.value)
+                stack.append((node, 1, 1))
+                continue
+            if operation == "field":
+                name = str(instruction.value)
+                if name in expressions:
+                    size, depth = sizes[name]
+                    stack.append((deepcopy(expressions[name]), size, depth))
+                    continue
+                left = ElementTree.Element(f"{{{OGC_NAMESPACE}}}PropertyName")
+                left.text = name
+                right = ElementTree.Element(f"{{{OGC_NAMESPACE}}}Literal")
+                right.text = "true" if definition.numericText else "false"
+                size = 4
+                depth = 2
+                operation = "number"
+            elif operation in {"positive", "negate"}:
+                left, size, depth = stack.pop()
+                right = ElementTree.Element(f"{{{OGC_NAMESPACE}}}Literal")
+                right.text = "0"
+                size += 3
+                depth += 1
+            else:
+                right, right_size, right_depth = stack.pop()
+                left, left_size, left_depth = stack.pop()
+                size = left_size + right_size + 2
+                depth = max(left_depth, right_depth) + 1
+            if size + total_nodes > 16384 or depth > 128:
+                raise ValueError(
+                    "Calculated fields are too complex to display; simplify the expressions."
+                )
+            node = ElementTree.Element(
+                f"{{{OGC_NAMESPACE}}}Function", {"name": "eolabArithmetic"}
+            )
+            operator = ElementTree.SubElement(node, f"{{{OGC_NAMESPACE}}}Literal")
+            operator.text = operation
+            node.extend((left, right))
+            stack.append((node, size, depth))
+        expression, size, depth = stack.pop()
+        if expression.tag == f"{{{OGC_NAMESPACE}}}Literal":
+            # OGC literals are strings; a constant-only field must still be numeric.
+            number = ElementTree.Element(
+                f"{{{OGC_NAMESPACE}}}Function", {"name": "eolabArithmetic"}
+            )
+            ElementTree.SubElement(number, f"{{{OGC_NAMESPACE}}}Literal").text = (
+                "number"
+            )
+            number.append(expression)
+            ElementTree.SubElement(number, f"{{{OGC_NAMESPACE}}}Literal").text = "true"
+            expression, size, depth = number, 4, 2
+        expressions[definition.name] = expression
+        if size + total_nodes > 16384:
+            raise ValueError(
+                "Calculated fields are too complex to display; simplify the expressions."
+            )
+        sizes[definition.name] = (size, depth)
+        total_nodes += size
+    return expressions
+
+
+def vector_expression_ecql(expression: ElementTree.Element) -> str:
+    """Serialize a generated arithmetic expression as escaped native ECQL.
+
+    Args:
+        expression: OGC tree generated by calculated_field_expressions.
+
+    Returns:
+        A function expression containing only quoted fields and fixed scalar literals.
+    """
+    kind = expression.tag.rsplit("}", 1)[-1]
+    if kind == "PropertyName":
+        return '"' + expression.text.replace('"', '""') + '"'
+    if kind == "Literal":
+        if expression.text in {"number", "positive", "negate", "+", "-", "*", "/"}:
+            return "'" + expression.text + "'"
+        return expression.text
+    return f"eolabArithmetic({','.join(vector_expression_ecql(child) for child in expression)})"
 
 
 def _append_symbol_rule(

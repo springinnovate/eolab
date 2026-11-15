@@ -94,7 +94,10 @@ def _read_summary_schema(
     with fiona.open(
         source.path, layer=source.selection.layerName, enabled_drivers=[source.driver]
     ) as dataset:
-        fields = dataset.schema["properties"]
+        fields = {
+            **dataset.schema["properties"],
+            **{field.definition.name: "float" for field in source.calculated_fields},
+        }
         value_fields = dict.fromkeys(summary.field for summary in summaries)
         if {inputs.groupField, *value_fields} - set(fields):
             raise ProcessingError(

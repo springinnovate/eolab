@@ -5,7 +5,13 @@ from dataclasses import dataclass, field
 import hmac
 import json
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from eolab_app.calculated_fields import (
+    CalculatedField,
+    CompiledCalculatedField,
+    compile_field_expression,
+    evaluate_calculated_fields,
+)
 
 from eolab_app.rendering.errors import PublishedLayerRequestError
 from eolab_app.vector.filters import VectorFilter, filter_ecql, filter_vector_sld
@@ -34,6 +40,7 @@ class PublishedVectorAuthorization:
         filter: Validated per-view predicate, never an arbitrary expression.
         inspection_layer_name: Original-geometry publication used for feature
             inspection and ID-specific highlights when the map uses overviews.
+        calculated_fields: Source-validated definitions retained with a filtered view.
     """
 
     source: ResolvedVectorSource
@@ -43,6 +50,7 @@ class PublishedVectorAuthorization:
     upstream_layer_name: str | None = None
     filter: VectorFilter | None = None
     inspection_layer_name: str | None = None
+    calculated_fields: tuple[CalculatedField, ...] = ()
 
     def sign_style_name(self, style_name: str) -> str:
         """Sign a validated content identity for this immutable vector source.
@@ -114,6 +122,7 @@ class PublishedVectorAuthorization:
                 or differs from the approved signed identity.
         """
         normalized = {key.lower(): value for key, value in query}
+        calculated_fields = self._read_calculated_fields(normalized)
         upstream_layer = (
             self.inspection_layer_name
             if self.inspection_layer_name is not None
@@ -132,13 +141,14 @@ class PublishedVectorAuthorization:
             layer_name = normalized[layer_parameter]
             style_name = style_name or self.default_style_name
             style, geometry_name = self._require_style(
-                layer_name, style_name, style_definition
+                layer_name, style_name, style_definition, calculated_fields
             )
             document = build_vector_sld(
                 style_name,
                 style,
                 layer_name=upstream_layer or layer_name,
                 geometry_name=geometry_name,
+                calculated_fields=calculated_fields,
             )
             query = [
                 (key, value)
@@ -155,6 +165,20 @@ class PublishedVectorAuthorization:
             and style_name != self.default_style_name
         ):
             raise PublishedLayerRequestError("Vector appearance is required for this style")
+        elif calculated_fields:
+            raise PublishedLayerRequestError(
+                "Calculated fields require their approved vector appearance"
+            )
+        query = [
+            (key, value)
+            for key, value in query
+            if key.lower() != "vector_calculated_fields"
+            and not (
+                calculated_fields
+                and operation == "getfeatureinfo"
+                and key.lower() == "propertyname"
+            )
+        ]
         if self.filter is None:
             return [
                 (
@@ -166,7 +190,7 @@ class PublishedVectorAuthorization:
                 )
                 for key, value in query
             ]
-        predicate = filter_ecql(self.filter)
+        predicate = filter_ecql(self.filter, self.calculated_fields)
         feature_id = normalized.get("featureid")
         if feature_id is not None:
             # The public boundary already restricts this to one safe feature ID.
@@ -216,6 +240,7 @@ class PublishedVectorAuthorization:
         style_environment: str | None,
         style_definition: Mapping[str, object] | None,
         opacity: float,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> bytes:
         """Build one authorized inline vector layer for composite rendering.
 
@@ -225,6 +250,7 @@ class PublishedVectorAuthorization:
             style_environment: Unsupported raster-style representation.
             style_definition: Required complete vector appearance.
             opacity: Neutral retained-layer opacity from zero through one.
+            calculated_fields: View-owned definitions accompanying this appearance.
 
         Returns:
             Complete single-layer SLD document.
@@ -238,7 +264,7 @@ class PublishedVectorAuthorization:
                 "Composite vector rendering requires an approved vector style"
             )
         style, geometry_name = self._require_style(
-            layer_name, style_name, style_definition
+            layer_name, style_name, style_definition, calculated_fields
         )
         document = build_vector_sld(
             style_name,
@@ -246,14 +272,20 @@ class PublishedVectorAuthorization:
             layer_name=self.upstream_layer_name or layer_name,
             opacity_multiplier=opacity,
             geometry_name=geometry_name,
+            calculated_fields=calculated_fields,
         )
-        return filter_vector_sld(document, self.filter) if self.filter is not None else document
+        return (
+            filter_vector_sld(document, self.filter, self.calculated_fields)
+            if self.filter is not None
+            else document
+        )
 
     def _require_style(
         self,
         layer_name: str,
         style_name: str,
         style_definition: object,
+        calculated_fields: tuple[CalculatedField, ...] = (),
     ) -> tuple[VectorStyle, str | None]:
         """Match browser-supplied appearance data to its source-bound approval.
 
@@ -262,6 +294,7 @@ class PublishedVectorAuthorization:
             style_name: Fixed default or signed content identity.
             style_definition: Complete untrusted appearance from a WMS or plan
                 request.
+            calculated_fields: View definitions which must match the signed appearance.
 
         Returns:
             Validated appearance and the geometry attribute needed for its labels.
@@ -277,6 +310,14 @@ class PublishedVectorAuthorization:
                 "Vector appearance is invalid"
             ) from error
         layer_name = self.upstream_layer_name or layer_name
+        if self.calculated_fields and self.calculated_fields != calculated_fields:
+            raise PublishedLayerRequestError(
+                "Calculated fields do not match this filtered view"
+            )
+        if calculated_fields and style_name == self.default_style_name:
+            raise PublishedLayerRequestError(
+                "Calculated fields require their approved vector appearance"
+            )
         resource_name = layer_name.partition(":")[2]
         geometry_name = (
             self.geometry_name
@@ -290,15 +331,77 @@ class PublishedVectorAuthorization:
             style_name == self.default_style_name
             and style_name == f"vector-{style.geometry_kind}"
             and style == default_vector_style(style.geometry_kind)
+            and not calculated_fields
         )
         try:
             content_name = vector_style_name(
-                resource_name, style, geometry_name=geometry_name,
+                resource_name,
+                style,
+                geometry_name=geometry_name,
+                calculated_fields=calculated_fields,
             )
         except ValueError as error:
-            raise PublishedLayerRequestError("Vector label geometry is unavailable") from error
+            raise PublishedLayerRequestError(str(error)) from error
         if not is_default_style and self.sign_style_name(content_name) != style_name:
             raise PublishedLayerRequestError(
                 "Vector appearance does not match its approved identity"
             )
         return style, geometry_name
+
+    def _read_calculated_fields(
+        self, query: Mapping[str, str]
+    ) -> tuple[CalculatedField, ...]:
+        """Read view definitions carried with an appearance before checking its signature.
+
+        Args:
+            query: Normalized public WMS parameters.
+
+        Returns:
+            Structurally valid definitions, still requiring source-bound style approval.
+
+        Raises:
+            PublishedLayerRequestError: If the field definition representation is invalid.
+        """
+        try:
+            return TypeAdapter(tuple[CalculatedField, ...]).validate_json(
+                query.get("vector_calculated_fields", "[]")
+            )
+        except ValueError as error:
+            raise PublishedLayerRequestError(
+                "Calculated field definitions are invalid"
+            ) from error
+
+    def prepare_feature_info(self, content: bytes, query: Mapping[str, str]) -> bytes:
+        """Append approved view values to original-geometry feature information.
+
+        Args:
+            content: Bounded GeoServer GeoJSON response for this authorized request.
+            query: Original normalized parameters whose appearance was already approved.
+
+        Returns:
+            GeoJSON with consistent calculated attributes for each returned feature.
+
+        Raises:
+            PublishedLayerRequestError: If GeoServer returned malformed feature information.
+        """
+        definitions = self._read_calculated_fields(query)
+        if not definitions:
+            return content
+        compiled = tuple(
+            CompiledCalculatedField(
+                value, compile_field_expression(value.expression), ()
+            )
+            for value in definitions
+        )
+        try:
+            document = json.loads(content)
+            for feature in document["features"]:
+                properties = feature["properties"]
+                properties.update(evaluate_calculated_fields(compiled, properties))
+            return json.dumps(document, allow_nan=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise PublishedLayerRequestError(
+                "The rendering service returned invalid feature information"
+            ) from error
