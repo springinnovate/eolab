@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import io
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -247,6 +248,102 @@ class CompletedCalculationJobs:
                 )
             ).model_dump(mode="json")
         )
+
+
+def test_catalog_constant_calculation_survives_jobs_worker_serialization(
+    arithmetic_source: tuple[Path, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep Catalog aliases through submission, scheduling and native execution.
+
+    Args:
+        arithmetic_source: Original three-feature GeoPackage and admitted fields.
+        monkeypatch: Supply Catalog metadata and the worker's binary input/output.
+    """
+    from job_service import runner
+    from job_service.configuration import Settings
+    from job_service.manager import JobManager
+    from job_service.models import SubmitJob
+
+    from eolab_app.catalog.vector import (
+        build_vector_source_properties,
+        build_vector_table_properties,
+    )
+    from eolab_app.catalog.vector_contract import CatalogVectorRequest
+    from eolab_app.vector.catalog import StacVectorCatalog
+
+    path, fields = arithmetic_source
+    source = {"collectionId": "eolab-mounted-vectors", "itemId": "regions"}
+    definitions = (CalculatedField(name="Constant", expression="2 * 3"),)
+    jobs = CompletedCalculationJobs()
+    asyncio.run(
+        FieldCalculationJobs(jobs).calculate(
+            FieldCalculationInput(source=source, calculatedFields=definitions)
+        )
+    )
+
+    async def scheduled_payload() -> bytes:
+        """Return the real scheduler's worker message before starting execution."""
+        manager = JobManager(Settings())
+        await manager.start()
+        try:
+            snapshot = manager.submit(
+                "test",
+                "catalog-constant",
+                SubmitJob.model_validate(jobs.submissions[0]),
+            )
+            return manager.records[snapshot.jobId].payload
+        finally:
+            await manager.close()
+
+    async def get_item(
+        self: StacVectorCatalog, request: CatalogVectorRequest
+    ) -> dict[str, Any]:
+        """Return fixture metadata for the original Catalog identity.
+
+        Args:
+            self: Worker Catalog adapter, unused by this fixture.
+            request: Identity reconstructed from the scheduler's worker message.
+
+        Returns:
+            Admitted metadata pointing to the original fixture file.
+        """
+        assert request.model_dump(by_alias=True) == source
+        return {
+            "id": "regions",
+            "collection": source["collectionId"],
+            "properties": {
+                **build_vector_source_properties("geopackage", "data", "regions"),
+                **build_vector_table_properties(3, "Point", fields.items()),
+            },
+            "assets": {
+                "data": {
+                    "href": path.as_uri(),
+                    "type": "application/geopackage+sqlite3",
+                    "roles": ["data"],
+                }
+            },
+        }
+
+    payload = asyncio.run(scheduled_payload())
+    output = io.BytesIO()
+    with monkeypatch.context() as worker:
+        worker.setattr(StacVectorCatalog, "get_item", get_item)
+        worker.setattr(
+            "eolab_app.vector.field_calculation_operation.SCAN_MOUNT", path.parent
+        )
+        worker.setattr(runner.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(payload)))
+        worker.setattr(runner.sys, "stdout", SimpleNamespace(buffer=output))
+        runner.main()
+    reply = json.loads(output.getvalue())
+    assert reply["ok"], reply
+    outcome = FieldCalculationOutcome.model_validate(reply["value"])
+    assert outcome.error is None
+    assert outcome.result is not None
+    assert outcome.result.calculatedFields == definitions
+    assert outcome.result.featureCount == 3
+    assert outcome.result.missingCounts == {"Constant": 0}
+    assert outcome.result.fields == {**fields, "Constant": "float"}
 
 
 def test_run_result_authorization_and_leases_enclose_calculation(
