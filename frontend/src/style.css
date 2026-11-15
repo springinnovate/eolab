@@ -642,14 +642,14 @@ h5 {
 }
 
 .catalog-map-actions .catalog-add-action {
-  background: var(--brand);
+  background: var(--brand-hover);
   padding: 7px 10px;
   color: var(--surface-1);
   font-size: 0.78rem;
 }
 
 .catalog-map-actions .catalog-add-action:hover:not(:disabled) {
-  background: var(--brand-hover);
+  background: var(--brand-press);
   color: var(--surface-1);
 }
 

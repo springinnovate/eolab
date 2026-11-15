@@ -15,7 +15,7 @@
 .models-header > .analysis-panel-close { margin-inline-start: auto; }
 .models-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border-1); border-radius: var(--radius); }
 .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
-.models-navigation button { min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--brand); font: inherit; font-size: 0.8rem; cursor: pointer; }
+.models-navigation button { min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--brand-hover); font: inherit; font-size: 0.8rem; cursor: pointer; }
 .models-navigation button:hover:not(:disabled) { background: var(--surface-hover); }
 .models-navigation button[aria-pressed="true"] { border-color: var(--brand); background: var(--surface-selected); color: var(--text-1); font-weight: 600; }
 @container map-inspection (max-width: 380px) {
@@ -74,7 +74,7 @@ article.models-result > .models-actions { margin: 0; }
 #models-panel .models-name { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .models-run-name-editor { margin: 8px 0; }
 .models-details { margin: 12px 0; font-size: 0.8rem; }
-.models-details summary { cursor: pointer; color: var(--brand); }
+.models-details summary { cursor: pointer; color: var(--brand-hover); }
 .models-details dd { margin: 3px 0 10px; overflow-wrap: anywhere; }
 .models-details dt { font-weight: 600; }
 .models-error { color: var(--status-danger); overflow-wrap: anywhere; }
