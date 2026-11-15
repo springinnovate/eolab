@@ -711,6 +711,7 @@ test("temporal edits and availability actions preserve focused dates and never s
     controls.period.startTime.focus(); controls.period.startTime.value = "03:27:41.250";
     controls.period.startTime.dispatchEvent(new Event("input"));
     assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {startTime: "2020-01-01T03:27:41.250"}]);
+    Object.assign(h.draft.temporal, h.actions.at(-1)[1]);
     h.draft.temporal.loading = true; h.view.render(h.state);
     assert.equal(h.view.setup.temporal, controls); assert.equal(h.doc.activeElement, controls.period.startTime);
     assert.equal(controls.period.startTime.value, "03:27:41.250");
