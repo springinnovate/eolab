@@ -113,8 +113,8 @@ Catalog datasets and darker custom copies share this one list.
 Use an item's checkbox to show or hide it. Its **Style** button includes a color
 preview and opens the full style editor. **Copy style** and **Paste style** stay
 beside it so you can apply one style to several compatible items.
-**Create copy** gives the same dataset independent display choices without
-changing the original data; **Duplicate** makes another custom copy. These kinds
+**Duplicate vector** and **Duplicate raster** make a custom copy with independent
+display choices. Custom vectors also support calculated fields. These copies
 and their appearances are saved with the map. Open **More actions** for source
 information, **Legend**, **Zoom to**, **Rename**, and other available actions.
 
@@ -251,8 +251,8 @@ the same layer, so the chart updates instead of making you configure it again.
 A data time cube brings observations from different dates together as one
 dataset. Search with `type:temporal`, add a dataset, and choose its **Variable**,
 **Month** and **Date and time (UTC)** in Map contents. Only available observations
-are listed. **Create copy** lets you compare dates or variables with
-independent styles; use **Duplicate** for further custom copies.
+are listed. **Duplicate raster** lets you compare dates or variables with
+independent styles.
 
 ![Blue hourly precipitation over the Atlantic and Africa, with controls for the variable, month and UTC observation time](docs/images/eolab-temporal-map.jpg)
 
@@ -503,7 +503,7 @@ features, then select that polygon layer when choosing your analysis area.
 This is useful for working with one country, watershed or project group without
 preparing another file.
 
-On a custom vector layer, open **More actions → Field calculator** to add a
+On a custom vector in **Map contents**, use the calculator icon to add a
 numeric field. Enter an output name and an expression, or use **Insert field**
 to insert a quoted field name. For example, `'Population' / 'Area km2'` divides
 two existing attributes. Supported operators are `+`, `-`, `*`, `/` and

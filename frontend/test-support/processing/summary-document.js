@@ -9,6 +9,7 @@ export class SummaryControlDocument extends FakeRasterControlDocument {
     /** @param {string} [markup=SUMMARY_MARKUP] Current HTML, optionally mutated to test the contract. */
     constructor(markup = SUMMARY_MARKUP) {
         super();
+        this.defaultView = Object.assign(new EventTarget(), this.defaultView);
         this.controlIds = new Set([...markup.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]));
         this.queries = new Set();
     }

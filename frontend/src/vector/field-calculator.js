@@ -81,6 +81,7 @@ export class VectorFieldCalculator {
         this.insert.setAttribute("aria-controls", "vector-field-calculator-picker");
         this.picker = this.element("section", "", "fc-picker");
         this.picker.id = "vector-field-calculator-picker";
+        this.picker.setAttribute("popover", "manual");
         this.picker.hidden = true;
         this.picker.setAttribute("aria-label", "Insert a field");
         const search = this.element("div", "", "fc-search");
@@ -149,8 +150,18 @@ export class VectorFieldCalculator {
         this.insert.addEventListener("click", () => this.togglePicker());
         this.search.addEventListener("input", () => this.renderOptions());
         this.picker.addEventListener("keydown", event => this.navigatePicker(event));
+        this.document.defaultView.addEventListener("resize", () => this.positionPicker());
+        this.dialog.addEventListener("scroll", () => this.positionPicker(), true);
         this.dialog.addEventListener("click", event => {
             if (!this.picker.contains(event.target) && !this.insert.contains(event.target)) this.closePicker();
+        });
+        this.dialog.addEventListener("focusin", event => {
+            if (!this.picker.contains(event.target) && event.target !== this.insert) this.closePicker();
+        });
+        this.dialog.addEventListener("keydown", event => {
+            if (event.key === "Escape" && !this.picker.hidden) {
+                event.preventDefault(); event.stopPropagation(); this.closePicker(); this.insert.focus();
+            }
         });
         this.cancelEdit.addEventListener("click", () => { this.restoreNewDraft(); this.name.focus(); });
         this.undo.addEventListener("click", () => { void this.undoDeletion(); });
@@ -306,20 +317,46 @@ export class VectorFieldCalculator {
         }).filter(field => field.type === "number" || field.type === "text");
     }
 
-    /** Open searchable choices while preserving the textarea selection.
+    /** Open searchable choices above the dialog's clipping boundary while retaining the selection.
      * @return {void}
      */
     togglePicker() {
         if (!this.picker.hidden) { this.closePicker(); this.insert.focus(); return; }
         this.selection = {start: this.expression.selectionStart, end: this.expression.selectionEnd};
         this.search.value = ""; this.renderOptions();
-        this.picker.hidden = false; this.insert.setAttribute("aria-expanded", "true"); this.search.focus();
+        this.picker.hidden = false;
+        this.picker.showPopover();
+        this.insert.setAttribute("aria-expanded", "true");
+        this.positionPicker(); this.search.focus();
     }
 
     /** Close choices without changing the editor selection.
      * @return {void}
      */
-    closePicker() { this.picker.hidden = true; this.insert.setAttribute("aria-expanded", "false"); }
+    closePicker() {
+        this.picker.hidePopover(); this.picker.hidden = true; this.insert.setAttribute("aria-expanded", "false");
+    }
+
+    /** Keep searchable choices beside Insert field and inside the browser viewport.
+     * The native popover escapes dialog clipping; only its field list scrolls.
+     * @return {void}
+     */
+    positionPicker() {
+        if (this.picker.hidden) return;
+        const {innerWidth, innerHeight} = this.document.defaultView;
+        const anchor = this.insert.getBoundingClientRect();
+        const dialog = this.dialog.getBoundingClientRect();
+        if (anchor.bottom <= dialog.top || anchor.top >= dialog.bottom) { this.closePicker(); return; }
+        const below = innerHeight - anchor.bottom - 12;
+        const above = anchor.top - 12;
+        const placeAbove = below < 180 && above > below;
+        const width = Math.min(340, innerWidth - 16);
+        this.picker.style.width = `${width}px`;
+        this.picker.style.maxHeight = `${Math.max(0, placeAbove ? above : below)}px`;
+        this.picker.style.left = `${Math.max(8, Math.min(anchor.right - width, innerWidth - width - 8))}px`;
+        const height = this.picker.getBoundingClientRect().height;
+        this.picker.style.top = `${placeAbove ? anchor.top - height - 4 : anchor.bottom + 4}px`;
+    }
 
     /** Render matching field references as keyboard-accessible insertion buttons.
      * @return {void}
@@ -335,13 +372,13 @@ export class VectorFieldCalculator {
         });
         this.options.replaceChildren(...this.optionButtons);
         if (!this.optionButtons.length) this.options.append(this.element("p", "No matching fields.", "fc-empty"));
+        this.positionPicker();
     }
 
     /** Navigate the searchable picker without submitting or closing the dialog.
      * @param {KeyboardEvent} event Picker key event. @return {void}
      */
     navigatePicker(event) {
-        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); this.closePicker(); this.insert.focus(); }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
             const index = this.optionButtons.indexOf(this.document.activeElement);

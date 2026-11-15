@@ -153,6 +153,21 @@ export class MapLayerStackView {
         this.dismissRemoval.addEventListener("click", () => this.handlers?.onDismissRemoval());
         this.removalIndex = 0;
         this.scrollContainer = this.root.parentElement ?? this.list;
+        this.actionTooltip = documentContext.createElement("div");
+        this.actionTooltip.className = "map-layer-action-tooltip";
+        this.actionTooltip.id = "map-layer-action-tooltip";
+        this.actionTooltip.setAttribute("role", "tooltip");
+        this.actionTooltip.setAttribute("popover", "manual");
+        this.actionTooltip.hidden = true;
+        this.root.append(this.actionTooltip);
+        /** @type {ReturnType<typeof setTimeout>|null} Pending hover explanation. */
+        this.actionTooltipTimer = null;
+        /** @type {HTMLButtonElement|null} Action currently described by the tooltip. */
+        this.actionTooltipTrigger = null;
+        this.scrollContainer.addEventListener("scroll", () => this.#hideActionTooltip());
+        /** @type {()=>void} Dismiss viewport-positioned help when window geometry changes. */
+        this.hideActionTooltipOnResize = () => this.#hideActionTooltip();
+        documentContext.defaultView?.addEventListener("resize", this.hideActionTooltipOnResize);
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
         /** @type {{key:string,sourceIndex:number,targetIndex:number,pointerId:number}|null} */
@@ -218,6 +233,8 @@ export class MapLayerStackView {
      * @return {void}
      */
     unbind() {
+        this.#hideActionTooltip();
+        this.documentContext.defaultView?.removeEventListener("resize", this.hideActionTooltipOnResize);
         this.pointerDrag = null;
         this.keyboardDrag = null;
         this.handlers = null;
@@ -242,6 +259,7 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        this.#hideActionTooltip();
         const preserveViewport = (requestedFocus === null || ["visibility", "copy-style", "paste-style"].includes(requestedFocus.action)) &&
             layers.length === this.layers.length &&
             layers.every((layer, index) => layer.key === this.layers[index].key);
@@ -617,25 +635,46 @@ export class MapLayerStackView {
             )] : [])
         );
         if (this.allowRemoval && layer.canAddView) {
-            const actionLabel = layer.isCustom ? "Duplicate" : "Create copy";
+            const actionLabel = `Duplicate ${layer.datasetKind}`;
             const addView = this.#button(
-                layer.addingView ? "Creating…" : actionLabel,
-                `${layer.isCustom ? "Duplicate" : "Create copy of"} ${accessibleName}`, layer.key, "add-view",
+                layer.addingView ? "Duplicating…" : actionLabel,
+                `${actionLabel}: ${accessibleName}`, layer.key, "add-view",
                 () => this.handlers?.onAddView(layer.key), focusTargets,
             );
             addView.disabled = layer.addingView === true;
-            addView.title = "Create an independently styled copy without changing the original data.";
+            const help = this.documentContext.createElement("p");
+            help.className = "map-layer-duplicate-help";
+            help.id = `map-layer-duplicate-help-${encodeURIComponent(layer.key)}`;
+            help.textContent = layer.datasetKind === "vector"
+                ? "Duplicate to use a different style or calculate custom fields."
+                : "Duplicate to use a different style.";
+            addView.setAttribute("aria-describedby", help.id);
             layerActions.append(addView);
+            rowActions.append(help);
+        }
+        if (this.allowRemoval && layer.datasetKind === "vector") {
+            const enabled = layer.isCustom && layer.canCalculateFields;
+            const help = !layer.isCustom ? "Duplicate this vector to calculate custom fields."
+                : enabled ? "Field calculator" : "Field calculator is unavailable for this vector.";
+            const calculator = this.#iconButton(
+                "calculator", `Field calculator for ${layer.label}`, layer.key, "field-calculator",
+                () => {
+                    if (enabled) {
+                        this.#hideActionTooltip();
+                        this.handlers?.onCalculateFields?.(layer.key);
+                    }
+                    else this.#showActionTooltip(calculator, help, 0);
+                }, focusTargets,
+            );
+            calculator.setAttribute("aria-disabled", String(!enabled));
+            this.#bindActionTooltip(calculator, help);
+            layerActions.append(calculator);
         }
         const utilities = this.documentContext.createElement("div");
         utilities.className = "map-layer-utility-actions";
         utilities.append(
             ...(legend ? [legend.trigger] : []),
             zoom,
-            ...(this.allowRemoval && layer.isCustom && layer.canCalculateFields ? [this.#button(
-                "Field calculator", `Field calculator for ${layer.label}`, layer.key, "field-calculator",
-                () => this.handlers?.onCalculateFields?.(layer.key), focusTargets,
-            )] : []),
             ...(layer.item !== null || layer.sourceName ? [this.#iconButton(
                 "rename", `Rename ${accessibleName}`, layer.key, "rename",
                 () => this.#openRenameEditor(layer), focusTargets,
@@ -649,7 +688,7 @@ export class MapLayerStackView {
         const details = this.#buildDetails(layer, utilities, focusTargets);
         if (legend) details.panel.append(legend.panel);
         layerActions.append(details.trigger);
-        rowActions.append(styleActions, layerActions);
+        rowActions.prepend(styleActions, layerActions);
         row.append(reorder);
         row.append(primary);
         row.append(kind);
@@ -1193,10 +1232,75 @@ export class MapLayerStackView {
         if (moveFocus) (expanded ? state.panel.children[0] : state.trigger).focus({ preventScroll: true });
     }
 
+    /** Add debounced hover help and immediate keyboard or touch help to an action.
+     * @param {HTMLButtonElement} trigger Action being described.
+     * @param {string} text Action name or unavailable-state reason.
+     * @return {void}
+     */
+    #bindActionTooltip(trigger, text) {
+        trigger.title = "";
+        trigger.addEventListener("pointerenter", () => this.#showActionTooltip(trigger, text));
+        trigger.addEventListener("pointerleave", () => {
+            if (this.documentContext.activeElement !== trigger) this.#hideActionTooltip();
+        });
+        trigger.addEventListener("focus", () => this.#showActionTooltip(trigger, text, 0));
+        trigger.addEventListener("blur", () => this.#hideActionTooltip());
+        trigger.addEventListener("pointerdown", event => {
+            if (event.pointerType === "touch") this.#showActionTooltip(trigger, text, 0);
+        });
+        trigger.addEventListener("keydown", event => {
+            if (event.key === "Escape" && this.actionTooltipTrigger === trigger) {
+                event.preventDefault();
+                event.stopPropagation();
+                this.#hideActionTooltip();
+            }
+        });
+    }
+
+    /** Cancel pending hover help, dismiss its popover and remove its accessible description.
+     * @return {void}
+     */
+    #hideActionTooltip() {
+        clearTimeout(this.actionTooltipTimer);
+        this.actionTooltipTimer = null;
+        if (!this.actionTooltip.hidden) this.actionTooltip.hidePopover();
+        this.actionTooltip.hidden = true;
+        this.actionTooltipTrigger?.removeAttribute("aria-describedby");
+        this.actionTooltipTrigger = null;
+    }
+
+    /** Explain an action in the top layer after a short hover, or immediately for focus and touch.
+     * @param {HTMLButtonElement} trigger Action being described.
+     * @param {string} text Action name or unavailable-state reason.
+     * @param {number} [delay=100] Hover debounce in milliseconds; zero displays immediately.
+     * @return {void}
+     */
+    #showActionTooltip(trigger, text, delay = 100) {
+        this.#hideActionTooltip();
+        this.actionTooltipTrigger = trigger;
+        /** Position the explanation beside its action within the viewport. @return {void} */
+        const show = () => {
+            this.actionTooltipTimer = null;
+            this.actionTooltip.textContent = text;
+            this.actionTooltip.hidden = false;
+            this.actionTooltip.showPopover();
+            trigger.setAttribute("aria-describedby", this.actionTooltip.id);
+            const anchor = trigger.getBoundingClientRect();
+            const tooltip = this.actionTooltip.getBoundingClientRect();
+            const viewport = this.documentContext.documentElement;
+            const top = anchor.bottom + tooltip.height + 4 <= viewport.clientHeight
+                ? anchor.bottom + 4 : anchor.top - tooltip.height - 4;
+            this.actionTooltip.style.left = `${Math.max(8, Math.min(anchor.left, viewport.clientWidth - tooltip.width - 8))}px`;
+            this.actionTooltip.style.top = `${Math.max(8, top)}px`;
+        };
+        if (delay === 0) show();
+        else this.actionTooltipTimer = setTimeout(show, delay);
+    }
+
     /**
      * Create a direct utility action with a decorative SVG and explicit accessible name.
      * Tooltips describe the same intent; callers may supply a disabled-state reason.
-     * @param {"zoom"|"rename"|"info"|"filter"|"download"|"collapse"} icon Local utility symbol.
+     * @param {"zoom"|"rename"|"info"|"filter"|"download"|"collapse"|"calculator"} icon Local utility symbol.
      * @param {string} accessibleName Complete layer-specific action description.
      * @param {string} key Stable layer identity.
      * @param {string} action Stable intent/focus identity.
@@ -1212,6 +1316,7 @@ export class MapLayerStackView {
             filter: "M3 3h18l-7 8v8l-4 2V11Z",
             download: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5",
             collapse: "m6 15 6-6 6 6",
+            calculator: "M5 2h14v20H5ZM8 5h8v4H8ZM8 13h1m6 0h1m-8 4h1m6 0h1",
         };
         const button = this.#button("", accessibleName, key, action, callback, focusTargets);
         button.classList.add("map-layer-icon-button");
