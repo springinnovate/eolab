@@ -643,6 +643,116 @@ def _vector_result_sampler(
     return sampler, authority, selection
 
 
+@pytest.mark.parametrize("lease_lost", [False, True])
+def test_vector_metadata_cancellation_retains_file_until_native_read_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_lost: bool
+) -> None:
+    """Keep native metadata reads leased after disconnect or renewal failure.
+
+    Args:
+        tmp_path: Isolated original GeoPackage.
+        monkeypatch: Delay the native metadata reader at its actual thread boundary.
+        lease_lost: Lose lease renewal instead of cancelling the caller twice.
+    """
+    from eolab_app.bounded_vector import resolve_vector_file_selection
+    from eolab_app.catalog_selection import ResolvedCatalogSelection
+
+    original_sampler, authority, selection = _vector_result_sampler(tmp_path)
+
+    async def exercise() -> None:
+        """Cancel an active native thread and observe file release ordering."""
+        entered, renewal_failed = asyncio.Event(), asyncio.Event()
+        finish, stopped = Event(), Event()
+        loop = asyncio.get_running_loop()
+        files = authority.files(renewal_seconds=0.01)
+        release = files.release
+
+        def read_metadata(
+            path: Path, selected: ArtifactVectorSelection
+        ) -> ResolvedCatalogSelection:
+            """Read the real schema after the test allows the native thread to finish.
+
+            Args:
+                path: Original file retained by the production source lease.
+                selected: Validated selection passed by the sampling service.
+
+            Returns:
+                Original-source metadata including the calculated attribute program.
+            """
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                assert finish.wait(5)
+                assert authority.leases
+                return resolve_vector_file_selection(path, selected)
+            finally:
+                stopped.set()
+
+        async def release_after_read(lease: str) -> bool:
+            """Release a retained file only after its native reader has stopped.
+
+            Args:
+                lease: Source lease issued to the metadata reader.
+
+            Returns:
+                Whether the authority released the source lease.
+            """
+            assert stopped.is_set()
+            return await release(lease)
+
+        async def lose_renewal(lease: str) -> bool:
+            """Reject renewal after the reader enters its native operation.
+
+            Args:
+                lease: Active source lease whose renewal fails.
+
+            Returns:
+                False to trigger the production source-lifecycle cancellation.
+            """
+            await entered.wait()
+            assert lease in authority.leases
+            renewal_failed.set()
+            return False
+
+        files.release = release_after_read
+        if lease_lost:
+            files.renew = lose_renewal
+        sampler = VectorSamplingService(
+            original_sampler.catalog,
+            original_sampler.resolver,
+            artifact_files=lambda: files,
+        )
+        monkeypatch.setattr(
+            "eolab_app.bounded_vector.resolve_vector_file_selection", read_metadata
+        )
+
+        async def open_selection() -> None:
+            """Request metadata that must never be delivered after cancellation."""
+            async with sampler.open_selection(selection, "owner"):
+                pytest.fail("Cancelled metadata was delivered")
+
+        request = asyncio.create_task(open_selection())
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            if lease_lost:
+                await asyncio.wait_for(renewal_failed.wait(), 5)
+            else:
+                request.cancel()
+                await asyncio.sleep(0)
+                request.cancel()
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(request), 0.02)
+            assert authority.leases and not stopped.is_set()
+        finally:
+            finish.set()
+            with pytest.raises(
+                SourceFileError if lease_lost else asyncio.CancelledError
+            ):
+                await asyncio.wait_for(request, 5)
+        assert stopped.is_set() and not authority.leases
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("paired", [False, True])
 def test_vector_result_lease_outlives_coalesced_statistics_and_native_cancel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, paired: bool
