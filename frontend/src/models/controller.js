@@ -97,7 +97,6 @@ export class ModelsController {
             const value = JSON.parse(this.storage?.getItem(RECOVERY_KEY) ?? "null");
             if (value && typeof value.requestId === "string" && /^[A-Za-z0-9_-]{16,80}$/.test(value.requestId) && value.model && value.inputs && value.parameters) {
                 this.state.pending = value;
-                this.state.error = "A previous submission needs recovery. Retry with its original inputs to find or create the same run.";
             }
         } catch { this.state.error = "The previous submission could not be read from this tab's storage."; }
         void this.recoverDeletions();
@@ -686,7 +685,7 @@ export class ModelsController {
                 this.state.pending = null; try { this.storage?.removeItem(RECOVERY_KEY); } catch { /* Retry identity remains harmless. */ }
             }
             if (revision === this.revision && !this.destroyed)
-                this.state.error = `${error.message}${this.state.pending ? " Use Recover submission to retry the same request." : ""}`;
+                this.state.error = error.message;
         } finally {
             this.discardPolygonAreas(uploadedPolygonAreaIds);
             this.state.submitting = false; this.render();

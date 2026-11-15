@@ -184,7 +184,7 @@ export class RasterClipsController {
                 this.state.pending = null;
                 this.state.message = `${error.message} Prepare the download again when the problem is resolved.`;
             } else {
-                this.state.message = `Submission not confirmed: ${error.message} Retry the same request to recover it safely.`;
+                this.state.message = error.message;
             }
         } finally {
             this.state.submitting = false;
