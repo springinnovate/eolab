@@ -1191,11 +1191,11 @@ test("matching area labels identify their sources and assets without repeating t
         {...structuredClone(selection), itemId: "area-a", assetKey: "other-polygons"},
     ];
     h.api.getHabitatPreparationSelections = async () => ({selections: choices});
-    h.api.getCatalogItem = async source => ({id: source.itemId, properties: {title: "basins"}});
+    h.api.getCatalogItem = async source => ({id: source.itemId, properties: {title: "study.gpkg — basins"}});
     h.controller.chooseModel(habitat); await settle();
     const controls = h.view.setup.inputs.area.preparationSelection;
     assert.deepEqual(controls.source.children.slice(1).map(option => option.textContent), choices.map(choice =>
-        `basins · BASIN equals "North" · Source: eolab-mounted-vectors / ${choice.itemId} / ${choice.assetKey}`));
+        `study.gpkg — basins · BASIN equals "North" · Source: eolab-mounted-vectors / ${choice.itemId} / ${choice.assetKey}`));
     await chooseVector(h, "references", h.context.vectors[0], "North");
     await choosePreparationSelection(h, 2);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "distinct-source").inputs.area.selection, choices[2]);
@@ -1204,6 +1204,26 @@ test("matching area labels identify their sources and assets without repeating t
     controls.refresh.dispatchEvent(new Event("click")); await settle();
     assert.equal(controls.source.value, "0");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "reordered-source").inputs.area.selection, choices[2]);
+});
+
+test("area titles preserve their text without appending an already named layer", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    for (const [title, label] of [
+        ["basins", "basins"],
+        ["workshop/regions.gpkg — basins", "workshop/regions.gpkg — basins"],
+        ["Authored study — basins", "Authored study — basins"],
+        ["Authored basin study", "Authored basin study · basins"],
+        ["Authored study — basins expanded", "Authored study — basins expanded · basins"],
+    ]) {
+        h.api.getCatalogItem = async source => ({id: source.itemId, properties: {title}});
+        h.controller.chooseModel(habitat); await settle();
+        const controls = h.view.setup.inputs.area.preparationSelection;
+        assert.equal(controls.source.children[1].textContent, `${label} · BASIN equals "North"`);
+        await choosePreparationSelection(h, 1);
+        assert.equal(controls.selectionDetails.textContent,
+            `${label} · BASIN equals "South" · Source: eolab-mounted-vectors / watersheds / data`);
+        assert.deepEqual(h.controller.state.draft.setupState.selectedSelection, preparationSelections[1]);
+    }
 });
 
 test("preparation refresh matches descriptors across option reorder without selecting another filter", async t => {
