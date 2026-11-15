@@ -229,7 +229,7 @@ export class MapLayerStackView {
      * Restore control focus without scrolling during refreshes and visibility changes;
      * explicit focus after reordering or removal may still bring its target into view.
      * Details and legends retain expansion; focus returns to the visible legend control when
-     * its collapsed swatch has been replaced by the full graphic.
+     * its Legend button has been replaced by the full graphic.
      * Clipboard actions keep the visible row stationary; a paste action that disappears
      * returns focus to its row's Style control.
      *
@@ -461,7 +461,7 @@ export class MapLayerStackView {
         const accessibleName = (layer.item === null
             ? `${layer.label}; ${typeLabel.toLowerCase()}${typeLabel.toLowerCase().endsWith("layer") ? "" : " layer"}${layer.group ? ` from ${layer.group.label}` : ""}`
             : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`) +
-            (layer.isCustom ? "; Custom copy" : "");
+            (layer.isCustom ? "; Custom" : "");
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
         row.classList.toggle("is-custom-layer", Boolean(layer.isCustom));

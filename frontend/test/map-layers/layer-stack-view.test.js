@@ -1503,11 +1503,12 @@ test("an owner-supplied details control replaces Info and retains focus", () => 
 test("layer types and owner style targets distinguish annotations without embedding their editor", () => {
     const doc = new FakeLayerStackDocument();
     const view = new MapLayerStackView(doc);
-    const shared = { ...LAYERS[0], key: "shared", item: null, datasetKind: "annotation", typeLabel: "Shared annotation", stylePanelId: "annotations-panel" };
+    const shared = { ...LAYERS[0], key: "shared", item: null, isCustom: true, datasetKind: "annotation", typeLabel: "Shared annotation", stylePanelId: "annotations-panel" };
     view.render([shared], null);
     const row = doc.querySelector("#raster-layer-list").children[0];
     assert.equal(elementsByClass(row, "map-layer-type")[0].textContent, "Shared annotation");
     assert.match(row.getAttribute("aria-label"), /shared annotation layer/);
+    assert.match(row.getAttribute("aria-label"), /; Custom$/);
     assert.equal(actionControl(row, "style").getAttribute("aria-controls"), "annotations-panel");
 });
 
