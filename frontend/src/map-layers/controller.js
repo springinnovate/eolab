@@ -579,7 +579,7 @@ export class MapLayerController {
         for (const entry of changed) this.#applyVisibility(entry.key, visible);
         this.render();
         this.view.announceStatus(
-            `${changed.length} map layer${changed.length === 1 ? "" : "s"} ` +
+            `${changed.length} map item${changed.length === 1 ? "" : "s"} ` +
             `${visible ? "shown" : "hidden"}.`
         );
     }
@@ -768,7 +768,7 @@ export class MapLayerController {
             this.render();
             this.onOrderChange(this.snapshots());
         }
-        this.view.setStatus(`${action.label}. Layers at the top draw above layers below.`);
+        this.view.setStatus(`${action.label}. Items at the top draw above items below.`);
     }
 
     /**
@@ -881,10 +881,10 @@ export class MapLayerController {
             snapshot.isCustom = true;
             await this.restoreLayerSnapshot(snapshot, isCurrent);
             if (!isCurrent()) return null;
-            this.view.announceStatus?.(`Created a custom layer from ${snapshot.label}.`);
+            this.view.announceStatus?.(`Created a copy of ${snapshot.label}.`);
             return snapshot.key;
         } catch (error) {
-            if (isCurrent()) this.view.setStatus(`Could not create custom layer: ${error.message}`);
+            if (isCurrent()) this.view.setStatus(`Could not create a copy: ${error.message}`);
             return null;
         } finally {
             this.pendingAdditionalViews.delete(key);
@@ -896,7 +896,7 @@ export class MapLayerController {
      * Remove a layer at the user's request, keeping only its data for one Undo.
      * Owner capture can reject removal, for example when a polygon is being edited.
      * @param {string} key Retained layer identity.
-     * @return {boolean} Whether removal succeeded; errors are shown in Map layers.
+     * @return {boolean} Whether removal succeeded; errors are shown in Map contents.
      */
     removeWithUndo(key) {
         try {
@@ -1045,7 +1045,7 @@ export class MapLayerController {
                 focusKey === null ? null : { key: focusKey, action: "style" }
             );
         }
-        this.view.setStatus(`${removed.label} was removed from map layers.`);
+        this.view.setStatus(`${removed.label} was removed from the map.`);
     }
 
     /**

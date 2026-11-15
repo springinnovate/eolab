@@ -25,10 +25,10 @@ test("status reports incomplete tiles accessibly and sends a targeted retry acti
     assert.match(message.textContent, /Retrying/);
     assert.equal(button.hidden, true);
     view.update({ phase: "complete", total: 6, loaded: 6, failed: 0 });
-    assert.equal(message.textContent, "Map layers loaded");
+    assert.equal(message.textContent, "Map contents loaded");
     view.update({ phase: "error", total: 0, loaded: 0, failed: 0, message: "Try later." });
     assert.match(message.textContent, /Try later/);
-    assert.equal(button.textContent, "Retry map layers");
+    assert.equal(button.textContent, "Retry map contents");
     view.update({ phase: "idle", total: 0, loaded: 0, failed: 0 });
     assert.equal(root.hidden, true);
     assert.deepEqual(calls.stoppedClicks, [root]);

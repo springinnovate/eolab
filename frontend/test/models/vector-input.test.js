@@ -142,7 +142,7 @@ test("removing the chosen source clears its live choices and never selects a rep
     assert.equal(state.vectorKey, "");
     assert.deepEqual(state.fields, {identifier: "", measurement: ""});
     assert.equal(h.view.setup.run.disabled, true);
-    assert.match(h.view.setup.inputs.features.status.textContent, /Add the vector layer/);
+    assert.match(h.view.setup.inputs.features.status.textContent, /Add the vector dataset/);
 });
 
 test("unavailable field kinds prevent running and identify the configured selector", t => {
@@ -285,7 +285,7 @@ test("changing or losing the source clears every field while preserving row coun
     assert.equal(controls.source.value, "");
     assert.deepEqual(h.controller.state.draft.inputs.features.rows, expectedRows);
     assert.equal(controls.fields.identifier.value, ""); assert.equal(h.view.setup.run.disabled, true);
-    assert.match(controls.status.textContent, /Add the vector layer/);
+    assert.match(controls.status.textContent, /Add the vector dataset/);
     controls.rows[0].remove.dispatchEvent(new Event("click"));
     assert.equal(h.doc.activeElement, controls.source);
     assert.equal(controls.rows[0].remove.disabled, true);

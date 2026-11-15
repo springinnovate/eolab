@@ -176,7 +176,7 @@ test("successful shared maps dismiss loading without a final click", () => {
   assert.equal(elements.get("#saved-map-view-dialog-title").textContent,
     "Opening map…");
   assert.equal(elements.get("#saved-map-view-dialog-summary").textContent,
-    "Loading 2 map layers…");
+    "Loading 2 map items…");
   assert.equal(elements.get("#saved-map-view-dialog-details").hidden, true);
   assert.equal(dialog.open, true);
 

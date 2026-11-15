@@ -115,9 +115,9 @@ export function captureRasterPreparation(value, draft) {
 export function captureModelRaster(raster, sources, type = "raster") {
     const startingMask = type === "mask_source";
     if (!raster || !sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
-        throw new Error(startingMask ? "Choose a starting raster from Map layers." : "Choose a raster from Map layers or a completed run.");
+        throw new Error(startingMask ? "Choose a starting raster from Map contents." : "Choose a raster from Map contents or a completed run.");
     if ((type === "catalog_raster" || startingMask) && raster.kind === "runArtifact")
-        throw new Error(startingMask ? "Choose a starting raster from Map layers." : "This recipe requires a raster from Map layers.");
+        throw new Error(startingMask ? "Choose a starting raster from Map contents." : "This recipe requires a raster from Map contents.");
     if (raster.available === false || raster.kind === "runArtifact" && Date.parse(raster.expiresAt) <= Date.now())
         throw new Error("This raster is no longer available. Choose another input.");
     return raster.kind === "runArtifact" ?
@@ -300,7 +300,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
                 if (!modelSupportsArea(input.type, area)) throw new Error("Choose an area supported by this tool.");
                 if (area.kind === "catalogSelection" && state.areaMode !== "captured" &&
                     !state.vectors.some(source => modelSourceKey(source) === modelSourceKey(area.selection)))
-                    throw new Error("Add the selected vector layer to Map layers before running this tool.");
+                    throw new Error("Add the selected vector dataset to Map contents before running this tool.");
                 if (["selectedArea", "samplingBox"].includes(area.kind)) modelAreaInput(area);
                 else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
                 else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});

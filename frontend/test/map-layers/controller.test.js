@@ -655,7 +655,7 @@ test("bulk visibility preserves layers and notifies owners and composition once"
     assert.deepEqual(raster.events, [["visibility", rasterRecord.entry.key, false]]);
     assert.deepEqual(vector.events, [], "Already hidden layers are untouched");
     assert.deepEqual([...map.attached], [basemap]);
-    assert.equal(view.announcement, "1 map layer hidden.");
+    assert.equal(view.announcement, "1 map item hidden.");
     view.handlers.onAllVisibility(false);
     assert.equal(changes.length, 1, "A no-op does not refresh consumers");
 
@@ -786,7 +786,7 @@ test("name sorts use displayed numeric names, retain ties and preserve layer sta
     assert.equal(controller.presentationActiveKey, activeKey);
     assert.equal(controller.leafletLayers.isAttached(keys[1]), false);
     assert.deepEqual(adapter.events, [["order", keys[3]], ["order", keys[0]]]);
-    assert.match(view.status, /Layers at the top draw above/);
+    assert.match(view.status, /Items at the top draw above/);
     view.handlers.onSort("name-ascending");
     assert.equal(changes.length, 1, "already sorted layers do not notify or refresh renderers");
     view.handlers.onSort("name-descending");
@@ -949,7 +949,7 @@ test("pending view additions cannot outlive their source view and failures can b
     await h.controller.show(catalogItem("source"), h.adapter);
     h.beforeRestore = async () => { throw new Error("Publication unavailable"); };
     assert.equal(await h.controller.addAnotherView(key), null);
-    assert.match(h.view.status, /Could not create custom layer.*Publication unavailable/);
+    assert.match(h.view.status, /Could not create a copy.*Publication unavailable/);
     assert.equal(h.controller.snapshots()[0].addingView, false);
     h.beforeRestore = async () => {};
     assert.ok(await h.controller.addAnotherView(key));

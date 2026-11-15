@@ -746,7 +746,7 @@ async function initializeCatalog(
     };
 
     /**
-     * Report one layer-specific tile failure in Map layers.
+     * Report one layer-specific tile failure in Map contents.
      *
      * @param {string} message User-facing raster tile failure.
      * @param {Object} item Affected Catalog Item.
@@ -1346,20 +1346,20 @@ async function initializeCatalog(
                 getTarget: key => key === target.key && request.isCurrent() ? target : null});
             modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
                 applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
-                help: "Change the filter for this layer and every tool input using it. Use a separate custom layer for a different filter.",
+                help: "Change the filter for this map item and every tool input using it. Create a copy to use a different filter.",
             });
         },
         closeVectorFilter: () => modelFilterControls?.close(),
         /** Store a checked selection's filter on its map view, then update rendering.
          * Models receives the shared filter immediately and reports display failures separately.
-         * @param {Object} source Vector choice with its Map layers key.
+         * @param {Object} source Vector choice with its Map contents key.
          * @param {Object} area Checked source/predicate and matched/total feature counts.
          * @return {Promise<Object|null>} Applied filter, or null when superseded.
          * @throws {Error} If the layer was removed or its map filter cannot be applied.
          */
         applyMapFilter: (source, area) => {
             const record = mapLayerController.getRecord(source.key);
-            if (!record || record.adapter !== vectorMapLayerAdapter) throw new Error("The vector layer is no longer in Map layers.");
+            if (!record || record.adapter !== vectorMapLayerAdapter) throw new Error("The vector dataset is no longer in Map contents.");
             return record.adapter.applyCheckedFilter(record, area.selection.filter,
                 {matched: area.matched, total: area.total, complete: true});
         },
