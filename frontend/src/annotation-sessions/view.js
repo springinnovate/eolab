@@ -51,13 +51,16 @@ export class AnnotationSessionsView {
         wrapper.append(text, wrapper.input); return wrapper;
     }
 
-    /** Open a connection form or a prefilled contributor-name form.
+    /** Open a shared-layer form or membership list and identify this opening.
      * @param {"create"|"join"|"contribute"|"rename"|"library"} mode Form purpose; library lists memberships without changing them.
      * @param {string|null} [localId=null] Local layer to share or rename yourself in.
      * @param {string} [value=""] Layer name, invitation code, or current contributor name.
-     * @return {void}
+     * @return {()=>boolean} Whether this opening is still displayed; use before presenting an asynchronous result.
+     * @throws {DOMException} If the native dialog cannot be opened modally.
      */
     open(mode, localId = null, value = "") {
+        const opening = {};
+        this.opening = opening;
         this.mode = mode; this.localId = localId;
         this.library.hidden = mode !== "library";
         this.library.replaceChildren(); this.layerButtons = [];
@@ -78,6 +81,7 @@ export class AnnotationSessionsView {
         }
         if (mode === "library") this.heading.textContent = "Your shared layers";
         this.message(""); this.dialog.showModal(); (mode === "library" ? this.cancel : value ? this.name.input : field).focus();
+        return () => this.dialog.open && this.opening === opening;
     }
 
     /** Display available memberships with explicit map inclusion controls.
