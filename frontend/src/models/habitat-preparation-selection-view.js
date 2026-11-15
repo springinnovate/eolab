@@ -23,14 +23,16 @@ export class HabitatPreparationSelectionView {
         this.source.addEventListener("change", () => handlers.onHabitatPreparationSelection(
             this.source.value === "" ? null : this.selections[Number(this.source.value)]));
         this.help = element("p", "Areas are configured by your administrator.", "models-help");
-        this.selectionDetails = element("p", "", "models-help"); this.selectionDetails.id = "models-" + name + "-preparation-selection-details";
+        this.selectionDetails = element("p", "", "models-help");
+        this.sourceDetails = element("details", "", "models-details");
+        this.sourceDetails.append(element("summary", "Area source"), this.selectionDetails);
         this.status = element("p", "", "models-help"); this.status.setAttribute("role", "status");
         this.status.id = "models-" + name + "-prepared-coverage";
-        this.source.setAttribute("aria-describedby", this.selectionDetails.id + " " + this.status.id);
+        this.source.setAttribute("aria-describedby", this.status.id);
         this.refresh = button("Refresh areas", handlers.onRefreshHabitatPreparationSelections, "models-action");
         this.retry = button("Check coverage again", handlers.onRefreshHabitatCoverage, "models-action");
         this.root.append(field("models-" + name + "-preparation-selection", label, this.source),
-            this.help, this.selectionDetails, this.status, this.refresh, this.retry);
+            this.help, this.sourceDetails, this.status, this.refresh, this.retry);
     }
 
     /** Show exact Catalog layers and filters, readiness and missing-input warnings.
@@ -56,7 +58,7 @@ export class HabitatPreparationSelectionView {
             ...labels.map((label, index) => ({value: String(index),
                 label: labelCounts.get(label) > 1 ? `${label} · Source: ${identities[index]}` : label}))], selectedIndex < 0 ? "" : String(selectedIndex));
         this.selectionDetails.textContent = selectedIndex < 0 ? "" : `${labels[selectedIndex]} · Source: ${identities[selectedIndex]}`;
-        this.selectionDetails.hidden = selectedIndex < 0;
+        this.sourceDetails.hidden = selectedIndex < 0;
         this.source.disabled = value.loading || !value.loaded || Boolean(value.error) || !value.selections.length;
         this.refresh.disabled = value.loading;
         this.refresh.textContent = value.loading ? "Loading areas…" : "Refresh areas";
