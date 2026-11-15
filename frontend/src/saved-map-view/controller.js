@@ -330,6 +330,8 @@ export class SavedMapViewController {
      * private storage when malformed. Authoring mode can restore the last
      * validated origin-local document without a fragment; a shared viewer
      * requires a shared fragment and never restores private map storage.
+     * Private startup applies appearance before loading layers so later user
+     * changes are not replaced when those layers finish.
      *
      * @param {string} fragment Current browser URL fragment.
      * @return {Promise<void>} Completion after shared or local restoration.
@@ -365,7 +367,9 @@ export class SavedMapViewController {
         this.restoreGeneration = restoreGeneration;
         this.#setBusy(true);
         try {
-            const report = await this.#restore(savedMapView, restoreGeneration);
+            const report = await this.#restore(savedMapView, restoreGeneration, {
+                restoreAppearanceEarly: true,
+            });
             if (report !== null) {
                 if (report.loaded !== report.total || report.details.length > 0) this.view.showResults(report);
                 this.rememberPending = true;
@@ -536,13 +540,21 @@ export class SavedMapViewController {
      *
      * @param {Object} savedMapView Validated saved-map document.
      * @param {number} restoreGeneration Current restoration generation.
+     * @param {Object} [options] Restoration timing.
+     * @param {boolean} [options.restoreAppearanceEarly=false] Apply private startup
+     * appearance before preparing layers; explicit map actions apply it at commit.
      * @return {Promise<{loaded:number,total:number,details:string[]}|null>}
      * Per-layer restoration report, or null after supersession.
      */
-    async #restore(savedMapView, restoreGeneration) {
+    async #restore(savedMapView, restoreGeneration, { restoreAppearanceEarly = false } = {}) {
         this.beforeRestore();
         this.catalogVisualization.clear();
-        const preparations = await mapWithConcurrencyLimit(
+        const initialAppearance = restoreAppearanceEarly
+            ? this.#restoreViewportAndBasemap(savedMapView) : null;
+        if (restoreAppearanceEarly) {
+            this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
+        }
+        const preparingLayers = mapWithConcurrencyLimit(
             savedMapView.layers,
             RESTORE_CONCURRENCY,
             async (layer) => {
@@ -577,14 +589,17 @@ export class SavedMapViewController {
                 }
             }
         );
+        const [preparations, initialBasemapWarning] = await Promise.all([
+            preparingLayers, initialAppearance,
+        ]);
         const stagedLayers = preparations
             .filter(({ staged }) => staged !== null)
             .map(({ staged }) => staged);
         if (restoreGeneration !== this.restoreGeneration) {
             return null;
         }
-        this.viewport.restore(savedMapView.viewport);
-        const basemapWarning = savedMapView.basemap === undefined ? null : await this.basemap.restore(savedMapView.basemap);
+        const basemapWarning = restoreAppearanceEarly ? initialBasemapWarning
+            : await this.#restoreViewportAndBasemap(savedMapView);
         if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
         this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
         const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
@@ -599,7 +614,9 @@ export class SavedMapViewController {
                 this.mapLayers.setCustomLayer(result.key, savedMapView.layers[index].isCustom);
             }
         }
-        this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
+        if (!restoreAppearanceEarly) {
+            this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
+        }
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         // Older callers may expose only catalog staging; mixed maps require explicit ordering.
         if (preparations.some(result => result.key)) {
@@ -613,6 +630,16 @@ export class SavedMapViewController {
                 .map(({ detail }) => detail)
                 .filter((detail) => detail !== null)],
         };
+    }
+
+    /**
+     * Apply the saved viewport and start loading its basemap through their owners.
+     * @param {Object} savedMapView Validated saved-map document.
+     * @return {Promise<string|null>} Warning if the saved basemap is unavailable.
+     */
+    async #restoreViewportAndBasemap(savedMapView) {
+        this.viewport.restore(savedMapView.viewport);
+        return savedMapView.basemap === undefined ? null : this.basemap.restore(savedMapView.basemap);
     }
 
     /**

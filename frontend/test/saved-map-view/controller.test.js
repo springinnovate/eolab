@@ -914,6 +914,106 @@ test("startup silently restores a valid remembered map through the transaction",
   assert.equal(view.error, null);
 });
 
+for (const destroyDuringLoad of [false, true]) {
+  test(`private startup applies appearance before loading and preserves later choices (${destroyDuringLoad ? "destroyed" : "completed"})`, async () => {
+    const saved = {
+      ...emptySavedMap(10, 20, 6),
+      basemap: "outlines",
+      mapLegend: { visible: false, collapsed: true },
+      layers: ["slow", "missing", "fast"].map(id => ({
+        catalogItem: { collection: "vectors", id },
+        visible: true, opacity: 1, style: { kind: "vector", definition: {} },
+      })),
+    };
+    const storage = createStorage(serializeSavedMapView(saved));
+    const view = createView(), timers = createTimers(), records = [], requested = [];
+    const appearanceCalls = [];
+    let position = emptySavedMap(0, 0, 2).viewport;
+    let background = "detailed", legend = { visible: true, collapsed: false };
+    let finishLayer, finishBasemap;
+    const pendingLayer = new Promise(resolve => { finishLayer = resolve; });
+    const pendingBasemap = new Promise(resolve => { finishBasemap = resolve; });
+    const controller = createController({
+      view, storage, viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+      setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+      viewport: {
+        snapshot: () => position,
+        restore(value) { position = value; appearanceCalls.push("viewport"); },
+      },
+      basemap: {
+        snapshot: () => background,
+        restore(value) { background = value; appearanceCalls.push("basemap"); return pendingBasemap; },
+      },
+      mapLegend: {
+        snapshot: () => legend,
+        restore(value) { legend = value; appearanceCalls.push("legend"); },
+      },
+      mapLayers: {
+        retainedRecords: records,
+        commitStaged(layers, options) {
+          assert.deepEqual(options, { fitToBounds: false });
+          records.push(...layers.map(layer => layer.record));
+        },
+        setLegendIncluded(key, included) {
+          records.find(record => record.entry.key === key).entry.legendIncluded = included;
+        },
+      },
+      catalogItems: { async get(identity) {
+        requested.push(identity.id);
+        if (identity.id === "slow") await pendingLayer;
+        if (identity.id === "missing") throw new Error("Source unavailable");
+        return identity;
+      } },
+      catalogVisualization: {
+        clear() {}, prepare: async item => item,
+        stage: async (item, presentation) => ({ record: {
+          entry: { item, ...presentation, label: item.id },
+          adapter: { applySavedState() {}, exportSavedState: () => ({ kind: "vector", definition: {} }) },
+        } }),
+      },
+    });
+
+    const restoring = controller.restoreStartupView("");
+    assert.deepEqual(position, saved.viewport);
+    assert.equal(background, saved.basemap);
+    assert.deepEqual(legend, saved.mapLegend);
+    assert.deepEqual(requested, ["slow", "missing", "fast"], "layer preparation starts while the basemap is pending");
+    assert.equal(view.loading, null, "private startup does not open a blocking progress dialog");
+
+    position = emptySavedMap(50, 60, 10).viewport;
+    background = "none";
+    legend = { visible: true, collapsed: false };
+    controller.scheduleRemember();
+    if (destroyDuringLoad) controller.destroy();
+    finishLayer();
+    finishBasemap(null);
+    await restoring;
+
+    assert.deepEqual(position, emptySavedMap(50, 60, 10).viewport);
+    assert.equal(background, "none");
+    assert.deepEqual(legend, { visible: true, collapsed: false });
+    assert.deepEqual(appearanceCalls, ["viewport", "basemap", "legend"]);
+    if (destroyDuringLoad) {
+      assert.equal(records.length, 0);
+      assert.equal(view.result, null);
+      assert.equal(timers.scheduled.size, 0);
+      assert.deepEqual(storage.writes, []);
+    } else {
+      assert.deepEqual(records.map(record => record.entry.item.id), ["slow", "fast"]);
+      assert.equal(view.result.loaded, 2);
+      assert.equal(view.result.total, 3);
+      assert.match(view.result.details[0], /vectors\/missing: Source unavailable/);
+      timers.runOnly();
+      const remembered = JSON.parse(storage.serialized);
+      assert.deepEqual(remembered.viewport, position);
+      assert.equal(remembered.basemap, background);
+      assert.deepEqual(remembered.mapLegend, legend);
+    }
+    assert.equal(storage.clears, 0);
+    controller.destroy();
+  });
+}
+
 test("startup discards corrupt remembered content without blocking the map", async () => {
   const storage = createStorage("not valid saved-map JSON");
   let clearedMap = false;
