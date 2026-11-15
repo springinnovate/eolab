@@ -52,9 +52,10 @@ export class PolygonLabelLayout {
     }
 
     /**
-     * Measure labels once, then apply visibility without changing polygons or tooltip content.
-     * Hide saved labels only when the polygon's longest screen dimension is below
-     * 24 pixels, or the label overlaps an earlier label. Names may extend beyond
+     * Measure labels once, then scan collisions only for eligible saved labels.
+     * Apply visibility without changing polygons or tooltip content.
+     * Hide saved labels when offscreen, when the polygon's longest screen dimension
+     * is below 24 pixels, or when the label overlaps an earlier label. Names may extend beyond
      * their polygon. Drafts take priority; other ties use renderer and polygon order.
      * Hidden labels retain their dimensions so zooming back in can reveal them.
      * @return {void}
@@ -81,10 +82,9 @@ export class PolygonLabelLayout {
         candidates.sort((a, b) => Number(b.editing) - Number(a.editing));
         const occupied = [];
         for (const { element, label, editing, eligible } of candidates) {
-            const overlaps = occupied.some(other => label.left < other.right + LABEL_GAP &&
-                label.right + LABEL_GAP > other.left && label.top < other.bottom + LABEL_GAP &&
-                label.bottom + LABEL_GAP > other.top);
-            const visible = eligible && (editing || !overlaps);
+            const visible = eligible && (editing || !occupied.some(other =>
+                label.left < other.right + LABEL_GAP && label.right + LABEL_GAP > other.left &&
+                label.top < other.bottom + LABEL_GAP && label.bottom + LABEL_GAP > other.top));
             element.style.visibility = visible ? "visible" : "hidden";
             if (visible) occupied.push(label);
         }
