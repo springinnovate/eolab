@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createCatalogResultView } from "../src/catalog-result-view.js";
 import { buildCatalogResultPresentation } from "../src/catalog-result-presentation.js";
+import { getCatalogVisualization, MOUNTED_DATASET_TYPES, NONSPATIAL_COLLECTION_ID } from "../src/catalog.js";
 
 /** Minimal DOM boundary: stable nodes, attributes, focus, and native events. */
 function fixture(presentation = {}) {
@@ -85,6 +86,18 @@ test("result rows display curated titles and distinguish native vector layers", 
     assert.equal(view.detailsButton.getAttribute("aria-label"),
       `More details for ${title}, Layer: ${layerName}, Vector`);
   }
+});
+
+test("nonspatial Catalog results identify their type without enabling map actions", () => {
+  const item = { collection: NONSPATIAL_COLLECTION_ID, id: "study", properties: { title: "Study results" } };
+  const presentation = buildCatalogResultPresentation(item, MOUNTED_DATASET_TYPES.get(item.collection));
+  const f = fixture(presentation);
+  f.update({ supported: getCatalogVisualization(item) !== null });
+  assert.equal(presentation.datasetType, "Nonspatial data");
+  assert.match(f.view.detailsButton.getAttribute("aria-label"), /Nonspatial data/);
+  assert.equal(f.mapButton.hidden, true);
+  assert.equal(f.zoomButton.hidden, true);
+  assert.equal(f.styleButton.hidden, true);
 });
 
 test("state changes preserve controls/focus and keep On map distinct from Remove", () => {
