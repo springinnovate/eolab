@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import fiona
@@ -27,7 +28,7 @@ from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
 from eolab_app.vector.models import ResolvedVectorSource, VectorFormat, VectorSourceKind
 from eolab_app.vector.sampling import VectorSamplingService
-from eolab_app.attribute_filter import ogr_predicate
+from eolab_app.attribute_filter import AttributeFilterError, ogr_predicate
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 
 
@@ -203,6 +204,144 @@ def test_count_selected_features_read_only_filter_attributes(
             "matched": 3 if rule is None else 1,
             "total": 3,
         }
+
+
+@pytest.mark.parametrize("native_total", [2, 1_000_001])
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        VectorFilter(enabled=True, rules=[]),
+        VectorFilter(
+            enabled=False,
+            rules=[{"field": "doubled", "operator": "eq", "value": 6}],
+        ),
+    ],
+    ids=["empty-rules", "disabled-rules"],
+)
+def test_inactive_selection_uses_native_count_without_feature_work(
+    source: ResolvedCatalogSelection,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate: VectorFilter,
+    native_total: int,
+) -> None:
+    """Return the native total through selection admission without consuming features.
+
+    Args:
+        source: Real authorized GeoPackage with two original features.
+        monkeypatch: Reject record/expression work and optionally supply a large count.
+        candidate: Inactive predicate submitted through the public request model.
+        native_total: Native count, with the large case avoiding a million-row fixture.
+    """
+    catalog = FixtureCatalog(
+        ResolvedVectorSource("mounted", "geopackage", source.path, "data", "polygons")
+    )
+    request = CatalogVectorFilterRequest(
+        collectionId=source.selection.collection_id,
+        itemId=source.selection.item_id,
+        filter=candidate,
+        calculatedFields=[{"name": "doubled", "expression": "'selected' * 2"}],
+    )
+    feature_work = Mock(side_effect=AssertionError("Inactive selection read a feature"))
+    expression_work = Mock(
+        side_effect=AssertionError("Inactive selection evaluated a calculated field")
+    )
+    monkeypatch.setattr(fiona.Collection, "filter", feature_work)
+    monkeypatch.setattr(fiona.Collection, "__iter__", feature_work)
+    monkeypatch.setattr(
+        "eolab_app.bounded_vector.evaluate_calculated_fields", expression_work
+    )
+    if native_total > 2:
+        monkeypatch.setattr(
+            fiona.Collection, "__len__", Mock(return_value=native_total)
+        )
+
+    async def count_features(
+        selection: CatalogSelection, upload_owner: str | None
+    ) -> dict[str, int]:
+        """Reauthorize the produced descriptor and count its original layer.
+
+        Args:
+            selection: Path-free descriptor produced by selection admission.
+            upload_owner: Unused private owner for this Catalog selection.
+
+        Returns:
+            Native matched and total counts with no candidate scan allowance.
+        """
+        resolved = await service.resolve_for_sampling(selection, upload_owner)
+        assert resolved.selection.filter == candidate
+        assert resolved.calculated_fields
+        return count_selected_features(resolved, limits=VectorReadLimits(features=0))
+
+    service = VectorSamplingService(catalog, catalog, selection_executor=count_features)
+    result = asyncio.run(service.select(request))
+    assert (result["matched"], result["total"]) == (native_total, native_total)
+    descriptor = CatalogSelection.model_validate(result["selection"])
+    assert descriptor.filter == candidate
+    assert descriptor.calculated_fields == request.calculated_fields
+    feature_work.assert_not_called()
+    expression_work.assert_not_called()
+
+
+def test_inactive_selection_preserves_source_and_read_failures(
+    tmp_path: Path,
+    source: ResolvedCatalogSelection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep empty, schema, source, cancellation and elapsed limits on native counts.
+
+    Args:
+        tmp_path: Directory for an empty original GeoPackage.
+        source: Real authorized nonempty vector layer.
+        monkeypatch: Cancel during native counting or advance its elapsed clock.
+    """
+    empty = write_selection(tmp_path / "empty.gpkg", [])
+    with pytest.raises(GeometryValidationError, match="No matching"):
+        count_selected_features(empty)
+    whole_layer = replace(
+        source,
+        selection=source.selection.model_copy(update={"filter": VectorFilter()}),
+        where=None,
+    )
+    with pytest.raises(SelectionUnavailableError):
+        count_selected_features(
+            replace(whole_layer, path=source.path.with_name("missing.gpkg"))
+        )
+    invalid = VectorFilter(
+        enabled=False,
+        rules=[{"field": "unknown", "operator": "eq", "value": 1}],
+    )
+    with pytest.raises(AttributeFilterError, match="not in this layer"):
+        count_selected_features(
+            replace(
+                whole_layer,
+                selection=whole_layer.selection.model_copy(update={"filter": invalid}),
+            )
+        )
+    cancelled = False
+    native_count = fiona.Collection.__len__
+
+    def cancel_during_count(dataset: fiona.Collection) -> int:
+        """Request cancellation after the native driver obtains its count.
+
+        Args:
+            dataset: Real collection whose feature count is requested.
+
+        Returns:
+            The original native feature count.
+        """
+        nonlocal cancelled
+        total = native_count(dataset)
+        cancelled = True
+        return total
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fiona.Collection, "__len__", cancel_during_count)
+        with pytest.raises(RasterReadCancelled):
+            count_selected_features(whole_layer, lambda: cancelled)
+    clock = iter([0, 16])
+    monkeypatch.setattr("eolab_app.bounded_vector.monotonic", lambda: next(clock))
+    with pytest.raises(GeometryValidationError, match="15-second time budget"):
+        count_selected_features(whole_layer)
 
 
 def test_count_selected_features_preserve_empty_budget_cancellation_and_read_errors(

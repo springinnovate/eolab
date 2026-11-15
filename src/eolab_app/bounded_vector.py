@@ -423,12 +423,15 @@ def count_selected_features(
 
     The native predicate narrows candidates; exact attribute comparisons retain
     the same selection used by polygon readers. Geometry is checked when an
-    outline or calculation reads it.
+    outline or calculation reads it. Inactive predicates use the native layer
+    count without traversing features or evaluating calculated fields.
 
     Args:
         resolved: Authorized immutable source and feature filter.
-        cancellation_requested: Optional request to stop between native records.
-        limits: Time and candidate-feature budgets, or None for supervised work.
+        cancellation_requested: Optional request to stop after the native count
+            or between records.
+        limits: Time and actual candidate-feature budgets, or None for supervised
+            work. A native count does not consume the candidate-feature budget.
 
     Returns:
         Exact matched and whole-layer feature counts.
@@ -459,22 +462,30 @@ def count_selected_features(
             },
         )
         total = len(dataset)
-        options = {"where": resolved.where} if resolved.where else {}
-        for count, feature in enumerate(dataset.filter(**options), 1):
+        if not resolved.selection.filter.active:
             require_active_raster_read(cancellation_requested)
-            if limits is not None and count > limits.features:
-                raise GeometryValidationError(
-                    f"Vector reading exceeded its {limits.features:,}-feature budget"
-                )
             if deadline is not None and monotonic() > deadline:
                 raise GeometryValidationError(
-                    f"Vector reading exceeded its {limits.seconds:g}-second time budget after {count - 1:,} features"
+                    f"Vector reading exceeded its {limits.seconds:g}-second time budget after 0 features"
                 )
-            properties = dict(feature.properties)
-            properties.update(
-                evaluate_calculated_fields(resolved.calculated_fields, properties)
-            )
-            matched += int(matches_filter(resolved.selection.filter, properties))
+            matched = total
+        else:
+            options = {"where": resolved.where} if resolved.where else {}
+            for count, feature in enumerate(dataset.filter(**options), 1):
+                require_active_raster_read(cancellation_requested)
+                if limits is not None and count > limits.features:
+                    raise GeometryValidationError(
+                        f"Vector reading exceeded its {limits.features:,}-feature budget"
+                    )
+                if deadline is not None and monotonic() > deadline:
+                    raise GeometryValidationError(
+                        f"Vector reading exceeded its {limits.seconds:g}-second time budget after {count - 1:,} features"
+                    )
+                properties = dict(feature.properties)
+                properties.update(
+                    evaluate_calculated_fields(resolved.calculated_fields, properties)
+                )
+                matched += int(matches_filter(resolved.selection.filter, properties))
     if not matched:
         raise GeometryValidationError("No matching polygon features; change the filter")
     return {"matched": matched, "total": total}
