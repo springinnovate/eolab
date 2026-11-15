@@ -866,7 +866,7 @@ h5 {
   line-height: 1.3;
 }
 .raster-layer-row .raster-layer-name { font-size: var(--font-size-title); font-weight: 600; }
-.map-layer-name-tail { display: inline-flex; max-width: 100%; align-items: baseline; vertical-align: baseline; }
+.map-layer-name-tail { display: inline-flex; max-width: 100%; align-items: last baseline; vertical-align: baseline; }
 .map-layer-name-tail > label { min-width: 0; overflow-wrap: anywhere; }
 .map-layer-role-badge {
   display: inline-block;
