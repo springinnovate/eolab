@@ -315,16 +315,11 @@ test("Catalog layout reserves its height for compact searchable results", () => 
   );
   assert.doesNotMatch(stylesheet, /is-catalog-browser-collapsed/);
   assert.match(stylesheet, /is-catalog-inspector-visible/);
-  assert.match(stylesheet, /\.catalog-item-heading h3\s*\{[^}]*font-size:\s*0\.82rem[^}]*text-overflow:\s*ellipsis/s);
   assert.match(stylesheet, /\.catalog-inspector-close\s*\{[^}]*display:\s*inline-grid/s);
   assert.match(stylesheet, /\.catalog-map-actions \.catalog-add-action\s*\{[^}]*background:\s*var\(--brand-hover\)/s);
   assert.match(stylesheet, /\.catalog-on-map\[hidden\]\s*\{[^}]*display:\s*none/s);
   assert.match(stylesheet, /\.catalog-search-toolbar\s*\{/);
   assert.match(stylesheet, /\.catalog-result-count\s*\{/);
-  assert.match(
-    stylesheet,
-    /\.catalog-result\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s,
-  );
   assert.match(stylesheet, /--workspace-catalog-inspector-width:/);
   assert.match(
     stylesheet,

@@ -439,7 +439,7 @@ export class MapLayerStackView {
     }
 
     /**
-     * Construct a compact Catalog or Custom layer card in the existing drawing order.
+     * Construct a compact Catalog or Custom layer row in the existing drawing order.
      * Keep frequent actions beside a source-details disclosure, preserving owner
      * controls and every action's stable focus identity.
      *
@@ -510,7 +510,7 @@ export class MapLayerStackView {
         label.append(title);
         const kind = this.documentContext.createElement("span");
         kind.className = "map-layer-kind";
-        kind.textContent = layer.isCustom ? "Custom layer" : "Catalog dataset";
+        kind.textContent = layer.isCustom ? "Custom" : "Catalog";
         title.append(kind);
         if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
             const roleBadge = this.documentContext.createElement("span");
@@ -659,7 +659,7 @@ export class MapLayerStackView {
     }
 
     /**
-     * Build a collapsed source description and utility actions for one layer.
+     * Build a collapsed full layer name, source description and utility actions.
      * The explicit layer kind controls presentation only; source identity,
      * owner-specific attribution and action permissions remain unchanged.
      * @param {MapLayerStackSnapshot} layer Current owner-supplied presentation.
@@ -674,6 +674,10 @@ export class MapLayerStackView {
         panel.id = `map-layer-details-${encodeURIComponent(layer.key)}`;
         panel.setAttribute("role", "group");
         panel.setAttribute("aria-label", `Details for ${layer.label}`);
+        const name = this.documentContext.createElement("strong");
+        name.className = "map-layer-details-name";
+        name.textContent = layer.label;
+        panel.append(name);
         const type = this.documentContext.createElement("p");
         type.className = "map-layer-type";
         type.textContent = typeLabel;

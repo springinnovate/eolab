@@ -372,7 +372,7 @@ test("the create action names the source layer and disables only its pending add
   assert.equal(actionControl(list.children[0], "add-view").textContent, "Creating…");
 });
 
-test("Catalog and Custom cards share one unchanged order and use explicit layer meaning", () => {
+test("Catalog and Custom rows share one unchanged order and use explicit layer meaning", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const layers = [
     { ...LAYERS[0], key: "catalog-shaped-key", isCustom: true, canAddView: true, sourceName: "temperature.tif" },
@@ -386,7 +386,7 @@ test("Catalog and Custom cards share one unchanged order and use explicit layer 
   assert.deepEqual(rows.map(row => row.dataset.layerKey), layers.map(layer => layer.key));
   assert.deepEqual(rows.map(row => row.classList.contains("is-custom-layer")), [true, false, true]);
   assert.deepEqual(rows.map(row => elementsByClass(row, "map-layer-kind")[0].textContent),
-    ["Custom layer", "Catalog dataset", "Custom layer"]);
+    ["Custom", "Catalog", "Custom"]);
   assert.deepEqual(rows.map(row => actionControl(row, "add-view").textContent),
     ["Duplicate", "Create custom layer", "Duplicate"]);
   actionControl(rows[0], "add-view").dispatchEvent(new Event("click"));
@@ -399,9 +399,10 @@ test("Catalog and Custom cards share one unchanged order and use explicit layer 
     "The original Catalog dataset stays unchanged.");
 });
 
-test("Details preserves disclosure and utility focus through refresh and reorder", () => {
+test("Details exposes full names and preserves disclosure and utility focus through refresh and reorder", () => {
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
   const layers = LAYERS.map(layer => ({ ...layer, isCustom: false }));
+  layers[0].label = "A long temperature dataset name with <literal> text and no abbreviation";
   view.render(layers, layers[0].key);
   const list = doc.querySelector("#raster-layer-list");
   let row = list.children[0];
@@ -409,14 +410,19 @@ test("Details preserves disclosure and utility focus through refresh and reorder
   let panel = elementsByClass(row, "map-layer-details")[0];
   assert.equal(trigger.getAttribute("aria-controls"), panel.id);
   assert.equal(trigger.getAttribute("aria-expanded"), "false");
+  trigger.focus();
   trigger.dispatchEvent(new Event("click"));
   assert.equal(panel.hidden, false);
   assert.equal(trigger.getAttribute("aria-expanded"), "true");
+  const name = elementsByClass(panel, "map-layer-details-name")[0];
+  assert.equal(name.textContent, layers[0].label);
+  assert.equal(name.children.length, 0);
   actionControl(row, "zoom").focus();
   view.render([layers[1], layers[0], layers[2]], layers[0].key);
   row = list.children[1];
   panel = elementsByClass(row, "map-layer-details")[0];
   assert.equal(panel.hidden, false);
+  assert.equal(elementsByClass(panel, "map-layer-details-name")[0].textContent, layers[0].label);
   assert.equal(doc.activeElement, actionControl(row, "zoom"));
   panel.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
   assert.equal(panel.hidden, true);

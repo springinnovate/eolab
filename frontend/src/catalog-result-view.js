@@ -36,15 +36,14 @@ export function createCatalogResultView({
         context.textContent = presentation.context;
         element.append(context);
     }
+    const actions = documentContext.createElement("div");
+    actions.className = "catalog-result-actions";
     if (presentation.datasetType !== null) {
         const type = documentContext.createElement("small");
         type.className = "catalog-result-type";
         type.textContent = presentation.datasetType;
-        element.append(type);
+        actions.append(type);
     }
-
-    const actions = documentContext.createElement("div");
-    actions.className = "catalog-result-actions";
     const onMap = documentContext.createElement("span");
     onMap.className = "catalog-on-map catalog-result-on-map";
     onMap.hidden = true;

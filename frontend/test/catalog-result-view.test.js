@@ -46,7 +46,10 @@ function fixture(presentation = {}) {
     onClearPreview: () => calls.push(["clear"]),
   });
   const actions = view.element.children.find((child) => child.className === "catalog-result-actions");
-  const [onMap, mapButton, zoomButton, styleButton] = actions.children;
+  const onMap = actions.children.find(child => child.classList.contains("catalog-result-on-map"));
+  const mapButton = actions.children.find(child => child.classList.contains("catalog-result-map-action"));
+  const zoomButton = actions.children.find(child => child.classList.contains("catalog-result-zoom"));
+  const styleButton = actions.children.find(child => child.classList.contains("catalog-result-style"));
   const status = view.element.children.at(-1);
   const update = (state = {}) => view.update({ supported: true, retained: false,
     removalTarget: state.retained ? { key: "wind", label: "wind.tif", count: 1 } : null,
@@ -82,9 +85,11 @@ test("result rows display curated titles and distinguish native vector layers", 
       },
       assets: { support: { title: "supporting.tif" }, data: { title: "habitat.gpkg" } },
     }, "Vector");
-    const { view } = fixture(presentation);
+    const { view, actions } = fixture(presentation);
     assert.equal(view.element.children[0].textContent, title);
     assert.equal(view.element.children[1].textContent, `Layer: ${layerName}`);
+    assert.equal(actions.children.find(child => child.className === "catalog-result-type").textContent,
+      "Vector");
     assert.equal(view.detailsButton.getAttribute("aria-label"),
       `More details for ${title}, Layer: ${layerName}, Vector`);
   }
@@ -135,7 +140,8 @@ test("Style follows Zoom to only for retained Items and does not invoke map or d
   assert.equal(f.styleButton.textContent, "Style");
   assert.equal(f.styleButton.getAttribute("aria-label"), "Style: future/wind.tif");
   assert.equal(f.styleButton.getAttribute("aria-controls"), "layer-style-editor");
-  assert.deepEqual(f.actions.children, [f.onMap, f.mapButton, f.zoomButton, f.styleButton, f.view.detailsButton]);
+  assert.deepEqual(f.actions.children.filter(child => child.tagName === "button"),
+    [f.mapButton, f.zoomButton, f.styleButton, f.view.detailsButton]);
   f.styleButton.focus();
   f.styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(f.calls, [["style", f.item]]);

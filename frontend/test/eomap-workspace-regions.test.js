@@ -497,7 +497,11 @@ test("sidebar panels own deliberate, independent scrolling", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.map-layers-region\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.map-layers-region\s*\{[^}]*overflow:\s*hidden/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.map-layers-body\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
     );
     assert.match(
         STYLESHEET,
