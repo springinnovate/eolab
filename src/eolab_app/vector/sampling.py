@@ -29,7 +29,11 @@ from eolab_app.vector.ports import VectorCatalog
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector_uploads import VectorUploadStore
-from eolab_app.source_files import LeasedSourceFiles, SourceFileError
+from eolab_app.source_files import (
+    LeasedSourceFiles,
+    SourceFileError,
+    finish_source_task,
+)
 
 
 class VectorSelectionExecutor(Protocol):
@@ -109,6 +113,7 @@ class VectorSamplingService:
         Raises:
             SelectionUnavailableError: If source identity, fields or access are invalid.
             SourceFileError: If a result's ownership, expiry or lease changes.
+            asyncio.CancelledError: After the native metadata read finishes.
         """
         if not isinstance(selection, ArtifactVectorSelection):
             yield await self.resolve_for_sampling(selection, source_owner)
@@ -124,9 +129,13 @@ class VectorSamplingService:
         ) as source:
             if source.media_type != "application/geopackage+sqlite3":
                 raise SelectionUnavailableError("Choose a vector GeoPackage result.")
-            yield await asyncio.to_thread(
-                resolve_vector_file_selection, source.path, selection
+            metadata = asyncio.create_task(
+                asyncio.to_thread(resolve_vector_file_selection, source.path, selection)
             )
+            try:
+                yield await asyncio.shield(metadata)
+            finally:
+                await finish_source_task(metadata)
 
     async def _execute_selection(
         self,

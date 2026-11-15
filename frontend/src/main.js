@@ -1223,7 +1223,7 @@ async function initializeCatalog(
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
     /** Read polygon choices for Models, histogram and summary controls.
      * Visibility and WMS publication do not determine numerical selection.
-     * @return {Array<{key:string,label:string,item:import("./vector/map-layer-adapter.js").VectorSourceDescription["source"],
+     * @return {Array<{key:string,label:string,item:import("./vector/sampling.js").VectorSamplingSource,
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
      * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
      * Retained source identities, immutable fields and applied filter snapshots.
@@ -1233,7 +1233,8 @@ async function initializeCatalog(
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
             return source.geometryKind === "polygon" ? [{
-                key: record.entry.key, label: record.entry.label, item: source.source,
+                key: record.entry.key, label: record.entry.label,
+                item: source.source.kind === "runArtifact" ? source.selection : source.source,
                 fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
                 selection: source.selection, filter: record.adapter.exportFilterState(record),
             }] : [];
@@ -1243,7 +1244,7 @@ async function initializeCatalog(
      */
     const getSamplingPolygonTargets = () => [...getPolygonTargets(), ...(annotations?.summaryTargets() ?? [])];
     /** Prepare an original vector selection or upload the matching saved drawing geometry.
-     * @param {Object|null} item Catalog or uploaded source identity, or null for a drawing.
+     * @param {import("./vector/sampling.js").VectorSamplingSource|null} item Original vector identity, or null for a drawing.
      * @param {Object} filter Applied field conditions.
      * @param {AbortSignal} signal Cancellation of a superseded vector read.
      * @param {Object} target Committed layer snapshot.
@@ -1322,7 +1323,7 @@ async function initializeCatalog(
             };
         },
         /** Read selected features without requiring a display layer.
-         * @param {Object} source Catalog or uploaded source and captured filter.
+         * @param {import("./vector/sampling.js").VectorSamplingSource & {filter:Object}} source Original vector identity and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
          * @return {Promise<Object>} Selection descriptor and matched/total feature counts.
          */
