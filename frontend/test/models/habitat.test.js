@@ -216,12 +216,17 @@ test("Default GEE setup requires a preparation selection even when the map canno
     assert.equal(areaChoice.help.textContent, "Areas are configured by your administrator.");
     assert.equal(areaChoice.status.textContent, "");
     assert.equal(areaChoice.status.hidden, true);
+    assert.equal(areaChoice.sourceDetails.hidden, true);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     assert.equal(h.controller.state.draft.inputs.area.area, null);
     assert.equal(h.view.setup.run.disabled, true);
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "no-area"), /Catalog selection/i);
     await choosePreparationSelection(h);
     assert.equal(areaChoice.status.hidden, false);
+    assert.equal(areaChoice.sourceDetails.hidden, false);
+    assert.equal(Boolean(areaChoice.sourceDetails.open), false);
+    assert.equal(areaChoice.sourceDetails.children[0].textContent, "Area source");
+    assert.equal(areaChoice.selectionDetails.parentElement, areaChoice.sourceDetails);
     assert.equal(h.view.setup.run.disabled, false);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "preparation-selection").inputs.area,
         {kind: "catalogSelection", selection: preparationSelections[0]});
@@ -927,7 +932,7 @@ for (const cachedTiles of [0, 2, 4]) test("preparation selection with " + cached
     const controls = h.view.setup.inputs.area.preparationSelection;
     assert.equal(controls.status.getAttribute("role"), "status");
     assert.equal(controls.status.hidden, false);
-    assert.equal(controls.source.getAttribute("aria-describedby"), controls.selectionDetails.id + " " + controls.status.id);
+    assert.equal(controls.source.getAttribute("aria-describedby"), controls.status.id);
     assert.equal(h.view.setup.run.disabled, cachedTiles === 0);
     if (cachedTiles === 0) {
         assert.match(controls.status.textContent, /No prepared inputs.*area and year/);
