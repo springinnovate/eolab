@@ -3,6 +3,9 @@
 import { getCatalogVisualization } from "./catalog.js";
 import { assessCatalogVector } from "./vector/api.js";
 
+/** @type {string} Reader contract whose admitted vector assessments can be reused for publication. */
+const VECTOR_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-vector-v1";
+
 /** Select the raster or vector adapter used to prepare and display a catalog dataset. */
 export class CatalogVisualizationCoordinator {
     /**
@@ -38,18 +41,23 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Check a vector dataset's display support, or pass through a raster dataset.
+     * Reuse admitted display support, assessing vectors that need a current decision.
      *
-     * The server supplies vector display metadata before publication.
-     * Rasters do not need this extra assessment request.
+     * Current eligible vector assessments describe immutable admitted sources.
+     * Missing, obsolete or ineligible assessments still use the server workflow.
+     * Rasters pass through without a vector assessment request.
      *
      * @param {Object} item Selected supported STAC Item.
-     * @return {Promise<Object>} Prepared Item; vectors carry fresh assessment.
+     * @return {Promise<Object>} Prepared Item with reusable or refreshed assessment.
      * @throws {TypeError} If the Item has no visualization adapter.
      */
     prepare(item) {
         const descriptor = this.#requireDescriptor(item);
-        return descriptor.kind === "raster"
+        const assessment = descriptor.metadata;
+        return descriptor.kind === "raster" || (
+            assessment?.eligible === true &&
+            assessment.reader_contract === VECTOR_READER_CONTRACT
+        )
             ? Promise.resolve(item)
             : this.assessVector(item);
     }
