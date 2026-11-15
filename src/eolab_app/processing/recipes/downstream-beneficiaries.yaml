@@ -79,31 +79,26 @@ steps:
       travel_time_pixel_size_m: {parameter: travel_time_pixel_size_m}
 outputs:
   masked_values:
-    label: Values within downstream coverage
     source: analysis.masked_values
     role: result
     presentation: map
     saveEligible: true
   coverage:
-    label: Downstream coverage
     source: analysis.coverage
     role: result
     presentation: map
     saveEligible: true
   statistics:
-    label: Downstream statistics
     source: analysis.statistics
     role: result
     presentation: table
     saveEligible: true
   starting_mask:
-    label: Starting mask
     source: analysis.starting_mask
     role: intermediate
     presentation: map
     saveEligible: false
   routing_dem:
-    label: Routing DEM (pit-filled)
     source: analysis.routing_dem
     role: intermediate
     presentation: map
