@@ -42,12 +42,12 @@
 const CONTEXT_ANNOTATIONS = new Set([
     "objective", "objectives", "study_objective", "study_objectives",
     "location", "study_location", "method", "methods", "study_methods",
-    "findings", "main_findings", "study_summary",
+    "findings", "main_findings", "study_summary", "evidence_type", "dataset_role",
+    "study_design", "design",
 ]);
 const EVIDENCE_ANNOTATIONS = new Set([
     "evidence", "limitations", "relationship", "relationship_notes",
-    "threshold", "thresholds", "threshold_notes", "reconciliation",
-    "reconciliation_evidence", "match_evidence", "reconciliation_notes",
+    "threshold", "thresholds", "threshold_notes",
 ]);
 
 /**
@@ -75,6 +75,38 @@ export function safeCatalogHttpReference(value) {
  */
 export function catalogDoiReference(doi) {
     return "https://doi.org/" + doi.split("/").map(encodeURIComponent).join("/");
+}
+
+/**
+ * Compare safe external destinations without changing the supplied link value.
+ * DOI resolver aliases share one identity; other URLs retain path, query and
+ * fragment distinctions so separate resources are never hidden by their title.
+ * @param {string} href Approved HTTP(S) destination.
+ * @return {string} Normalized comparison key used only by the inspector.
+ */
+export function catalogReferenceIdentity(href) {
+    const url = new URL(href);
+    if (["doi.org", "dx.doi.org"].includes(url.hostname.toLowerCase())) {
+        const doiPath = url.pathname.replace(/%[0-9a-f]{2}/gi, (escape) =>
+            String.fromCharCode(parseInt(escape.slice(1), 16))).toLowerCase();
+        return JSON.stringify(["doi", doiPath, url.search, url.hash]);
+    }
+    return url.href;
+}
+
+/**
+ * Create a native disclosure for optional Catalog detail.
+ * @param {Document} documentContext Owning document.
+ * @param {string} label Visible and keyboard-accessible summary.
+ * @return {HTMLDetailsElement} Initially closed disclosure ready for content.
+ */
+export function createCatalogDisclosure(documentContext, label) {
+    const details = documentContext.createElement("details");
+    details.className = "catalog-detail-disclosure";
+    const summary = documentContext.createElement("summary");
+    summary.textContent = label;
+    details.append(summary);
+    return details;
 }
 
 /**
@@ -139,22 +171,23 @@ function annotationLabel(key) {
  * Null, false, zero and empty collections remain distinct and visible.
  * @param {Document} documentContext Owning document.
  * @param {JsonValue} value Supplied public annotation value.
+ * @param {Set<string>} references Destinations already linked in this inspector.
  * @return {HTMLElement} Safe value content.
  */
-function createAnnotationValue(documentContext, value) {
+function createAnnotationValue(documentContext, value, references) {
     if (Array.isArray(value) && value.length > 0) {
         const list = documentContext.createElement("ul");
         list.className = "catalog-annotation-list";
         for (const entry of value) {
             const row = documentContext.createElement("li");
-            row.append(createAnnotationValue(documentContext, entry));
+            row.append(createAnnotationValue(documentContext, entry, references));
             list.append(row);
         }
         return list;
     }
     if (value !== null && !Array.isArray(value) && typeof value === "object"
         && Object.keys(value).length > 0) {
-        return createAnnotationList(documentContext, Object.entries(value));
+        return createAnnotationList(documentContext, Object.entries(value), references);
     }
     const text = documentContext.createElement("span");
     text.className = "catalog-annotation-value";
@@ -163,9 +196,12 @@ function createAnnotationValue(documentContext, value) {
         : typeof value === "object" ? JSON.stringify(value) : String(value);
     if (typeof value === "string") {
         const href = safeCatalogHttpReference(value);
-        if (href !== null) return createCatalogReferenceLink(documentContext, {
-            href, label: value, external: true,
-        });
+        if (href !== null && !references.has(catalogReferenceIdentity(href))) {
+            references.add(catalogReferenceIdentity(href));
+            return createCatalogReferenceLink(documentContext, {
+                href, label: value, external: true,
+            });
+        }
     }
     return text;
 }
@@ -174,9 +210,10 @@ function createAnnotationValue(documentContext, value) {
  * Render named annotations, including nested values, without losing their scope.
  * @param {Document} documentContext Owning document.
  * @param {Array<[string, JsonValue]>} entries Ordered annotation pairs.
+ * @param {Set<string>} references Destinations already linked in this inspector.
  * @return {HTMLDListElement} Labeled annotation values.
  */
-function createAnnotationList(documentContext, entries) {
+function createAnnotationList(documentContext, entries, references) {
     const list = documentContext.createElement("dl");
     list.className = "catalog-metadata catalog-annotations";
     for (const [key, value] of entries) {
@@ -184,38 +221,47 @@ function createAnnotationList(documentContext, entries) {
         term.textContent = annotationLabel(key);
         term.title = key;
         const description = documentContext.createElement("dd");
-        description.append(createAnnotationValue(documentContext, value));
+        description.append(createAnnotationValue(documentContext, value, references));
         list.append(term, description);
     }
     return list;
 }
 
 /**
- * Append a titled section only when it has supplied values.
+ * Append supplied values under a heading without repeating a matching sole label.
  * @param {HTMLElement} parent Container for one Item or Asset's annotations.
  * @param {string} title Section title.
  * @param {Array<[string, JsonValue]>} entries Supplied annotations.
  * @param {number} headingLevel Heading level within the inspector.
+ * @param {Set<string>} references Destinations already linked in this inspector.
  * @return {void}
  */
-function appendAnnotationSection(parent, title, entries, headingLevel) {
+function appendAnnotationSection(parent, title, entries, headingLevel, references) {
     if (entries.length === 0) return;
     const section = parent.ownerDocument.createElement("section");
     section.className = "catalog-curated-section";
     const heading = parent.ownerDocument.createElement("h" + headingLevel);
     heading.textContent = title;
-    section.append(heading, createAnnotationList(parent.ownerDocument, entries));
+    if (entries.length === 1 && annotationLabel(entries[0][0]).toLowerCase() === title.toLowerCase()) {
+        const content = parent.ownerDocument.createElement("div");
+        content.className = "catalog-annotation-content";
+        content.append(createAnnotationValue(parent.ownerDocument, entries[0][1], references));
+        section.append(heading, content);
+    } else {
+        section.append(heading, createAnnotationList(parent.ownerDocument, entries, references));
+    }
     parent.append(section);
 }
 
 /**
- * Render one publication with its own citation, notes and additional annotations.
+ * Render one publication, retaining unique links and keeping record IDs optional.
  * @param {Document} documentContext Owning document.
  * @param {CatalogPublication} publication Supplied publication record.
  * @param {number} headingLevel Heading level for its title.
+ * @param {Set<string>} references Destinations already linked in this inspector.
  * @return {HTMLElement} Publication card with safe source references.
  */
-function createPublicationCard(documentContext, publication, headingLevel) {
+function createPublicationCard(documentContext, publication, headingLevel, references) {
     const article = documentContext.createElement("article");
     article.className = "catalog-publication";
     const heading = documentContext.createElement("h" + headingLevel);
@@ -225,85 +271,124 @@ function createPublicationCard(documentContext, publication, headingLevel) {
     if (publication.authors.length > 0) entries.push(["Authors", publication.authors]);
     if (publication.year != null) entries.push(["Publication year", publication.year]);
     if (publication.citation != null) entries.push(["Citation", publication.citation]);
-    if (entries.length > 0) article.append(createAnnotationList(documentContext, entries));
-    if (publication.doi != null) article.append(createCatalogReferenceLink(documentContext, {
-        href: catalogDoiReference(publication.doi),
-        label: "Paper DOI: " + publication.doi, external: true,
-    }));
-    if (publication.url != null) {
-        const href = safeCatalogHttpReference(publication.url);
-        if (href !== null) article.append(createCatalogReferenceLink(documentContext, {
-            href, label: "Open publication", external: true,
-            accessibleLabel: "Open publication: " + publication.title,
+    if (entries.length > 0) article.append(createAnnotationList(documentContext, entries, references));
+    const doiHref = publication.doi == null ? null : catalogDoiReference(publication.doi);
+    const publicationHref = publication.url == null ? null : safeCatalogHttpReference(publication.url);
+    const primaryHref = publicationHref ?? doiHref;
+    if (primaryHref !== null && !references.has(catalogReferenceIdentity(primaryHref))) {
+        article.append(createCatalogReferenceLink(documentContext, {
+            href: primaryHref, label: "Read paper", external: true,
+            accessibleLabel: "Read paper: " + publication.title,
         }));
-        else article.append(createAnnotationList(documentContext, [["Publication reference", publication.url]]));
+        references.add(catalogReferenceIdentity(primaryHref));
     }
     if (publication.notes.length > 0) {
-        article.append(createAnnotationList(documentContext, [["Publication notes", publication.notes]]));
+        article.append(createAnnotationList(documentContext, [["Publication notes", publication.notes]], references));
     }
-    if (Object.keys(publication.annotations).length > 0) {
-        article.append(createAnnotationList(documentContext, Object.entries(publication.annotations)));
+    const detail = createCatalogDisclosure(documentContext, "Publication record");
+    detail.append(createAnnotationList(documentContext, [
+        ["Publication ID", publication.id],
+        ...(publication.url == null ? [] : [["Publication reference", publication.url]]),
+        ...Object.entries(publication.annotations),
+    ], references));
+    if (doiHref !== null) {
+        if (!references.has(catalogReferenceIdentity(doiHref))) {
+            detail.append(createCatalogReferenceLink(documentContext, {
+                href: doiHref, label: "Paper DOI: " + publication.doi, external: true,
+            }));
+            references.add(catalogReferenceIdentity(doiHref));
+        } else {
+            detail.append(createAnnotationList(documentContext, [["Paper DOI", publication.doi]], references));
+        }
     }
-    article.append(createAnnotationList(documentContext, [["Publication ID", publication.id]]));
+    article.append(detail);
     return article;
 }
 
 /**
- * Show an Item or Asset's curated study information in the existing inspector.
- * Titles/descriptions are rendered by the caller once. This component never
- * fetches papers, reads source files, or changes analysis/rendering availability.
+ * Show supplied study context or references in the existing Catalog inspector.
+ * Titles/descriptions are rendered by the caller once. Unknown annotations and
+ * dataset provenance remain available in a disclosure; file provenance goes
+ * inside the caller's File details disclosure. No source files are fetched.
  * @param {CatalogCuratedMetadata} metadata Validated public annotation envelope.
  * @param {Object} options DOM and scope supplied by the existing inspector.
  * @param {Document} [options.documentContext=document] Owning document.
  * @param {"dataset"|"file"} [options.scope="dataset"] Scope for DOI/citation labels.
  * @param {number} [options.headingLevel=4] Section heading level.
- * @return {HTMLDivElement} Study sections retaining every public annotation.
+ * @param {"all"|"context"|"references"} [options.section="all"] Sections to render;
+ * separate context and references calls let the inspector place files between them.
+ * @param {Set<string>} [options.references] Shared destination identities; newly
+ * rendered external links are added so repeated references remain plain text.
+ * @return {HTMLDivElement} Study sections retaining every supplied annotation.
  */
 export function createCuratedMetadataView(metadata, {
     documentContext = document, scope = "dataset", headingLevel = 4,
+    section = "all", references = new Set(),
 } = {}) {
     const root = documentContext.createElement("div");
     root.className = "catalog-curated";
     const context = [];
+    if (metadata.study_time != null) context.push(["Study period", metadata.study_time]);
     for (const [key, label] of [
-        ["statuses", "Evidence status"], ["categories", "Categories"],
-        ["risks", "Risks"], ["study_ids", "Study IDs"], ["keywords", "Keywords"],
+        ["statuses", "Data status"], ["categories", "Categories"], ["risks", "Risks"],
     ]) {
         if (metadata[key].length > 0) context.push([label, metadata[key]]);
     }
-    for (const [key, label] of [
-        ["study_time", "Study period"], ["license", "License"], ["attribution", "Attribution"],
-        ["citation", scope === "dataset" ? "Dataset citation" : "File citation"],
-    ]) {
-        if (metadata[key] != null) context.push([label, metadata[key]]);
-    }
-    const annotations = Object.entries(metadata.annotations);
     const contextAnnotations = [], evidenceAnnotations = [], otherAnnotations = [];
-    for (const entry of annotations) {
+    for (const entry of Object.entries(metadata.annotations)) {
         const normalizedKey = entry[0].toLowerCase().replace(/[ -]+/g, "_");
         const group = CONTEXT_ANNOTATIONS.has(normalizedKey) ? contextAnnotations
             : EVIDENCE_ANNOTATIONS.has(normalizedKey) ? evidenceAnnotations : otherAnnotations;
         group.push(entry);
     }
-    appendAnnotationSection(root, scope === "dataset" ? "Study and dataset context" : "About this file",
-        context.concat(contextAnnotations), headingLevel);
-    if (metadata.doi != null) root.append(createCatalogReferenceLink(documentContext, {
-        href: catalogDoiReference(metadata.doi),
-        label: (scope === "dataset" ? "Dataset DOI: " : "File DOI: ") + metadata.doi,
-        external: true,
-    }));
+    if (section !== "references") {
+        appendAnnotationSection(root, scope === "dataset" ? "Study context" : "About this file",
+            contextAnnotations.concat(context), headingLevel, references);
+        const evidenceTitle = evidenceAnnotations.length === 1
+            && annotationLabel(evidenceAnnotations[0][0]).toLowerCase() === "limitations"
+            ? "Limitations" : "Evidence and limitations";
+        appendAnnotationSection(root, evidenceTitle, evidenceAnnotations, headingLevel, references);
+    }
+    if (section === "context") return root;
+    const sourceEntries = [];
+    for (const [key, label] of [
+        ["license", "License"], ["attribution", "Attribution"],
+        ["citation", scope === "dataset" ? "Dataset citation" : "File citation"],
+    ]) {
+        if (metadata[key] != null) sourceEntries.push([label, metadata[key]]);
+    }
+    appendAnnotationSection(root, "Source and citation", sourceEntries, headingLevel, references);
+    if (metadata.doi != null) {
+        const href = catalogDoiReference(metadata.doi);
+        const label = (scope === "dataset" ? "Dataset DOI: " : "File DOI: ") + metadata.doi;
+        if (!references.has(catalogReferenceIdentity(href))) {
+            root.append(createCatalogReferenceLink(documentContext, { href, label, external: true }));
+            references.add(catalogReferenceIdentity(href));
+        } else {
+            root.append(createAnnotationList(documentContext, [["DOI", metadata.doi]], references));
+        }
+    }
     if (metadata.publications.length > 0) {
-        const section = documentContext.createElement("section");
-        section.className = "catalog-curated-section";
+        const publications = documentContext.createElement("section");
+        publications.className = "catalog-curated-section";
         const heading = documentContext.createElement("h" + headingLevel);
         heading.textContent = "Source publications";
-        section.append(heading);
+        publications.append(heading);
         for (const publication of metadata.publications) {
-            section.append(createPublicationCard(documentContext, publication, Math.min(6, headingLevel + 1)));
+            publications.append(createPublicationCard(documentContext, publication, Math.min(6, headingLevel + 1), references));
         }
-        root.append(section);
+        root.append(publications);
     }
-    appendAnnotationSection(root, "Evidence and limitations", evidenceAnnotations, headingLevel);
-    appendAnnotationSection(root, "Additional annotations", otherAnnotations, headingLevel);
+    const provenance = [];
+    if (metadata.study_ids.length > 0) provenance.push(["Study IDs", metadata.study_ids]);
+    if (metadata.keywords.length > 0) provenance.push(["Keywords", metadata.keywords]);
+    provenance.push(...otherAnnotations);
+    if (scope === "file") {
+        appendAnnotationSection(root, "Additional metadata", provenance, headingLevel, references);
+    } else if (provenance.length > 0) {
+        const detail = createCatalogDisclosure(documentContext, "Provenance and additional metadata");
+        detail.append(createAnnotationList(documentContext, provenance, references));
+        root.append(detail);
+    }
     return root;
 }

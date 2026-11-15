@@ -808,6 +808,38 @@ export function findPaginationLink(itemCollection, relations) {
 }
 
 /**
+ * Sort file records by their purpose, then title and key, independent of JSON order.
+ * A bound source comes first, then readable documentation and supporting data.
+ * Without a bound source, all data precedes documentation. Other local files and
+ * external references follow. This order never changes Asset identity.
+ * @param {Object<string, Object>} assets STAC Assets keyed by catalog identity.
+ * @param {string|undefined} primaryAssetKey Native vector source binding or the
+ * conventional data Asset, when present with the data role.
+ * @return {Array<[string, Object]>} New ordered entries; the input is unchanged.
+ */
+function sortCatalogAssets(assets, primaryAssetKey) {
+    /**
+     * Rank a file using its declared roles, media type and access kind.
+     * @param {Object} asset One public STAC Asset.
+     * @return {number} Reader order, with lower values displayed first.
+     */
+    function getAssetReadingPriority(asset) {
+        if (asset.roles?.includes("data")) return primaryAssetKey === undefined ? 0 : 2;
+        if (asset.roles?.includes("documentation") || asset.type?.split(";")[0].trim() === "text/markdown") return 1;
+        if (asset["eolab:access"]?.kind === "catalog" || asset.href.startsWith("file:")) return 3;
+        return 4;
+    }
+    return Object.entries(assets).sort(([leftKey, left], [rightKey, right]) => {
+        const purpose = (leftKey === primaryAssetKey ? -1 : getAssetReadingPriority(left))
+            - (rightKey === primaryAssetKey ? -1 : getAssetReadingPriority(right));
+        if (purpose !== 0) return purpose;
+        const leftTitle = left["eolab:metadata"]?.title ?? left.title ?? leftKey;
+        const rightTitle = right["eolab:metadata"]?.title ?? right.title ?? rightKey;
+        return leftTitle.localeCompare(rightTitle, "en") || leftKey.localeCompare(rightKey, "en");
+    });
+}
+
+/**
  * Builds display details for a STAC Item, including its identity, datetime or
  * datetime range, geometry, bounding box, projection, raster dimensions,
  * assets, vector fields, and raster bands. Temporal datasets show their variables,
@@ -903,7 +935,12 @@ export function buildCatalogItemDetails(
     metadata.push(...vectorDetails.metadata);
     const fields = vectorDetails.fields;
 
-    const assets = isTemporal ? null : Object.entries(item.assets).map(([assetKey, asset]) => {
+    const primaryAssetKey = properties["eolab:vector_source"]?.asset_key
+        ?? (item.assets.data?.roles?.includes("data") ? "data" : undefined);
+    const assetEntries = curatedMetadata
+        ? sortCatalogAssets(item.assets, primaryAssetKey)
+        : Object.entries(item.assets);
+    const assets = isTemporal ? null : assetEntries.map(([assetKey, asset]) => {
         const isMountedFile =
             datasetType !== undefined && asset.href.startsWith("file:");
         let location = asset.href;

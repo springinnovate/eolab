@@ -1681,13 +1681,6 @@ div.chart-tooltip {
   padding: 14px;
 }
 
-.catalog-asset-key {
-  margin-bottom: 12px;
-  color: var(--text-3);
-  font: 0.68rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  overflow-wrap: anywhere;
-}
-
 .catalog-bands-heading {
   display: block;
   margin-top: 14px;
@@ -5212,7 +5205,8 @@ summary:hover > .raster-disclosure-chevron {
   overflow-wrap: anywhere;
 }
 
-.catalog-reference:focus-visible {
+.catalog-reference:focus-visible,
+.catalog-detail-disclosure > summary:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 3px;
   border-radius: 2px;
@@ -5222,6 +5216,12 @@ summary:hover > .raster-disclosure-chevron {
 .catalog-inspector-description {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.catalog-annotation-content {
+  color: var(--text-1);
+  font-size: 0.76rem;
+  line-height: 1.4;
 }
 
 .catalog-annotation-list {
@@ -5254,4 +5254,27 @@ summary:hover > .raster-disclosure-chevron {
   .catalog-annotations > dd {
     margin-bottom: 8px;
   }
+}
+
+.catalog-detail-disclosure {
+  min-width: 0;
+  margin: 12px 0;
+}
+
+.catalog-detail-disclosure > summary {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.catalog-detail-disclosure[open] > summary {
+  margin-bottom: 12px;
+}
+
+.catalog-detail-disclosure > .catalog-asset {
+  margin-top: 12px;
 }

@@ -3,9 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
     catalogAssetReference, catalogDoiReference, createCatalogReferenceLink,
-    createCuratedMetadataView, safeCatalogHttpReference,
+    createCuratedMetadataView, safeCatalogHttpReference, catalogReferenceIdentity,
+    createCatalogDisclosure,
 } from "../src/catalog-curated-metadata.js";
-import { buildCatalogItemDetails, getCatalogVisualization } from "../src/catalog.js";
+import { buildCatalogItemDetails, getCatalogVisualization, MOUNTED_DATASET_TYPES } from "../src/catalog.js";
+
+import { buildCatalogResultPresentation } from "../src/catalog-result-presentation.js";
 
 const records = JSON.parse(readFileSync(
     new URL("../../tests/fixtures/catalog_descriptors/public-items.json", import.meta.url), "utf8",
@@ -39,6 +42,10 @@ class TestElement {
     set innerHTML(value) { throw new Error("Unexpected markup: " + value); }
     /** @param {...TestElement} children Child nodes. @return {void} */
     append(...children) { this.children.push(...children); }
+    /** @param {...TestElement} children Replacement children. @return {void} */
+    replaceChildren(...children) { this.children = children; this.text = ""; }
+    /** @param {string} name Attribute to remove. @return {void} */
+    removeAttribute(name) { this.attributes.delete(name); }
     /** @param {string} name Attribute name. @param {string} value Value. @return {void} */
     setAttribute(name, value) { this.attributes.set(name, value); }
 }
@@ -96,7 +103,7 @@ test("canonical producer fixtures retain Item metadata, publications and annotat
     const links = elements(view, "a");
     assert.ok(links.some(link => link.textContent.startsWith("Dataset DOI:") && link.href.endsWith("example-flood-dataset")));
     assert.ok(links.some(link => link.textContent.startsWith("Paper DOI:") && link.href.endsWith("example-flood")));
-    assert.ok(links.some(link => link.attributes.get("aria-label") === "Open publication: Flood observations and modeled depth"));
+    assert.ok(links.some(link => link.attributes.get("aria-label") === "Read paper: Flood observations and modeled depth"));
 });
 
 test("Asset-specific annotations stay with their file and do not inherit Item evidence", () => {
@@ -143,11 +150,10 @@ test("arbitrary annotations keep nested lists, null, zero, false and empty value
         "Original review remains distinct", "Later match explanation",
     ]) assert.ok(text.includes(value), value);
     assert.ok(elements(view, "dt").some(term => term.textContent === "Inner name" && term.title === "inner_name"));
-    const evidence = view.children.find(section => section.children[0]?.textContent === "Evidence and limitations");
-    const other = view.children.find(section => section.children[0]?.textContent === "Additional annotations");
-    assert.match(evidence.textContent, /Later match explanation/);
-    assert.doesNotMatch(evidence.textContent, /Original review/);
-    assert.match(other.textContent, /Original review/);
+    const provenance = elements(view, "details").find(detail =>
+        detail.children[0].textContent === "Provenance and additional metadata");
+    assert.match(provenance.textContent, /Later match explanation/);
+    assert.match(provenance.textContent, /Original review/);
     assert.equal(elements(view, "a")[0].href, "https://example.org/notes?file=1");
 });
 
@@ -231,4 +237,226 @@ test("curator evidence labels never authorize or disable existing rendering capa
         assert.match(render(item.properties["eolab:metadata"]).textContent, new RegExp(status));
         assert.deepEqual(getCatalogVisualization(item), { kind: "raster", metadata: {} });
     }
+});
+
+
+test("study design, dataset purpose and limits precede sources while provenance stays optional", () => {
+    const metadata = structuredClone(records[0].item.properties["eolab:metadata"]);
+    metadata.annotations = {
+        evidence_type: "Paired field observations",
+        dataset_role: "Observed outcomes for the comparison",
+        study_design: "Upstream and downstream sites sampled together",
+        limitations: ["No pre-restoration baseline"],
+        row_ids: ["source-row-4"],
+        reconciliation_evidence: { matched: false, score: 0 },
+    };
+    const view = render(metadata);
+    const summary = view.children.slice(0, 2).map(child => child.textContent).join(" ");
+    for (const value of ["Paired field observations", "Observed outcomes", "No pre-restoration baseline"]) {
+        assert.ok(summary.includes(value));
+    }
+    assert.doesNotMatch(summary, /source-row-4|paper-009/);
+    const provenance = elements(view, "details").find(detail => detail.textContent.includes("source-row-4"));
+    assert.equal(provenance.open, undefined);
+    assert.match(provenance.textContent, /false/);
+    assert.match(provenance.textContent, /0/);
+    const context = createCuratedMetadataView(metadata, { documentContext: new TestDocument(), section: "context" });
+    const references = createCuratedMetadataView(metadata, { documentContext: new TestDocument(), section: "references" });
+    assert.match(context.textContent, /No pre-restoration baseline/);
+    assert.doesNotMatch(context.textContent, /Source publications|source-row-4/);
+    assert.match(references.textContent, /Source publications/);
+    assert.doesNotMatch(references.textContent, /Paired field observations/);
+});
+
+test("publication links deduplicate DOI resolver aliases without losing distinct sources or values", () => {
+    const metadata = structuredClone(records[0].item.properties["eolab:metadata"]);
+    metadata.publications[0].url = "http://dx.doi.org/10.1234/EXAMPLE-FLOOD";
+    metadata.annotations = {
+        same_paper: "https://doi.org/10.1234/example-flood",
+        repository: "https://example.org/data?version=1",
+        second_version: "https://example.org/data?version=2",
+        section: "https://example.org/data?version=1#methods",
+        nested: ["https://example.org/data?version=1", { link: "https://other.example/data" }],
+    };
+    const original = structuredClone(metadata);
+    const view = render(metadata);
+    const links = elements(view, "a");
+    const identities = links.map(link => catalogReferenceIdentity(link.href));
+    assert.equal(identities.length, new Set(identities).size);
+    assert.equal(links.filter(link => /doi.org.*example-flood$/i.test(link.href)).length, 1);
+    assert.equal(links.filter(link => link.href.startsWith("https://example.org/data")).length, 3);
+    assert.ok(view.textContent.includes(metadata.publications[0].url));
+    assert.ok(view.textContent.includes(metadata.annotations.same_paper));
+    assert.deepEqual(metadata, original);
+});
+
+test("curated files sort semantically after JSON key order changes and preserve every Asset", () => {
+    const item = structuredClone(records[0].item);
+    const local = { href: "/api/catalog/asset", "eolab:access": { kind: "catalog" } };
+    item.assets = {
+        provenance: { ...local, title: "A preparation record", type: "application/json", roles: ["metadata"] },
+        source: { href: "https://example.org/source", title: "A source", type: "text/html", roles: ["metadata"] },
+        notes: { ...local, title: "Study findings and limits (Markdown)", type: "text/markdown", roles: ["metadata"] },
+        z_data: { ...local, title: "Z measurements", type: "text/csv", roles: ["data"] },
+        a_data: { ...local, title: "A measurements", type: "text/csv", roles: ["data"] },
+    };
+    const original = structuredClone(item);
+    const forward = buildCatalogItemDetails(item, [], "unused").assets.map(asset => asset.key);
+    const reversed = structuredClone(item);
+    reversed.assets = Object.fromEntries(Object.entries(item.assets).reverse());
+    assert.deepEqual(forward, ["a_data", "z_data", "notes", "provenance", "source"]);
+    assert.deepEqual(buildCatalogItemDetails(reversed, [], "unused").assets.map(asset => asset.key), forward);
+    item.properties["eolab:vector_source"] = { asset_key: "z_data" };
+    assert.deepEqual(buildCatalogItemDetails(item, [], "unused").assets.map(asset => asset.key),
+        ["z_data", "notes", "a_data", "provenance", "source"]);
+    delete item.properties["eolab:vector_source"];
+    assert.deepEqual(item, original);
+});
+
+/**
+ * Exercise the composition root's existing inspector with a minimal DOM.
+ * Extract just the two presentation functions to avoid booting unrelated map
+ * infrastructure; their production imports and call sites remain unchanged.
+ * @param {Object} item Public STAC Item selected through Catalog.
+ * @return {TestElement} Actual inspector content produced by the composition root.
+ */
+function renderInspector(item) {
+    const documentContext = new TestDocument();
+    const nodes = new Map(["heading", "content", "status"].map(name =>
+        [`#catalog-inspector-${name}`, documentContext.createElement("div")]));
+    nodes.set("#catalog-item-context", documentContext.createElement("div"));
+    documentContext.querySelector = selector => nodes.get(selector);
+    const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+    const start = source.indexOf("function createCatalogMetadataList(");
+    const end = source.indexOf("/**\n * Connects Catalog search", start);
+    const renderSelected = new Function(
+        "document", "buildCatalogItemDetails", "buildCatalogResultPresentation", "MOUNTED_DATASET_TYPES",
+        "createCuratedMetadataView", "catalogAssetReference", "createCatalogReferenceLink",
+        "catalogReferenceIdentity", "createCatalogDisclosure",
+        source.slice(start, end) + "\nreturn renderCatalogItemInspector;",
+    )(documentContext, buildCatalogItemDetails, buildCatalogResultPresentation, MOUNTED_DATASET_TYPES,
+        createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink,
+        catalogReferenceIdentity, createCatalogDisclosure);
+    const priorDocument = globalThis.document;
+    globalThis.document = documentContext;
+    try {
+        renderSelected(item, [], "unused");
+    } finally {
+        if (priorDocument === undefined) delete globalThis.document;
+        else globalThis.document = priorDocument;
+    }
+    return nodes.get("#catalog-inspector-content");
+}
+
+test("actual inspector places downloads before sources and preserves duplicate Asset records in detail", () => {
+    const item = structuredClone(records[0].item);
+    item.assets.notes = {
+        href: "/api/catalog/asset", title: "Study findings and limits (Markdown)",
+        type: "text/markdown", roles: ["metadata"], "eolab:access": { kind: "catalog" },
+    };
+    const original = structuredClone(item);
+    const view = renderInspector(item);
+    const firstFile = view.children.findIndex(child => child.className === "catalog-asset");
+    const sources = view.children.findIndex(child => child.textContent.includes("Source publications"));
+    const technical = view.children.at(-1);
+    assert.ok(firstFile > 0 && sources > firstFile);
+    assert.equal(technical.tagName, "details");
+    assert.equal(technical.children[0].textContent, "Technical details");
+    assert.match(technical.textContent, /Asset keypublication/);
+    assert.match(technical.textContent, /https:\/\/example.org\/papers\/flood/);
+    const links = elements(view, "a");
+    assert.equal(links.filter(link => link.href === item.assets.publication.href).length, 1);
+    assert.ok(links.some(link => link.textContent === "Download file"
+        && link.attributes.get("aria-label").includes("Study findings and limits")));
+    assert.equal(links.some(link => link.attributes.get("aria-label")?.includes("Study findings and limits")
+        && /Read/.test(link.textContent)), false);
+    for (const asset of view.children.filter(child => child.className === "catalog-asset")) {
+        assert.ok(asset.children.find(child => child.tagName === "details").textContent.includes("Asset key"));
+        assert.notEqual(asset.children[1].tagName, "details");
+    }
+    assert.deepEqual(item, original);
+});
+
+
+test("DOI comparison keeps encoded path delimiters distinct from query and fragment", () => {
+    assert.notEqual(catalogReferenceIdentity("https://doi.org/10.1/a%3Fb"),
+        catalogReferenceIdentity("https://doi.org/10.1/a?b"));
+    assert.notEqual(catalogReferenceIdentity("https://doi.org/10.1/a%23b"),
+        catalogReferenceIdentity("https://doi.org/10.1/a#b"));
+});
+
+test("a paper has one primary action and retains its alternate DOI in the publication record", () => {
+    const view = render(records[0].item.properties["eolab:metadata"]);
+    const paper = elements(view, "article")[0];
+    const directLinks = paper.children.filter(child => child.tagName === "a");
+    assert.equal(directLinks.length, 1);
+    assert.equal(directLinks[0].textContent, "Read paper");
+    assert.equal(directLinks[0].href, "https://example.org/papers/flood");
+    const record = paper.children.find(child => child.tagName === "details");
+    assert.ok(elements(record, "a").some(link => link.href === "https://doi.org/10.1234/example-flood"));
+});
+
+test("a data Asset keeps its prominent action when its destination also appears in citations", () => {
+    const item = structuredClone(records[0].item);
+    item.assets.data.href = "https://doi.org/10.1234/example-flood-dataset";
+    item.assets.data["eolab:access"] = { kind: "external" };
+    const view = renderInspector(item);
+    const dataCard = view.children.find(child => child.className === "catalog-asset"
+        && child.children[0].textContent === "Flood depth raster");
+    assert.ok(dataCard);
+    assert.ok(elements(dataCard, "a").some(link => link.href === item.assets.data.href));
+    assert.equal(elements(view, "a").filter(link => link.href === item.assets.data.href).length, 1);
+});
+
+test("file annotations need only the existing File details disclosure", () => {
+    const view = renderInspector(records[0].item);
+    const observations = view.children.find(child => child.className === "catalog-asset"
+        && child.children[0].textContent === "Supporting observations");
+    const details = elements(observations, "details");
+    assert.equal(details.length, 1);
+    assert.match(details[0].textContent, /metres/);
+    assert.match(details[0].textContent, /true/);
+});
+
+
+test("legacy temporal Items keep variables and coverage visible without opening technical detail", () => {
+    const item = {
+        id: "temperature-history", collection: "eolab-temporal-datasets", geometry: null,
+        properties: {
+            title: "Monthly temperature", datetime: null,
+            "cube:dimensions": { time: { extent: ["2020-01", "2020-03"] } },
+            "cube:variables": { temperature: { description: "Temperature", unit: "K" } },
+        },
+        assets: {
+            january: { href: "file:///source/january.tif", roles: ["data"] },
+            march: { href: "file:///source/march.tif", roles: ["data"] },
+        },
+    };
+    const view = renderInspector(item);
+    assert.equal(elements(view, "details").length, 0);
+    assert.match(view.textContent, /VariablesTemperature \(temperature; K\)/);
+    assert.match(view.textContent, /Observation times \(UTC\)2020-01/);
+    assert.match(view.textContent, /Months with data2/);
+});
+
+
+test("scientific context leads classification and a sole limitations field has one heading", () => {
+    const metadata = structuredClone(records[0].item.properties["eolab:metadata"]);
+    metadata.annotations = {
+        evidence_type: "River connectivity model",
+        dataset_role: "Locations used as model inputs",
+        limitations: ["Habitat outcomes are in a separate file"],
+    };
+    const view = render(metadata);
+    const context = view.children[0];
+    assert.deepEqual(elements(context, "dt").slice(0, 3).map(term => term.textContent),
+        ["Evidence type", "Dataset role", "Study period"]);
+    const limits = view.children[1];
+    assert.equal(limits.children[0].textContent, "Limitations");
+    assert.equal(elements(limits, "dt").length, 0);
+    assert.match(limits.textContent, /Habitat outcomes are in a separate file/);
+    metadata.annotations.evidence = "Two scenarios compared";
+    const mixedLimits = render(metadata).children[1];
+    assert.equal(mixedLimits.children[0].textContent, "Evidence and limitations");
+    assert.deepEqual(elements(mixedLimits, "dt").map(term => term.textContent), ["Limitations", "Evidence"]);
 });
