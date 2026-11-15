@@ -36,6 +36,7 @@ export class HabitatPreparationSelectionView {
     }
 
     /** Show exact Catalog layers and filters, readiness and missing-input warnings.
+     * Preserve full titles without repeating an already named trailing layer.
      * Option indexes belong only to this DOM list; the controller receives the descriptor.
      * @param {Object} draft Habitat draft with selections, optional Catalog titles and coverage.
      * @return {boolean} Whether a selected Catalog descriptor has any prepared input tiles.
@@ -49,7 +50,8 @@ export class HabitatPreparationSelectionView {
         const labels = value.selections.map(selection => {
             const title = value.titles[this.sourceKey(selection)];
             const name = title && title !== selection.itemId ? title : selection.layerName;
-            return [name, name === selection.layerName ? null : selection.layerName, this.describeFilter(selection.filter)]
+            const layerAlreadyNamed = name === selection.layerName || name.endsWith(` — ${selection.layerName}`);
+            return [name, layerAlreadyNamed ? null : selection.layerName, this.describeFilter(selection.filter)]
                 .filter(part => part !== null).join(" · ");
         });
         const labelCounts = new Map();
