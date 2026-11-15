@@ -423,7 +423,7 @@ export function createVectorMapLayerAdapter({
          * @return {Array<import("../calculated-fields.js").CalculatedField>} Detached ordered definitions.
          */
         exportCalculatedFields(record) { return structuredClone(record.state.source.calculatedFields ?? []); },
-        /** Install accepted fields atomically, then refresh their independent map display.
+        /** Install accepted fields synchronously, then refresh their independent map display.
          * @param {Object} record Retained vector view.
          * @param {import("./api.js").FieldCalculationResult} result Accepted calculation result.
          * @param {AbortSignal} [signal] Cancel an obsolete installation.

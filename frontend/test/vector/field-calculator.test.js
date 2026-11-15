@@ -122,6 +122,35 @@ test("failed and cancelled calculations preserve entered text and never install 
     assert.equal(c.submit.disabled, false);
 });
 
+test("closing during map refresh reopens the saved field for editing", async () => {
+    const {calculator: c, targets} = calculatorFixture();
+    const target = targets.get("a");
+    const install = target.apply;
+    let finishRefresh;
+    let installed;
+    const committed = new Promise(resolve => { installed = resolve; });
+    target.apply = result => {
+        void install(result);
+        installed();
+        return new Promise(resolve => { finishRefresh = resolve; });
+    };
+    c.name.value = "Density"; c.expression.value = "'Population total' / 'Area km2'";
+    const pending = c.submitCalculation();
+    await committed;
+    c.dialog.close();
+    assert.match(c.status.textContent, /Field saved/);
+    c.open("a");
+    assert.equal(c.field.value, "Density");
+    assert.equal(c.name.readOnly, true);
+    finishRefresh(null);
+    await pending;
+    target.apply = install;
+    c.expression.value = "'Population total' * 2";
+    await c.submitCalculation();
+    assert.equal(target.calculatedFields.length, 1);
+    assert.equal(target.calculatedFields[0].expression, c.expression.value);
+});
+
 test("editing offers only original and earlier calculated fields, including after reopening", () => {
     const {calculator: c, targets} = calculatorFixture();
     const target = targets.get("a");

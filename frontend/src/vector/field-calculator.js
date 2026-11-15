@@ -9,7 +9,7 @@ import { vectorFilterFieldKind } from "./filter.js";
  * @property {import("./api.js").VectorFieldValueSource} source Original source identity.
  * @property {ReadonlyArray<{name:string,type:string}>} fields Original and accepted calculated field choices.
  * @property {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} calculatedFields Installed definitions in evaluation order.
- * @property {(result:import("./api.js").FieldCalculationResult,signal:AbortSignal)=>Promise<string|null>} apply Commit accepted definitions and refresh presentation; return a display warning if that refresh fails.
+ * @property {(result:import("./api.js").FieldCalculationResult,signal:AbortSignal)=>Promise<string|null>} apply Synchronously commit accepted definitions, then resolve with a display warning if presentation refresh fails.
  */
 
 /** Quote an exact field name for the arithmetic expression grammar.
@@ -30,6 +30,7 @@ export class VectorFieldCalculator {
         Object.assign(this, {document, getTarget, calculate});
         this.key = null;
         this.request = null;
+        this.calculationSaved = false;
         this.drafts = new Map();
         this.dialog = document.createElement("dialog");
         this.dialog.className = "vector-field-calculator";
@@ -219,6 +220,7 @@ export class VectorFieldCalculator {
         if (index < 0) definitions.push(definition); else definitions[index] = definition;
         const request = new AbortController();
         this.request = request;
+        this.calculationSaved = false;
         this.setBusy(true);
         this.saveDraft();
         this.message("Calculating every feature…");
@@ -228,11 +230,13 @@ export class VectorFieldCalculator {
             if (this.getTarget(this.key)?.identity !== target.identity) throw new Error("This layer changed or was removed. Reopen the calculator and try again.");
             this.message("Field calculated. Updating the map…");
             this.cancel.hidden = true;
-            const warning = await target.apply(result, request.signal);
-            if (request.signal.aborted || this.request !== request) return;
+            const refresh = target.apply(result, request.signal);
+            this.calculationSaved = true;
             this.updateFieldChoices(this.getTarget(this.key), definition.name);
             this.name.readOnly = true;
             this.saveDraft();
+            const warning = await refresh;
+            if (request.signal.aborted || this.request !== request) return;
             const missing = result.missingCounts[definition.name] ?? 0;
             this.message(`${definition.name} saved for ${result.featureCount.toLocaleString()} features.${missing ? ` ${missing.toLocaleString()} empty values.` : ""} ${warning ?? "Choose it in Style or Filter, or click a feature to see its value."}`);
         } catch (error) {
@@ -242,7 +246,7 @@ export class VectorFieldCalculator {
         }
     }
 
-    /** Cancel an unfinished calculation while preserving the draft and installed fields.
+    /** Cancel pending work while preserving the draft or an already saved field.
      * @return {void}
      */
     cancelCalculation() {
@@ -250,7 +254,7 @@ export class VectorFieldCalculator {
         this.request.abort();
         this.request = null;
         this.setBusy(false);
-        this.message("Calculation cancelled. Your expression is still here.");
+        this.message(this.calculationSaved ? "Field saved. Map refresh stopped." : "Calculation cancelled. Your expression is still here.");
     }
 
     /** Follow a removed target without disrupting typing on a retained layer.
