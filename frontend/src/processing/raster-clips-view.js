@@ -75,6 +75,7 @@ export class RasterClipsView {
      * Pending recovery uses its persisted source/area even without current map layers.
      * Review disclosures and source controls retain their nodes; rebuilt job controls
      * restore focus and disclosure state.
+     * An offered retry remains visible and focusable while its request is in progress.
      * @param {Object} state Clip controller presentation and owned job snapshot.
      * @return {void}
      * @throws {TypeError} If a ready job contains an invalid owned download address.
@@ -115,8 +116,8 @@ export class RasterClipsView {
         const pendingMessage = !state.pending ? "" : state.submitting ? `Preparing download for “${state.pending.label}”…`
             : `We couldn’t confirm whether the download for “${state.pending.label}” started. Retrying uses the same raster and area.`;
         if (e.pending.textContent !== pendingMessage) e.pending.textContent = pendingMessage;
-        e["retry-submission"].hidden = !state.pending || state.submitting;
-        e["retry-submission"].disabled = state.submitting;
+        if (!state.submitting) e["retry-submission"].hidden = !state.pending;
+        e["retry-submission"].setAttribute("aria-disabled", String(state.submitting));
         const jobSignature = JSON.stringify([current, [...state.jobActions], state.sources]);
         if (this.jobSignature !== jobSignature) {
             const focused = e.current.contains(this.document.activeElement);
