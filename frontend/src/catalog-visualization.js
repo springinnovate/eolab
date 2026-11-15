@@ -134,6 +134,17 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
+     * Describe the topmost matching Catalog layer or temporal view before removal.
+     * @param {Object} item Catalog source identity.
+     * @return {{key:string,label:string,count:number}|null} Target and matching view count, or null when absent.
+     */
+    removalTarget(item) {
+        return this.describe(item)?.metadata?.temporal
+            ? this.rasterViewer.temporalRemovalTarget(item)
+            : this.mapLayerController.removalTarget(item);
+    }
+
+    /**
      * Remove the topmost retained view of a Catalog dataset.
      *
      * @param {Object} item Retained Catalog STAC Item.

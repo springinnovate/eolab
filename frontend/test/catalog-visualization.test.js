@@ -125,11 +125,15 @@ test("filter failure and superseded Undo discard staged work without exposing an
 
 test("catalog user removal requests Undo while internal removal keeps its existing lifecycle", () => {
     const calls = [];
+    const target = {key: "local:view:topmost", label: "Custom rain", count: 2};
     const coordinator = new CatalogVisualizationCoordinator({}, {
         remove: item => calls.push(["internal", item]),
+        removalTarget: item => item === RASTER_ITEM ? target : null,
         findLayerKey: item => item === RASTER_ITEM ? "local:view:topmost" : null,
         removeWithUndo: key => calls.push(["user", key]),
     }, {});
+    assert.equal(coordinator.removalTarget(RASTER_ITEM), target);
+    assert.equal(coordinator.removalTarget(VECTOR_ITEM), null);
     coordinator.remove(RASTER_ITEM);
     coordinator.remove(RASTER_ITEM, true);
     assert.equal(calls[0][0], "internal");
@@ -143,15 +147,18 @@ test("catalog user removal requests Undo while internal removal keeps its existi
 test("temporal Catalog actions use the raster viewer's independent dataset views", async () => {
     const item = { collection: "eolab-temporal-datasets", id: "era5" };
     const calls = [];
+    const target = {key: "local:temporal:topmost", label: "Temperature · January", count: 2};
     const viewer = {
         showTemporal: async source => { calls.push(["show", source]); return "first view"; },
         containsTemporal: source => { calls.push(["contains", source]); return true; },
+        temporalRemovalTarget: source => { assert.equal(source, item); return target; },
         removeTemporal: (source, allowUndo) => calls.push(["remove", source, allowUndo]),
     };
     const coordinator = new CatalogVisualizationCoordinator(viewer, {}, {});
     assert.equal(await coordinator.prepare(item), item);
     assert.equal(await coordinator.show(item), "first view");
     assert.equal(coordinator.contains(item), true);
+    assert.equal(coordinator.removalTarget(item), target);
     coordinator.remove(item, true);
     coordinator.remove(item);
     assert.deepEqual(calls, [

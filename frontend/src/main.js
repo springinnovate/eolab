@@ -683,7 +683,7 @@ async function initializeCatalog(
     };
 
     const catalogMapActions = new CatalogMapActions({
-        contains: item => catalogVisualization.contains(item),
+        removalTarget: item => catalogVisualization.removalTarget(item),
         prepare: item => catalogVisualization.prepare(item),
         show: item => catalogVisualization.show(item),
         remove: item => catalogVisualization.remove(item, true),
