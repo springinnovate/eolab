@@ -291,6 +291,8 @@ def selected_raster_area_for_polygon_input(
 ) -> SelectedRasterArea:
     """Project a saved polygon selection within the histogram coordinate budget.
 
+    Use its validated bounds to choose the cyclic column view before projection.
+
     Args:
         dataset: Open, georeferenced source raster.
         sampling_area: Authorized temporary input containing exact WGS84 polygons.
@@ -309,6 +311,7 @@ def selected_raster_area_for_polygon_input(
             for polygon in sampling_area.polygons.polygons
         ),
         RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
+        selected_bounds=sampling_area.polygons.bounds(),
     )
 
 

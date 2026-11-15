@@ -8,7 +8,6 @@ from eolab_app.sampling_box import Wgs84SamplingBox
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 import math
 from typing import Any
-from rasterio.io import DatasetReader
 
 from eolab_app.processing.models import ProcessingError
 from eolab_app.raster.source_models import (
@@ -16,9 +15,10 @@ from eolab_app.raster.source_models import (
     RunArtifactReference,
     UploadedRasterReference,
 )
-from eolab_app.raster.reader import RasterData
+from eolab_app.raster.reader import RasterData, RasterDataset
 from eolab_app.raster.bounded_window import (
     NoRasterBoundsOverlapError,
+    prepare_raster_for_wgs84_bounds,
     selected_raster_area_for_wgs84_bounds,
     selected_raster_area_for_sampling_box,
     selected_raster_area_for_wgs84_polygons,
@@ -70,7 +70,7 @@ def validate_supported_raster(dataset: Any, raster_data: RasterData) -> None:
 
 
 def select_area(
-    dataset: DatasetReader,
+    dataset: RasterDataset,
     kind: str,
     bounds: CanonicalWgs84Bounds | None,
     geometries: tuple[dict[str, object], ...],
@@ -81,6 +81,9 @@ def select_area(
     sampling_box: Wgs84SamplingBox | None = None,
 ) -> SelectedRasterArea:
     """Locate a selected area on the raster grid and prepare its polygon-mask source.
+
+    Reuse the captured area bounds to choose a cyclic view before polygon
+    planning, including unlimited Catalog reads that need no geometry preflight.
 
     Args:
         dataset: Validated open native raster.
@@ -106,6 +109,7 @@ def select_area(
                 raise ValueError(
                     "Catalog source must be authorized before native execution"
                 )
+            prepare_raster_for_wgs84_bounds(dataset, bounds)
             reader = PolygonRasterizer(
                 dataset,
                 resolved,
@@ -123,7 +127,7 @@ def select_area(
         if kind == "bounds":
             return selected_raster_area_for_wgs84_bounds(dataset, bounds)
         return selected_raster_area_for_wgs84_polygons(
-            dataset, geometries, max_coordinates
+            dataset, geometries, max_coordinates, selected_bounds=bounds
         )
     except ProjectedGeometryMemoryError as error:
         raise ProcessingError(
