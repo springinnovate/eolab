@@ -1415,10 +1415,10 @@
           <fieldset class="vector-label-controls">
             <legend>Labels</legend>
             <label class="vector-label-toggle" for="vector-label-enabled">
-              <input id="vector-label-enabled" type="checkbox" />
+              <input id="vector-label-enabled" type="checkbox" aria-controls="vector-label-fields" />
               <span>Show labels</span>
             </label>
-            <div class="vector-style-group vector-label-fields">
+            <div id="vector-label-fields" class="vector-style-group vector-label-fields" hidden>
               <label for="vector-label-field">
                 <span>Label by</span>
                 <select id="vector-label-field"></select>

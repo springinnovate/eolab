@@ -70,6 +70,7 @@ export class VectorStyleControls {
         this.strokeWidth = documentContext.querySelector("#vector-style-stroke-width");
         this.pointSize = documentContext.querySelector("#vector-style-point-size");
         this.labelEnabled = documentContext.querySelector("#vector-label-enabled");
+        this.labelFieldsRoot = documentContext.querySelector("#vector-label-fields");
         this.labelField = documentContext.querySelector("#vector-label-field");
         this.labelFontFamily = documentContext.querySelector("#vector-label-font-family");
         this.labelFontSize = documentContext.querySelector("#vector-label-font-size");
@@ -1450,7 +1451,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Apply busy, availability, and enabled state to label fields.
+     * Reveal retained label settings only when labels are available and enabled.
      *
      * @return {void}
      */
@@ -1458,11 +1459,12 @@ export class VectorStyleControls {
         const unavailable = this.labelFields.length === 0;
         this.labelEnabled.disabled = unavailable;
         const fieldsDisabled = unavailable || !this.labelEnabled.checked;
+        this.labelFieldsRoot.hidden = fieldsDisabled;
         for (const input of this.labelInputs) input.disabled = fieldsDisabled;
     }
 
     /**
-     * Explain current label availability and scale behavior.
+     * Explain unavailable fields or enabled label behavior, hiding off-state guidance.
      *
      * @return {void}
      */
@@ -1470,12 +1472,13 @@ export class VectorStyleControls {
         if (this.labelFields.length === 0) {
             this.labelNote.textContent = "This Item has no cataloged attribute fields.";
         } else if (!this.labelEnabled.checked) {
-            this.labelNote.textContent = "Labels are off. Enable Show labels and choose Label by.";
+            this.labelNote.textContent = "";
         } else {
             this.labelNote.textContent =
                 `Labels use ${this.labelField.value} at zoom ` +
                 `${this.labelMinimumZoom.value} and closer. ` +
                 LONG_LABEL_NOTE;
         }
+        this.labelNote.hidden = this.labelNote.textContent === "";
     }
 }
