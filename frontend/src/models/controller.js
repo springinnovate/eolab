@@ -153,7 +153,7 @@ export class ModelsController {
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
-        this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
+        this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusPage();
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
         this.bindModelSetup(draft);
@@ -717,7 +717,7 @@ export class ModelsController {
             this.revision += 1;
             this.state.selectedRun = null; this.state.invocation = null; this.state.invocationError = "";
             this.state.yaml = null; this.state.deleteConfirmation = null;
-            if (this.state.page === "run") { this.state.page = "runs"; this.view.focusHeading("runs"); }
+            if (this.state.page === "run") { this.state.page = "runs"; this.view.focusPage("runs"); }
         }
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" &&
             this.state.draft && getModelRasterFields(this.state.draft).some(({state, field}) => state[field]?.jobId === job.jobId))) {
@@ -771,7 +771,7 @@ export class ModelsController {
         this.state.selectedRun = id; this.state.page = "run"; this.state.invocation = null; this.state.invocationError = "";
         this.state.deleteConfirmation = null; this.state.actionMessage = "";
         this.state.error = ""; this.state.yaml = null; this.jobs.tracked.add(id); this.tracked.add(id); this.jobs.schedule();
-        this.render(); this.view.focusHeading();
+        this.render(); this.view.focusPage();
         try {
             const [job, invocation] = await Promise.all([this.api.getJob(id), this.api.readModelInvocation(id).catch(error => ({readError: error.message}))]);
             if (revision !== this.revision || this.destroyed) return;
@@ -1016,7 +1016,7 @@ export class ModelsController {
             for (const source of getRasterPreparationSources(draft)) source.state.resampling = saved.inputs[preparationName].resampling[source.key];
         }
         this.refreshMapLayers();
-        this.render(); this.view.focusHeading();
+        this.render(); this.view.focusPage();
         this.bindModelSetup(draft);
         await this.setupSession?.start();
         if (draft.temporal?.datasetKey) await this.loadTemporalDates(undefined, true);

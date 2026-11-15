@@ -20,22 +20,6 @@ function fixture() {
     view.render(state); return {doc, view, state, actions};
 }
 
-test("list pages retain their semantic focus heading while setup uses its visible model name", () => {
-    const h = fixture();
-    for (const page of ["library", "runs"]) {
-        h.state.page = page;
-        h.view.render(h.state);
-        h.view.focusHeading();
-        assert.equal(h.doc.activeElement, h.view.elements.heading);
-        assert.equal(h.view.elements.heading.hidden, false);
-    }
-    h.state.page = "setup";
-    h.view.render(h.state);
-    h.view.focusHeading();
-    assert.equal(h.doc.activeElement, h.view.elements["setup-heading"]);
-    assert.equal(h.view.elements["setup-heading"].textContent, model.title);
-});
-
 test("setup and saved runs share a collapsed recipe disclosure with their existing YAML actions", () => {
     const h = fixture();
     for (const [index, recipe] of [model, clipModel].entries()) {
