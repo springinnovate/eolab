@@ -303,6 +303,12 @@ def test_explicit_rescan_extends_the_same_item_and_is_idempotent(
         2,
         {TEMPERATURE: (0, 1, 2, 3), PRECIPITATION: (0, 2, 3), RADIATION: (2,)},
     )
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(
+            "UPDATE coverage SET units = 'kelvin' WHERE variable = ?", (TEMPERATURE,)
+        )
+    updated_items = AsyncMock()
+    manager.items_updated = updated_items
     for _ in range(2):
         status = asyncio.run(scan(manager))
         assert status["failed"] == 0
@@ -312,6 +318,14 @@ def test_explicit_rescan_extends_the_same_item_and_is_idempotent(
             writer.write_session.items[ITEM_KEY]["properties"]["end_datetime"]
             == "2000-02-01T03:00:00Z"
         )
+        assert (
+            writer.write_session.items[ITEM_KEY]["properties"]["cube:variables"][
+                TEMPERATURE
+            ]["unit"]
+            == "kelvin"
+        )
+        updated_items.assert_awaited_once_with((ITEM_KEY,))
+        updated_items.reset_mock()
 
 
 def test_changed_dataset_id_retires_old_records_and_keeps_other_sources(
@@ -641,3 +655,102 @@ def test_regional_float64_grid_and_publication_visibility(era5_archive: Path) ->
         "2000-02-01T00:00:00Z",
         "2000-02-01T00:00:00Z",
     ]
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("band", 2, "Unsupported raster grid"),
+        ("crs", "EPSG:3857", "share one raster grid"),
+        ("transform", "[0, 1, 0, 0, 0, 1]", "Unsupported raster grid"),
+        ("units", "different", "Variable metadata differs"),
+        ("dtype", "object", "Unsupported variable metadata"),
+        ("nodata", "not numeric", "could not convert string to float"),
+        ("valid_time", "not a time", "Invalid time or interval"),
+        ("reference_time", "not a time", "Invalid time or interval"),
+        ("interval_start", 0, "Invalid time or interval"),
+    ],
+)
+def test_later_observation_still_validates_changed_metadata_and_time(
+    era5_archive: Path, tmp_path: Path, field: str, value: Any, message: str
+) -> None:
+    """Reject a bad row after valid rows with matching grid and variable fields.
+
+    Args:
+        era5_archive: Published observations with repeated metadata.
+        tmp_path: Isolated source mount.
+        field: Fixture column to corrupt in the last temperature observation.
+        value: Invalid or conflicting value for that field.
+        message: Expected admission failure.
+    """
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(
+            f"UPDATE coverage SET {field} = ? WHERE rowid = "
+            "(SELECT rowid FROM coverage WHERE variable = ? ORDER BY valid_time DESC LIMIT 1)",
+            (value, TEMPERATURE),
+        )
+    manager, writer = create_scanner(tmp_path)
+    status = asyncio.run(scan(manager))
+    assert status["failed"] == 1
+    assert message in status["errors"][0]["error"]
+    assert writer.write_session.items == {}
+
+
+def test_equal_valued_real_height_does_not_reuse_a_valid_integer_grid(
+    era5_archive: Path, tmp_path: Path
+) -> None:
+    """Keep SQLite value types significant when a later grid repeats its size.
+
+    Args:
+        era5_archive: Valid source whose final temperature height becomes a REAL.
+        tmp_path: Isolated source mount.
+    """
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        last_row = db.execute(
+            "SELECT rowid FROM coverage WHERE variable = ? ORDER BY valid_time DESC LIMIT 1",
+            (TEMPERATURE,),
+        ).fetchone()[0]
+        columns = [
+            (
+                f"CASE WHEN rowid = {last_row} THEN CAST(height AS REAL) ELSE height END AS height"
+                if row[1] == "height"
+                else row[1]
+            )
+            for row in db.execute("PRAGMA table_info(coverage)")
+        ]
+        db.execute("DROP VIEW observations")
+        db.execute(
+            f"CREATE VIEW observations AS SELECT {', '.join(columns)} FROM coverage"
+        )
+    manager, writer = create_scanner(tmp_path)
+    status = asyncio.run(scan(manager))
+    assert status["failed"] == 1
+    assert "Unsupported raster grid" in status["errors"][0]["error"]
+    assert writer.write_session.items == {}
+
+
+def test_equivalent_grid_and_nodata_representations_keep_the_same_item(
+    era5_archive: Path, tmp_path: Path
+) -> None:
+    """Compare parsed metadata so alternate valid spellings remain admissible.
+
+    Args:
+        era5_archive: Source with equivalent CRS, transform and NoData encodings.
+        tmp_path: Isolated source mount.
+    """
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    original = deepcopy(writer.write_session.items[ITEM_KEY])
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        transform = db.execute("SELECT transform FROM coverage LIMIT 1").fetchone()[0]
+        db.execute(
+            "UPDATE coverage SET crs = ?, transform = ?, nodata = 'nan' WHERE rowid = "
+            "(SELECT rowid FROM coverage WHERE variable = ? ORDER BY valid_time DESC LIMIT 1)",
+            (
+                rasterio.crs.CRS.from_epsg(4326).to_wkt(),
+                json.dumps(json.loads(transform), indent=2),
+                TEMPERATURE,
+            ),
+        )
+    assert asyncio.run(scan(manager))["failed"] == 0
+    assert writer.write_session.items[ITEM_KEY] == original
