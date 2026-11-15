@@ -177,9 +177,10 @@ function canRetryRasterStatistics(error) {
  * while a calculation uses it, without changing the selected geometry.
  * @property {(item:Object,selection?:Object,presentation?:Object)=>Promise<Object|null>} showTemporal Retain an independent temporal view.
  * @property {()=>Promise<void>} refreshTemporalLayers Reload retained temporal availability after server refresh.
- * @property {(item:Object)=>string|null} temporalLayerKey First retained view of this Catalog dataset.
+ * @property {(item:Object)=>string|null} temporalLayerKey Topmost retained view of this Catalog dataset.
+ * @property {(item:Object)=>{key:string,label:string,count:number}|null} temporalRemovalTarget Topmost matching temporal view and matching count.
  * @property {(item:Object)=>boolean} containsTemporal Whether a temporal view is retained.
- * @property {(item:Object,allowUndo?:boolean)=>void} removeTemporal Remove the first view of a dataset.
+ * @property {(item:Object,allowUndo?:boolean)=>void} removeTemporal Remove the topmost view of a dataset.
  * @property {(record:Object)=>Object|null} exportTemporal Copy one temporal selection and appearance for a saved map.
  * @property {(layer:Object,item:Object,isCurrent:()=>boolean)=>Promise<string|null>} restoreTemporal Restore an explicit saved observation.
  * @property {() => void} destroy Permanently detach viewer listeners; the
@@ -4771,13 +4772,24 @@ export function initializeRasterViewer(
         }));
     }
 
-    /** Return the first retained view of a Catalog temporal dataset.
+    /** Describe the topmost matching temporal view removed by a Catalog action.
+     * @param {Object} item Catalog dataset identity.
+     * @return {{key:string,label:string,count:number}|null} Target and matching view count, or null when absent.
+     */
+    function temporalRemovalTarget(item) {
+        const matches = mapLayers.retainedRecords.filter(record => record.state.temporal?.item.collection === item.collection &&
+            record.state.temporal.item.id === item.id);
+        return matches.length === 0 ? null : {
+            key: matches[0].entry.key, label: matches[0].entry.label, count: matches.length,
+        };
+    }
+
+    /** Return the topmost retained view of a Catalog temporal dataset.
      * @param {Object} item Catalog dataset identity.
      * @return {string|null} Retained key, or null when absent.
      */
     function temporalLayerKey(item) {
-        return mapLayers.retainedRecords.find(record => record.state.temporal?.item.collection === item.collection &&
-            record.state.temporal.item.id === item.id)?.entry.key ?? null;
+        return temporalRemovalTarget(item)?.key ?? null;
     }
 
     /** Remove one dataset view through the ordinary row-removal lifecycle.
@@ -5037,6 +5049,7 @@ export function initializeRasterViewer(
         showTemporal,
         refreshTemporalLayers,
         temporalLayerKey,
+        temporalRemovalTarget,
         containsTemporal: item => temporalLayerKey(item) !== null,
         removeTemporal,
         exportTemporal,

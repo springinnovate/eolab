@@ -8,6 +8,7 @@ import { renderCatalogMapAction } from "../src/catalog-map-action-view.js";
 import { createCatalogResultView } from "../src/catalog-result-view.js";
 import { getCatalogItemKey } from "../src/catalog-item-identity.js";
 import { getCatalogItemMapBounds } from "../src/map.js";
+import { MapLayerStack } from "../src/map-layers/layer-stack.js";
 
 const MARKUP = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
@@ -93,7 +94,14 @@ function harness({ selectedItem = null, prepare = async (item) => item,
   show = async () => ({ layerName: "eolab:test" }), retained = [] } = {}) {
   const calls = [], transitions = [];
   const state = { selectedItem, resultViews: new Map() };
-  const retainedItems = new Set(retained.map(getCatalogItemKey));
+  const stack = new MapLayerStack();
+  /** Retain one map view with optional independent identity and name.
+   * @param {Object} item Catalog source.
+   * @param {{key?:string,label?:string}} [presentation] View identity and readable name.
+   * @return {Object} Added or existing stack entry.
+   */
+  const retain = (item, {key, label = item.properties.title} = {}) => stack.add(item, label, undefined, key);
+  retained.forEach(item => retain(item));
   const documentContext = { createElement: (tag) => new ActionElement(tag) };
   const layerButton = new ActionElement("button"), styleButton = new ActionElement("button");
   const zoomButton = new ActionElement("button"), onMap = new ActionElement("span");
@@ -102,11 +110,11 @@ function harness({ selectedItem = null, prepare = async (item) => item,
   const elements = { container: actionContainer, toggle: layerButton, style: styleButton,
     zoom: zoomButton, onMap, actionStatus, layerStatus: status };
   const visualization = {
-    contains: (item) => retainedItems.has(getCatalogItemKey(item)),
+    removalTarget: (item) => stack.removalTarget(item),
     /** Record removal and its Undo policy. @param {Object} item Removed source. @param {boolean} allowUndo User-removal flag. @return {void} */
     remove(item, allowUndo) {
       calls.push(["remove", item.id, allowUndo]);
-      retainedItems.delete(getCatalogItemKey(item));
+      stack.remove(stack.findLayerKey(item));
     },
     /** Record preparation and defer to the test boundary. @param {Object} item Requested Item. @return {Promise<Object>} Prepared Item. */
     async prepare(item) { calls.push(["prepare", item.id]); return prepare(item); },
@@ -114,7 +122,7 @@ function harness({ selectedItem = null, prepare = async (item) => item,
     async show(item) {
       calls.push(["show", item.id]);
       const publication = await show(item);
-      if (publication !== null) retainedItems.add(getCatalogItemKey(item));
+      if (publication !== null) retain(item);
       return publication;
     },
   };
@@ -124,7 +132,7 @@ function harness({ selectedItem = null, prepare = async (item) => item,
     renderCatalogMapAction(elements, state.selectedItem, actions.state(state.selectedItem));
   };
   const actions = new CatalogMapActions({
-    contains: visualization.contains,
+    removalTarget: visualization.removalTarget,
     prepare: visualization.prepare,
     show: visualization.show,
     remove: item => visualization.remove(item, true),
@@ -171,14 +179,18 @@ function harness({ selectedItem = null, prepare = async (item) => item,
   const row = selectedItem === null ? null : addRow(selectedItem);
   refresh();
   return {
-    run: (item = state.selectedItem) => actions.toggle(item), actions,
+    run: (item = state.selectedItem) => actions.toggle(item), actions, stack,
     refresh, style: item => actions.style(item), zoom: item => actions.zoom(item),
     addRow, row, state, calls, transitions, layerButton, styleButton, zoomButton,
     onMap, actionContainer, actionStatus, status,
     /** Read the latest control-triggered action. @return {Promise<void>|null} Latest action dispatched by a native control. */
     get lastAction() { return lastAction; },
-    /** Simulate retention before publication settles. @param {Object} item Source retained by another owner while publication is pending. @return {void} */
-    retainExternally(item) { retainedItems.add(getCatalogItemKey(item)); refresh(); },
+    /** Simulate another owner retaining a source or independent view.
+     * @param {Object} item Source retained by another owner.
+     * @param {{key?:string,label?:string}} [presentation] Independent view identity and name.
+     * @return {void}
+     */
+    retainExternally(item, presentation) { retain(item, presentation); refresh(); },
     /** Simulate removal outside Catalog actions. @param {Object} item Source removed outside Catalog. @return {void} */
     removeExternally(item) { visualization.remove(item, false); refresh(); },
   };
@@ -194,12 +206,12 @@ test("catalog publication and map feedback retain live regions", () => {
 
 test("empty startup state does not access map membership or uninitialized feature commands", () => {
   const commands = Object.fromEntries([
-    "contains", "prepare", "show", "remove", "openStyle", "zoomToBounds",
+    "removalTarget", "prepare", "show", "remove", "openStyle", "zoomToBounds",
     "onPrepared", "onRemoved", "onAdded", "onChange",
   ].map(name => [name, () => { throw new Error(`Startup must not call ${name}`); }]));
   const actions = new CatalogMapActions({ ...commands, getBounds: getCatalogItemMapBounds });
   assert.deepEqual(actions.state(null), {
-    visualization: null, supported: false, retained: false, canZoom: false,
+    visualization: null, supported: false, retained: false, removalTarget: null, canZoom: false,
     pendingAction: null, feedback: null,
   });
 });
@@ -318,7 +330,7 @@ test("selected Item mirrors pending and success states", async () => {
     ["prepare", item.id], ["activate-analysis", item.id],
     ["render-inspector", item.id], ["show", item.id], ["open-rendering"],
   ]);
-  assert.equal(h.layerButton.textContent, "Remove first view");
+  assert.equal(h.layerButton.textContent, "Remove from map");
   assert.equal(h.layerButton.classList.contains("catalog-add-action"), false);
   assert.equal(h.onMap.hidden, false);
   assert.equal(h.row.state.retained, true);
@@ -350,7 +362,7 @@ test("row removal skips assessment and updates row and matching inspector", asyn
   assert.equal(h.layerButton.classList.contains("catalog-add-action"), true);
   assert.equal(h.onMap.hidden, true);
   assert.equal(h.row.state.retained, false);
-  assert.equal(h.actionStatus.textContent, "First dataset view removed from the map.");
+  assert.equal(h.actionStatus.textContent, `“${item.properties.title}” was removed from the map.`);
   assert.equal(h.calls.some(([call]) => call === "open-rendering"), false);
   assert.deepEqual(h.calls, [["remove", item.id, true], ["activate-analysis", item.id]]);
   assert.deepEqual(h.transitions, [["removed", item, "raster"]]);
@@ -365,8 +377,37 @@ test("removing an unselected raster or a vector preserves analysis selection and
     assert.equal(h.state.selectedItem, selected);
     assert.equal(h.transitions[0][0], "removed");
     assert.equal(h.actions.state(item).feedback.message,
-      "First dataset view removed from the map.");
+      `“${item.properties.title}” was removed from the map.`);
   }
+});
+
+test("row and inspector name the current topmost view and report its pre-removal name", async () => {
+  const item = raster("rain"), h = harness({ selectedItem: item, retained: [item] });
+  const originalKey = getCatalogItemKey(item), copyKey = "local:view:rain-copy";
+  h.retainExternally(item, {key: copyKey, label: "Dry season"});
+  assert.equal(h.layerButton.textContent, "Remove topmost: “Dry season”");
+  assert.equal(h.row.mapButton.textContent, h.layerButton.textContent);
+  assert.equal(h.row.mapButton.getAttribute("aria-label"), "Remove topmost: “Dry season”: rain");
+  h.stack.get(originalKey).label = "Wet season";
+  h.stack.moveTo(originalKey, 0);
+  h.refresh();
+  assert.equal(h.layerButton.textContent, "Remove topmost: “Wet season”");
+  assert.equal(h.row.mapButton.textContent, h.layerButton.textContent);
+  h.stack.get(copyKey).label = "Wet season";
+  h.refresh();
+  assert.equal(h.layerButton.textContent, "Remove topmost: “Wet season”", "identical names still identify stack position");
+  h.row.mapButton.dispatchEvent(new Event("click"));
+  await h.lastAction;
+  assert.equal(h.stack.get(originalKey), null);
+  assert.ok(h.stack.get(copyKey));
+  assert.equal(h.layerButton.textContent, "Remove from map");
+  assert.equal(h.row.mapButton.textContent, "Remove from map");
+  assert.equal(h.actionStatus.textContent, "“Wet season” was removed from the map.");
+  h.layerButton.dispatchEvent(new Event("click"));
+  await h.lastAction;
+  assert.equal(h.layerButton.textContent, "Add to map");
+  assert.equal(h.row.state.retained, false);
+  assert.equal(h.calls.filter(([call]) => call === "remove").every(([, , undo]) => undo), true);
 });
 
 test("ineligible vector assessment keeps its contextual reason and never publishes", async () => {
@@ -547,13 +588,13 @@ test("temporal Catalog controls explain which view they remove and pass the data
   assert.equal(h.actionStatus.textContent, "Opening a variable and observation time from this dataset.");
   completion.resolve({ layerName: "eolab:observation" });
   await attempt;
-  assert.equal(h.layerButton.textContent, "Remove first view");
-  assert.equal(h.row.mapButton.textContent, "Remove first view");
-  assert.match(h.row.mapButton.getAttribute("aria-label"), /^Remove first view:/);
+  assert.equal(h.layerButton.textContent, "Remove from map");
+  assert.equal(h.row.mapButton.textContent, "Remove from map");
+  assert.match(h.row.mapButton.getAttribute("aria-label"), /^Remove from map:/);
   assert.match(h.status.textContent, /Map layers.*create or duplicate a custom layer/);
   h.styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.calls.at(-1), ["style", getCatalogItemKey(item), item]);
   h.row.mapButton.dispatchEvent(new Event("click"));
   await h.lastAction;
-  assert.equal(h.actionStatus.textContent, "First dataset view removed from the map.");
+  assert.equal(h.actionStatus.textContent, "“ERA5” was removed from the map.");
 });

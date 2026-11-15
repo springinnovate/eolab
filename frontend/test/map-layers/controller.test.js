@@ -73,6 +73,33 @@ test("staged custom names survive attachment and removal Undo snapshots", async 
     controller.destroy();
 });
 
+test("Catalog removal targets follow live names and topmost source matches, including hidden views", async () => {
+    const item = catalogItem("rain"), adapter = createAdapter("Raster"), updates = [];
+    let controller;
+    controller = new MapLayerController({leafletMap: createMap(), view: createView(),
+        onLayersChange: () => updates.push(controller?.removalTarget(item) ?? null)});
+    try {
+        assert.equal(controller.removalTarget(item), null);
+        const top = await controller.stage(item, adapter, {key: "local:view:top", customName: "Dry season"});
+        const bottom = await controller.stage(item, adapter, {key: "local:view:bottom", customName: "Wet season"});
+        const unrelated = await controller.stage({...item, collection: "other"}, adapter);
+        controller.commitStaged([unrelated, top, bottom]);
+        assert.deepEqual(controller.removalTarget(item), {key: top.key, label: "Dry season", count: 2});
+        controller.renameLayer(bottom.key, "Annual rainfall");
+        controller.reorder(bottom.key, 0);
+        controller.setVisible(bottom.key, false);
+        const target = {key: bottom.key, label: "Annual rainfall", count: 2};
+        assert.deepEqual(updates.at(-1), target, "the existing layers-change callback exposes the latest Catalog target");
+        assert.equal(controller.findLayerKey(item), target.key);
+        controller.remove(item);
+        assert.equal(controller.getRecord(bottom.key), null);
+        assert.deepEqual(controller.removalTarget(item), {key: top.key, label: "Dry season", count: 1});
+        controller.remove(item);
+        assert.equal(controller.removalTarget(item), null);
+        assert.ok(controller.getRecord(unrelated.key), "matching uses collection as well as Item ID");
+    } finally { controller.destroy(); }
+});
+
 /** Create a Catalog Item with the identity required by the layer boundary. */
 function catalogItem(id) {
     return { collection: "observations", id };

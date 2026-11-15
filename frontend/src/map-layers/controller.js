@@ -519,6 +519,15 @@ export class MapLayerController {
     }
 
     /**
+     * Describe the topmost matching layer removed by a Catalog action.
+     * @param {Object} item Catalog source identity.
+     * @return {{key:string,label:string,count:number}|null} Target and matching view count, or null when absent.
+     */
+    removalTarget(item) {
+        return this.stack.removalTarget(item);
+    }
+
+    /**
      * Set one retained layer's visibility.
      *
      * @param {string} key Stable map-layer key.

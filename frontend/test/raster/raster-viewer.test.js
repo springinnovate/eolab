@@ -5839,6 +5839,31 @@ test("removing a temporal row cancels pending publication and cannot resurrect i
     } finally {fixture.destroy();}
 });
 
+test("temporal Catalog removal names the topmost matching view after renaming and reordering", async () => {
+    const fixture = temporalFixture(), item = temporalItem();
+    try {
+        assert.equal(fixture.viewer.temporalRemovalTarget(item), null);
+        const first = await fixture.viewer.showTemporal(item);
+        const second = await fixture.viewer.showTemporal(item, {variable: "temperature", time: "2020-01-01T02:00:00Z"});
+        assert.deepEqual(fixture.viewer.temporalRemovalTarget(item), {
+            key: second.entry.key, label: second.entry.label, count: 2,
+        });
+        assert.equal(fixture.viewer.temporalRemovalTarget({...item, collection: "other"}), null);
+        fixture.mapLayers.renameLayer(first.entry.key, "Morning temperature");
+        fixture.mapLayers.reorder(first.entry.key, 0);
+        assert.deepEqual(fixture.viewer.temporalRemovalTarget(item), {
+            key: first.entry.key, label: "Morning temperature", count: 2,
+        });
+        fixture.viewer.removeTemporal(item);
+        assert.equal(fixture.mapLayers.getRecord(first.entry.key), null);
+        assert.deepEqual(fixture.viewer.temporalRemovalTarget(item), {
+            key: second.entry.key, label: second.entry.label, count: 1,
+        });
+        fixture.viewer.removeTemporal(item);
+        assert.equal(fixture.viewer.temporalRemovalTarget(item), null);
+    } finally { fixture.destroy(); }
+});
+
 
 test("temporal source changes cancel old statistics and exact pixels before accepting new values", async () => {
     const statistics = [], pixels = [], cursorValues = [], clock = createManualClock();
