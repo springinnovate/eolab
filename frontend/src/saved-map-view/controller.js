@@ -161,6 +161,8 @@ export class SavedMapViewController {
             onReset: () => void this.resetView(),
             onUndo: () => void this.undoReset(),
             onSavePublishedMap: fields => void this.savePublishedMapChanges(fields),
+            onShowUnavailableLayers: () => this.showUnavailableLayers(),
+            onRemoveUnavailableLayer: index => this.removeUnavailableLayer(index),
         });
     }
 
@@ -424,8 +426,34 @@ export class SavedMapViewController {
         this.unavailableLayers.push({index: savedIndex, origin: this.viewerOrigin, layer: {...structuredClone(layer),
             isCustom: record.entry.isCustom, ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})}});
         this.unavailableLayers.sort((left, right) => left.index - right.index);
+        this.view.setUnavailableLayerCount(this.unavailableLayers.length);
         this.view.showResults({loaded: records.length - 1, total: records.length,
             details: [`${record.entry.label} is unavailable. Its calculated fields remain saved.`]});
+        this.scheduleRemember();
+    }
+
+    /** Present saved unavailable layers without attempting to read their sources.
+     * @return {void}
+     */
+    showUnavailableLayers() {
+        if (this.busy || this.destroyed) return;
+        this.view.showUnavailableLayers(this.unavailableLayers.map(({index, layer, origin}) => ({index,
+            label: layer.customName ?? layer.catalogItem?.id ?? (layer.uploadId ? "Private uploaded layer" : "Private run result"),
+            sourceSite: origin === this.viewerOrigin ? null : origin,
+            fields: (layer.calculatedFields ?? []).map(field => field.name)})));
+    }
+
+    /** Discard one unavailable view's saved settings after an explicit remove action.
+     * @param {number} index Saved drawing position supplied by the current unavailable-layer list.
+     * @return {void}
+     */
+    removeUnavailableLayer(index) {
+        if (this.busy || this.destroyed) return;
+        if (!this.unavailableLayers.some(entry => entry.index === index)) return;
+        this.unavailableLayers = this.unavailableLayers.filter(entry => entry.index !== index);
+        for (const entry of this.unavailableLayers) if (entry.index > index) entry.index -= 1;
+        this.view.setUnavailableLayerCount(this.unavailableLayers.length);
+        this.showUnavailableLayers();
         this.scheduleRemember();
     }
 
@@ -528,7 +556,7 @@ export class SavedMapViewController {
         for (const entry of this.unavailableLayers) {
             if (entry.layer.uploadId || entry.layer.runArtifact) privateOrigins.add(entry.origin);
         }
-        if (privateOrigins.size > 1) throw new Error("Remove private layers from this site before saving a map that retains private layers from another EOLab site.");
+        if (privateOrigins.size > 1) throw new Error("This map includes private layers from another EOLab site. Open Unavailable layers and remove those saved layers, or remove this site's private layers before saving.");
         for (const entry of this.unavailableLayers) retainedLayers.splice(Math.min(entry.index, retainedLayers.length), 0, structuredClone(entry.layer));
         return createSavedMapView({
             viewer: {
@@ -676,6 +704,7 @@ export class SavedMapViewController {
             return !result.key && !result.staged && !result.removed && (layer.calculatedFields?.length || layer.runArtifact)
                 ? [{index, layer: structuredClone(layer), origin: savedMapView.viewer.origin}] : [];
         });
+        this.view.setUnavailableLayerCount(this.unavailableLayers.length);
         // Older callers may expose only catalog staging; mixed maps require explicit ordering.
         if (preparations.some(result => result.key)) {
             const otherKeys = this.mapLayers.retainedRecords.map(record => record.entry.key).filter(key => !keys.includes(key));
@@ -685,7 +714,7 @@ export class SavedMapViewController {
             loaded: stagedLayers.length + preparations.filter(result => result.key).length,
             total: savedMapView.layers.length,
             details: [...(basemapWarning ? [basemapWarning] : []),
-                ...(this.unavailableLayers.length ? ["Unavailable calculated layers remain saved. Reopen this map to retry them."] : []), ...preparations
+                ...(this.unavailableLayers.length ? ["Unavailable layers remain saved. Use Unavailable layers to review or remove them, or reopen this map to retry."] : []), ...preparations
                 .map(({ detail }) => detail)
                 .filter((detail) => detail !== null)],
         };

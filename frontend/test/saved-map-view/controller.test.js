@@ -81,7 +81,7 @@ test("live unavailable results retain only identities and definitions in the nex
   assert.equal(records.length, 0);
 });
 
-test("unavailable private references preserve their original site and cannot be saved with another site's private layers", async () => {
+test("unavailable private references keep their origin and can be explicitly removed to save this site's private layers", async () => {
   const saved = {...emptySavedMap(0, 0, 2), layers: [{runArtifact: {jobId: "a".repeat(32), artifactId: "b".repeat(32), layerName: "results"},
     visible: true, opacity: 1, calculatedFields: [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}],
     style: {kind: "vector", definition: {}}}]};
@@ -99,6 +99,47 @@ test("unavailable private references preserve their original site and cannot be 
   records.push({entry: {key: "local-result", item: null, isCustom: true}, layer: saved.layers[0]});
   await controller.copyMapLink();
   assert.match(view.error.message, /private layers from another EOLab site/);
+  assert.equal(view.unavailableCount, 1);
+  view.handlers.onShowUnavailableLayers();
+  assert.deepEqual(view.unavailableLayers, [{index: 0, label: "Private run result", sourceSite: saved.viewer.origin, fields: ["Scaled"]}]);
+  view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
+  assert.equal(view.unavailableCount, 0);
+  assert.deepEqual(view.unavailableLayers, []);
+  await controller.copyMapLink();
+  const afterRemoval = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.equal(afterRemoval.viewer.origin, "https://other.example");
+  assert.deepEqual(afterRemoval.layers, [{...saved.layers[0], isCustom: true}]);
+  assert.equal(records.length, 1);
+});
+
+test("removing an unavailable saved layer preserves the order of remaining live and unavailable layers", async () => {
+  const fields = [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}];
+  const layers = ["A", "B", "C", "D"].map(name => ({catalogItem: {collection: "vectors", id: name},
+    visible: true, opacity: 1, isCustom: true, calculatedFields: fields, style: {kind: "vector", definition: {}}}));
+  const saved = {...emptySavedMap(0, 0, 2), layers}, view = createView(), records = [];
+  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+    viewport: {restore() {}, snapshot: () => saved.viewport},
+    mapLayers: {retainedRecords: records, commitStaged(staged) {records.push(...staged.map(value => value.record));}, setLegendIncluded() {}},
+    catalogVisualization: {clear() {}, prepare: async item => item,
+      stage: async (item, presentation) => ({record: {entry: {...presentation, item}, adapter: {
+        restoreCalculatedFields() {}, applySavedState() {}, exportSavedState: () => layers[0].style, exportCalculatedFields: () => fields,
+      }}})},
+    catalogItems: {get: async identity => {
+      if (["A", "C"].includes(identity.id)) throw new Error("Source unavailable");
+      return identity;
+    }},
+  });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  view.handlers.onShowUnavailableLayers();
+  assert.deepEqual(view.unavailableLayers.map(layer => layer.label), ["A", "C"]);
+  view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
+  await controller.copyMapLink();
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(copied.layers.map(layer => layer.catalogItem.id), ["B", "C", "D"]);
+  view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
+  await controller.copyMapLink();
+  const afterBothRemoved = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(afterBothRemoved.layers.map(layer => layer.catalogItem.id), ["B", "D"]);
 });
 
 test("published drafts ignore personal autosave and only write on explicit save", async () => {
@@ -401,6 +442,8 @@ function createView() {
     showCopied() { this.copied = true; },
     showCopyFallback(url) { this.copyFallback = url; },
     showResults(result) { this.result = result; },
+    setUnavailableLayerCount(count) { this.unavailableCount = count; },
+    showUnavailableLayers(layers) { this.unavailableLayers = layers; },
     showLoading(layerCount) { this.loading = layerCount; },
     showError(error, operation) {
       this.error = error;

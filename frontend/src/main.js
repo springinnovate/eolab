@@ -1522,7 +1522,7 @@ async function initializeCatalog(
             return {
                 uploadId: record.adapter.describeSource(record).source.uploadId,
                 visible: record.entry.visible, opacity: record.entry.opacity,
-                ...(record.entry.customName ? { customName: record.entry.customName } : {}),
+                customName: record.entry.customName ?? [...record.entry.label].slice(0, 160).join(""),
                 style: record.adapter.exportSavedState(record),
                 filter: record.adapter.exportFilterState(record),
                 calculatedFields: record.adapter.exportCalculatedFields(record),
@@ -1536,7 +1536,7 @@ async function initializeCatalog(
             const {jobId, artifactId} = source.source;
             return {runArtifact: {jobId, artifactId, layerName: source.selection.layerName},
                 visible: record.entry.visible, opacity: record.entry.opacity,
-                ...(record.entry.customName ? {customName: record.entry.customName} : {}),
+                customName: record.entry.customName ?? [...record.entry.label].slice(0, 160).join(""),
                 style: record.adapter.exportSavedState(record), filter: record.adapter.exportFilterState(record),
                 calculatedFields: record.adapter.exportCalculatedFields(record)};
         },
