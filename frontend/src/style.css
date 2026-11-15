@@ -551,11 +551,12 @@ h5 {
   grid-row: 1;
   min-width: 0;
   margin: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
   font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.5;
-  white-space: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .catalog-inspector-close {
@@ -2166,10 +2167,6 @@ div.chart-tooltip {
 }
 
 .catalog-result-name {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: var(--font-size-ui);
