@@ -812,13 +812,15 @@ export class MapLayerStackView {
             const above = bounds.top - size.height - 4;
             tooltip.style.top = `${above >= 4 ? above : Math.min(bounds.bottom + 4, viewport.innerHeight - size.height - 4)}px`;
         };
-        /** Allow pointer travel into the explanation before dismissing it. @return {void} */
+        /** Keep a focused action's explanation, otherwise allow pointer travel before dismissal. @return {void} */
         const leave = () => {
             clearTimeout(this.actionTooltipTimer);
             clearTimeout(this.actionTooltipHideTimer);
+            if (this.documentContext.activeElement === button) return;
             this.actionTooltipHideTimer = setTimeout(() => this.#hideActionTooltip(), 80);
         };
         button.addEventListener("pointerenter", () => {
+            if (this.documentContext.activeElement === button) { show(); return; }
             this.#hideActionTooltip();
             this.actionTooltipTimer = setTimeout(show, 80);
         });
