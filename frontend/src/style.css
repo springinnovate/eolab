@@ -4214,6 +4214,11 @@ article.raster-histogram-summary {
 
 #raster-series { padding-top: 0; }
 
+/* Background results may arrive after a modal has entered the top layer. */
+:root:has(dialog:modal) :is(#map-inspection, #workspace-tool-actions, #catalog-search-suggestions):not(dialog:modal *) {
+  display: none;
+}
+
 #map-inspection:not(:popover-open),
 #map-tools-more-summary[hidden],
 #map-histogram-panel[hidden],
