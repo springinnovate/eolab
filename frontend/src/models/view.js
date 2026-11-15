@@ -740,10 +740,9 @@ export class ModelsView {
                 const heading = this.element("h3");
                 const open = this.button(model.title, () => this.handlers.onChoose(model), "models-card-open models-name");
                 open.setAttribute("aria-label", `Set up ${model.title}`); heading.append(open);
-                card.append(heading, this.element("p", model.description),
-                    this.element("p", `Inputs: ${Object.values(model.inputs).map(input => input.label).join(", ")}`, "models-help"),
-                    this.element("p", `Outputs: ${Object.entries(model.outputs).map(([name, output]) => `${name} (${output.presentation})`).join(", ")}`, "models-help"),
-                    this.element("span", "Set up tool →", "models-card-hint")); return card;
+                const outputLabels = Object.entries(model.outputs).map(([name, output]) =>
+                    output.label ?? name.replace(/[_-]/g, " "));
+                card.append(heading, this.element("p", `Outputs: ${outputLabels.join(" · ")}`, "models-help")); return card;
             }));
         }
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
