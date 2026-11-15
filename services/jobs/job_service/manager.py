@@ -129,6 +129,8 @@ class JobManager:
     def submit(self, owner: str, key: str, request: SubmitJob) -> JobSnapshot:
         """Queue an operation or return the job from an identical submission retry.
 
+        Preserve declared input aliases when serializing the worker's request.
+
         Args:
             owner: Authenticated principal, never a submitted owner field.
             key: Validated idempotency key, scoped to this principal.
@@ -196,7 +198,7 @@ class JobManager:
             json.dumps(
                 {
                     "operation": request.operation,
-                    "inputs": inputs.model_dump(mode="json"),
+                    "inputs": inputs.model_dump(mode="json", by_alias=True),
                 },
                 allow_nan=False,
             ).encode(),
