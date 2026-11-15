@@ -238,7 +238,7 @@ export class VectorFieldCalculator {
             const warning = await refresh;
             if (request.signal.aborted || this.request !== request) return;
             const missing = result.missingCounts[definition.name] ?? 0;
-            this.message(`${definition.name} saved for ${result.featureCount.toLocaleString()} features.${missing ? ` ${missing.toLocaleString()} empty values.` : ""} ${warning ?? "Choose it in Style or Filter, or click a feature to see its value."}`);
+            this.message(`${definition.name} saved for ${result.featureCount.toLocaleString()} ${result.featureCount === 1 ? "feature" : "features"}.${missing ? ` ${missing.toLocaleString()} empty ${missing === 1 ? "value" : "values"}.` : ""} ${warning ?? "Choose it in Style or Filter, or click a feature to see its value."}`);
         } catch (error) {
             if (!request.signal.aborted) this.message(error.message, true);
         } finally {

@@ -90,7 +90,7 @@ test("calculation installs one view's fields and allows revising its expression 
     await c.submitCalculation();
     assert.deepEqual(targets.get("a").calculatedFields, [{version: 1, name: "Density", expression: c.expression.value, numericText: false}]);
     assert.deepEqual(targets.get("b").calculatedFields, []);
-    assert.match(c.status.textContent, /4 features.*1 empty/);
+    assert.match(c.status.textContent, /4 features\. 1 empty value\./);
     assert.equal(c.name.readOnly, true);
     c.expression.value = "'Population total' / 'Area km2' * 1000";
     await c.submitCalculation();
