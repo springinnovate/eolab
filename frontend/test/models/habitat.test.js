@@ -199,6 +199,55 @@ test("Habitat starts with all datasets selected in collapsed role groups", async
     h.controller.destroy();
 });
 
+test("Habitat keeps reference choices visible and reports the optional output mask while Advanced is closed", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    const {references, habitat_mask: mask, stack, area} = h.view.setup.inputs;
+    assert.equal(mask.root.open, false);
+    assert.equal(mask.summary.textContent, "Advanced");
+    assert.equal(mask.root.contains(mask.source), true);
+    assert.equal(mask.root.contains(references.source), false);
+    assert.equal(mask.root.contains(area.preparationSelection.source), false);
+    assert.equal(mask.source.parentElement.textContent, "Limit output to a raster mask (optional)");
+    assert.equal(mask.hint.textContent, "Only cells equal to 1 receive results.");
+    assert.equal(references.choiceHint.textContent, "Choose either polygon features or a raster for the reference sites.");
+    assert.equal(references.choiceHint.hidden, false);
+    assert.ok(references.source.getAttribute("aria-describedby").split(" ").includes(references.choiceHint.id));
+
+    await choosePreparationSelection(h);
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    const reference = captureModelSubmission(h.controller.state.draft, "before-output-mask").inputs.references;
+    mask.root.open = true;
+    edit(mask.source, modelSourceKey(h.context.rasters[4]));
+    edit(mask.resampling, "mode");
+    mask.root.open = false;
+    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask");
+    assert.equal(mask.root.open, false);
+    const selected = captureModelSubmission(h.controller.state.draft, "selected-output-mask").inputs;
+    assert.deepEqual(selected.references, reference);
+    assert.deepEqual(selected.habitat_mask, {collectionId: h.context.rasters[4].collectionId, itemId: h.context.rasters[4].itemId});
+    assert.equal(selected.preparation.resampling.habitat_mask, "mode");
+
+    chooseStack(h); await settle();
+    const manual = captureModelSubmission(h.controller.state.draft, "manual-output-mask").inputs;
+    assert.deepEqual(manual.references, reference);
+    assert.deepEqual(manual.habitat_mask, selected.habitat_mask);
+    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask");
+    edit(stack.source, "earthEngine"); await settle();
+    const automatic = captureModelSubmission(h.controller.state.draft, "automatic-output-mask").inputs;
+    assert.deepEqual(automatic.references, reference);
+    assert.deepEqual(automatic.habitat_mask, selected.habitat_mask);
+    assert.equal(mask.root.open, false);
+
+    mask.root.open = true;
+    edit(mask.source, "");
+    mask.root.open = false;
+    assert.equal(mask.summary.textContent, "Advanced");
+    const cleared = captureModelSubmission(h.controller.state.draft, "cleared-output-mask").inputs;
+    assert.equal(cleared.habitat_mask, null);
+    assert.deepEqual(cleared.references, reference);
+    assert.equal(cleared.preparation.resampling.habitat_mask, undefined);
+});
+
 for (const area of [undefined, {kind: "wholeRaster"}]) test(`Habitat retains a separate manual viewport choice instead of ${area ? "a whole raster" : "an absent area"}`, () => {
     const viewportBounds = {west: -109, south: 46, east: -107, north: 48};
     const draft = createModelDraft(habitat, {area, viewportBounds}, "default-area");
@@ -287,7 +336,8 @@ test("reference choices retain upload provenance after selection and a display-n
     h.context.vectors[1].label = "Trusted reference sites";
     h.controller.refreshMapLayers();
     assert.equal(references.sourceOrigin.textContent, "Uploaded by you · Polygons");
-    assert.equal(references.source.getAttribute("aria-describedby"), references.sourceOrigin.id);
+    assert.deepEqual(references.source.getAttribute("aria-describedby").split(" ").sort(),
+        [references.choiceHint.id, references.sourceOrigin.id].sort());
     h.controller.destroy();
 });
 
@@ -419,11 +469,19 @@ test("Habitat keeps raster reference and assessment choices separate through dup
     edit(h.view.setup.inputs.habitat_mask.source, modelSourceKey(h.context.rasters[4]));
     await settle();
     await h.controller.submit(); await h.controller.duplicateRun();
+    const mask = h.view.setup.inputs.habitat_mask;
+    assert.equal(mask.root.open, false);
+    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask");
+    assert.equal(mask.source.parentElement.textContent, "Limit output to a raster mask (optional)");
+    assert.equal(h.controller.state.draft.model.inputs.habitat_mask.label, "Habitat assessment mask");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-masks").inputs, h.requests[0].inputs);
     h.context.rasters.pop(); h.controller.refreshMapLayers();
+    assert.equal(mask.root.open, false);
+    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask (unavailable)");
     assert.equal(h.view.setup.run.disabled, true);
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "missing-mask"), /available|Map layers|mask/i);
     edit(h.view.setup.inputs.habitat_mask.source, "");
+    assert.equal(mask.summary.textContent, "Advanced");
     assert.equal(h.view.setup.run.disabled, false);
     const inputs = captureModelSubmission(h.controller.state.draft, "without-mask").inputs;
     assert.deepEqual(inputs.references, h.requests[0].inputs.references); assert.equal(inputs.habitat_mask, null);
@@ -804,6 +862,55 @@ test("Late Habitat options preserve a chosen custom stack and cannot replace ano
     h.controller.destroy();
 });
 
+
+test("reference choices switch between polygons and rasters without combining sources or accepting stale selections", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy()); chooseStack(h);
+    const references = h.view.setup.inputs.references;
+    const vector = h.context.vectors[0], raster = h.context.rasters[3];
+    const options = references.source.querySelectorAll("option");
+    const vectorOption = options.find(option => option.value === `vector:${vector.key}`);
+    const rasterOption = options.find(option => option.value === `raster:${modelSourceKey(raster)}`);
+    assert.equal(vectorOption.parentElement, rasterOption.parentElement);
+    assert.equal(Boolean(references.source.multiple), false);
+    edit(h.view.setup.inputs.habitat_mask.source, modelSourceKey(h.context.rasters[4]));
+    await chooseVector(h, "references", vector, "North");
+    const polygonInputs = captureModelSubmission(h.controller.state.draft, "polygon-reference").inputs;
+    assert.equal(polygonInputs.references.kind, "vector");
+    assert.equal(references.maskGroup.hidden, true);
+    assert.equal(references.vectorGroup.hidden, false);
+
+    edit(references.source, `raster:${modelSourceKey(raster)}`); await settle();
+    const rasterInputs = captureModelSubmission(h.controller.state.draft, "raster-reference").inputs;
+    assert.deepEqual(rasterInputs.references, {kind: "raster", source: {collectionId: raster.collectionId, itemId: raster.itemId}});
+    assert.equal(references.maskGroup.hidden, false);
+    assert.equal(references.vectorGroup.hidden, true);
+    assert.equal(references.choiceHint.hidden, false);
+    assert.deepEqual(rasterInputs.habitat_mask, polygonInputs.habitat_mask);
+
+    const prepareVector = h.controller.prepareVector;
+    let finishSelection, selectionSignal, pendingSource;
+    h.controller.prepareVector = (source, signal) => new Promise(resolve => {
+        pendingSource = source; selectionSignal = signal; finishSelection = resolve;
+    });
+    edit(references.source, `vector:${vector.key}`);
+    assert.equal(h.view.setup.run.disabled, true);
+    edit(references.source, `raster:${modelSourceKey(raster)}`);
+    assert.equal(selectionSignal.aborted, true);
+    finishSelection(await prepareVector(pendingSource)); await settle();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "after-stale-selection").inputs.references, rasterInputs.references);
+    assert.equal(references.source.value, `raster:${modelSourceKey(raster)}`);
+    assert.equal(references.vectorGroup.hidden, true);
+
+    h.controller.prepareVector = prepareVector;
+    edit(references.source, `vector:${vector.key}`); await settle();
+    const restored = captureModelSubmission(h.controller.state.draft, "restored-polygon-reference").inputs;
+    assert.deepEqual(restored.references, polygonInputs.references);
+    assert.equal(restored.preparation.resampling.reference_mask, undefined);
+    assert.deepEqual(restored.habitat_mask, polygonInputs.habitat_mask);
+    assert.equal(references.maskGroup.hidden, true);
+    assert.equal(references.vectorGroup.hidden, false);
+    assert.equal(references.choiceHint.hidden, false);
+});
 
 test("direct spatial choices retain opaque view identity, independent filters and captured areas", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy()); chooseStack(h);

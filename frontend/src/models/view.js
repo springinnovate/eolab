@@ -180,7 +180,7 @@ export class ModelsView {
         return {resampling, resamplingField};
     }
 
-    /** Build a direct spatial-source chooser and its active raster or vector controls.
+    /** Build one spatial-source chooser with mutually exclusive raster or vector controls.
      * @param {HTMLElement} fields Owning setup fieldset.
      * @param {string} name Recipe input name.
      * @param {{type:string,label:string}} input Declared area, mask or reference input.
@@ -205,6 +205,8 @@ export class ModelsView {
         sourceField.id = `models-${name}-source-label`;
         group.setAttribute("role", "group"); group.setAttribute("aria-labelledby", sourceField.id);
         group.append(sourceField); fields.append(group);
+        const choiceHint = references ? this.element("p", "Choose either polygon features or a raster for the reference sites.", "models-help") : null;
+        if (choiceHint) { choiceHint.id = `models-${name}-choice-help`; group.append(choiceHint); }
         const sourceOrigin = this.element("p", "", "models-help");
         sourceOrigin.id = `models-${name}-source-origin`;
         sourceOrigin.hidden = true;
@@ -238,7 +240,7 @@ export class ModelsView {
         const mapHelp = this.element("p", "", "models-help");
         group.append(vectorGroup, areaDescription, mapHelp);
         if (input.type === "mask_source") group.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
-        return {group, source, sourceOrigin, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
+        return {group, source, choiceHint, sourceOrigin, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
 
@@ -414,7 +416,7 @@ export class ModelsView {
                 : value.maskRaster.kind === "runArtifact" ? "Completed run · Raster" : "Catalog · Raster"
             : drawn && drawnLayer ? "Drawn polygons" : "";
         controls.sourceOrigin.hidden = !controls.sourceOrigin.textContent;
-        controls.source.setAttribute("aria-describedby", [controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id,
+        controls.source.setAttribute("aria-describedby", [controls.choiceHint?.id ?? "", controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id,
             rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : ""].filter(Boolean).join(" "));
         if (controls.resampling) {
             controls.resampling.value = value.resampling;

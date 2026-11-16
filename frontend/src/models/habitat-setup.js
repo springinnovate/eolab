@@ -359,7 +359,8 @@ function acquisitionGrid(draft) {
     return grid ? {key: "earthEngine", label: "Earth Engine inputs", sourceCrs: grid.crs, grid} : null;
 }
 
-/** Build Habitat controls with explicit ordinary spatial/raster presentation helpers.
+/** Build Habitat setup, keeping its optional output mask in a collapsed disclosure.
+ * Reuse ordinary spatial/raster controls for source selection and readiness.
  * @param {import("./model-setup.js").ModelSetupUi} ui Element, formatting and ordinary input builders supplied by the host view.
  * @param {{onInput:(name:string,change:Object)=>void,onSetupAction:(action:string,value?:unknown)=>void}} handlers Generic input edits and integration actions.
  * @param {string} name Recipe input name.
@@ -373,6 +374,27 @@ function buildInput(ui, handlers, name, definition, draft) {
             onRefreshHabitat: inputName => handlers.onSetupAction("refresh-options", inputName)}, name, definition);
         ui.append(controls.root);
         controls.renderModelInput = (value, state) => controls.render(value, state);
+        return controls;
+    }
+    if (name === "habitat_mask" && definition.type === "optional_raster") {
+        const root = ui.element("details", "", "models-details models-output-mask");
+        root.open = false;
+        const summary = ui.element("summary", "Advanced");
+        const fields = ui.element("div", "", "models-vector");
+        const controls = ui.buildRasterInput(fields, name, {...definition, label: "Limit output to a raster mask (optional)"});
+        const hint = ui.element("p", "Only cells equal to 1 receive results.", "models-help");
+        hint.id = `models-${name}-help`;
+        controls.source.setAttribute("aria-describedby", `${hint.id} ${controls.reason.id}`);
+        fields.append(hint); root.append(summary, fields); ui.append(root);
+        Object.assign(controls, {root, summary, hint});
+        controls.renderModelInput = (value, state) => {
+            const input = value.inputs[name];
+            const ready = ui.renderRasterInput(controls, definition, input, state);
+            summary.textContent = input.raster
+                ? `Advanced · Output mask: ${input.raster.label ?? "Selected raster"}${input.raster.available === false ? " (unavailable)" : ""}`
+                : "Advanced";
+            return ready;
+        };
         return controls;
     }
     if (definition.type !== "summary_area") return null;
