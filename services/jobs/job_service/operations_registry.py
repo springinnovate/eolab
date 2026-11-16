@@ -31,6 +31,13 @@ from eolab_app.vector.field_calculation_operation import (
     FieldCalculationOutcome,
     calculate_vector_fields,
 )
+from eolab_app.vector.parcel_models import ParcelIdInput, ParcelRowsInput
+from eolab_app.vector.parcel_operation import (
+    ParcelIdResult,
+    ParcelRowsResult,
+    validate_catalog_parcel_ids,
+    read_catalog_parcel_rows,
+)
 
 @dataclass(frozen=True)
 class InstalledOperation:
@@ -96,5 +103,19 @@ OPERATIONS = {
         FieldCalculationInput,
         FieldCalculationOutcome,
         calculate_vector_fields,
+    ),
+    "vector.parcel-id-validation.v1": InstalledOperation(
+        "vector.parcel-id-validation.v1",
+        "Validate one original parcel ID field across an entire Catalog polygon layer.",
+        ParcelIdInput,
+        ParcelIdResult,
+        validate_catalog_parcel_ids,
+    ),
+    "vector.parcel-rows.v1": InstalledOperation(
+        "vector.parcel-rows.v1",
+        "Page exact filtered Catalog parcel IDs and original display attributes.",
+        ParcelRowsInput,
+        ParcelRowsResult,
+        read_catalog_parcel_rows,
     ),
 }

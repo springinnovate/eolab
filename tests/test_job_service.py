@@ -365,6 +365,8 @@ def test_scheduler_has_only_explicit_operation_registration_edge() -> None:
                         "eolab_app.vector.selection_operation",
                         "eolab_app.vector.extent_operation",
                         "eolab_app.vector.field_calculation_operation",
+                        "eolab_app.vector.parcel_models",
+                        "eolab_app.vector.parcel_operation",
                     }
                 ]
             assert not any(

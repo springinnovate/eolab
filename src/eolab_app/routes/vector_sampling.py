@@ -20,6 +20,12 @@ from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector.parcel_models import (
+    ParcelIdRequest,
+    ParcelIdValidationResponse,
+    ParcelRowsRequest,
+    ParcelRowsResponse,
+)
 from eolab_app.source_files import SourceFileError
 
 
@@ -41,6 +47,58 @@ def create_vector_sampling_router(
         tags=["sampling"],
         route_class=PrivateVectorRoute,
     )
+
+    @router.post("/parcels/validate-id", response_model=ParcelIdValidationResponse)
+    async def validate_parcel_ids(
+        payload: ParcelIdRequest, request: Request
+    ) -> ParcelIdValidationResponse:
+        """Validate one original parcel ID field across an entire Catalog layer.
+
+        Args:
+            payload: Catalog identity and one original field; filters are not accepted.
+            request: HTTP disconnect observer for the supervised native read.
+
+        Returns:
+            Complete-layer validation and the authoritative source descriptor.
+
+        Raises:
+            HTTPException: The client disconnected or the source/read is unavailable.
+            VectorFeatureError: Safe source, validation or Jobs error translated by the route.
+        """
+        try:
+            return await run_until_http_disconnect(
+                request, service.validate_parcel_ids(payload)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Parcel ID validation cancelled") from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
+
+    @router.post("/parcels/rows", response_model=ParcelRowsResponse)
+    async def parcel_rows(
+        payload: ParcelRowsRequest, request: Request
+    ) -> ParcelRowsResponse:
+        """Return original parcel IDs and display attributes after exact filtering.
+
+        Args:
+            payload: Catalog source, ordinary filter, original fields and page bounds.
+            request: HTTP disconnect observer for the supervised native read.
+
+        Returns:
+            One complete page, including empty success, with source and next offset.
+
+        Raises:
+            HTTPException: The client disconnected or the source/read is unavailable.
+            VectorFeatureError: Safe source, field or Jobs error translated by the route.
+        """
+        try:
+            return await run_until_http_disconnect(
+                request, service.read_parcel_rows(payload)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Parcel reading cancelled") from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
 
     def read_source_owner(
         payload: object, request: Request, response: Response
