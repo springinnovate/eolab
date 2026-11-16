@@ -47,12 +47,12 @@ final class VectorFeatureInfoOutputFormatTest {
 
     /** Keep the private format selection separate from ordinary public JSON requests. */
     @Test
-    void selectsOnlyPrivateFormatAndReturnsJson() {
+    void selectsOnlyPrivateFormatAndReturnsItsMimeType() {
         var format = new VectorFeatureInfoOutputFormat(configuration());
         assertTrue(format.canProduce("application/vnd.eolab.feature-info+json"));
         assertFalse(format.canProduce("application/json"));
         assertFalse(format.canProduce(null));
-        assertEquals("application/json", format.getContentType());
+        assertEquals(VectorFeatureInfoOutputFormat.FORMAT, format.getContentType());
         assertEquals("UTF-8", format.getCharset());
     }
 

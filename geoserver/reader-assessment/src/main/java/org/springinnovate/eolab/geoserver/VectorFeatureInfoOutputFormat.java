@@ -42,12 +42,12 @@ public final class VectorFeatureInfoOutputFormat extends GetFeatureInfoOutputFor
     private final GeoServer geoServer;
 
     /**
-     * Reuse the deployed GeoServer JSON encoder and its attribute formatting settings.
+     * Register the private WMS format and reuse GeoServer JSON attribute settings.
      *
      * @param geoServer current GeoServer configuration
      */
     public VectorFeatureInfoOutputFormat(GeoServer geoServer) {
-        super("application/json");
+        super(FORMAT);
         this.geoServer = geoServer;
     }
 

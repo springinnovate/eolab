@@ -283,7 +283,10 @@ def create_wms_proxy_router(
             request: Incoming WMS request.
 
         Returns:
-            GeoServer response body, status, and safe headers.
+            GeoServer response body, status, and safe headers. Successful vector
+            bounds responses expose the public JSON media type while retaining
+            charset parameters for unchanged bodies. Shared responses remain
+            unchanged.
 
         Raises:
             HTTPException: If the request violates the public contract, its
@@ -440,8 +443,13 @@ def create_wms_proxy_router(
             response_media_type = geoserver_response.headers.get(
                 "content-type",
                 "",
-            ).partition(";")[0].lower()
-            if response_media_type != "application/json":
+            ).partition(";")[0].strip().lower()
+            expected_media_type = (
+                "application/vnd.eolab.feature-info+json"
+                if normalized_query.get("vector_feature_bounds") == "true"
+                else "application/json"
+            )
+            if response_media_type != expected_media_type:
                 raise HTTPException(
                     status_code=502,
                     detail="The rendering service returned invalid feature information",
@@ -506,6 +514,15 @@ def create_wms_proxy_router(
                     502, "The rendering service returned invalid capabilities."
                 ) from error
         result = safe_geoserver_response(geoserver_response)
+        if (
+            operation == "getfeatureinfo"
+            and geoserver_response.is_success
+            and normalized_query.get("vector_feature_bounds") == "true"
+        ):
+            # The queue can share the upstream response between callers. Only
+            # normalize this caller's new response, after any UTF-8 re-encoding.
+            _, separator, parameters = result.headers["content-type"].partition(";")
+            result.headers["content-type"] = f"application/json{separator}{parameters}"
         if private:
             result.headers["Cache-Control"] = "private, no-store"
         return result
