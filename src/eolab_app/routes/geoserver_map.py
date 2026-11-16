@@ -1,4 +1,4 @@
-"""Shared HTTP forwarding for cancellable GeoServer GetMap operations."""
+"""HTTP forwarding for cancellable GeoServer maps and feature inspections."""
 
 from collections.abc import Awaitable
 
@@ -100,6 +100,50 @@ async def forward_geoserver_get_map(
             detail="The rendering service is unavailable",
         ) from error
     return safe_geoserver_response(geoserver_response)
+
+
+async def forward_geoserver_feature_info(
+    request: Request,
+    operation: Awaitable[httpx2.Response],
+) -> httpx2.Response:
+    """Await one feature inspection without counting it as a map render.
+
+    The WMS route validates the returned feature payload. Queued work is canceled
+    when its client disconnects; the queue retains started HTTP work and its
+    source leases through the upstream response or existing execution deadline.
+
+    Args:
+        request: Browser request that owns the inspection.
+        operation: Already-authorized inspection submitted to the shared queue.
+
+    Returns:
+        Upstream response for the owning route's feature-payload validation.
+
+    Raises:
+        HTTPException: If the client disconnects, admission fails, or execution
+            exceeds its deadline.
+        httpx2.RequestError: If the upstream HTTP transport fails.
+    """
+    try:
+        return await run_until_http_disconnect(request, operation)
+    except HttpClientDisconnectedError as error:
+        raise HTTPException(
+            499,
+            "The feature inspection request was canceled",
+            headers={"Cache-Control": "private, no-store"},
+        ) from error
+    except RenderQueueUnavailableError as error:
+        raise HTTPException(
+            503,
+            "Feature inspection is busy. Try again shortly.",
+            headers={"Retry-After": "1", "Cache-Control": "private, no-store"},
+        ) from error
+    except RenderExecutionTimeoutError as error:
+        raise HTTPException(
+            504,
+            "Feature inspection exceeded its time limit.",
+            headers={"Cache-Control": "private, no-store"},
+        ) from error
 
 
 def safe_geoserver_response(geoserver_response: httpx2.Response) -> Response:
