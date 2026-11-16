@@ -32,6 +32,8 @@ async function fetchRasterMetadata(url, body, signal, fetcher) {
 }
 
 /** Read source metadata, optionally describing its pixel size in another CRS.
+ * Upload versions match their immutable upload ID; other sources use a 64-digit
+ * hexadecimal identity supplied by their owner.
  * @param {Object} source Catalog, uploaded raster or run-file identity.
  * @param {AbortSignal} signal Cancellation of an obsolete layer request.
  * @param {typeof fetch} [fetcher=globalThis.fetch] HTTP implementation.
@@ -43,7 +45,10 @@ export async function describeRasterSource(source, signal, fetcher = globalThis.
     const body = {source: rasterSourceReference(source)};
     if (targetCrs !== null) body.targetCrs = targetCrs;
     const metadata = await fetchRasterMetadata("/api/raster-analysis/sources", body, signal, fetcher);
-    if (rasterSourceKey(metadata) !== rasterSourceKey(source) || !/^[a-f0-9]{64}$/.test(metadata.version) ||
+    const versionMatchesSource = body.source.kind === "uploadedRaster"
+        ? metadata.version === body.source.uploadId
+        : /^[a-f0-9]{64}$/.test(metadata.version);
+    if (rasterSourceKey(metadata) !== rasterSourceKey(source) || !versionMatchesSource ||
         ![metadata.width, metadata.height, metadata.bands].every(n => Number.isSafeInteger(n) && n > 0) ||
         !["pixels", "statistics"].every(name => typeof metadata.capabilities?.[name]?.supported === "boolean") ||
         metadata.bounds !== null && (!Array.isArray(metadata.bounds) || metadata.bounds.length !== 4 || !metadata.bounds.every(Number.isFinite))) {

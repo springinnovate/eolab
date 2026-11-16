@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { ModelOutputLayers, artifactLayerKey } from "../src/model-output-preview/controller.js";
 import { readArtifactPreview, validateArtifactPreview } from "../src/model-output-preview/api.js";
 import { fileManifest, job } from "../test-support/models/fixtures.js";
+import { describeRasterSource } from "../src/raster/source-api.js";
 
 /** Compose display ownership against explicit map and HTTP boundary fakes.
  * @param {Object} [overrides={}] Optional transport replacements.
@@ -378,6 +379,23 @@ test("raster display delegates to the common raster owner using original identit
     attachment.lifecycle.removed(); assert.equal(h.owner.layers.size, 0);
 });
 
+
+test("a valid source metadata response cannot substitute a different run artifact checksum", async () => {
+    const h = fixture({
+        describe: (source, signal) => describeRasterSource(source, signal, async () => Response.json({
+            source, version: "b".repeat(64), bounds: [0, 0, 1, 1], width: 2, height: 2, bands: 1,
+            capabilities: {pixels: {supported: true}, statistics: {supported: true}},
+        })),
+        addRaster: () => assert.fail("Mismatched run output must not reach map attachment"),
+    });
+    h.file.mediaType = "image/tiff";
+    h.file.sha256 = "a".repeat(64);
+    await h.owner.show(h.run, h.file);
+    assert.deepEqual(h.owner.state(h.run.jobId, h.file.artifactId, h.file), {
+        canShow: true, onMap: false, busy: false,
+        error: "This raster result changed. Reopen the run and try again.",
+    });
+});
 
 test("closing during raster publication cancels attachment without removing an unattached layer", async () => {
     let finish, presentation;
