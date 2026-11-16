@@ -11,6 +11,8 @@ inputs:
     type: summary_area
     label: Analysis area
   references:
+    # Raster references use valid finite non-zero cells, including negative values.
+    # Zero, NoData and nonfinite values are excluded. Align with nearest neighbor.
     type: habitat_references
     label: Reference sites
   habitat_mask:

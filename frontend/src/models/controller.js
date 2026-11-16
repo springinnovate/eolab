@@ -973,6 +973,7 @@ export class ModelsController {
      * The exact recipe must remain available. Choosing a vector view explicitly
      * switches a captured area to that view's current filter. Registered setup
      * integrations restore their own values before asynchronous choices reload.
+     * Reference rasters retain nearest-neighbor alignment in the new run.
      * @return {Promise<void>} Completion after the copied setup loads its current source choices.
      */
     async duplicateRun() {
@@ -1022,7 +1023,9 @@ export class ModelsController {
         draft.integration?.restoreState(draft, saved.inputs);
         const preparationName = Object.keys(model.inputs).find(name => model.inputs[name].type === "raster_preparation");
         if (preparationName) {
-            for (const source of getRasterPreparationSources(draft)) source.state.resampling = saved.inputs[preparationName].resampling[source.key];
+            for (const source of getRasterPreparationSources(draft)) {
+                if (source.key !== "reference_mask") source.state.resampling = saved.inputs[preparationName].resampling[source.key];
+            }
         }
         this.refreshMapLayers();
         this.render(); this.view.focusPage();

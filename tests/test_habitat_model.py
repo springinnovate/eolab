@@ -171,7 +171,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     habitat_definition: ModelDefinition,
     reference_kind: Literal["raster", "uploadedRaster", "vector", "polygonArea"],
 ) -> None:
-    """Align mismatched inputs and match an independently prepared library run.
+    """Match nonzero raster references and polygons to an independent binary run.
 
     Args:
         tmp_path: Isolated source files, direct library outputs and worker artifacts.
@@ -179,6 +179,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         reference_kind: Coarse catalog/uploaded raster, filtered vector, or drawing.
             The drawn case uses independent polygons for both area and references.
             The upload case admits a Byte mask and deletes its public source before execution.
+            The catalog case includes negative references and invalid nonzero cells.
     """
     rows, columns = np.indices((16, 24))
     environment = rows * 0.3 + columns * 0.07
@@ -197,9 +198,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         - 0.15 * habitat_type
         + 0.03 * np.cos(rows * 2 + columns)
         + 0.1 * (rows % 3) * ~references,
-        "references": np.where(
-            references, 1, 0 if reference_kind == "uploadedRaster" else 2
-        ),
+        "references": references.astype("float64"),
         "assessment": np.where(columns < 22, 1, 2),
     }
     grid = from_origin(0, 16000, 1000, 1000)
@@ -231,6 +230,11 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         elif name in {"habitat_type", "references", "assessment"}:
             data = data[::2, ::2]
             spacing = 2000
+        if name == "references" and reference_kind == "raster":
+            # Expected membership above is independent of these source encodings.
+            data = data.copy()
+            data[:3] = np.resize([1, 2, -3], data[:3].shape)
+            data[3:, :5] = [-9999, np.nan, np.inf, -np.inf, 7]
         source_dtype = (
             "uint8"
             if reference_kind == "uploadedRaster" and name == "references"
@@ -246,8 +250,15 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             dtype=source_dtype,
             crs="EPSG:6933",
             transform=from_origin(0, 16000, spacing, spacing),
+            nodata=(
+                -9999 if name == "references" and reference_kind == "raster" else None
+            ),
         ) as destination:
             destination.write(data.astype(source_dtype), 1)
+            if name == "references" and reference_kind == "raster":
+                valid = np.full(data.shape, 255, dtype="uint8")
+                valid[3:, 4] = 0
+                destination.write_mask(valid)
     sources = {
         name: {
             "collectionId": "eolab-mounted-geotiffs",
@@ -602,12 +613,16 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         "wrong-crs",
         "automatic-whole-raster",
         "automatic-mask-method",
+        "reference-bilinear",
+        "reference-cubic",
+        "reference-average",
+        "reference-mode",
     ],
 )
 def test_habitat_rejects_ambiguous_stack_or_preparation(
     habitat_definition: ModelDefinition, invalid: str
 ) -> None:
-    """Reject ambiguous variables, incomplete resampling and the wrong target CRS.
+    """Reject ambiguous variables, invalid resampling and the wrong target CRS.
 
     Args:
         habitat_definition: Installed Habitat recipe with fixture settings.
@@ -632,6 +647,8 @@ def test_habitat_rejects_ambiguous_stack_or_preparation(
     }
     if invalid == "missing-resampling":
         del preparation["resampling"]["reference_mask"]
+    elif invalid.startswith("reference-"):
+        preparation["resampling"]["reference_mask"] = invalid.removeprefix("reference-")
     request = ModelRunRequest(
         requestId="invalid-habitat-run",
         label="Invalid stack",

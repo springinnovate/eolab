@@ -210,11 +210,9 @@ export class ModelsView {
         sourceOrigin.hidden = true;
         group.append(sourceOrigin);
         const maskGroup = this.element("div", "", "models-vector");
-        const preparation = references ? this.buildRasterResampling(maskGroup, name,
-            resampling => this.handlers.onInput(name, {resampling})) : {resampling: null, resamplingField: null};
         const rasterReason = this.element("p", "", "models-help"); rasterReason.id = `models-${name}-raster-reason`;
         const maskHint = this.element("p", references
-            ? "Cells equal to 1 identify reference sites. Other values and NoData are excluded. Only reference sites inside the analysis area are used. Nearest neighbor preserves mask values; interpolation can change which cells equal 1."
+            ? "Non-zero cells are reference sites; NoData is ignored. Negative values are included; nonfinite values are excluded. Nearest neighbor preserves reference sites when aligning the raster. Only sites inside the analysis area are used."
             : "Flow starts in valid cells greater than zero. Zero, negative and NoData cells are excluded.", "models-help");
         maskHint.id = `models-${name}-raster-help`;
         maskGroup.append(rasterReason, maskHint);
@@ -238,7 +236,7 @@ export class ModelsView {
         const mapHelp = this.element("p", "", "models-help");
         group.append(vectorGroup, areaDescription, mapHelp);
         if (input.type === "mask_source") group.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
-        return {group, source, sourceOrigin, maskGroup, rasterReason, maskHint, ...preparation, vectorGroup, selectionCard, selectedCount, editFilter,
+        return {group, source, sourceOrigin, maskGroup, rasterReason, maskHint, vectorGroup, selectionCard, selectedCount, editFilter,
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
 
@@ -416,10 +414,6 @@ export class ModelsView {
         controls.sourceOrigin.hidden = !controls.sourceOrigin.textContent;
         controls.source.setAttribute("aria-describedby", [controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id,
             rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : ""].filter(Boolean).join(" "));
-        if (controls.resampling) {
-            controls.resampling.value = value.resampling;
-            controls.resampling.disabled = !rasterActive;
-        }
         controls.rasterReason.textContent = value.maskRaster?.available === false ? "This raster is no longer available. Choose another input." : "";
         controls.editFilter.hidden = drawn;
         if (drawn) {
@@ -682,7 +676,7 @@ export class ModelsView {
                 const handler = getModelInputHandler(input.type);
                 const description = handler ? handler.describe(value, input, {describeFilter: describeModelFilter}) :
                     input.type === "optional_raster" ? value ? describeModelRaster(value, state.runs) : "None" :
-                    input.type === "habitat_references" ? value.kind === "raster" ? `${describeModelRaster(value.source, state.runs)} · cells equal to 1` :
+                    input.type === "habitat_references" ? value.kind === "raster" ? `${describeModelRaster(value.source, state.runs)} · valid finite non-zero cells` :
                         describeModelArea(value.kind === "vector" ? {kind: "catalogSelection", selection: value.selection} : value) :
                     input.type === "mask_source" && value.kind === "catalogRaster" ?
                     `${value.source.collectionId} / ${value.source.itemId} · valid cells greater than zero` :

@@ -95,6 +95,7 @@ export function getRasterPreparationSources(draft) {
 
 /** Capture the chosen grid and each active raster's resampling method.
  * Metadata lookup failures do not prevent a user from choosing a custom grid.
+ * Habitat reference masks always use nearest neighbor to preserve membership.
  * @param {Object} value Editable grid choices.
  * @param {Object} draft Model draft supplying active raster roles.
  * @return {{crs:string,pixelSize:number[],origin:number[],resampling:Object}} Explicit preparation request.
@@ -104,7 +105,8 @@ export function captureRasterPreparation(value, draft) {
     if (!value.crs.trim()) throw new Error("Choose an output projection.");
     if (!value.pixelSize.every(size => Number.isFinite(size) && size > 0)) throw new Error("Choose a pixel size or enter positive pixel width and height.");
     return {crs: value.crs, pixelSize: [...value.pixelSize], origin: [...value.origin],
-        resampling: Object.fromEntries(getRasterPreparationSources(draft).map(source => [source.key, source.state.resampling]))};
+        resampling: Object.fromEntries(getRasterPreparationSources(draft).map(source =>
+            [source.key, source.key === "reference_mask" ? "nearest" : source.state.resampling]))};
 }
 
 /** Capture an available raster choice using the ordinary path-free source contract.

@@ -243,7 +243,8 @@ for (const [label, areaIndex, referenceIndex, withMask] of [
     const references = h.view.setup.inputs.references;
     if (referenceIndex === null) {
         edit(references.source, `raster:${modelSourceKey(h.context.rasters[3])}`);
-        assert.match(references.maskHint.textContent, /equal to 1/);
+        assert.match(references.maskHint.textContent, /^Non-zero cells are reference sites; NoData is ignored\./);
+        assert.match(references.maskHint.textContent, /Negative values are included; nonfinite values are excluded\./);
         assert.doesNotMatch(references.maskHint.textContent, /greater than zero/);
     } else {
         await chooseVector(h, "references", h.context.vectors[referenceIndex], "South");
@@ -252,7 +253,7 @@ for (const [label, areaIndex, referenceIndex, withMask] of [
     }
     assert.equal(references.source.required, true);
     assert.equal(references.maskGroup.hidden, referenceIndex !== null);
-    assert.equal(references.resampling.disabled, referenceIndex !== null);
+    assert.equal(references.resampling, undefined);
     assert.equal(h.view.setup.inputs.habitat_mask.source.required, false);
     if (withMask) edit(h.view.setup.inputs.habitat_mask.source, modelSourceKey(h.context.rasters[4]));
     assert.equal(h.requests.length, 0); assert.equal(h.view.setup.run.disabled, false);
@@ -306,7 +307,7 @@ test("uploaded raster reference sites keep their origin in choices, saved runs a
     await h.controller.submit();
     assert.deepEqual(h.requests[0].inputs.references, {kind: "raster", source});
     const saved = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
-    assert.ok(saved.includes("Uploaded by you · Raster mask · cells equal to 1"));
+    assert.ok(saved.includes("Uploaded by you · Raster mask · valid finite non-zero cells"));
     assert.ok(saved.every(text => !text.includes("undefined")));
     await h.controller.duplicateRun(); await settle();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-upload").inputs.references, {kind: "raster", source});
@@ -505,7 +506,7 @@ test("Habitat captures independent resampling and duplicates the exact chosen gr
     assert.equal(grid.description.hidden, false); assert.doesNotMatch(grid.description.textContent, /Grid origin|Every raster/);
     const count = lookups.length;
     edit(stack.predictors[0].resampling, "bilinear"); edit(stack.predictors[1].resampling, "mode");
-    edit(stack.responses[0].resampling, "average"); edit(references.resampling, "nearest"); edit(mask.resampling, "cubic");
+    edit(stack.responses[0].resampling, "average"); edit(mask.resampling, "cubic");
     edit(stack.predictors[1].name, "renamed_class", "input");
     await settle();
     assert.equal(lookups.length, count, "Methods and variable names do not reload immutable grid metadata");
@@ -525,7 +526,9 @@ test("Habitat captures independent resampling and duplicates the exact chosen gr
     const expected = {crs: "EPSG:6933", pixelSize: [12.5, 25.25], origin: [0, 0],
         resampling: {predictor_0: "bilinear", predictor_1: "mode", response_0: "average", reference_mask: "nearest", habitat_mask: "cubic"}};
     assert.deepEqual(h.requests[0].inputs.preparation, expected);
+    h.controller.state.invocation.inputs.preparation.resampling.reference_mask = "bilinear";
     await h.controller.duplicateRun(); await settle();
+    assert.equal(h.controller.state.draft.inputs.references.resampling, "nearest");
     h.context.rasters.reverse(); h.controller.refreshMapLayers();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-grid").inputs.preparation, expected);
     assert.equal(h.view.setup.inputs.stack.responses[0].resampling.value, "average");
@@ -823,7 +826,7 @@ test("direct spatial choices retain opaque view identity, independent filters an
     assert.equal(h.doc.activeElement, referenceSource);
     assert.match(controls.area.filterDescription.textContent, /North/);
     assert.match(controls.references.filterDescription.textContent, /South/);
-    assert.equal(controls.references.resampling.disabled, true);
+    assert.equal(controls.references.resampling, undefined);
     await h.controller.openVectorFilter("references");
     const filter = structuredClone(second.filter); filter.rules[0].value = "West";
     await h.filters.at(-1).apply(filter); h.filters.at(-1).complete(); await settle();
@@ -844,7 +847,7 @@ test("direct spatial choices retain opaque view identity, independent filters an
     assert.equal(h.controller.state.draft.inputs.references.area, null);
     assert.equal(h.view.setup.inputs.references.source.value, "");
     assert.equal(h.view.setup.inputs.references.selectionCard.hidden, true);
-    assert.equal(h.view.setup.inputs.references.resampling.disabled, true);
+    assert.equal(h.view.setup.inputs.references.resampling, undefined);
     assert.equal(h.view.setup.run.disabled, true);
     assert.deepEqual(h.requests[0].inputs, captured);
 });
@@ -869,7 +872,7 @@ test("manual Ecosystem inputs select filtered drawn layers and capture them toge
     assert.equal(sites.selectedCount.textContent, "1 of 3 polygons selected");
     assert.match(sites.filterDescription.textContent, /layer's filter/);
     assert.equal(sites.editFilter.hidden, true);
-    assert.equal(sites.resampling.disabled, true);
+    assert.equal(sites.resampling, undefined);
     assert.equal(h.view.setup.run.disabled, false);
     assert.deepEqual(h.uploads, []);
 

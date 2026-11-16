@@ -199,7 +199,15 @@ HabitatStack = HabitatRasterStack | HabitatEarthEngineStack
 
 
 class RasterReferenceSites(HabitatSchema):
-    """Use cells equal to one after the selected resampling as reference sites."""
+    """Use valid finite non-zero raster cells as reference sites.
+
+    Nearest-neighbor alignment preserves source membership. Zero, NoData and
+    nonfinite cells are excluded; valid negative values are reference sites.
+
+    Attributes:
+        kind: Selects the literal string "raster".
+        source: Catalog or session-owned raster selected for reference sites.
+    """
 
     kind: Literal["raster"]
     source: RasterSourceReference
@@ -240,6 +248,7 @@ class HabitatPreparation(HabitatSchema):
         origin: Grid intersection anchoring the AOI's outward-snapped bounds.
         resampling: Methods keyed by predictor_N, response_N, reference_mask or
             habitat_mask, matching the selected source roles exactly.
+            Reference masks require nearest-neighbor alignment.
             Automatic bands use nearest-neighbor resampling; in automatic mode
             this mapping contains only the user-selected raster masks.
     """
@@ -337,10 +346,16 @@ class HabitatRequest(HabitatSchema):
 
         Raises:
             ValueError: If a method is missing or names an inactive source, or
-                the requested CRS differs from the model's requirement.
+                reference sites do not use nearest-neighbor alignment, or the
+                requested CRS differs from the model's requirement.
         """
         if set(self.preparation.resampling) != set(self.get_raster_sources()):
             raise ValueError("Choose one resampling method for each selected raster.")
+        if (
+            isinstance(self.references, RasterReferenceSites)
+            and self.preparation.resampling["reference_mask"] != "nearest"
+        ):
+            raise ValueError("Reference sites require nearest-neighbor resampling.")
         if CRS.from_user_input(self.preparation.crs) != CRS.from_user_input(
             self.settings.required_crs
         ):
