@@ -18,6 +18,14 @@ from eolab_app.rendering.errors import (
     PublishedLayerRequestError,
 )
 from eolab_app.rendering.ports import MapRenderQueue, PublishedLayerRegistry
+from eolab_app.rendering.render_queue import (
+    RenderExecutionTimeoutError,
+    RenderQueueUnavailableError,
+)
+from eolab_app.routes.http_disconnect import (
+    HttpClientDisconnectedError,
+    run_until_http_disconnect,
+)
 from eolab_app.routes.geoserver_map import (
     forward_geoserver_get_map,
     geoserver_forward_headers,
@@ -248,11 +256,13 @@ def create_wms_proxy_router(
         geoserver_internal_url: Internal GeoServer base URL.
         published_layers: Feature-owned current-process layer registries.
         get_map_request_tracker: Bounded GetMap request observer.
-        render_queue: GetMap capacity shared with composite map tiles.
+        render_queue: Shared GetMap and GetFeatureInfo capacity, also used by
+            composite map tiles.
         authorize_layers: Current-session source-access check supplied by composition.
         hidden_layer: Identifies private publications omitted from public capabilities.
         use_layers: Retain layer resources using the originating request's ownership
-            credentials until the upstream read finishes.
+            credentials until the upstream HTTP operation ends, including its
+            execution deadline.
             Called inside the render queue so resources outlive browser cancellation.
 
     Returns:
@@ -367,18 +377,18 @@ def create_wms_proxy_router(
 
         forwarded_headers = geoserver_forward_headers(request)
         try:
-            if operation == "getmap":
+            if operation in {"getmap", "getfeatureinfo"}:
                 # Include the prepared query so server-owned vector filters and
                 # every forwarded header remain part of the response identity.
-                render_request_key = json.dumps(
+                layer_request_key = json.dumps(
                     [
                         internal_wms_url,
                         sorted((name.lower(), value) for name, value in query_entries),
                         sorted(forwarded_headers.items()),
                     ]
                 )
-                async def load_map() -> httpx2.Response:
-                    """Retain layer resources while sending the authorized map request.
+                async def send_layer_request() -> httpx2.Response:
+                    """Retain source files for the admitted map or inspection HTTP operation.
 
                     Returns:
                         Completed upstream response under the shared render queue.
@@ -400,17 +410,22 @@ def create_wms_proxy_router(
                             headers=forwarded_headers,
                         )
 
-                result = await forward_geoserver_get_map(
-                    request,
-                    render_queue.run(
-                        load_map,
-                        request_key=render_request_key,
-                    ),
-                    get_map_request_tracker,
+                queued_request = render_queue.run(
+                    send_layer_request,
+                    request_key=layer_request_key,
                 )
-                if private:
-                    result.headers["Cache-Control"] = "private, no-store"
-                return result
+                if operation == "getmap":
+                    result = await forward_geoserver_get_map(
+                        request,
+                        queued_request,
+                        get_map_request_tracker,
+                    )
+                    if private:
+                        result.headers["Cache-Control"] = "private, no-store"
+                    return result
+                geoserver_response = await run_until_http_disconnect(
+                    request, queued_request
+                )
             else:
                 async with use_layers(layer_names, request) if use_layers else nullcontext():
                     if any(name.lower() == "sld_body" for name, _ in query_entries):
@@ -421,6 +436,24 @@ def create_wms_proxy_router(
                         geoserver_response = await geoserver_client.get(
                             internal_wms_url, params=query_entries, headers=forwarded_headers,
                         )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(
+                499,
+                "The feature inspection request was canceled",
+                headers={"Cache-Control": "private, no-store"},
+            ) from error
+        except RenderQueueUnavailableError as error:
+            raise HTTPException(
+                503,
+                "Feature inspection is busy. Try again shortly.",
+                headers={"Retry-After": "1", "Cache-Control": "private, no-store"},
+            ) from error
+        except RenderExecutionTimeoutError as error:
+            raise HTTPException(
+                504,
+                "Feature inspection exceeded its time limit.",
+                headers={"Cache-Control": "private, no-store"},
+            ) from error
         except httpx2.RequestError as error:
             raise HTTPException(
                 status_code=502,
