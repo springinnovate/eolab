@@ -40,6 +40,9 @@ from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.source_files import LeasedSourceFiles, SourceFileError
 from eolab_app.upload_storage import UploadStorage, UploadError
 
+METADATA_QUEUE_CAPACITY = 32
+METADATA_QUEUE_WAIT_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class RasterReadSource:
@@ -271,6 +274,7 @@ class RasterSourceAccess:
         self.catalog, self.files = catalog, files
         self.uploads = uploads
         self._metadata_slots = asyncio.Semaphore(2)
+        self._waiting_metadata = 0
 
     @asynccontextmanager
     async def open(
@@ -423,6 +427,43 @@ class RasterSourceAccess:
             True,
         )
 
+    @asynccontextmanager
+    async def _admit_metadata_read(self) -> AsyncIterator[None]:
+        """Wait for and hold one of two original-metadata readers.
+
+        Up to 32 requests may wait in arrival order for at most 30 seconds.
+        Waiting requests acquire no source or lease. Active readers retain their
+        slot through native exit and source cleanup, including on cancellation.
+
+        Yields:
+            None when this request may acquire and inspect its source.
+
+        Raises:
+            SourceFileError: If the waiting queue is full or its deadline expires.
+            asyncio.CancelledError: If the caller cancels waiting or active work.
+        """
+        if self._waiting_metadata >= METADATA_QUEUE_CAPACITY:
+            raise SourceFileError(
+                "Too many raster information requests are waiting. Try again shortly.",
+                429,
+            )
+        self._waiting_metadata += 1
+        try:
+            try:
+                async with asyncio.timeout(METADATA_QUEUE_WAIT_SECONDS):
+                    await self._metadata_slots.acquire()
+            except TimeoutError as error:
+                raise SourceFileError(
+                    "The raster information request waited too long to start. Try again shortly.",
+                    429,
+                ) from error
+        finally:
+            self._waiting_metadata -= 1
+        try:
+            yield
+        finally:
+            self._metadata_slots.release()
+
     async def describe(
         self,
         reference: RasterAnalysisSourceReference,
@@ -444,14 +485,12 @@ class RasterSourceAccess:
 
         Raises:
             RasterFeatureError: On unsupported or unavailable raster content.
-            SourceFileError: On failed authorization, capacity or lifetime checks.
+            SourceFileError: On failed authorization, queue capacity, wait deadline
+                or lifetime checks.
+            asyncio.CancelledError: After active native reading and source cleanup stop.
         """
-        if self._metadata_slots.locked():
-            raise SourceFileError(
-                "Raster metadata checks are busy. Try again shortly.", 429
-            )
         async with (
-            self._metadata_slots,
+            self._admit_metadata_read(),
             self.open(reference, owner, upload_owner) as source,
         ):
             try:
