@@ -93,7 +93,6 @@ article.models-result > .models-actions { margin: 0; }
 .models-details summary { cursor: pointer; color: var(--brand-hover); }
 .models-details dd { margin: 3px 0 10px; overflow-wrap: anywhere; }
 .models-details dt { font-weight: 600; }
-.models-output-mask { min-width: 0; overflow-wrap: anywhere; }
 .models-error { color: var(--status-danger); overflow-wrap: anywhere; }
 .models-delete { margin: 4px 0 10px; min-width: 0; }
 .models-action-danger { color: var(--status-danger); }

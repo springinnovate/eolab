@@ -199,11 +199,16 @@ test("Habitat starts with all datasets selected in collapsed role groups", async
     h.controller.destroy();
 });
 
-test("Habitat keeps reference choices visible and reports the optional output mask while Advanced is closed", async t => {
+test("Habitat keeps reference choices and the independent optional output mask in the main form", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
     const {references, habitat_mask: mask, stack, area} = h.view.setup.inputs;
-    assert.equal(mask.root.open, false);
-    assert.equal(mask.summary.textContent, "Advanced");
+    assert.equal(mask.root.parentElement, h.view.setup.fields);
+    for (const control of [mask.source, references.source, area.preparationSelection.source]) {
+        for (let node = control; node && node !== h.view.setup.fields; node = node.parentElement) {
+            assert.notEqual(node.tagName, "details");
+            assert.equal(node.hidden, false);
+        }
+    }
     assert.equal(mask.root.contains(mask.source), true);
     assert.equal(mask.root.contains(references.source), false);
     assert.equal(mask.root.contains(area.preparationSelection.source), false);
@@ -216,12 +221,9 @@ test("Habitat keeps reference choices visible and reports the optional output ma
     await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const reference = captureModelSubmission(h.controller.state.draft, "before-output-mask").inputs.references;
-    mask.root.open = true;
     edit(mask.source, modelSourceKey(h.context.rasters[4]));
     edit(mask.resampling, "mode");
-    mask.root.open = false;
-    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask");
-    assert.equal(mask.root.open, false);
+    assert.equal(mask.source.value, modelSourceKey(h.context.rasters[4]));
     const selected = captureModelSubmission(h.controller.state.draft, "selected-output-mask").inputs;
     assert.deepEqual(selected.references, reference);
     assert.deepEqual(selected.habitat_mask, {collectionId: h.context.rasters[4].collectionId, itemId: h.context.rasters[4].itemId});
@@ -231,17 +233,17 @@ test("Habitat keeps reference choices visible and reports the optional output ma
     const manual = captureModelSubmission(h.controller.state.draft, "manual-output-mask").inputs;
     assert.deepEqual(manual.references, reference);
     assert.deepEqual(manual.habitat_mask, selected.habitat_mask);
-    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask");
+    assert.equal(mask.source.value, modelSourceKey(h.context.rasters[4]));
+    assert.equal(mask.root.hidden, false);
     edit(stack.source, "earthEngine"); await settle();
     const automatic = captureModelSubmission(h.controller.state.draft, "automatic-output-mask").inputs;
     assert.deepEqual(automatic.references, reference);
     assert.deepEqual(automatic.habitat_mask, selected.habitat_mask);
-    assert.equal(mask.root.open, false);
+    assert.equal(mask.source.value, modelSourceKey(h.context.rasters[4]));
+    assert.equal(mask.root.hidden, false);
 
-    mask.root.open = true;
     edit(mask.source, "");
-    mask.root.open = false;
-    assert.equal(mask.summary.textContent, "Advanced");
+    assert.equal(mask.source.value, "");
     const cleared = captureModelSubmission(h.controller.state.draft, "cleared-output-mask").inputs;
     assert.equal(cleared.habitat_mask, null);
     assert.deepEqual(cleared.references, reference);
@@ -470,18 +472,22 @@ test("Habitat keeps raster reference and assessment choices separate through dup
     await settle();
     await h.controller.submit(); await h.controller.duplicateRun();
     const mask = h.view.setup.inputs.habitat_mask;
-    assert.equal(mask.root.open, false);
-    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask");
+    assert.equal(mask.root.parentElement, h.view.setup.fields);
+    assert.equal(mask.root.hidden, false);
+    assert.equal(mask.source.value, modelSourceKey(h.context.rasters[4]));
     assert.equal(mask.source.parentElement.textContent, "Limit output to a raster mask (optional)");
     assert.equal(h.controller.state.draft.model.inputs.habitat_mask.label, "Habitat assessment mask");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-masks").inputs, h.requests[0].inputs);
     h.context.rasters.pop(); h.controller.refreshMapLayers();
-    assert.equal(mask.root.open, false);
-    assert.equal(mask.summary.textContent, "Advanced · Output mask: Assessment mask (unavailable)");
+    const unavailableMask = mask.source.querySelectorAll("option").find(option => option.value === mask.source.value);
+    assert.equal(unavailableMask.disabled, true);
+    assert.match(unavailableMask.textContent, /Assessment mask.*unavailable/);
+    assert.equal(mask.reason.hidden, false);
+    assert.match(mask.reason.textContent, /no longer available/);
     assert.equal(h.view.setup.run.disabled, true);
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "missing-mask"), /available|Map layers|mask/i);
     edit(h.view.setup.inputs.habitat_mask.source, "");
-    assert.equal(mask.summary.textContent, "Advanced");
+    assert.equal(mask.source.value, "");
     assert.equal(h.view.setup.run.disabled, false);
     const inputs = captureModelSubmission(h.controller.state.draft, "without-mask").inputs;
     assert.deepEqual(inputs.references, h.requests[0].inputs.references); assert.equal(inputs.habitat_mask, null);
