@@ -470,6 +470,28 @@ implementation understand what this control does and what will happen next?**
 - Review wording in the rendered UI, including accessible names and surrounding
   controls. Apply this rule to the requested work without unrelated text churn.
 
+## User-visible correctness and audit coverage
+
+During audits and changes affecting data interpretation or presentation:
+
+- Establish expected results from the user's task and representative
+  input data. Do not treat existing implementation or test expectations
+  as proof that the behavior is correct.
+- Challenge automatic inference from names, dates, units, grouping,
+  sorting and defaults with plausible counterexamples.
+- Verify actual user-visible meaning: values, labels, units, positions,
+  selection and omissions. Successful requests, working controls and
+  agreement between components do not alone establish correctness.
+- Assign ownership of complete, bounded user workflows across component
+  boundaries. No reviewer needs to read the entire repository.
+- Independent review must challenge the proposed acceptance criteria
+  as well as the implementation. An extra pass must introduce different
+  data, assumptions or a different verification method.
+- Report which workflows, data cases and outcomes were exercised,
+  and what remains untested. Passing test counts are not coverage claims.
+- Findings outside an approved remediation belong in a separate issue;
+  do not silently broaden the current implementation.
+
 ## Verification
 
 - Add tests at the component that owns the behavior.
