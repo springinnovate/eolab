@@ -278,8 +278,8 @@ def test_shared_slots_and_private_http_summary(tmp_path: Path) -> None:
     assert storage.summary(owner).used_files == 5
 
 
-def test_last_slot_and_busy_admission_do_not_read_a_second_body(tmp_path: Path) -> None:
-    """Reject concurrent intake before consuming its body or exceeding five files.
+def test_queued_upload_rechecks_the_last_file_slot(tmp_path: Path) -> None:
+    """Recheck the file quota after waiting, before consuming the next body.
 
     Args:
         tmp_path: Disposable shared upload volume.
@@ -333,14 +333,210 @@ def test_last_slot_and_busy_admission_do_not_read_a_second_body(tmp_path: Path) 
         await entered.wait()
         assert storage.summary(owner).used_files == 5
         assert storage.summary(owner).retained_files == 0
-        with pytest.raises(UploadError) as busy:
+
+        async def upload_sixth() -> None:
+            """Wait for the fifth file, then reject without consuming another body."""
             async with storage.stage(owner, "vector", unwanted_body()):
-                pytest.fail("A second upload entered while the first was active")
-        assert busy.value.status == 429
+                pytest.fail("A sixth upload exceeded the browser's file quota")
+
+        queued = asyncio.create_task(upload_sixth())
+        await asyncio.sleep(0)
+        assert not queued.done()
         assert not consumed
         release.set()
         await task
+        with pytest.raises(UploadError, match="5 uploaded files") as full:
+            await queued
+        assert full.value.status == 409
+        assert not consumed
         assert storage.summary(owner).used_files == 5
+
+    asyncio.run(exercise())
+
+
+def test_upload_burst_waits_in_order_with_bounded_capacity(tmp_path: Path) -> None:
+    """Queue distinct browsers without reading bodies or mixing private files.
+
+    Args:
+        tmp_path: Disposable upload volume.
+    """
+    storage = UploadStorage(tmp_path)
+    consumed: list[int] = []
+
+    async def upload(index: int) -> UploadRecord:
+        """Publish one browser's file and record when its body is consumed.
+
+        Args:
+            index: Distinct browser and body identifier.
+
+        Returns:
+            This browser's published record.
+        """
+
+        async def chunks() -> AsyncIterator[bytes]:
+            """Record admission before streaming the browser's original.
+
+            Yields:
+                Original bytes unique to this browser.
+            """
+            consumed.append(index)
+            yield str(index).encode()
+
+        async with storage.stage(f"{index:064x}", "vector", chunks()) as pending:
+            record = UploadRecord(
+                id=uuid4(),
+                name=str(index),
+                size_bytes=pending.size_bytes,
+                created_at=datetime.now(timezone.utc),
+            )
+            storage.publish(pending, record)
+            return record
+
+    async def exercise() -> None:
+        """Fill the queue, replace one cancelled waiter, then admit in FIFO order."""
+        async with storage.stage("f" * 64, "raster", body(b"held")):
+            queued = [asyncio.create_task(upload(index)) for index in range(32)]
+            await asyncio.sleep(0)
+            assert not any(task.done() for task in queued)
+            assert consumed == []
+            assert len(list(tmp_path.glob("*/.pending-*"))) == 1
+            with pytest.raises(UploadError, match="Too many uploads") as full:
+                await upload(98)
+            assert full.value.status == 429
+            queued[15].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await queued[15]
+            replacement = asyncio.create_task(upload(99))
+            await asyncio.sleep(0)
+            assert not replacement.done()
+            assert consumed == []
+        survivors = [task for index, task in enumerate(queued) if index != 15]
+        records = await asyncio.wait_for(asyncio.gather(*survivors, replacement), 20)
+        expected = [index for index in range(32) if index != 15] + [99]
+        assert consumed == expected
+        for index, record in zip(expected, records, strict=True):
+            assert storage.summary(f"{index:064x}").uploads == [record]
+        assert storage.summary(f"{15:064x}").used_files == 0
+        assert storage.summary(f"{98:064x}").used_files == 0
+        assert not list(tmp_path.glob("*/.pending-*"))
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("stop", ["cancel", "timeout"])
+def test_stopped_upload_waiter_does_not_consume_body_or_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stop: str,
+) -> None:
+    """Release a cancelled or timed-out wait without creating an incoming file.
+
+    Args:
+        tmp_path: Disposable upload volume.
+        monkeypatch: Shorten only the admission wait for the deadline case.
+        stop: How the pending request ends before admission.
+    """
+    storage = UploadStorage(tmp_path)
+    consumed = False
+
+    async def chunks() -> AsyncIterator[bytes]:
+        """Track whether an abandoned request's body is consumed.
+
+        Yields:
+            Bytes that must remain unread.
+        """
+        nonlocal consumed
+        consumed = True
+        yield b"unused"
+
+    async def waiting() -> None:
+        """Try to stage a second browser's body while the first holds admission."""
+        async with storage.stage("b" * 64, "vector", chunks()):
+            pytest.fail("Stopped waiter entered upload admission")
+
+    async def exercise() -> None:
+        """End a waiting request, then prove the storage accepts a fresh request."""
+        async with storage.stage("a" * 64, "raster", body(b"held")):
+            if stop == "timeout":
+                monkeypatch.setattr(
+                    "eolab_app.upload_storage.UPLOAD_QUEUE_WAIT_SECONDS", 0.02
+                )
+            task = asyncio.create_task(waiting())
+            await asyncio.sleep(0)
+            assert not task.done()
+            if stop == "cancel":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(UploadError, match="waited too long") as expired:
+                    await asyncio.wait_for(task, 5)
+                assert expired.value.status == 429
+            assert not consumed
+            assert not (tmp_path / ("b" * 64)).exists()
+        await admit(storage, "b" * 64)
+        assert storage.summary("b" * 64).used_files == 1
+        assert not list(tmp_path.glob("*/.pending-*"))
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", ["inspection", "disconnect"])
+def test_failed_upload_releases_admission_to_waiting_browser(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    """Clean a failed upload before another browser starts streaming its file.
+
+    Args:
+        tmp_path: Disposable upload volume.
+        failure: Fail after streaming, or disconnect before the body arrives.
+    """
+    from starlette.requests import ClientDisconnect
+
+    storage = UploadStorage(tmp_path)
+
+    async def exercise() -> None:
+        """Queue work behind a failed original and verify isolation and cleanup."""
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def chunks() -> AsyncIterator[bytes]:
+            """Hold reception, optionally ending it with a client disconnect.
+
+            Yields:
+                Original bytes when the body arrives successfully.
+
+            Raises:
+                ClientDisconnect: When the pending connection has closed.
+            """
+            entered.set()
+            await release.wait()
+            if failure == "disconnect":
+                raise ClientDisconnect()
+            yield b"invalid original"
+
+        async def failed() -> None:
+            """Fail inspection after receiving the original.
+
+            Raises:
+                OSError: The simulated format inspection rejects its source.
+                ClientDisconnect: The request body reports a disconnected client.
+            """
+            async with storage.stage("a" * 64, "vector", chunks()):
+                raise OSError("inspection failed")
+
+        first = asyncio.create_task(failed())
+        await entered.wait()
+        next_upload = asyncio.create_task(admit(storage, "b" * 64, "raster"))
+        await asyncio.sleep(0)
+        assert not next_upload.done()
+        release.set()
+        with pytest.raises(ClientDisconnect if failure == "disconnect" else OSError):
+            await first
+        record = await asyncio.wait_for(next_upload, 5)
+        assert storage.summary("a" * 64).used_files == 0
+        assert storage.summary("b" * 64).uploads == [record]
+        assert not list(tmp_path.glob("*/.pending-*"))
 
     asyncio.run(exercise())
 
