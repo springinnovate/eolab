@@ -667,14 +667,20 @@ def test_regional_float64_grid_and_publication_visibility(era5_archive: Path) ->
         ("dtype", "object", "Unsupported variable metadata"),
         ("nodata", "not numeric", "could not convert string to float"),
         ("valid_time", "not a time", "Invalid time or interval"),
+        ("valid_time", None, "Invalid time or interval"),
+        ("valid_time", 0.5, "Invalid time or interval"),
         ("reference_time", "not a time", "Invalid time or interval"),
+        ("interval_start", None, "Invalid time or interval"),
+        ("interval_start", 0.5, "Invalid time or interval"),
+        ("interval_end", None, "Invalid time or interval"),
+        ("interval_end", 0.5, "Invalid time or interval"),
         ("interval_start", 0, "Invalid time or interval"),
     ],
 )
 def test_later_observation_still_validates_changed_metadata_and_time(
     era5_archive: Path, tmp_path: Path, field: str, value: Any, message: str
 ) -> None:
-    """Reject a bad row after valid rows with matching grid and variable fields.
+    """Reject malformed values in an otherwise valid observation catalog.
 
     Args:
         era5_archive: Published observations with repeated metadata.
