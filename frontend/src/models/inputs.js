@@ -66,49 +66,6 @@ export function getModelRasterFields(draft) {
     return fields;
 }
 
-/** List active raster roles and their independent preparation choices.
- * @param {Object} draft Model draft with named stack, reference and mask inputs.
- * @return {Array<{key:string,state:Object,raster:Object,label:string}>} Selected inputs keyed by the operation's raster roles.
- */
-export function getRasterPreparationSources(draft) {
-    const sources = [];
-    const preparationName = Object.keys(draft.model.inputs).find(name => draft.model.inputs[name].type === "raster_preparation");
-    if (!preparationName) return sources;
-    const step = draft.model.steps.find(value => value.inputs.preparation?.input === preparationName);
-    for (const [argument, binding] of Object.entries(step.inputs)) {
-        if (!binding.input) continue;
-        const definition = draft.model.inputs[binding.input], state = draft.inputs[binding.input];
-        if (definition.type === "habitat_stack" && state.kind === "manual") {
-            for (const [role, prefix] of [["predictors", "predictor"], ["responses", "response"]]) {
-                state[role].forEach((row, index) => {
-                    if (row.raster) sources.push({key: `${prefix}_${index}`, state: row, raster: row.raster, label: row.name});
-                });
-            }
-        } else if (definition.type === "habitat_references" && state.areaMode === "raster" && state.maskRaster) {
-            sources.push({key: "reference_mask", state, raster: state.maskRaster, label: definition.label});
-        } else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type) && state.raster) {
-            sources.push({key: argument, state, raster: state.raster, label: definition.label});
-        }
-    }
-    return sources;
-}
-
-/** Capture active raster resampling and any user-selected output grid.
- * A recipe-owned fixed grid stays in the recipe rather than becoming a run override.
- * Metadata lookup failures do not prevent choosing an editable custom grid.
- * @param {({fixedGrid:{crs:string,pixel_size:number[],origin:number[]}}|{crs:string,pixelSize:number[],origin:number[]})} value Fixed recipe grid or editable grid choices.
- * @param {Object} draft Model draft supplying active raster roles.
- * @return {({resampling:Record<string,string>}|{crs:string,pixelSize:number[],origin:number[],resampling:Record<string,string>})} Fixed-grid runs capture only resampling; editable-grid runs also capture their grid.
- * @throws {Error} If the projection or positive X/Y pixel sizes are missing.
- */
-export function captureRasterPreparation(value, draft) {
-    const resampling = Object.fromEntries(getRasterPreparationSources(draft).map(source => [source.key, source.state.resampling]));
-    if (value.fixedGrid) return {resampling};
-    if (!value.crs.trim()) throw new Error("Choose an output projection.");
-    if (!value.pixelSize.every(size => Number.isFinite(size) && size > 0)) throw new Error("Choose a pixel size or enter positive pixel width and height.");
-    return {crs: value.crs, pixelSize: [...value.pixelSize], origin: [...value.origin], resampling};
-}
-
 /** Capture an available raster choice using the ordinary path-free source contract.
  * @param {Object|null} raster Selected map raster, uploaded raster or owned run result.
  * @param {Object[]} sources Current source choices in this model setup.
@@ -203,8 +160,7 @@ export function selectedDrawnPolygonLayer(draft, input) {
  * @return {Object} Draft with field state in inputs[name], shared source choices,
  * temporal controls and parameters. Ordinary raster inputs track copiedFromRun
  * until an explicit source choice replaces that provenance. Spatial fields select live vector views or
- * retain an explicitly captured area from the map or an earlier run. Raster preparation
- * retains a recipe's output_grid as fixedGrid; other recipes receive editable grid choices.
+ * retain an explicitly captured area from the map or an earlier run.
  * @throws {Error} If the supplied map selection is invalid.
  */
 export function createModelDraft(model, context, id, integration = getModelSetupIntegration(model)) {
@@ -214,26 +170,18 @@ export function createModelDraft(model, context, id, integration = getModelSetup
     const suggestedRaster = visibleCatalogRasters.length === 1 ? visibleCatalogRasters[0] : catalogRasters.length === 1 ? catalogRasters[0] : null;
     const usesStartingMask = modelHasInput(model, "mask_source");
     const usesTemporal = modelHasInput(model, "temporal_interval");
-    const preparation = modelHasInput(model, "raster_preparation") ? {resampling: "nearest"} : {};
     const statisticType = Object.values(model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type))?.type;
     const inputs = {};
     for (const [name, input] of Object.entries(model.inputs)) {
         const handler = getModelInputHandler(input.type);
-        const owned = integration?.createInput(input, preparation);
+        const owned = integration?.createInput(input);
         if (owned !== undefined) inputs[name] = owned;
         else if (handler) inputs[name] = handler.createDraft(input, context);
         else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) {
             inputs[name] = {
-                ...preparation,
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
                 copiedFromRun: false,
             };
-        } else if (input.type === "raster_preparation") {
-            const step = model.steps.find(value => value.inputs.preparation?.input === name);
-            const settings = step.inputs.settings.value;
-            inputs[name] = settings.output_grid ? {fixedGrid: settings.output_grid} :
-                {crs: "", pixelSize: [null, null], origin: [0, 0],
-                mode: "auto", sourceKey: "", unit: "", choices: [], loading: false, error: ""};
         } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
             const explicitSelection = ["mask_source", "habitat_references"].includes(input.type);
             let area = explicitSelection ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
@@ -245,7 +193,6 @@ export function createModelDraft(model, context, id, integration = getModelSetup
                 catch (error) { selectionError = error.message; }
             }
             inputs[name] = {
-                ...(explicitSelection ? preparation : {}),
                 area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
                 vectorKey: "", vectorInfo: null, drawnPolygonKey: "", selecting: false, selectionError, maskRaster: null,
                 vectors: structuredClone(context.vectors ?? []),
@@ -283,7 +230,6 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         else if (handler) inputs[name] = handler.capture(state, input);
         else if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
             inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
-        else if (input.type === "raster_preparation") inputs[name] = captureRasterPreparation(state, draft);
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;

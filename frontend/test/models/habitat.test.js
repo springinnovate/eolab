@@ -79,7 +79,7 @@ function toggleDataset(checkbox, checked) {
  * @return {Promise<Object>} Controller, view, source choices and captured API requests.
  */
 async function fixture(contextOverrides = {}) {
-    const requests = [], filters = [], gridRequests = [], values = new Map();
+    const requests = [], filters = [], values = new Map();
     const uploads = [], released = [];
     const context = {
         rasters: ["Environment", "Habitat class", "Productivity", "Reference mask", "Assessment mask"].map((label, index) =>
@@ -108,10 +108,6 @@ async function fixture(contextOverrides = {}) {
     let id = 0;
     const controller = new ModelsController({api, jobs, view, getContext: () => context,
         getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
-        describeSource: async (source, _signal, targetCrs) => {
-            gridRequests.push({source, targetCrs});
-            return {crs: "EPSG:4326", projectedGrid: {crs: targetCrs, pixelSize: [25000, 50000], origin: [0, 0], unit: "metre", approximate: true}};
-        },
         prepareVector: async source => ({selection: source.uploadId
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}
             : {...selection, filter: source.filter}, matched: source.filter.rules[0].value === "North" ? 3 : 1, total: 8}),
@@ -126,7 +122,7 @@ async function fixture(contextOverrides = {}) {
     assert.deepEqual(controller.state.library.map(recipe => recipe.id), [model.id, habitat.id]);
     controller.setActive(true); controller.chooseModel(habitat);
     await settle();
-    return {controller, view, doc, context, api, jobs, requests, filters, gridRequests, uploads, released};
+    return {controller, view, doc, context, api, jobs, requests, filters, uploads, released};
 }
 
 /** Select a vector and review the named input's filter using the composed editor.
@@ -485,7 +481,7 @@ test("Habitat shows Reference similarity first and diagnostics under Details wit
     h.controller.destroy();
 });
 
-test("Habitat manual runs retain independent resampling without grid controls or metadata reads", async () => {
+test("Habitat manual runs retain independent resampling without grid controls", async () => {
     const h = await fixture();
     chooseStack(h);
     const stack = h.view.setup.inputs.stack;
@@ -494,10 +490,8 @@ test("Habitat manual runs retain independent resampling without grid controls or
     edit(mask.source, modelSourceKey(h.context.rasters[4]));
     edit(stack.responses[0].source, modelSourceKey(h.context.rasters[0]));
     await settle();
-    assert.equal(h.view.setup.inputs.preparation, undefined);
     assert.equal(h.view.setup.fields.querySelectorAll("legend").some(node => node.textContent === "Raster preparation"), false);
     assert.equal(h.view.setup.fields.querySelectorAll("select").some(node => node.id === "models-preparation-projection"), false);
-    assert.deepEqual(h.gridRequests, []);
     edit(stack.predictors[0].resampling, "bilinear"); edit(stack.predictors[1].resampling, "mode");
     edit(stack.responses[0].resampling, "average"); edit(references.resampling, "nearest"); edit(mask.resampling, "cubic");
     edit(stack.predictors[1].name, "renamed_class", "input");
@@ -520,7 +514,6 @@ test("Habitat manual runs retain independent resampling without grid controls or
     edit(h.view.setup.inputs.habitat_mask.source, "");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "active-methods").inputs.preparation.resampling,
         {predictor_0: "bilinear", predictor_1: "mode", response_0: "average"});
-    assert.deepEqual(h.gridRequests, [], "Changing sources, resampling and duplicate-run inputs never requests grid choices");
     h.controller.destroy();
 });
 
@@ -685,8 +678,7 @@ test("Earth Engine runs use the recipe grid and preserve mask resampling through
     edit(inputs.references.source, `raster:${modelSourceKey(h.context.rasters[3])}`);
     edit(inputs.habitat_mask.source, modelSourceKey(h.context.rasters[4]));
     await settle();
-    assert.equal(inputs.preparation, undefined);
-    assert.deepEqual(h.gridRequests, []);
+    assert.equal(h.view.setup.fields.querySelectorAll("select").some(node => node.id === "models-preparation-projection"), false);
     edit(inputs.habitat_mask.resampling, "mode");
     await h.controller.submit();
     assert.deepEqual(h.requests[0].inputs.preparation, {resampling: {reference_mask: "nearest", habitat_mask: "mode"}});
@@ -698,22 +690,38 @@ test("Earth Engine runs use the recipe grid and preserve mask resampling through
     h.controller.destroy();
 });
 
-test("Switching Habitat input sources preserves manual rows and never requests grid metadata", async () => {
+test("Habitat saved grid descriptions use the captured recipe rather than the current library", async t => {
+    const h = await fixture();
+    t.after(() => h.controller.destroy());
+    await choosePreparationSelection(h);
+    await chooseVector(h, "references", h.context.vectors[1], "South");
+    await h.controller.submit();
+    const saved = structuredClone(h.controller.state.invocation);
+    saved.model.definition.steps[0].inputs.settings.value.output_grid = {
+        crs: "EPSG:6933", pixel_size: [125, 250], origin: [7, 11],
+    };
+    h.controller.state.invocation = saved;
+    h.controller.render();
+    const descriptions = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    assert.ok(descriptions.includes("EPSG:6933 · pixel size 125 × 250 · origin 7, 11"));
+    assert.equal(descriptions.includes("EPSG:6933 · pixel size 500 × 500 · origin 0, 0"), false);
+    assert.deepEqual(h.controller.state.library.find(recipe => recipe.id === habitat.id).steps[0].inputs.settings.value.output_grid.pixel_size, [500, 500]);
+});
+
+test("Switching Habitat input sources preserves manual rows without showing grid controls", async () => {
     const h = await fixture();
     chooseStack(h);
     edit(h.view.setup.inputs.stack.predictors[0].resampling, "bilinear");
     const rows = structuredClone(h.controller.state.draft.inputs.stack.predictors);
     edit(h.view.setup.inputs.stack.source, "earthEngine");
     await settle();
-    assert.deepEqual(h.gridRequests, []);
     assert.deepEqual(h.controller.state.draft.inputs.stack.predictors, rows);
     edit(h.view.setup.inputs.stack.source, "manual"); await settle();
     assert.equal(h.view.setup.inputs.stack.manual.disabled, false);
     assert.equal(h.view.setup.inputs.stack.automatic.disabled, true);
     assert.deepEqual(h.controller.state.draft.inputs.stack.predictors, rows);
     assert.equal(h.view.setup.inputs.stack.categorical.value, "habitat_type");
-    assert.deepEqual(h.gridRequests, []);
-    assert.equal(h.view.setup.inputs.preparation, undefined);
+    assert.equal(h.view.setup.fields.querySelectorAll("legend").some(node => node.textContent === "Raster preparation"), false);
     h.controller.destroy();
 });
 

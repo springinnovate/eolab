@@ -12,7 +12,7 @@ import { habitatSetup } from "./habitat-setup.js";
  * @property {(source:Object)=>string} sourceKey Compare original source identities.
  * @property {(raster:Object,sources:Object[],type?:string)=>Object} captureRaster Capture an available original raster reference.
  * @property {(root:HTMLElement)=>void} append Place an integration-owned control in the form.
- * @property {(host:HTMLElement,name:string,input:Object,onChange?:(value:Object|null)=>void,onResampling?:(method:string)=>void)=>Object} buildRasterInput Build an ordinary raster chooser.
+ * @property {(host:HTMLElement,name:string,input:Object,onChange?:(value:Object|null)=>void)=>Object} buildRasterInput Build an ordinary raster chooser.
  * @property {(controls:Object,input:Object,value:Object,state:Object)=>boolean} renderRasterInput Render ordinary raster choices and readiness.
  * @property {(name:string,input:Object)=>Object} buildSpatialInput Build ordinary spatial controls in the form.
  * @property {(controls:Object,input:Object,value:Object,state:Object)=>boolean} renderSpatialInput Render ordinary spatial choices and readiness.
@@ -44,11 +44,12 @@ import { habitatSetup } from "./habitat-setup.js";
  * viewer or map object; dependencies expose only transport and explicit UI callbacks.
  * @typedef {Object} ModelSetupIntegration
  * @property {(model:Object,inputs:Object,context:Object,helpers:{viewportArea:(bounds:Object)=>Object})=>Object} createState Create model-owned state and adjust initial input defaults.
- * @property {(definition:Object,preparation:Object)=>Object|undefined} createInput Create an owned input, or defer to ordinary input handling.
+ * @property {(definition:Object)=>Object|undefined} createInput Create an owned input, or defer to ordinary input handling.
  * @property {(draft:Object,name:string,helpers:{captureRaster:(raster:Object,sources:Object[])=>Object})=>Object|undefined} captureInput Capture an owned input, or defer to ordinary capture.
  * @property {(draft:Object,name:string,value:Object)=>boolean} restoreInput Restore an owned input and report whether it handled the value.
  * @property {(draft:Object,inputs:Object)=>void} restoreState Restore cross-input setup state after ordinary input restoration.
  * @property {(ui:ModelSetupUi,handlers:ModelSetupActions,name:string,definition:Object,draft:Object)=>ModelSetupControls|null} buildInput Build owned controls or defer to ordinary controls.
+ * @property {(invocation:Object,name:string)=>Array<{label:string,value:string}>|null} [describeInput] Describe an owned saved input using its captured model definition; null defers to ordinary descriptions and an empty array omits the input.
  * @property {(draft:Object,dependencies:ModelSetupDependencies)=>ModelSetupSession} createSession Bind transport and explicit UI notifications to one draft.
  */
 
