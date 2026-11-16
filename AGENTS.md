@@ -470,6 +470,43 @@ implementation understand what this control does and what will happen next?**
 - Review wording in the rendered UI, including accessible names and surrounding
   controls. Apply this rule to the requested work without unrelated text churn.
 
+## Check that the app gives users the right result
+
+For substantial audits, divide the work among these four roles.
+Small tasks can combine roles.
+
+1. Coordinator: List the user tasks being checked, assign reviewers,
+   and record what has and has not been tested.
+
+2. Feature tester: Try complete user tasks with representative data.
+   Write down what a correct result should look like before reading
+   the implementation or existing tests.
+
+3. Code reviewer: Trace those tasks through the relevant code.
+   Check calculations, data handling, performance, and whether tests
+   actually verify the result the user sees.
+
+4. Challenger: Try different data and question assumptions made by
+   the feature and its tests. For example, a number inside a field
+   name does not necessarily represent a year or chart coordinate.
+
+Check the actual result: displayed values, labels, units, plotted
+positions, and which data was included or omitted. A working button
+or successful request is only part of the check.
+
+For example, two different CO2 measurements must remain distinguishable
+on the chart. Checking that two points exist would miss a problem if
+both have the same misleading label and position.
+
+The extra review pass must try different examples or use a different
+way of checking the result. Repeating the same tests is not an extra
+review.
+
+Report what was checked and what remains untested. Do not describe
+the whole application as verified because many tests passed.
+
+Keep each approved fix focused. Record unrelated problems separately.
+
 ## Verification
 
 - Add tests at the component that owns the behavior.
