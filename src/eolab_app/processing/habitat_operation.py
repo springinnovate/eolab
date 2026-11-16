@@ -210,7 +210,7 @@ async def resolve_habitat_sources(
 async def prepare_habitat(
     context: OperationContext, queued: QueuedHabitat, primary: None
 ) -> PreparedJobPlan:
-    """Prepare the selected area and requested grid in the supervised worker process.
+    """Prepare the selected area on the model's grid in the supervised worker process.
 
     Args:
         context: Existing source, lifecycle and native-execution capabilities.

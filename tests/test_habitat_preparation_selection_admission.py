@@ -106,9 +106,6 @@ def _request(registry: ModelRegistry, **input_changes: Any) -> ModelRunRequest:
         },
         "habitat_mask": None,
         "preparation": {
-            "crs": "EPSG:6933",
-            "pixelSize": [500, 500],
-            "origin": [0, 0],
             "resampling": {},
         },
         **input_changes,
@@ -177,9 +174,6 @@ def _manual_request(registry: ModelRegistry) -> ModelRunRequest:
         },
         area=BOUNDS_AREA,
         preparation={
-            "crs": "EPSG:6933",
-            "pixelSize": [500, 500],
-            "origin": [0, 0],
             "resampling": {"predictor_0": "nearest", "response_0": "nearest"},
         },
     )
@@ -680,9 +674,6 @@ def test_drawn_references_and_raster_mask_remain_independent_inputs(
         },
         habitat_mask=SOURCE,
         preparation={
-            "crs": "EPSG:6933",
-            "pixelSize": [500, 500],
-            "origin": [0, 0],
             "resampling": {"habitat_mask": "nearest"},
         },
     )

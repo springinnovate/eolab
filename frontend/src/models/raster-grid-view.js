@@ -25,7 +25,6 @@ export class RasterGridView {
         this.customCrs.placeholder = "For example, EPSG:6933";
         this.customCrs.addEventListener("change", () => handlers.onInput(name, {crs: this.customCrs.value.trim()}));
         this.customField = field(`models-${name}-custom-crs`, "Custom projection", this.customCrs);
-        this.requirement = element("p", "", "models-help");
         this.resolution = element("select");
         this.resolution.addEventListener("change", () => {
             if (this.resolution.value === "custom") handlers.onInput(name, {mode: "custom"});
@@ -46,7 +45,7 @@ export class RasterGridView {
         this.description = element("p", "", "models-help");
         this.status = element("p", "", "models-help"); this.status.setAttribute("role", "status");
         this.retry = button("Retry pixel-size choices", handlers.onRefreshGrid, "models-action");
-        this.root.append(field(`models-${name}-projection`, "Output projection", this.projection), this.requirement, this.customField,
+        this.root.append(field(`models-${name}-projection`, "Output projection", this.projection), this.customField,
             field(`models-${name}-resolution`, "Pixel size", this.resolution),
             field(`models-${name}-pixel-x`, "Pixel width (X)", this.pixelX),
             field(`models-${name}-pixel-y`, "Pixel height (Y)", this.pixelY), this.unit, this.description, this.status, this.retry);
@@ -60,13 +59,10 @@ export class RasterGridView {
     render(value, draft) {
         this.value = value;
         const projections = [...new Set([value.crs, ...value.choices.map(choice => choice.sourceCrs)].filter(Boolean))];
-        this.options(this.projection, value.requiredCrs ? [{value: value.requiredCrs, label: value.requiredCrs}] :
+        this.options(this.projection,
             [...projections.map(crs => ({value: crs, label: crs})), {value: "custom", label: "Custom projection…"}],
-        value.requiredCrs ?? (value.projectionMode === "custom" ? "custom" : value.crs));
-        this.projection.disabled = Boolean(value.requiredCrs);
-        this.requirement.hidden = !value.requiredCrs;
-        this.requirement.textContent = value.requiredCrs ? `This tool requires ${value.requiredCrs}. Inputs in other projections will be reprojected.` : "";
-        this.customField.hidden = Boolean(value.requiredCrs) || value.projectionMode !== "custom";
+        value.projectionMode === "custom" ? "custom" : value.crs);
+        this.customField.hidden = value.projectionMode !== "custom";
         this.customCrs.required = !this.customField.hidden;
         if (this.document.activeElement !== this.customCrs) this.customCrs.value = value.crs;
         const format = number => number.toLocaleString(undefined, {maximumSignificantDigits: 6});

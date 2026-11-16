@@ -93,18 +93,20 @@ export function getRasterPreparationSources(draft) {
     return sources;
 }
 
-/** Capture the chosen grid and each active raster's resampling method.
- * Metadata lookup failures do not prevent a user from choosing a custom grid.
- * @param {Object} value Editable grid choices.
+/** Capture active raster resampling and any user-selected output grid.
+ * A recipe-owned fixed grid stays in the recipe rather than becoming a run override.
+ * Metadata lookup failures do not prevent choosing an editable custom grid.
+ * @param {({fixedGrid:{crs:string,pixel_size:number[],origin:number[]}}|{crs:string,pixelSize:number[],origin:number[]})} value Fixed recipe grid or editable grid choices.
  * @param {Object} draft Model draft supplying active raster roles.
- * @return {{crs:string,pixelSize:number[],origin:number[],resampling:Object}} Explicit preparation request.
+ * @return {({resampling:Record<string,string>}|{crs:string,pixelSize:number[],origin:number[],resampling:Record<string,string>})} Fixed-grid runs capture only resampling; editable-grid runs also capture their grid.
  * @throws {Error} If the projection or positive X/Y pixel sizes are missing.
  */
 export function captureRasterPreparation(value, draft) {
+    const resampling = Object.fromEntries(getRasterPreparationSources(draft).map(source => [source.key, source.state.resampling]));
+    if (value.fixedGrid) return {resampling};
     if (!value.crs.trim()) throw new Error("Choose an output projection.");
     if (!value.pixelSize.every(size => Number.isFinite(size) && size > 0)) throw new Error("Choose a pixel size or enter positive pixel width and height.");
-    return {crs: value.crs, pixelSize: [...value.pixelSize], origin: [...value.origin],
-        resampling: Object.fromEntries(getRasterPreparationSources(draft).map(source => [source.key, source.state.resampling]))};
+    return {crs: value.crs, pixelSize: [...value.pixelSize], origin: [...value.origin], resampling};
 }
 
 /** Capture an available raster choice using the ordinary path-free source contract.
@@ -201,7 +203,8 @@ export function selectedDrawnPolygonLayer(draft, input) {
  * @return {Object} Draft with field state in inputs[name], shared source choices,
  * temporal controls and parameters. Ordinary raster inputs track copiedFromRun
  * until an explicit source choice replaces that provenance. Spatial fields select live vector views or
- * retain an explicitly captured area from the map or an earlier run.
+ * retain an explicitly captured area from the map or an earlier run. Raster preparation
+ * retains a recipe's output_grid as fixedGrid; other recipes receive editable grid choices.
  * @throws {Error} If the supplied map selection is invalid.
  */
 export function createModelDraft(model, context, id, integration = getModelSetupIntegration(model)) {
@@ -228,7 +231,8 @@ export function createModelDraft(model, context, id, integration = getModelSetup
         } else if (input.type === "raster_preparation") {
             const step = model.steps.find(value => value.inputs.preparation?.input === name);
             const settings = step.inputs.settings.value;
-            inputs[name] = {requiredCrs: settings.required_crs, crs: settings.required_crs ?? "", pixelSize: [null, null], origin: [0, 0],
+            inputs[name] = settings.output_grid ? {fixedGrid: settings.output_grid} :
+                {crs: "", pixelSize: [null, null], origin: [0, 0],
                 mode: "auto", sourceKey: "", unit: "", choices: [], loading: false, error: ""};
         } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
             const explicitSelection = ["mask_source", "habitat_references"].includes(input.type);

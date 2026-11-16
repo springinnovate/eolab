@@ -188,7 +188,6 @@ export class ModelsController {
         this.setupSession = draft.integration?.createSession(draft, {
             api: this.api, getCatalogItem: this.getCatalogItem,
             render: () => { if (current()) this.render(); },
-            refreshGrid: () => { if (current()) this.refreshRasterPreparation(); },
             closeInputEditor: () => { if (current()) this.closeVectorFilter(); },
         }) ?? null;
     }
@@ -225,7 +224,7 @@ export class ModelsController {
         this.preparationAbort?.abort(); this.preparationKey = null;
     }
 
-    /** Offer the model's acquisition grid and active source grids without replacing explicit choices.
+    /** Offer active source grids for models with an editable output grid.
      * Requests run sequentially within the source metadata service's concurrency limit.
      * @param {boolean} [retry=false] Retry failed lookups at the user's request.
      * @return {void}
@@ -235,20 +234,15 @@ export class ModelsController {
         const name = draft && Object.keys(draft.model.inputs).find(key => draft.model.inputs[key].type === "raster_preparation");
         if (!name) return;
         const input = draft.inputs[name];
+        if (input.fixedGrid) return;
         const sources = [...new Map(getRasterPreparationSources(draft).filter(value => value.raster.available !== false)
             .map(value => [modelSourceKey(value.raster), value.raster])).values()];
-        const acquisition = draft.integration?.acquisitionGrid(draft);
-        const grid = acquisition?.grid;
-        const choices = acquisition ? [acquisition] : [];
-        const key = JSON.stringify([draft.id, input.crs, acquisition, sources.map(modelSourceKey)]);
+        const key = JSON.stringify([draft.id, input.crs, sources.map(modelSourceKey)]);
         if (!retry && key === this.preparationKey) return;
         this.preparationAbort?.abort();
         const abort = new AbortController(); this.preparationAbort = abort; this.preparationKey = key;
-        input.choices = choices; input.loading = Boolean(sources.length && (input.crs || input.projectionMode !== "custom")); input.error = "";
-        if (grid) input.unit = grid.unit;
-        if (input.mode === "auto" && grid) {
-            Object.assign(input, {pixelSize: [...grid.pixelSize], origin: [...grid.origin], sourceKey: acquisition.key, unit: grid.unit});
-        } else if (input.mode === "auto" && input.sourceKey !== (sources[0] ? modelSourceKey(sources[0]) : "")) {
+        input.choices = []; input.loading = Boolean(sources.length && (input.crs || input.projectionMode !== "custom")); input.error = "";
+        if (input.mode === "auto" && input.sourceKey !== (sources[0] ? modelSourceKey(sources[0]) : "")) {
             Object.assign(input, {pixelSize: [null, null], origin: [0, 0], sourceKey: ""});
         }
         if (input.loading) void this.loadRasterPreparation(draft, input, sources, abort);
@@ -272,7 +266,7 @@ export class ModelsController {
                     const native = await this.describeSource(source, abort.signal);
                     if (!isCurrent()) return;
                     input.crs = native.crs;
-                    this.preparationKey = JSON.stringify([draft.id, input.crs, draft.integration?.acquisitionGrid(draft), sources.map(modelSourceKey)]);
+                    this.preparationKey = JSON.stringify([draft.id, input.crs, sources.map(modelSourceKey)]);
                 }
                 const key = modelSourceKey(source);
                 const metadata = await this.describeSource(source, abort.signal, input.crs);
@@ -997,8 +991,10 @@ export class ModelsController {
                 input.raster = structuredClone(saved.inputs[name]);
                 input.copiedFromRun = true;
             } else if (definition.type === "raster_preparation") {
-                const {crs, pixelSize, origin} = saved.inputs[name];
-                Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});
+                if (!input.fixedGrid) {
+                    const {crs, pixelSize, origin} = saved.inputs[name];
+                    Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});
+                }
             } else if (definition.type === "temporal_interval") {
                 const value = saved.inputs[name];
                 Object.assign(draft.temporal, {datasetKey: modelSourceKey(value), variable: value.variable,

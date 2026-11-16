@@ -77,11 +77,10 @@ class HabitatSetupSession {
      * @param {Object} dependencies.api Processing transport for Habitat metadata and coverage.
      * @param {(selection:Object,signal:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read display metadata for an exact Item.
      * @param {()=>void} dependencies.render Notify the host that draft presentation changed.
-     * @param {()=>void} dependencies.refreshGrid Refresh ordinary raster-grid choices.
      * @param {()=>void} dependencies.closeInputEditor Close an active editor before mode changes.
      */
-    constructor(draft, {api, getCatalogItem, render, refreshGrid, closeInputEditor}) {
-        Object.assign(this, {draft, api, getCatalogItem, render, refreshGrid, closeInputEditor});
+    constructor(draft, {api, getCatalogItem, render, closeInputEditor}) {
+        Object.assign(this, {draft, api, getCatalogItem, render, closeInputEditor});
         this.disposed = false;
     }
 
@@ -102,7 +101,6 @@ class HabitatSetupSession {
         if (this.draft.model.inputs[name].type !== "habitat_stack") return;
         if (change.kind) {
             for (const [key, definition] of Object.entries(this.draft.model.inputs)) {
-                if (definition.type === "raster_preparation") Object.assign(this.draft.inputs[key], {mode: "auto", sourceKey: ""});
                 if (definition.type === "summary_area" && this.draft.inputs[key].filterEditing) this.closeInputEditor();
             }
             this.cancelPreparationReads();
@@ -132,10 +130,10 @@ class HabitatSetupSession {
         this.cancelPreparationReads();
     }
 
-    /** Load Habitat's years, dataset choices and acquisition grid for model setup.
+    /** Load Habitat's assessment years and dataset choices for model setup.
      * Manual raster setup remains usable if this request fails. Replaced drafts
      * ignore late replies. New drafts select every dataset; refreshes and duplicated
-     * runs retain their existing year, dataset selections and output grid.
+     * runs retain their existing year and dataset selections.
      * @param {Object} draft Draft requesting the configuration.
      * @param {string} name Habitat stack input declared by that recipe.
      * @return {Promise<void>} Resolves after choices or retry guidance are displayed.
@@ -157,7 +155,7 @@ class HabitatSetupSession {
         } finally {
             input.loading = false;
             if (!abort.signal.aborted && !this.disposed) {
-                this.refreshGrid(); void this.refreshCoverage(); this.render();
+                void this.refreshCoverage(); this.render();
             }
         }
     }
@@ -350,15 +348,6 @@ function restoreState(draft, inputs) {
     draft.setupState.unavailable = true;
 }
 
-/** Offer the installed Earth Engine acquisition grid only in automatic input mode.
- * @param {Object} draft Current Habitat setup.
- * @return {{key:string,label:string,sourceCrs:string,grid:Object}|null} Model-provided grid choice.
- */
-function acquisitionGrid(draft) {
-    const grid = getHabitatEarthEngineInput(draft)?.configuration?.grid;
-    return grid ? {key: "earthEngine", label: "Earth Engine inputs", sourceCrs: grid.crs, grid} : null;
-}
-
 /** Build Habitat controls with explicit ordinary spatial/raster presentation helpers.
  * @param {import("./model-setup.js").ModelSetupUi} ui Element, formatting and ordinary input builders supplied by the host view.
  * @param {{onInput:(name:string,change:Object)=>void,onSetupAction:(action:string,value?:unknown)=>void}} handlers Generic input edits and integration actions.
@@ -405,4 +394,4 @@ function createSession(draft, dependencies) { return new HabitatSetupSession(dra
 /** Habitat integration registered once at the model setup boundary.
  * @type {import("./model-setup.js").ModelSetupIntegration}
  */
-export const habitatSetup = Object.freeze({createState, createInput, captureInput, restoreInput, restoreState, acquisitionGrid, buildInput, createSession});
+export const habitatSetup = Object.freeze({createState, createInput, captureInput, restoreInput, restoreState, buildInput, createSession});

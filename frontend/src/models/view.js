@@ -281,6 +281,7 @@ export class ModelsView {
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
             else if (input.type === "raster_preparation") {
+                if (draft.inputs[name].fixedGrid) continue;
                 inputs[name] = new RasterGridView({element: this.element.bind(this), field: this.field.bind(this),
                     button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers, name, input);
                 fields.append(inputs[name].root);
@@ -493,7 +494,7 @@ export class ModelsView {
             else if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
-            else if (input.type === "raster_preparation") inputsReady = setupControls.inputs[name].render(draft.inputs[name], draft) && inputsReady;
+            else if (input.type === "raster_preparation" && !draft.inputs[name].fixedGrid) inputsReady = setupControls.inputs[name].render(draft.inputs[name], draft) && inputsReady;
         }
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
@@ -667,8 +668,10 @@ export class ModelsView {
                     continue;
                 }
                 if (input.type === "raster_preparation") {
-                    list.append(this.element("dt", input.label), this.element("dd", `${value.crs} · pixel size ${value.pixelSize.join(" × ")} · origin ${value.origin.join(", ")}`));
                     const step = invocation.model.definition.steps.find(item => item.inputs.preparation?.input === name);
+                    const fixedGrid = step.inputs.settings.value.output_grid;
+                    const grid = fixedGrid ? {crs: fixedGrid.crs, pixelSize: fixedGrid.pixel_size, origin: fixedGrid.origin} : value;
+                    list.append(this.element("dt", input.label), this.element("dd", `${grid.crs} · pixel size ${grid.pixelSize.join(" × ")} · origin ${grid.origin.join(", ")}`));
                     const stack = invocation.inputs[step.inputs.stack.input];
                     if (stack.kind !== "earthEngine") for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {
                         stack[role].forEach((row, index) => list.append(this.element("dt", `${label}: ${row.name} resampling`),

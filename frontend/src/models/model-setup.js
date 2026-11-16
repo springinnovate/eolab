@@ -36,7 +36,6 @@ import { habitatSetup } from "./habitat-setup.js";
  * @property {Object} api Existing Processing API transport; the integration selects its own endpoints.
  * @property {(source:Object,signal?:AbortSignal)=>Promise<Object>} getCatalogItem Read exact Catalog metadata for display.
  * @property {()=>void} render Request a render while this draft is current.
- * @property {()=>void} refreshGrid Refresh shared grid choices while this draft is current.
  * @property {()=>void} closeInputEditor Close an active input editor while this draft is current.
  */
 
@@ -49,7 +48,6 @@ import { habitatSetup } from "./habitat-setup.js";
  * @property {(draft:Object,name:string,helpers:{captureRaster:(raster:Object,sources:Object[])=>Object})=>Object|undefined} captureInput Capture an owned input, or defer to ordinary capture.
  * @property {(draft:Object,name:string,value:Object)=>boolean} restoreInput Restore an owned input and report whether it handled the value.
  * @property {(draft:Object,inputs:Object)=>void} restoreState Restore cross-input setup state after ordinary input restoration.
- * @property {(draft:Object)=>{key:string,label:string,sourceCrs:string,grid:Object}|null} acquisitionGrid Supply an optional model-provided grid choice.
  * @property {(ui:ModelSetupUi,handlers:ModelSetupActions,name:string,definition:Object,draft:Object)=>ModelSetupControls|null} buildInput Build owned controls or defer to ordinary controls.
  * @property {(draft:Object,dependencies:ModelSetupDependencies)=>ModelSetupSession} createSession Bind transport and explicit UI notifications to one draft.
  */
