@@ -7,6 +7,7 @@ import hashlib
 from io import FileIO
 import json
 from pathlib import Path
+from threading import Event, Thread, get_ident
 from typing import Any, IO
 from uuid import uuid4
 
@@ -17,11 +18,184 @@ import pytest
 from eolab_app.routes.browser_identity import COOKIE
 from eolab_app.routes.uploads import create_uploads_router
 from eolab_app.upload_storage import (
+    StorageUsage,
     UploadError,
     UploadKind,
     UploadRecord,
     UploadStorage,
 )
+
+
+@pytest.mark.parametrize("entrypoint", ["stage", "read"])
+@pytest.mark.parametrize("blocked_on", ["lock", "inventory"])
+def test_acquisition_keeps_disk_waits_off_the_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    blocked_on: str,
+) -> None:
+    """Keep asyncio scheduling responsive while storage acquisition is blocked.
+
+    Args:
+        tmp_path: Disposable shared upload volume.
+        monkeypatch: Observe the real lock or delay the original inventory.
+        entrypoint: Staging or active-read acquisition under test.
+        blocked_on: Disk operation deliberately held until asyncio releases it.
+    """
+    storage = UploadStorage(tmp_path)
+    owner = "a" * 64
+    record = asyncio.run(admit(storage, owner, "raster"))
+    original_lock = storage._disk_lock
+    original_usage = storage._usage
+    release = Event()
+    lock_held = Event()
+
+    async def exercise() -> None:
+        """Release blocked disk work from the event loop before acquisition completes."""
+        loop = asyncio.get_running_loop()
+        loop_thread = get_ident()
+        entered = asyncio.Event()
+
+        class ObservedLock:
+            """Observe the actual disk-lock wait without replacing its exclusion."""
+
+            def __enter__(self) -> None:
+                """Acquire the real lock only from a disk worker."""
+                assert get_ident() != loop_thread
+                loop.call_soon_threadsafe(entered.set)
+                original_lock.acquire()
+
+            def __exit__(self, *exc: object) -> None:
+                """Release the real lock after the protected operation.
+
+                Args:
+                    exc: Exception details supplied by the context manager.
+                """
+                original_lock.release()
+
+        def slow_inventory() -> StorageUsage:
+            """Hold disk inventory until asyncio responds, then return actual usage.
+
+            Returns:
+                Original storage inventory after the event-loop handshake.
+            """
+            assert get_ident() != loop_thread
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "The event loop did not release inventory"
+            return original_usage()
+
+        def hold_lock() -> None:
+            """Keep the real disk lock occupied until the event loop responds."""
+            with original_lock:
+                lock_held.set()
+                release.wait(5)
+
+        holder = None
+        if blocked_on == "lock":
+            monkeypatch.setattr(storage, "_disk_lock", ObservedLock())
+            holder = Thread(target=hold_lock)
+            holder.start()
+            assert lock_held.wait(5)
+        else:
+            monkeypatch.setattr(storage, "_usage", slow_inventory)
+
+        async def acquire() -> None:
+            """Enter and leave the public storage context being exercised."""
+            context = (
+                storage.stage(owner, "raster", body(b"new original"))
+                if entrypoint == "stage"
+                else storage.open_source(owner, record.id, "raster")
+            )
+            async with context:
+                pass
+
+        task = asyncio.create_task(acquire())
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            await task
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            if holder is not None:
+                holder.join()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("entrypoint", ["stage", "read"])
+def test_cancelled_acquisition_releases_late_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+) -> None:
+    """Clean resources acquired after repeated cancellation without yielding them.
+
+    Args:
+        tmp_path: Disposable shared upload volume.
+        monkeypatch: Delay acquisition while preserving real filesystem operations.
+        entrypoint: Staging or active-read acquisition under test.
+    """
+    storage = UploadStorage(tmp_path)
+    owner = "a" * 64
+    record = asyncio.run(admit(storage, owner, "raster"))
+    original_usage = storage._usage
+    release = Event()
+
+    async def exercise() -> None:
+        """Cancel during inventory and retain cleanup ownership through late creation."""
+        loop = asyncio.get_running_loop()
+        loop_thread = get_ident()
+        entered = asyncio.Event()
+
+        def slow_inventory() -> StorageUsage:
+            """Delay inventory before resource acquisition, then return real usage.
+
+            Returns:
+                Current shared storage usage.
+            """
+            assert get_ident() != loop_thread
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "The test did not release inventory"
+            return original_usage()
+
+        async def acquire() -> None:
+            """Fail if a cancelled acquisition yields a resource to its caller."""
+            context = (
+                storage.stage(owner, "raster", body(b"new original"))
+                if entrypoint == "stage"
+                else storage.open_source(owner, record.id, "raster")
+            )
+            async with context:
+                pytest.fail("Cancelled acquisition yielded its resource")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(storage, "_usage", slow_inventory)
+            task = asyncio.create_task(acquire())
+            try:
+                await asyncio.wait_for(entered.wait(), 5)
+                task.cancel()
+                await asyncio.sleep(0)
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+
+        assert not storage._active_reads
+        assert not storage._admission.locked()
+        assert not list((tmp_path / owner).glob(".pending-*"))
+        assert not list((tmp_path / ".reading").glob("*"))
+        assert storage.summary(owner).used_files == 1
+        async with storage.open_source(owner, record.id, "raster") as (_, source):
+            assert source.read_bytes() == b"original"
+        await admit(storage, owner)
+
+    asyncio.run(exercise())
 
 
 async def body(content: bytes) -> AsyncIterator[bytes]:

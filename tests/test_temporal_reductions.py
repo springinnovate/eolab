@@ -18,6 +18,7 @@ from affine import Affine
 from pydantic import ValidationError
 from rasterio.crs import CRS
 from rasterio.windows import Window
+from shapely.geometry import box, mapping
 
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.models import ProcessingError
@@ -40,7 +41,11 @@ from eolab_app.raster.temporal import (
     TemporalRasterDataset,
 )
 from eolab_app.vector.filters import VectorFilter
-from catalog_selection_support import write_selection
+from catalog_selection_support import (
+    owned_polygon_area,
+    write_aggregate_area,
+    write_selection,
+)
 
 
 def _write_observation(
@@ -891,6 +896,85 @@ def test_rotated_seam_view_applies_to_every_observation(tmp_path: Path) -> None:
     ):
         assert result.read(1, masked=True).compressed().tolist() == [26.0]
         assert count.read(1, masked=True).compressed().tolist() == [3.0]
+
+
+@pytest.mark.parametrize("kind", ["polygons", "catalogSelection"])
+def test_seam_polygons_keep_temporal_reads_compact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Read only the compact seam crop across every observation and release masks.
+
+    Args:
+        tmp_path: Isolated native observations, Catalog geometry and output directory.
+        monkeypatch: Trace actual reads and forbid repeated geometry summaries.
+        kind: Owned polygons or an authorized Catalog polygon selection.
+    """
+    transform = Affine(0.25, 0, -180.125, 0, -0.25, 8.125)
+    start = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    observations = tuple(
+        TemporalObservation(
+            path=_write_observation(
+                tmp_path / "archive" / f"global-{index}.tif",
+                np.broadcast_to(np.arange(1440)[None, :] + index, (64, 1440)).astype(
+                    "float32"
+                ),
+                transform,
+                None,
+            ),
+            time=start + timedelta(hours=index),
+            reference_time=None,
+            interval_start=start,
+            interval_end=start,
+            transform=transform,
+            crs=CRS.from_epsg(4326),
+            nodata=None,
+            cyclic_x=True,
+        )
+        for index in range(24)
+    )
+    geometry = mapping(box(179.8, -1, 180, 1))
+    area = (
+        owned_polygon_area([geometry])
+        if kind == "polygons"
+        else write_aggregate_area(tmp_path / "area.gpkg", [geometry])
+    )
+
+    def reject_summary(*args: object, **kwargs: object) -> None:
+        """Reject a new preflight scan after the area bounds have been captured.
+
+        Args:
+            args: Unexpected summary positional arguments.
+            kwargs: Unexpected summary keyword arguments.
+
+        Raises:
+            AssertionError: Always, because Processing already has the area bounds.
+        """
+        raise AssertionError("Unexpected polygon summary scan during planning")
+
+    monkeypatch.setattr("eolab_app.bounded_vector.selection_summary", reject_summary)
+    trace = _trace_temporal_execution(monkeypatch)
+    directory = tmp_path / "result"
+    spec, artifact = _calculate(
+        ResolvedTemporalInterval(observations, "K", "instantaneous"),
+        TemporalReduction(reducer="mean"),
+        area,
+        directory,
+    )
+    assert spec.grid.window == (14, 27, 4, 11)
+    assert spec.grid.columnRotation == 1424
+    assert len(trace.reads) == 96
+    assert sum(width * height for _, (_, _, width, height) in trace.reads) == 1056
+    assert artifact.valid_pixels == 9
+    with (
+        rasterio.open(directory / "result.tif") as result,
+        rasterio.open(directory / "count.tif") as count,
+    ):
+        np.testing.assert_array_equal(
+            result.read(1, masked=True).compressed(), [11.5] * 9
+        )
+        np.testing.assert_array_equal(count.read(1, masked=True).compressed(), [24] * 9)
+    assert not trace.active
+    assert not (directory / "polygon-mask.tif").exists()
 
 
 def test_percentile_choice_is_validated_at_input_boundary() -> None:

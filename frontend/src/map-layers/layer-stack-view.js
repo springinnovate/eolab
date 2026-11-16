@@ -160,7 +160,7 @@ export class MapLayerStackView {
         this.pointerDrag = null;
         /** @type {{key:string,originIndex:number}|null} */
         this.keyboardDrag = null;
-        /** @type {Map<string,{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}>} Presentation-owned legend state and controls. */
+        /** @type {Map<string,{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement,contents:HTMLDivElement,preview:HTMLSpanElement|null}>} Presentation-owned legend state and controls. */
         this.legends = new Map();
         /** @type {Map<string,{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}>} Source details and utility disclosure state for each retained layer. */
         this.details = new Map();
@@ -269,9 +269,16 @@ export class MapLayerStackView {
      * @param {string|null} activeKey Active layer key.
      * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
      * focus target after a layer action, such as toggling visibility, reordering or removal.
+     * @param {string|null} [opacityKey=null] Existing layer whose opacity alone changed;
+     * update its graphics without replacing rows, controls, or disclosure state.
      * @return {void}
      */
-    render(layers, activeKey, requestedFocus = null) {
+    render(layers, activeKey, requestedFocus = null, opacityKey = null) {
+        if (opacityKey !== null) {
+            this.layers = layers;
+            this.#updateOpacity(layers.find(layer => layer.key === opacityKey));
+            return;
+        }
         this.#hideActionTooltip();
         const preserveViewport = (requestedFocus === null || ["visibility", "copy-style", "paste-style"].includes(requestedFocus.action)) &&
             layers.length === this.layers.length &&
@@ -638,7 +645,7 @@ export class MapLayerStackView {
         pasteStyle.classList.add("map-layer-clipboard-action");
         pasteStyle.setAttribute("aria-disabled", String(!clipboard.canPaste || clipboard.pasting));
         pasteStyle.setAttribute("aria-busy", String(clipboard.pasting));
-        const legend = this.#buildLegend(layer, focusTargets);
+        const legend = this.#buildLegend(layer, focusTargets, stylePreview);
         if (this.allowRemoval) {
             const remove = this.#button(
                 "×",
@@ -1268,9 +1275,10 @@ export class MapLayerStackView {
      *
      * @param {MapLayerStackSnapshot} layer Layer identity, legend and effective opacity.
      * @param {Map<string,Element>} focusTargets Controls retained across style updates.
-     * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}|null} Legend controls, or null without a legend.
+     * @param {HTMLSpanElement|null} preview Decorative key inside the retained Style button.
+     * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement,contents:HTMLDivElement,preview:HTMLSpanElement|null}|null} Legend controls and graphics, or null without a legend.
      */
-    #buildLegend(layer, focusTargets) {
+    #buildLegend(layer, focusTargets, preview) {
         const legend = layer.legend;
         const opacity = layer.effectiveOpacity ?? layer.opacity;
         if (!legend) {
@@ -1307,7 +1315,8 @@ export class MapLayerStackView {
         const text = this.documentContext.createElement("span");
         text.textContent = "Include in map legend";
         include.append(checkbox, text);
-        panel.append(collapse, buildLegendContents(this.documentContext, legend, opacity), include);
+        const contents = buildLegendContents(this.documentContext, legend, opacity);
+        panel.append(collapse, contents, include);
         panel.addEventListener("keydown", event => {
             if (event.key === "Escape" && this.legends.get(layer.key)?.expanded) {
                 event.preventDefault();
@@ -1315,10 +1324,29 @@ export class MapLayerStackView {
                 this.#toggleLegend(layer.key, false);
             }
         });
-        const state = { expanded: this.legends.get(layer.key)?.expanded ?? false, trigger, panel };
+        const state = { expanded: this.legends.get(layer.key)?.expanded ?? false, trigger, panel, contents, preview };
         this.legends.set(layer.key, state);
         this.#toggleLegend(layer.key, state.expanded, false);
         return state;
+    }
+
+    /**
+     * Refresh one layer's decorative graphics while retaining every interactive control.
+     * The legend shape and labels are unchanged by opacity, so replacement contents
+     * preserve layout, scroll position, rename input, and disclosure focus.
+     * @param {MapLayerStackSnapshot} layer Retained layer after an opacity-only change.
+     * @return {void}
+     */
+    #updateOpacity(layer) {
+        const state = this.legends.get(layer.key);
+        if (!state) return;
+        const opacity = layer.effectiveOpacity ?? layer.opacity;
+        if (state.preview) {
+            const preview = this.#buildLegendKey(layer.legend, opacity);
+            state.preview.replaceChildren(...preview.children);
+        }
+        const contents = buildLegendContents(this.documentContext, layer.legend, opacity);
+        state.contents.replaceChildren(...contents.children);
     }
 
     /**

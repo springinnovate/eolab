@@ -12,7 +12,8 @@ function snapshot() {
 /** @param {Function} request API boundary. @return {Object} Controller and observable layer state. */
 function setup(request = async () => snapshot()) {
     const local = []; const events = []; const stored = new Map();
-    const view = { busy() {}, connected() {}, showLayers: layers => events.push(["memberships", layers]), open: (...args) => events.push(["open", ...args]), message: text => events.push(["error", text]) };
+    const view = { busy() {}, connected() {}, showLayers: layers => events.push(["memberships", layers]),
+        open: (...args) => { events.push(["open", ...args]); return () => true; }, message: text => events.push(["error", text]) };
     const controller = new AnnotationSessionsController({ document: {}, api: { request }, getLayers: () => local,
         saveLocalLayers: async () => {},
         isLayerOnMap: id => local.some(layer => layer.id === id),

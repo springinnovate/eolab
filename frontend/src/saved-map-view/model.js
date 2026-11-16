@@ -10,7 +10,7 @@ const MAX_IDENTITY_LENGTH = 512;
 const MAX_VERSION_LENGTH = 100;
 const MAX_APPEARANCE_DEFINITION_BYTES = 65536;
 
-/** Error raised when an imported saved-map document violates its contract. */
+/** Error raised when a saved-map document violates its contract. */
 export class SavedMapViewValidationError extends Error {
     /**
      * Create a user-facing saved-map validation error.
@@ -70,9 +70,16 @@ export function parseSavedMapView(serialized) {
  *
  * @param {Readonly<Object>} savedMapView Document returned by createSavedMapView or parseSavedMapView.
  * @return {string} Indented UTF-8 JSON text.
+ * @throws {SavedMapViewValidationError} If the serialized document exceeds the save limit.
  */
 export function serializeSavedMapView(savedMapView) {
-    return `${JSON.stringify(savedMapView, null, 2)}\n`;
+    const serialized = `${JSON.stringify(savedMapView, null, 2)}\n`;
+    if (new TextEncoder().encode(serialized).byteLength > MAX_SAVED_MAP_VIEW_BYTES) {
+        throw new SavedMapViewValidationError(
+            "Map settings exceed the 512 KiB save limit. Remove some layers or simplify their styles."
+        );
+    }
+    return serialized;
 }
 
 /**

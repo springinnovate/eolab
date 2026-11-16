@@ -5,6 +5,7 @@ import math
 from typing import Literal
 
 import numpy
+from numpy.typing import NDArray
 import rasterio
 from rasterio.warp import transform
 from rasterio.windows import Window, transform as window_transform
@@ -218,6 +219,43 @@ def strict_raster_value_range(
     )
 
 
+def build_raster_histogram_edges(
+    minimum: float,
+    maximum: float,
+    bin_count: int,
+) -> NDArray[numpy.float64]:
+    """Build distinct finite histogram edges containing the sampled range.
+
+    Preserve the sample domain when it can represent every edge. Otherwise,
+    expand it using the same relative padding as constant-value distributions,
+    keeping expansion inside the finite float64 limits. Callers retain the
+    original sample extrema separately from this histogram domain.
+
+    Args:
+        minimum: Finite sample minimum.
+        maximum: Finite sample maximum no lower than ``minimum``.
+        bin_count: Fixed histogram size of 32 or 64 used by the statistics owner.
+
+    Returns:
+        ``bin_count + 1`` finite, strictly increasing float64 edges containing
+        both sample extrema, for use as explicit NumPy histogram bins.
+    """
+    if math.isfinite(maximum - minimum):
+        edges = numpy.linspace(minimum, maximum, bin_count + 1)
+    else:
+        # Halving before interpolation avoids overflowing the endpoint span.
+        edges = numpy.linspace(minimum / 2, maximum / 2, bin_count + 1) * 2
+        edges[0], edges[-1] = minimum, maximum
+    if numpy.all(edges[1:] > edges[:-1]):
+        return edges
+
+    padding = max(abs(minimum) * 1e-6, abs(maximum) * 1e-6, 1e-12)
+    finite_limit = float(numpy.finfo(numpy.float64).max)
+    lower = max(-finite_limit, minimum - padding)
+    upper = min(finite_limit, maximum + padding)
+    return numpy.linspace(lower, upper, bin_count + 1)
+
+
 def selected_raster_area_for_catalog_selection(
     dataset: RasterDataset,
     sampling_area: CatalogSelectionSamplingArea,
@@ -253,6 +291,8 @@ def selected_raster_area_for_polygon_input(
 ) -> SelectedRasterArea:
     """Project a saved polygon selection within the histogram coordinate budget.
 
+    Use its validated bounds to choose the cyclic column view before projection.
+
     Args:
         dataset: Open, georeferenced source raster.
         sampling_area: Authorized temporary input containing exact WGS84 polygons.
@@ -271,6 +311,7 @@ def selected_raster_area_for_polygon_input(
             for polygon in sampling_area.polygons.polygons
         ),
         RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
+        selected_bounds=sampling_area.polygons.bounds(),
     )
 
 
@@ -430,20 +471,11 @@ def summarize_raster_sample(
         p50,
         p95,
     )
-    histogram_minimum = (
-        sample_minimum
-        if sample_minimum < sample_maximum
-        else suggested_range.minimum
-    )
-    histogram_maximum = (
-        sample_maximum
-        if sample_minimum < sample_maximum
-        else suggested_range.maximum
-    )
     counts, edges = numpy.histogram(
         sample_values,
-        bins=RASTER_STATISTICS_BIN_COUNT,
-        range=(histogram_minimum, histogram_maximum),
+        bins=build_raster_histogram_edges(
+            sample_minimum, sample_maximum, RASTER_STATISTICS_BIN_COUNT
+        ),
     )
     source_pixel_count = source_width * source_height
     sampled_pixel_count = sample_width * sample_height

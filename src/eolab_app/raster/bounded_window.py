@@ -587,14 +587,21 @@ def selected_raster_area_for_wgs84_polygons(
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+    *,
+    selected_bounds: CanonicalWgs84Bounds | None = None,
 ) -> SelectedRasterArea:
     """Project a bounded polygon union and clip its complete envelope to a raster.
+
+    Choose the cyclic column view before projecting periodic polygon copies.
+    A view already chosen by an earlier selection keeps ownership of the grid.
 
     Args:
         dataset: Open georeferenced raster.
         geometries: Validated exact polygonal WGS84 mappings.
         maximum_coordinates: Caller-owned transformed-coordinate capacity.
         coordinate_transform: Injectable longitude/latitude transformation.
+        selected_bounds: Existing WGS84 envelope of the polygon union, when the
+            caller has one; otherwise derive it from the supplied coordinates.
 
     Returns:
         Projected polygons and their padded integral source window.
@@ -604,6 +611,21 @@ def selected_raster_area_for_wgs84_polygons(
         ValueError: If projection fails or exceeds coordinate capacity.
         TypeError: If a polygon mapping is malformed.
     """
+    if get_longitude_wrap_width(dataset) is not None:
+        if selected_bounds is None:
+            positions = [
+                point
+                for geometry in geometries
+                for ring in _polygon_rings(geometry)
+                for point in ring
+            ]
+            selected_bounds = (
+                min(point[0] for point in positions),
+                min(point[1] for point in positions),
+                max(point[0] for point in positions),
+                max(point[1] for point in positions),
+            )
+        prepare_raster_for_wgs84_bounds(dataset, selected_bounds)
     projected_tuple = project_wgs84_polygons(
         dataset,
         geometries,

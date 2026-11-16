@@ -49,6 +49,7 @@ CATALOG_FILES = {
     "tests/test_catalog_ingestion_postgres.py",
     "tests/test_catalog_descriptor_postgres.py",
     "tests/fixtures/catalog_descriptors/public-items.json",
+    "src/eolab_app/catalog/models.py",
     "scripts/test_catalog_postgres.py",
     "scripts/test_processing_postgres.py",
 }

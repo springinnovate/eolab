@@ -26,19 +26,32 @@ export class TemporalPeriodView {
      * @param {(tag:string,text?:string,className?:string)=>HTMLElement} helpers.element Create a text-only element.
      * @param {(id:string,caption:string,input:HTMLElement)=>HTMLLabelElement} helpers.field Create a labelled field.
      * @param {(select:HTMLSelectElement,choices:Object[],selected:string)=>void} helpers.options Update select choices.
-     * @param {Document} helpers.document Owning document, used to preserve focused edits.
      * @param {Object} settings Form-specific identity and callback.
      * @param {(change:Partial<import("./temporal-period.js").TemporalPeriod>)=>void} settings.onEdit Update editable period fields.
      * @param {string} settings.idPrefix Unique prefix for this form's period control IDs.
      * @param {string} settings.describedBy Space-separated IDs of the owning form's period guidance and status.
      */
-    constructor({element, field, options, document}, {onEdit, idPrefix, describedBy}) {
-        this.document = document;
+    constructor({element, field, options}, {onEdit, idPrefix, describedBy}) {
+        /** @type {import("./temporal-period.js").TemporalPeriod|null} Last locally emitted period whose raw controls remain authoritative. */
+        this.editedPeriod = null;
+        /** Retain independent field drafts when the owning controller echoes this edit.
+         * @param {Partial<import("./temporal-period.js").TemporalPeriod>} change Edited boundaries, empty while a calendar field is incomplete.
+         * @return {void}
+         */
+        const editPeriod = change => {
+            const previous = this.editedPeriod ?? this.temporal;
+            this.editedPeriod = {periodMode: previous.periodMode, startTime: previous.startTime, endTime: previous.endTime, ...change};
+            onEdit(change);
+        };
         this.root = element("div", "", "temporal-period");
         this.periodMode = element("select");
         options(this.periodMode, [{value: "year", label: "Whole year"}, {value: "month", label: "Whole month"},
             {value: "days", label: "Date range"}, {value: "times", label: "Exact times"}], "month");
-        this.periodMode.addEventListener("change", () => onEdit(selectTemporalPeriodMode(this.temporal, this.periodMode.value)));
+        this.periodMode.addEventListener("change", () => {
+            const previous = this.editedPeriod ?? this.temporal;
+            this.editedPeriod = null;
+            onEdit(selectTemporalPeriodMode(previous, this.periodMode.value));
+        });
         this.calendarFields = element("div", "", "temporal-period-grid");
         this.dayFields = element("div", "", "temporal-period-grid");
         this.exactFields = element("div", "", "temporal-period-grid");
@@ -50,7 +63,7 @@ export class TemporalPeriodView {
             label: new Intl.DateTimeFormat(undefined, {month: "long", timeZone: "UTC"}).format(new Date(Date.UTC(2000, month)))})), "01");
         for (const input of [this.selectedYear, this.selectedMonth]) input.addEventListener("input", () => {
             const year = readCalendarInput(this.selectedYear, true);
-            onEdit(this.periodMode.value === "year" ? getTemporalYearBoundaries(year) :
+            editPeriod(this.periodMode.value === "year" ? getTemporalYearBoundaries(year) :
                 getTemporalMonthBoundaries(year ? `${year}-${this.selectedMonth.value}` : ""));
         });
         this.monthField = field(`${idPrefix}-selected-month`, "Month", this.selectedMonth);
@@ -58,23 +71,23 @@ export class TemporalPeriodView {
         /** Capture typed or calendar-picked days without starting a calculation.
          * @return {void}
          */
-        const editDays = () => onEdit(getTemporalDayBoundaries(readCalendarInput(this.firstDay), readCalendarInput(this.lastDay)));
+        const editDays = () => editPeriod(getTemporalDayBoundaries(readCalendarInput(this.firstDay), readCalendarInput(this.lastDay)));
         for (const [name, caption] of [["firstDay", "First day"], ["lastDay", "Last day (included)"]]) {
             this.dayFields.append(this.createDateField(name, caption, {element, field, idPrefix, describedBy}, editDays));
         }
         for (const [name, caption] of [["start", "Start"], ["end", "End"]]) {
             const group = element("div", "", "temporal-period-fields");
             group.append(this.createDateField(name + "Date", `${caption} date`, {element, field, idPrefix, describedBy},
-                () => this.editExactBoundary(name, onEdit, this.roundToHour)));
+                () => this.editExactBoundary(name, editPeriod, this.roundToHour)));
             const date = this[name + "Date"];
-            date.addEventListener("input", () => this.editExactBoundary(name, onEdit, false));
-            date.addEventListener("change", () => this.editExactBoundary(name, onEdit, this.roundToHour));
-            date.addEventListener("blur", () => { if (this.roundToHour) this.editExactBoundary(name, onEdit, true); });
+            date.addEventListener("input", () => this.editExactBoundary(name, editPeriod, false));
+            date.addEventListener("change", () => this.editExactBoundary(name, editPeriod, this.roundToHour));
+            date.addEventListener("blur", () => { if (this.roundToHour) this.editExactBoundary(name, editPeriod, true); });
             const time = this[name + "Time"] = element("input"); time.type = "time"; time.required = true;
             time.setAttribute("aria-describedby", describedBy);
-            time.addEventListener("input", () => this.editExactBoundary(name, onEdit, false));
-            time.addEventListener("change", () => this.editExactBoundary(name, onEdit, this.roundToHour));
-            time.addEventListener("blur", () => { if (this.roundToHour) this.editExactBoundary(name, onEdit, true); });
+            time.addEventListener("input", () => this.editExactBoundary(name, editPeriod, false));
+            time.addEventListener("change", () => this.editExactBoundary(name, editPeriod, this.roundToHour));
+            time.addEventListener("blur", () => { if (this.roundToHour) this.editExactBoundary(name, editPeriod, true); });
             group.append(field(`${idPrefix}-${name}Time`, name === "start" ? "Start time (UTC)" : "End time (excluded, UTC)", time));
             this.exactFields.append(group);
         }
@@ -123,7 +136,10 @@ export class TemporalPeriodView {
         onEdit({[name + "Time"]: value});
     }
 
-    /** Update the selected mode and boundaries without replacing focused controls.
+    /** Refresh controls for external period changes while preserving echoed local field drafts.
+     * Incomplete calendar fields emit empty boundaries, so those boundaries cannot
+     * reconstruct their companion month or time. Keep the controls and validation
+     * until a different period, an explicit mode choice or a precision change arrives.
      * @param {import("./temporal-period.js").TemporalPeriod} temporal Editable UTC period.
      * @param {{roundToHour:boolean}} settings Whether the owning calculation requires whole-hour boundaries.
      * @return {void}
@@ -132,6 +148,9 @@ export class TemporalPeriodView {
         this.temporal = temporal;
         const precisionChanged = roundToHour !== this.roundToHour;
         this.roundToHour = roundToHour;
+        const preserveEdits = !precisionChanged && this.editedPeriod &&
+            ["periodMode", "startTime", "endTime"].every(name => temporal[name] === this.editedPeriod[name]);
+        if (!preserveEdits) this.editedPeriod = null;
         this.periodMode.value = temporal.periodMode;
         const days = getTemporalSelectedDays(temporal);
         const values = {selectedYear: temporal.startTime.slice(0, 4), selectedMonth: temporal.startTime.slice(5, 7) || "01", ...days};
@@ -141,7 +160,7 @@ export class TemporalPeriodView {
             this[name + "Time"].step = roundToHour ? "3600" : "any";
         }
         for (const [name, value] of Object.entries(values)) {
-            if (precisionChanged || this.document.activeElement !== this[name]) {
+            if (!preserveEdits) {
                 this[name].value = value;
                 if (name !== "selectedMonth") this[name].setCustomValidity("");
                 this[name].setAttribute("aria-invalid", "false");

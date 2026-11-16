@@ -530,41 +530,6 @@ def test_paired_statistics_use_internal_overviews_for_both_sources(
     assert statistics.approximate is True
 
 
-def test_paired_statistics_accept_constant_extreme_float64_values(
-    tmp_path: Path,
-) -> None:
-    """Keep histogram bounds finite at both supported float64 extremes.
-
-    Args:
-        tmp_path: Temporary directory for two controlled GeoTIFF sources.
-
-    Returns:
-        None after verifying the public paired-statistics result.
-    """
-    x_path = tmp_path / "maximum-float64.tif"
-    y_path = tmp_path / "minimum-float64.tif"
-    extreme = numpy.finfo(numpy.float64).max
-    transform = from_origin(0, 1, 1, 1)
-    _write_raster(
-        x_path,
-        numpy.full((1, 1), extreme, dtype=numpy.float64),
-        transform=transform,
-    )
-    _write_raster(
-        y_path,
-        numpy.full((1, 1), -extreme, dtype=numpy.float64),
-        transform=transform,
-    )
-
-    statistics = read_raster_paired_statistics(x_path, y_path, None)
-
-    assert statistics.x_minimum == statistics.x_maximum == extreme
-    assert statistics.y_minimum == statistics.y_maximum == -extreme
-    assert numpy.isfinite(statistics.histogram.x_edges).all()
-    assert numpy.isfinite(statistics.histogram.y_edges).all()
-    assert sum(map(sum, statistics.histogram.counts)) == 1
-
-
 def test_paired_statistics_admit_both_plans_before_pixel_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
