@@ -220,6 +220,92 @@ test("typed years and ISO dates keep partial edits and reject invalid calendar d
     h.controller.destroy();
 });
 
+test("month year edits preserve June through incomplete input, blur and final submission", async t => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({}, view), period = view.setup.temporal.period;
+    t.after(() => h.controller.destroy());
+    await h.controller.chooseTemporalVariable("temperature");
+    period.selectedYear.value = "2020"; period.selectedMonth.value = "06";
+    period.selectedMonth.dispatchEvent(new Event("input"));
+    for (const value of ["", "2", "20", "202", "0000"]) {
+        period.selectedYear.focus(); period.selectedYear.value = value;
+        period.selectedYear.dispatchEvent(new Event("input"));
+        assert.equal(view.document.activeElement, period.selectedYear);
+        period.selectedMonth.focus(); period.selectedYear.dispatchEvent(new Event("blur"));
+        h.controller.render();
+        assert.equal(period.selectedYear.value, value);
+        assert.equal(period.selectedMonth.value, "06");
+        assert.equal(period.selectedYear.getAttribute("aria-invalid"), String(Boolean(value)));
+        assert.equal(view.setup.run.disabled, true);
+        await h.controller.submit();
+        assert.equal(h.submitted.length, 0);
+    }
+    period.selectedYear.focus(); period.selectedYear.value = "2021";
+    period.selectedYear.dispatchEvent(new Event("input"));
+    assert.equal(period.selectedMonth.value, "06");
+    assert.equal(period.selectedYear.validationMessage, "");
+    assert.equal(view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs.weather, {collectionId: temporalDataset.collectionId,
+        itemId: temporalDataset.itemId, variable: "temperature", startTime: "2021-06-01T00:00:00.000Z",
+        endTime: "2021-07-01T00:00:00.000Z"});
+});
+
+test("exact date edits retain both times and accept explicit calendar, preset and restored periods", async t => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({}, view), controls = view.setup.temporal, period = controls.period;
+    t.after(() => h.controller.destroy());
+    await h.controller.chooseTemporalVariable("temperature");
+    period.periodMode.value = "times"; period.periodMode.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2020-06-01T13:45");
+    editExactTime(controls, "end", "2020-07-01T18:15");
+    for (const boundary of ["start", "end"]) {
+        const input = period[boundary + "Date"], time = period[boundary + "Time"];
+        const expectedTime = time.value, replacement = boundary === "start" ? "2020-06-02" : "2020-07-02";
+        for (const value of ["2020-02-31", "", ...Array.from(replacement, (_, index) => replacement.slice(0, index + 1))]) {
+            input.focus(); input.value = value; input.dispatchEvent(new Event("input"));
+            assert.equal(view.document.activeElement, input);
+            time.focus(); input.dispatchEvent(new Event("blur")); h.controller.render();
+            assert.equal(input.value, value); assert.equal(time.value, expectedTime);
+            if (value !== replacement) {
+                assert.equal(view.setup.run.disabled, true);
+                assert.equal(input.getAttribute("aria-invalid"), String(Boolean(value)));
+                await h.controller.submit(); assert.equal(h.submitted.length, 0);
+            }
+        }
+    }
+    const expected = captureModelSubmission(h.controller.state.draft, "e".repeat(32));
+    assert.equal(expected.inputs.weather.startTime, "2020-06-02T13:45:00.000Z");
+    assert.equal(expected.inputs.weather.endTime, "2020-07-02T18:15:00.000Z");
+    period.startDatePicker.value = "2020-06-03"; period.startDatePicker.dispatchEvent(new Event("change"));
+    assert.equal(period.startDate.value, "2020-06-03"); assert.equal(period.startTime.value, "13:45");
+    period.startTime.focus(); period.startTime.value = ""; period.startTime.dispatchEvent(new Event("input"));
+    h.controller.render();
+    assert.equal(period.startDate.value, "2020-06-03"); assert.equal(view.setup.run.disabled, true);
+    period.startTime.value = "14:45"; period.startTime.dispatchEvent(new Event("input"));
+    period.startDate.focus(); period.startDate.value = "2020-"; period.startDate.dispatchEvent(new Event("input"));
+    h.controller.editDraft({temporal: {...h.controller.state.draft.temporal,
+        startTime: "2020-06-04T12:30", endTime: "2020-07-04T16:20"}});
+    assert.equal(period.startDate.value, "2020-06-04"); assert.equal(period.startTime.value, "12:30");
+    assert.equal(period.endDate.value, "2020-07-04"); assert.equal(period.endTime.value, "16:20");
+    assert.equal(period.startDate.validationMessage, ""); assert.equal(view.setup.run.disabled, false);
+    period.periodMode.value = "month"; period.periodMode.dispatchEvent(new Event("change"));
+    assert.equal(period.selectedMonth.value, "06");
+    assert.equal(period.selectedYear.value, "2020");
+    period.selectedYear.focus(); period.selectedYear.value = "2"; period.selectedYear.dispatchEvent(new Event("input"));
+    controls.useMonth.dispatchEvent(new Event("click"));
+    assert.equal(period.selectedYear.value, "2000"); assert.equal(period.selectedMonth.value, "01");
+    assert.equal(period.selectedYear.validationMessage, ""); assert.equal(view.setup.run.disabled, false);
+    h.controller.state.library = [periodModel];
+    h.controller.state.invocation = {...expected, model: periodModel};
+    await h.controller.duplicateRun();
+    const restored = view.setup.temporal.period;
+    assert.equal(restored.periodMode.value, "times");
+    assert.equal(restored.startDate.value, "2020-06-02"); assert.equal(restored.startTime.value, "13:45:00.000");
+    assert.equal(restored.endDate.value, "2020-07-02"); assert.equal(restored.endTime.value, "18:15:00.000");
+    await h.controller.submit(); assert.deepEqual(h.submitted[0].inputs, expected.inputs);
+});
+
 test("temporal setup captures typed inputs in UTC without raster publication or automatic jobs", async () => {
     const h = await periodFixture(), draft = h.controller.state.draft;
     assert.equal(draft.inputs.raster, undefined);
@@ -401,6 +487,31 @@ test("only selecting Precipitation total rounds UTC hours and submits those date
     assert.deepEqual(h.submitted[0].inputs, expected.inputs);
     assert.deepEqual(h.submitted[0].inputs.region, area);
     h.controller.destroy();
+});
+
+test("partial precipitation dates retain companion hours and round only completed edits", async t => {
+    const item = structuredClone(temporalItem);
+    item.properties["cube:variables"].water_flux = {description: "Precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"};
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({getCatalogItem: async () => item}, view), controls = view.setup.temporal, period = controls.period;
+    t.after(() => h.controller.destroy());
+    await h.controller.chooseTemporalVariable("water_flux");
+    period.periodMode.value = "times"; period.periodMode.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2020-06-01T13:45"); editExactTime(controls, "end", "2020-07-01T18:15");
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
+    assert.equal(period.startTime.value, "14:00"); assert.equal(period.endTime.value, "18:00");
+    period.startDate.focus(); period.startDate.value = "2020-06-"; period.startDate.dispatchEvent(new Event("input"));
+    period.startTime.focus(); period.startDate.dispatchEvent(new Event("blur")); h.controller.render();
+    assert.equal(period.startDate.value, "2020-06-"); assert.equal(period.startTime.value, "14:00");
+    assert.equal(view.setup.run.disabled, true);
+    period.startDate.value = "2020-06-02"; period.startDate.dispatchEvent(new Event("input"));
+    period.startTime.value = "13:45"; period.startTime.dispatchEvent(new Event("input"));
+    assert.equal(view.setup.run.disabled, true, "unfinished rounding cannot submit fractional precipitation hours");
+    period.startTime.dispatchEvent(new Event("blur"));
+    assert.equal(period.startTime.value, "14:00"); assert.equal(view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.equal(h.submitted[0].inputs.weather.startTime, "2020-06-02T14:00:00.000Z");
+    assert.equal(h.submitted[0].inputs.weather.endTime, "2020-07-01T18:00:00.000Z");
 });
 
 test("a sole precipitation variable defaults to Mean and copied totals preserve their exact period and area", async () => {

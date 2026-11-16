@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { csvFormat, csvParse } from "d3";
+import { RasterSeriesView } from "../../src/raster/series-view.js";
+import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { RasterSeriesController } from "../../src/raster/series.js";
 import { RasterSeriesCalculations } from "../../src/processing/raster-series-calculations.js";
 import { CalculationRequests } from "../../src/processing/calculation-requests.js";
@@ -19,12 +21,13 @@ const flush = async () => { for (let index = 0; index < 120; index++) await Prom
 
 /** Connect the real stack controller and execution lifecycle to a controlled server.
  * @param {Object} [options={}] Controlled source metadata and retained server/browser state.
+ * @param {RasterSeriesView|null} [options.view=null] Real temporal controls for user-input boundary tests.
  * @param {Map<string,Object>} [options.server] Jobs retained across reload.
  * @param {Map<string,string>} [options.saved] Browser recovery records retained across reload.
  * @param {Object<string,Object>} [options.variables] Admitted Catalog variable metadata.
  * @return {Object} User actions, captured API requests and explicit server completion.
  */
-function fixture({server = new Map(), saved = new Map(), variables = {
+function fixture({view: realView = null, server = new Map(), saved = new Map(), variables = {
     temperature: {description: "Temperature", unit: "K", "eolab:time_support": "instantaneous"},
 }} = {}) {
     const submitted = [], cancelled = [], downloads = [], discovery = [], timers = new Map();
@@ -53,7 +56,7 @@ function fixture({server = new Map(), saved = new Map(), variables = {
     const jobs = new ProcessingJobs(api, clock);
     const requests = new CalculationRequests({api, jobs, storage, requestId: () => "request-" + String(++serial).padStart(16, "0")});
     const calculations = new RasterSeriesCalculations({requests, api, clock});
-    const view = {bind(actions) { this.actions = actions; }, render(state) { this.state = state; }, downloadCsv(csv) { this.csv = csv; }};
+    const view = realView ?? {bind(actions) { this.actions = actions; }, render(state) { this.state = state; }, downloadCsv(csv) { this.csv = csv; }};
     const controller = new RasterSeriesController({view, areaStatistics: calculations, onClose() {}, onEditArea() {},
         async getTemporalItem(source) {
             discovery.push(source.itemId);
@@ -71,6 +74,55 @@ function fixture({server = new Map(), saved = new Map(), variables = {
     };
     const close = () => { calculations.destroy(); requests.destroy(); jobs.destroy(); };
     return {controller, view, calculations, api, submitted, cancelled, downloads, discovery, server, saved, tick, finish, close};
+}
+
+/** Attach the real raster view to a manually advanced animation frame.
+ * @return {{document:SummaryControlDocument,view:RasterSeriesView,frame:()=>void}} Temporal controls and their frame clock.
+ */
+function periodViewFixture() {
+    const document = new SummaryControlDocument(), frames = new Map();
+    let serial = 0;
+    document.defaultView.requestAnimationFrame = callback => { frames.set(++serial, callback); return serial; };
+    document.defaultView.cancelAnimationFrame = id => frames.delete(id);
+    for (const id of ["order", "direction", "temporal-variable"]) {
+        const label = document.createElement("label"); label.append(document.querySelector("#raster-series-" + id));
+    }
+    const view = new RasterSeriesView(document);
+    /** Draw the latest controller snapshot without advancing calculation debounce.
+     * @return {void}
+     */
+    const frame = () => { const callbacks = [...frames.values()]; frames.clear(); for (const callback of callbacks) callback(); };
+    return {document, view, frame};
+}
+
+for (const mode of ["month", "times"]) {
+    test(`raster series preserves companion fields through partial ${mode} edits and captures the completed interval`, async t => {
+        const ui = periodViewFixture(), h = fixture({view: ui.view}), period = ui.view.period;
+        t.after(h.close);
+        await h.controller.chooseTimeRange(DATASET.key);
+        h.controller.updateSamplingForPanelVisibility(true); ui.frame();
+        ui.view.actions.onTemporalEdit({periodMode: mode, startTime: "2020-06-01T13:45", endTime: "2020-07-01T18:15"});
+        ui.frame();
+        const input = mode === "month" ? period.selectedYear : period.startDate;
+        const replacement = mode === "month" ? "2021" : "2020-06-02";
+        for (const value of ["", ...Array.from(replacement, (_, index) => replacement.slice(0, index + 1))]) {
+            input.focus(); input.value = value; input.dispatchEvent(new Event("input")); ui.frame();
+            assert.equal(ui.document.activeElement, input);
+            period.periodMode.focus(); input.dispatchEvent(new Event("blur")); h.controller.render(); ui.frame();
+            assert.equal(input.value, value);
+            assert.equal(mode === "month" ? period.selectedMonth.value : period.startTime.value, mode === "month" ? "06" : "13:45");
+            if (value !== replacement) {
+                await h.tick(); ui.frame();
+                assert.equal(h.submitted.length, 0, "incomplete periods never reach Processing");
+                assert.match(ui.view.status.textContent, /Choose a year/);
+            }
+        }
+        await h.tick(); ui.frame();
+        assert.equal(h.submitted.length, 1);
+        assert.deepEqual(h.submitted[0].source, {collectionId: DATASET.collectionId, itemId: DATASET.itemId, variable: "temperature",
+            startTime: mode === "month" ? "2021-06-01T00:00:00.000Z" : "2020-06-02T13:45:00.000Z",
+            endTime: mode === "month" ? "2021-07-01T00:00:00.000Z" : "2020-07-01T18:15:00.000Z"});
+    });
 }
 
 test("accepting a vector area automatically calculates its complete temporal period", async () => {
