@@ -7,6 +7,7 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from itertools import chain
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -54,6 +55,27 @@ class AdmittedArchive:
     description: ArchiveDescription
     root: Path
     catalog: Path
+
+
+@dataclass(frozen=True)
+class _TemporalMetadata:
+    """Hold validated archive metadata used to construct one temporal Item.
+
+    Attributes:
+        variables: Normalized data-cube metadata keyed by variable identifier.
+        grid: Common CRS, north-up transform, raster height and width.
+        label_start: Earliest published observation timestamp in epoch seconds.
+        label_end: Latest published observation timestamp in epoch seconds.
+        support_start: Earliest physical interval start in epoch seconds.
+        support_end: Latest physical interval end in epoch seconds.
+    """
+
+    variables: dict[str, Any]
+    grid: tuple[CRS, Affine, int, int]
+    label_start: int
+    label_end: int
+    support_start: int
+    support_end: int
 
 
 def confined_path(root: Path, relative_path: str) -> Path:
@@ -216,6 +238,141 @@ def _parse_variable_metadata(
     }
 
 
+def _read_observation_summary(
+    connection: sqlite3.Connection,
+) -> _TemporalMetadata | None:
+    """Read certified metadata groups without traversing individual observations.
+
+    The producer certifies each observation's integer times, valid intervals and
+    unique variable/time identity when publishing this relation. Admission still
+    validates its metadata groups, repeated variable totals and time bounds.
+
+    Args:
+        connection: Read-only connection to the confined producer catalog.
+
+    Returns:
+        Validated metadata, or None when the relation is absent or empty. Empty
+        summaries explicitly request the ordinary observation reader, including
+        while a producer has an unfinished ready publication.
+
+    Raises:
+        ValueError: Summary metadata, counts or extents violate the contract.
+        sqlite3.Error: An advertised summary cannot be queried.
+        TypeError: External grid or variable values cannot be interpreted.
+    """
+    relation = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') "
+        "AND name = 'observation_summary'"
+    ).fetchone()
+    if relation is None:
+        return None
+    rows = connection.execute(
+        "SELECT variable, name, units, band, dtype, nodata, temporal_type, crs, "
+        "transform, height, width, group_observation_count, observation_count, "
+        "valid_time_min, valid_time_max, interval_start_min, interval_end_max "
+        "FROM observation_summary ORDER BY variable"
+    )
+    first = rows.fetchone()
+    if first is None:
+        return None
+    variables: dict[str, Any] = {}
+    grid: tuple[CRS, Affine, int, int] | None = None
+    totals: dict[str, tuple[int, int, int, int, int]] = {}
+    grouped_counts: dict[str, int] = {}
+    for (
+        variable,
+        name,
+        units,
+        band,
+        dtype,
+        nodata,
+        temporal_type,
+        crs_value,
+        transform_value,
+        height,
+        width,
+        group_count,
+        observation_count,
+        label_start,
+        label_end,
+        support_start,
+        support_end,
+    ) in chain((first,), rows):
+        current_grid = _parse_observation_grid(
+            variable, crs_value, transform_value, height, width
+        )
+        if band != 1:
+            raise ValueError(f"Unsupported raster grid for {variable}")
+        if grid is not None and current_grid != grid:
+            raise ValueError("Temporal observations must share one raster grid")
+        grid = current_grid
+        metadata = _parse_variable_metadata(
+            variable, name, units, dtype, nodata, temporal_type
+        )
+        if variable in variables and variables[variable] != metadata:
+            raise ValueError(
+                f"Variable metadata differs between observations: {variable}"
+            )
+        variables[variable] = metadata
+        if (
+            not isinstance(group_count, int)
+            or group_count <= 0
+            or not isinstance(observation_count, int)
+            or observation_count <= 0
+        ):
+            raise ValueError(f"Invalid observation summary count for {variable}")
+        if (
+            not all(
+                isinstance(value, int)
+                for value in (label_start, label_end, support_start, support_end)
+            )
+            or label_start > label_end
+            or support_end != label_end
+        ):
+            raise ValueError(
+                f"Invalid time or interval for {variable} in observation summary"
+            )
+        current_totals = (
+            observation_count,
+            label_start,
+            label_end,
+            support_start,
+            support_end,
+        )
+        if variable in totals and totals[variable] != current_totals:
+            raise ValueError(
+                f"Observation summary totals or time bounds differ for {variable}"
+            )
+        totals[variable] = current_totals
+        grouped_counts[variable] = grouped_counts.get(variable, 0) + group_count
+    for variable, (
+        count,
+        label_start,
+        label_end,
+        support_start,
+        support_end,
+    ) in totals.items():
+        instantaneous = variables[variable]["eolab:time_support"] == "instantaneous"
+        if (instantaneous and support_start != label_start) or (
+            not instantaneous and support_start >= label_start
+        ):
+            raise ValueError(
+                f"Invalid time or interval for {variable} in observation summary"
+            )
+        if grouped_counts[variable] != count:
+            raise ValueError(
+                f"Observation summary group counts do not match total for {variable}"
+            )
+    return _TemporalMetadata(
+        variables=variables,
+        grid=cast(tuple[CRS, Affine, int, int], grid),
+        label_start=min(values[1] for values in totals.values()),
+        label_end=max(values[2] for values in totals.values()),
+        support_start=min(values[3] for values in totals.values()),
+        support_end=max(values[4] for values in totals.values()),
+    )
+
+
 def build_temporal_items(
     source_root: Path, candidate: DatasetCandidate
 ) -> tuple[dict[str, Any], ...]:
@@ -225,8 +382,10 @@ def build_temporal_items(
     variable metadata and observation intervals. The producer owns TIFF
     publication integrity; native file errors are reported when an observation
     is used. Partial coverage is valid and no missing observations are invented.
-    Every scan reads the current published rows. Consecutive identical grid and
-    variable descriptions reuse one parsed result each within this call only;
+    Every scan reads the current producer summary when available, trusting its
+    publication-time certification of individual times and identities. Absent or
+    empty summaries use the full observation reader. That reader reuses parsed
+    consecutive identical grid and variable descriptions within this call only;
     changed descriptions are validated and compared in their normalized form.
 
     Args:
@@ -257,11 +416,18 @@ def build_temporal_items(
     if archive.catalog.drive.startswith("\\\\"):
         catalog_uri = catalog_uri.replace("file://", "file:////", 1)
     with closing(sqlite3.connect(f"{catalog_uri}?mode=ro", uri=True)) as connection:
-        rows = connection.execute(
-            "SELECT variable, name, units, band, valid_time, reference_time, "
-            "interval_start, interval_end, temporal_type, dtype, nodata, crs, "
-            "transform, height, width FROM observations ORDER BY variable, valid_time"
-        )
+        summary = _read_observation_summary(connection)
+        if summary is None:
+            rows = connection.execute(
+                "SELECT variable, name, units, band, valid_time, reference_time, "
+                "interval_start, interval_end, temporal_type, dtype, nodata, crs, "
+                "transform, height, width FROM observations ORDER BY variable, valid_time"
+            )
+        else:
+            variables, grid = summary.variables, summary.grid
+            label_start, label_end = summary.label_start, summary.label_end
+            support_start, support_end = summary.support_start, summary.support_end
+            rows = ()
         for (
             variable,
             name,
