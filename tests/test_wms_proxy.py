@@ -1,13 +1,15 @@
 """Test the restricted public WMS proxy contract."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx2
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from starlette.types import Message, Scope
 
 from eolab_app.main import create_app
 from eolab_app.rendering.render_queue import GeoServerRenderQueue
@@ -232,6 +234,350 @@ def test_wms_proxy_drains_get_map_after_client_disconnect() -> None:
     assert snapshot.latest_seconds is None
     assert snapshot.recent_failures == 0
     assert snapshot.recent_window_size == 0
+
+
+
+class _FeatureInspectionRequest:
+    """Send one feature inspection through ASGI with an explicit disconnect."""
+
+    def __init__(
+        self, application: FastAPI, index: int = 0, *, owner: str = "allowed"
+    ) -> None:
+        """Start a distinct query without relying on a test client's cancellation.
+
+        Args:
+            application: Actual WMS router under test.
+            index: Pixel coordinate distinguishing the upstream query.
+            owner: Test-only authorization header checked by the source boundary.
+        """
+        self.messages: asyncio.Queue[Message] = asyncio.Queue()
+        self.messages.put_nowait(
+            {"type": "http.request", "body": b"", "more_body": False}
+        )
+        self.responses: list[Message] = []
+        scope: Scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/geoserver/eolab/wms",
+            "raw_path": b"/geoserver/eolab/wms",
+            "query_string": (
+                "service=WMS&version=1.3.0&request=GetFeatureInfo"
+                "&layers=eolab:parcels&query_layers=eolab:parcels"
+                "&styles=vector-polygon&crs=EPSG:3857&bbox=0,0,1,1"
+                "&width=256&height=256&format=image/png"
+                f"&info_format=application/json&i={index}&j=1"
+            ).encode(),
+            "headers": [(b"host", b"testserver"), (b"x-test-owner", owner.encode())],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "root_path": "",
+            "state": {},
+        }
+        self.task = asyncio.create_task(
+            application(scope, self.messages.get, self.send)
+        )
+
+    async def send(self, message: Message) -> None:
+        """Record an HTTP response message.
+
+        Args:
+            message: ASGI output emitted by the actual route.
+        """
+        self.responses.append(message)
+
+    def disconnect(self) -> None:
+        """Tell the server that this browser no longer needs its query."""
+        self.messages.put_nowait({"type": "http.disconnect"})
+
+    async def response(self) -> tuple[int, dict[str, str]]:
+        """Wait for completion and return the HTTP status and headers.
+
+        Returns:
+            Status and decoded headers from the ASGI response start.
+        """
+        await self.task
+        start = next(
+            message
+            for message in self.responses
+            if message["type"] == "http.response.start"
+        )
+        return start["status"], {
+            key.decode(): value.decode() for key, value in start["headers"]
+        }
+
+
+def test_feature_inspection_disconnect_bounds_work_and_retains_source_leases() -> None:
+    """Discard twelve users' superseded queries while started reads retain files."""
+
+    async def scenario() -> None:
+        """Exercise three pointer waves through real HTTP admission and leases."""
+        started: list[int] = []
+        leases: set[int] = set()
+        both_started = asyncio.Event()
+        released = asyncio.Event()
+        release_upstream = asyncio.Event()
+        tracker = GetMapRequestTracker(2)
+        queue = GeoServerRenderQueue(2)
+
+        @asynccontextmanager
+        async def use_layers(
+            names: tuple[str, ...], request: Request
+        ) -> AsyncIterator[None]:
+            """Track source retention until its admitted query actually finishes.
+
+            Args:
+                names: Authorized publication identities.
+                request: HTTP query whose private source is retained.
+
+            Yields:
+                Control while the controlled upstream read owns the source.
+            """
+            assert names == ("eolab:parcels",)
+            index = int(request.query_params["i"])
+            leases.add(index)
+            try:
+                yield
+            finally:
+                leases.remove(index)
+                if not leases:
+                    released.set()
+
+        async def upstream(request: httpx2.Request) -> httpx2.Response:
+            """Hold the first two native reads until the test releases them.
+
+            Args:
+                request: Admitted GeoServer request.
+
+            Returns:
+                Small valid feature collection.
+            """
+            started.append(int(request.url.params["i"]))
+            if len(started) == 2:
+                both_started.set()
+            await release_upstream.wait()
+            return httpx2.Response(
+                200, json={"type": "FeatureCollection", "features": []}
+            )
+
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(upstream)
+        ) as client:
+            application = FastAPI()
+            application.include_router(
+                create_wms_proxy_router(
+                    client,
+                    "http://geoserver/geoserver",
+                    (_FixedVectorAuthorization(),),
+                    tracker,
+                    queue,
+                    use_layers=use_layers,
+                )
+            )
+            for wave in range(3):
+                requests = [
+                    _FeatureInspectionRequest(application, wave * 12 + user)
+                    for user in range(12)
+                ]
+                if wave == 0:
+                    await both_started.wait()
+                for request in requests:
+                    request.disconnect()
+                responses = await asyncio.gather(
+                    *(request.response() for request in requests)
+                )
+                assert all(status == 499 for status, _headers in responses)
+                assert len(started) == len(leases) == 2
+            assert tracker.snapshot().active == tracker.snapshot().completed == 0
+            assert tracker.snapshot().recent_failures == 0
+            release_upstream.set()
+            await released.wait()
+            assert not leases
+            final_status, _headers = await _FeatureInspectionRequest(
+                application, 100
+            ).response()
+            assert final_status == 200
+            assert len(started) == 3
+            await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))
+
+
+def test_feature_inspection_authorizes_every_coalesced_caller() -> None:
+    """Share identical authorized reads without granting private access to others."""
+
+    async def scenario() -> None:
+        """Hold one shared query while rejecting an unauthorized matching request."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+        starts = 0
+        checks: list[str] = []
+        second_admission = asyncio.Event()
+
+        class ObservedQueue(GeoServerRenderQueue):
+            """Expose admission at the public queue boundary without altering it."""
+
+            async def run(
+                self,
+                request: Callable[[], Awaitable[httpx2.Response]],
+                *,
+                request_key: str | None = None,
+            ) -> httpx2.Response:
+                """Signal the second admitted caller before yielding to its read.
+
+                Args:
+                    request: Authorized deferred upstream operation.
+                    request_key: Prepared query identity supplied by the route.
+
+                Returns:
+                    Response from the real shared queue.
+                """
+                if started.is_set():
+                    second_admission.set()
+                return await super().run(request, request_key=request_key)
+
+        queue = ObservedQueue(1)
+
+        async def authorize(names: tuple[str, ...], request: Request) -> bool:
+            """Enforce independent source ownership before shared queue admission.
+
+            Args:
+                names: Requested publication identities.
+                request: Browser request carrying the fixture owner.
+
+            Returns:
+                True to mark the authorized response private.
+
+            Raises:
+                HTTPException: When the fixture owner is not allowed access.
+            """
+            assert names == ("eolab:parcels",)
+            owner = request.headers["x-test-owner"]
+            checks.append(owner)
+            if owner != "allowed":
+                raise HTTPException(404, "This upload is unavailable.")
+            return True
+
+        async def upstream(request: httpx2.Request) -> httpx2.Response:
+            """Count actual upstream operations while their callers overlap.
+
+            Args:
+                request: Authorized feature-info query.
+
+            Returns:
+                Valid private feature collection.
+            """
+            nonlocal starts
+            assert request.url.params["request"] == "GetFeatureInfo"
+            starts += 1
+            started.set()
+            await release.wait()
+            return httpx2.Response(
+                200, json={"type": "FeatureCollection", "features": []}
+            )
+
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(upstream)
+        ) as client:
+            application = FastAPI()
+            application.include_router(
+                create_wms_proxy_router(
+                    client,
+                    "http://geoserver/geoserver",
+                    (_FixedVectorAuthorization(),),
+                    GetMapRequestTracker(1),
+                    queue,
+                    authorize_layers=authorize,
+                )
+            )
+            first = _FeatureInspectionRequest(application)
+            await started.wait()
+            second = _FeatureInspectionRequest(application)
+            denied = _FeatureInspectionRequest(application, owner="other")
+            assert (await denied.response())[0] == 404
+            await second_admission.wait()
+            first.disconnect()
+            assert (await first.response())[0] == 499
+            release.set()
+            status, headers = await second.response()
+            assert status == 200
+            assert headers["cache-control"] == "private, no-store"
+            assert checks == ["allowed", "allowed", "other"]
+            assert starts == 1
+            await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))
+
+
+@pytest.mark.parametrize("failure", ("capacity", "queue-timeout", "execution-timeout"))
+def test_feature_inspection_translates_admission_and_execution_failures(
+    failure: str,
+) -> None:
+    """Return bounded retryable busy responses or the upstream execution deadline.
+
+    Args:
+        failure: Queue failure exercised through the actual HTTP route.
+    """
+
+    async def scenario() -> None:
+        """Block an upstream request and observe the public failure response."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+        queue = GeoServerRenderQueue(
+            1,
+            capacity=0 if failure == "capacity" else 1,
+            wait_seconds=0.02 if failure == "queue-timeout" else 1,
+            execution_seconds=0.02 if failure == "execution-timeout" else 1,
+        )
+
+        async def upstream(request: httpx2.Request) -> httpx2.Response:
+            """Wait for release or the queue's execution deadline.
+
+            Args:
+                request: Admitted GeoServer query.
+
+            Returns:
+                Valid feature collection after release.
+            """
+            del request
+            started.set()
+            await release.wait()
+            return httpx2.Response(
+                200, json={"type": "FeatureCollection", "features": []}
+            )
+
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(upstream)
+        ) as client:
+            application = FastAPI()
+            application.include_router(
+                create_wms_proxy_router(
+                    client,
+                    "http://geoserver/geoserver",
+                    (_FixedVectorAuthorization(),),
+                    GetMapRequestTracker(1),
+                    queue,
+                )
+            )
+            first = _FeatureInspectionRequest(application)
+            await started.wait()
+            failing = (
+                first
+                if failure == "execution-timeout"
+                else _FeatureInspectionRequest(application, 1)
+            )
+            status, headers = await failing.response()
+            assert status == (504 if failure == "execution-timeout" else 503)
+            assert headers["cache-control"] == "private, no-store"
+            if status == 503:
+                assert headers["retry-after"] == "1"
+                release.set()
+                assert (await first.response())[0] == 200
+            await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))
 
 
 def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:

@@ -32,7 +32,7 @@ class _SharedRender:
 
 
 class GeoServerRenderQueue:
-    """Schedule distinct WMS requests in FIFO order across both tile routes.
+    """Schedule map images and feature inspections in shared FIFO order.
 
     Requests with the same caller-supplied key share one queued or running render.
     Composite callers also cache and coalesce tiles before entering this queue.
@@ -51,7 +51,8 @@ class GeoServerRenderQueue:
         """Set process-local limits without changing GeoServer's own limits.
 
         Args:
-            concurrency: Maximum simultaneous upstream GetMap requests.
+            concurrency: Maximum simultaneous upstream map and feature-inspection
+                requests.
             capacity: Additional distinct requests allowed to wait.
             wait_seconds: Maximum time waiting for an upstream slot.
             execution_seconds: Maximum time from dispatch through response body.

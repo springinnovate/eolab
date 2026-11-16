@@ -7,7 +7,7 @@ import httpx2
 from eolab_app.calculated_fields import CalculatedField
 
 class MapRenderQueue(Protocol):
-    """Admit an authorized HTTP render without exposing queue implementation."""
+    """Admit authorized map and inspection HTTP work through shared capacity."""
 
     async def run(
         self, request: Callable[[], Awaitable[httpx2.Response]],
@@ -17,7 +17,7 @@ class MapRenderQueue(Protocol):
         """Wait for rendering capacity and then send the supplied request.
 
         Args:
-            request: Deferred upstream GetMap HTTP operation.
+            request: Deferred upstream GetMap or GetFeatureInfo HTTP operation.
             request_key: Full authorized upstream request identity. Matching keys
                 share outstanding work; None requests an independent operation.
                 Every caller must authorize before joining. Canceling the last
