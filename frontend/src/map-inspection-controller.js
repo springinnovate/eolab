@@ -84,6 +84,8 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
+            { name: "planning", label: "Planning", panel: documentContext.querySelector("#planning-panel"),
+                tab: documentContext.querySelector("#map-inspection-tab-planning") },
             { name: "models", label: "Data tools", panel: documentContext.querySelector("#models-panel"),
                 tab: documentContext.querySelector("#map-inspection-tab-models") },
             { name: "raster-series", label: "Raster statistics", panel: this.rasterSeries, raster: true, resultNavigation: true,
@@ -343,6 +345,12 @@ export class MapInspectionController {
 
     /** Hide Data tools while its controller retains setup and run observation. @return {void} */
     hideModels() { this.#hideTool("models"); }
+
+    /** Reveal Planning while retaining peer tools and their settings. @return {void} */
+    showPlanning() { this.#showTool("planning"); }
+
+    /** Hide Planning while its controller retains the edited tool. @return {void} */
+    hidePlanning() { this.#hideTool("planning"); }
 
 
     /** Reveal the raster clip tool while retaining peer panels. @return {void} */
@@ -845,7 +853,7 @@ export class MapInspectionController {
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
         this.dockTitle.textContent = tool === null ? "Explore data" : `${tool.task} · ${tool.label}`;
         this.dockTitle.title = this.dockTitle.textContent;
-        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations", "models", "style", "filter"].includes(this.activeTool);
+        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations", "models", "planning", "style", "filter"].includes(this.activeTool);
         const context = tool?.context ?? (this.activeTool === "feature"
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });

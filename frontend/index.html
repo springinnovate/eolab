@@ -681,6 +681,10 @@
       </div>
       <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
+          <strong class="workspace-tool-actions-label">Planning</strong>
+          <button id="open-planning" class="workspace-tool-action" type="button" aria-controls="planning-panel">Planning tools</button>
+        </div>
+        <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Analysis</strong>
           <button id="open-models" class="workspace-tool-action" type="button" aria-controls="models-panel">Data tools</button>
           <button id="open-model-runs" class="workspace-tool-action" type="button" aria-controls="models-panel">Data tool runs</button>
@@ -725,6 +729,7 @@
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
             aria-label="Open map tools">
             <button id="map-inspection-tab-models" class="map-inspection-tab" type="button" role="tab" aria-controls="models-panel" aria-selected="false" tabindex="-1" hidden>Data tools</button>
+            <button id="map-inspection-tab-planning" class="map-inspection-tab" type="button" role="tab" aria-controls="planning-panel" aria-selected="false" tabindex="-1" hidden>Planning</button>
             <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Polygons</button>
             <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
               type="button" role="tab" aria-controls="raster-clips-panel"
@@ -745,6 +750,7 @@
           </div>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
+          <section id="planning-panel" role="tabpanel" aria-labelledby="map-inspection-tab-planning" hidden></section>
           <section id="models-panel" role="tabpanel" aria-labelledby="map-inspection-tab-models" hidden>
             <header class="map-histogram-toolbar models-header">
               <h2 id="models-heading" class="visually-hidden" tabindex="-1">Data tools</h2>

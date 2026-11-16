@@ -29,6 +29,7 @@ function fixture(configureDocument = () => {}) {
     doc.querySelector("#vector-filter-panel").hidden = true;
     doc.querySelector("#raster-clips-panel").hidden = true;
     doc.querySelector("#models-panel").hidden = true;
+    doc.querySelector("#planning-panel").hidden = true;
     doc.querySelector("#annotations-panel").hidden = true;
     doc.querySelector("#raster-series").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
@@ -1187,6 +1188,26 @@ test("sampling widget retains disclosure and area through Models, tool switches 
     assert.equal(view.disclosure.open, false, "a user's collapsed state also survives panel changes");
     assert.equal(widget.hidden, false);
     view.unbind();
+});
+
+test("Planning retains its place while ordinary layer filters are edited", () => {
+    const h = fixture(), panel = h.doc.querySelector("#planning-panel"), tab = h.doc.querySelector("#map-inspection-tab-planning");
+    const active = [];
+    h.controller.subscribeActiveTool(tool => active.push(tool));
+    h.controller.showPlanning();
+    assert.equal(panel.hidden, false);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(h.dockTitle.hidden, true);
+    h.controller.showFilter("Restoration parcels");
+    assert.equal(h.controller.activeTool, "filter");
+    assert.equal(tab.hidden, false);
+    tab.dispatchEvent(new Event("click"));
+    assert.equal(h.controller.activeTool, "planning");
+    assert.equal(active.at(-1), "planning");
+    h.controller.hidePlanning();
+    assert.equal(panel.hidden, true);
+    assert.equal(h.controller.activeTool, "filter");
+    h.controller.destroy();
 });
 
 test("Data tools keeps its visible tool title when alone and alongside another editor", () => {
