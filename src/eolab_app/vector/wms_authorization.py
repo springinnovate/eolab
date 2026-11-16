@@ -1,6 +1,7 @@
 """Authorize source-bound vector appearances and build request-local WMS styles."""
 
 from collections.abc import Mapping
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass, field
 import hmac
 import json
@@ -86,16 +87,22 @@ class PublishedVectorAuthorization:
         operation: str,
         query: Mapping[str, str],
     ) -> None:
-        """Reject raster-only substitutions on a vector request.
+        """Validate vector inspection options and reject raster substitutions.
 
         Args:
             operation: Normalized WMS operation.
             query: Normalized, globally bounded query parameters.
 
         Raises:
-            PublishedLayerRequestError: If a dynamic environment is supplied.
+            PublishedLayerRequestError: If bounds are requested outside feature
+                inspection, their flag is invalid, or raster options are supplied.
         """
-        del operation
+        if "vector_feature_bounds" in query and (
+            operation != "getfeatureinfo" or query["vector_feature_bounds"] != "true"
+        ):
+            raise PublishedLayerRequestError(
+                "vector_feature_bounds requires GetFeatureInfo and the value true"
+            )
         if "raster_style" in query:
             raise PublishedLayerRequestError(
                 "raster_style is not supported for vector layers"
@@ -108,7 +115,12 @@ class PublishedVectorAuthorization:
     def prepare_query(
         self, operation: str, query: list[tuple[str, str]],
     ) -> list[tuple[str, str]]:
-        """Build inline appearance and filter parameters for one WMS request.
+        """Build the authorized appearance, filter and bounded inspection format.
+
+        When feature bounds are requested, GeoServer reads geometry to return
+        WGS84 envelopes without serializing full geometry. Requested scalar
+        fields are selected inside the writer before response-size validation.
+        Attribute-only requests, including hover, keep their native projection.
 
         Args:
             operation: Validated lowercase WMS operation.
@@ -123,6 +135,7 @@ class PublishedVectorAuthorization:
         """
         normalized = {key.lower(): value for key, value in query}
         calculated_fields = self._read_calculated_fields(normalized)
+        include_bounds = normalized.get("vector_feature_bounds") == "true"
         upstream_layer = (
             self.inspection_layer_name
             if self.inspection_layer_name is not None
@@ -169,16 +182,23 @@ class PublishedVectorAuthorization:
             raise PublishedLayerRequestError(
                 "Calculated fields require their approved vector appearance"
             )
+        omitted_parameters = {"vector_calculated_fields", "vector_feature_bounds"}
+        if include_bounds:
+            omitted_parameters.update({"propertyname", "info_format"})
+        elif calculated_fields and operation == "getfeatureinfo":
+            omitted_parameters.add("propertyname")
         query = [
-            (key, value)
-            for key, value in query
-            if key.lower() != "vector_calculated_fields"
-            and not (
-                calculated_fields
-                and operation == "getfeatureinfo"
-                and key.lower() == "propertyname"
-            )
+            (key, value) for key, value in query
+            if key.lower() not in omitted_parameters
         ]
+        if include_bounds:
+            query.append(("info_format", "application/vnd.eolab.feature-info+json"))
+            if "propertyname" in normalized and not calculated_fields:
+                property_names = json.dumps(
+                    normalized["propertyname"].split(",")
+                ).encode("utf-8")
+                encoded_names = urlsafe_b64encode(property_names).decode("ascii")
+                query.append(("format_options", f"eolabProperties:{encoded_names}"))
         if self.filter is None:
             return [
                 (

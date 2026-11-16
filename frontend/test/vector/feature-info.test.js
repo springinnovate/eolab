@@ -50,6 +50,7 @@ test("feature info scales a large viewport and click under the WMS limit", () =>
   assert.equal(url.searchParams.get("buffer"), String(VECTOR_FEATURE_INFO_BUFFER_PIXELS));
   assert.equal(url.searchParams.get("info_format"), "application/json");
   assert.equal(url.searchParams.get("propertyName"), "name,R2000,R2024");
+  assert.equal(url.searchParams.has("vector_feature_bounds"), false);
 });
 
 test("feature info accepts only a bounded GeoJSON FeatureCollection", async () => {
@@ -113,4 +114,14 @@ test("feature info exposes safe proxy failures", async () => {
     })),
     /exceeded its limit/,
   );
+});
+
+
+test("explicit inspection requests feature bounds while ordinary queries stay attribute-only", () => {
+  const url = new URL(buildVectorFeatureInfoUrl({
+    wmsUrl: "https://viewer.test/wms", publication: PUBLICATION,
+    propertyNames: PROPERTY_NAMES, viewport: VIEWPORT, includeBounds: true,
+  }));
+  assert.equal(url.searchParams.get("vector_feature_bounds"), "true");
+  assert.equal(url.searchParams.get("propertyName"), "name,R2000,R2024");
 });

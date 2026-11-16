@@ -230,9 +230,9 @@ test("feature queries keep the clicked location across Mercator zooms and map si
   assert.equal(requests.length, 27);
 });
 
-test("projected WMS geometry retains geographic feature focus and fallback highlighting", async () => {
+test("geographic feature bounds stay independent of projected fallback highlighting", async () => {
   const feature = {
-    type: "Feature", properties: {},
+    type: "Feature", properties: {}, bbox: [-108, 54, -107, 55],
     geometry: { type: "GeometryCollection", geometries: [
       { type: "Point", coordinates: [-12022505, 7170156, 12] },
       { type: "Polygon", coordinates: [[[-12022505, 7170156], [-11911185, 7170156],
@@ -365,41 +365,19 @@ test("analysis observations are immutable and omit nested properties", () => {
   assert.equal(Object.isFrozen(observation.properties), true);
 });
 
-test("feature focus uses returned geometry bounds with a safe click fallback", () => {
-  /**
-   * Derive the observation-owned focus for test geometry.
-   *
-   * @param {Object|null} geometry Optional GeoJSON geometry.
-   * @param {{lng:number,lat:number}} [inspectionPosition] Map-click position.
-   * @return {Readonly<Object>} Derived neutral focus target.
-   */
-  function focusFor(
-    geometry,
-    inspectionPosition = { lng: 10.5, lat: 21.5 },
-  ) {
-    return vectorInspectionObservation({
-      feature: { geometry, properties: {} },
-      target: { sourceId: "catalog|focus", label: "Focus layer" },
-      inspectionPosition,
-    }).focus;
-  }
-  assert.deepEqual(focusFor({
-    type: "LineString", coordinates: [[10, 20], [12, 24], [11, 22]],
-  }), { center: [10.5, 21.5], bounds: [10, 20, 12, 24] });
-  assert.deepEqual(focusFor(
-    { type: "Point", coordinates: [11, 22] },
-  ), { center: [11, 22], bounds: [11, 22, 11, 22] });
-  assert.deepEqual(focusFor(null), {
-    center: [10.5, 21.5], bounds: null,
+test("feature focus uses returned geographic bounds independently of the click", () => {
+  const bbox = [10, 20, 12, 24];
+  const observation = vectorInspectionObservation({
+    feature: { geometry: null, bbox, properties: {} },
+    target: { sourceId: "catalog|focus", label: "Focus layer" },
+    inspectionPosition: { lng: 9.99, lat: 21.5 },
   });
-  assert.deepEqual(focusFor({
-    type: "LineString",
-    coordinates: [[179, 10], [-179, 11]],
-  }), { center: [10.5, 21.5], bounds: null });
-  assert.throws(
-    () => focusFor(null, { lng: 181, lat: 0 }),
-    /Invalid vector feature inspection position/,
-  );
+  assert.deepEqual(observation.focus, { center: [11, 22], bounds: bbox });
+  assert.notEqual(observation.focus.bounds, bbox);
+  assert.equal(Object.isFrozen(observation.focus.bounds), true);
+  assert.equal(Object.isFrozen(bbox), false);
+  bbox[0] = 0;
+  assert.equal(observation.focus.bounds[0], 10);
 });
 
 test("inspector queries composed visible targets and navigates overlapping features", async () => {
@@ -408,6 +386,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   const features = [
     {
       type: "Feature",
+      bbox: [1, 1, 2, 2],
       geometry: { type: "Polygon", coordinates: [
         [[1, 1], [2, 1], [2, 2], [1, 1]],
       ] },
@@ -415,6 +394,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
     },
     {
       type: "Feature",
+      bbox: [7, 7, 8, 8],
       geometry: { type: "Polygon", coordinates: [
         [[7, 7], [8, 7], [8, 8], [7, 7]],
       ] },
@@ -423,6 +403,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   ];
   const h = createFixture(async (_url, { body: parameters }) => {
     assert.deepEqual(JSON.parse(parameters.get("vector_style")), POLYGON_STYLE);
+    assert.equal(parameters.get("vector_feature_bounds"), "true");
     requestedLayers.push(parameters.get("layers"));
     requestedProperties.push(parameters.get("propertyName"));
     return {
@@ -472,7 +453,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(zoomButton.disabled, false);
   zoomButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.featureZoomRequests, [{
-    center: [5, 5], bounds: [7, 7, 8, 8],
+    center: [7.5, 7.5], bounds: [7, 7, 8, 8],
   }]);
   assert.deepEqual(h.currentNavigationChanges.at(-1), {
     position: 2,
@@ -498,7 +479,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   });
   zoomButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.featureZoomRequests.at(-1), {
-    center: [5, 5], bounds: [1, 1, 2, 2],
+    center: [1.5, 1.5], bounds: [1, 1, 2, 2],
   });
   assert.throws(() => h.controller.navigateResult("later"), /direction/);
 });
@@ -912,4 +893,50 @@ test("inspection still rejects invalid catalog bounds", () => {
     h.targets[0].bbox = bbox;
     assert.throws(() => h.controller.syncVisibleLayers(), /Invalid vector feature inspection target/);
   }
+});
+
+
+test("unavailable feature location keeps attributes and explains the rejected zoom", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature", id: "parcels.42", geometry: null, bbox: null,
+      properties: { name: "Selected parcel" },
+    }] }),
+  }));
+  h.controller.onFeatureZoomRequested = focus => {
+    assert.equal(focus.bounds, null);
+    return false;
+  };
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const zoom = h.documentContext.querySelector("#zoom-inspected-vector-feature");
+  zoom.dispatchEvent(new Event("click"));
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
+  assert.equal(h.currentObservationChanges.at(-1).properties.name, "Selected parcel");
+  h.controller.destroy();
+});
+
+
+test("paging away from a feature without bounds clears obsolete zoom failure text", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [
+      { type: "Feature", id: "parcels.1", geometry: null, bbox: null, properties: {} },
+      { type: "Feature", id: "parcels.2", geometry: null, bbox: [1, 1, 2, 2], properties: {} },
+    ] }),
+  }));
+  h.controller.onFeatureZoomRequested = focus => focus.bounds !== null;
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const zoom = h.documentContext.querySelector("#zoom-inspected-vector-feature");
+  const status = h.documentContext.querySelector("#vector-feature-status");
+  zoom.dispatchEvent(new Event("click"));
+  assert.match(status.textContent, /unavailable/);
+  h.controller.navigateResult("next");
+  assert.equal(status.textContent, "2 features found in under 0.1 s.");
+  assert.equal(zoom.disabled, false);
+  zoom.dispatchEvent(new Event("click"));
+  assert.equal(status.textContent, "2 features found in under 0.1 s.");
+  h.controller.destroy();
 });

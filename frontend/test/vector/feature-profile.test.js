@@ -499,3 +499,20 @@ test("active mode survives empty clicks, reopens, and ends on explicit close", (
     2,
   );
 });
+
+
+test("unavailable feature location leaves the chart usable with a readable explanation", () => {
+  const h = fixture();
+  h.controller.onFeatureZoom = () => false;
+  h.controller.setCurrentObservation(observation({
+    focus: Object.freeze({ center: [20, 10], bounds: null }),
+  }));
+  h.controller.open();
+  const zoom = h.documentContext.querySelector("#zoom-vector-feature-profile-feature");
+  zoom.dispatchEvent(new Event("click"));
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-chart").hidden, false);
+  h.controller.destroy();
+});

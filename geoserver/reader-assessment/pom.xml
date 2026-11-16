@@ -22,6 +22,13 @@
   </repositories>
 
   <dependencies>
+    <!-- Compile against the WMS extension point already present in GeoServer. -->
+    <dependency>
+      <groupId>org.geoserver</groupId>
+      <artifactId>gs-wms-core</artifactId>
+      <version>3.0.1</version>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>org.geoserver</groupId>
       <artifactId>gs-restconfig</artifactId>
@@ -44,6 +51,12 @@
       <groupId>org.geotools</groupId>
       <artifactId>gt-feature-pregeneralized</artifactId>
       <version>35.1</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>6.1.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>

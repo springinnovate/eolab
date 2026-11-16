@@ -29,6 +29,7 @@ test("reuses bounded feature queries in top-first order and stops at first hit",
     assert.equal(queries[0].get("styles"), "filtered-style");
     assert.deepEqual(JSON.parse(queries[0].get("vector_style")), targets[0].publication.style);
     assert.equal(queries[0].get("propertyName"), "name");
+    assert.equal(queries.every(query => !query.has("vector_feature_bounds")), true);
 });
 
 test("no visible targets or no matching feature returns no label", async () => {
