@@ -10,7 +10,8 @@ test("both chart controllers consume the inspector's immutable scalar observatio
   const observation = vectorInspectionObservation({
     feature: {
       id: "habitat.1",
-      geometry: { type: "Point", coordinates: [20, 10] },
+      geometry: null,
+      bbox: [20, 10, 20, 10],
       properties: { R1999: 1, R2000: 2, nested: { ignored: true } },
     },
     target: { sourceId: "catalog|habitat", label: "Habitat" },

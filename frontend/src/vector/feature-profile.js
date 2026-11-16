@@ -354,6 +354,7 @@ export class VectorFeatureProfileController {
             if (this.currentObservation === null) return;
             if (this.onFeatureZoom(this.currentObservation.focus)) return;
             this.zoomFeatureButton.disabled = true;
+            this.status.textContent = "Feature location is unavailable. The map has not moved.";
         };
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();

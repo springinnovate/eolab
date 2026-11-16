@@ -190,11 +190,14 @@ def test_signed_view_context_isolates_filter_rendering_and_inspection(
             [value.model_dump() for value in DEFINITIONS]
         ),
         "propertyname": "density",
+        "vector_feature_bounds": "true",
     }
     forwarded = dict(authorization.prepare_query("getfeatureinfo", list(query.items())))
     assert forwarded["layers"] == "eolab:parcels"
     assert "propertyname" not in forwarded
     assert "vector_calculated_fields" not in forwarded
+    assert forwarded["info_format"] == "application/vnd.eolab.feature-info+json"
+    assert "format_options" not in forwarded
     assert "eolabArithmetic" in forwarded["sld_body"]
     assert forwarded["cql_filter"] == filter_ecql(predicate, DEFINITIONS)
     content = json.dumps(

@@ -4,4 +4,8 @@
        xsi:schemaLocation="http://www.springframework.org/schema/beans https://www.springframework.org/schema/beans/spring-beans.xsd">
   <bean id="eolabVectorReaderAssessmentController"
         class="org.springinnovate.eolab.geoserver.VectorReaderAssessmentController" />
+  <bean id="eolabVectorFeatureInfoOutputFormat"
+        class="org.springinnovate.eolab.geoserver.VectorFeatureInfoOutputFormat">
+    <constructor-arg ref="geoServer" />
+  </bean>
 </beans>

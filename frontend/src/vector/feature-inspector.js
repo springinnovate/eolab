@@ -19,7 +19,6 @@ const TIME_SERIES_AVAILABLE_HELP =
 const TIME_SERIES_UNAVAILABLE_HELP =
     "Select at least two features at this location to plot one field across them.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
-const MAX_FEATURE_FOCUS_COORDINATE_ARRAYS = 20_000;
 
 /**
  * Format elapsed inspection time without implying unavailable precision.
@@ -34,99 +33,15 @@ function formatInspectionDuration(elapsedMilliseconds) {
 }
 
 /**
- * Derive finite WGS 84 bounds from geometry already present in a bounded
- * feature-info response.
- *
- * The traversal is capped and does not cause another geometry request. Empty,
- * malformed, out-of-world, or antimeridian-spanning geometry returns no bounds
- * so callers can use the inspected map position instead.
- *
- * @param {Object|null} geometry Optional GeoJSON geometry.
- * @return {number[]|null} West, south, east, north bounds, or null.
- */
-function vectorFeatureGeometryBounds(geometry) {
-    if (geometry === null || typeof geometry !== "object") return null;
-    const geometryStack = [geometry];
-    const coordinateStack = [];
-    let visitedCoordinateArrays = 0;
-    let west = Infinity;
-    let south = Infinity;
-    let east = -Infinity;
-    let north = -Infinity;
-    let foundCoordinate = false;
-    let visitedGeometries = 0;
-    while (geometryStack.length > 0) {
-        const current = geometryStack.pop();
-        visitedGeometries += 1;
-        if (visitedGeometries > MAX_FEATURE_FOCUS_COORDINATE_ARRAYS) {
-            return null;
-        }
-        if (
-            current?.type === "GeometryCollection" &&
-            Array.isArray(current.geometries)
-        ) {
-            if (
-                visitedGeometries + geometryStack.length +
-                current.geometries.length >
-                MAX_FEATURE_FOCUS_COORDINATE_ARRAYS
-            ) {
-                return null;
-            }
-            for (const nestedGeometry of current.geometries) {
-                geometryStack.push(nestedGeometry);
-            }
-        } else if (Array.isArray(current?.coordinates)) {
-            coordinateStack.push(current.coordinates);
-        }
-    }
-    while (coordinateStack.length > 0) {
-        const coordinates = coordinateStack.pop();
-        visitedCoordinateArrays += 1;
-        if (visitedCoordinateArrays > MAX_FEATURE_FOCUS_COORDINATE_ARRAYS) {
-            return null;
-        }
-        if (
-            coordinates.length >= 2 &&
-            Number.isFinite(coordinates[0]) &&
-            Number.isFinite(coordinates[1])
-        ) {
-            const [longitude, latitude] = coordinates;
-            if (
-                longitude < -180 || longitude > 180 ||
-                latitude < -90 || latitude > 90
-            ) {
-                return null;
-            }
-            west = Math.min(west, longitude);
-            south = Math.min(south, latitude);
-            east = Math.max(east, longitude);
-            north = Math.max(north, latitude);
-            foundCoordinate = true;
-            continue;
-        }
-        if (!coordinates.every(Array.isArray)) return null;
-        if (
-            visitedCoordinateArrays + coordinateStack.length +
-            coordinates.length > MAX_FEATURE_FOCUS_COORDINATE_ARRAYS
-        ) {
-            return null;
-        }
-        for (const nestedCoordinates of coordinates) {
-            coordinateStack.push(nestedCoordinates);
-        }
-    }
-    if (!foundCoordinate || east - west > 180) return null;
-    return [west, south, east, north];
-}
-
-/**
  * Build an immutable geometry-neutral map target for one inspected feature.
  *
  * @param {Object} configuration Focus inputs.
- * @param {Object} configuration.feature Bounded GeoJSON feature result.
+ * @param {Object} configuration.feature Bounded GeoJSON feature result with
+ * geographic bounds validated at the response boundary.
  * @param {{lng:number,lat:number}} configuration.inspectionPosition Accepted
  * WGS 84 map-click position.
- * @return {Readonly<Object>} Center and optional already-returned feature bounds.
+ * @return {Readonly<Object>} Feature center and optional geographic bounds.
+ * Without bounds the click is retained only as context, never a zoom destination.
  * @throws {TypeError} If the inspection position is outside WGS 84.
  */
 function vectorFeatureFocus({ feature, inspectionPosition }) {
@@ -138,11 +53,10 @@ function vectorFeatureFocus({ feature, inspectionPosition }) {
     ) {
         throw new TypeError("Invalid vector feature inspection position.");
     }
-    const bounds = vectorFeatureGeometryBounds(feature?.geometry ?? null);
-    const center = bounds !== null &&
-        bounds[0] === bounds[2] && bounds[1] === bounds[3]
-        ? [bounds[0], bounds[1]]
-        : [longitude, latitude];
+    const bounds = feature.bbox == null ? null : [...feature.bbox];
+    const center = bounds === null
+        ? [longitude, latitude]
+        : [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2];
     return Object.freeze({
         center: Object.freeze(center),
         bounds: bounds === null ? null : Object.freeze(bounds),
@@ -412,6 +326,7 @@ export class VectorFeatureInspectorController {
             const observation = vectorInspectionObservation(selected);
             if (!this.onFeatureZoomRequested(observation.focus)) {
                 this.zoomFeatureButton.disabled = true;
+                this.status.textContent = "Feature location is unavailable. The map has not moved.";
             }
         };
         this.onPrevious = () => this.navigateResult("previous");
@@ -642,6 +557,7 @@ export class VectorFeatureInspectorController {
                     wmsUrl: this.wmsUrl,
                     publication: target.publication,
                     propertyNames: target.propertyNames,
+                    includeBounds: true,
                     viewport,
                     signal: abortController.signal,
                 }, this.fetchImplementation);
@@ -855,6 +771,7 @@ export class VectorFeatureInspectorController {
         this.styleButton.hidden = false;
         this.styleButton.disabled = false;
         this.zoomFeatureButton.disabled = false;
+        if (this.lastSample) this.status.textContent = this.lastSample.message;
         this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;

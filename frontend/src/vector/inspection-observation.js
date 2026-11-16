@@ -8,7 +8,8 @@
  * @property {string} layerLabel User-facing source layer or filename.
  * @property {string|number|null} featureId Source feature identifier, or null if absent.
  * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}} focus
- * Map center and optional WGS 84 feature bounds; full geometry is not included.
+ * Feature center and optional WGS 84 bounds; full geometry is not included.
+ * Without bounds the center preserves click context and must not be used for zoom.
  * @property {Readonly<Record<string,string|number|boolean|null>>} properties
  * Feature attributes limited to strings, numbers, booleans and null.
  */
@@ -43,8 +44,7 @@ export function validateVectorFeatureFocus(focus) {
             bounds.every(Number.isFinite) &&
             bounds[0] >= -180 && bounds[2] <= 180 &&
             bounds[1] >= -90 && bounds[3] <= 90 &&
-            bounds[0] <= bounds[2] && bounds[1] <= bounds[3] &&
-            bounds[2] - bounds[0] <= 180
+            bounds[0] <= bounds[2] && bounds[1] <= bounds[3]
         )
     ) {
         throw new TypeError("Invalid vector feature focus target.");

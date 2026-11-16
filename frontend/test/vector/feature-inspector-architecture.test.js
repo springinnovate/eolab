@@ -214,9 +214,6 @@ test("time-series analysis consumes neutral samples without sibling knowledge", 
   );
   assert.match(COMPOSITION_SOURCE, /function zoomInspectedVectorFeature\(focus\)/);
   assert.match(COMPOSITION_SOURCE, /validateVectorFeatureFocus\(focus\)/);
-  assert.match(COMPOSITION_SOURCE, /leafletMap\.setView\(\[latitude, longitude\], 14\)/);
-  assert.match(COMPOSITION_SOURCE, /\.pad\(0\.15\)/);
-  assert.match(COMPOSITION_SOURCE, /\{ maxZoom: 14 \}/);
   for (const forbiddenNavigationKnowledge of [
     "getCatalogItemMapBounds",
     "fitBounds",

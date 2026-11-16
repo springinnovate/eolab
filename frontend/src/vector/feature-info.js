@@ -49,7 +49,9 @@ export class VectorFeatureInfoError extends Error {
  * @param {string} configuration.wmsUrl Restricted browser WMS endpoint.
  * @param {Object} configuration.publication Published vector identity.
  * @param {string[]} configuration.propertyNames Catalog-declared non-geometry
- * properties to return without materializing full feature geometry.
+ * properties to return for the matching features.
+ * @param {boolean} [configuration.includeBounds=false] Request compact WGS 84
+ * feature bounds for explicit inspection; hover keeps its attribute-only request.
  * @param {VectorFeatureInfoViewport} configuration.viewport Neutral map view.
  * @return {string} Relative or absolute bounded WMS URL.
  * @throws {VectorFeatureInfoError} If the viewport or attribute list is invalid.
@@ -59,6 +61,7 @@ export function buildVectorFeatureInfoUrl({
     publication,
     propertyNames,
     viewport,
+    includeBounds = false,
 }) {
     if (
         typeof viewport?.crs !== "string" || viewport.crs.length === 0 ||
@@ -112,6 +115,7 @@ export function buildVectorFeatureInfoUrl({
         feature_count: String(VECTOR_FEATURE_INFO_LIMIT),
         buffer: String(VECTOR_FEATURE_INFO_BUFFER_PIXELS),
     });
+    if (includeBounds) parameters.set("vector_feature_bounds", "true");
     if (propertyNames.length > 0) {
         parameters.set("propertyName", propertyNames.join(","));
     }
@@ -126,7 +130,8 @@ export function buildVectorFeatureInfoUrl({
  * @param {Object} configuration Request configuration accepted by the URL builder.
  * @param {AbortSignal} configuration.signal Cancellation signal.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP implementation.
- * @return {Promise<Object[]>} Valid GeoJSON Features, capped by the request limit.
+ * @return {Promise<Object[]>} Valid GeoJSON Features with optional WGS 84 bbox,
+ * capped by the request limit. Bounds remain geographic regardless of the map CRS.
  * @throws {VectorFeatureInfoError} If the public response is unavailable or invalid.
  */
 export async function fetchVectorFeatureInfo(
@@ -181,6 +186,13 @@ export async function fetchVectorFeatureInfo(
         document.features.length > VECTOR_FEATURE_INFO_LIMIT ||
         !document.features.every((feature) =>
             feature?.type === "Feature" &&
+            (feature.bbox == null ||
+                Array.isArray(feature.bbox) && feature.bbox.length === 4 &&
+                feature.bbox.every(Number.isFinite) &&
+                feature.bbox[0] >= -180 && feature.bbox[2] <= 180 &&
+                feature.bbox[1] >= -90 && feature.bbox[3] <= 90 &&
+                feature.bbox[0] <= feature.bbox[2] &&
+                feature.bbox[1] <= feature.bbox[3]) &&
             (feature.geometry === null || typeof feature.geometry === "object") &&
             feature.properties !== null &&
             typeof feature.properties === "object" &&

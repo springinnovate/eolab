@@ -74,6 +74,7 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
         "info_format",
         "j",
         "propertyname",
+        "vector_feature_bounds",
         "query_layers",
         "x",
         "y",

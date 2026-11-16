@@ -137,6 +137,10 @@ class PublishedRasterAuthorization:
             raise PublishedLayerRequestError(
                 "featureid is supported only for vector layers"
             )
+        if "vector_feature_bounds" in query:
+            raise PublishedLayerRequestError(
+                "vector_feature_bounds is supported only for vector layers"
+            )
         if "vector_style" in query or "vector_calculated_fields" in query:
             raise PublishedLayerRequestError("vector_style is not supported for raster layers")
         if "env" in query:

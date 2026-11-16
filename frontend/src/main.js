@@ -2262,9 +2262,9 @@ async function initializeCatalog(
     /**
      * Focus the map on a geometry-neutral selected-feature target.
      *
-     * Already-returned line and polygon bounds fit with proportional padding.
-     * Points and geometry-free feature results use a neighborhood-scale center
-     * so bounded inspection never needs to request full feature geometry.
+     * Fit the returned geographic feature bounds with proportional and pixel
+     * padding, limiting close zoom for points and tiny features. Missing bounds
+     * leave the map unchanged; the inspection click is not the feature location.
      *
      * @param {Object} focus Validated center and optional WGS 84 bounds.
      * @return {boolean} Whether the map accepted the focus target.
@@ -2275,19 +2275,12 @@ async function initializeCatalog(
         } catch {
             return false;
         }
-        const [longitude, latitude] = focus.center;
         const bounds = focus.bounds;
-        if (
-            bounds === null ||
-            bounds[0] === bounds[2] && bounds[1] === bounds[3]
-        ) {
-            leafletMap.setView([latitude, longitude], 14);
-            return true;
-        }
+        if (bounds === null) return false;
         const [west, south, east, north] = bounds;
         leafletMap.fitBounds(
             L.latLngBounds([[south, west], [north, east]]).pad(0.15),
-            { maxZoom: 14 }
+            { padding: [24, 24], maxZoom: 14 }
         );
         return true;
     }
