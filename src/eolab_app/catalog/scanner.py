@@ -673,7 +673,10 @@ class ScanManager:
         error: Exception,
         reconciliation_task: asyncio.Task[int] | None,
     ) -> None:
-        """Finish overlapping cleanup before recording a terminal failure.
+        """Finish cleanup and publish the primary failure even if cleanup fails.
+
+        Cleanup failures are logged and retained separately in the public status.
+        The scan becomes terminal only after overlapping cleanup finishes.
 
         Args:
             error: Failure that stopped the primary scan pipeline.
@@ -685,16 +688,32 @@ class ScanManager:
             type(error).__name__,
             exc_info=(type(error), error, error.__traceback__),
         )
-        removed_items = 0
-        if reconciliation_task is not None:
-            removed_items = await reconciliation_task
-        if removed_items:
-            await self.catalog_database.invalidate_search_count_cache()
-        self._status.state = "failed"
-        self._status.errors.append({
-            "path": None,
-            "error": f"Scan stopped: {error}",
-        })
+        self._status.errors.append(
+            {
+                "path": None,
+                "error": f"Scan stopped: {error}",
+            }
+        )
+        try:
+            removed_items = 0
+            if reconciliation_task is not None:
+                removed_items = await reconciliation_task
+            if removed_items:
+                await self.catalog_database.invalidate_search_count_cache()
+        except Exception as cleanup_error:
+            LOGGER.exception(
+                "Catalog scan cleanup failed: scan_id=%s error_type=%s",
+                self._status.id,
+                type(cleanup_error).__name__,
+            )
+            self._status.errors.append(
+                {
+                    "path": None,
+                    "error": f"Scan cleanup failed: {cleanup_error}",
+                }
+            )
+        finally:
+            self._status.state = "failed"
 
     def _finish_status(self) -> None:
         """Record terminal timestamps and clear transient file progress."""
