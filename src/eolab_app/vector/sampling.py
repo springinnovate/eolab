@@ -1,4 +1,4 @@
-"""Authorize vector selections, count features, and request bounds or map outlines.
+"""Authorize vector selections and read feature counts, bounds, outlines or parcels.
 
 Source/filter preparation lives in selection_source so readers and installed Jobs
 operations use the same rules without constructing this service.
@@ -14,6 +14,7 @@ from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
 
 from eolab_app.catalog_selection import (
+    CatalogSelection,
     ResolvedCatalogSelection,
     ArtifactVectorSelection,
     SelectionUnavailableError,
@@ -26,6 +27,14 @@ from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
 )
 from eolab_app.vector.ports import VectorCatalog
+from eolab_app.vector.parcel_models import (
+    ParcelIdRequest,
+    ParcelIdValidation,
+    ParcelIdValidationResponse,
+    ParcelRowsRequest,
+    ParcelRowsPage,
+    ParcelRowsResponse,
+)
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector_uploads import VectorUploadStore
@@ -58,8 +67,54 @@ class VectorSelectionExecutor(Protocol):
         ...
 
 
+class VectorParcelExecutor(Protocol):
+    """Execute Catalog parcel validation and page reads without rendering state."""
+
+    async def validate_ids(
+        self, selection: CatalogSelection, id_field: str
+    ) -> ParcelIdValidation:
+        """Validate all original IDs in a whole-layer Catalog selection.
+
+        Args:
+            selection: Authorized Catalog descriptor with an inactive filter.
+            id_field: One original string or integer attribute.
+
+        Returns:
+            Complete-layer validation, never a sampled or truncated success.
+
+        Raises:
+            VectorConflictError: The source, IDs or execution are unavailable.
+        """
+        ...
+
+    async def read_rows(
+        self,
+        selection: CatalogSelection,
+        id_field: str,
+        fields: tuple[str, ...],
+        offset: int,
+        limit: int,
+    ) -> ParcelRowsPage:
+        """Read a page of exact filtered parcel IDs and display attributes.
+
+        Args:
+            selection: Authorized Catalog descriptor and ordinary current filter.
+            id_field: Original parcel ID field.
+            fields: Requested original display attributes.
+            offset: Matching rows to skip.
+            limit: Maximum rows to return.
+
+        Returns:
+            Complete page with its next offset, including empty success.
+
+        Raises:
+            VectorConflictError: The source, fields or execution are unavailable.
+        """
+        ...
+
+
 class VectorSamplingService:
-    """Authorize filtered vector features and request counts, bounds or outlines."""
+    """Authorize vector sources for counts, bounds, outlines and parcel identity/rows."""
 
     def __init__(
         self,
@@ -69,6 +124,7 @@ class VectorSamplingService:
         *,
         selection_executor: VectorSelectionExecutor | None = None,
         extent_executor: VectorSelectionExecutor | None = None,
+        parcel_executor: VectorParcelExecutor | None = None,
         uploads: VectorUploadStore | None = None,
         artifact_files: Callable[[], LeasedSourceFiles] | None = None,
     ) -> None:
@@ -85,6 +141,8 @@ class VectorSamplingService:
                 then reports unavailable without launching a local process.
             extent_executor: Jobs adapter for original-source bounds; omit when
                 the consumer does not offer filtered map zoom.
+            parcel_executor: Jobs adapter for Catalog parcel ID validation and
+                page reads; omit for consumers without parcel-list endpoints.
             uploads: Original browser-owned GeoPackages and their admission metadata.
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
@@ -95,7 +153,70 @@ class VectorSamplingService:
         self._selection_executor = selection_executor
         self._uploads = uploads
         self._extent_executor = extent_executor
+        self._parcel_executor = parcel_executor
         self._artifact_files = artifact_files
+
+    async def validate_parcel_ids(
+        self, request: ParcelIdRequest
+    ) -> ParcelIdValidationResponse:
+        """Authorize a full Catalog layer and validate one original parcel ID field.
+
+        Args:
+            request: Catalog source identity and original ID field; no display filter.
+
+        Returns:
+            Complete-layer ID validation tied to its authoritative asset/layer identity.
+
+        Raises:
+            VectorFeatureError: Catalog identity or source resolution failed.
+            VectorConflictError: IDs, native reading or the executor are unavailable.
+            asyncio.CancelledError: After the executor's bounded cancellation cleanup.
+        """
+        if self._parcel_executor is None:
+            raise VectorConflictError("The parcel reader is unavailable")
+        resolved = await resolve_selection(
+            self.catalog,
+            self.resolver,
+            CatalogVectorFilterRequest(
+                collectionId=request.collection_id,
+                itemId=request.item_id,
+                filter=VectorFilter(),
+            ),
+        )
+        validation = await self._parcel_executor.validate_ids(
+            resolved.selection, request.idField
+        )
+        return ParcelIdValidationResponse(
+            **validation.model_dump(), selection=resolved.selection
+        )
+
+    async def read_parcel_rows(self, request: ParcelRowsRequest) -> ParcelRowsResponse:
+        """Authorize and page the currently filtered original Catalog parcels.
+
+        Full-layer ID validation belongs to tool configuration, not each page read.
+
+        Args:
+            request: Catalog source/filter, original ID/display fields and page bounds.
+
+        Returns:
+            Current source descriptor and complete page with lossless typed IDs.
+
+        Raises:
+            VectorFeatureError: Catalog identity, filters or source resolution failed.
+            VectorConflictError: Native reading or the executor are unavailable.
+            asyncio.CancelledError: After the executor's bounded cancellation cleanup.
+        """
+        if self._parcel_executor is None:
+            raise VectorConflictError("The parcel reader is unavailable")
+        resolved = await resolve_selection(self.catalog, self.resolver, request)
+        page = await self._parcel_executor.read_rows(
+            resolved.selection,
+            request.idField,
+            request.fields,
+            request.offset,
+            request.limit,
+        )
+        return ParcelRowsResponse(**page.model_dump(), selection=resolved.selection)
 
     @asynccontextmanager
     async def open_selection(

@@ -147,6 +147,7 @@ from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.selection_jobs import SelectionJobs
 from eolab_app.vector.extent_jobs import ExtentJobs
+from eolab_app.vector.parcel_jobs import ParcelJobs
 from eolab_jobs.client import JobsClient
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
@@ -258,6 +259,7 @@ def create_app(
         OutlineJobs(vector_jobs),
         selection_executor=SelectionJobs(vector_jobs),
         extent_executor=ExtentJobs(vector_jobs),
+        parcel_executor=ParcelJobs(vector_jobs),
         uploads=vector_uploads,
         artifact_files=lambda: source_files,
     )

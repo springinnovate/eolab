@@ -25,6 +25,7 @@ def visit_vector_fields(
     *,
     open_options: tuple[str, ...] = (),
     calculated_fields: tuple[CompiledCalculatedField, ...] = (),
+    where: str | None = None,
 ) -> bool:
     """Visit selected scalar properties without retaining features or geometry.
 
@@ -38,6 +39,8 @@ def visit_vector_fields(
         open_options: Format-owned GDAL options preserving the admitted schema.
         calculated_fields: Programs bound to the original schema by the source owner.
             Requested calculated fields are evaluated from original columns per row.
+        where: Optional source-owner-compiled native candidate predicate. Callers
+            retain responsibility for exact post-filtering of returned attributes.
 
     Returns:
         Whether the source was exhausted without cancellation. Limited reads
@@ -64,6 +67,8 @@ def visit_vector_fields(
             )
             if layer is None:
                 raise ValueError("The exact source layer is missing")
+            if where is not None:
+                layer.SetAttributeFilter(where)
             definition = layer.GetLayerDefn()
             field_types = {
                 definition.GetFieldDefn(index)
