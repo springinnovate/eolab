@@ -14,7 +14,7 @@ class MapRenderQueue(Protocol):
         *,
         request_key: str | None = None,
     ) -> httpx2.Response:
-        """Wait for rendering capacity and then send the supplied request.
+        """Wait for shared GeoServer capacity, then send the supplied request.
 
         Args:
             request: Deferred upstream GetMap or GetFeatureInfo HTTP operation.
@@ -22,14 +22,14 @@ class MapRenderQueue(Protocol):
                 share outstanding work; None requests an independent operation.
                 Every caller must authorize before joining. Canceling the last
                 caller removes queued work; running work retains its slot and
-                remains available to matching callers until it finishes.
+                remains available to matching callers until its response or deadline.
 
         Returns:
             Completed HTTP response, including upstream error responses.
 
         Raises:
             RenderQueueUnavailableError: If the queue is full, closed, or expires.
-            RenderExecutionTimeoutError: If the admitted render exceeds its deadline.
+            RenderExecutionTimeoutError: If the admitted request exceeds its deadline.
             httpx2.RequestError: If the upstream transport fails.
             asyncio.CancelledError: If the caller cancels or the queue shuts down.
         """

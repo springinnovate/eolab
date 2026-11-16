@@ -256,11 +256,13 @@ def create_wms_proxy_router(
         geoserver_internal_url: Internal GeoServer base URL.
         published_layers: Feature-owned current-process layer registries.
         get_map_request_tracker: Bounded GetMap request observer.
-        render_queue: GetMap capacity shared with composite map tiles.
+        render_queue: Shared GetMap and GetFeatureInfo capacity, also used by
+            composite map tiles.
         authorize_layers: Current-session source-access check supplied by composition.
         hidden_layer: Identifies private publications omitted from public capabilities.
         use_layers: Retain layer resources using the originating request's ownership
-            credentials until the upstream read finishes.
+            credentials until the upstream HTTP operation ends, including its
+            execution deadline.
             Called inside the render queue so resources outlive browser cancellation.
 
     Returns:
@@ -386,7 +388,7 @@ def create_wms_proxy_router(
                     ]
                 )
                 async def send_layer_request() -> httpx2.Response:
-                    """Retain source files until an admitted map or inspection completes.
+                    """Retain source files for the admitted map or inspection HTTP operation.
 
                     Returns:
                         Completed upstream response under the shared render queue.

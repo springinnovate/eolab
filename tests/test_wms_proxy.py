@@ -346,7 +346,7 @@ def test_feature_inspection_disconnect_bounds_work_and_retains_source_leases() -
                     released.set()
 
         async def upstream(request: httpx2.Request) -> httpx2.Response:
-            """Hold the first two native reads until the test releases them.
+            """Hold the first two upstream responses until the test releases them.
 
             Args:
                 request: Admitted GeoServer request.
