@@ -55,20 +55,23 @@ export class AnnotationSessionsController {
     bookmarkedLayerIds() { return this.savedBindings.map(binding => binding.localId); }
 
     /** List this browser's memberships on demand without opening or synchronizing them.
-     * @return {Promise<void>} Completion, including a visible loading, empty or failure state.
+     * The read can be dismissed; only its original dialog opening receives the result.
+     * @return {Promise<void>} Completion, with loading, empty or failure status while still current.
      */
     async showYourLayers() {
         if (this.connecting || this.closed) return;
-        this.connecting = true;
-        this.view.open("library"); this.view.busy(true); this.view.message("Loading your layers…");
+        const isCurrent = this.view.open("library");
+        this.view.message("Loading your layers…");
         try {
             const memberships = await this.api.request("");
-            if (this.closed) return;
+            if (this.closed || !isCurrent()) return;
             this.view.showLayers(memberships.map(layer => ({ ...layer,
                 onMap: [...this.bindings.values()].some(binding => binding.sessionId === layer.id && this.isLayerOnMap(binding.localId)) })));
             this.view.message(memberships.length ? "Add a layer without joining again. Removing it from the map keeps your membership." : "You have not created or joined any shared layers on this browser yet.");
-        } catch (error) { this.view.message(`Could not load your layers: ${error.message} Close this dialog and try again.`); }
-        finally { this.connecting = false; this.view.busy(false); }
+        } catch (error) {
+            if (this.closed || !isCurrent()) return;
+            this.view.message(`Could not load your layers: ${error.message} Close this dialog and try again.`);
+        }
     }
 
     /** Reopen a membership using its invitation and existing contributor credentials.
