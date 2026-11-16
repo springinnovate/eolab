@@ -454,7 +454,8 @@ function renderRasterInput(ui, controls, definition, value, state) {
     return ready;
 }
 
-/** Build Habitat controls with explicit ordinary spatial/raster presentation helpers.
+/** Build Habitat setup with reference sites and its optional output mask in the main form.
+ * Reuse ordinary source controls and Habitat's own per-raster resampling controls.
  * @param {import("./model-setup.js").ModelSetupUi} ui Element, formatting and ordinary input builders supplied by the host view.
  * @param {{onInput:(name:string,change:Object)=>void,onSetupAction:(action:string,value?:unknown)=>void}} handlers Generic input edits and integration actions.
  * @param {string} name Recipe input name.
@@ -475,9 +476,20 @@ function buildInput(ui, handlers, name, definition, draft) {
         return controls;
     }
     if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
-        const fields = ui.element("div", "", "models-vector"); ui.append(fields);
-        const controls = buildRasterInput(ui, fields, name, definition, raster => handlers.onInput(name, {raster}),
+        const isOutputMask = name === "habitat_mask" && definition.type === "optional_raster";
+        const fields = ui.element(isOutputMask ? "fieldset" : "div", "", "models-vector");
+        const displayDefinition = isOutputMask ? {...definition, label: "Limit output to a raster mask (optional)"} : definition;
+        const controls = buildRasterInput(ui, fields, name, displayDefinition, raster => handlers.onInput(name, {raster}),
             resampling => handlers.onInput(name, {resampling}));
+        if (isOutputMask) {
+            fields.setAttribute("aria-label", "Output mask (optional)");
+            const hint = ui.element("p", "Only cells equal to 1 receive results.", "models-help");
+            hint.id = `models-${name}-help`;
+            controls.source.setAttribute("aria-describedby", `${hint.id} ${controls.reason.id}`);
+            fields.append(hint);
+            Object.assign(controls, {root: fields, hint});
+        }
+        ui.append(fields);
         controls.renderModelInput = (value, state) => renderRasterInput(ui, controls, definition, value.inputs[name], state);
         return controls;
     }
