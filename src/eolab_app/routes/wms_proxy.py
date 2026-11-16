@@ -18,15 +18,8 @@ from eolab_app.rendering.errors import (
     PublishedLayerRequestError,
 )
 from eolab_app.rendering.ports import MapRenderQueue, PublishedLayerRegistry
-from eolab_app.rendering.render_queue import (
-    RenderExecutionTimeoutError,
-    RenderQueueUnavailableError,
-)
-from eolab_app.routes.http_disconnect import (
-    HttpClientDisconnectedError,
-    run_until_http_disconnect,
-)
 from eolab_app.routes.geoserver_map import (
+    forward_geoserver_feature_info,
     forward_geoserver_get_map,
     geoserver_forward_headers,
     safe_geoserver_response,
@@ -423,7 +416,7 @@ def create_wms_proxy_router(
                     if private:
                         result.headers["Cache-Control"] = "private, no-store"
                     return result
-                geoserver_response = await run_until_http_disconnect(
+                geoserver_response = await forward_geoserver_feature_info(
                     request, queued_request
                 )
             else:
@@ -436,24 +429,6 @@ def create_wms_proxy_router(
                         geoserver_response = await geoserver_client.get(
                             internal_wms_url, params=query_entries, headers=forwarded_headers,
                         )
-        except HttpClientDisconnectedError as error:
-            raise HTTPException(
-                499,
-                "The feature inspection request was canceled",
-                headers={"Cache-Control": "private, no-store"},
-            ) from error
-        except RenderQueueUnavailableError as error:
-            raise HTTPException(
-                503,
-                "Feature inspection is busy. Try again shortly.",
-                headers={"Retry-After": "1", "Cache-Control": "private, no-store"},
-            ) from error
-        except RenderExecutionTimeoutError as error:
-            raise HTTPException(
-                504,
-                "Feature inspection exceeded its time limit.",
-                headers={"Cache-Control": "private, no-store"},
-            ) from error
         except httpx2.RequestError as error:
             raise HTTPException(
                 status_code=502,
