@@ -257,41 +257,51 @@ def build_temporal_items(
     if archive.catalog.drive.startswith("\\\\"):
         catalog_uri = catalog_uri.replace("file://", "file:////", 1)
     with closing(sqlite3.connect(f"{catalog_uri}?mode=ro", uri=True)) as connection:
-        connection.row_factory = sqlite3.Row
         rows = connection.execute(
             "SELECT variable, name, units, band, valid_time, reference_time, "
             "interval_start, interval_end, temporal_type, dtype, nodata, crs, "
             "transform, height, width FROM observations ORDER BY variable, valid_time"
         )
-        for row in rows:
-            variable, time = row["variable"], row["valid_time"]
+        for (
+            variable,
+            name,
+            units,
+            band,
+            time,
+            reference_time,
+            start,
+            end,
+            temporal_type,
+            dtype,
+            nodata,
+            crs_value,
+            transform_value,
+            height,
+            width,
+        ) in rows:
             current_grid = parse_grid(
-                variable, row["crs"], row["transform"], row["height"], row["width"]
+                variable, crs_value, transform_value, height, width
             )
-            if row["band"] != 1:
+            if band != 1:
                 raise ValueError(f"Unsupported raster grid for {variable}")
             if grid is not None and current_grid != grid:
                 raise ValueError("Temporal observations must share one raster grid")
             grid = current_grid
             metadata = parse_variable(
                 variable,
-                row["name"],
-                row["units"],
-                row["dtype"],
-                row["nodata"],
-                row["temporal_type"],
+                name,
+                units,
+                dtype,
+                nodata,
+                temporal_type,
             )
-            start, end = row["interval_start"], row["interval_end"]
             if (
-                any(not isinstance(value, int) for value in (time, start, end))
-                or (
-                    row["reference_time"] is not None
-                    and not isinstance(row["reference_time"], int)
-                )
-                or (
-                    row["temporal_type"] == "instant" and (start != time or end != time)
-                )
-                or (row["temporal_type"] != "instant" and (start >= end or end != time))
+                not isinstance(time, int)
+                or not isinstance(start, int)
+                or not isinstance(end, int)
+                or (reference_time is not None and not isinstance(reference_time, int))
+                or (temporal_type == "instant" and (start != time or end != time))
+                or (temporal_type != "instant" and (start >= end or end != time))
             ):
                 raise ValueError(f"Invalid time or interval for {variable} at {time}")
             identity = (variable, time)
