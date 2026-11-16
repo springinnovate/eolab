@@ -4,7 +4,6 @@ import test from "node:test";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import {
   buildVectorFeatureProfile,
-  fieldNameNumber,
   numericFeatureFields,
   suggestFeatureProfileFields,
   suggestFeatureProfileTitle,
@@ -81,8 +80,6 @@ test("field discovery chooses repeated numeric names and a conventional title", 
     "R2000",
     "R2001",
   ]);
-  assert.equal(fieldNameNumber("resistance_R2001_mean"), 2001);
-  assert.equal(fieldNameNumber("resistance"), null);
   assert.deepEqual(suggestFeatureProfileFields(current), [
     "R1999",
     "R2000",
@@ -128,6 +125,63 @@ test("profile points use field-name numbers and preserve missing-value gaps", ()
   assert.equal(profile.missingCount, 1);
   assert.equal(profile.xAxisLabel, "Number in field name");
   assert.equal(profile.xScale, "numeric");
+});
+
+test("chemical digits and unrelated numeric names retain complete ordinal labels", () => {
+  for (const selectedFields of [
+    ["CO2_total", "CO2_mean"], ["CO2_total", "rainfall"], ["CO2_total"],
+    ["R2020"], ["A2", "Z1"], ["R1", "R01"], ["R1", "R1.0"],
+    ["a1#", "a#2"],
+  ]) {
+    for (const direction of ["ascending", "descending"]) {
+      const properties = Object.fromEntries(selectedFields.map((field, index) => [field, index ? null : 3]));
+      const profile = buildVectorFeatureProfile(observation({ properties }), { selectedFields, direction });
+      assert.equal(profile.xScale, "ordinal", selectedFields.join(", "));
+      assert.equal(profile.xAxisLabel, "Field");
+      assert.deepEqual(profile.points.map(point => point.xLabel), profile.points.map(point => point.fieldName));
+      assert.equal(profile.points.every(point => point.xValue === null), true);
+      assert.equal(profile.finiteCount, 1);
+      assert.equal(profile.missingCount, selectedFields.length - 1);
+    }
+  }
+});
+
+test("numeric families retain year and decimal coordinates around shared text", () => {
+  for (const [selectedFields, expectedValues] of [
+    [["resistance_R2005_mean", "resistance_R2000_mean"], [2000, 2005]],
+    [["CO2_2005", "CO2_2000"], [2000, 2005]],
+    [["depth4_m", "depth0.5_m", "depth1.5_m"], [0.5, 1.5, 4]],
+  ]) {
+    const properties = Object.fromEntries(selectedFields.map((field, index) => [field, index ? null : 3]));
+    for (const direction of ["ascending", "descending"]) {
+      const profile = buildVectorFeatureProfile(observation({ properties }), { selectedFields, direction });
+      const ordered = direction === "ascending" ? expectedValues : [...expectedValues].reverse();
+      assert.equal(profile.xScale, "numeric");
+      assert.equal(profile.xAxisLabel, "Number in field name");
+      assert.deepEqual(profile.points.map(point => point.xValue), ordered);
+      assert.deepEqual(profile.points.map(point => point.xLabel), ordered.map(String));
+      assert.equal(profile.missingCount, selectedFields.length - 1);
+    }
+  }
+});
+
+test("CO2 fields render distinct chart positions and complete axis and table labels", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation({ properties: { CO2_total: 3, CO2_mean: 2 } }));
+  const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
+  const points = chart.querySelectorAll(".series-chart-point");
+  assert.equal(points.length, 2);
+  assert.notEqual(points[0].getAttribute("cx"), points[1].getAttribute("cx"));
+  const labels = chart.querySelectorAll("text").map(element => element.textContent);
+  assert.equal(labels.includes("CO2_mean"), true);
+  assert.equal(labels.includes("CO2_total"), true);
+  assert.equal(labels.includes("Field"), true);
+  assert.equal(labels.includes("Number in field name"), false);
+  const rows = h.documentContext.querySelector("#vector-feature-profile-table-body").children;
+  assert.deepEqual(rows.map(row => row.children.slice(0, 2).map(cell => cell.textContent)), [
+    ["CO2_mean", "CO2_mean"], ["CO2_total", "CO2_total"],
+  ]);
+  h.controller.destroy();
 });
 
 test("mixed field names have one natural order for every selection permutation", () => {
