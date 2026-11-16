@@ -222,10 +222,11 @@ def prepare_habitat_inputs(
         SelectionUnavailableError: If the original vector cannot be read.
         RasterioError: If the first predictor cannot be opened.
     """
-    crs = CRS.from_user_input(request.preparation.crs)
-    aoi = read_habitat_area(area, sources, crs, request.preparation.pixelSize)
+    output_grid = request.settings.output_grid
+    crs = CRS.from_user_input(output_grid.crs)
+    aoi = read_habitat_area(area, sources, crs, output_grid.pixel_size)
     target = calculate_raster_grid(
-        aoi.bounds, crs, request.preparation.pixelSize, request.preparation.origin
+        aoi.bounds, crs, output_grid.pixel_size, output_grid.origin
     )
     width, height = target.width, target.height
     grid = ClipGrid(
@@ -318,7 +319,7 @@ def calculate_habitat(
             height=prepared.grid.height,
         )
         aoi = read_habitat_area(
-            prepared.area, sources, grid.crs, request.preparation.pixelSize
+            prepared.area, sources, grid.crs, settings.output_grid.pixel_size
         )
         inputs = {
             name: (path, Resampling[request.preparation.resampling[name]])

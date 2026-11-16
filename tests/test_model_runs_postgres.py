@@ -1494,9 +1494,6 @@ def test_habitat_admission_retains_both_owned_polygon_roles(
             "references": sites,
             "habitat_mask": None,
             "preparation": {
-                "crs": "EPSG:6933",
-                "pixelSize": [500, 500],
-                "origin": [0, 0],
                 "resampling": {"predictor_0": "nearest", "response_0": "nearest"},
             },
         },

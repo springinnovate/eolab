@@ -219,7 +219,7 @@ export class HabitatStackView {
         this.options(this.year, configuration ? Array.from({length: configuration.maximumYear - configuration.minimumYear + 1},
             (_, index) => ({value: String(configuration.minimumYear + index), label: String(configuration.minimumYear + index)})) :
             [{value: "", label: "Loading years…"}], String(this.value.year ?? ""));
-        this.acquisitionStatus.textContent = this.value.loading ? "Loading available years and pixel size…" : this.value.error;
+        this.acquisitionStatus.textContent = this.value.loading ? "Loading available years…" : this.value.error;
         this.acquisitionStatus.hidden = !this.acquisitionStatus.textContent;
         this.retry.hidden = !this.value.error; this.retry.disabled = this.value.loading;
         for (const role of ["predictors", "responses"]) {

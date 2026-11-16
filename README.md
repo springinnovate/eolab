@@ -354,6 +354,9 @@ environment and habitat responses at the reference sites inside that area, then
 compares observed responses elsewhere with those expected under reference
 conditions.
 
+Results use a fixed 500 m grid in EPSG:6933. Input rasters are aligned to this
+grid using their selected resampling methods.
+
 When you choose a raster for **Reference sites**, valid finite non-zero cells
 are reference sites, including negative values. Zero, NoData and nonfinite
 values are excluded. Nearest-neighbor alignment preserves reference membership;

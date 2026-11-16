@@ -3,7 +3,6 @@
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from rasterio.crs import CRS
 from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfiguration
 
 from eolab_app.catalog_selection import VectorSelection
@@ -93,7 +92,7 @@ class NamedHabitatRaster(HabitatSchema):
 class HabitatRasterStack(HabitatSchema):
     """The final predictor and response choices, including one categorical predictor.
 
-    Names are unique across both roles. Inputs are prepared on the run's requested
+    Names are unique across both roles. Inputs are prepared on the model's fixed
     grid before sampling and fitting.
     """
 
@@ -240,12 +239,9 @@ HabitatReferences = Annotated[
 
 
 class HabitatPreparation(HabitatSchema):
-    """Requested output grid and one resampling method for each selected raster.
+    """One resampling method for each input raster.
 
     Attributes:
-        crs: Requested output coordinate system.
-        pixelSize: Positive X/Y pixel sizes in the requested CRS's units.
-        origin: Grid intersection anchoring the AOI's outward-snapped bounds.
         resampling: Methods keyed by predictor_N, response_N, reference_mask or
             habitat_mask, matching the selected source roles exactly.
             Reference masks require nearest-neighbor alignment.
@@ -253,17 +249,28 @@ class HabitatPreparation(HabitatSchema):
             this mapping contains only the user-selected raster masks.
     """
 
-    crs: str
-    pixelSize: tuple[PositiveNumber, PositiveNumber]
-    origin: tuple[FiniteNumber, FiniteNumber]
     resampling: dict[str, ResamplingMethod]
+
+
+class HabitatOutputGrid(HabitatSchema):
+    """The calculation grid fixed by the Ecosystem Condition model recipe.
+
+    Attributes:
+        crs: Equal-area coordinate system required by the scientific runner.
+        pixel_size: Positive X/Y cell sizes in metres.
+        origin: Grid intersection anchoring the AOI's outward-snapped bounds.
+    """
+
+    crs: Literal["EPSG:6933"]
+    pixel_size: tuple[PositiveNumber, PositiveNumber]
+    origin: tuple[FiniteNumber, FiniteNumber]
 
 
 class HabitatSettings(HabitatSchema):
     """Projection, scientific and sampling settings fixed by the model recipe.
 
     Attributes:
-        required_crs: Equal-area projection required by the current Habitat runner.
+        output_grid: Calculation grid fixed by the model, independent of inputs.
         fold_count: Number of spatial cross-validation folds.
         sampling_block_size_meters: Width of equal-area sampling blocks.
         validation_block_size_meters: Width of grouped validation blocks.
@@ -280,7 +287,7 @@ class HabitatSettings(HabitatSchema):
         tile_origin: EPSG:6933 origin anchoring the virtual sampling tiles.
     """
 
-    required_crs: Literal["EPSG:6933"]
+    output_grid: HabitatOutputGrid
     fold_count: Annotated[int, Field(strict=True, ge=2)]
     sampling_block_size_meters: PositiveInteger
     validation_block_size_meters: PositiveInteger
@@ -339,15 +346,14 @@ class HabitatRequest(HabitatSchema):
 
     @model_validator(mode="after")
     def check_preparation(self) -> Self:
-        """Require explicit methods for active rasters and the model's projection.
+        """Require one explicit resampling method for each active raster.
 
         Returns:
-            This request with one method per raster and a supported target CRS.
+            This request with one method per raster.
 
         Raises:
             ValueError: If a method is missing or names an inactive source, or
-                reference sites do not use nearest-neighbor alignment, or the
-                requested CRS differs from the model's requirement.
+                reference sites do not use nearest-neighbor alignment.
         """
         if set(self.preparation.resampling) != set(self.get_raster_sources()):
             raise ValueError("Choose one resampling method for each selected raster.")
@@ -356,12 +362,6 @@ class HabitatRequest(HabitatSchema):
             and self.preparation.resampling["reference_mask"] != "nearest"
         ):
             raise ValueError("Reference sites require nearest-neighbor resampling.")
-        if CRS.from_user_input(self.preparation.crs) != CRS.from_user_input(
-            self.settings.required_crs
-        ):
-            raise ValueError(
-                f"Ecosystem Condition requires {self.settings.required_crs}."
-            )
         return self
 
     @model_validator(mode="after")
@@ -411,7 +411,7 @@ class QueuedHabitat(HabitatSchema):
 
 
 class HabitatCalculationInputs(HabitatSchema):
-    """Captured Habitat inputs, exact area descriptor and the requested output grid.
+    """Captured Habitat inputs, exact area descriptor and the model's output grid.
 
     Grid datatype and NoData describe the runner's primary Reference similarity
     output: float32 with valid values from 0 to 1 and -9999 for missing values.

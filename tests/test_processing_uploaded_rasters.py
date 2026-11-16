@@ -201,9 +201,6 @@ def test_habitat_reference_upload_is_retained_with_its_opaque_identity(
             "references": {"kind": "raster", "source": reference},
             "habitat_mask": None,
             "preparation": {
-                "crs": "EPSG:6933",
-                "pixelSize": [500, 500],
-                "origin": [0, 0],
                 "resampling": {
                     "predictor_0": "nearest",
                     "response_0": "nearest",

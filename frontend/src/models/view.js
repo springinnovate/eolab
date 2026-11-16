@@ -5,12 +5,9 @@ import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
-import { RasterGridView } from "./raster-grid-view.js";
+import { getModelSetupIntegration } from "./model-setup.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { describeTemporalInterval, describeTemporalReduction, describeTemporalResult } from "./temporal-inputs.js";
-
-const RESAMPLING_LABELS = {nearest: "Nearest neighbor", bilinear: "Bilinear interpolation", cubic: "Cubic interpolation",
-    average: "Average", mode: "Most common value (mode)"};
 
 /** Show the creation time in the timezone captured when this run was started.
  * @param {Object} job Model run with its fixed naming timestamp.
@@ -54,9 +51,12 @@ function describeModelRaster(source, runs) {
 export class ModelsView {
     /** Bind the existing Models panel markup.
      * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {Object} [dependencies={}] Registered model presentation dependencies.
+     * @param {(model:Object)=>import("./model-setup.js").ModelSetupIntegration|null} [dependencies.getSetupIntegration] Resolve descriptions from the saved model definition.
      */
-    constructor(documentContext = globalThis.document) {
+    constructor(documentContext = globalThis.document, {getSetupIntegration = getModelSetupIntegration} = {}) {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
+        this.getSetupIntegration = getSetupIntegration;
         this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
             "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
@@ -145,39 +145,21 @@ export class ModelsView {
         select.value = selected;
     }
 
-    /** Build one named raster chooser with its optional resampling control.
+    /** Build one named raster chooser using the available original sources.
      * @param {HTMLElement} fields Owning setup fieldset.
      * @param {string} name Recipe input name.
      * @param {{type:string,label:string}} input Declared raster input.
      * @param {(raster:Object|null)=>void} [onChange] Update a raster nested inside another input; otherwise update this named input.
-     * @param {(method:string)=>void} [onResampling] Update this raster's independent preparation method.
      * @return {Object} Stable controls for this input.
      */
-    buildRasterInput(fields, name, input, onChange = raster => this.handlers.onInput(name, {raster}), onResampling = resampling => this.handlers.onInput(name, {resampling})) {
+    buildRasterInput(fields, name, input, onChange = raster => this.handlers.onInput(name, {raster})) {
         const source = this.element("select"); source.required = input.type !== "optional_raster";
         source.addEventListener("change", () => onChange(this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null));
         const reason = this.element("p", "", "models-help"); reason.id = `models-${name}-source-reason`;
         source.setAttribute("aria-describedby", reason.id);
         fields.append(this.field(`models-${name}-raster`, input.label, source));
-        const preparation = this.buildRasterResampling(fields, name, onResampling);
         fields.append(reason);
-        return {source, reason, ...preparation};
-    }
-
-    /** Build the per-raster resampling choice when the model prepares a grid.
-     * @param {HTMLElement} fields Container for this raster's dependent controls.
-     * @param {string} name Input identity used for the accessible control label.
-     * @param {(method:string)=>void} onChange Update this raster's preparation method.
-     * @return {{resampling:HTMLSelectElement|null,resamplingField:HTMLLabelElement|null}} Optional stable controls.
-     */
-    buildRasterResampling(fields, name, onChange) {
-        if (!modelHasInput(this.state.draft.model, "raster_preparation")) return {resampling: null, resamplingField: null};
-        const resampling = this.element("select");
-        this.options(resampling, Object.entries(RESAMPLING_LABELS).map(([value, label]) => ({value, label})), "nearest");
-        resampling.addEventListener("change", () => onChange(resampling.value));
-        const resamplingField = this.field(`models-${name}-resampling`, "Resampling", resampling);
-        fields.append(resamplingField);
-        return {resampling, resamplingField};
+        return {source, reason};
     }
 
     /** Build a direct spatial-source chooser and its active raster or vector controls.
@@ -278,11 +260,6 @@ export class ModelsView {
             }
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
-            else if (input.type === "raster_preparation") {
-                inputs[name] = new RasterGridView({element: this.element.bind(this), field: this.field.bind(this),
-                    button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers, name, input);
-                fields.append(inputs[name].root);
-            }
         }
         if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
@@ -331,7 +308,7 @@ export class ModelsView {
     /** Refresh one raster chooser, showing help only for an unresolved or copied input.
      * @param {Object} controls Stable controls for this raster input.
      * @param {{type:string,label:string}} input Declared raster input.
-     * @param {{raster:Object|null,copiedFromRun:boolean,resampling?:string}} value Selected raster, copied-run provenance and optional preparation method.
+     * @param {{raster:Object|null,copiedFromRun:boolean}} value Selected raster and copied-run provenance.
      * @param {Object} state Controller snapshot supplying shared source choices.
      * @return {boolean} Whether an available raster is selected, or an optional input is unset.
      */
@@ -354,10 +331,6 @@ export class ModelsView {
                 : sources.length ? "Choose a raster from Map contents." : "Add a raster to Map contents to use this tool.";
         }
         controls.reason.hidden = !controls.reason.textContent;
-        if (controls.resampling) {
-            controls.resampling.value = value.resampling;
-            controls.resamplingField.hidden = !value.raster;
-        }
         return optional && !value.raster || Boolean(value.raster) && value.raster.available !== false;
     }
 
@@ -487,7 +460,6 @@ export class ModelsView {
             else if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
-            else if (input.type === "raster_preparation") inputsReady = setupControls.inputs[name].render(draft.inputs[name], draft) && inputsReady;
         }
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
@@ -644,8 +616,14 @@ export class ModelsView {
         if (invocation && (r.invocation !== invocation || r.datasetLabels !== state.habitatDatasetLabels)) {
             r.invocation = invocation; r.datasetLabels = state.habitatDatasetLabels;
             const list = this.element("dl");
+            const integration = this.getSetupIntegration(invocation.model.definition);
             for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
                 const value = invocation.inputs[name];
+                const owned = integration?.describeInput?.(invocation, name);
+                if (owned != null) {
+                    for (const row of owned) list.append(this.element("dt", row.label), this.element("dd", row.value));
+                    continue;
+                }
                 if (input.type === "habitat_stack") {
                     if (value.kind === "earthEngine") {
                         list.append(this.element("dt", input.label), this.element("dd", `Original model inputs from Earth Engine · Assessment year ${value.year}`));
@@ -657,19 +635,6 @@ export class ModelsView {
                     for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {
                         for (const row of value[role]) list.append(this.element("dt", `${label}: ${row.name}${role === "predictors" && row.name === value.categoricalPredictor ? " (categorical)" : ""}`),
                             this.element("dd", describeModelRaster(row.source, state.runs)));
-                    }
-                    continue;
-                }
-                if (input.type === "raster_preparation") {
-                    list.append(this.element("dt", input.label), this.element("dd", `${value.crs} · pixel size ${value.pixelSize.join(" × ")} · origin ${value.origin.join(", ")}`));
-                    const step = invocation.model.definition.steps.find(item => item.inputs.preparation?.input === name);
-                    const stack = invocation.inputs[step.inputs.stack.input];
-                    if (stack.kind !== "earthEngine") for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {
-                        stack[role].forEach((row, index) => list.append(this.element("dt", `${label}: ${row.name} resampling`),
-                            this.element("dd", RESAMPLING_LABELS[value.resampling[`${role === "predictors" ? "predictor" : "response"}_${index}`]])));
-                    }
-                    for (const [key, label] of [["reference_mask", "Reference raster resampling"], ["habitat_mask", "Habitat assessment mask resampling"]]) {
-                        if (value.resampling[key]) list.append(this.element("dt", label), this.element("dd", RESAMPLING_LABELS[value.resampling[key]]));
                     }
                     continue;
                 }

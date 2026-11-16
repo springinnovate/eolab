@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -112,7 +113,7 @@ def test_automatic_dataset_selection_rejects_invalid_role_choices(
 
 @pytest.fixture
 def habitat_definition() -> ModelDefinition:
-    """Use the installed recipe with sampling settings for the small test grid.
+    """Use the installed 500 m recipe with fitting settings for a small test area.
 
     Returns:
         Habitat recipe retaining its actual inputs, outputs and operation binding.
@@ -201,8 +202,8 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         "references": references.astype("float64"),
         "assessment": np.where(columns < 22, 1, 2),
     }
-    grid = from_origin(0, 16000, 1000, 1000)
-    aoi = box(100, 100, 23900, 15900).difference(box(6000, 2000, 10000, 5000))
+    grid = from_origin(0, 8000, 500, 500)
+    aoi = box(50, 50, 11950, 7950).difference(box(3000, 1000, 5000, 2500))
     outside = geometry_mask([mapping(aoi)], (16, 24), grid)
     paths = {name: tmp_path / f"{name}.tif" for name in values}
     prepared_paths = {name: tmp_path / f"prepared-{name}.tif" for name in values}
@@ -224,12 +225,12 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             nodata=np.nan,
         ) as destination:
             destination.write(prepared, 1)
-        spacing = 1000
+        spacing = 500
         if name == "environment":
             data = data[:, :20]
         elif name in {"habitat_type", "references", "assessment"}:
             data = data[::2, ::2]
-            spacing = 2000
+            spacing = 1000
         if name == "references" and reference_kind == "raster":
             # Expected membership above is independent of these source encodings.
             data = data.copy()
@@ -249,7 +250,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             height=data.shape[0],
             dtype=source_dtype,
             crs="EPSG:6933",
-            transform=from_origin(0, 16000, spacing, spacing),
+            transform=from_origin(0, 8000, spacing, spacing),
             nodata=(
                 -9999 if name == "references" and reference_kind == "raster" else None
             ),
@@ -296,7 +297,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     area = write_selection(tmp_path / "area.gpkg", [mapping(aoi)], crs="EPSG:6933")
     selected_references = write_selection(
         tmp_path / "references.gpkg",
-        [mapping(box(0, 10000, 24000, 16000)), mapping(box(0, 0, 24000, 10000))],
+        [mapping(box(0, 5000, 12000, 8000)), mapping(box(0, 0, 12000, 5000))],
         crs="EPSG:6933",
         values=[1, 2],
         candidate=VectorFilter(
@@ -335,9 +336,6 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         ),
         "habitat_mask": sources["assessment"] if uses_assessment_mask else None,
         "preparation": {
-            "crs": "EPSG:6933",
-            "pixelSize": [1000, 1000],
-            "origin": [0, 16000],
             "resampling": {
                 "predictor_0": "bilinear",
                 "predictor_1": "nearest",
@@ -353,14 +351,14 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     if reference_kind == "polygonArea":
         # Four drawable polygons reproduce the vector AOI's single interior hole.
         assessment_polygons = (
-            box(100, 100, 6000, 15900),
-            box(10000, 100, 23900, 15900),
-            box(6000, 100, 10000, 2000),
-            box(6000, 5000, 10000, 15900),
+            box(50, 50, 3000, 7950),
+            box(5000, 50, 11950, 7950),
+            box(3000, 50, 5000, 1000),
+            box(3000, 2500, 5000, 7950),
         )
         for field, role, identifier, shapes in (
             ("area", "area", "a" * 32, assessment_polygons),
-            ("references", "reference_sites", "b" * 32, (box(0, 10000, 24000, 16000),)),
+            ("references", "reference_sites", "b" * 32, (box(0, 5000, 12000, 8000),)),
         ):
             geometries = tuple(
                 transform_geom("EPSG:6933", "EPSG:4326", mapping(polygon))
@@ -393,6 +391,11 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     calculation, invocation = build_model_calculation_request(
         request, ModelRegistry((habitat_definition,))
     )
+    assert calculation.settings.output_grid.model_dump(mode="json") == {
+        "crs": "EPSG:6933",
+        "pixel_size": [500, 500],
+        "origin": [0, 0],
+    }
     operation = get_model_operation("habitat.condition.v1")
     identities = {
         item_id: RasterSourceIdentity.read(path)
@@ -530,6 +533,14 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     assert diagnostics.role == "intermediate"
     assert diagnostics.mediaType == "application/zip"
     assert habitat_definition.outputs["diagnostics"].presentation == "download"
+    provenance = json.loads(
+        artifacts.artifact_path(row["attempt_id"], "provenance.json").read_text()
+    )
+    assert provenance["inputs"]["settings"]["output_grid"] == {
+        "crs": "EPSG:6933",
+        "pixel_size": [500, 500],
+        "origin": [0, 0],
+    }
     run_yaml = export_model_job_yaml(ready, run=True).decode()
     assert str(tmp_path) not in run_yaml
     assert "coordinates:" not in run_yaml
@@ -573,6 +584,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     with rasterio.open(actual_path) as similarity:
         assert similarity.shape == (16, 24)
         assert similarity.transform == grid
+        assert similarity.crs == rasterio.crs.CRS.from_epsg(6933)
         assert similarity.dtypes == (response.result.grid.dtype,) == ("float32",)
         assert similarity.nodata == float(row["summary"]["grid"]["nodata"]) == -9999.0
         similarity_values = similarity.read(1, masked=True)
@@ -610,7 +622,12 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         "missing-category",
         "reserved-name",
         "missing-resampling",
-        "wrong-crs",
+        "grid-crs",
+        "grid-pixel-size",
+        "grid-origin",
+        "automatic-grid-crs",
+        "automatic-grid-pixel-size",
+        "automatic-grid-origin",
         "automatic-whole-raster",
         "automatic-mask-method",
         "reference-bilinear",
@@ -622,7 +639,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
 def test_habitat_rejects_ambiguous_stack_or_preparation(
     habitat_definition: ModelDefinition, invalid: str
 ) -> None:
-    """Reject ambiguous variables, invalid resampling and the wrong target CRS.
+    """Reject ambiguous variables, invalid resampling and user grid overrides.
 
     Args:
         habitat_definition: Installed Habitat recipe with fixture settings.
@@ -635,10 +652,7 @@ def test_habitat_rejects_ambiguous_stack_or_preparation(
             "itemId": "geotiff-aaaaaaaaaaaaaaaaaaaaaaaa",
         },
     }
-    preparation = {
-        "crs": "EPSG:4326" if invalid == "wrong-crs" else "EPSG:6933",
-        "pixelSize": [1000, 1000],
-        "origin": [0, 0],
+    preparation: dict[str, Any] = {
         "resampling": {
             "predictor_0": "nearest",
             "response_0": "nearest",
@@ -649,6 +663,12 @@ def test_habitat_rejects_ambiguous_stack_or_preparation(
         del preparation["resampling"]["reference_mask"]
     elif invalid.startswith("reference-"):
         preparation["resampling"]["reference_mask"] = invalid.removeprefix("reference-")
+    elif invalid.removeprefix("automatic-") == "grid-crs":
+        preparation["crs"] = "EPSG:6933"
+    elif invalid.removeprefix("automatic-") == "grid-pixel-size":
+        preparation["pixelSize"] = [750, 750]
+    elif invalid.removeprefix("automatic-") == "grid-origin":
+        preparation["origin"] = [0, 0]
     request = ModelRunRequest(
         requestId="invalid-habitat-run",
         label="Invalid stack",
@@ -687,7 +707,25 @@ def test_habitat_rejects_ambiguous_stack_or_preparation(
         if invalid == "automatic-whole-raster":
             request.inputs["preparation"]["resampling"] = {"reference_mask": "nearest"}
         else:
-            request.inputs["area"] = {"kind": "bounds", "bounds": [-110, 45, -109, 46]}
+            request.inputs["area"] = {
+                "kind": "selectedArea",
+                "selectedBounds": {
+                    "west": -110,
+                    "south": 45,
+                    "east": -109,
+                    "north": 46,
+                },
+            }
+            if invalid.startswith("automatic-grid-"):
+                request.inputs["preparation"]["resampling"] = {
+                    "reference_mask": "nearest"
+                }
+    if "grid-" in invalid:
+        baseline = request.model_copy(deep=True)
+        baseline.inputs["preparation"] = {
+            "resampling": request.inputs["preparation"]["resampling"]
+        }
+        build_model_calculation_request(baseline, ModelRegistry((habitat_definition,)))
     with pytest.raises(ProcessingError) as error:
         build_model_calculation_request(request, ModelRegistry((habitat_definition,)))
     assert error.value.code == "invalid_model_inputs"
@@ -730,9 +768,6 @@ def test_habitat_exports_private_predictor_source(
             "references": {"kind": "raster", "source": catalog},
             "habitat_mask": None,
             "preparation": {
-                "crs": "EPSG:6933",
-                "pixelSize": [1000, 1000],
-                "origin": [0, 0],
                 "resampling": {
                     "predictor_0": "nearest",
                     "response_0": "nearest",
