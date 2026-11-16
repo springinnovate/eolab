@@ -67,16 +67,25 @@ export function numericFeatureFields(observation) {
 }
 
 /**
- * Extract the last finite decimal number embedded in one field name.
+ * Split a field name around its last finite decimal number.
+ *
+ * The unchanged prefix and suffix identify a numeric series, so CO2_2000 and
+ * CO2_2005 can share an axis while CO2_total and CO2_mean remain field labels.
  *
  * @param {string} fieldName Attribute name.
- * @return {number|null} Numeric X value or null when the name has none.
+ * @return {{value:number,prefix:string,suffix:string}|null} Numeric token and
+ * surrounding text, or null when the name has no finite numeric token.
  */
-export function fieldNameNumber(fieldName) {
+function parseNumericFieldName(fieldName) {
     const matches = [...fieldName.matchAll(/\d+(?:\.\d+)?/g)];
     if (matches.length === 0) return null;
-    const value = Number(matches.at(-1)[0]);
-    return Number.isFinite(value) ? value : null;
+    const match = matches.at(-1);
+    const value = Number(match[0]);
+    return Number.isFinite(value) ? {
+        value,
+        prefix: fieldName.slice(0, match.index),
+        suffix: fieldName.slice(match.index + match[0].length),
+    } : null;
 }
 
 /**
@@ -154,8 +163,8 @@ export function vectorFeatureProfilePresentation(
 /**
  * Select the largest repeated numeric field-name family as an initial series.
  *
- * A family replaces the last number with a marker, so R2000 through R2024 are
- * selected together while unrelated numeric identifiers remain separate.
+ * A family has identical text around its last finite number, so R2000 through
+ * R2024 are selected together while unrelated numeric identifiers stay separate.
  *
  * @param {VectorInspectionObservation} observation Immutable inspector observation.
  * @return {string[]} Suggested field names.
@@ -164,11 +173,9 @@ export function suggestFeatureProfileFields(observation) {
     const numericFields = numericFeatureFields(observation);
     const families = new Map();
     for (const fieldName of numericFields) {
-        const matches = [...fieldName.matchAll(/\d+(?:\.\d+)?/g)];
-        if (matches.length === 0) continue;
-        const match = matches.at(-1);
-        const family = `${fieldName.slice(0, match.index)}#` +
-            fieldName.slice(match.index + match[0].length);
+        const parts = parseNumericFieldName(fieldName);
+        if (parts === null) continue;
+        const family = JSON.stringify([parts.prefix, parts.suffix]);
         if (!families.has(family)) families.set(family, []);
         families.get(family).push(fieldName);
     }
@@ -182,8 +189,10 @@ export function suggestFeatureProfileFields(observation) {
 
 /**
  * Build ordered points from selected fields while preserving missing values.
- * Numeric field-name ordering applies only when every selected name has a
- * number; otherwise complete names use one natural order for the whole series.
+ * Numeric spacing requires at least two distinct numbers with identical text
+ * around the final numeric token in every selected name. All other selections
+ * use complete field labels and natural ordering on an ordinal axis. Missing
+ * values retain their field's position without affecting this decision.
  *
  * @param {import("./inspection-observation.js").VectorInspectionObservation}
  * observation Validated inspection observation.
@@ -203,8 +212,16 @@ export function buildVectorFeatureProfile(observation, settings) {
     ) {
         throw new TypeError("Invalid vector feature-profile settings.");
     }
-    const points = [...new Set(settings.selectedFields)].map((fieldName) => {
-        const number = fieldNameNumber(fieldName);
+    const selectedFields = [...new Set(settings.selectedFields)];
+    const numericNames = selectedFields.map(parseNumericFieldName);
+    const firstNumericName = numericNames[0];
+    const usesNumericNames = numericNames.length >= 2 && firstNumericName !== null &&
+        numericNames.every((parts) => parts !== null &&
+            parts.prefix === firstNumericName.prefix &&
+            parts.suffix === firstNumericName.suffix
+        ) && new Set(numericNames.map((parts) => parts.value)).size === numericNames.length;
+    const points = selectedFields.map((fieldName, index) => {
+        const number = usesNumericNames ? numericNames[index].value : null;
         const value = observation.properties[fieldName];
         return {
             fieldName,
@@ -215,9 +232,6 @@ export function buildVectorFeatureProfile(observation, settings) {
                 : null,
         };
     });
-    const usesNumericNames = points.length > 0 && points.every(
-        (point) => point.xValue !== null
-    );
     points.sort((left, right) => {
         const compared = usesNumericNames
             ? left.xValue - right.xValue
