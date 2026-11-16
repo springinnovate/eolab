@@ -354,6 +354,9 @@ environment and habitat responses at the reference sites inside that area, then
 compares observed responses elsewhere with those expected under reference
 conditions.
 
+Results use a fixed 500 m grid in EPSG:6933. Input rasters are aligned to this
+grid using their selected resampling methods.
+
 Choose a layer under **Drawn polygons** for **Reference sites**. With custom
 raster inputs, drawn polygons are also available for **Analysis area**, and each
 input can use a different layer. The tool uses saved polygons that match the
