@@ -173,9 +173,6 @@ def _consumer_run_plan(
             },
             "habitat_mask": None,
             "preparation": {
-                "crs": "EPSG:6933",
-                "pixelSize": [1000, 1000],
-                "origin": [0, 0],
                 "resampling": {},
             },
         },

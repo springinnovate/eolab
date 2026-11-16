@@ -244,9 +244,6 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             },
             "habitat_mask": None,
             "preparation": {
-                "crs": "EPSG:6933",
-                "pixelSize": [1000, 1000],
-                "origin": [0, 0],
                 "resampling": {},
             },
         },
@@ -264,6 +261,11 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
     calculation, invocation = build_model_calculation_request(
         request, ModelRegistry((habitat_definition,))
     )
+    assert calculation.settings.output_grid.model_dump(mode="json") == {
+        "crs": "EPSG:6933",
+        "pixel_size": [500, 500],
+        "origin": [0, 0],
+    }
     operation = get_model_operation("habitat.condition.v1")
     assert operation.source is None and operation.primary_input is None
     assert operation.extra_sources(calculation) == {}
@@ -497,18 +499,20 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                 pixels[8:16, 8:16] = np.nan
     paths = {}
     for name, pixels in values.items():
+        # Cached 1000 m cells cover four cells of the fixed 500 m output grid.
+        pixels = pixels.repeat(2, axis=0).repeat(2, axis=1)
         path = tmp_path / f"expected-{name}.tif"
         with rasterio.open(
             path,
             "w",
             driver="GTiff",
             count=1,
-            width=24,
-            height=16,
+            width=48,
+            height=32,
             dtype="float64",
             crs="EPSG:6933",
             nodata=np.nan,
-            transform=from_origin(0, 16000, 1000, 1000),
+            transform=from_origin(0, 16000, 500, 500),
         ) as destination:
             destination.write(pixels.astype("float64"), 1)
         paths[name] = path
@@ -564,8 +568,11 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                 rasterio.open(getattr(expected, name)) as direct,
             ):
                 assert actual.transform == direct.transform
+                assert actual.transform == from_origin(0, 16000, 500, 500)
+                assert actual.crs == rasterio.crs.CRS.from_epsg(6933)
+                assert actual.shape == (32, 48)
                 assert actual.descriptions == direct.descriptions
                 np.testing.assert_array_equal(actual.read(), direct.read())
                 if coverage == "partial" and name == "reference_similarity":
-                    assert actual.read(1, masked=True).mask[8:16, 8:16].all()
+                    assert actual.read(1, masked=True).mask[16:32, 16:32].all()
     assert all(path.is_file() for path in provenance_path.parent.iterdir())

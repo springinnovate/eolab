@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ModelsController } from "../../src/models/controller.js";
 import { ModelsView } from "../../src/models/view.js";
-import { captureModelSubmission } from "../../src/models/inputs.js";
+import { captureModelSubmission, createModelDraft } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
-import { model, raster, selection } from "../../test-support/models/fixtures.js";
+import { model, raster, area, selection, invocation, job } from "../../test-support/models/fixtures.js";
 
 test("an unrelated model owns setup actions, readiness, capture, restoration and disposal through the common host", async t => {
     const recipe = {...model, id: "test-edge-model", title: "Edge model"};
@@ -25,7 +25,6 @@ test("an unrelated model owns setup actions, readiness, capture, restoration and
             return true;
         },
         restoreState: draft => { draft.setupState.restored = true; events.push("restore-state"); },
-        acquisitionGrid: () => null,
         buildInput: (ui, handlers, name) => {
             if (name !== "area") return null;
             const root = ui.element("div"), choose = ui.button("Choose eligible features", () => handlers.onSetupAction("choose-features"));
@@ -82,9 +81,9 @@ test("an unrelated model owns setup actions, readiness, capture, restoration and
     let renders = 0;
     const originalRender = view.render.bind(view);
     view.render = state => { renders += 1; originalRender(state); };
-    sessions[1].dependencies.render(); sessions[1].dependencies.refreshGrid();
+    sessions[1].dependencies.render();
     assert.equal(renders, 0, "late notifications from replaced setup cannot render its successor");
-    assert.deepEqual(capabilities[0], ["api", "closeInputEditor", "getCatalogItem", "refreshGrid", "render"]);
+    assert.deepEqual(capabilities[0], ["api", "closeInputEditor", "getCatalogItem", "render"]);
 });
 
 test("Habitat preparation policy stays behind the registered model integration", () => {
@@ -94,7 +93,55 @@ test("Habitat preparation policy stays behind the registered model integration",
         assert.doesNotMatch(source, /from ["']\.\/habitat-/u, name);
         assert.doesNotMatch(source, /getHabitatEarthEngineInput|captureHabitat|loadHabitat|habitatCoverage|habitatPreparationSelections/u, name);
         assert.doesNotMatch(source, /setupState\./u, `${name} must treat integration state as opaque`);
+        assert.doesNotMatch(source, /output_grid|fixedGrid|raster_preparation|resampling|reference_mask|habitat_mask/u,
+            `${name} must not interpret Habitat preparation settings or source roles`);
     }
     assert.match(read("model-setup.js"), /from "\.\/habitat-setup\.js"/u);
     assert.doesNotMatch(read("habitat-setup.js"), /from ["']\.\/(controller|inputs|view)\.js/u);
+});
+
+test("saved input descriptions use their model owner and leave ordinary inputs to the shared view", t => {
+    const savedRecipe = {...model, id: "described-model", title: "Saved model"};
+    const currentRecipe = {...savedRecipe, title: "Current model", version: "2.0.0", definitionSha256: "e".repeat(64)};
+    const described = [], selectedDefinitions = [];
+    let showArea = true;
+    const integration = {describeInput: (saved, name) => {
+        described.push({saved, name});
+        if (name !== "area") return null;
+        return showArea ? [{label: `Area from ${saved.model.definition.title}`, value: saved.inputs.area.selection.layerName},
+            {label: "Saved filter", value: saved.inputs.area.selection.filter.rules[0].value}] : [];
+    }};
+    const document = new SummaryControlDocument(), view = new ModelsView(document, {getSetupIntegration: definition => {
+        selectedDefinitions.push(definition);
+        return definition.id === savedRecipe.id ? integration : null;
+    }});
+    const controller = new ModelsController({api: {},
+        jobs: {subscribe: () => () => {}, tracked: new Set(), schedule: () => {}}, view,
+        getContext: () => ({rasters: [raster], area}), closeVectorFilter: () => {}});
+    t.after(() => controller.destroy());
+    const saved = {...invocation, model: {...savedRecipe, definition: savedRecipe}, inputs: {...invocation.inputs,
+        area: {kind: "catalogSelection", selection: structuredClone(selection)}}};
+    const run = job({model: savedRecipe, status: "cancelled"});
+    Object.assign(controller.state, {page: "run", library: [currentRecipe],
+        draft: createModelDraft(currentRecipe, {rasters: [raster], area}, "current-draft"),
+        runs: [run], selectedRun: run.jobId, invocation: saved});
+    controller.render();
+    const rows = view.run.inputsBody.children[0].children.map(node => node.textContent);
+    assert.deepEqual(selectedDefinitions, [savedRecipe]);
+    assert.deepEqual(described.map(({name}) => name), ["raster", "area"]);
+    assert.ok(described.every(({saved: received}) => received === saved));
+    assert.deepEqual(rows.slice(0, 6), ["Raster", `${raster.collectionId} / ${raster.itemId}`,
+        "Area from Saved model", "basins", "Saved filter", "North"]);
+    assert.equal(rows.includes("Area from Current model"), false);
+
+    showArea = false; controller.state.invocation = {...saved}; controller.render();
+    const hiddenRows = view.run.inputsBody.children[0].children.map(node => node.textContent);
+    assert.equal(hiddenRows.includes("Area from Saved model"), false);
+    assert.equal(hiddenRows.includes("Analysis area"), false, "An empty owned description does not fall back to the shared area description");
+
+    controller.state.invocation = invocation; controller.render();
+    const ordinaryRows = view.run.inputsBody.children[0].children.map(node => node.textContent);
+    assert.equal(selectedDefinitions.at(-1), model);
+    assert.equal(ordinaryRows[2], "Analysis area");
+    assert.match(ordinaryRows[3], /Box · W 0.0000°/);
 });

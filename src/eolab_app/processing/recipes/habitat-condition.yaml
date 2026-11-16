@@ -31,7 +31,10 @@ steps:
       preparation: {input: preparation}
       settings:
         value:
-          required_crs: EPSG:6933
+          output_grid:
+            crs: EPSG:6933
+            pixel_size: [500, 500]
+            origin: [0, 0]
           fold_count: 5
           sampling_block_size_meters: 25000
           validation_block_size_meters: 50000

@@ -1348,7 +1348,6 @@ async function initializeCatalog(
     };
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
-        describeSource: (source, signal, targetCrs) => describeRasterSource(source, signal, undefined, targetCrs),
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
         showOutput: (job, file) => outputLayers.show(job, file),

@@ -3,6 +3,38 @@ import { vectorSelectionsEqual } from "../selected-area.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
 import { HabitatPreparationSelectionView } from "./habitat-preparation-selection-view.js";
 
+/** Names for the resampling methods accepted by Habitat's input preparation.
+ * @type {Record<string,string>}
+ */
+const RESAMPLING_LABELS = {nearest: "Nearest neighbor", bilinear: "Bilinear interpolation", cubic: "Cubic interpolation",
+    average: "Average", mode: "Most common value (mode)"};
+
+/** List selected Habitat raster roles and the state holding each resampling method.
+ * @param {Object} draft Habitat draft with named stack, reference and mask inputs.
+ * @return {Array<{key:string,state:Object}>} Active raster roles in the calculation's input order.
+ */
+function getRasterResamplingStates(draft) {
+    const sources = [];
+    const preparationName = Object.keys(draft.model.inputs).find(name => draft.model.inputs[name].type === "raster_preparation");
+    const step = draft.model.steps.find(value => value.inputs.preparation?.input === preparationName);
+    for (const [argument, binding] of Object.entries(step.inputs)) {
+        if (!binding.input) continue;
+        const definition = draft.model.inputs[binding.input], state = draft.inputs[binding.input];
+        if (definition.type === "habitat_stack" && state.kind === "manual") {
+            for (const [role, prefix] of [["predictors", "predictor"], ["responses", "response"]]) {
+                state[role].forEach((row, index) => {
+                    if (row.raster) sources.push({key: `${prefix}_${index}`, state: row});
+                });
+            }
+        } else if (definition.type === "habitat_references" && state.areaMode === "raster" && state.maskRaster) {
+            sources.push({key: "reference_mask", state});
+        } else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type) && state.raster) {
+            sources.push({key: argument, state});
+        }
+    }
+    return sources;
+}
+
 /** Find the active Earth Engine stack in this model's editable inputs.
  * @param {Object} draft Model draft with named input state.
  * @return {Object|undefined} Habitat stack state, absent when manual rasters are selected.
@@ -77,11 +109,10 @@ class HabitatSetupSession {
      * @param {Object} dependencies.api Processing transport for Habitat metadata and coverage.
      * @param {(selection:Object,signal:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read display metadata for an exact Item.
      * @param {()=>void} dependencies.render Notify the host that draft presentation changed.
-     * @param {()=>void} dependencies.refreshGrid Refresh ordinary raster-grid choices.
      * @param {()=>void} dependencies.closeInputEditor Close an active editor before mode changes.
      */
-    constructor(draft, {api, getCatalogItem, render, refreshGrid, closeInputEditor}) {
-        Object.assign(this, {draft, api, getCatalogItem, render, refreshGrid, closeInputEditor});
+    constructor(draft, {api, getCatalogItem, render, closeInputEditor}) {
+        Object.assign(this, {draft, api, getCatalogItem, render, closeInputEditor});
         this.disposed = false;
     }
 
@@ -102,7 +133,6 @@ class HabitatSetupSession {
         if (this.draft.model.inputs[name].type !== "habitat_stack") return;
         if (change.kind) {
             for (const [key, definition] of Object.entries(this.draft.model.inputs)) {
-                if (definition.type === "raster_preparation") Object.assign(this.draft.inputs[key], {mode: "auto", sourceKey: ""});
                 if (definition.type === "summary_area" && this.draft.inputs[key].filterEditing) this.closeInputEditor();
             }
             this.cancelPreparationReads();
@@ -132,10 +162,10 @@ class HabitatSetupSession {
         this.cancelPreparationReads();
     }
 
-    /** Load Habitat's years, dataset choices and acquisition grid for model setup.
+    /** Load Habitat's assessment years and dataset choices for model setup.
      * Manual raster setup remains usable if this request fails. Replaced drafts
      * ignore late replies. New drafts select every dataset; refreshes and duplicated
-     * runs retain their existing year, dataset selections and output grid.
+     * runs retain their existing year and dataset selections.
      * @param {Object} draft Draft requesting the configuration.
      * @param {string} name Habitat stack input declared by that recipe.
      * @return {Promise<void>} Resolves after choices or retry guidance are displayed.
@@ -157,7 +187,7 @@ class HabitatSetupSession {
         } finally {
             input.loading = false;
             if (!abort.signal.aborted && !this.disposed) {
-                this.refreshGrid(); void this.refreshCoverage(); this.render();
+                void this.refreshCoverage(); this.render();
             }
         }
     }
@@ -272,9 +302,9 @@ class HabitatSetupSession {
 
 }
 
-/** Create preparation-selection state without replacing the ordinary manual AOI.
+/** Initialize Habitat's raster methods and preparation choices without replacing a selected manual AOI.
  * @param {Object} model Installed Habitat recipe.
- * @param {Object} inputs Ordinary input drafts, adjusted only for the default manual AOI.
+ * @param {Object} inputs Input drafts receiving resampling defaults and the default manual AOI.
  * @param {Object} context Initial source and viewport choices.
  * @param {{viewportArea:(bounds:Object)=>Object}} helpers Ordinary viewport-area capture.
  * @return {Object} Empty asynchronous choices, exact selection and coverage state.
@@ -282,6 +312,7 @@ class HabitatSetupSession {
 function createState(model, inputs, context, {viewportArea}) {
     for (const [name, definition] of Object.entries(model.inputs)) {
         const input = inputs[name];
+        if (["raster", "catalog_raster", "optional_raster", "habitat_references"].includes(definition.type)) input.resampling = "nearest";
         if (definition.type !== "summary_area" || input.area?.kind !== "wholeRaster") continue;
         input.areaMode = "viewport"; input.area = null;
         try { input.area = viewportArea(context.viewportBounds); }
@@ -293,18 +324,18 @@ function createState(model, inputs, context, {viewportArea}) {
         coverage: null, coverageLoading: false, coverageError: ""};
 }
 
-/** Create the Habitat stack with independent manual raster choices.
+/** Create Habitat's raster-stack choices or its input-preparation state.
  * @param {Object} definition Recipe input definition.
- * @param {Object} preparation Ordinary per-raster preparation defaults.
- * @return {Object|undefined} Stack draft, or undefined for another input family.
+ * @return {Object|undefined} Stack choices, empty preparation state with no editable grid, or undefined for another input family.
  */
-function createInput(definition, preparation) {
+function createInput(definition) {
+    if (definition.type === "raster_preparation") return {};
     if (definition.type !== "habitat_stack") return undefined;
     return {kind: "earthEngine", year: null, configuration: null, loading: false, error: "", predictorDatasets: null, responseDatasets: null,
-        predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
+        predictors: [{name: "predictor_1", raster: null, resampling: "nearest"}], responses: [{name: "response_1", raster: null, resampling: "nearest"}], categoricalPredictor: ""};
 }
 
-/** Capture Habitat's stack or prepared AOI through the existing invocation contract.
+/** Capture Habitat's stack, prepared AOI or raster resampling through the invocation contract.
  * @param {Object} draft Editable Habitat inputs and preparation state.
  * @param {string} name Recipe input to capture.
  * @param {{captureRaster:(raster:Object,sources:Object[])=>Object}} helpers Ordinary source-value capture.
@@ -313,18 +344,21 @@ function createInput(definition, preparation) {
  */
 function captureInput(draft, name, {captureRaster}) {
     const definition = draft.model.inputs[name];
+    if (definition.type === "raster_preparation")
+        return {resampling: Object.fromEntries(getRasterResamplingStates(draft).map(source => [source.key, source.state.resampling]))};
     if (definition.type === "habitat_stack") return captureHabitatStack(draft.inputs[name], draft.sources, captureRaster);
     if (definition.type === "summary_area" && getHabitatEarthEngineInput(draft)) return captureHabitatPreparationSelection(draft);
     return undefined;
 }
 
-/** Restore Habitat stack values while leaving ordinary spatial restoration to its owner.
+/** Restore Habitat's stack and defer raster methods until all source inputs are restored.
  * @param {Object} draft New editable Habitat draft.
  * @param {string} name Recipe input receiving its saved invocation value.
- * @param {Object} value Saved stack value.
+ * @param {Object} value Saved stack or preparation value.
  * @return {boolean} Whether this integration restored the input.
  */
 function restoreInput(draft, name, value) {
+    if (draft.model.inputs[name].type === "raster_preparation") return true;
     if (draft.model.inputs[name].type !== "habitat_stack") return false;
     const input = draft.inputs[name];
     if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year,
@@ -337,12 +371,14 @@ function restoreInput(draft, name, value) {
     return true;
 }
 
-/** Require the duplicated Earth Engine AOI to match a current prepared selection.
+/** Restore selected raster methods and require an Earth Engine AOI to match current prepared selections.
  * @param {Object} draft Draft after its ordinary inputs have been restored.
  * @param {Object} inputs Saved invocation values keyed by recipe input name.
  * @return {void}
  */
 function restoreState(draft, inputs) {
+    const preparationName = Object.keys(draft.model.inputs).find(name => draft.model.inputs[name].type === "raster_preparation");
+    for (const source of getRasterResamplingStates(draft)) source.state.resampling = inputs[preparationName].resampling[source.key];
     if (!getHabitatEarthEngineInput(draft)) return;
     const name = Object.keys(draft.model.inputs).find(key => draft.model.inputs[key].type === "summary_area");
     const area = inputs[name];
@@ -350,17 +386,76 @@ function restoreState(draft, inputs) {
     draft.setupState.unavailable = true;
 }
 
-/** Offer the installed Earth Engine acquisition grid only in automatic input mode.
- * @param {Object} draft Current Habitat setup.
- * @return {{key:string,label:string,sourceCrs:string,grid:Object}|null} Model-provided grid choice.
+/** Describe the grid and raster methods actually recorded in a saved Habitat run.
+ * @param {Object} invocation Captured recipe definition and accepted input values.
+ * @param {string} name Recipe input being described.
+ * @return {Array<{label:string,value:string}>|null} Preparation rows, or null for an input described by its ordinary owner.
  */
-function acquisitionGrid(draft) {
-    const grid = getHabitatEarthEngineInput(draft)?.configuration?.grid;
-    return grid ? {key: "earthEngine", label: "Earth Engine inputs", sourceCrs: grid.crs, grid} : null;
+function describeInput(invocation, name) {
+    const definition = invocation.model.definition, input = definition.inputs[name];
+    if (input.type !== "raster_preparation") return null;
+    const step = definition.steps.find(item => item.inputs.preparation?.input === name);
+    const grid = step.inputs.settings.value.output_grid, value = invocation.inputs[name];
+    const rows = [{label: input.label, value: `${grid.crs} · pixel size ${grid.pixel_size.join(" × ")} · origin ${grid.origin.join(", ")}`}];
+    const stack = invocation.inputs[step.inputs.stack.input];
+    if (stack.kind !== "earthEngine") for (const [role, label, prefix] of [["predictors", "Predictor", "predictor"], ["responses", "Observed response", "response"]]) {
+        stack[role].forEach((row, index) => rows.push({label: `${label}: ${row.name} resampling`, value: RESAMPLING_LABELS[value.resampling[`${prefix}_${index}`]]}));
+    }
+    for (const [key, label] of [["reference_mask", "Reference raster resampling"], ["habitat_mask", "Habitat assessment mask resampling"]]) {
+        if (value.resampling[key]) rows.push({label, value: RESAMPLING_LABELS[value.resampling[key]]});
+    }
+    return rows;
+}
+
+/** Build one Habitat-owned resampling choice next to its raster selector.
+ * @param {import("./model-setup.js").ModelSetupUi} ui Neutral element and field builders.
+ * @param {HTMLElement} fields Host for this raster's controls.
+ * @param {string} name Input identity used in the accessible label.
+ * @param {(method:string)=>void} onChange Store this raster's resampling method.
+ * @return {{resampling:HTMLSelectElement,resamplingField:HTMLLabelElement}} Stable controls for this raster.
+ */
+function buildResamplingInput(ui, fields, name, onChange) {
+    const resampling = ui.element("select");
+    ui.options(resampling, Object.entries(RESAMPLING_LABELS).map(([value, label]) => ({value, label})), "nearest");
+    resampling.addEventListener("change", () => onChange(resampling.value));
+    const resamplingField = ui.field(`models-${name}-resampling`, "Resampling", resampling);
+    fields.append(resamplingField);
+    return {resampling, resamplingField};
+}
+
+/** Add Habitat resampling to an ordinary raster chooser without changing source handling.
+ * @param {import("./model-setup.js").ModelSetupUi} ui Ordinary raster chooser and neutral field builders.
+ * @param {HTMLElement} fields Host for the source, method and source guidance.
+ * @param {string} name Input identity used in accessible labels.
+ * @param {Object} definition Declared raster input.
+ * @param {(raster:Object|null)=>void} onChange Store the selected raster.
+ * @param {(method:string)=>void} onResampling Store this raster's method.
+ * @return {Object} Ordinary chooser controls with Habitat's resampling controls attached.
+ */
+function buildRasterInput(ui, fields, name, definition, onChange, onResampling) {
+    const controls = ui.buildRasterInput(fields, name, definition, onChange);
+    Object.assign(controls, buildResamplingInput(ui, fields, name, onResampling));
+    fields.insertBefore(controls.resamplingField, controls.reason);
+    return controls;
+}
+
+/** Render Habitat's selected raster and its independent resampling choice.
+ * @param {import("./model-setup.js").ModelSetupUi} ui Ordinary raster presentation.
+ * @param {Object} controls Source and resampling controls.
+ * @param {Object} definition Declared raster input.
+ * @param {Object} value Selected raster and preparation method.
+ * @param {Object} state Current model-page state.
+ * @return {boolean} Whether the ordinary raster input is ready.
+ */
+function renderRasterInput(ui, controls, definition, value, state) {
+    const ready = ui.renderRasterInput(controls, definition, value, state);
+    controls.resampling.value = value.resampling;
+    controls.resamplingField.hidden = !value.raster;
+    return ready;
 }
 
 /** Build Habitat setup with reference sites and its optional output mask in the main form.
- * Reuse ordinary spatial/raster controls for source selection and readiness.
+ * Reuse ordinary source controls and Habitat's own per-raster resampling controls.
  * @param {import("./model-setup.js").ModelSetupUi} ui Element, formatting and ordinary input builders supplied by the host view.
  * @param {{onInput:(name:string,change:Object)=>void,onSetupAction:(action:string,value?:unknown)=>void}} handlers Generic input edits and integration actions.
  * @param {string} name Recipe input name.
@@ -369,23 +464,46 @@ function acquisitionGrid(draft) {
  * @return {import("./model-setup.js").ModelSetupControls|null} Owned controls with renderModelInput, or null for ordinary controls.
  */
 function buildInput(ui, handlers, name, definition, draft) {
+    if (definition.type === "raster_preparation") return {renderModelInput: () => true};
     if (definition.type === "habitat_stack") {
-        const controls = new HabitatStackView({...ui, captureStack: (value, sources) => captureHabitatStack(value, sources, ui.captureRaster)}, {onInput: handlers.onInput,
+        const controls = new HabitatStackView({...ui,
+            buildRasterInput: (fields, id, input, onChange, onResampling) => buildRasterInput(ui, fields, id, input, onChange, onResampling),
+            renderRasterInput: (raster, input, value, state) => renderRasterInput(ui, raster, input, value, state),
+            captureStack: (value, sources) => captureHabitatStack(value, sources, ui.captureRaster)}, {onInput: handlers.onInput,
             onRefreshHabitat: inputName => handlers.onSetupAction("refresh-options", inputName)}, name, definition);
         ui.append(controls.root);
         controls.renderModelInput = (value, state) => controls.render(value, state);
         return controls;
     }
-    if (name === "habitat_mask" && definition.type === "optional_raster") {
-        const root = ui.element("fieldset", "", "models-vector");
-        root.setAttribute("aria-label", "Output mask (optional)");
-        const controls = ui.buildRasterInput(root, name, {...definition, label: "Limit output to a raster mask (optional)"});
-        const hint = ui.element("p", "Only cells equal to 1 receive results.", "models-help");
-        hint.id = `models-${name}-help`;
-        controls.source.setAttribute("aria-describedby", `${hint.id} ${controls.reason.id}`);
-        root.append(hint); ui.append(root);
-        Object.assign(controls, {root, hint});
-        controls.renderModelInput = (value, state) => ui.renderRasterInput(controls, definition, value.inputs[name], state);
+    if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
+        const isOutputMask = name === "habitat_mask" && definition.type === "optional_raster";
+        const fields = ui.element(isOutputMask ? "fieldset" : "div", "", "models-vector");
+        const displayDefinition = isOutputMask ? {...definition, label: "Limit output to a raster mask (optional)"} : definition;
+        const controls = buildRasterInput(ui, fields, name, displayDefinition, raster => handlers.onInput(name, {raster}),
+            resampling => handlers.onInput(name, {resampling}));
+        if (isOutputMask) {
+            fields.setAttribute("aria-label", "Output mask (optional)");
+            const hint = ui.element("p", "Only cells equal to 1 receive results.", "models-help");
+            hint.id = `models-${name}-help`;
+            controls.source.setAttribute("aria-describedby", `${hint.id} ${controls.reason.id}`);
+            fields.append(hint);
+            Object.assign(controls, {root: fields, hint});
+        }
+        ui.append(fields);
+        controls.renderModelInput = (value, state) => renderRasterInput(ui, controls, definition, value.inputs[name], state);
+        return controls;
+    }
+    if (definition.type === "habitat_references") {
+        const controls = ui.buildSpatialInput(name, definition);
+        Object.assign(controls, buildResamplingInput(ui, controls.maskGroup, name, resampling => handlers.onInput(name, {resampling})));
+        controls.maskGroup.prepend(controls.resamplingField);
+        controls.renderModelInput = (value, state) => {
+            const input = value.inputs[name];
+            const ready = ui.renderSpatialInput(controls, definition, input, state);
+            controls.resampling.value = input.resampling;
+            controls.resampling.disabled = input.areaMode !== "raster";
+            return ready;
+        };
         return controls;
     }
     if (definition.type !== "summary_area") return null;
@@ -418,4 +536,4 @@ function createSession(draft, dependencies) { return new HabitatSetupSession(dra
 /** Habitat integration registered once at the model setup boundary.
  * @type {import("./model-setup.js").ModelSetupIntegration}
  */
-export const habitatSetup = Object.freeze({createState, createInput, captureInput, restoreInput, restoreState, acquisitionGrid, buildInput, createSession});
+export const habitatSetup = Object.freeze({createState, createInput, captureInput, restoreInput, restoreState, describeInput, buildInput, createSession});
