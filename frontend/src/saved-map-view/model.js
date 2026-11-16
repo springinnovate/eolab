@@ -68,12 +68,12 @@ export function parseSavedMapView(serialized) {
 /**
  * Serialize one already validated saved-map document.
  *
- * @param {Object} savedMapView Canonical saved-map document.
+ * @param {Readonly<Object>} savedMapView Document returned by createSavedMapView or parseSavedMapView.
  * @return {string} Indented UTF-8 JSON text.
  * @throws {SavedMapViewValidationError} If the serialized document exceeds the save limit.
  */
 export function serializeSavedMapView(savedMapView) {
-    const serialized = `${JSON.stringify(validateSavedMapView(savedMapView), null, 2)}\n`;
+    const serialized = `${JSON.stringify(savedMapView, null, 2)}\n`;
     if (new TextEncoder().encode(serialized).byteLength > MAX_SAVED_MAP_VIEW_BYTES) {
         throw new SavedMapViewValidationError(
             "Map settings exceed the 512 KiB save limit. Remove some layers or simplify their styles."
