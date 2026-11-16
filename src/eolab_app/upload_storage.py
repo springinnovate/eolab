@@ -25,6 +25,8 @@ from eolab_app.source_files import finish_source_task
 
 UploadKind = Literal["vector", "raster"]
 UPLOAD_LIFETIME = timedelta(days=7)
+UPLOAD_QUEUE_CAPACITY = 32
+UPLOAD_QUEUE_WAIT_SECONDS = 30
 T = TypeVar("T")
 
 
@@ -169,6 +171,7 @@ class UploadStorage:
         self.owner_max_bytes = owner_max_bytes
         self.global_max_bytes = global_max_bytes
         self._admission = asyncio.Lock()
+        self._waiting_uploads = 0
         self._disk_lock = RLock()
         self._incoming_usage: StorageUsage | None = None
         self._active_reads: dict[tuple[str, UUID, UploadKind], ActiveUploadRead] = {}
@@ -388,6 +391,39 @@ class UploadStorage:
             )
 
     @asynccontextmanager
+    async def _admit_upload(self) -> AsyncIterator[None]:
+        """Wait for and hold the upload slot without consuming request bytes.
+
+        Up to 32 requests may wait in arrival order for at most 30 seconds. The
+        active request retains the slot through inspection, publication and
+        cleanup. Cancelling a waiting task leaves its body and storage untouched.
+
+        Yields:
+            None once this request exclusively owns upload admission.
+
+        Raises:
+            UploadError: If the waiting queue is full or the wait expires.
+            asyncio.CancelledError: If the caller cancels while waiting or active.
+        """
+        if self._waiting_uploads >= UPLOAD_QUEUE_CAPACITY:
+            raise UploadError(429, "Too many uploads are waiting. Try again shortly.")
+        self._waiting_uploads += 1
+        try:
+            try:
+                async with asyncio.timeout(UPLOAD_QUEUE_WAIT_SECONDS):
+                    await self._admission.acquire()
+            except TimeoutError as error:
+                raise UploadError(
+                    429, "The upload waited too long to start. Try again shortly."
+                ) from error
+        finally:
+            self._waiting_uploads -= 1
+        try:
+            yield
+        finally:
+            self._admission.release()
+
+    @asynccontextmanager
     async def stage(
         self,
         owner: str,
@@ -408,16 +444,12 @@ class UploadStorage:
             Staged original for bounded format inspection and publish().
 
         Raises:
-            UploadError: If five files or a byte budget is exhausted, another
-                upload is active, or the incoming body exceeds 120 seconds.
+            UploadError: If five files or a byte budget is exhausted, admission's
+                queue is full or times out, or the incoming body exceeds 120 seconds.
             OSError: If staging fails.
             asyncio.CancelledError: After pending writes and cleanup finish.
         """
-        if self._admission.locked():
-            raise UploadError(
-                429, "Another upload is being received. Try again shortly."
-            )
-        async with self._admission:
+        async with self._admit_upload():
             temporary: TemporaryDirectory[str] | None = None
             output: BinaryIO | None = None
 
