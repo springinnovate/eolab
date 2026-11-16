@@ -17,8 +17,9 @@ const area = {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1,
 test("uploaded rasters use opaque identities through ordinary metadata, rendering and analysis clients", async () => {
     const reference = {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"};
     const descriptor = {source: reference, label: "Reference mask", bbox: [0, 0, 1, 1], path: "/private/mask.tif"};
-    const metadata = {source: reference, version: "c".repeat(64), bounds: descriptor.bbox, width: 2, height: 2, bands: 1,
-        capabilities: {pixels: {supported: true}, statistics: {supported: true}}};
+    const metadata = {source: reference, version: reference.uploadId, bounds: descriptor.bbox, width: 2, height: 2, bands: 1,
+        dtype: "uint8", crs: "EPSG:4326", transform: [0.5, 0, 0, 0, -0.5, 1], nodata: 255,
+        capabilities: {pixels: {supported: true, reason: null}, statistics: {supported: true, reason: null}}, projectedGrid: null};
     const requests = [], signal = new AbortController().signal;
     const fetcher = async (url, options) => {
         requests.push({url, ...options, body: JSON.parse(options.body)});
@@ -88,12 +89,34 @@ test("temporary raster publication uses the ordinary rendering endpoint and path
     assert.equal(requests[0].options.headers["X-EOLab-Processing"], "1");
 });
 
-test("source metadata requires matching identity, version, dimensions and capabilities", async () => {
+test("source metadata accepts only the version contract supplied by its owner", async () => {
+    const uploadId = "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d";
+    const otherUploadId = "bbbbbbbb-dcc1-420a-b9b1-ed9db35e789d";
+    const references = [source, {collectionId: "catalog", itemId: "raster"},
+        {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature", time: "2020-01-01T00:00:00Z"},
+        {kind: "uploadedRaster", uploadId}];
+    for (const reference of references) {
+        const uploaded = reference.kind === "uploadedRaster";
+        const metadata = {source: reference, version: uploaded ? uploadId : raster.version,
+            bounds: raster.bbox, width: 2, height: 1, bands: 1,
+            capabilities: {pixels: {supported:true}, statistics: {supported:true}}, projectedGrid: null};
+        const fetcher = async () => Response.json(metadata);
+        assert.deepEqual(await describeRasterSource(reference, undefined, fetcher), metadata);
+        const invalidVersions = ["invalid", null, uploaded ? raster.version : uploadId];
+        if (uploaded) invalidVersions.push(otherUploadId);
+        for (const version of invalidVersions) {
+            metadata.version = version;
+            await assert.rejects(describeRasterSource(reference, undefined, fetcher), /invalid/);
+        }
+    }
+});
+
+test("source metadata requires matching identity, dimensions and capabilities", async () => {
     const valid = {source, version: raster.version, bounds: raster.bbox, width: 2, height: 1, bands: 1,
         capabilities: {pixels: {supported:true}, statistics: {supported:true}}, projectedGrid: null};
     const fetcher = value => async () => new Response(JSON.stringify(value));
     assert.deepEqual(await describeRasterSource(source, undefined, fetcher(valid)), valid);
-    for (const change of [{version: "invalid"}, {source: {...source, jobId: "e".repeat(32)}}, {width: 0}, {bounds: [1]}, {capabilities: {}}]) {
+    for (const change of [{source: {...source, jobId: "e".repeat(32)}}, {width: 0}, {bounds: [1]}, {capabilities: {}}]) {
         await assert.rejects(describeRasterSource(source, undefined, fetcher({...valid, ...change})), /invalid/);
     }
 });
