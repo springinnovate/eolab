@@ -1016,7 +1016,7 @@ h5 {
   display: flex;
   flex: 1;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: 2px;
   min-width: 0;
 }
