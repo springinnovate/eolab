@@ -100,6 +100,9 @@ and **Style** without making you leave the search results.
 
 #### Build and style the map
 
+Use the chevron on either side of the map to collapse that panel. Select its
+named tab to reopen it where you left off. The **Tools** menu is in the right panel.
+
 Open **Map contents** to see the current stack. The first item in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
 the same handle.

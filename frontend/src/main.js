@@ -325,8 +325,6 @@ function applyMapHeading(title, subtitle) {
             "aria-label",
             `${title} controls`
         );
-    document.querySelector("#open-panel").textContent =
-        `Open ${title}`;
 }
 
 /**

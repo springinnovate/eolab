@@ -41,7 +41,7 @@ function fixture(configureDocument = () => {}) {
     root.showPopover = () => { calls.push("show"); presentationOrder.push("dock-open"); };
     root.hidePopover = () => { calls.push("hide"); };
     const toolbar = doc.querySelector("#map-tools-toolbar");
-    toolbar.getBoundingClientRect = () => ({ height: 44 });
+    toolbar.getBoundingClientRect = () => ({ height: toolbar.hidden ? 0 : 44 });
     const toolActions = doc.querySelector("#workspace-tool-actions");
     const mapToolsButton = doc.querySelector("#map-tools-more-summary");
     for (const [id, caption] of [
@@ -90,6 +90,7 @@ function fixture(configureDocument = () => {}) {
         panels: doc.querySelector("#map-inspection-panels"),
         dockTitle: doc.querySelector("#map-inspection-dock-title"),
         minimizeButton: doc.querySelector("#toggle-map-inspection-dock"),
+        expandButton: doc.querySelector("#open-map-tools"),
         featureTab: doc.querySelector("#map-inspection-tab-feature"),
         timeSeriesTab: doc.querySelector("#map-inspection-tab-time-series"),
         featureProfileTab: doc.querySelector("#map-inspection-tab-feature-profile"),
@@ -102,12 +103,12 @@ function fixture(configureDocument = () => {}) {
     };
 }
 
-test("Tools retains its invoker and open menu through panel opening, minimization and closing", () => {
+test("the tool chooser survives passive panel opening and its restore command expands the toolbar", () => {
     const h = fixture();
     const command = h.doc.createElement();
     h.toolActions.append(command);
     assert.equal(h.mapToolsButton.hidden, false);
-    assert.equal(h.minimizeButton.hidden, true);
+    assert.equal(h.expandButton.hidden, true);
     h.controller.showToolActions();
     h.controller.showToolActions();
     assert.deepEqual(h.toolActionsCalls, ["show"], "a restore request does not toggle an open popover closed");
@@ -120,14 +121,17 @@ test("Tools retains its invoker and open menu through panel opening, minimizatio
     assert.equal(h.minimizeButton.hidden, false);
     assert.equal(h.doc.activeElement, command);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.mapToolsButton.hidden, false);
-    assert.equal(h.doc.activeElement, command);
-    assert.equal(h.controller.minimized, true);
+    assert.equal(h.toolbar.hidden, true);
+    assert.equal(h.expandButton.hidden, false);
+    assert.equal(h.doc.activeElement, h.expandButton);
+    assert.deepEqual(h.toolActionsCalls, ["show", "hide", "show", "hide"]);
     h.controller.hideStyle();
-    assert.equal(h.mapToolsButton.hidden, false);
-    assert.equal(h.minimizeButton.hidden, true);
-    assert.equal(h.doc.activeElement, command);
-    assert.deepEqual(h.toolActionsCalls, ["show", "hide", "show"]);
+    assert.equal(h.toolbar.hidden, true, "closing the last retained tool keeps the user's collapse choice");
+    h.controller.showToolActions();
+    assert.equal(h.toolbar.hidden, false);
+    assert.equal(h.expandButton.hidden, true);
+    assert.equal(h.toolActionsCalls.at(-1), "show");
+    command.focus();
     h.toolActions.hidePopover();
     assert.equal(h.doc.activeElement, h.mapToolsButton, "native dismissal returns to the same persistent invoker");
     h.controller.showStyle("Resistance");
@@ -219,14 +223,15 @@ test("destination cues clear when their presentation closes, minimizes, switches
     }
 });
 
-test("closing the last panel returns a focused minimize action to the persistent Tools button", () => {
+test("an empty toolbar can collapse and restore with focus on its visible button", () => {
     const h = fixture();
-    h.controller.showStyle("Resistance");
-    h.minimizeButton.focus();
-    h.controller.hideStyle();
-    assert.equal(h.minimizeButton.hidden, true);
-    assert.equal(h.doc.activeElement, h.mapToolsButton);
-    assert.equal(h.mapToolsButton.hidden, false);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.toolbar.hidden, true);
+    assert.equal(h.doc.activeElement, h.expandButton);
+    h.expandButton.dispatchEvent(new Event("click"));
+    assert.equal(h.toolbar.hidden, false);
+    assert.equal(h.panels.hidden, true);
+    assert.equal(h.doc.activeElement, h.minimizeButton);
     h.controller.destroy();
 });
 
@@ -422,7 +427,7 @@ test("compact Features navigation preserves progress, errors and unread results 
     assert.equal(h.featureTab.hidden, false);
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(h.featureTab.getAttribute("aria-pressed"), "false");
-    assert.equal(h.doc.activeElement, h.map);
+    assert.equal(h.doc.activeElement, h.expandButton);
     h.controller.destroy();
 });
 
@@ -483,7 +488,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(tabs.hidden, true);
     assert.equal(h.doc.querySelector("#map-inspection").getAttribute("data-minimized"), "true");
-    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.expandButton.dispatchEvent(new Event("click"));
     assert.equal(feature.getAttribute("aria-pressed"), "true");
     h.controller.setClickResult("histogram", null);
     assert.equal(h.histogramTab.hidden, false, "retained histogram remains reachable without a click card");
@@ -561,7 +566,7 @@ test("active-tool subscriptions report expanded presentation, support detachment
     assert.deepEqual(changes, [null, "raster-series"]);
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
-    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.expandButton.dispatchEvent(new Event("click"));
     assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     h.histogramTab.dispatchEvent(new Event("click"));
     assert.deepEqual(changes, [null, "raster-series", null, "raster-series", "histogram"]);
@@ -588,8 +593,8 @@ test("layout reports follow dock transitions, not repeated result updates", () =
     h.controller.showVectorTimeSeries();
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, toolbarHeight: 44 });
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, toolbarHeight: 44 });
-    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, toolbarHeight: 0 });
+    h.expandButton.dispatchEvent(new Event("click"));
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, toolbarHeight: 44 });
     h.controller.hideVectorTimeSeries();
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, toolbarHeight: 44 });
@@ -642,7 +647,8 @@ test("toolbar reflow reports its height without losing retained tools", () => {
     let disconnected = false;
     let height = 48;
     const h = fixture(doc => {
-        doc.querySelector("#map-tools-toolbar").getBoundingClientRect = () => ({ height });
+        const toolbar = doc.querySelector("#map-tools-toolbar");
+        toolbar.getBoundingClientRect = () => ({ height: toolbar.hidden ? 0 : height });
         doc.defaultView.ResizeObserver = class {
             /** Capture the native resize callback for deterministic delivery.
              * @param {ResizeObserverCallback} callback Geometry notification.
@@ -669,14 +675,14 @@ test("toolbar reflow reports its height without losing retained tools", () => {
     assert.equal(h.layouts.length, count);
     height = 72.25;
     notifyResize();
-    assert.equal(h.layouts.length, count + 1);
-    assert.equal(h.layouts.at(-1).toolbarHeight, 73);
-    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "73px");
+    assert.equal(h.layouts.length, count, "the collapsed toolbar occupies no space");
+    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "0px");
     assert.equal(h.histogram.hidden, false);
     assert.equal(h.style.hidden, false);
     assert.equal(h.controller.activeTool, "style");
-    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.expandButton.dispatchEvent(new Event("click"));
     assert.equal(h.layouts.at(-1).expanded, true);
+    assert.equal(h.layouts.at(-1).toolbarHeight, 73);
     const expandedCount = h.layouts.length;
     height = 96;
     notifyResize();
@@ -856,16 +862,16 @@ test("dock minimization retains open tools and selecting a tab expands it", () =
 
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(h.panels.hidden, true);
-    assert.equal(h.minimizeButton.textContent, "Expand");
-    assert.equal(h.minimizeButton.getAttribute("aria-expanded"), "false");
+    assert.equal(h.expandButton.hidden, false);
+    assert.equal(h.toolbar.hidden, true);
     assert.equal(h.feature.hidden, false);
     assert.equal(h.style.hidden, false);
     assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
 
     h.featureTab.dispatchEvent(new Event("click"));
     assert.equal(h.panels.hidden, false);
-    assert.equal(h.minimizeButton.textContent, "Minimize");
-    assert.equal(h.minimizeButton.getAttribute("aria-expanded"), "true");
+    assert.equal(h.expandButton.hidden, true);
+    assert.equal(h.toolbar.hidden, false);
     assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "false");
     h.controller.destroy();
@@ -1008,7 +1014,7 @@ test("closing the last tool hides its empty surface while raster navigation rema
     assert.equal(h.doc.activeElement, h.map);
 
     h.minimizeButton.dispatchEvent(new Event("click"));
-    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.expandButton.dispatchEvent(new Event("click"));
     assert.equal(h.panels.hidden, true, "expanding only the result cards must not restore an empty surface");
 
     reopen.dispatchEvent(new Event("click"));
