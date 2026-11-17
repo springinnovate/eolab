@@ -24,11 +24,11 @@ export class MapInspectionController {
         this.root = documentContext.querySelector("#map-inspection");
         this.toolbar = documentContext.querySelector("#map-tools-toolbar");
         this.panels = documentContext.querySelector("#map-inspection-panels");
-        this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
+        this.toolName = documentContext.querySelector("#map-tool-name");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
-        this.mapToolsButton = documentContext.querySelector("#map-tools-more-summary");
+        this.mapToolsButton = documentContext.querySelector("#map-tool-chooser");
         this.toolActionsOpen = false;
         /** @type {(event:ToggleEvent)=>void} Track native open/closed state synchronously. */
         this.onToolActionsBeforeToggle = event => { this.toolActionsOpen = event.newState === "open"; };
@@ -132,15 +132,6 @@ export class MapInspectionController {
                 tab: documentContext.querySelector("#map-inspection-tab-style"),
             },
         ];
-        const tasks = {
-            style: "Appearance", filter: "Data selection",
-            "raster-clips": "Export", histogram: "Raster analysis",
-            "raster-series": "Raster analysis", feature: "Point inspection",
-        };
-        for (const tool of this.tools) {
-            tool.task = tasks[tool.name] ?? "Analysis";
-            tool.context = null;
-        }
         this.isOpen = false;
         this.activeTool = null;
         this.activationOrder = [];
@@ -844,31 +835,26 @@ export class MapInspectionController {
     }
 
     /**
-     * Render foreground task/source/scope, retained navigation and active-panel visibility.
-     * Raster destinations use stable native buttons; their owners handle opening.
-     * Features share the compact result navigation. Raster statistics omits the
-     * inactive Style tab while retaining its editor; other tools keep their tabs.
-     * Data tools and polygon editing use their panel headings without another task heading.
-     * Opening or updating a tool never replaces its focused raster destination.
-     * Hide the panel surface when no tool is active so the retained result header
-     * cannot leave an invisible container intercepting map input below it.
-     * A collapsed toolbar leaves a single Map tools tab for restoring the controls.
+     * Show the active tool's name in the chooser, its content, and any other retained tabs.
+     * Raster results keep their own navigation and the sampling panel keeps its inputs
+     * when collapsed. The named Map tools tab restores the same active tool.
      *
      * @return {void}
      */
     #renderDock() {
+        const retainedTabHadFocus = this.tabList.contains(this.document.activeElement);
         this.panels.hidden = this.minimized || this.activeTool === null;
         this.root.setAttribute("data-minimized", String(this.minimized));
         this.root.setAttribute("data-active-tool", this.activeTool ?? "");
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
-        this.dockTitle.textContent = tool === null ? "Explore data" : `${tool.task} · ${tool.label}`;
-        this.dockTitle.title = this.dockTitle.textContent;
-        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations", "models", "planning", "style", "filter"].includes(this.activeTool);
+        this.toolName.textContent = tool?.label ?? "Choose a tool";
+        this.mapToolsButton.setAttribute("aria-label", tool ? `${tool.label}, choose a map tool` : "Choose a tool");
         const context = tool?.context ?? (this.activeTool === "feature"
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
-        this.dockContext.hidden = this.dockTitle.hidden || !this.dockContext.textContent;
+        this.dockContext.hidden = !this.dockContext.textContent ||
+            !["raster-clips", "time-series", "feature-profile"].includes(this.activeTool);
         const expandWasFocused = this.document.activeElement === this.expandButton;
         this.toolbar.hidden = this.minimized;
         this.expandButton.hidden = !this.minimized;
@@ -890,7 +876,8 @@ export class MapInspectionController {
             panel.setAttribute("aria-labelledby", tab.id);
         }
         const visibleTabs = this.tools.filter(({tab, resultNavigation}) => !resultNavigation && !tab.hidden);
-        this.tabList.hidden = visibleTabs.length === 0 || this.minimized;
+        this.tabList.hidden = this.minimized || !visibleTabs.some(({name}) => name !== this.activeTool);
+        if (this.tabList.hidden && retainedTabHadFocus && !this.minimized) this.mapToolsButton.focus();
         if (!visibleTabs.some(({tab}) => tab.tabIndex === 0) && visibleTabs.length > 0) {
             visibleTabs[0].tab.tabIndex = 0;
         }

@@ -220,7 +220,7 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
-    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Explore data/);
+    assert.match(inspection.source, /aria-labelledby="map-tool-name"/);
     assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Analysis results"/);
     assert.match(inspection.source, /id="open-raster-series-dock"[\s\S]*?aria-controls="raster-series"/);
     assert.doesNotMatch(inspection.source, /popovertarget="workspace-tool-actions"/);
@@ -518,9 +518,9 @@ test("workspace overflow shares one native action list", () => {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }
-    for (const id of ["map-tools-more-summary"]) {
-        assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools <span aria-hidden="true">▾<\/span><\/button>/);
-    }
+    const chooser = requireElementRange("map-tool-chooser");
+    assert.match(chooser.source, /popovertarget="workspace-tool-actions"/);
+    assert.match(chooser.source, /<span id="map-tool-name">Choose a tool<\/span>/);
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
@@ -529,7 +529,7 @@ test("the collapsible toolbar contains the tool chooser and filters, with a rest
     const dock = requireElementRange("map-inspection");
     assert.ok(requireElementRange("open-map-tools").end < toolbar.start);
     assert.ok(toolbar.end < dock.start);
-    for (const id of ["map-tools-more-summary", "toggle-map-inspection-dock", "map-filter-indicators"]) {
+    for (const id of ["map-tool-chooser", "toggle-map-inspection-dock", "map-filter-indicators"]) {
         const control = requireElementRange(id);
         assert.ok(control.start > toolbar.start && control.end < toolbar.end);
         assert.equal(countMarkupId(id), 1);
@@ -550,13 +550,12 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     }
     assert.match(requireElementRange("models-heading").source, /class="visually-hidden" tabindex="-1">Data tools<\/h2>$/);
     assert.match(requireElementRange("models-panel").source, /<nav class="models-navigation" aria-label="Data tools">/);
-    for (const id of ["map-tools-more-summary"]) {
-        const {source} = requireElementRange(id);
-        assert.match(source, /^<button\b[^>]*\btype="button"/);
-        assert.match(source, /aria-label="Map and analysis tools"/);
-        assert.match(source, /aria-controls="workspace-tool-actions"/);
-        assert.match(source, /popovertarget="workspace-tool-actions"/);
-        assert.match(source, />Tools <span aria-hidden="true">▾<\/span><\/button>$/);
+    const chooser = requireElementRange("map-tool-chooser").source;
+    assert.match(chooser, /^<button\b[^>]*\btype="button"/);
+    assert.match(chooser, /aria-controls="workspace-tool-actions"/);
+    for (const id of ["collapse-panel", "toggle-map-inspection-dock"]) {
+        assert.match(requireElementRange(id).source, /class="map-panel-toggle map-panel-collapse"/);
+        assert.match(requireElementRange(id).source, /<span aria-hidden="true">×<\/span><\/button>$/);
     }
     for (const [id, action] of [["toggle-map-inspection-dock", "Collapse"], ["open-map-tools", "Expand"]]) {
         const button = requireElementRange(id).source;

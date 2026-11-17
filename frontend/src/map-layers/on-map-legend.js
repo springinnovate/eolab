@@ -65,7 +65,7 @@ export class OnMapLegend {
         const hide = this.document.createElement("button");
         hide.type = "button";
         hide.textContent = "×";
-        hide.title = "Hide legend; restore from Tools";
+        hide.title = "Hide map legend";
         hide.setAttribute("aria-label", "Hide map legend");
         hide.addEventListener("click", () => {
             this.visible = false;
@@ -213,7 +213,7 @@ export class OnMapLegend {
         this.updateLayout();
     }
 
-    /** Update disclosure and the persistent More command. @return {void} */
+    /** Show or hide the legend and label its command in the map tool chooser. @return {void} */
     refreshVisibility() {
         this.root.hidden = !this.visible;
         this.body.hidden = this.collapsed;
