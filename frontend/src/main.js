@@ -1673,7 +1673,7 @@ async function initializeCatalog(
             return id && isCurrent() ? annotations.restoreMapAppearance(id, layer) : null;
         },
         exportDrawing: record => annotations?.exportDrawingLayer(record.entry.key) ?? null,
-        restoreDrawing: (layer, isCurrent) => annotations.restoreDrawingLayer(layer, isCurrent),
+        stageDrawing: (layer, isCurrent) => annotations.stageDrawingLayer(layer, isCurrent),
     });
     if (!isSharedViewer) {
         planning = new PlanningController({

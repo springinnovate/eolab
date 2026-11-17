@@ -38,7 +38,7 @@ function additiveCatalogFixture(options = {}) {
   const records = [existing], staged = [], discarded = [], removed = [], order = [];
   const mapLayers = {retainedRecords: records,
     restoreStagedLayer(value, index) {
-      if (value.record.entry.item.id === options.failAttach) throw new Error("Attach failed");
+      if (value.record.entry.item?.id === options.failAttach && options.failAttach !== undefined) throw new Error("Attach failed");
       records.splice(index, 0, value.record);
     },
     setLegendIncluded(key, included) { records.find(record => record.entry.key === key).entry.legendIncluded = included; },
@@ -92,20 +92,21 @@ function drawingDefinition(customName = "Priority parcels") {
  * @return {Object} Fixture with drawing restoration observations.
  */
 function additiveDrawingFixture(options = {}) {
-  const restored = [];
+  const restored = [], discardedDrawings = [];
   const f = additiveCatalogFixture({...options, configuration: {
     exportDrawing: record => record.definition ?? null,
-    restoreDrawing: async (definition, isCurrent) => {
+    stageDrawing: async (definition, isCurrent) => {
       if (options.catalogExpected !== false) assert.equal(f.order.includes("filter"), true, "Catalog style and filter stage before attaching drawings");
       await options.readDrawing?.(definition);
       if (!isCurrent()) return null;
       const key = `local:annotation:${restored.length}`;
-      const record = {entry: {key, item: null, isCustom: true}, definition: structuredClone(definition)};
-      restored.push(record); f.records.unshift(record);
-      return key;
+      const record = {entry: {key, item: null, isCustom: true}, definition: structuredClone(definition),
+        adapter: {discardStaged() { discardedDrawings.push(key); }}};
+      restored.push(record);
+      return {key, record, layer: {remove() {}}};
     },
   }});
-  return {...f, restored};
+  return {...f, restored, discardedDrawings};
 }
 
 test("additive mixed views preserve original order and export drawings through the common layer path", async () => {
@@ -132,13 +133,21 @@ test("a drawing-only addition uses the shared restore path without needing Catal
   assert.equal(f.staged.length, 0);
 });
 
-test("a drawing read failure rolls back added drawings and detached Catalog views", async () => {
-  const f = additiveDrawingFixture({readDrawing: async layer => { if (layer.customName === "Missing") throw new Error("Drawing unavailable"); }});
+test("a drawing read failure discards detached drawings and Catalog views", async () => {
+  const exposed = [];
+  const f = additiveDrawingFixture({readDrawing: async layer => {
+    if (layer.customName === "Missing") {
+      exposed.push(...f.records);
+      throw new Error("Drawing unavailable");
+    }
+  }});
   const results = await f.controller.restoreLayers([drawingDefinition(), f.definition, drawingDefinition("Missing")], () => true);
+  assert.deepEqual(exposed, [f.existing], "an incomplete addition must not expose a drawing that rollback could delete after editing");
   assert.ok(results.every(result => result.key === null && /Drawing unavailable/.test(result.error)));
   assert.deepEqual(f.records, [f.existing]);
   assert.deepEqual(f.discarded, ["parcels"]);
-  assert.deepEqual(f.removed, [f.restored[0].entry.key]);
+  assert.deepEqual(f.removed, []);
+  assert.deepEqual(f.discardedDrawings, [f.restored[0].entry.key]);
 });
 
 test("Catalog attachment failure rolls back drawing additions without touching preexisting views", async () => {
@@ -149,13 +158,14 @@ test("Catalog attachment failure rolls back drawing additions without touching p
   assert.deepEqual(f.removed, [f.restored[0].entry.key]);
 });
 
-test("superseded mixed additions remove earlier drawings and discard staged Catalog views", async () => {
+test("superseded mixed additions discard detached drawings and Catalog views", async () => {
   let current = true;
   const f = additiveDrawingFixture({readDrawing: async layer => { if (layer.customName === "Slow") current = false; }});
   const results = await f.controller.restoreLayers([f.definition, drawingDefinition(), drawingDefinition("Slow")], () => current);
   assert.ok(results.every(result => result.key === null && /cancelled/.test(result.error)));
   assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded, ["parcels"]);
-  assert.deepEqual(f.removed, [f.restored[0].entry.key]);
+  assert.deepEqual(f.removed, []);
+  assert.deepEqual(f.discardedDrawings, [f.restored[0].entry.key]);
 });
 
 test("additive Catalog restore rejects failed style and discards all detached preparations", async () => {
@@ -518,11 +528,10 @@ test("ordinary map save and restore includes independent drawing views with Cata
       stage: async (item, presentation) => ({record: {entry: {item, ...presentation},
         adapter: {applySavedState() {}, exportSavedState: () => catalog.style}}})},
     exportDrawing: record => record.definition ?? null,
-    restoreDrawing: async (definition, isCurrent) => {
+    stageDrawing: async (definition, isCurrent) => {
       assert.equal(isCurrent(), true); reads.push(definition.drawingLayerId);
       const key = `drawing:${reads.length}`;
-      records.push({entry: {key, item: null, isCustom: true}, definition: structuredClone(definition)});
-      return key;
+      return {key, record: {entry: {key, item: null, isCustom: true}, definition: structuredClone(definition), adapter: {}}, layer: {remove() {}}};
     },
   });
   await controller.restoreStartupView("");
@@ -552,7 +561,7 @@ for (const foreign of [false, true]) {
       viewport: {snapshot: () => saved.viewport, restore() {}},
       mapLayers: {retainedRecords: records, commitStaged() {}}, catalogVisualization: {clear() {}},
       exportDrawing: record => record.definition ?? null,
-      restoreDrawing: async () => { reads++; throw new Error("Drawing unavailable"); },
+      stageDrawing: async () => { reads++; throw new Error("Drawing unavailable"); },
     });
     await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
     assert.equal(view.result.loaded, 0); assert.equal(reads, foreign ? 0 : 1);

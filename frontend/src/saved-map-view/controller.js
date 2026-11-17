@@ -42,7 +42,7 @@ export class SavedMapViewController {
      * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {(record:Object)=>Object|null} [configuration.exportDrawing] Export a linked drawing reference and view, or null for another layer kind.
-     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreDrawing] Restore a fresh drawing view through its source owner and return its map key, or null after supersession.
+     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<{key:string,record:Object,layer:Object}|null>} [configuration.stageDrawing] Prepare a detached drawing through its source owner for the ordinary staged commit, or null after supersession.
      * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreUpload Open this browser's upload with its saved appearance and return its map key, or null after supersession.
      * @param {(record:Object)=>Object|null} [configuration.exportArtifact] Export a private vector result reference and view definitions.
@@ -77,7 +77,7 @@ export class SavedMapViewController {
         exportAnnotation = () => null,
         restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
         exportDrawing = () => null,
-        restoreDrawing = async () => { throw new Error("Saved drawings are unavailable."); },
+        stageDrawing = async () => { throw new Error("Saved drawings are unavailable."); },
         exportUpload,
         restoreUpload,
         exportArtifact = () => null,
@@ -122,7 +122,7 @@ export class SavedMapViewController {
         this.exportAnnotation = exportAnnotation;
         this.restoreAnnotation = restoreAnnotation;
         this.exportDrawing = exportDrawing;
-        this.restoreDrawing = restoreDrawing;
+        this.stageDrawing = stageDrawing;
         this.exportUpload = exportUpload;
         this.restoreUpload = restoreUpload;
         this.exportArtifact = exportArtifact;
@@ -557,8 +557,8 @@ export class SavedMapViewController {
     }
 
     /** Add portable Catalog and drawing views without replacing the map or changing its viewport.
-     * Catalog views are staged before drawing owners attach fresh views. Failure or
-     * cancellation removes this addition while preserving existing map layers.
+     * All views remain detached until every source is ready. Failure or cancellation
+     * discards this addition while preserving existing map layers and edits.
      * Other source kinds may reuse existing views and are not accepted by this atomic addition.
      * @param {Object[]} definitions Ordinary portable Catalog or drawing layer definitions.
      * @param {()=>boolean} isCurrent Whether the caller still wants this addition.
@@ -588,30 +588,21 @@ export class SavedMapViewController {
                 if (!layer.drawingLayerId) continue;
                 if (!stillCurrent()) throw new Error("Layer restoration was cancelled.");
                 const result = await this.#restoreLayer(layer, document.viewer.origin, stillCurrent);
-                if (!result.key) throw new Error(result.detail ?? "Layer restoration was cancelled.");
+                if (!result.staged) throw new Error(result.detail ?? "Layer restoration was cancelled.");
                 prepared[index] = result;
-                attached.add(result.key);
             }
             if (!stillCurrent()) throw new Error("Layer restoration was cancelled.");
             for (const [index, result] of prepared.entries()) {
-                if (result.staged) {
-                    this.mapLayers.restoreStagedLayer(result.staged, index);
-                    attached.add(result.staged.key);
-                } else if (!this.mapLayers.retainedRecords.some(record => record.entry.key === result.key)) {
-                    throw new Error("A saved drawing was removed from the map while it was opening.");
-                }
-                this.mapLayers.setLegendIncluded(result.key ?? result.staged.key, document.layers[index].legendIncluded !== false);
+                this.mapLayers.restoreStagedLayer(result.staged, index);
+                attached.add(result.staged.key);
+                this.mapLayers.setLegendIncluded(result.staged.key, document.layers[index].legendIncluded !== false);
             }
-            const keys = prepared.map(result => result.key ?? result.staged.key);
-            if (prepared.some(result => result.key)) {
-                const existingKeys = this.mapLayers.retainedRecords.map(record => record.entry.key).filter(key => !attached.has(key));
-                this.mapLayers.restoreOrder([...keys, ...existingKeys]);
-            }
+            const keys = prepared.map(result => result.staged.key);
             return keys.map(key => ({key, error: null}));
         } catch (error) {
             for (const result of prepared) {
                 if (!result) continue;
-                const key = result.key ?? result.staged.key;
+                const key = result.staged.key;
                 if (attached.has(key)) this.mapLayers.removeKey(key);
                 else { result.staged.record.adapter.discardStaged?.(result.staged.record); result.staged.layer?.remove?.(); }
             }
@@ -730,13 +721,22 @@ export class SavedMapViewController {
         const stagedLayers = preparations
             .filter(({ staged }) => staged !== null)
             .map(({ staged }) => staged);
-        if (restoreGeneration !== this.restoreGeneration) {
+        if (this.destroyed || restoreGeneration !== this.restoreGeneration) {
+            this.#discardLayers(stagedLayers);
             return null;
         }
         const basemapWarning = restoreAppearanceEarly ? initialBasemapWarning
             : await this.#restoreViewportAndBasemap(savedMapView);
-        if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
-        this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        if (this.destroyed || restoreGeneration !== this.restoreGeneration) {
+            this.#discardLayers(stagedLayers);
+            return null;
+        }
+        try {
+            this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        } catch (error) {
+            this.#discardLayers(stagedLayers);
+            throw error;
+        }
         const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
         for (const [index, result] of preparations.entries()) {
             if (result.key && !retainedKeys.has(result.key)) {
@@ -785,19 +785,30 @@ export class SavedMapViewController {
         return savedMapView.basemap === undefined ? null : this.basemap.restore(savedMapView.basemap);
     }
 
-    /** Restore one portable view through its source owner, staging Catalog views until commit.
+    /** Release detached layers after cancellation or a failed synchronous batch commit.
+     * @param {Array<{record:Object,layer:Object}>} stagedLayers Prepared layers that did not complete attachment.
+     * @return {void}
+     */
+    #discardLayers(stagedLayers) {
+        for (const staged of stagedLayers) {
+            staged.record.adapter.discardStaged?.(staged.record);
+            staged.layer?.remove?.();
+        }
+    }
+
+    /** Restore one portable view through its source owner, staging Catalog and drawing views until commit.
      * Instance-local identifiers never reach a source owner on a different EOLab site.
      * @param {Object} layer Validated portable layer definition.
      * @param {string} origin Original EOLab site for instance-local sources.
      * @param {()=>boolean} isCurrent Whether the restore still owns its result.
      * @param {{strictStyle?:boolean}} [options] Require exact Catalog appearance for atomic additions.
-     * @return {Promise<{key?:string|null,staged:Object|null,detail:string|null}>} Prepared Catalog view, attached source-owned key or failure detail.
+     * @return {Promise<{key?:string|null,staged:Object|null,detail:string|null}>} Detached view, attached source-owned key or failure detail.
      */
     async #restoreLayer(layer, origin, isCurrent, {strictStyle = false} = {}) {
         if (layer.catalogItem) return this.#prepareLayer(layer, {strictStyle});
         let restore, label, sourceLabel;
         if (layer.drawingLayerId) {
-            restore = this.restoreDrawing;
+            restore = this.stageDrawing;
             label = layer.customName ?? "Saved drawing";
             sourceLabel = "Saved drawings";
         } else if (layer.runArtifact) {
@@ -820,8 +831,8 @@ export class SavedMapViewController {
             if (sourceLabel && origin !== this.viewerOrigin) {
                 throw new Error(`${sourceLabel} can only be opened on their original EOLab site.`);
             }
-            const key = await restore(layer, isCurrent);
-            return {key, staged: null, detail: null};
+            const restored = await restore(layer, isCurrent);
+            return layer.drawingLayerId ? {staged: restored, detail: null} : {key: restored, staged: null, detail: null};
         } catch (error) {
             return {staged: null, detail: `${label}: ${asError(error).message}`};
         }

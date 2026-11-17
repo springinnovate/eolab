@@ -50,7 +50,15 @@ function fixture() {
             this.controls.set(value.id, {setDrawingSource(canEdit) { this.canEdit = canEdit; }});
             records.set(`local:annotation:${value.id}`, {entry: {legendIncluded: true}});
         },
+        createLayerAttachment(value) {
+            return {source: {key: `local:annotation:${value.id}`, label: value.name}, adapter: {
+                added: () => this.attachLayer(value),
+                discardStaged: () => { this.layers.delete(value.id); this.controls.delete(value.id); },
+            }};
+        },
         mapLayers: {
+            stageLocal(source, adapter) { return {key: source.key, record: {entry: source, adapter}, layer: {remove() {}}}; },
+            restoreStagedLayer(staged) { staged.record.adapter.added(); },
             getRecord(key) { return records.get(key); },
             setLegendIncluded(key, included) { records.get(key).entry.legendIncluded = included; },
             reorder() {}, snapshots() { return controller.model.layers; },
@@ -65,6 +73,22 @@ function fixture() {
     });
     controller.attachLayer(layer);
     return {controller, layer, saved, calls, server, key: `local:annotation:${layer.id}`};
+}
+
+/** Restore a prepared drawing through the map commit boundary, then wait for ordinary device saving.
+ * @param {AnnotationController} controller Source owner under test.
+ * @param {Object} view Portable drawing definition.
+ * @param {()=>boolean} isCurrent Restore ownership check.
+ * @return {Promise<string|null>} Attached view key, or null after cancellation.
+ */
+async function restoreDrawing(controller, view, isCurrent) {
+    const staged = await controller.stageDrawingLayer(view, isCurrent);
+    if (!staged) return null;
+    try { controller.mapLayers.restoreStagedLayer(staged, 0); }
+    catch (error) { staged.record.adapter.discardStaged(); throw error; }
+    controller.mapLayers.setLegendIncluded(staged.key, view.legendIncluded !== false);
+    await controller.save();
+    return staged.key;
 }
 
 /** Return this view's portable definition with an independently chosen filter.
@@ -139,7 +163,7 @@ test("an unrelated conflict cannot prevent linking or reopening another drawing"
     h.layer.polygons[0].note = "Keep A edits";
     await h.controller.save();
     assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
-    const key = await h.controller.restoreDrawingLayer(h.controller.exportDrawingLayer(h.otherKey), () => true);
+    const key = await restoreDrawing(h.controller, h.controller.exportDrawingLayer(h.otherKey), () => true);
     assert.ok(h.controller.mapLayers.getRecord(key));
     assert.equal(h.layer.drawingSource.pending, true);
     assert.equal(h.layer.polygons[0].note, "Keep A edits");
@@ -154,7 +178,7 @@ test("an unavailable source does not gate another drawing's save or restore", as
     h.other.polygons[0].note = "B remains writable";
     await h.controller.save();
     assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
-    const key = await h.controller.restoreDrawingLayer(h.controller.exportDrawingLayer(h.otherKey), () => true);
+    const key = await restoreDrawing(h.controller, h.controller.exportDrawingLayer(h.otherKey), () => true);
     assert.ok(h.controller.mapLayers.getRecord(key));
     assert.equal(h.controller.hasUnsavedChanges(), false, "an unavailable clean source is not an unsaved edit");
     assert.equal(h.layer.drawingSource.canEdit, false);
@@ -226,7 +250,7 @@ test("retry saves a failed source's latest edits without resubmitting an unaffec
 
 test("a clean view cannot bypass conflicting edits in another view of the same source", async () => {
     const h = fixture(); await h.controller.ensureDrawingSource(h.key);
-    const otherKey = await h.controller.restoreDrawingLayer(definition(h), () => true);
+    const otherKey = await restoreDrawing(h.controller, definition(h), () => true);
     h.server.record.revision = 2;
     h.layer.polygons[0].note = "Conflicting view";
     await h.controller.save();
@@ -332,13 +356,13 @@ test("failed and conflicting source writes retain local edits and never acquire 
     assert.equal(h.layer.drawingSource.pending, true);
     assert.match(h.controller.status.textContent, /changed/);
     const calls = h.calls.length;
-    await assert.rejects(h.controller.restoreDrawingLayer(definition(h), () => true), /local changes/);
+    await assert.rejects(restoreDrawing(h.controller, definition(h), () => true), /local changes/);
     assert.equal(h.calls.length, calls, "reopening cannot fetch a new revision to overwrite pending edits");
 });
 
 test("a source acknowledgement cannot overwrite edits made in another local view while saving", async () => {
     const h = fixture(); await h.controller.ensureDrawingSource(h.key);
-    await h.controller.restoreDrawingLayer(definition(h), () => true);
+    await restoreDrawing(h.controller, definition(h), () => true);
     const peer = h.controller.model.layers[0];
     let release, started;
     const began = new Promise(resolve => { started = resolve; });
@@ -367,7 +391,7 @@ test("reopening uses latest polygons in independent views while preserving IDs a
     h.server.record.collection.features[0].properties.note = "Changed remotely";
     const view = definition(h);
     view.filter = {enabled: true, match: "all", rules: [{field: "note", operator: "eq", value: "Changed remotely"}]};
-    const key = await h.controller.restoreDrawingLayer(view, () => true);
+    const key = await restoreDrawing(h.controller, view, () => true);
     assert.notEqual(key, h.key);
     const restored = h.controller.model.layers[0];
     assert.deepEqual(restored.polygons.map(polygon => polygon.id), ["parcel-a", "parcel-b"]);
@@ -385,6 +409,61 @@ test("reopening uses latest polygons in independent views while preserving IDs a
     assert.equal(h.server.record.collection.name, "Original drawing");
 });
 
+test("drawing preparation and discard leave existing views, source acknowledgements and device storage untouched", async () => {
+    const h = fixture(); await h.controller.ensureDrawingSource(h.key);
+    const before = structuredClone(h.controller.model.document()), writes = h.saved.length;
+    h.server.record.revision = 2;
+    h.server.record.collection.features[0].properties.note = "New remote content";
+    const staged = await h.controller.stageDrawingLayer(definition(h), () => true);
+    assert.equal(h.controller.mapLayers.getRecord(staged.key), undefined);
+    assert.deepEqual(h.controller.model.document(), before);
+    assert.equal(h.saved.length, writes);
+    h.controller.model.beginPolygon(h.layer.id, "parcel-a");
+    h.controller.model.draft.polygon.note = "Keep the user's unfinished note";
+    staged.record.adapter.discardStaged();
+    assert.equal(h.controller.model.draft.polygon.note, "Keep the user's unfinished note");
+    assert.equal(h.saved.length, writes);
+    assert.equal(h.layer.drawingSource.revision, 1);
+});
+
+test("drawing commit rejects edits or newer acknowledgements made after preparation", async () => {
+    for (const change of ["draft", "pending", "saved"]) {
+        const h = fixture(); await h.controller.ensureDrawingSource(h.key);
+        const staged = await h.controller.stageDrawingLayer(definition(h), () => true);
+        if (change === "draft") {
+            h.controller.model.beginPolygon(h.layer.id, "parcel-a");
+            h.controller.model.draft.polygon.note = "Unfinished note";
+        } else {
+            h.layer.polygons[0].note = "Keep the latest edit";
+            if (change === "saved") await h.controller.save();
+            else h.layer.drawingSource.pending = true;
+        }
+        assert.throws(() => h.controller.mapLayers.restoreStagedLayer(staged, 0),
+            change === "saved" ? /changed while it was opening/ : /local changes/);
+        staged.record.adapter.discardStaged();
+        assert.deepEqual(h.controller.model.layers, [h.layer]);
+        if (change === "draft") assert.equal(h.controller.model.draft.polygon.note, "Unfinished note");
+        else assert.equal(h.layer.polygons[0].note, "Keep the latest edit");
+    }
+});
+
+test("device persistence failure after drawing commit retains its view and edits for retry", async () => {
+    const h = fixture(); await h.controller.ensureDrawingSource(h.key);
+    const persist = h.controller.storage.save;
+    h.controller.storage.save = async () => { throw new Error("Device storage unavailable"); };
+    const key = await restoreDrawing(h.controller, definition(h), () => true);
+    const restored = h.controller.model.layers[0];
+    assert.ok(h.controller.mapLayers.getRecord(key));
+    assert.match(h.controller.status.textContent, /Device storage unavailable/);
+    restored.polygons[0].note = "Keep edits while device saving is unavailable";
+    await h.controller.save();
+    assert.ok(h.controller.mapLayers.getRecord(key));
+    h.controller.storage.save = persist;
+    await h.controller.retrySaving();
+    assert.equal(h.saved.at(-1).layers[0].polygons[0].note, restored.polygons[0].note);
+    assert.equal(h.server.record.collection.features[0].properties.note, restored.polygons[0].note);
+});
+
 test("out-of-order drawing reads cannot replace a newer source admitted by another view", async () => {
     const h = fixture(); await h.controller.ensureDrawingSource(h.key);
     const view = definition(h), old = structuredClone(h.server.record);
@@ -393,9 +472,9 @@ test("out-of-order drawing reads cannot replace a newer source admitted by anoth
     await h.controller.prepareDrawingMapRestore(() => true);
     const reads = [];
     h.controller.sourceApi.get = () => new Promise(resolve => reads.push(resolve));
-    const earlier = h.controller.restoreDrawingLayer(view, () => true);
+    const earlier = restoreDrawing(h.controller, view, () => true);
     const rejection = assert.rejects(earlier, /changed while it was opening/);
-    const later = h.controller.restoreDrawingLayer({...view, customName: "Latest view"}, () => true);
+    const later = restoreDrawing(h.controller, {...view, customName: "Latest view"}, () => true);
     reads[1](latest); const key = await later;
     reads[0](old); await rejection;
     assert.equal(h.controller.model.layers.length, 1);
@@ -410,7 +489,7 @@ test("a delayed read cannot undo a successful polygon save in an existing view",
     const old = structuredClone(h.server.record);
     let release;
     h.controller.sourceApi.get = () => new Promise(resolve => { release = resolve; });
-    const restoring = h.controller.restoreDrawingLayer(definition(h), () => true);
+    const restoring = restoreDrawing(h.controller, definition(h), () => true);
     const rejection = assert.rejects(restoring, /changed while it was opening/);
     h.layer.polygons[0].note = "Newly saved polygon";
     await h.controller.save();
@@ -427,7 +506,7 @@ test("another browser's drawing is read-only but still supports local filters, s
     h.server.record = {id: SOURCE, revision: 1, collection: exportDrawingCollection(h.layer), canEdit: false};
     const view = {drawingLayerId: SOURCE, customName: "Shared input", isCustom: true, visible: true, opacity: 1,
         appearance: {...h.layer.style}, filter: {...h.layer.filter}};
-    const key = await h.controller.restoreDrawingLayer(view, () => true);
+    const key = await restoreDrawing(h.controller, view, () => true);
     const restored = h.controller.model.layers[0];
     assert.equal(restored.drawingSource.canEdit, false);
     assert.throws(() => h.controller.deletePolygon(restored.id, restored.polygons[0].id), /read-only/);
@@ -451,7 +530,7 @@ test("another browser's drawing is read-only but still supports local filters, s
 test("saved drawing definitions without a custom label retain the source name", async () => {
     for (const customName of [undefined, null]) {
         const h = fixture(); await h.controller.ensureDrawingSource(h.key);
-        await h.controller.restoreDrawingLayer({...definition(h), customName}, () => true);
+        await restoreDrawing(h.controller, {...definition(h), customName}, () => true);
         assert.equal(h.controller.model.layers[0].name, "Original drawing");
     }
 });
@@ -464,7 +543,7 @@ test("ordinary map restoration replaces cached drawing views without multiplying
     for (let count = 0; count < 3; count++) {
         await h.controller.prepareDrawingMapRestore(() => true);
         assert.deepEqual(h.controller.model.layers.map(layer => layer.id), [local.id]);
-        const keys = await Promise.all([first, second].map(view => h.controller.restoreDrawingLayer(view, () => true)));
+        const keys = await Promise.all([first, second].map(view => restoreDrawing(h.controller, view, () => true)));
         assert.equal(new Set(keys).size, 2, "two views of one source remain distinct");
         const linked = h.controller.model.layers.filter(layer => layer.drawingSource);
         assert.equal(linked.length, 2);
@@ -488,14 +567,14 @@ test("map restoration preserves pending drawing edits, drafts and their original
         assert.equal(h.layer.drawingSource.revision, 1);
         assert.ok(h.controller.layers.has(h.layer.id));
         assert.equal(h.controller.model.draft !== null, !pending);
-        await assert.rejects(h.controller.restoreDrawingLayer(definition(h), () => true), /local changes/);
+        await assert.rejects(restoreDrawing(h.controller, definition(h), () => true), /local changes/);
     }
 });
 
 test("replacing a clean view cannot discard a conflicting edit or draft in another view", async () => {
     for (const draft of [false, true]) {
         const h = fixture(); await h.controller.ensureDrawingSource(h.key);
-        const cleanKey = await h.controller.restoreDrawingLayer(definition(h), () => true);
+        const cleanKey = await restoreDrawing(h.controller, definition(h), () => true);
         if (draft) h.controller.model.beginPolygon(h.layer.id, "parcel-a");
         else {
             h.layer.polygons[0].note = "Conflicting local edit";

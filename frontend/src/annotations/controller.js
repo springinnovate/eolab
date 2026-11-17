@@ -397,6 +397,16 @@ export class AnnotationController {
      * @return {void}
      */
     attachLayer(layer) {
+        const {source, adapter} = this.createLayerAttachment(layer);
+        adapter.added();
+        this.mapLayers.addLocal(source, adapter);
+    }
+
+    /** Construct detached annotation rendering and controls for immediate attachment or staged restoration.
+     * @param {import("./model.js").AnnotationLayer} layer Validated annotation data.
+     * @return {{source:Object,adapter:Object}} Local map source and adapter; added registers controls, discardStaged releases them.
+     */
+    createLayerAttachment(layer) {
         const key = `local:annotation:${layer.id}`;
         const controls = new AnnotationLayerControls(this.document, layer, {
             open: () => this.openControls(key, "info"),
@@ -416,12 +426,21 @@ export class AnnotationController {
             }),
             opacity: opacity => this.mapLayers.setOpacity(key, opacity),
         });
-        this.controls.set(layer.id, controls);
         const displayLayer = Object.create(layer);
         Object.defineProperty(displayLayer, "polygons", { get: () => this.displayLayer(layer).polygons });
         const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer, this.labelLayout);
-        this.layers.set(layer.id, rendering);
         const adapter = {
+            added: () => {
+                this.controls.set(layer.id, controls);
+                this.layers.set(layer.id, rendering);
+                this.panel.registerLayerControls(key, layer.name, controls.root);
+            },
+            discardStaged: () => {
+                rendering.release();
+                this.layers.delete(layer.id);
+                this.controls.delete(layer.id);
+                this.panel.removeLayer(key);
+            },
             createState: () => layer,
             createLayer: () => rendering,
             snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared layer" : layer.drawingSource ? "Saved drawing" : "Local layer",
@@ -482,8 +501,7 @@ export class AnnotationController {
             },
         };
         if (layer.drawingSource) controls.setDrawingSource(layer.drawingSource.canEdit);
-        this.mapLayers.addLocal({ key, label: layer.name, isCustom: true, visible: layer.visible, opacity: layer.opacity }, adapter);
-        this.panel.registerLayerControls(key, layer.name, controls.root);
+        return {source: {key, label: layer.name, isCustom: true, visible: layer.visible, opacity: layer.opacity}, adapter};
     }
 
     /** Describe the layer's polygon colors for the neutral Map layers legend.
@@ -962,13 +980,13 @@ export class AnnotationController {
         await this.save();
     }
 
-    /** Add a fresh ordinary view of the latest linked drawing, preserving original polygon IDs.
+    /** Prepare a detached view of the latest linked drawing, preserving original polygon IDs.
      * @param {Object} definition Portable drawing reference and local appearance/filter.
      * @param {()=>boolean} isCurrent Whether the requesting workflow still wants this view.
-     * @return {Promise<string|null>} Added local map key, or null after cancellation.
-     * @throws {Error} If reading, validation, local edits or persistence prevent restoration.
+     * @return {Promise<{key:string,record:Object,layer:Object}|null>} Ordinary staged layer, or null after cancellation.
+     * @throws {Error} If reading, validation or local edits prevent restoration; commit rechecks edits and revisions.
      */
-    async restoreDrawingLayer(definition, isCurrent) {
+    async stageDrawingLayer(definition, isCurrent) {
         if (!this.loaded) throw new Error("Wait for your saved drawings to open.");
         if (this.savePromise) await this.savePromise;
         const peers = this.model.layers.filter(layer => layer.drawingSource?.id === definition.drawingLayerId);
@@ -983,21 +1001,28 @@ export class AnnotationController {
         layer.style = validateAnnotationStyle(definition.appearance);
         layer.filter = annotationFilterRules(definition.filter ?? layer.filter);
         readAnnotationLayers({version: 1, layers: [...this.model.layers, layer]});
-        this.acceptDrawingSource(record);
-        this.model.layers.unshift(layer);
-        this.savedDrawingContents.set(layer.id, serializeDrawingContent(record.collection));
-        this.attachLayer(layer);
-        const key = `local:annotation:${layer.id}`;
-        try {
-            this.mapLayers.setLegendIncluded(key, definition.legendIncluded !== false);
-            await this.save();
-            this.requireSavedDrawing(layer);
-            if (!isCurrent()) { this.mapLayers.removeKey(key); return null; }
-            return key;
-        } catch (error) {
-            this.mapLayers.removeKey(key);
-            throw error;
-        }
+        const {source, adapter} = this.createLayerAttachment(layer);
+        const register = adapter.added, discard = adapter.discardStaged;
+        adapter.added = () => {
+            if (this.model.layers.some(peer => peer.drawingSource?.id === record.id && this.drawingHasLocalChanges(peer))) {
+                throw new Error("This drawing has local changes. Save or cancel its unfinished polygon before reopening it.");
+            }
+            readAnnotationLayers({version: 1, layers: [...this.model.layers, layer]});
+            this.acceptDrawingSource(record);
+            this.model.layers.unshift(layer);
+            this.savedDrawingContents.set(layer.id, serializeDrawingContent(record.collection));
+            register();
+            void this.save();
+        };
+        adapter.discardStaged = () => {
+            discard();
+            if (this.model.layers.includes(layer)) {
+                this.model.layers = this.model.layers.filter(candidate => candidate !== layer);
+                this.savedDrawingContents.delete(layer.id);
+                void this.save();
+            }
+        };
+        return this.mapLayers.stageLocal(source, adapter);
     }
 
     /** Refresh clean cached views while preserving pending local edits and unfinished drafts.
