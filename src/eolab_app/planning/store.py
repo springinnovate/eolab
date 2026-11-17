@@ -570,7 +570,8 @@ class PlanningToolStore:
     ) -> Scenario:
         """Save or clear one validated original parcel choice under both row locks.
 
-        The caller validates original-source membership before this transaction.
+        The caller checks the source's assignment rules before this transaction.
+        This permits clearing a deleted drawing polygon's stored choice.
         Exact type/value matching preserves arbitrary-length string IDs without
         an indexed copy or digest. Locking the scenario serializes insertions.
 
