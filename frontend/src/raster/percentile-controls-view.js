@@ -1,6 +1,7 @@
 /** Inspect histogram percentiles and opt into rescaling one raster view. */
 import { estimateRasterHistogramPercentile } from "./statistics.js";
 import { formatRasterPixelValue } from "./value-format.js";
+import { clampHistogramPercentileInput } from "./percentile-slider-input.js";
 
 /** @typedef {{lower:number,middle:number,upper:number,rescale:boolean}} HistogramPercentileSettings */
 
@@ -105,8 +106,13 @@ export class RasterPercentileControlsView {
         this.rescaleInput.removeEventListener("change", this.handleInput);
     }
 
-    /** Read native controls, update estimates immediately and report the edit. @return {void} */
-    #handleInput() {
+    /**
+     * Keep the active slider ordered, update estimates and report accepted values.
+     * @param {Event} event Native slider input or color-matching checkbox change.
+     * @return {void}
+     */
+    #handleInput(event) {
+        clampHistogramPercentileInput(this.inputs, event.currentTarget);
         this.settings = {
             lower: Number(this.inputs.lower.value),
             middle: Number(this.inputs.middle.value),

@@ -15,6 +15,7 @@ import {
 import { formatHistogramTick } from "./histogram-axes.js";
 import { appendHistogramThresholdMarkers } from "./histogram-threshold-markers.js";
 import { formatRasterPixelValue } from "./value-format.js";
+import { clampHistogramPercentileInput } from "./percentile-slider-input.js";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const LEGEND_GRID_SIZE = 12;
@@ -336,7 +337,15 @@ export class BivariateRasterControlsView {
             ])),
             status: requireRasterControl(documentContext, `#bivariate-${axis}-range-status`),
             rescale: requireRasterControl(documentContext, `#match-bivariate-${axis}-percentiles`),
-            onInput: () => this.handlers?.onBivariatePercentileInput(axis),
+            /**
+             * Clamp this axis's edited slider before reporting its accepted values.
+             * @param {Event} event Native slider input or matching-checkbox change.
+             * @return {void}
+             */
+            onInput: (event) => {
+                clampHistogramPercentileInput(this.rangeControls[axis].inputs, event.currentTarget);
+                this.handlers?.onBivariatePercentileInput(axis);
+            },
         }]));
         this.cells = new Map();
         this.activeCell = null;

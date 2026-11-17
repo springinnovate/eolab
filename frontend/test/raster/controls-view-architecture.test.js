@@ -14,7 +14,9 @@ const FOCUSED_VIEW_IMPORTS = {
         "./percentile-controls-view.js",
         "./required-control.js",
     ],
-    "percentile-controls-view.js": ["./statistics.js", "./value-format.js"],
+    "percentile-controls-view.js": [
+        "./percentile-slider-input.js", "./statistics.js", "./value-format.js",
+    ],
     "style-histogram-view.js": [
         "./categorical-histogram-view.js",
         "./required-control.js",
@@ -25,6 +27,7 @@ const FOCUSED_VIEW_IMPORTS = {
         "./histogram-axis-controls.js",
         "./histogram-threshold-markers.js",
         "./paired-statistics.js",
+        "./percentile-slider-input.js",
         "./required-control.js",
         "./value-format.js",
     ],
@@ -141,6 +144,7 @@ test("histogram axis controls, transforms and markers have only local presentati
         ["histogram-axis-controls.js", ["./histogram-axis-scale.js", "./value-format.js"]],
         ["histogram-axis-scale.js", []],
         ["histogram-threshold-markers.js", []],
+        ["percentile-slider-input.js", []],
     ]) {
         const source = await readFile(
             new URL(`../../src/raster/${moduleName}`, import.meta.url), "utf8"
