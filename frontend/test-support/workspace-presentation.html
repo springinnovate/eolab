@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Workspace presentation checks</title>
+</head>
+<body>
+  <h1>Workspace presentation checks</h1>
+  <p>Serve the frontend with Vite, then open this page. These browser checks use the current application markup, CSS and presentation controllers; Node does not run them.</p>
+  <pre id="results" role="status">Running...</pre>
+  <script type="module">
+    import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
+    import { EomapLayoutController } from "../src/eomap-layout-controller.js";
+
+    /** Fail this scenario when a user-visible condition is false.
+     * @param {boolean} condition Expected outcome.
+     * @param {string} message Description shown on failure.
+     * @returns {void}
+     * @throws {Error} If the outcome is false.
+     */
+    function check(condition, message) {
+      if (!condition) throw new Error(message);
+    }
+
+    /** Wait for layout and the existing sidebar transition to settle.
+     * @returns {Promise<void>} Resolves after the transition and a paint.
+     */
+    function settleLayout() {
+      return new Promise(resolve => setTimeout(() => requestAnimationFrame(() => resolve()), 300));
+    }
+
+    /** Check that a control is visible and can receive pointer input in this viewport.
+     * @param {HTMLElement} element Control to inspect.
+     * @returns {boolean} Whether its center is visible and unobstructed.
+     */
+    function isReachable(element) {
+      const bounds = element.getBoundingClientRect();
+      const x = bounds.left + bounds.width / 2;
+      const y = bounds.top + bounds.height / 2;
+      return bounds.width > 0 && bounds.height > 0 && x >= 0 && y >= 0 &&
+        x < innerWidth && y < innerHeight && element.contains(document.elementFromPoint(x, y));
+    }
+
+    /** Verify overflow is contained in a scrollable region, rather than clipping its controls.
+     * @param {HTMLElement} element Region with deliberately overflowing fixture content.
+     * @param {string} name Region named in failure output.
+     * @returns {void}
+     * @throws {Error} If content cannot scroll within the viewport.
+     */
+    function checkScrollRegion(element, name) {
+      check(["auto", "scroll"].includes(getComputedStyle(element).overflowY), `${name}: overflowing content cannot be scrolled by the user`);
+      check(element.clientHeight > 0 && element.scrollHeight > element.clientHeight, `${name}: fixture must overflow a bounded region`);
+      const bounds = element.getBoundingClientRect();
+      check(bounds.height < innerHeight, `${name}: region expands beyond the viewport`);
+      check(bounds.width > 0 && bounds.bottom > 0 && bounds.top < innerHeight && bounds.right > 0 && bounds.left < innerWidth,
+        `${name}: scroll region is outside the viewport`);
+      element.scrollTop = element.scrollHeight;
+      check(element.scrollTop > 0, `${name}: scroll position did not change`);
+    }
+
+    /** Exercise search/details focus, independent content scrolling and diagnostic bounds.
+     * @returns {Promise<void>} Resolves after the current viewport passes.
+     * @throws {Error} If markup cannot load or a presentation outcome fails.
+     */
+    async function checkWorkspace() {
+      const response = await fetch("/index.html");
+      check(response.ok, "Application markup could not be loaded");
+      const markup = new DOMParser().parseFromString(await response.text(), "text/html");
+      markup.querySelectorAll("script").forEach(script => script.remove());
+      document.body.replaceChildren(...markup.body.childNodes);
+      const stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet";
+      stylesheet.href = "/src/style.css";
+      await new Promise((resolve, reject) => {
+        stylesheet.onload = resolve;
+        stylesheet.onerror = () => reject(new Error("Application CSS could not be loaded"));
+        document.head.append(stylesheet);
+      });
+      const layout = new EomapLayoutController({
+        documentContext: document,
+        /** No map renderer is mounted in this presentation fixture. @returns {void} */
+        invalidateMapSize() {},
+      });
+      const catalog = initializeCatalogPaneControls(document, () => layout.notifyLayoutChange());
+      const results = document.querySelector("#catalog-results");
+      for (let index = 0; index < 80; index++) {
+        const row = document.createElement("p");
+        const button = document.createElement("button");
+        button.textContent = `Observation ${index + 1}: More details`;
+        button.onclick = () => catalog.showInspector({ moveFocus: true, returnFocusTarget: button });
+        row.append(button);
+        results.append(row);
+      }
+      const resultsScroll = document.querySelector("#catalog-results-scroll");
+      await settleLayout();
+      const search = document.querySelector("#catalog-search");
+      checkScrollRegion(resultsScroll, "Catalog results");
+      check(isReachable(search), "Catalog search disappears when results scroll");
+      const lastResult = results.lastElementChild.firstElementChild;
+      lastResult.scrollIntoView({ block: "nearest" });
+      check(isReachable(lastResult), "Last Catalog result cannot be reached");
+      lastResult.click();
+      await settleLayout();
+      check(document.activeElement.id === "catalog-inspector-heading", "Opening details does not focus its heading");
+      const closeDetails = document.querySelector("#close-catalog-item-details");
+      check(isReachable(closeDetails), "Details close control cannot be reached");
+      closeDetails.click();
+      await settleLayout();
+      check(document.activeElement === lastResult && isReachable(lastResult), "Closing details does not return to the chosen result");
+
+      layout.showWorkspace("map-layers");
+      const mapContents = document.querySelector("#eomap-map-layers-body");
+      for (let index = 0; index < 80; index++) {
+        const row = document.createElement("p");
+        row.textContent = `Map content ${index + 1}`;
+        mapContents.append(row);
+      }
+      await settleLayout();
+      const catalogPosition = resultsScroll.scrollTop;
+      checkScrollRegion(mapContents, "Map contents");
+      check(resultsScroll.scrollTop === catalogPosition, "Scrolling Map contents moves Catalog results");
+      check(isReachable(document.querySelector("#toggle-map-layers")), "Map contents disclosure is clipped");
+      document.querySelector("#toggle-map-layers").click();
+      check(mapContents.getClientRects().length === 0, "Collapsed Map contents still occupies visible space");
+
+      document.querySelector("#toggle-operational-status").click();
+      const diagnostics = document.querySelector("#system-state");
+      diagnostics.open = true;
+      const locations = document.querySelector("#scan-locations");
+      for (let index = 0; index < 80; index++) {
+        const row = document.createElement("li");
+        row.textContent = `Configured data directory ${index + 1}`;
+        locations.append(row);
+      }
+      await settleLayout();
+      checkScrollRegion(diagnostics.querySelector(".system-state-details-body"), "Catalog diagnostics");
+      check(isReachable(diagnostics.querySelector("summary")), "Diagnostic disclosure cannot be closed");
+      const lastLocation = locations.lastElementChild;
+      lastLocation.scrollIntoView({ block: "nearest" });
+      check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
+      layout.destroy();
+    }
+
+    if (new URLSearchParams(location.search).has("frame")) {
+      try {
+        await checkWorkspace();
+        parent.postMessage({ workspacePresentation: "passed" }, location.origin);
+      } catch (error) {
+        parent.postMessage({ workspacePresentation: "failed", message: error.message }, location.origin);
+      }
+    } else {
+      const results = document.querySelector("#results");
+      results.textContent = "";
+      for (const [width, height] of [[1280, 720], [390, 844]]) {
+        const frame = document.createElement("iframe");
+        frame.width = width;
+        frame.height = height;
+        frame.title = `Workspace at ${width} by ${height}`;
+        const result = new Promise(resolve => {
+          const timeout = setTimeout(() => {
+            removeEventListener("message", receive);
+            resolve({ workspacePresentation: "failed", message: "Scenario did not finish; inspect the browser console" });
+          }, 15000);
+          /** Receive only this fixture frame's completion.
+           * @param {MessageEvent} event Same-origin scenario result.
+           * @returns {void}
+           */
+          function receive(event) {
+            if (event.source !== frame.contentWindow || event.origin !== location.origin || !event.data.workspacePresentation) return;
+            clearTimeout(timeout);
+            removeEventListener("message", receive);
+            resolve(event.data);
+          }
+          addEventListener("message", receive);
+        });
+        frame.src = `${location.pathname}?frame`;
+        document.body.append(frame);
+        const outcome = await result;
+        results.textContent += `${width}x${height}: ${outcome.workspacePresentation}${outcome.message ? ` - ${outcome.message}` : ""}\n`;
+      }
+    }
+  </script>
+</body>
+</html>

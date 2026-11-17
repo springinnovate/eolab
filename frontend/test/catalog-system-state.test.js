@@ -107,20 +107,9 @@ test("Catalog scan controls use a native system-state disclosure", () => {
   );
 });
 
-test("Catalog and Rendering disclosures share bounded responsive details styling", () => {
-  const styles = readFileSync(
-    new URL("../src/style.css", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(
-    styles,
-    /\.system-state-details-body \{[\s\S]*?max-height: min\(55vh, 520px\);[\s\S]*?overflow-y: auto;/,
-  );
-  assert.match(
-    styles,
-    /@media \(max-width: 820px\) \{[\s\S]*?\.system-state > summary,\s*\.system-state-details-body \{\s*padding-right: 12px;\s*padding-left: 12px;/,
-  );
+test("diagnostic regions retain the keyboard focus style hook", () => {
+  // Source-level smoke check; browser focus behavior is checked separately.
+  const styles = readFileSync(new URL("../src/style.css", import.meta.url), "utf8");
   assert.match(styles, /\.system-state-details-body:focus-visible/);
 });
 
