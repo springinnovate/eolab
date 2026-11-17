@@ -60,15 +60,43 @@
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
     }
 
+    /** Exercise both raster views as histogram results arrive in the shared dock.
+     * @param {MapInspectionController} dock Mounted map inspection panel.
+     * @returns {void}
+     * @throws {Error} If a result changes the header text, layout, selected view or focus.
+     */
+    function checkHistogramResultNavigation(dock) {
+      const header = document.querySelector("#map-inspection-raster-analysis");
+      for (const [buttonId, open] of [
+        ["open-raster-series-dock", () => dock.showRasterSeries()],
+        ["map-click-histogram", () => dock.showHistogram()],
+      ]) {
+        open();
+        dock.beginMapClick({ lat: -5, lng: -63 });
+        const button = document.getElementById(buttonId);
+        button.focus();
+        const text = header.innerText;
+        const height = header.offsetHeight;
+        check(height > 0, "Analysis navigation must be visible before results arrive");
+        for (const state of ["loading", "ready", "error"]) {
+          dock.setClickResult("histogram", { state });
+          check(header.innerText === text && header.offsetHeight === height,
+            `Histogram ${state} changed the shared header with ${button.textContent} open`);
+          check(button.getAttribute("aria-pressed") === "true" && document.activeElement === button,
+            `Histogram ${state} changed the selected view or moved keyboard focus`);
+        }
+      }
+      const featureError = "The selected feature could not be read.";
+      dock.setClickResult("feature", { state: "error", message: featureError });
+      check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
+    }
+
     /** Check that both panel tabs free map space, retain context, and stay reachable.
-     * @param {EomapLayoutController} layout Mounted workspace shell.
+     * @param {MapInspectionController} inspection Mounted map inspection panel.
      * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
      * @throws {Error} If either disclosure is obscured or restores the wrong state.
      */
-    async function checkPanelDisclosures(layout) {
-      const inspection = new MapInspectionController({
-        onLayoutChange: state => layout.setInspectionLayout(state),
-      });
+    async function checkPanelDisclosures(inspection) {
       const collapseLeft = document.querySelector("#collapse-panel");
       const expandLeft = document.querySelector("#open-panel");
       const collapseRight = document.querySelector("#toggle-map-inspection-dock");
@@ -97,7 +125,6 @@
       check(isReachable(document.querySelector("#close-layer-style")) &&
         document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
         "The style editor did not reopen on Land cover");
-      inspection.destroy();
     }
 
     /** Check where a long catalog filename begins and ends in a rendered Map contents row.
@@ -133,7 +160,7 @@
       view.unbind();
     }
 
-    /** Exercise search/details focus, independent content scrolling and diagnostic bounds.
+    /** Exercise workspace scrolling, panel disclosures and result navigation at this viewport size.
      * @returns {Promise<void>} Resolves after the current viewport passes.
      * @throws {Error} If markup cannot load or a presentation outcome fails.
      */
@@ -214,7 +241,12 @@
       const lastLocation = locations.lastElementChild;
       lastLocation.scrollIntoView({ block: "nearest" });
       check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
-      await checkPanelDisclosures(layout);
+      const inspection = new MapInspectionController({
+        onLayoutChange: state => layout.setInspectionLayout(state),
+      });
+      await checkPanelDisclosures(inspection);
+      checkHistogramResultNavigation(inspection);
+      inspection.destroy();
       layout.destroy();
     }
 

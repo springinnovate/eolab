@@ -150,6 +150,45 @@ export async function loadRasterStatistics(
         requestDocument.polygonArea = normalizedArea.polygonArea;
     }
     if (codes !== null) requestDocument.categoryValues = codes;
+    const response = await requestRasterStatistics(item, requestDocument, signal, fetchImplementation);
+    const statistics = validateRasterStatisticsForSelection(await response.json(), normalizedArea);
+    if (!rasterStatisticsMatchCategories(statistics, codes)) {
+        throw new Error("Raster statistics returned a different category classification.");
+    }
+    return statistics;
+}
+
+/** Get the native or estimated mean of original pixels in one geodesic box.
+ * @param {Object} source Original raster identity.
+ * @param {Object} box Validated sampling box with its center and side length.
+ * @param {AbortSignal} signal Aborts the read when the box changes.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
+ * @return {Promise<{method:string,value:number|null,unit:string|null}>} Mean and precision, or an unavailable sample.
+ * @throws {Error} If the request fails or the result violates the mean contract.
+ */
+export async function loadSamplingBoxMean(source, box, signal, fetchImplementation = globalThis.fetch) {
+    const response = await requestRasterStatistics(source,
+        {...analysisSourceBody(source), samplingBox: box, measure: "mean"}, signal, fetchImplementation);
+    const mean = await response.json();
+    if (!["exact", "estimated", "unavailable"].includes(mean.method) ||
+        !(mean.value === null || Number.isFinite(mean.value)) ||
+        (mean.method === "estimated" && mean.value === null) ||
+        (mean.method === "unavailable" && mean.value !== null) ||
+        !(mean.unit === null || typeof mean.unit === "string")) {
+        throw new Error("The raster mean could not be read.");
+    }
+    return mean;
+}
+
+/** Post an authorized statistic request and translate structured analysis errors.
+ * @param {Object} item Original raster identity.
+ * @param {Object} requestDocument Path-free source, sampling area and requested measure.
+ * @param {AbortSignal} signal Cancellation of superseded work.
+ * @param {typeof fetch} fetchImplementation Same-origin transport.
+ * @return {Promise<Response>} Successful response ready for its statistic-specific decoder.
+ * @throws {RasterAnalysisRequestError} If the statistics service rejects the request.
+ */
+async function requestRasterStatistics(item, requestDocument, signal, fetchImplementation) {
     const response = await fetchImplementation.call(
         globalThis,
         "/api/raster-analysis/statistics",
@@ -159,7 +198,7 @@ export async function loadRasterStatistics(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
-                ...(normalizedArea.catalogSelection?.uploadId || rasterSourceReference(item).kind === "uploadedRaster" ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(requestDocument.catalogSelection?.uploadId || rasterSourceReference(item).kind === "uploadedRaster" ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"
@@ -171,11 +210,7 @@ export async function loadRasterStatistics(
             "Raster statistics request"
         );
     }
-    const statistics = validateRasterStatisticsForSelection(await response.json(), normalizedArea);
-    if (!rasterStatisticsMatchCategories(statistics, codes)) {
-        throw new Error("Raster statistics returned a different category classification.");
-    }
-    return statistics;
+    return response;
 }
 
 /**

@@ -9,6 +9,7 @@ from rasterio.enums import MaskFlags, Resampling
 from rasterio.transform import from_origin
 from rasterio.windows import Window
 
+from eolab_app.raster import sample_grid
 from eolab_app.raster.exact_source import (
     plan_exact_source_window,
     read_exact_source_window,
@@ -130,73 +131,26 @@ class _NativeBlockDataset:
         ].copy()
 
 
-class _OverviewDataset(_NativeBlockDataset):
-    """Provide advertised overview factors and record decimated reads."""
+@pytest.fixture
+def overview_path(tmp_path: Path) -> Path:
+    """Create an integer raster whose pixel values identify their native positions.
 
-    def __init__(
-        self,
-        values: numpy.ndarray,
-        *,
-        block_shape: tuple[int, int],
-        overview_factors: tuple[int, ...],
-    ) -> None:
-        """Create a source with a controlled embedded-overview pyramid.
+    Args:
+        tmp_path: Directory for the tiled GeoTIFF.
 
-        Args:
-            values: Two-dimensional band-one source values.
-            block_shape: Native source block height and width.
-            overview_factors: Advertised overview decimation factors.
-        """
-        super().__init__(values, block_shape=block_shape)
-        self.overview_factors = overview_factors
-        self.overview_reads: list[
-            tuple[Window, tuple[int, int], Resampling]
-        ] = []
-
-    def read(
-        self,
-        band: int,
-        *,
-        window: Window,
-        out_shape: tuple[int, int],
-        masked: bool,
-        resampling: Resampling,
-    ) -> numpy.ndarray:
-        """Return one nearest-neighbor decimated source window.
-
-        Args:
-            band: One-based band index.
-            window: Integral source window.
-            out_shape: Requested overview-level height and width.
-            masked: Whether Rasterio should apply a validity mask.
-            resampling: Requested decimation algorithm.
-
-        Returns:
-            Controlled decimated values with ``out_shape``.
-        """
-        assert band == 1
-        assert masked is False
-        self.overview_reads.append((window, out_shape, resampling))
-        read_height, read_width = out_shape
-        source_height = int(window.height)
-        source_width = int(window.width)
-        rows = int(window.row_off) + numpy.minimum(
-            source_height - 1,
-            numpy.floor(
-                (numpy.arange(read_height) + 0.5)
-                * source_height
-                / read_height
-            ).astype(numpy.int64),
-        )
-        columns = int(window.col_off) + numpy.minimum(
-            source_width - 1,
-            numpy.floor(
-                (numpy.arange(read_width) + 0.5)
-                * source_width
-                / read_width
-            ).astype(numpy.int64),
-        )
-        return self.values[numpy.ix_(rows, columns)].copy()
+    Returns:
+        Original raster with three embedded nearest-neighbor overviews.
+    """
+    path = tmp_path / "overview.tif"
+    values = numpy.arange(1024 * 1024, dtype=numpy.int32).reshape(1024, 1024)
+    with rasterio.open(
+        path, "w", driver="GTiff", width=1024, height=1024, count=1,
+        dtype=values.dtype, crs="EPSG:4326", transform=from_origin(-180, 90, 360 / 1024, 180 / 1024),
+        tiled=True, blockxsize=128, blockysize=128, nodata=-9999,
+    ) as destination:
+        destination.write(values, 1)
+        destination.build_overviews((2, 4, 8), Resampling.nearest)
+    return path
 
 
 class _PlanningDataset:
@@ -309,11 +263,10 @@ def test_sample_grid_is_deterministic_and_reads_only_proven_blocks() -> None:
     assert plan.cell_positions[0] == ((103, 103),)
     assert plan.cell_positions[-1] == ((496, 896),)
 
-    sample, read_plan = read_source_window_sample_grid(
+    sample = read_source_window_sample_grid(
         dataset,  # type: ignore[arg-type]
         source_window,
     )
-    assert read_plan == plan
     assert len(dataset.read_windows) == len(plan.block_indexes)
     assert len(set(dataset.read_windows)) == len(dataset.read_windows)
     assert sample.shape == (63, 127)
@@ -323,111 +276,74 @@ def test_sample_grid_is_deterministic_and_reads_only_proven_blocks() -> None:
         assert sample[sample_row, sample_column] == values[row, column]
 
 
-def test_sample_grid_prefers_coarsest_suitable_embedded_overview() -> None:
-    """Use one bounded overview read instead of scattered native blocks."""
-    values = numpy.arange(600 * 1_000, dtype=numpy.int32).reshape((600, 1_000))
-    source_window = Window(100, 100, 800, 400)
-    dataset = _OverviewDataset(
-        values,
-        block_shape=(32, 32),
-        overview_factors=(2, 4, 8),
-    )
-
-    sample, plan = read_source_window_sample_grid(
-        dataset,  # type: ignore[arg-type]
-        source_window,
-    )
-
-    assert (plan.width, plan.height) == (127, 63)
-    assert sample.shape == (63, 127)
-    assert dataset.overview_reads == [
-        (source_window, (100, 200), Resampling.nearest),
-    ]
-    assert dataset.read_windows == []
-
-
-def test_explicit_positions_are_mapped_through_one_bounded_overview() -> None:
-    """Read irregular paired positions without falling back to native blocks."""
-    values = numpy.arange(600 * 1_000, dtype=numpy.int32).reshape((600, 1_000))
-    source_window = Window(100, 100, 800, 400)
-    dataset = _OverviewDataset(
-        values,
-        block_shape=(32, 32),
-        overview_factors=(2, 4, 8),
-    )
-    positions = (
-        ((103, 103),),
-        ((300, 300),),
-        (),
-        ((496, 896),),
-    )
-    plan = plan_sample_grid_for_source_positions(
-        dataset,  # type: ignore[arg-type]
-        2,
-        2,
-        positions,
-    )
-
-    sample = read_planned_sample_grid_from_overview(
-        dataset,  # type: ignore[arg-type]
-        source_window,
-        plan,
-        None,
-    )
-
-    assert sample is not None
-    assert dataset.overview_reads == [
-        (source_window, (50, 100), Resampling.nearest),
-    ]
-    assert dataset.read_windows == []
-    assert sample.mask.tolist() == [[False, False], [True, False]]
-    assert sample[0, 0] == values[104, 104]
-    assert sample[0, 1] == values[304, 304]
-    assert sample[1, 1] == values[496, 896]
-
-
-def test_sample_grid_reads_a_real_internal_geotiff_overview(
-    tmp_path: Path,
+def test_sample_grid_prefers_coarsest_suitable_embedded_overview(
+    overview_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep the optimized reader compatible with Rasterio overview I/O.
+    """Admit a four-tile overview even when the native fallback exceeds its budget.
 
     Args:
-        tmp_path: Temporary directory for one internally overviewed GeoTIFF.
+        overview_path: Tiled raster with known native values and embedded levels.
+        monkeypatch: Set a budget that admits four overview tiles.
     """
-    source_path = tmp_path / "overviewed.tif"
-    values = numpy.arange(1_024 * 1_024, dtype=numpy.int32).reshape(
-        (1_024, 1_024)
-    )
-    with rasterio.open(
-        source_path,
-        "w",
-        driver="GTiff",
-        width=values.shape[1],
-        height=values.shape[0],
-        count=1,
-        dtype=values.dtype,
-        crs="EPSG:4326",
-        transform=from_origin(-180, 90, 360 / 1_024, 180 / 1_024),
-        tiled=True,
-        blockxsize=128,
-        blockysize=128,
-        nodata=-9999,
-    ) as destination:
-        destination.write(values, 1)
-        destination.build_overviews((2, 4, 8), Resampling.nearest)
+    from eolab_app.raster.statistics import read_raster_statistics
+    from eolab_app.sampling_area import WholeRasterSamplingArea
 
-    with rasterio.open(source_path) as dataset:
-        assert dataset.overviews(1) == [2, 4, 8]
-        assert tuple(Path(name) for name in dataset.files) == (source_path,)
-        sample, plan = read_source_window_sample_grid(
-            dataset,
-            Window(0, 0, dataset.width, dataset.height),
-        )
+    window = Window(96, 96, 800, 400)
+    monkeypatch.setattr(sample_grid, "SAMPLE_GRID_MAX_SOURCE_BLOCK_READS", 4)
+    with rasterio.open(overview_path) as source:
+        with pytest.raises(ValueError, match="source-block limit"):
+            plan_source_window_sample_grid(source, window)
+        sample = read_source_window_sample_grid(source, window)
+        # Factor four produces a 200 by 100 intermediate window. Factor eight
+        # is too coarse for this box. The nearest pyramid selects native
+        # indices divisible by the factor in this aligned fixture.
+        edges_y = numpy.arange(64) * 100 // 63
+        edges_x = numpy.arange(128) * 200 // 127
+        rows = 96 + 4 * ((edges_y[1:] + edges_y[:-1]) // 2)
+        cols = 96 + 4 * ((edges_x[1:] + edges_x[:-1]) // 2)
+        numpy.testing.assert_array_equal(sample, rows[:, None] * 1024 + cols)
+        with pytest.raises(RasterReadCancelled):
+            read_source_window_sample_grid(source, window, lambda: True)
 
-    assert (plan.width, plan.height) == (127, 127)
-    assert sample.shape == (127, 127)
-    assert sample.count() == 127 * 127
-    assert float(sample.min()) < float(sample.max())
+    result = read_raster_statistics(overview_path, WholeRasterSamplingArea())
+    centers = numpy.arange(127) * 128 // 127
+    centers += numpy.diff(numpy.arange(128) * 128 // 127) // 2
+    expected = (centers[:, None] * 1024 + centers) * 8
+    assert result.valid_sample_count == 127 ** 2
+    assert (result.sample_minimum, result.sample_maximum) == (expected.min(), expected.max())
+    counts, _ = numpy.histogram(expected, bins=result.histogram.edges)
+    assert result.histogram.counts == counts.tolist()
+
+
+def test_overview_and_native_fallback_both_exceed_tile_budget(
+    overview_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Charge full decoded overview tiles even for a small output array.
+
+    Args:
+        overview_path: Source with 128-pixel tiles at the chosen level.
+        monkeypatch: Lower the aggregate limit below a single decoded tile.
+    """
+    monkeypatch.setattr(sample_grid, "SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES", 128 * 128 * 5 - 1)
+    with rasterio.open(overview_path) as source, pytest.raises(ValueError, match="decoded source-work"):
+        read_source_window_sample_grid(source, Window(0, 0, 1024, 1024))
+
+
+def test_explicit_positions_are_mapped_through_one_bounded_overview(overview_path: Path) -> None:
+    """Read paired positions from the chosen level, including an empty position.
+
+    Args:
+        overview_path: Source whose native values encode row and column.
+    """
+    window = Window(96, 96, 800, 400)
+    with rasterio.open(overview_path) as source:
+        plan = plan_sample_grid_for_source_positions(source, 2, 2, (
+            ((103, 103),), ((300, 300),), (), ((491, 891),),
+        ))
+        sample = read_planned_sample_grid_from_overview(source, window, plan, None)
+    assert sample is not None
+    assert sample.mask.tolist() == [[False, False], [True, False]]
+    assert sample.compressed().tolist() == [96 * 1024 + 96, 296 * 1024 + 296, 488 * 1024 + 888]
 
 
 def test_huge_source_grid_is_planned_under_fixed_limits_without_source_reads() -> None:
@@ -528,7 +444,7 @@ def test_sample_grid_preserves_nodata_instead_of_inventing_zero() -> None:
     center_row, center_column = plan.cell_positions[center_index][0]
     values[center_row, center_column] = -9999
 
-    sample, _ = read_source_window_sample_grid(
+    sample = read_source_window_sample_grid(
         dataset,  # type: ignore[arg-type]
         source_window,
     )

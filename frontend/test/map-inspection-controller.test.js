@@ -305,7 +305,7 @@ test("task headers retain their own source and scope while clicks and peer conte
     h.controller.showStyle("GEA South Africa");
     h.map.focus();
     h.controller.beginMapClick({ lat: 37.5, lng: 14 });
-    h.controller.setClickResult("histogram", { state: "ready", message: "Ready" });
+    h.controller.setClickResult("histogram", { state: "ready" });
     assert.equal(h.dockTitle.textContent, "Appearance · Style");
     assert.equal(context.textContent, "GEA South Africa");
     assert.match(h.doc.querySelector("#map-click-context").textContent, /37\.5000, 14\.0000/);
@@ -438,7 +438,7 @@ test("map-click summaries retain the chosen panel and expose unseen peer results
     h.controller.beginMapClick({lat: 22, lng: 78});
     h.controller.showHistogram(null, {activate: false});
     h.controller.showFeatureInspector({activate: false});
-    h.controller.setClickResult("histogram", {state: "loading", message: "Map box · Updating…"});
+    h.controller.setClickResult("histogram", {state: "loading"});
     h.controller.setClickResult("feature", {state: "ready", message: "3 features returned"});
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(h.doc.activeElement, h.map);
@@ -447,7 +447,7 @@ test("map-click summaries retain the chosen panel and expose unseen peer results
     h.doc.querySelector("#map-inspection-tab-feature").dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.doc.querySelector("#map-inspection-tab-feature").getAttribute("data-unread"), "false");
-    h.controller.setClickResult("histogram", {state: "ready", message: "Map box · Ready"});
+    h.controller.setClickResult("histogram", {state: "ready"});
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.histogramTab.getAttribute("data-unread"), "true");
     h.controller.beginMapClick({lat: 24, lng: 80});
@@ -469,7 +469,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     assert.equal(h.dockTitle.textContent, "Raster analysis · Histograms");
     assert.equal(h.histogramTab.hidden, false);
     h.controller.beginMapClick({lat: 22, lng: 78});
-    h.controller.setClickResult("histogram", {state: "ready", message: "Ready"});
+    h.controller.setClickResult("histogram", {state: "ready"});
     h.controller.setClickResult("feature", {state: "ready", message: "One feature"});
     assert.equal(h.histogramTab.hidden, false);
     assert.equal(h.featureTab.hidden, false);
@@ -506,7 +506,7 @@ test("distributions remain reachable before a click and after empty or failed ar
     assert.equal(h.featureTab.disabled, true);
     for (const state of ["empty", "error", "invalidated"]) {
         h.controller.showStyle("Countries");
-        h.controller.setClickResult("histogram", { state, message: `${state} distribution` });
+        h.controller.setClickResult("histogram", { state });
         assert.equal(button.disabled, false);
         button.dispatchEvent(new Event("click"));
         assert.equal(h.controller.activeTool, "histogram");
@@ -587,7 +587,7 @@ test("layout reports follow dock transitions, not repeated result updates", () =
     const count = h.layouts.length;
     for (let i = 0; i < 25; i++) {
         h.controller.showHistogram(i, { activate: false });
-        h.controller.setClickResult("histogram", { state: "loading", message: `Read ${i}` });
+        h.controller.setClickResult("histogram", { state: "loading" });
     }
     assert.equal(h.layouts.length, count, "result content does not change shell layout");
     h.controller.showVectorTimeSeries();
@@ -998,7 +998,7 @@ test("Escape is focus-scoped and destroy detaches presentation listeners", () =>
 test("closing the last tool hides its empty surface while raster navigation remains usable", () => {
     const h = fixture();
     h.controller.beginMapClick({ lat: -10, lng: -60 });
-    h.controller.setClickResult("histogram", { state: "ready", message: "1 raster ready" });
+    h.controller.setClickResult("histogram", { state: "ready" });
     h.controller.showHistogram(1);
     const reopen = h.doc.querySelector("#map-click-histogram");
     assert.equal(h.panels.hidden, false);
@@ -1008,7 +1008,6 @@ test("closing the last tool hides its empty surface while raster navigation rema
     assert.equal(h.histogram.hidden, true);
     assert.equal(h.panels.hidden, true, "the empty top-layer container must not intercept map clicks");
     assert.equal(h.featureTab.disabled, true, "raster results do not create point features");
-    assert.equal(h.doc.querySelector("#map-click-histogram-status").hidden, true);
     assert.equal(reopen.disabled, false);
     assert.deepEqual(h.calls, ["show"], "retained results keep their popover");
     assert.equal(h.doc.activeElement, h.map);
@@ -1044,7 +1043,7 @@ for (const [name, show, hide, args] of [
     test(`closing ${name} hides the shared surface beneath retained map results`, () => {
         const h = fixture();
         h.controller.beginMapClick({ lat: -10, lng: -60 });
-        h.controller.setClickResult("histogram", { state: "ready", message: "Raster ready" });
+        h.controller.setClickResult("histogram", { state: "ready" });
         h.controller.setClickResult("feature", { state: "ready", message: "Feature ready" });
         h.controller[show](...args);
         assert.equal(h.panels.hidden, false);
@@ -1059,7 +1058,7 @@ for (const [name, show, hide, args] of [
 test("mixed raster and vector clicks never restore an empty inspection surface", () => {
     const h = fixture();
     h.controller.beginMapClick({ lat: -10, lng: -60 });
-    h.controller.setClickResult("histogram", { state: "loading", message: "Sampling" });
+    h.controller.setClickResult("histogram", { state: "loading" });
     h.controller.showHistogram();
     h.controller.setClickResult("feature", { state: "ready", message: "Two features" });
     h.controller.showFeatureInspector({ activate: false });
@@ -1074,7 +1073,7 @@ test("mixed raster and vector clicks never restore an empty inspection surface",
     assert.equal(h.panels.hidden, true);
 
     h.controller.beginMapClick({ lat: -11, lng: -61 });
-    h.controller.setClickResult("histogram", { state: "ready", message: "Updated raster" });
+    h.controller.setClickResult("histogram", { state: "ready" });
     h.controller.setClickResult("feature", { state: "empty", message: "No features" });
     assert.equal(h.panels.hidden, true, "new result cards alone do not occupy panel space");
     h.doc.querySelector("#map-click-histogram").dispatchEvent(new Event("click"));
@@ -1130,7 +1129,16 @@ test("raster series remains active during map inspection and closes without hidi
     h.controller.beginMapClick({ lat: 22, lng: 78 });
     h.controller.showHistogram(2, { activate: false });
     h.controller.showFeatureInspector({ activate: false });
-    assert.equal(h.controller.activeTool, "raster-series");
+    const statisticsButton = h.doc.querySelector("#open-raster-series-dock");
+    statisticsButton.focus();
+    for (const state of ["loading", "ready", "error"]) {
+        h.controller.setClickResult("histogram", { state });
+        assert.equal(h.histogramTab.getAttribute("data-loading"), String(state === "loading"));
+        assert.equal(h.controller.activeTool, "raster-series");
+        assert.equal(statisticsButton.getAttribute("aria-pressed"), "true");
+        assert.equal(h.doc.activeElement, statisticsButton);
+        assert.equal(h.histogramTab.title, "2 raster results");
+    }
     h.controller.hideRasterSeries();
     assert.notEqual(activity.at(-1), "raster-series");
     assert.equal(h.doc.querySelector("#raster-series").hidden, true);
@@ -1144,7 +1152,7 @@ test("annotation click details remain active while independent raster and vector
     h.controller.showHistogram(2, { activate: false });
     h.controller.showFeatureInspector({ activate: false });
     h.controller.showAnnotations();
-    h.controller.setClickResult("histogram", { state: "ready", message: "2 raster results" });
+    h.controller.setClickResult("histogram", { state: "ready" });
     h.controller.setClickResult("feature", { state: "ready", message: "1 feature" });
     h.controller.setFeatureResultCount(1);
     assert.equal(h.controller.activeTool, "annotations");

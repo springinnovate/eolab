@@ -63,7 +63,7 @@ from eolab_app.raster.statistics import (
     RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
 )
 
-RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v5-internal-masks"
+RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v6"
 
 
 def raster_paired_statistics_policy_parameters() -> tuple[int, ...]:

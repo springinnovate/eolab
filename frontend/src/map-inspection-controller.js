@@ -47,10 +47,10 @@ export class MapInspectionController {
         this.toolActions.addEventListener("click", this.onToolActionsCommand, true);
         this.document.defaultView?.addEventListener?.("resize", this.onToolActionsLayout);
         this.clickContext = documentContext.querySelector("#map-click-context");
+        this.featureStatus = documentContext.querySelector("#map-click-feature-status");
         this.clickLabel = "";
         this.clickResults = ["histogram", "feature"].map(name => ({
             name, button: documentContext.querySelector(name === "feature" ? "#map-inspection-tab-feature" : "#map-click-histogram"),
-            status: documentContext.querySelector(`#map-click-${name}-status`),
             snapshot: null, unread: false,
         }));
         this.hasClick = false;
@@ -432,8 +432,8 @@ export class MapInspectionController {
 
     /** Present an owning analysis stream's current, already stale-checked status.
      * @param {"histogram"|"feature"} name Result stream.
-     * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message:string}|null} snapshot
-     * Display-only state, or null when this click has no participating layer.
+     * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message?:string}|null} snapshot
+     * Feature snapshots include their status message. A null snapshot clears the result for this click.
      * @return {void}
      * @throws {TypeError} For an invalid stream or presentation snapshot.
      */
@@ -441,7 +441,7 @@ export class MapInspectionController {
         const entry = this.clickResults.find(result => result.name === name);
         if (!entry || (snapshot !== null && (![
             "loading", "ready", "empty", "error", "invalidated",
-        ].includes(snapshot.state) || typeof snapshot.message !== "string"))) {
+        ].includes(snapshot.state) || (name === "feature" && typeof snapshot.message !== "string")))) {
             throw new TypeError("Invalid map-click result presentation.");
         }
         if (!this.hasClick) return;
@@ -454,25 +454,27 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
-    /** Present compact result feedback without moving another tool into the foreground.
-     * Routine completion belongs to the results; loading and failures remain visible.
+    /** Update the result buttons and the Features status in the shared header.
+     * Histogram cards display progress and failures for their own layers.
      * @return {void}
      */
     #renderResultNavigation() {
         this.clickContext.textContent = this.clickLabel;
         for (const entry of this.clickResults) {
-            const {name, button, status, snapshot} = entry;
+            const {name, button, snapshot} = entry;
             const tool = this.#tool(name);
             const loading = snapshot?.state === "loading";
             button.disabled = name === "feature" && tool.panel.hidden && snapshot === null;
             button.setAttribute("data-unread", String(entry.unread));
             button.setAttribute("data-loading", String(loading));
             button.setAttribute("aria-pressed", String(this.activeTool === name && !this.minimized));
-            status.textContent = snapshot === null ? "" : snapshot.message + (entry.unread ? " · New results" : "");
-            status.hidden = snapshot === null || this.minimized ||
-                !(["error", "invalidated"].includes(snapshot.state) ||
-                    (loading && this.activeTool === name));
-            if (snapshot !== null) button.title = status.textContent;
+            if (name === "feature") {
+                this.featureStatus.textContent = snapshot === null ? "" : snapshot.message + (entry.unread ? " · New results" : "");
+                this.featureStatus.hidden = snapshot === null || this.minimized ||
+                    !(["error", "invalidated"].includes(snapshot.state) ||
+                        (loading && this.activeTool === name));
+                if (snapshot !== null) button.title = this.featureStatus.textContent;
+            }
             tool.panel.setAttribute("data-inspection-loading", String(loading));
         }
     }

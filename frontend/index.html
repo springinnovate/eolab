@@ -710,7 +710,7 @@
             <div class="map-inspection-result-header">
               <div class="map-inspection-raster-actions">
                 <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
-                  aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
+                  aria-pressed="false">Histograms</button>
                 <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
                   aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
                 <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button"
@@ -723,7 +723,6 @@
               <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
                 aria-label="Close feature inspector">×</button>
             </div>
-            <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
             <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
           </nav>
           <div class="map-inspection-navigation">
@@ -812,6 +811,7 @@
             <div class="raster-series-run-controls">
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
+                <button id="raster-series-exact-mean" class="secondary-button" type="button" hidden>Calculate exact mean</button>
                 <button id="raster-series-retry" class="secondary-button" type="button" hidden>Retry failed rasters</button>
                 <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel</button>
                 <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
