@@ -437,14 +437,16 @@ class PlanningToolStore:
                 raise PlanningError(404, "Scenario not found.")
             return self._read_scenario(row)
 
-    def get_scenario_for_edit(
+    def get_scenario_tool_for_edit(
         self,
         owner: str,
         identifier: UUID,
         expected_revision: int,
         expected_tool_revision: int,
-    ) -> tuple[Scenario, PlanningTool]:
-        """Check ownership and both revisions before starting native parcel validation.
+    ) -> PlanningTool:
+        """Return the scenario's tool after checking ownership and both revisions.
+
+        Call before native parcel validation; the write transaction rechecks revisions.
 
         Args:
             owner: Participant browser's server-derived identity.
@@ -453,7 +455,7 @@ class PlanningToolStore:
             expected_tool_revision: Last acknowledged tool revision.
 
         Returns:
-            Owned scenario metadata and its current linked tool definition.
+            Current linked tool definition for this participant's scenario.
 
         Raises:
             PlanningError: Ownership, revisions or storage prevent editing.
@@ -482,7 +484,7 @@ class PlanningToolStore:
                     "updated_at": row["tool_updated_at"],
                 }
             )
-            return scenario, tool
+            return tool
 
     def _lock_scenario_for_edit(
         self,
@@ -491,7 +493,7 @@ class PlanningToolStore:
         identifier: UUID,
         expected_revision: int,
         expected_tool_revision: int,
-    ) -> tuple[Scenario, PlanningTool]:
+    ) -> PlanningTool:
         """Lock a tool before its owned scenario and recheck both write preconditions.
 
         Args:
@@ -502,7 +504,7 @@ class PlanningToolStore:
             expected_tool_revision: Tool revision to recheck after native validation.
 
         Returns:
-            Locked scenario metadata and linked tool definition.
+            Linked tool definition after locking the tool and owned scenario.
 
         Raises:
             PlanningError: The scenario is unavailable or a revision changed.
@@ -529,7 +531,7 @@ class PlanningToolStore:
         self._require_scenario_revisions(
             scenario, expected_revision, expected_tool_revision
         )
-        return scenario, tool
+        return tool
 
     def rename_scenario(
         self, owner: str, identifier: UUID, request: RenameScenario
@@ -548,7 +550,7 @@ class PlanningToolStore:
             PlanningError: Ownership, revisions or storage prevent the rename.
         """
         with self.transaction() as cursor:
-            _, tool = self._lock_scenario_for_edit(
+            tool = self._lock_scenario_for_edit(
                 cursor,
                 owner,
                 identifier,
@@ -584,7 +586,7 @@ class PlanningToolStore:
             PlanningError: Ownership, revisions, allowed choices or storage prevent saving.
         """
         with self.transaction() as cursor:
-            _, tool = self._lock_scenario_for_edit(
+            tool = self._lock_scenario_for_edit(
                 cursor,
                 owner,
                 identifier,

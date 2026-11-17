@@ -335,7 +335,7 @@ def create_planning_scenarios_router(service: PlanningScenarioService) -> APIRou
     @router.post(
         "/tools/{identifier}/scenarios", response_model=Scenario, status_code=201
     )
-    async def create_scenario(
+    def create_scenario(
         identifier: UUID, payload: CreateScenario, response: Response, owner: Owner
     ) -> Scenario:
         """Create an empty private scenario against an acknowledged tool revision.
@@ -352,7 +352,7 @@ def create_planning_scenarios_router(service: PlanningScenarioService) -> APIRou
         Raises:
             PlanningError: The tool is missing, changed, or storage is unavailable.
         """
-        result = await service.create_scenario(owner, identifier, payload)
+        result = service.store.create_scenario(owner, identifier, payload)
         response.headers["Location"] = f"/api/planning/scenarios/{result.id}"
         return result
 
@@ -373,7 +373,7 @@ def create_planning_scenarios_router(service: PlanningScenarioService) -> APIRou
         return service.store.get_scenario(owner, identifier)
 
     @router.put("/scenarios/{identifier}", response_model=Scenario)
-    async def rename_scenario(
+    def rename_scenario(
         identifier: UUID, payload: RenameScenario, owner: Owner
     ) -> Scenario:
         """Rename an owned scenario without overwriting a newer saved revision.
@@ -389,7 +389,7 @@ def create_planning_scenarios_router(service: PlanningScenarioService) -> APIRou
         Raises:
             PlanningError: Ownership, revision, or storage prevents the edit.
         """
-        return await service.rename_scenario(owner, identifier, payload)
+        return service.store.rename_scenario(owner, identifier, payload)
 
     @router.get(
         "/scenarios/{identifier}/assignments", response_model=ScenarioAssignmentPage
