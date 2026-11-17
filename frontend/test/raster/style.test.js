@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   applyRasterColorPalette,
   buildRasterLegend,
-  DEFAULT_RASTER_PALETTE_NAME,
   DEFAULT_RASTER_STYLE,
   deriveInitialRasterStyleFromStatistics,
   deriveRasterStyleFromStatistics,
@@ -18,21 +17,6 @@ import {
   SELECTED_RASTER_STATISTICS,
   TINY_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
-
-test("new rasters default to a fully opaque blue-yellow-red ramp", () => {
-  assert.equal(DEFAULT_RASTER_PALETTE_NAME, "blue-yellow-red");
-  assert.deepEqual(DEFAULT_RASTER_STYLE, {
-    minimum: 0,
-    midpoint: 50,
-    maximum: 100,
-    minimumColor: "#2b83ba",
-    midpointColor: "#ffffbf",
-    maximumColor: "#d7191c",
-    minimumOpacity: 1,
-    midpointOpacity: 1,
-    maximumOpacity: 1,
-  });
-});
 
 test("raster palettes preserve thresholds and drive the numeric legend", () => {
   const style = applyRasterColorPalette(

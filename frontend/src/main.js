@@ -182,14 +182,17 @@ let basemapControl = null;
  */
 
 /**
- * Loads the browser-safe application settings.
+ * Load application settings and establish the private browser identity.
+ * Startup awaits this same-origin response before enabling feature requests.
  *
  * @return {Promise<AppGlobalConfiguration>} The application settings.
  * @throws {Error} If the settings endpoint does not return a successful response.
  */
 async function loadAppGlobalConfiguration() {
     const configurationResponse = await fetch("/api/config", {
-        headers: { Accept: "application/json" }
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
     });
 
     if (!configurationResponse.ok) {
@@ -1584,7 +1587,7 @@ async function initializeCatalog(
         namedMapSlug,
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
-        publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: appGlobalConfiguration.appSubtitle },
+        publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
         applyMapHeading,
         basemap: basemapControl,
         mapLegend,

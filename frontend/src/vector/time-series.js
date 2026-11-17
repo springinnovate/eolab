@@ -432,12 +432,14 @@ export class VectorTimeSeriesController {
         ) {
             this.#clearPointSelection();
         }
+        const xScale = vectorTimeSeriesXScale(series.points);
         this.pointElements = renderOrdinalSeriesChart({
             documentContext: this.document,
             chart: this.chart,
             points: series.points,
             chartType: this.settings.chartType,
-            xScale: vectorTimeSeriesXScale(series.points),
+            xScale,
+            xReverse: xScale === "numeric" && this.settings.direction === "descending",
             xAxisLabel: this.#xAxisLabel(),
             yAxisLabel: this.settings.yField,
             ariaLabel: `Vector series ${this.settings.chartType} chart showing ` +

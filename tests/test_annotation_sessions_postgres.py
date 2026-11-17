@@ -1,11 +1,14 @@
 """Exercise annotation-session ownership and revision rules against PostgreSQL."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx2
 import psycopg
 import pytest
 
@@ -14,6 +17,11 @@ from eolab_app.annotation_sessions.models import ShareLayer, SessionError
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from test_annotation_sessions import collection
+from test_browser_identity import DelayedUploadResponse
+from eolab_app.routes.browser_identity import COOKIE
+from eolab_app.routes.system import create_system_router
+from eolab_app.routes.uploads import create_uploads_router
+from eolab_app.vector_uploads import VectorUploadStore
 
 BASE = "/api/annotation-sessions"
 HEADERS = {"X-EOLab-Annotations": "1"}
@@ -722,3 +730,110 @@ def test_concurrent_duplicate_names_admit_only_one(
 
     with ThreadPoolExecutor(2) as pool:
         assert sorted(pool.map(join, ["second", "third"])) == [200, 409]
+
+
+@pytest.mark.parametrize("existing_cookie", [False, True])
+@pytest.mark.parametrize("sequential", [False, True])
+def test_delayed_usage_keeps_shared_contribution_accessible(
+    tmp_path: Path,
+    store: AnnotationSessionStore,
+    existing_cookie: bool,
+    sequential: bool,
+) -> None:
+    """Preserve PostgreSQL membership, geometry and later writes after a delayed read.
+
+    Args:
+        tmp_path: Disposable upload inventory for the production usage route.
+        store: Real annotation store in an explicitly selected disposable database.
+        existing_cookie: Reuse a browser identity from an earlier visit.
+        sequential: Complete startup usage before creation as a control.
+    """
+    uploads = VectorUploadStore(tmp_path / "uploads", None)
+    uploads.initialize()
+    app = FastAPI()
+    app.include_router(create_system_router("test", {}))
+    app.include_router(create_uploads_router(uploads.storage))
+    app.include_router(create_annotation_sessions_router(store))
+    base = "/api/annotation-sessions"
+
+    async def exercise() -> None:
+        """Create and edit real contributions using the browser's HTTPS cookie jar."""
+        transport = DelayedUploadResponse(app)
+        async with httpx2.AsyncClient(
+            transport=transport,
+            base_url="https://testserver",
+            headers={"X-EOLab-Annotations": "1"},
+        ) as client:
+            if existing_cookie:
+                assert (await client.get(base)).status_code == 200
+                existing = client.cookies[COOKIE]
+            assert (await client.get("/api/config")).status_code == 200
+            token = client.cookies[COOKIE]
+            if existing_cookie:
+                assert token == existing
+            pending = asyncio.create_task(client.get("/api/uploads"))
+            try:
+                await asyncio.wait_for(transport.started.wait(), timeout=5)
+                if sequential:
+                    transport.release.set()
+                    assert (await pending).status_code == 200
+                created = await client.post(
+                    base, json={"name": "Wetlands", "contributorName": "Author"}
+                )
+                assert created.status_code == 201, created.text
+                layer = created.json()
+                path = f"{base}/{layer['id']}"
+                write_path = f"{path}/layers/{layer['id']}"
+                read_path = (
+                    f"{path}/contributors/{layer['contributorId']}/layers/{layer['id']}"
+                )
+                polygons = collection()
+                polygons["features"][0]["id"] = "river"
+                saved = await client.put(
+                    write_path, json={"revision": 0, "collection": polygons}
+                )
+                assert saved.status_code == 200, saved.text
+                assert saved.json()["revision"] == 1
+                transport.release.set()
+                assert (await pending).status_code == 200
+                assert client.cookies[COOKIE] == token
+                assert len((await client.get(base)).json()) == 1
+                assert (await client.get(path)).status_code == 200
+                assert (await client.get(read_path)).json()["collection"] == polygons
+                invitation = await client.get(
+                    f"{base}/invitations/{layer['id']}/{layer['joinCode']}"
+                )
+                assert invitation.json()["contributorId"] == layer["contributorId"]
+                polygons["features"][0]["properties"]["note"] = "Updated after startup"
+                updated = await client.put(
+                    write_path, json={"revision": 1, "collection": polygons}
+                )
+                assert updated.status_code == 200
+                assert updated.json()["revision"] == 2
+                with store.transaction() as cursor:
+                    cursor.execute(
+                        "SELECT revision, collection FROM shared_annotation_layers.layers "
+                        "WHERE local_id=%s",
+                        (layer["id"],),
+                    )
+                    assert cursor.fetchone() == {"revision": 2, "collection": polygons}
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(app=app),
+                    base_url="https://testserver",
+                    headers={"X-EOLab-Annotations": "1"},
+                ) as foreign:
+                    await foreign.get("/api/config")
+                    assert (await foreign.get(base)).json() == []
+                    assert (await foreign.get(path)).status_code == 404
+                    assert (await foreign.get(read_path)).status_code == 404
+                    assert (
+                        await foreign.put(
+                            write_path, json={"revision": 2, "collection": polygons}
+                        )
+                    ).status_code == 404
+                assert (await client.get(read_path)).json()["collection"] == polygons
+            finally:
+                transport.release.set()
+                await pending
+
+    asyncio.run(exercise())

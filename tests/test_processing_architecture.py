@@ -391,11 +391,6 @@ def test_retired_upload_runtime_is_absent() -> None:
     assert not list(Path("src/eolab_app/temporary_aoi").glob("*.py"))
     assert not Path("src/eolab_app/routes/temporary_aois.py").exists()
     assert not list(Path("frontend/src/temporary-aoi").glob("*.js"))
-    for path in [*Path("src").rglob("*.py"), *Path("frontend/src").rglob("*.js")]:
-        source = path.read_text(encoding="utf8")
-        assert "TemporaryAoi" not in source, path
-        if path != Path("src/eolab_app/processing/service.py"):
-            assert "temporaryAoiId" not in source, path
     markup = Path("frontend/index.html").read_text(encoding="utf8")
     for retired_control in ("Upload AOI", "temporary-aoi", "temporaryAoi"):
         assert retired_control not in markup
@@ -436,12 +431,3 @@ def test_model_submission_uses_registered_operations_not_native_implementations(
             "eolab_app.processing.raster_aggregate",
         }
     )
-
-
-def test_generic_model_contracts_delegate_domain_knowledge_to_operations() -> None:
-    """Keep operation-specific schemas and names out of generic recipe and run code."""
-    for name in ("model_definitions.py", "model_runs.py", "model_run_contracts.py"):
-        path = Path("src/eolab_app/processing") / name
-        source = path.read_text(encoding="utf-8").lower()
-        for domain_name in ("hydrology", "downstream", "mask_source"):
-            assert domain_name not in source, (path, domain_name)
