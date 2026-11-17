@@ -7,8 +7,6 @@ from uuid import UUID
 from eolab_app.catalog_selection import SelectionUnavailableError
 from eolab_app.planning.models import PlanningError
 from eolab_app.planning.scenario_models import (
-    CreateScenario,
-    RenameScenario,
     Scenario,
     SetScenarioAssignment,
 )
@@ -38,46 +36,6 @@ class PlanningScenarioService:
         """
         self.store = store
         self._lookup_parcel = lookup_parcel
-
-    async def create_scenario(
-        self, owner: str, tool_id: UUID, request: CreateScenario
-    ) -> Scenario:
-        """Create an empty owned scenario using an acknowledged linked tool.
-
-        Args:
-            owner: Participant browser's server-derived identity.
-            tool_id: Opaque identifier from the participant link.
-            request: Name and expected tool revision.
-
-        Returns:
-            New private scenario metadata at revision one.
-
-        Raises:
-            PlanningError: The tool is missing, changed, or storage is unavailable.
-        """
-        return await asyncio.to_thread(
-            self.store.create_scenario, owner, tool_id, request
-        )
-
-    async def rename_scenario(
-        self, owner: str, identifier: UUID, request: RenameScenario
-    ) -> Scenario:
-        """Rename an owned scenario without changing its assignments or reading sources.
-
-        Args:
-            owner: Participant browser's server-derived identity.
-            identifier: Opaque scenario identifier.
-            request: New name and both acknowledged revisions.
-
-        Returns:
-            Updated metadata with its scenario revision incremented.
-
-        Raises:
-            PlanningError: Ownership, revisions or storage prevent the rename.
-        """
-        return await asyncio.to_thread(
-            self.store.rename_scenario, owner, identifier, request
-        )
 
     async def set_assignment(
         self, owner: str, identifier: UUID, request: SetScenarioAssignment
