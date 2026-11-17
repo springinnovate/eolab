@@ -50,7 +50,10 @@
     function checkScrollRegion(element, name) {
       check(["auto", "scroll"].includes(getComputedStyle(element).overflowY), `${name}: overflowing content cannot be scrolled by the user`);
       check(element.clientHeight > 0 && element.scrollHeight > element.clientHeight, `${name}: fixture must overflow a bounded region`);
-      check(element.getBoundingClientRect().height < innerHeight, `${name}: region expands beyond the viewport`);
+      const bounds = element.getBoundingClientRect();
+      check(bounds.height < innerHeight, `${name}: region expands beyond the viewport`);
+      check(bounds.width > 0 && bounds.bottom > 0 && bounds.top < innerHeight && bounds.right > 0 && bounds.left < innerWidth,
+        `${name}: scroll region is outside the viewport`);
       element.scrollTop = element.scrollHeight;
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
     }
@@ -132,6 +135,9 @@
       await settleLayout();
       checkScrollRegion(diagnostics.querySelector(".system-state-details-body"), "Catalog diagnostics");
       check(isReachable(diagnostics.querySelector("summary")), "Diagnostic disclosure cannot be closed");
+      const lastLocation = locations.lastElementChild;
+      lastLocation.scrollIntoView({ block: "nearest" });
+      check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
       layout.destroy();
     }
 
