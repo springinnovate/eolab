@@ -7,7 +7,7 @@ import { csvParse, csvFormat } from "d3";
 
 const SERIES_STATISTICS = Object.freeze({
     pixel: { label: "Pixel value", expression: "pixelValue(a)" },
-    mean: { label: "Mean", expression: "mean(a)" },
+    mean: { label: "Mean", expression: "mean(a)", boxMean: true },
     stdev: { label: "Standard deviation", expression: "stdev(a)" },
     min: { label: "Minimum", expression: "min(a)" },
     max: { label: "Maximum", expression: "max(a)" },
@@ -46,6 +46,30 @@ function spreadsheetText(text) { return /^[=+@\-\t\r\n]/.test(text) ? "'" + text
  */
 function getCapturedStatisticLabel(result, formula) {
     return result?.calculationInputs.calculations.find(calculation => calculation.expression === formula.expression.trim())?.label;
+}
+
+/** Resolve the displayed scalar, its calculation method, and its owning job.
+ * @param {Object|undefined} result Captured measurements for one original source.
+ * @param {Object} formula Current named statistic, including its preset identity.
+ * @return {{row:Object|undefined,label:string,method:string|null,error:string,job:Object|null}} Value for both the plot and export.
+ */
+function seriesValue(result, formula) {
+    const mean = formula.boxMean ? result?.boxMean : null;
+    const label = formula.label || formula.expression || "Custom statistic";
+    if (mean) {
+        const wording = {estimated: "Estimated mean", exact: "Exact mean", unavailable: "Mean"}[mean.method];
+        const error = mean.error || (mean.method === "unavailable" ? "Estimate unavailable." : "");
+        return {label: label === "Mean" ? wording : label + " (" + wording.toLowerCase() + ")",
+            method: mean.method, error, job: null, row: {
+                value: mean.value === null ? null : String(mean.value), unit: mean.unit,
+                state: mean.value !== null ? "ok" : mean.method === "exact" ? "no_valid_data" : "error",
+            }};
+    }
+    const capturedLabel = getCapturedStatisticLabel(result, formula);
+    const row = result?.job?.result?.rows.find(candidate => candidate.label === capturedLabel);
+    const exactMean = formula.boxMean && row && result.calculationInputs.area?.kind === "samplingBox";
+    return {row, method: exactMean ? "exact" : null, job: result?.job ?? null, error: result?.error || "",
+        label: exactMean ? (label === "Mean" ? "Exact mean" : label + " (exact mean)") : label};
 }
 
 /** Compare immutable polygon-area or original-source selection identities.
@@ -121,6 +145,7 @@ export class RasterSeriesController {
             onRemovePlot: id => this.removePlot(id),
             onPlotOptions: (id, change) => this.setPlotOptions(id, change),
             onRetry: () => this.retryFailedCalculations(),
+            onExactMean: () => this.areaStatistics.calculateExactBoxMean(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(true),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
@@ -509,6 +534,13 @@ export class RasterSeriesController {
         this.updateAreaInputs();
     }
 
+    /** Whether a map click should select a box for this series.
+     * @return {boolean} True when the user chose a map box as the sampling area.
+     */
+    get usesMapSamplingBox() {
+        return this.areaChoice === "selection" && !["catalogSelection", "polygonArea"].includes(this.selectedArea?.kind);
+    }
+
     /** Read the latest area selected for the next calculation.
      * @return {Object|null} Whole raster, polygon selection, map area, or no selection.
      */
@@ -605,7 +637,10 @@ export class RasterSeriesController {
         if (!formula) return;
         const oldExpression = formula.expression;
         Object.assign(formula, change);
-        if (oldExpression !== formula.expression) this.updateAreaInputs();
+        if (oldExpression !== formula.expression) {
+            delete formula.boxMean;
+            this.updateAreaInputs();
+        }
         else this.render();
     }
 
@@ -674,13 +709,14 @@ export class RasterSeriesController {
          */
         const rowsFor = (results, formula) => sources.map(source => {
             const result = results.get(source.key);
-            const capturedLabel = getCapturedStatisticLabel(result, formula);
-            const row = result?.job?.result?.rows.find(row => row.label === capturedLabel);
-            const sameFormula = capturedLabel !== undefined;
-            return { key: source.key, label: source.label, statisticId: formula.id, statisticLabel: formula.label || formula.expression || "Custom statistic",
-                state: row?.state === "ok" && sameFormula ? "value" : result?.error ? "error" : sameFormula ? row?.state ?? "waiting" : "waiting",
-                value: !sameFormula || row?.value == null ? null : Number(row.value), rawValue: sameFormula ? row?.value : null, unit: row?.unit ?? "",
-                errorMessage: area.commonError ? "Not calculated. See the message above." : result?.error ?? area.progress.get(source.key)?.message ?? (!result ? "Waiting" : ""), cached: !!result?.job?.result?.cacheHit };
+            const value = seriesValue(result, formula);
+            const row = value.row;
+            return {key: source.key, label: source.label, statisticId: formula.id, statisticLabel: value.label,
+                method: value.method, state: row?.state === "ok" ? "value" : value.error ? "error" : row?.state ?? "waiting",
+                value: row?.value == null ? null : Number(row.value), rawValue: row?.value ?? null, unit: row?.unit ?? "",
+                errorMessage: area.commonError ? "Not calculated. See the message above." : value.error ||
+                    (!row ? area.progress.get(source.key)?.message || "Waiting" : ""),
+                cached: !!value.job?.result?.cacheHit};
         });
         const statistics = this.formulas.map(formula => ({ ...formula, ...this.statisticDisplay.get(formula.id), rows: rowsFor(area.results, formula) }));
         const rows = sources.flatMap((source, index) => statistics.map(statistic => statistic.rows[index]));
@@ -690,6 +726,8 @@ export class RasterSeriesController {
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
                 results: area.results, hasPendingVectorArea: this.hasPendingVectorArea,
+                canCalculateExactMean: area.useBoxMean && [...area.results.values()].some(({boxMean}) =>
+                    boxMean && boxMean.method !== "exact" && !boxMean.outside),
                 recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
             sources: this.sourceChoices(),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
@@ -757,20 +795,20 @@ export class RasterSeriesController {
             return csvFormat(exported, rows.columns) + "\r\n";
         }
         if (area.busy || !area.results.size) return "";
-        const lines = [["raster", "collection_id", "item_id", "statistic", "formula", "value", "unit", "status", "error", "area", "job_id", "cached", "pixel_point", "source"]];
+        const lines = [["raster", "collection_id", "item_id", "statistic", "formula", "value", "unit", "status", "error", "area", "job_id", "cached", "pixel_point", "source", "method"]];
         for (const source of this.orderedResultSources()) {
             const result = area.results.get(source.key);
             const reference = rasterSourceReference(source);
             for (const formula of this.formulas) {
-                const capturedLabel = getCapturedStatisticLabel(result, formula);
-                const row = result?.job?.result?.rows.find(row => row.label === capturedLabel);
+                const measurement = seriesValue(result, formula);
+                const {row, job} = measurement;
                 // Values are validated decimal strings from Processing, not user text.
                 const scalar = row?.value == null ? "" : { scalar: row.value };
-                lines.push([source.label, reference.collectionId ?? "", reference.itemId ?? "", formula.label, formula.expression,
-                    scalar, row?.unit ?? "", row?.state ?? (result?.error ? "error" : "waiting"), result?.error ?? "",
+                lines.push([source.label, reference.collectionId ?? "", reference.itemId ?? "", measurement.label, formula.expression,
+                    scalar, row?.unit ?? "", row?.state ?? (measurement.error ? "error" : "waiting"), measurement.error,
                     JSON.stringify(result?.calculationInputs.area ?? (this.areaChoice === "whole" ? {kind:"wholeRaster"} : area.area)),
-                    result?.job?.jobId ?? "", result?.job?.result?.cacheHit ? "true" : "false",
-                    result?.calculationInputs.pixelPoint ? JSON.stringify(result.calculationInputs.pixelPoint) : "", JSON.stringify(reference)]);
+                    job?.jobId ?? "", job?.result?.cacheHit ? "true" : "false",
+                    result?.calculationInputs.pixelPoint ? JSON.stringify(result.calculationInputs.pixelPoint) : "", JSON.stringify(reference), measurement.method ?? ""]);
             }
         }
         return lines.map(line => line.map(value => typeof value === "object" && value !== null ? '"' + value.scalar + '"' : csvField(value)).join(",")).join("\r\n") + "\r\n";

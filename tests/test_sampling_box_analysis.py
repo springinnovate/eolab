@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 import numpy as np
 import pytest
 import rasterio
+from rasterio.enums import Resampling
 from affine import Affine
 from pydantic import ValidationError
 from pyproj import Geod, Transformer
@@ -22,7 +23,7 @@ from eolab_app.raster.models import (
     CatalogRasterStatisticsRequest,
     CatalogRasterPairRequest,
 )
-from eolab_app.raster.statistics import read_raster_statistics
+from eolab_app.raster.statistics import read_raster_statistics, read_sampling_box_mean
 from eolab_app.raster.paired_statistics import read_raster_paired_statistics
 from eolab_app.raster.categorical_statistics import read_raster_categorical_statistics
 from eolab_app.processing.aggregate_models import AggregateArea, AggregatePlanRequest
@@ -260,6 +261,9 @@ def test_processing_aggregate_clip_and_hectares_use_the_same_box(
     aggregate_dir = tmp_path / "aggregate"
     aggregate_dir.mkdir()
     result = calculate_raster_statistics_for_area(path, spec, aggregate_dir, LIMITS)
+    box_mean = read_sampling_box_mean(path, SamplingBoxArea(BOX))
+    assert box_mean.method == "exact"
+    assert box_mean.value == pytest.approx(float(result.rows[0]["value"]), rel=1e-13)
     ring = reference_box_ring(BOX)
     outcomes = reference_numeric_outcomes(values, transform, False)
     means = [float(outcome.mean()) for outcome in outcomes]
@@ -346,3 +350,41 @@ def test_sampling_box_requests_binding_and_cache_identity_preserve_rectangles() 
         AggregateArea(kind="samplingBox", bounds=(0, 0, 1, 1), samplingBox=BOX)
     with pytest.raises(ValidationError):
         ClipArea(kind="bounds", bounds=sampling_box_bounds(BOX), samplingBox=BOX)
+
+@pytest.mark.parametrize("method", ["nearest", "average", "mode", "unknown", "masked"])
+def test_mean_uses_only_representative_overviews(tmp_path: Path, method: str) -> None:
+    """Keep valid zeros and sparse peaks, and reject levels with unknown weights.
+
+    Args:
+        tmp_path: Isolated original GeoTIFF directory.
+        method: Declared pyramid construction or embedded mask variant.
+    """
+    path = tmp_path / "mean.tif"
+    # A box overlapping the western half of this raster contains aligned
+    # four-pixel patches. Independent expected values come from Processing.
+    values = np.zeros((1024, 1024), dtype=np.float32)
+    values[::32, :] = 800
+    values[1::32, :] = values[2::32, :] = values[3::32, :] = 800
+    values[:, 256:512] = -9999
+    values[192:256] = np.nan
+    with rasterio.open(path, "w", driver="GTiff", count=1, width=1024, height=1024,
+                       dtype=values.dtype, crs="EPSG:4326", transform=from_bounds(0, -1, 2, 1, 1024, 1024),
+                       nodata=-9999, tiled=True, blockxsize=128, blockysize=128) as target:
+        target.write(values, 1)
+        if method == "masked":
+            target.write_mask(np.full(values.shape, 255, dtype=np.uint8))
+        algorithm = method if method in ("average", "mode") else "nearest"
+        target.build_overviews([2, 4], Resampling[algorithm])
+        if method != "unknown":
+            target.update_tags(ns="rio_overview", resampling=algorithm)
+    box = Wgs84SamplingBox(center={"longitude": 0, "latitude": 0}, sideLengthKm=225)
+    mean = read_sampling_box_mean(path, SamplingBoxArea(box))
+    if method != "nearest":
+        assert (mean.method, mean.value) == ("unavailable", None)
+        return
+    area = AggregateArea(kind="samplingBox", bounds=sampling_box_bounds(box), samplingBox=box)
+    spec = make_spec(path, ["mean(a)"], area)
+    native = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
+    assert mean.method == "estimated"
+    assert 50 < mean.value < 125
+    assert mean.value == pytest.approx(float(native.rows[0]["value"]), rel=0.02)

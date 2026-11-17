@@ -7,7 +7,7 @@
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
-     * Bind retained task context, navigation, native Tools popover and close controls.
+     * Bind the collapsible Map tools panel, its tool chooser, and retained results.
      *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
@@ -24,11 +24,11 @@ export class MapInspectionController {
         this.root = documentContext.querySelector("#map-inspection");
         this.toolbar = documentContext.querySelector("#map-tools-toolbar");
         this.panels = documentContext.querySelector("#map-inspection-panels");
-        this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
+        this.toolName = documentContext.querySelector("#map-tool-name");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
-        this.mapToolsButton = documentContext.querySelector("#map-tools-more-summary");
+        this.mapToolsButton = documentContext.querySelector("#map-tool-chooser");
         this.toolActionsOpen = false;
         /** @type {(event:ToggleEvent)=>void} Track native open/closed state synchronously. */
         this.onToolActionsBeforeToggle = event => { this.toolActionsOpen = event.newState === "open"; };
@@ -47,10 +47,10 @@ export class MapInspectionController {
         this.toolActions.addEventListener("click", this.onToolActionsCommand, true);
         this.document.defaultView?.addEventListener?.("resize", this.onToolActionsLayout);
         this.clickContext = documentContext.querySelector("#map-click-context");
+        this.featureStatus = documentContext.querySelector("#map-click-feature-status");
         this.clickLabel = "";
         this.clickResults = ["histogram", "feature"].map(name => ({
             name, button: documentContext.querySelector(name === "feature" ? "#map-inspection-tab-feature" : "#map-click-histogram"),
-            status: documentContext.querySelector(`#map-click-${name}-status`),
             snapshot: null, unread: false,
         }));
         this.hasClick = false;
@@ -59,9 +59,8 @@ export class MapInspectionController {
             if (entry && !entry.button.disabled) this.#showTool(entry.name);
         };
         for (const {button} of this.clickResults) button.addEventListener("click", this.onSummaryClick);
-        this.minimizeButton = documentContext.querySelector(
-            "#toggle-map-inspection-dock"
-        );
+        this.collapseButton = documentContext.querySelector("#toggle-map-inspection-dock");
+        this.expandButton = documentContext.querySelector("#open-map-tools");
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.filter = documentContext.querySelector("#vector-filter-panel");
@@ -133,15 +132,6 @@ export class MapInspectionController {
                 tab: documentContext.querySelector("#map-inspection-tab-style"),
             },
         ];
-        const tasks = {
-            style: "Appearance", filter: "Data selection",
-            "raster-clips": "Export", histogram: "Raster analysis",
-            "raster-series": "Raster analysis", feature: "Point inspection",
-        };
-        for (const tool of this.tools) {
-            tool.task = tasks[tool.name] ?? "Analysis";
-            tool.context = null;
-        }
         this.isOpen = false;
         this.activeTool = null;
         this.activationOrder = [];
@@ -151,9 +141,15 @@ export class MapInspectionController {
         /** @type {ReturnType<typeof setTimeout>|null} Expiry of the explicit destination cue. */
         this.toolAttentionTimer = null;
         this.onClose = () => this.closeHistogram();
-        this.onMinimize = () => {
-            this.minimized = !this.minimized;
+        /** Collapse or restore all Map tools controls and focus the matching disclosure.
+         * @param {MouseEvent} event Activation of the visible panel button.
+         * @return {void}
+         */
+        this.onTogglePanel = event => {
+            this.minimized = event.currentTarget === this.collapseButton;
+            if (this.minimized) this.#closeToolActions();
             this.#renderDock();
+            (this.minimized ? this.expandButton : this.collapseButton).focus();
         };
         this.onTabClick = (event) => {
             const tool = this.tools.find(({ tab }) => tab === event.currentTarget);
@@ -171,7 +167,8 @@ export class MapInspectionController {
             this.closeHistogram();
         };
         this.closeButton.addEventListener("click", this.onClose);
-        this.minimizeButton.addEventListener("click", this.onMinimize);
+        this.collapseButton.addEventListener("click", this.onTogglePanel);
+        this.expandButton.addEventListener("click", this.onTogglePanel);
         for (const { tab } of this.tools.filter(tool => !tool.resultNavigation)) {
             tab.addEventListener("click", this.onTabClick);
             tab.addEventListener("keydown", this.onTabKeydown);
@@ -194,11 +191,14 @@ export class MapInspectionController {
     }
 
     /**
-     * Open the Tools menu from its persistent toolbar button.
-     * The caller can then focus the command it wants the user to return to.
+     * Expand Map tools and open its chooser so the caller can focus a command.
      * @return {void}
      */
     showToolActions() {
+        if (this.minimized) {
+            this.minimized = false;
+            this.#renderDock();
+        }
         if (!this.toolActionsOpen) {
             this.mapToolsButton.click();
         }
@@ -423,8 +423,8 @@ export class MapInspectionController {
 
     /** Present an owning analysis stream's current, already stale-checked status.
      * @param {"histogram"|"feature"} name Result stream.
-     * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message:string}|null} snapshot
-     * Display-only state, or null when this click has no participating layer.
+     * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message?:string}|null} snapshot
+     * Feature snapshots include their status message. A null snapshot clears the result for this click.
      * @return {void}
      * @throws {TypeError} For an invalid stream or presentation snapshot.
      */
@@ -432,7 +432,7 @@ export class MapInspectionController {
         const entry = this.clickResults.find(result => result.name === name);
         if (!entry || (snapshot !== null && (![
             "loading", "ready", "empty", "error", "invalidated",
-        ].includes(snapshot.state) || typeof snapshot.message !== "string"))) {
+        ].includes(snapshot.state) || (name === "feature" && typeof snapshot.message !== "string")))) {
             throw new TypeError("Invalid map-click result presentation.");
         }
         if (!this.hasClick) return;
@@ -445,25 +445,27 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
-    /** Present compact result feedback without moving another tool into the foreground.
-     * Routine completion belongs to the results; loading and failures remain visible.
+    /** Update the result buttons and the Features status in the shared header.
+     * Histogram cards display progress and failures for their own layers.
      * @return {void}
      */
     #renderResultNavigation() {
         this.clickContext.textContent = this.clickLabel;
         for (const entry of this.clickResults) {
-            const {name, button, status, snapshot} = entry;
+            const {name, button, snapshot} = entry;
             const tool = this.#tool(name);
             const loading = snapshot?.state === "loading";
             button.disabled = name === "feature" && tool.panel.hidden && snapshot === null;
             button.setAttribute("data-unread", String(entry.unread));
             button.setAttribute("data-loading", String(loading));
             button.setAttribute("aria-pressed", String(this.activeTool === name && !this.minimized));
-            status.textContent = snapshot === null ? "" : snapshot.message + (entry.unread ? " · New results" : "");
-            status.hidden = snapshot === null || this.minimized ||
-                !(["error", "invalidated"].includes(snapshot.state) ||
-                    (loading && this.activeTool === name));
-            if (snapshot !== null) button.title = status.textContent;
+            if (name === "feature") {
+                this.featureStatus.textContent = snapshot === null ? "" : snapshot.message + (entry.unread ? " · New results" : "");
+                this.featureStatus.hidden = snapshot === null || this.minimized ||
+                    !(["error", "invalidated"].includes(snapshot.state) ||
+                        (loading && this.activeTool === name));
+                if (snapshot !== null) button.title = this.featureStatus.textContent;
+            }
             tool.panel.setAttribute("data-inspection-loading", String(loading));
         }
     }
@@ -801,7 +803,6 @@ export class MapInspectionController {
         if (!shouldOpen) {
             this.activeTool = null;
             this.activationOrder = [];
-            this.minimized = false;
         }
         const openChanged = shouldOpen !== this.isOpen;
         this.isOpen = shouldOpen;
@@ -834,41 +835,30 @@ export class MapInspectionController {
     }
 
     /**
-     * Render foreground task/source/scope, retained navigation and active-panel visibility.
-     * Raster destinations use stable native buttons; their owners handle opening.
-     * Features share the compact result navigation. Raster statistics omits the
-     * inactive Style tab while retaining its editor; other tools keep their tabs.
-     * Data tools and polygon editing use their panel headings without another task heading.
-     * Opening or updating a tool never replaces its focused raster destination.
-     * Hide the panel surface when no tool is active so the retained result header
-     * cannot leave an invisible container intercepting map input below it.
-     * Return focus to Tools if closing the last panel removes its minimize action.
+     * Show the active tool's name in the chooser, its content, and any other retained tabs.
+     * Raster results keep their own navigation and the sampling panel keeps its inputs
+     * when collapsed. The named Map tools tab restores the same active tool.
      *
      * @return {void}
      */
     #renderDock() {
+        const retainedTabHadFocus = this.tabList.contains(this.document.activeElement);
         this.panels.hidden = this.minimized || this.activeTool === null;
         this.root.setAttribute("data-minimized", String(this.minimized));
         this.root.setAttribute("data-active-tool", this.activeTool ?? "");
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
-        this.dockTitle.textContent = tool === null ? "Explore data" : `${tool.task} · ${tool.label}`;
-        this.dockTitle.title = this.dockTitle.textContent;
-        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations", "models", "planning", "style", "filter"].includes(this.activeTool);
+        this.toolName.textContent = tool?.label ?? "Choose a tool";
+        this.mapToolsButton.setAttribute("aria-label", tool ? `${tool.label}, choose a map tool` : "Choose a tool");
         const context = tool?.context ?? (this.activeTool === "feature"
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
-        this.dockContext.hidden = this.dockTitle.hidden || !this.dockContext.textContent;
-        const restoreToolbarFocus = !this.isOpen && this.document.activeElement === this.minimizeButton;
-        this.minimizeButton.hidden = !this.isOpen;
-        if (restoreToolbarFocus) this.mapToolsButton.focus();
-        this.minimizeButton.textContent = this.minimized ? "Expand" : "Minimize";
-        this.minimizeButton.setAttribute(
-            "aria-expanded", String(!this.minimized)
-        );
-        this.minimizeButton.setAttribute(
-            "aria-label", this.minimized ? "Expand map tools" : "Minimize map tools"
-        );
+        this.dockContext.hidden = !this.dockContext.textContent ||
+            !["raster-clips", "time-series", "feature-profile"].includes(this.activeTool);
+        const expandWasFocused = this.document.activeElement === this.expandButton;
+        this.toolbar.hidden = this.minimized;
+        this.expandButton.hidden = !this.minimized;
+        if (!this.minimized && expandWasFocused) this.collapseButton.focus();
         for (const { name, panel, tab, resultNavigation } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
@@ -886,7 +876,8 @@ export class MapInspectionController {
             panel.setAttribute("aria-labelledby", tab.id);
         }
         const visibleTabs = this.tools.filter(({tab, resultNavigation}) => !resultNavigation && !tab.hidden);
-        this.tabList.hidden = visibleTabs.length === 0 || this.minimized;
+        this.tabList.hidden = this.minimized || !visibleTabs.some(({name}) => name !== this.activeTool);
+        if (this.tabList.hidden && retainedTabHadFocus && !this.minimized) this.mapToolsButton.focus();
         if (!visibleTabs.some(({tab}) => tab.tabIndex === 0) && visibleTabs.length > 0) {
             visibleTabs[0].tab.tabIndex = 0;
         }
@@ -938,7 +929,8 @@ export class MapInspectionController {
         for (const {button} of this.clickResults) button.removeEventListener("click", this.onSummaryClick);
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
-        this.minimizeButton.removeEventListener("click", this.onMinimize);
+        this.collapseButton.removeEventListener("click", this.onTogglePanel);
+        this.expandButton.removeEventListener("click", this.onTogglePanel);
         for (const { tab } of this.tools.filter(tool => !tool.resultNavigation)) {
             tab.removeEventListener("click", this.onTabClick);
             tab.removeEventListener("keydown", this.onTabKeydown);

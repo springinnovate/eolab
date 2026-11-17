@@ -6,7 +6,7 @@ import { FakeRasterControlDocument } from "./raster/fake-controls-document.js";
  */
 export function createLeafletDouble() {
     const document = new FakeRasterControlDocument();
-    const calls = { map: null, setView: null, zoomControl: null, basemap: null,
+    const calls = { map: null, setView: null, basemap: null,
         layers: [], controls: [], stoppedClicks: [], stoppedScrolls: [] };
     /** Construct a Leaflet-style handler whose subclass can delegate native hooks. */
     class Handler {
@@ -46,17 +46,6 @@ export function createLeafletDouble() {
          */
         _onKeyDown(event) { calls.nativeKey = event; }
     }
-    /** Record native zoom-button actions and placement. */
-    class ZoomControl extends Handler {
-        /** @param {Object} options Control placement. */
-        constructor(options) { super(null); this.options = options; }
-        /** @param {Object} map Owning map. @return {ZoomControl} Attached control. */
-        addTo(map) { this._map = map; calls.zoomControl = {options: this.options, map}; map.zoomControl = this; return this; }
-        /** @param {Object} event Click event. @return {void} */
-        _zoomIn(event) { calls.nativeZoomIn = event; }
-        /** @param {Object} event Click event. @return {void} */
-        _zoomOut(event) { calls.nativeZoomOut = event; }
-    }
     const panes = new Map(), attached = new Set(), attributions = new Map();
     const leafletMap = {
         attributionControl: { setPrefix(prefix) { calls.attributionPrefix = prefix; } },
@@ -77,10 +66,6 @@ export function createLeafletDouble() {
         _onZoomTransitionEnd() { this._animatingZoom = false; calls.zoomTransitionsFinished = (calls.zoomTransitionsFinished ?? 0) + 1; },
         /** @param {number} zoom Requested zoom. @param {Object} options Animation options. @return {void} */
         setZoom(zoom, options) { calls.setZoom = {zoom, options}; },
-        /** @param {number} delta Zoom increment. @param {Object} options Animation options. @return {void} */
-        zoomIn(delta, options) { calls.zoomIn = {delta, options}; },
-        /** @param {number} delta Zoom decrement. @param {Object} options Animation options. @return {void} */
-        zoomOut(delta, options) { calls.zoomOut = {delta, options}; },
         attached, attributions,
         setView(center, zoom) { calls.setView = { center, zoom }; return this; },
         getContainer() { return { ownerDocument: document }; },
@@ -129,7 +114,6 @@ export function createLeafletDouble() {
             return leafletMap;
         },
         Map: {ScrollWheelZoom: WheelZoom, Keyboard: KeyboardZoom},
-        Control: {Zoom: ZoomControl},
         tileLayer(url, options) { return layer("tiles", url, options); },
         geoJSON(geometry, options) { return layer("outlines", geometry, options); },
         control(options) {

@@ -221,14 +221,21 @@ export class RasterSeriesPlotsView {
             if (elements.error.hidden && elements.scale.value !== plot.scale) elements.scale.value = plot.scale;
             elements.axes.x.group.hidden = !state.temporal;
             const statistics = state.statistics.filter(statistic => statistic.plotId === plot.id && statistic.visible);
-            const series = statistics.map(statistic => ({
-                id: String(statistic.id), label: `${statistic.label || "Custom statistic"} · ${statistic.expression}`,
-                ...STATISTIC_STYLES[statistic.styleIndex],
-                color: statistic.color ?? STATISTIC_STYLES[statistic.styleIndex].color,
-                points: (state.showingPrevious ? statistic.previousRows : statistic.rows).map(row => ({
-                    xLabel: row.label, xValue: row.xValue, yValue: row.state === "value" ? row.value : null, rawValue: row.rawValue, unit: row.unit,
-                })),
-            }));
+            const series = statistics.map(statistic => {
+                const rows = state.showingPrevious ? statistic.previousRows : statistic.rows;
+                const name = statistic.label || statistic.expression || "Custom statistic";
+                const meanLabels = rows.filter(row => row.state === "value" && row.method).map(row => row.statisticLabel);
+                const legendLabel = [...new Set(meanLabels)].join(" / ") || name;
+                return {
+                    id: String(statistic.id), legendLabel, label: `${legendLabel} · ${statistic.expression}`,
+                    ...STATISTIC_STYLES[statistic.styleIndex],
+                    color: statistic.color ?? STATISTIC_STYLES[statistic.styleIndex].color,
+                    points: rows.map(row => ({
+                        xLabel: row.label, xValue: row.xValue, yValue: row.state === "value" ? row.value : null,
+                        rawValue: row.rawValue, unit: row.unit, meanLabel: row.method ? row.statisticLabel : null,
+                    })),
+                };
+            });
             // Only chart inputs belong here: progress and catalog metadata do not change a figure.
             const signature = JSON.stringify([elements.chart.clientWidth, plot, state.direction, state.chartType, state.showingPrevious, !!state.temporal, series]);
             if (elements.signature !== signature) {
@@ -297,12 +304,13 @@ export class RasterSeriesPlotsView {
         note.textContent = [unitsText, excluded ? `Log scale omits ${excluded} zero or negative ${excluded === 1 ? "value" : "values"}; see the table or CSV.` : "",
             state.chartType === "bar" && (plot.scale === "log" || plot.bounds && (plot.bounds[0] > 0 || plot.bounds[1] < 0)) ? "Bars start at the displayed axis bound." : ""].filter(Boolean).join(" ");
         note.hidden = !note.textContent;
-        for (const statistic of statistics) {
+        for (const [index, statistic] of statistics.entries()) {
+            const {legendLabel} = series[index];
             const button = this.document.createElement("button"); button.type = "button";
             button.dataset.statisticId = String(statistic.id); button.className = "raster-series-legend-item";
-            button.setAttribute("aria-label", `Highlight ${statistic.label || statistic.expression}`);
+            button.setAttribute("aria-label", `Highlight ${legendLabel}`);
             button.append(createStatisticSwatch(this.document, statistic.styleIndex, statistic.color));
-            const name = this.document.createElement("span"); name.textContent = statistic.label || statistic.expression || "Custom statistic"; button.append(name);
+            const name = this.document.createElement("span"); name.textContent = legendLabel; button.append(name);
             for (const event of ["pointerenter", "focus"]) button.addEventListener(event, () => this.highlightStatistic(statistic.id));
             for (const event of ["pointerleave", "blur"]) button.addEventListener(event, () => this.highlightStatistic(null));
             legend.append(button);
@@ -352,7 +360,7 @@ export class RasterSeriesPlotsView {
         return [previous ? "Previous results" : "", series[0].points[index].xLabel,
             ...series.filter(item => Number.isFinite(item.points[index].yValue) && (scale !== "log" || item.points[index].yValue > 0)).map(item => {
                 const point = item.points[index];
-                return `${item.label}: ${point.rawValue ?? formatSeriesNumber(point.yValue)}${point.unit ? " " + point.unit : ""}`;
+                return `${point.meanLabel || item.label}: ${point.rawValue ?? formatSeriesNumber(point.yValue)}${point.unit ? " " + point.unit : ""}`;
             })].filter(Boolean).join("\n");
     }
 

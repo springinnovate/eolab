@@ -51,8 +51,16 @@ test("opening and collapsing sampling controls retains the chosen area and box s
     assert.equal(view.mapBoxControls.hidden, false);
     assert.equal(view.dimensions.textContent, "200 × 200 km");
     assert.equal(view.samplingAreaSummary.textContent, "Sampling box · 200 × 200 km");
+    assert.equal(view.rangeLabel.parentNode, view.compactSizeControls);
+    assert.equal(view.compactSizeControls.hidden, false);
+    assert.equal(view.scrollHint.hidden, false);
+    view.sampleWindowRange.dispatchEvent(new Event("input"));
+    assert.deepEqual(edits, ["200"]);
     view.openAreaEditor();
     assert.equal(view.disclosure.open, true);
+    assert.equal(view.rangeLabel.parentNode, view.expandedSizeControls);
+    assert.equal(view.compactSizeControls.hidden, true);
+    assert.equal(view.scrollHint.hidden, false);
     assert.equal(view.sampleWindowNumber.value, "200");
     assert.equal(view.samplingAreaSummary.textContent, "Sample area", "expanded controls show dimensions only beside the slider");
     view.setSampleWindowSize(80, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
@@ -65,18 +73,22 @@ test("opening and collapsing sampling controls retains the chosen area and box s
     assert.equal(view.useMapWindowButton.checked, true);
     assert.equal(view.sampleWindowNumber.value, "80");
     assert.equal(view.samplingAreaSummary.textContent, "Sampling box · 80 × 80 km");
+    assert.equal(view.rangeLabel.parentNode, view.compactSizeControls);
+    assert.equal(view.sampleWindowRange.getAttribute("aria-valuetext"), "80 kilometers");
     // A radio change hides sizing before a proposed polygon selection is accepted.
     view.useMapWindowButton.checked = false;
     view.vectorChoice.checked = true;
     document.querySelector("#raster-sampling-area-controls").dispatchEvent(new Event("change"));
     assert.equal(view.mapBoxControls.hidden, true);
     assert.equal(view.vectorControls.hidden, false, "the selected radio immediately reveals its controls");
+    assert.equal(view.compactSizeControls.hidden, true);
+    assert.equal(view.scrollHint.hidden, true);
     view.setSamplingAreaMode("vector", "Selected polygons");
     assert.equal(view.mapBoxControls.hidden, true);
     view.setSamplingAreaMode("wholeRaster");
     assert.equal(view.mapBoxControls.hidden, true);
     assert.equal(view.vectorControls.hidden, true);
-    assert.deepEqual(edits, []);
+    assert.deepEqual(edits, ["200"], "opening, closing and changing area presentation do not resize the box");
     view.unbind();
 });
 
@@ -168,6 +180,11 @@ test("composed area context keeps a foreground polygon workflow separate from hi
     assert.equal(view.samplingAreaSummary.textContent, "Sample area · Shared reserve drawings");
     view.setAreaContext(null);
     assert.equal(view.samplingAreaSummary.textContent, "Sample area · Whole raster");
+    view.setAreaContext({scope: "Statistics box", usesSamplingBox: true});
+    assert.equal(view.compactSizeControls.hidden, false);
+    assert.equal(view.scrollHint.hidden, false);
+    view.setAreaContext(null);
+    assert.equal(view.compactSizeControls.hidden, true);
 });
 
 test("spatial guidance is visible independently of numeric validity and clears on recovery", () => {

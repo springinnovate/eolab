@@ -103,14 +103,15 @@ export class RasterControlsView {
     }
 
     /**
-     * Render one summary per retained raster without exposing layer-stack DOM.
+     * Show applicable raster histograms or the reason the sampling box is empty.
      *
      * @param {Object[]} summaries Presentation-ready histogram summaries.
      * @param {string|null} activeKey Active retained raster key, or null.
+     * @param {boolean} [allOutsideBox=false] Every participating source missed the box.
      * @return {void}
      */
-    renderLayerHistograms(summaries, activeKey) {
-        this.#histogramView.renderLayerHistograms(summaries, activeKey);
+    renderLayerHistograms(summaries, activeKey, allOutsideBox = false) {
+        this.#histogramView.renderLayerHistograms(summaries, activeKey, allOutsideBox);
     }
 
     /**
@@ -414,8 +415,8 @@ export class RasterControlsView {
         this.#histogramView.setSamplingAreaMode(mode);
     }
 
-    /** Return whether Sampling box is selected for pointer preview.
-     * @return {boolean} Whether the Sampling box radio is checked.
+    /** Return whether map input should act on the active workflow's sampling box.
+     * @return {boolean} Whether the sampling controls present a box selection.
      */
     isSamplingBoxSelected() {
         return this.#samplingAreaView.isSamplingBoxSelected();

@@ -509,6 +509,32 @@ test("marginal markers use numeric thresholds and inverted vertical coordinates"
   assert.match(thresholdTargets(view, "x")[1].getAttribute("aria-label"), /Middle threshold for .+ \(X\) at 8/);
 });
 
+test("crowded marginal labels lead back to the clipped X and inverted Y threshold positions", () => {
+  const view = new BivariateRasterControlsView(new FakeBivariateDocument());
+  view.renderStatistics(pairedStatistics(), {
+    ...PRESENTATION,
+    xStyle: {...PRESENTATION.xStyle, minimum: -3, midpoint: -2, maximum: -1},
+    yStyle: {...PRESENTATION.yStyle, minimum: 15.99, midpoint: 16, maximum: 16.01},
+  });
+  const x = thresholdTargets(view, "x");
+  const xLabels = x.map(marker => Number(marker.children[3].getAttribute("x")));
+  assert.ok(xLabels[0] >= 160 && xLabels[0] < xLabels[1] && xLabels[1] < xLabels[2]);
+  for (const {children: [guide, tick, , label]} of x) {
+    assert.equal(tick.getAttribute("x1"), label.getAttribute("x"));
+    assert.equal(tick.getAttribute("x2"), guide.getAttribute("x1"));
+    assert.equal(guide.getAttribute("x1"), "160");
+  }
+  const y = thresholdTargets(view, "y");
+  const centers = y.map(marker => Number(marker.children[1].getAttribute("y1")));
+  assert.ok(centers[0] > centers[1] && centers[1] > centers[2]);
+  for (const {children: [guide, tick, hitArea]} of y) {
+    const center = Number(hitArea.getAttribute("y")) + Number(hitArea.getAttribute("height")) / 2;
+    assert.equal(Number(tick.getAttribute("y1")), center);
+    assert.equal(tick.getAttribute("y2"), guide.getAttribute("y1"));
+  }
+  assert.ok(Number(y[0].children[0].getAttribute("y1")) - Number(y[2].children[0].getAttribute("y1")) < 1);
+});
+
 test("range previews preserve histogram interactions and clear on stale or invalid data", () => {
   const documentContext = new FakeBivariateDocument();
   const view = new BivariateRasterControlsView(documentContext);

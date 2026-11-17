@@ -83,6 +83,7 @@ import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
+import { loadSamplingBoxMean } from "./raster/analysis-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
 import { RasterSeriesView } from "./raster/series-view.js";
@@ -205,9 +206,45 @@ async function loadAppGlobalConfiguration() {
 }
 
 /**
- * Create the map, coordinate guide and viewport resize observation.
- * Place coordinate feedback inside the map's allocated viewport.
- * The persistent tool toolbar remains anchored outside that changing viewport.
+ * Float the sample-area chooser with the desktop map navigation controls. On smaller
+ * screens the workspace drawers cover the map, so keep it in their measured toolbar.
+ * @param {L.Map} map Map whose controls share the visible viewport.
+ * @return {void}
+ */
+function placeSamplingTool(map) {
+    const tool = document.querySelector("#raster-sampling-tool");
+    const toolbar = tool.parentElement;
+    const desktop = window.matchMedia("(min-width: 1200px)");
+    const control = L.control({position: "bottomleft"});
+    /** @return {HTMLElement} Map control containing the existing chooser and its inputs. */
+    control.onAdd = () => {
+        const slot = L.DomUtil.create("div", "map-sampling-control");
+        L.DomEvent.disableClickPropagation(slot);
+        L.DomEvent.disableScrollPropagation(slot);
+        L.DomEvent.on(slot, "mousemove keydown", L.DomEvent.stopPropagation);
+        slot.append(tool);
+        return slot;
+    };
+    /** Return the chooser to the toolbar when the map releases its control. @return {void} */
+    control.onRemove = () => {
+        L.DomEvent.off(control.getContainer());
+        toolbar.prepend(tool);
+    };
+
+    /** Move the chooser between layouts and retain focus on its active control. @return {void} */
+    function updatePlacement() {
+        const focused = tool.contains(document.activeElement) ? document.activeElement : null;
+        if (desktop.matches) control.addTo(map);
+        else control.remove();
+        focused?.focus({preventScroll: true});
+    }
+    updatePlacement();
+    desktop.addEventListener("change", updatePlacement);
+    map.once("unload", () => desktop.removeEventListener("change", updatePlacement));
+}
+
+/**
+ * Create the map, coordinate guide, sampling control and viewport resize observation.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @return {L.Map} The initialized Leaflet map.
@@ -216,6 +253,7 @@ function initializeMap(appGlobalConfiguration) {
     const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
     observeMapViewportSize(leafletMap);
     addMapCoordinateGuide(L, leafletMap);
+    placeSamplingTool(leafletMap);
 
     const mapPositionElement = document.querySelector("#map-position");
     leafletMap.getContainer().append(mapPositionElement);
@@ -289,8 +327,6 @@ function applyMapHeading(title, subtitle) {
             "aria-label",
             `${title} controls`
         );
-    document.querySelector("#open-panel").textContent =
-        `Open ${title}`;
 }
 
 /**
@@ -982,7 +1018,7 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
-    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi });
+    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxMean: loadSamplingBoxMean });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
@@ -1865,7 +1901,9 @@ async function initializeCatalog(
             });
             if (!rasterClickSelected) {
                 mapInspection.closeHistogram(false);
-                updateRasterSeriesArea(null, "");
+                const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
+                    ? rasterVisualization.selectSamplingBox(event.latlng) : null;
+                updateRasterSeriesArea(box, box ? "Sampling box" : "");
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);

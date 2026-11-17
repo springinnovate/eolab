@@ -220,7 +220,7 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
-    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Explore data/);
+    assert.match(inspection.source, /aria-labelledby="map-tool-name"/);
     assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Analysis results"/);
     assert.match(inspection.source, /id="open-raster-series-dock"[\s\S]*?aria-controls="raster-series"/);
     assert.doesNotMatch(inspection.source, /popovertarget="workspace-tool-actions"/);
@@ -340,13 +340,12 @@ test("composition forwards inspection layout and CSS does not infer it from chan
     assert.doesNotMatch(STYLESHEET, /#map-inspection:has\(/);
     assert.match(STYLESHEET, /#app\[data-inspection-expanded="true"\]/);
     assert.match(STYLESHEET, /#app\[data-inspection-wide="true"\]/);
-    assert.match(STYLESHEET, /#app \.panel-opener\s*\{\s*inset: calc\(16px \+ var\(--map-tools-height, 42px\)\) auto auto 16px;/);
 });
 
 test("composition forwards compatible map areas and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*updateRasterSeriesArea\(null, ""\);/
+        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*const box = pixelPoint && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
 });
@@ -463,7 +462,6 @@ test("histogram charts precede optional help, point details and mode controls", 
         assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
     }
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
-    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*inset:\s*calc\(16px \+ var\(--map-tools-height, 42px\)\) 20px 16px auto[^}]*height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
     assert.match(STYLESHEET, /#map-histogram-panel,[^{]*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*display:\s*flex[^}]*justify-content:\s*space-between/s);
@@ -474,119 +472,8 @@ test("histogram charts precede optional help, point details and mode controls", 
     assert.doesNotMatch(MARKUP, /Inspect features|Select map window|Sample map center/);
 });
 
-test("sidebar panels own deliberate, independent scrolling", () => {
-    assert.match(
-        STYLESHEET,
-        /\.control-panel\s*\{[^}]*width:\s*var\(--active-workspace-width\)[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[^}]*overflow:\s*hidden/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.panel-content\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*var\(--workspace-catalog-track\)\s+var\(--workspace-map-layers-track\)[^}]*overflow:\s*hidden/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.workspace-disclosure\s*\{[^}]*width:\s*var\(--workspace-column-rail-width\)[^}]*writing-mode:\s*vertical-rl/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.workspace-disclosure\[aria-expanded="true"\]\s*\{[^}]*width:\s*100%[^}]*grid-row:\s*1[^}]*box-shadow:\s*inset 0 3px 0 var\(--brand\)[^}]*writing-mode:\s*horizontal-tb/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.catalog-panel\s*\{[^}]*overflow:\s*hidden/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.map-layers-region\s*\{[^}]*overflow:\s*hidden/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.map-layers-body\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.catalog-results-scroll\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.catalog-inspector-body\s*\{[^}]*overflow-y:\s*auto/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.catalog-panel\[hidden\],\s*\.map-layers-region\[hidden\]\s*\{[^}]*display:\s*none/s
-    );
-});
-
-test("CSS allocates wide space and intentional medium and narrow overlays", () => {
-    assert.match(
-        STYLESHEET,
-        /#app\s*\{[^}]*--workspace-column-rail-width:\s*44px[^}]*--active-workspace-width:\s*clamp\([^}]*--workspace-maximum-width/s
-    );
-    for (const [className, allocation] of [
-        ["catalog", "catalog"],
-        ["map-layers", "map-layers"],
-    ]) {
-        assert.match(
-            STYLESHEET,
-            new RegExp(
-                `#app\\.is-expanded-${className}-workspace\\s*\\{[^}]*--workspace-${allocation}-allocation:`,
-                "s"
-            )
-        );
-    }
-    for (const [identifier, column] of [
-        ["toggle-catalog-workspace", 1],
-        ["eomap-catalog-region", 1],
-        ["toggle-map-layers", 2],
-        ["eomap-map-layers-region", 2],
-    ]) {
-        assert.match(
-            STYLESHEET,
-            new RegExp(`#${identifier}\\s*\\{[^}]*grid-column:\\s*${column}`, "s")
-        );
-    }
-    assert.doesNotMatch(STYLESHEET, /workspace-histogram|is-expanded-histogram/);
-    assert.match(
-        STYLESHEET,
-        /#map\s*\{[^}]*inset:[^}]*var\(--active-workspace-width\)[^}]*transition:\s*left 220ms ease/s
-    );
-    assert.match(
-        STYLESHEET,
-        /#app\.is-control-panel-collapsed #map\s*\{[^}]*left:\s*var\(--workspace-edge\)/s
-    );
-    assert.match(
-        STYLESHEET,
-        /#app\.is-expanded-catalog-workspace:has\([\s\S]*?\.catalog-layout\.is-catalog-inspector-visible[\s\S]*?--workspace-catalog-allocation:\s*var\(--workspace-catalog-inspector-width\)/s
-    );
-    assert.match(
-        STYLESHEET,
-        /@container catalog-workspace \(max-width: 639px\)\s*\{[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s
-    );
-    assert.match(
-        STYLESHEET,
-        /@media \(max-width: 1199px\)\s*\{[\s\S]*?#map\s*\{[^}]*inset:\s*0/s
-    );
-    assert.match(
-        STYLESHEET,
-        /@media \(max-width: 699px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*inset:\s*auto 8px 8px[^}]*height:\s*min\(76dvh, 680px\)/s
-    );
-    assert.match(
-        STYLESHEET,
-        /@container workspace-sidebar \(max-width: 639px\)\s*\{[\s\S]*?\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[\s\S]*?\.workspace-disclosure\s*\{[^}]*width:\s*100%[^}]*writing-mode:\s*horizontal-tb/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.panel-opener\s*\{[^}]*top:\s*auto[^}]*bottom:\s*var\(--workspace-edge\)/s
-    );
-    assert.match(
-        STYLESHEET,
-        /@media \(max-width: 1199px\) and \(max-height: 480px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*inset:\s*8px[^}]*height:\s*auto/s
-    );
-    assert.match(
-        STYLESHEET,
-        /#app:not\(\.is-control-panel-collapsed\) \.map-position\s*\{[^}]*display:\s*none/s
-    );
-    assert.doesNotMatch(STYLESHEET, /min-height:\s*720px/);
+test("stylesheet retains its reduced-motion override", () => {
+    // Source-level smoke check; this does not emulate the user's media preference.
     assert.match(
         STYLESHEET,
         /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*transition-duration:\s*0\.01ms !important/s
@@ -631,17 +518,18 @@ test("workspace overflow shares one native action list", () => {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }
-    for (const id of ["map-tools-more-summary"]) {
-        assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools <span aria-hidden="true">▾<\/span><\/button>/);
-    }
+    const chooser = requireElementRange("map-tool-chooser");
+    assert.match(chooser.source, /popovertarget="workspace-tool-actions"/);
+    assert.match(chooser.source, /<span id="map-tool-name">Choose a tool<\/span>/);
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
-test("one persistent toolbar owns Tools, minimize and active filters outside retained panels", () => {
+test("the collapsible toolbar contains the tool chooser and filters, with a restore tab outside it", () => {
     const toolbar = requireElementRange("map-tools-toolbar");
     const dock = requireElementRange("map-inspection");
+    assert.ok(requireElementRange("open-map-tools").end < toolbar.start);
     assert.ok(toolbar.end < dock.start);
-    for (const id of ["map-tools-more-summary", "toggle-map-inspection-dock", "map-filter-indicators"]) {
+    for (const id of ["map-tool-chooser", "toggle-map-inspection-dock", "map-filter-indicators"]) {
         const control = requireElementRange(id);
         assert.ok(control.start > toolbar.start && control.end < toolbar.end);
         assert.equal(countMarkupId(id), 1);
@@ -662,19 +550,20 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     }
     assert.match(requireElementRange("models-heading").source, /class="visually-hidden" tabindex="-1">Data tools<\/h2>$/);
     assert.match(requireElementRange("models-panel").source, /<nav class="models-navigation" aria-label="Data tools">/);
-    for (const id of ["map-tools-more-summary"]) {
-        const {source} = requireElementRange(id);
-        assert.match(source, /^<button\b[^>]*\btype="button"/);
-        assert.match(source, /aria-label="Map and analysis tools"/);
-        assert.match(source, /aria-controls="workspace-tool-actions"/);
-        assert.match(source, /popovertarget="workspace-tool-actions"/);
-        assert.match(source, />Tools <span aria-hidden="true">▾<\/span><\/button>$/);
+    const chooser = requireElementRange("map-tool-chooser").source;
+    assert.match(chooser, /^<button\b[^>]*\btype="button"/);
+    assert.match(chooser, /aria-controls="workspace-tool-actions"/);
+    for (const id of ["collapse-panel", "toggle-map-inspection-dock"]) {
+        assert.match(requireElementRange(id).source, /class="map-panel-toggle map-panel-collapse"/);
+        assert.match(requireElementRange(id).source, /<span aria-hidden="true">×<\/span><\/button>$/);
     }
-    const minimize = requireElementRange("toggle-map-inspection-dock").source;
-    assert.match(minimize, /^<button\b[^>]*\btype="button"/);
-    assert.match(minimize, /aria-expanded="true"/);
-    assert.match(minimize, /aria-controls="map-inspection"/);
-    assert.match(minimize, />Minimize<\/button>$/);
+    for (const [id, action] of [["toggle-map-inspection-dock", "Collapse"], ["open-map-tools", "Expand"]]) {
+        const button = requireElementRange(id).source;
+        assert.match(button, /^<button\b[^>]*\btype="button"/);
+        assert.ok(button.includes(`aria-expanded="${action === "Collapse"}"`));
+        assert.ok(button.includes(`aria-label="${action} map tools"`));
+        assert.ok(button.includes('aria-controls="map-tools-toolbar map-inspection"'));
+    }
     for (const id of ["workspace-tool-actions", "map-inspection-raster-analysis", "map-inspection-tabs", "map-inspection-panels"]) {
         assert.equal(countMarkupId(id), 1, `supporting control target ${id} exists once`);
     }

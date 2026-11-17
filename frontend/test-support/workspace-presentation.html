@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Workspace presentation checks</title>
+</head>
+<body>
+  <h1>Workspace presentation checks</h1>
+  <p>Serve the frontend with Vite, then open this page. These browser checks use the current application markup, CSS and presentation controllers; Node does not run them.</p>
+  <pre id="results" role="status">Running...</pre>
+  <script type="module">
+    import L from "leaflet";
+    import { OnMapLegend } from "../src/map-layers/on-map-legend.js";
+    import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
+    import { EomapLayoutController } from "../src/eomap-layout-controller.js";
+    import { MapInspectionController } from "../src/map-inspection-controller.js";
+    import { MapLayerStackView } from "../src/map-layers/layer-stack-view.js";
+
+    /** Fail this scenario when a user-visible condition is false.
+     * @param {boolean} condition Expected outcome.
+     * @param {string} message Description shown on failure.
+     * @returns {void}
+     * @throws {Error} If the outcome is false.
+     */
+    function check(condition, message) {
+      if (!condition) throw new Error(message);
+    }
+
+    /** Wait for layout and the existing sidebar transition to settle.
+     * @returns {Promise<void>} Resolves after the transition and a paint.
+     */
+    function settleLayout() {
+      return new Promise(resolve => setTimeout(() => requestAnimationFrame(() => resolve()), 300));
+    }
+
+    /** Check that a control is visible and can receive pointer input in this viewport.
+     * @param {HTMLElement} element Control to inspect.
+     * @returns {boolean} Whether its center is visible and unobstructed.
+     */
+    function isReachable(element) {
+      const bounds = element.getBoundingClientRect();
+      const x = bounds.left + bounds.width / 2;
+      const y = bounds.top + bounds.height / 2;
+      return bounds.width > 0 && bounds.height > 0 && x >= 0 && y >= 0 &&
+        x < innerWidth && y < innerHeight && element.contains(document.elementFromPoint(x, y));
+    }
+
+    /** Verify overflow is contained in a scrollable region, rather than clipping its controls.
+     * @param {HTMLElement} element Region with deliberately overflowing fixture content.
+     * @param {string} name Region named in failure output.
+     * @returns {void}
+     * @throws {Error} If content cannot scroll within the viewport.
+     */
+    function checkScrollRegion(element, name) {
+      check(["auto", "scroll"].includes(getComputedStyle(element).overflowY), `${name}: overflowing content cannot be scrolled by the user`);
+      check(element.clientHeight > 0 && element.scrollHeight > element.clientHeight, `${name}: fixture must overflow a bounded region`);
+      const bounds = element.getBoundingClientRect();
+      check(bounds.height < innerHeight, `${name}: region expands beyond the viewport`);
+      check(bounds.width > 0 && bounds.bottom > 0 && bounds.top < innerHeight && bounds.right > 0 && bounds.left < innerWidth,
+        `${name}: scroll region is outside the viewport`);
+      element.scrollTop = element.scrollHeight;
+      check(element.scrollTop > 0, `${name}: scroll position did not change`);
+    }
+
+    /** Hide the on-map legend with its own ×, then restore it from the active tool's chooser.
+     * @param {MapInspectionController} inspection Mounted right panel with the Style tool selected.
+     * @returns {void}
+     * @throws {Error} If either action loses its focus target or changes the active tool.
+     */
+    function checkLegendControls(inspection) {
+      const map = L.map(document.querySelector("#map"), {zoomControl: false, attributionControl: false}).setView([0, 0], 2);
+      const command = document.querySelector("#toggle-map-legend");
+      const menu = document.querySelector("#workspace-tool-actions");
+      const legend = new OnMapLegend(L, map, {
+        toggleButton: command, onRestoreRequested: () => inspection.showToolActions(),
+        onChange() {}, onInclusion() {},
+      });
+      try {
+        document.querySelector("#toggle-map-inspection-dock").click();
+        const hide = legend.root.querySelector('button[aria-label="Hide map legend"]');
+        check(hide.textContent === "×", "The legend has no local ×");
+        hide.click();
+        check(legend.root.hidden && menu.matches(":popover-open") &&
+          command.textContent === "Show legend" && command === document.activeElement,
+          "The legend's × did not hide it and focus its restore command");
+        command.click();
+        check(!legend.root.hidden && !menu.matches(":popover-open") && document.activeElement === legend.collapse,
+          "Show legend did not restore the legend and its keyboard focus");
+        check(document.querySelector("#map-tool-name").textContent === "Style" &&
+          inspection.activeTool === "style", "The legend command replaced the foreground tool");
+      } finally {
+        legend.remove();
+        map.remove();
+      }
+    }
+
+    /** Exercise both raster views as histogram results arrive in the shared dock.
+     * @param {MapInspectionController} dock Mounted map inspection panel.
+     * @returns {void}
+     * @throws {Error} If a result changes the header text, layout, selected view or focus.
+     */
+    function checkHistogramResultNavigation(dock) {
+      const header = document.querySelector("#map-inspection-raster-analysis");
+      for (const [buttonId, open] of [
+        ["open-raster-series-dock", () => dock.showRasterSeries()],
+        ["map-click-histogram", () => dock.showHistogram()],
+      ]) {
+        open();
+        dock.beginMapClick({ lat: -5, lng: -63 });
+        const button = document.getElementById(buttonId);
+        button.focus();
+        const text = header.innerText;
+        const height = header.offsetHeight;
+        check(height > 0, "Analysis navigation must be visible before results arrive");
+        for (const state of ["loading", "ready", "error"]) {
+          dock.setClickResult("histogram", { state });
+          check(header.innerText === text && header.offsetHeight === height,
+            `Histogram ${state} changed the shared header with ${button.textContent} open`);
+          check(button.getAttribute("aria-pressed") === "true" && document.activeElement === button,
+            `Histogram ${state} changed the selected view or moved keyboard focus`);
+        }
+      }
+      const featureError = "The selected feature could not be read.";
+      dock.setClickResult("feature", { state: "error", message: featureError });
+      check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
+    }
+
+    /** Check that both panel tabs free map space, retain context, and stay reachable.
+     * @param {MapInspectionController} inspection Mounted map inspection panel.
+     * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
+     * @throws {Error} If either disclosure is obscured or restores the wrong state.
+     */
+    async function checkPanelDisclosures(inspection) {
+      const collapseLeft = document.querySelector("#collapse-panel");
+      const expandLeft = document.querySelector("#open-panel");
+      const collapseRight = document.querySelector("#toggle-map-inspection-dock");
+      const expandRight = document.querySelector("#open-map-tools");
+      const chooser = document.querySelector("#map-tool-chooser");
+      const toolName = chooser.querySelector("#map-tool-name");
+      check(toolName.textContent === "Choose a tool", "The empty panel has no named tool chooser");
+      const leftButton = collapseLeft.getBoundingClientRect(), rightButton = collapseRight.getBoundingClientRect();
+      check(leftButton.width === rightButton.width && leftButton.height === rightButton.height &&
+        leftButton.width === leftButton.height && [collapseLeft, collapseRight].every(button =>
+          button.textContent.trim() === "×" && getComputedStyle(button).borderRadius === "50%"),
+        "The expanded panels have different collapse controls");
+      collapseLeft.click();
+      inspection.showStyle("Land cover");
+      await settleLayout();
+      check(toolName.textContent === "Style" && isReachable(chooser), "The active tool name cannot open the chooser");
+      check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
+      inspection.showRasterClips();
+      await settleLayout();
+      const firstWord = document.createRange();
+      firstWord.setStart(toolName.firstChild, 0);
+      firstWord.setEnd(toolName.firstChild, "Download".length);
+      check(firstWord.getClientRects().length === 1 && isReachable(expandLeft) && isReachable(chooser),
+        "The tool title wraps mid-word or covers the left panel tab");
+      const catalogTab = expandLeft.getBoundingClientRect();
+      const sampleArea = document.querySelector("#raster-sampling-tool").getBoundingClientRect();
+      check(catalogTab.right <= sampleArea.left || catalogTab.bottom <= sampleArea.top,
+        "The sample area overlaps the left panel tab");
+      inspection.hideRasterClips();
+      collapseRight.click();
+      await settleLayout();
+      check(document.activeElement === expandRight, "Collapsing Map tools lost focus");
+      check(chooser.getClientRects().length === 0, "The tool chooser still occupies map space");
+      check(isReachable(expandLeft) && isReachable(expandRight), "A collapsed panel tab cannot be reached");
+      const left = expandLeft.getBoundingClientRect();
+      const right = expandRight.getBoundingClientRect();
+      check(left.top === right.top && left.height === right.height && left.left === innerWidth - right.right,
+        "Collapsed panel tabs differ in height or edge placement");
+      expandLeft.click();
+      await settleLayout();
+      check(document.activeElement === collapseLeft && isReachable(collapseLeft), "The left panel lost keyboard focus");
+      check(isReachable(expandRight), "Opening the left panel covered the Map tools tab");
+      expandRight.click();
+      await settleLayout();
+      check(document.activeElement === collapseRight && isReachable(chooser), "The tool chooser did not return");
+      check(isReachable(document.querySelector("#close-layer-style")) &&
+        document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
+        "The style editor did not reopen on Land cover");
+    }
+
+    /** Check where a long catalog filename begins and ends in a rendered Map contents row.
+     * @returns {void}
+     * @throws {Error} If the filename drops below the controls, overflows the row or leaves the pencil on its own line.
+     */
+    function checkMapLayerFilename() {
+      const filename = "avoided_sdwa_health_costs_raster_projected_coged.tif";
+      const view = new MapLayerStackView(document);
+      view.render([{
+        key: "health-costs", label: filename, item: { collection: "rasters", id: "health-costs" },
+        datasetKind: "raster", isCustom: false, visible: true, opacity: 1, legend: null, error: null,
+      }], null);
+      const row = document.querySelector("#raster-layer-list > li");
+      const checkbox = row.querySelector('[data-layer-action="visibility"]');
+      const labels = [...checkbox.labels];
+      check(labels.map(label => label.textContent).join("") === filename, "The visibility label lost part of the filename");
+      const lines = labels.flatMap(label => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return [...range.getClientRects()];
+      });
+      const firstLine = lines[0];
+      const lastLine = lines.at(-1);
+      const checkboxBounds = checkbox.getBoundingClientRect();
+      check(firstLine && firstLine.left >= checkboxBounds.right &&
+        firstLine.top < checkboxBounds.bottom && firstLine.bottom > checkboxBounds.top,
+        "The filename must start beside the visibility checkbox");
+      const rowBounds = row.getBoundingClientRect();
+      check(lines.every(line => line.left >= rowBounds.left && line.right <= rowBounds.right), "The filename overflows its card");
+      const renameBounds = row.querySelector('[data-layer-action="rename"]').getBoundingClientRect();
+      check(lastLine.top < renameBounds.bottom && lastLine.bottom > renameBounds.top, "Rename must sit on the last line of the filename");
+      view.unbind();
+    }
+
+    /** Exercise workspace scrolling, panel disclosures and result navigation at this viewport size.
+     * @returns {Promise<void>} Resolves after the current viewport passes.
+     * @throws {Error} If markup cannot load or a presentation outcome fails.
+     */
+    async function checkWorkspace() {
+      const response = await fetch("/index.html");
+      check(response.ok, "Application markup could not be loaded");
+      const markup = new DOMParser().parseFromString(await response.text(), "text/html");
+      markup.querySelectorAll("script").forEach(script => script.remove());
+      document.body.replaceChildren(...markup.body.childNodes);
+      const stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet";
+      stylesheet.href = "/src/style.css";
+      await new Promise((resolve, reject) => {
+        stylesheet.onload = resolve;
+        stylesheet.onerror = () => reject(new Error("Application CSS could not be loaded"));
+        document.head.append(stylesheet);
+      });
+      const layout = new EomapLayoutController({
+        documentContext: document,
+        /** No map renderer is mounted in this presentation fixture. @returns {void} */
+        invalidateMapSize() {},
+      });
+      const catalog = initializeCatalogPaneControls(document, () => layout.notifyLayoutChange());
+      const results = document.querySelector("#catalog-results");
+      for (let index = 0; index < 80; index++) {
+        const row = document.createElement("p");
+        const button = document.createElement("button");
+        button.textContent = `Observation ${index + 1}: More details`;
+        button.onclick = () => catalog.showInspector({ moveFocus: true, returnFocusTarget: button });
+        row.append(button);
+        results.append(row);
+      }
+      const resultsScroll = document.querySelector("#catalog-results-scroll");
+      await settleLayout();
+      const search = document.querySelector("#catalog-search");
+      checkScrollRegion(resultsScroll, "Catalog results");
+      check(isReachable(search), "Catalog search disappears when results scroll");
+      const lastResult = results.lastElementChild.firstElementChild;
+      lastResult.scrollIntoView({ block: "nearest" });
+      check(isReachable(lastResult), "Last Catalog result cannot be reached");
+      lastResult.click();
+      await settleLayout();
+      check(document.activeElement.id === "catalog-inspector-heading", "Opening details does not focus its heading");
+      const closeDetails = document.querySelector("#close-catalog-item-details");
+      check(isReachable(closeDetails), "Details close control cannot be reached");
+      closeDetails.click();
+      await settleLayout();
+      check(document.activeElement === lastResult && isReachable(lastResult), "Closing details does not return to the chosen result");
+
+      layout.showWorkspace("map-layers");
+      const mapContents = document.querySelector("#eomap-map-layers-body");
+      for (let index = 0; index < 80; index++) {
+        const row = document.createElement("p");
+        row.textContent = `Map content ${index + 1}`;
+        mapContents.append(row);
+      }
+      await settleLayout();
+      checkMapLayerFilename();
+      const catalogPosition = resultsScroll.scrollTop;
+      checkScrollRegion(mapContents, "Map contents");
+      check(resultsScroll.scrollTop === catalogPosition, "Scrolling Map contents moves Catalog results");
+      check(isReachable(document.querySelector("#toggle-map-layers")), "Map contents disclosure is clipped");
+      document.querySelector("#toggle-map-layers").click();
+      check(mapContents.getClientRects().length === 0, "Collapsed Map contents still occupies visible space");
+
+      document.querySelector("#toggle-operational-status").click();
+      const diagnostics = document.querySelector("#system-state");
+      diagnostics.open = true;
+      const locations = document.querySelector("#scan-locations");
+      for (let index = 0; index < 80; index++) {
+        const row = document.createElement("li");
+        row.textContent = `Configured data directory ${index + 1}`;
+        locations.append(row);
+      }
+      await settleLayout();
+      checkScrollRegion(diagnostics.querySelector(".system-state-details-body"), "Catalog diagnostics");
+      check(isReachable(diagnostics.querySelector("summary")), "Diagnostic disclosure cannot be closed");
+      const lastLocation = locations.lastElementChild;
+      lastLocation.scrollIntoView({ block: "nearest" });
+      check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
+      const inspection = new MapInspectionController({
+        onLayoutChange: state => layout.setInspectionLayout(state),
+      });
+      await checkPanelDisclosures(inspection);
+      checkLegendControls(inspection);
+      checkHistogramResultNavigation(inspection);
+      inspection.destroy();
+      layout.destroy();
+    }
+
+    if (new URLSearchParams(location.search).has("frame")) {
+      try {
+        await checkWorkspace();
+        parent.postMessage({ workspacePresentation: "passed" }, location.origin);
+      } catch (error) {
+        parent.postMessage({ workspacePresentation: "failed", message: error.message }, location.origin);
+      }
+    } else {
+      const results = document.querySelector("#results");
+      results.textContent = "";
+      for (const [width, height] of [[1280, 720], [390, 844]]) {
+        const frame = document.createElement("iframe");
+        frame.width = width;
+        frame.height = height;
+        frame.title = `Workspace at ${width} by ${height}`;
+        const result = new Promise(resolve => {
+          const timeout = setTimeout(() => {
+            removeEventListener("message", receive);
+            resolve({ workspacePresentation: "failed", message: "Scenario did not finish; inspect the browser console" });
+          }, 15000);
+          /** Receive only this fixture frame's completion.
+           * @param {MessageEvent} event Same-origin scenario result.
+           * @returns {void}
+           */
+          function receive(event) {
+            if (event.source !== frame.contentWindow || event.origin !== location.origin || !event.data.workspacePresentation) return;
+            clearTimeout(timeout);
+            removeEventListener("message", receive);
+            resolve(event.data);
+          }
+          addEventListener("message", receive);
+        });
+        frame.src = `${location.pathname}?frame`;
+        document.body.append(frame);
+        const outcome = await result;
+        results.textContent += `${width}x${height}: ${outcome.workspacePresentation}${outcome.message ? ` - ${outcome.message}` : ""}\n`;
+      }
+    }
+  </script>
+</body>
+</html>

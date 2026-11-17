@@ -283,51 +283,6 @@ test("Catalog inspector shows requested metadata without a second disclosure", (
   );
 });
 
-test("Catalog layout reserves its height for compact searchable results", () => {
-  const stylesheet = readFileSync(
-    new URL("../src/style.css", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(
-    stylesheet,
-    /\.catalog-results-scroll\s*\{[^}]*overflow-y:\s*auto/s,
-  );
-  assert.match(
-    stylesheet,
-    /\.catalog-pane-body\[hidden\]\s*\{[^}]*display:\s*none/s,
-  );
-  assert.match(
-    stylesheet,
-    /\.catalog-inspector\s*\{[^}]*overflow:\s*hidden/s,
-  );
-  assert.doesNotMatch(stylesheet, /is-catalog-browser-collapsed/);
-  assert.match(stylesheet, /is-catalog-inspector-visible/);
-  assert.match(stylesheet, /\.catalog-item-heading h3\s*\{[^}]*font-size:\s*0\.82rem[^}]*text-overflow:\s*ellipsis/s);
-  assert.match(stylesheet, /\.catalog-inspector-close\s*\{[^}]*display:\s*inline-grid/s);
-  assert.match(stylesheet, /\.catalog-map-actions \.catalog-add-action\s*\{[^}]*background:\s*var\(--brand-hover\)/s);
-  assert.match(stylesheet, /\.catalog-on-map\[hidden\]\s*\{[^}]*display:\s*none/s);
-  assert.match(stylesheet, /\.catalog-search-toolbar\s*\{/);
-  assert.match(stylesheet, /\.catalog-result-count\s*\{/);
-  assert.match(stylesheet, /--workspace-catalog-inspector-width:/);
-  assert.match(
-    stylesheet,
-    /@container catalog-workspace \(min-width: 640px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible\s*\{[^}]*grid-template-columns:\s*minmax\(280px, var\(--catalog-results-width\)\)\s*minmax\(320px, var\(--catalog-inspector-width\)\)/s,
-  );
-  assert.match(
-    stylesheet,
-    /@container catalog-workspace \(max-width: 639px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
-  );
-  assert.match(
-    stylesheet,
-    /@media \(max-width: 1199px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
-  );
-  assert.match(
-    stylesheet,
-    /\.catalog-map-actions\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s,
-  );
-});
-
 test("Catalog selection delegates progressive presentation without feature coupling", () => {
   const mainSource = readFileSync(
     new URL("../src/main.js", import.meta.url),

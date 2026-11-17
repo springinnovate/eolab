@@ -171,7 +171,7 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object) => void} remove Remove one Item from the stack.
  * @property {(key?:string|null,mode?:string)=>Readonly<Object>|null} getSelectedArea
  * Read an immutable explicit selection, independently of statistics readiness.
- * @property {()=>Readonly<Object>|null} selectSamplingBox Capture a geodesic box at the map center,
+ * @property {(position?:{lng:number,lat:number})=>Readonly<Object>|null} selectSamplingBox Capture a geodesic box at the supplied position or map center,
  * returning null when its pole/date-line boundary is unsupported.
  * @property {(area:Object|null)=>void} setSamplingActivity Mark the matching committed box or rectangle
  * while a calculation uses it, without changing the selected geometry.
@@ -200,8 +200,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
- * @property {(snapshot:{state:string,message:string,source:string,scope:string}|null)=>void} [onHistogramChange]
- * Receives current histogram participation, owned source/area labels and status without exposing analysis state.
+ * @property {(snapshot:{state:"loading"|"error"|"ready",source:string,scope:string}|null)=>void} [onHistogramChange]
+ * Receives the histogram activity, participating rasters and sampling area for dock navigation.
  * @property {(method:"box"|"whole"|"vector")=>void} [onSamplingMethodChange]
  * Notify composition when the user chooses an area method, so obsolete vector reads can be cancelled.
  * @property {(area:Readonly<Object>|null,change:{waitingForPolygons:boolean,invalidatedArea:Readonly<Object>|null})=>void} [onSamplingAreaChange]
@@ -372,6 +372,7 @@ export function initializeRasterViewer(
     /** @type {Map<string, import("./percentile-controls-view.js").HistogramPercentileSettings>} Pair-local settings by retained view identity. */
     const bivariatePercentiles = new Map();
     let rasterSampleWindowResizeTimeout = null;
+    let boxWheelRemainder = 0;
     let rasterStyleWasEdited = false;
     let activeRasterItem = null;
     let rasterAnalysis = createRasterAnalysisState();
@@ -1354,8 +1355,20 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Render histogram summaries for visible rasters in automatic mode, or
-     * all retained rasters otherwise, with the current analysis key marked.
+     * Check whether the source reader excluded this layer from the sampling box.
+     * @param {Object} session Retained raster with its current sampling result.
+     * @return {boolean} Whether to omit its automatic histogram card.
+     */
+    function isOutsideHistogramBox(session) {
+        const error = session.analysis.selectedRasterStatisticsError;
+        return followsVisibleLayers && session.analysis.selectedRasterBounds !== null &&
+            error instanceof RasterAnalysisRequestError &&
+            error.code === "sampling_box_outside_raster";
+    }
+
+    /**
+     * Render applicable histogram cards in layer order and identify a box
+     * that missed every participating raster.
      *
      * @return {void}
      */
@@ -1365,24 +1378,10 @@ export function initializeRasterViewer(
             onHistogramChange(null);
             return;
         }
-        const summaries = (followsVisibleLayers
-            ? visibleRasterRecords() : mapLayers.retainedRecords)
-            .filter(
-                /**
-                 * Keep only records owned by the raster analysis adapter.
-                 * @param {{adapter:Object}} record Candidate retained layer.
-                 * @return {boolean} Whether this viewer owns the record.
-                 */
-                ({ adapter }) => adapter === rasterMapLayerAdapter
-            )
-            .map(
-                /**
-                 * Convert retained interaction state to histogram presentation.
-                 * @param {{state:Object}} record Raster record with session state.
-                 * @return {Object} Histogram summary from buildLayerHistogramSummary.
-                 */
-                ({ state }) => buildLayerHistogramSummary(state)
-            );
+        const records = followsVisibleLayers ? visibleRasterRecords()
+            : mapLayers.retainedRecords.filter(({ adapter }) => adapter === rasterMapLayerAdapter);
+        const summaries = records.filter(({ state }) => !isOutsideHistogramBox(state))
+            .map(({ state }) => buildLayerHistogramSummary(state));
         const activeRetainedKey = summaries.some(
             /**
              * Check whether active analysis appears among the displayed summaries.
@@ -1393,12 +1392,12 @@ export function initializeRasterViewer(
         )
             ? activeLayerKey
             : null;
-        controlsView.renderLayerHistograms(summaries, activeRetainedKey);
+        const allOutsideBox = records.length > 0 && summaries.length === 0;
+        controlsView.renderLayerHistograms(summaries, activeRetainedKey, allOutsideBox);
         publishHistogramPresentation();
     }
 
-    /** Publish display-only status for the current histogram targets and area.
-     * Uses the same owned sessions as the charts; no additional reads or timers.
+    /** Report activity for the Histograms button and the source and area for its dock context.
      * @return {void}
      */
     function publishHistogramPresentation() {
@@ -1408,23 +1407,21 @@ export function initializeRasterViewer(
             ? visibleRasterRecords().map(record => record.state)
             : activeLayerKey === null ? [] : [mapLayers.getRecord(activeLayerKey)?.state].filter(Boolean);
         if (sessions.length === 0) { onHistogramChange(null); return; }
-        const presentations = sessions.map(getLayerHistogramPresentation);
-        const states = bivariateMode.active ? [pairedHistogramState] : presentations.map(item => item.state);
-        const resizing = rasterSampleWindowResizeTimeout !== null;
-        const loading = resizing || states.some(state => state === "loading" || state === "idle");
-        const failures = states.filter(state => state === "error").length;
-        const state = loading ? "loading" : failures ? "error" : "ready";
+        const states = bivariateMode.active ? [pairedHistogramState] : sessions
+            .filter(session => !isOutsideHistogramBox(session))
+            .map(session => getLayerHistogramPresentation(session).state);
+        const loading = rasterSampleWindowResizeTimeout !== null ||
+            states.some(state => state === "loading" || state === "idle");
+        const state = loading ? "loading" : states.includes("error") ? "error" : "ready";
         const selection = bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling;
         const scope = bivariateMode.active
             ? selection ? `Selected polygons · ${selection.filename}` : bivariateSelectedBounds ? "Sampling box · 2D comparison" : "Whole overlap · 2D comparison"
-            : presentations[0].scope;
+            : getLayerHistogramPresentation(sessions[0]).scope;
         const visibleCount = followsVisibleLayers ? allVisibleRasterRecords().length : sessions.length;
         const participation = visibleCount > sessions.length
             ? `Top ${sessions.length} of ${visibleCount} visible rasters`
             : `${sessions.length} raster layer${sessions.length === 1 ? "" : "s"}`;
-        const progress = resizing ? "Resizing box; results show the previous area…" : loading ? "Updating for this selection…" : failures
-            ? "Some histograms unavailable — see details" : "Ready";
-        onHistogramChange(Object.freeze({state, source: participation, scope, message: `${participation} · ${scope} · ${progress}`}));
+        onHistogramChange(Object.freeze({state, source: participation, scope}));
     }
 
     /**
@@ -3791,7 +3788,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Apply one valid size from either synchronized sample-window control.
+     * Apply a side length from the slider, numeric field or map wheel shortcut.
      *
      * @param {string|number} value Candidate side length in kilometers.
      * @return {boolean} Whether the candidate satisfied the size contract.
@@ -3825,7 +3822,7 @@ export function initializeRasterViewer(
             } else {
                 controlsView.setSampleWindowStatus(
                     `Updating the selected map box to ${sideLengthKm} km × ` +
-                    `${sideLengthKm} km…`
+                    `${sideLengthKm} km. Histograms still show the previous area.`, true
                 );
                 scheduleRasterSampleWindowResize(presentedBounds, resizedBounds, center);
             }
@@ -3843,6 +3840,37 @@ export function initializeRasterViewer(
             }
         }
         return true;
+    }
+
+    /**
+     * Resize the selected box on Alt + vertical scroll before Leaflet handles zoom.
+     * Accumulate small trackpad movements. One wheel step changes the side length
+     * by about ten percent and always moves at least one kilometer within the limits.
+     * @param {WheelEvent} event Wheel input over the map viewport.
+     * @return {void}
+     */
+    function handleSampleBoxWheel(event) {
+        if (!pointerInspectionEnabled || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+            !event.deltaY || !controlsView.isSamplingBoxSelected() ||
+            event.target.closest(".leaflet-control, .leaflet-popup")) {
+            boxWheelRemainder = 0;
+            return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // A wheel notch is commonly reported as 100 pixels, three lines or one page.
+        const unitsPerStep = event.deltaMode === 1 ? 3 : event.deltaMode === 2 ? 1 : 100;
+        const movement = -event.deltaY / unitsPerStep;
+        if (boxWheelRemainder * movement < 0) boxWheelRemainder = 0;
+        boxWheelRemainder += movement;
+        const steps = Math.trunc(boxWheelRemainder);
+        if (!steps) return;
+        boxWheelRemainder -= steps;
+        const current = rasterSampleWindowController.windowSizeKm;
+        const scaled = Math.round(current * 1.1 ** steps);
+        const next = steps > 0 ? Math.max(current + steps, scaled) : Math.min(current + steps, scaled);
+        const size = Math.max(1, Math.min(MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM, next));
+        if (size !== current) setRasterSampleWindowSize(size);
     }
 
     /**
@@ -4422,6 +4450,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapMouseLeave() {
+        boxWheelRemainder = 0;
         rasterSampleWindowController.clearPreview();
         rasterCursorPosition = null;
         cursorSamplesController.clear();
@@ -4964,6 +4993,7 @@ export function initializeRasterViewer(
         }
         cursorValuesView.unbind?.();
         mapContainer.removeEventListener("mouseleave", handleMapMouseLeave);
+        mapContainer.removeEventListener("wheel", handleSampleBoxWheel, true);
         leafletMap.off("mousemove", handleMapMouseMove);
         leafletMap.off("dragstart", handleMapDragStart);
         leafletMap.off("dragend", handleMapDragEnd);
@@ -5038,6 +5068,7 @@ export function initializeRasterViewer(
     leafletMap.on("zoomend", handleMapZoomEnd);
     leafletMap.on("resize", handleMapMouseLeave);
     mapContainer.addEventListener("mouseleave", handleMapMouseLeave);
+    mapContainer.addEventListener("wheel", handleSampleBoxWheel, {capture: true, passive: false});
 
     resetRasterSampleWindow();
     resetRasterStyle();
@@ -5072,10 +5103,11 @@ export function initializeRasterViewer(
         getSelectedArea,
         // Composition reuses these same map-sampling actions from the floating
         // area form; Processing retains its own polygon selection lifecycle.
-        /** Select a map-centered geodesic box without requiring a histogram source.
+        /** Select a geodesic box for area consumers independently of histogram coverage.
+         * @param {{lng:number,lat:number}} [position] Clicked position, defaulting to the map center.
          * @return {Object|null} Captured samplingBox descriptor, or null near a pole/date line.
          */
-        selectSamplingBox: () => rasterSampleWindowController.selectAt(leafletMap.getCenter()) === null
+        selectSamplingBox: (position = leafletMap.getCenter()) => rasterSampleWindowController.selectAt(position) === null
             ? null : rasterSampleWindowController.selectedArea,
         selectWholeRaster: handleClearSampleWindow,
         setSamplingActivity: area => rasterSampleWindowController.setActivityArea(area),

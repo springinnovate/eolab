@@ -35,7 +35,7 @@
           </div>
           <p id="published-map-edit-status" role="status" aria-live="polite">Loading published map…</p>
         </form>
-        <header class="panel-header" id="app-header">
+        <header class="map-panel-header panel-header" id="app-header">
           <div class="panel-identity">
             <h1 id="app-title">TITLE TO BE SET BY CONFIGURATION</h1>
             <p class="subtitle" id="app-subtitle">
@@ -114,15 +114,13 @@
               <span class="panel-header-action-label" id="unavailable-map-layers-label">Unavailable layers</span>
             </button>
             <button
-              class="icon-button"
+              class="map-panel-toggle map-panel-collapse"
               id="collapse-panel"
               type="button"
-              aria-label="Collapse control panel"
+              aria-label="Collapse Catalog and map contents"
               aria-controls="control-panel"
               aria-expanded="true"
-            >
-              <span aria-hidden="true">&#10005;</span>
-            </button>
+            ><span aria-hidden="true">×</span></button>
           </div>
         </header>
         </div>
@@ -549,15 +547,13 @@
       </section>
 
       <button
-        class="panel-opener"
+        class="map-panel-toggle map-panel-toggle--left map-panel-opener"
         id="open-panel"
         type="button"
         aria-controls="control-panel"
         aria-expanded="false"
         hidden
-      >
-        OPEN LABEL TO BE SET BY CONFIGURATION
-      </button>
+      >Catalog &amp; map contents</button>
       <div class="map-position" id="map-position">0.000, 0.000</div>
       <div id="raster-cursor-marker" class="raster-cursor-marker"
         aria-hidden="true" hidden></div>
@@ -588,6 +584,9 @@
         type="button"
         hidden
       >Pixel picker hidden · Press P to show</button>
+      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener"
+        type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
+        aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" role="region" aria-label="Map tools">
         <section id="raster-sampling-tool" aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
@@ -622,12 +621,12 @@
                   </label>
                   <div id="raster-histogram-box-controls"><div class="raster-map-box-controls" id="raster-map-box-controls" hidden>
                     <output id="raster-sample-window-dimensions" for="raster-sample-window-range raster-sample-window-number">600 × 600 km</output>
-                    <div class="raster-sample-window-size">
+                    <div class="raster-sample-window-size" id="raster-sample-window-size">
                       <label for="raster-sample-window-range">
                         <span class="visually-hidden">Box size in kilometers</span>
                         <input id="raster-sample-window-range" type="range"
                           min="0" max="1000" step="any"
-                          aria-describedby="raster-sample-window-status" />
+                          aria-describedby="raster-box-scroll-hint raster-sample-window-status" />
                       </label>
                       <label for="raster-sample-window-number">
                         <span class="visually-hidden">Box size in kilometers</span>
@@ -660,20 +659,22 @@
                 </div>
               </div>
             </details>
-                    <p class="raster-sample-window-status visually-hidden"
-                      id="raster-sample-window-status" role="status"
-                      aria-live="polite" aria-atomic="true">
-                      Select a raster to choose its sample area.
-                    </p>
+            <div id="raster-compact-box-size" hidden></div>
+            <p id="raster-box-scroll-hint" hidden>Alt + scroll on the map to resize the box.</p>
+            <p class="raster-sample-window-status visually-hidden"
+              id="raster-sample-window-status" role="status"
+              aria-live="polite" aria-atomic="true">
+              Select a raster to choose its sample area.
+            </p>
         </section>
-        <div class="map-tools-toolbar-actions">
-          <button id="toggle-map-inspection-dock" class="analysis-panel-action"
-            type="button" aria-controls="map-inspection"
-            aria-expanded="true" hidden>Minimize</button>
-          <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
+        <header class="map-panel-header map-tools-header">
+          <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-collapse"
+            type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="true"
+            aria-label="Collapse map tools" title="Collapse map tools"><span aria-hidden="true">×</span></button>
+          <button id="map-tool-chooser" class="map-tool-chooser" type="button"
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
-            aria-label="Map and analysis tools">Tools <span aria-hidden="true">▾</span></button>
-        </div>
+            title="Choose a map tool"><span id="map-tool-name">Choose a tool</span><span aria-hidden="true">▾</span></button>
+        </header>
         <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
@@ -701,15 +702,14 @@
           <button id="toggle-map-legend" class="workspace-tool-action" type="button" aria-pressed="true">Hide legend</button>
         </div>
       </div>
-      <aside id="map-inspection" popover="manual" aria-labelledby="map-inspection-dock-title" aria-describedby="map-inspection-context">
+      <aside id="map-inspection" popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
         <header class="map-inspection-dock-header">
-          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Analysis results">
             <div class="map-inspection-result-header">
               <div class="map-inspection-raster-actions">
                 <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
-                  aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
+                  aria-pressed="false">Histograms</button>
                 <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
                   aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
                 <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button"
@@ -722,7 +722,6 @@
               <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
                 aria-label="Close feature inspector">×</button>
             </div>
-            <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
             <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
           </nav>
           <div class="map-inspection-navigation">
@@ -811,6 +810,7 @@
             <div class="raster-series-run-controls">
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
+                <button id="raster-series-exact-mean" class="secondary-button" type="button" hidden>Calculate exact mean</button>
                 <button id="raster-series-retry" class="secondary-button" type="button" hidden>Retry failed rasters</button>
                 <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel</button>
                 <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
@@ -1239,6 +1239,7 @@
                 </div>
               </div>
               <div class="raster-histogram-body">
+                <div id="raster-histogram-bar-height"></div>
                 <svg class="raster-histogram-chart" id="raster-histogram-chart"
                   role="img" hidden></svg>
                 <p class="raster-histogram-status" id="raster-histogram-status"

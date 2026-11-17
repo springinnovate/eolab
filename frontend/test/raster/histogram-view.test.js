@@ -110,7 +110,7 @@ test("every bin fits inside labeled axes across container widths", () => {
     }
     const axes = chart.querySelector(".chart-axes");
     const labels = axes.querySelectorAll("text").map(child => child.textContent);
-    assert.ok(labels.includes("Sampled pixels (%)"));
+    assert.match(chart.getAttribute("aria-label"), /Vertical axis: percentage of valid sampled pixels/);
     assert.ok(labels.includes("Raster value"));
     assert.deepEqual(axes.querySelector(".series-chart-y-axis").querySelectorAll("text").map(tick => tick.textContent), ["0", "1", "2"]);
     assert.ok(labels.includes("-10") && labels.includes("30"));
@@ -195,9 +195,13 @@ test("equal values retain exact guide positions and separately focusable letters
   draw();
   const targets = chart.children.find(child => child.classList.contains("raster-histogram-thresholds")).children;
   assert.equal(new Set(targets.map(marker => marker.children[0].getAttribute("x1"))).size, 1);
-  assert.equal(new Set(targets.map(marker => marker.children[3].getAttribute("x"))).size, 3);
-  for (const [guide, tick] of targets.map(marker => marker.children)) {
-    assert.equal(tick.getAttribute("x1"), guide.getAttribute("x1"));
+  const letters = targets.map(marker => Number(marker.children[3].getAttribute("x")));
+  assert.equal(letters[1], Number(targets[1].children[0].getAttribute("x1")));
+  assert.ok(letters[1] - letters[0] >= 20 && letters[2] - letters[1] >= 20);
+  assert.deepEqual(targets.map(marker => marker.children[0].classList.contains("is-coincident")),
+    [false, true, true]);
+  for (const [guide, tick, , label] of targets.map(marker => marker.children)) {
+    assert.equal(tick.getAttribute("x1"), label.getAttribute("x"));
     assert.equal(tick.getAttribute("x2"), guide.getAttribute("x1"));
   }
   targets[1].focus();
@@ -244,8 +248,6 @@ test("raster histogram hover styles emphasize only the active bar", () => {
     stylesheet,
     /\.raster-histogram-bar\.is-hovered\s*\{[^}]*opacity:\s*1[^}]*stroke:/s,
   );
-  assert.match(stylesheet, /\.raster-histogram-threshold-guide\s*\{[^}]*stroke-dasharray:[^}]*visibility:\s*hidden/s);
-  assert.match(stylesheet, /\.raster-histogram-threshold-marker:is\(:hover, :focus-visible\) \.raster-histogram-threshold-guide\s*\{[^}]*visibility:\s*visible/s);
   assert.match(stylesheet, /\.raster-histogram-threshold-target\s*\{[^}]*pointer-events:\s*all/s);
 });
 

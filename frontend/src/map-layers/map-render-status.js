@@ -1,7 +1,7 @@
 /** Compact map-layer loading feedback and recovery, separate from analysis. */
 
 /**
- * Add a status control above the map's zoom buttons.
+ * Show map tile progress and recovery actions in the lower-left map corner.
  * @param {Object} leaflet Leaflet namespace.
  * @param {Object} map Leaflet map.
  * @param {()=>void} retry Retry failed current tiles or plan preparation.
@@ -34,20 +34,24 @@ export function addMapRenderStatus(leaflet, map, retry) {
     control.addTo(map);
     return {
         /**
-         * Display tile counts without claiming a time estimate or rendering percentage.
+         * Show active tile loads or failures and dismiss the control when the viewport is ready.
          * @param {import('./composite-leaflet-renderer.js').MapTileStatus} status Current viewport snapshot.
          * @return {void}
          */
         update(status) {
             const { phase, total, loaded, failed } = status;
-            root.hidden = phase === "idle";
+            root.hidden = phase === "idle" || phase === "complete";
             root.setAttribute("data-phase", phase);
+            if (root.hidden) {
+                message.textContent = "";
+                button.hidden = true;
+                return;
+            }
             const count = total ? ` · ${loaded} of ${total} visible tiles loaded` : "";
             const missing = failed ? ` · ${failed} missing` : "";
             const text = phase === "preparing" ? "Preparing map contents…"
                 : phase === "error" ? `Map contents unavailable. ${status.message || "Try again."}`
                 : phase === "incomplete" ? `Map contents incomplete${count}${missing}`
-                : phase === "complete" ? "Map contents loaded"
                 : `${phase === "retrying" ? "Retrying" : "Loading"} map contents…${count}${missing}`;
             if (message.textContent !== text) message.textContent = text;
             button.hidden = !(failed > 0 || phase === "error");

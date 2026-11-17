@@ -64,14 +64,7 @@ test("application map is bounded to one strict WGS 84 world", () => {
     center: [20, -25],
     zoom: 2,
   });
-  assert.deepEqual(calls.zoomControl, {
-    options: {
-      position: "bottomleft",
-      zoomInTitle: "Zoom in (hold Shift for smaller steps)",
-      zoomOutTitle: "Zoom out (hold Shift for smaller steps)",
-    },
-    map: leafletMap,
-  });
+  assert.equal(leafletMap.zoomControl, undefined);
 });
 
 test("basemap tile requests do not wrap into another world", () => {
@@ -158,28 +151,12 @@ test("wheel modifiers use separate native batches and restore ordinary sensitivi
   assert.equal(map.options.wheelPxPerZoomLevel, 60);
 });
 
-test("fine controls and focused-map keys use tenths without replacing ordinary actions", () => {
+test("focused-map keys retain fine and ordinary zoom", () => {
   const {leafletMap: map, calls} = fineZoomMap();
-  const fine = {shiftKey: true}, normal = {shiftKey: false};
-  map._animatingZoom = true;
-  map.zoomControl._zoomIn(fine);
-  map.zoomControl._zoomOut(fine);
-  assert.equal(calls.zoomTransitionsFinished, 1);
-  assert.deepEqual(calls.zoomIn, {delta: 0.1, options: {animate: false}});
-  assert.deepEqual(calls.zoomOut, {delta: 0.1, options: {animate: false}});
-  map.zoomControl._zoomIn(normal);
-  map.zoomControl._zoomOut(normal);
-  assert.equal(calls.nativeZoomIn, normal);
-  assert.equal(calls.nativeZoomOut, normal);
-  map.zoomControl._disabled = true;
-  calls.zoomIn = null;
-  map.zoomControl._zoomIn(fine);
-  assert.equal(calls.zoomIn, null);
-
   const key = {shiftKey: true, keyCode: 187};
   map._animatingZoom = true;
   map.keyboard._onKeyDown(key);
-  assert.equal(calls.zoomTransitionsFinished, 2);
+  assert.equal(calls.zoomTransitionsFinished, 1);
   assert.deepEqual(calls.setZoom, {zoom: 2.1, options: {animate: false}});
   assert.equal(calls.stoppedEvent, key);
   for (const event of [{shiftKey: false, keyCode: 187},
