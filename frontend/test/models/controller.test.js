@@ -30,7 +30,9 @@ function fixture(overrides = {}, viewOverride = null) {
     let sequence = 0; let handlers;
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusPage: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
+    const tabContext = { label: "" };
     const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
+        onViewLabel: label => { tabContext.label = label; },
         getCatalogItem: source => api.getCatalogItem(source),
         loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
         prepareVector: async source => ({selection: {...selection, filter: source.filter}, matched: 3, total: 8}), editVectorFilter: async request => { filterRequests.push(request); },
@@ -43,7 +45,7 @@ function fixture(overrides = {}, viewOverride = null) {
             return filter;
         }, onOpen: () => controller.setActive(true),
         onClose: () => controller.setActive(false), newId: () => String(++sequence).padStart(32, "0")});
-    return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers};
+    return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers, tabContext};
 }
 
 test("Models navigation retains an unfinished setup and focuses actual model and run names", async t => {
@@ -56,6 +58,7 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     view.elements["library-items"].children[0].dispatchEvent(new Event("click"));
     const draft = h.controller.state.draft, setup = view.setup;
     assert.equal(view.elements["setup-heading"].textContent, model.title);
+    assert.equal(h.tabContext.label, model.title);
     assert.equal(doc.activeElement, view.elements["setup-heading"]);
     assert.equal(setup.fields.getAttribute("aria-labelledby"), "models-setup-heading");
     setup.label.value = "My unfinished analysis"; setup.label.dispatchEvent(new Event("input"));
@@ -64,6 +67,7 @@ test("Models navigation retains an unfinished setup and focuses actual model and
         view.navigation[page].focus(); view.navigation[page].dispatchEvent(new Event("click"));
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(h.controller.state.page, page);
+        assert.equal(h.tabContext.label, { library: "Choose a tool", setup: model.title, runs: "Runs" }[page]);
         assert.equal(doc.activeElement, view.navigation[page], "navigation keeps its native button focus");
         for (const [name, button] of Object.entries(view.navigation)) assert.equal(button.getAttribute("aria-pressed"), String(name === page));
         assert.equal(view.navigation.setup.disabled, false);
@@ -81,6 +85,7 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     assert.equal(view.navigation.setup.getAttribute("aria-pressed"), "false");
     assert.equal(doc.activeElement, view.run.title);
     assert.equal(view.run.title.textContent, saved.label);
+    assert.equal(h.tabContext.label, saved.label);
     assert.equal(view.run.title.tabIndex, -1);
     view.navigation.setup.dispatchEvent(new Event("click"));
     assert.equal(h.controller.state.draft, draft);
