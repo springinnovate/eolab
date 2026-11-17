@@ -28,7 +28,10 @@ from eolab_app.raster.exact_source import (
 )
 from eolab_app.raster.models import (
     CanonicalWgs84Bounds,
-    RasterBoxMean,
+    BoxStatistic,
+    PercentAbove,
+    RasterBoxPreview,
+    RasterPreviewValue,
     RasterHistogram,
     RasterPercentiles,
     RasterStatistics,
@@ -317,31 +320,75 @@ def selected_raster_area_for_polygon_input(
     )
 
 
-# A mean can use all the representatives in an overview. A 2,048-pixel
-# window retains detail in sparse rasters while fitting the interactive byte limit.
-BOX_MEAN_MAX_OVERVIEW_DIMENSION = 2048
-BOX_MEAN_ALGORITHM = "box-mean-native-or-nearest-v1"
+# A denser window than the histogram grid retains detail in sparse rasters.
+BOX_PREVIEW_MAX_OVERVIEW_DIMENSION = 2048
+BOX_PREVIEW_ALGORITHM = "box-statistics-native-or-nearest-v1"
 
 
-def read_sampling_box_mean(
+def _summarize_box_pixels(
+    valid: NDArray[numpy.float64],
+    statistics: tuple[BoxStatistic, ...],
+    method: Literal["exact", "estimated", "unavailable"],
+    unit: str | None,
+) -> RasterBoxPreview:
+    """Calculate the requested statistics over the same included pixel values.
+
+    Args:
+        valid: Finite, unmasked pixel values inside the box, including zeros.
+        statistics: Ordered built-in statistics and strict percentage thresholds.
+        method: Source of this sample, shared by every returned value.
+        unit: Declared band unit for the mean and population standard deviation.
+
+    Returns:
+        Values in request order, with nulls for an empty or unavailable sample.
+    """
+    results: dict[BoxStatistic, float] = {}
+    if valid.size:
+        if "mean" in statistics or "stdev" in statistics:
+            magnitude = max(abs(float(valid.min())), abs(float(valid.max())))
+            # A power of two preserves mantissas while keeping both moments finite.
+            bound, exponent = math.frexp(magnitude)
+            scaled = numpy.ldexp(valid, -exponent)
+            if "mean" in statistics:
+                mean = float(numpy.mean(scaled))
+                results["mean"] = math.ldexp(max(-bound, min(bound, mean)), exponent)
+            if "stdev" in statistics:
+                # Subtract a nearby origin before centering tightly clustered values.
+                deviation = float(numpy.std(scaled - scaled[0]))
+                # Both the mean magnitude and the population deviation are at most
+                # the largest absolute input. Rounding at that bound must stay finite.
+                results["stdev"] = math.ldexp(min(deviation, bound), exponent)
+        for statistic in dict.fromkeys(statistics):
+            if isinstance(statistic, PercentAbove):
+                results[statistic] = 100 * numpy.count_nonzero(valid > statistic.threshold) / valid.size
+    return RasterBoxPreview(method=method, values=tuple(
+        RasterPreviewValue(value=results.get(statistic), unit="%" if isinstance(statistic, PercentAbove) else unit)
+        for statistic in statistics
+    ))
+
+
+def read_sampling_box_preview(
     source: RasterData,
     sampling_area: SamplingBoxArea,
     cancellation_requested: RasterReadCancellationCheck | None = None,
-) -> RasterBoxMean:
-    """Average stored values using the exact box's pixel-center inclusion rule.
+    *,
+    statistics: tuple[BoxStatistic, ...],
+) -> RasterBoxPreview:
+    """Calculate all requested box statistics from one native or overview window.
 
     A nearest-neighbor pyramid samples one original value per regularly spaced
     cell. Zeros participate and NoData and nonfinite representatives are omitted.
     Means of averaged cells with unknown valid counts, or of mode/min/max
-    overviews, cannot estimate this statistic on the same basis.
+    overviews, cannot estimate these statistics on the same basis.
 
     Args:
         source: Authorized original raster or admitted temporal observation.
         sampling_area: Validated geodesic sampling box.
         cancellation_requested: Last-waiter cancellation check.
+        statistics: Ordered statistics to calculate from this shared sample.
 
     Returns:
-        Native or estimated mean with its units and method. An empty exact box
+        Native or estimated values with units and a shared method. An empty exact box
         has a null value. Unsuitable or empty overview samples are unavailable.
 
     Raises:
@@ -366,15 +413,13 @@ def read_sampling_box_mean(
             method = dataset.tags(ns="IMAGE_STRUCTURE").get("OVERVIEW_RESAMPLING")
             if method is None:
                 method = dataset.tags(ns="rio_overview").get("resampling", "")
-            if method.lower() != "nearest":
-                return RasterBoxMean(method="unavailable", value=None, unit=unit)
-            sample = read_bounded_overview(
+            sample = None if method.lower() != "nearest" else read_bounded_overview(
                 dataset, window, 1, 1, cancellation_requested,
-                maximum_dimension=BOX_MEAN_MAX_OVERVIEW_DIMENSION,
+                maximum_dimension=BOX_PREVIEW_MAX_OVERVIEW_DIMENSION,
                 prefer_finest=True, maximum_decoded_bytes=EXACT_SOURCE_MAX_DECODED_BYTES,
             )
             if sample is None:
-                return RasterBoxMean(method="unavailable", value=None, unit=unit)
+                return _summarize_box_pixels(numpy.empty(0, dtype=numpy.float64), statistics, "unavailable", unit)
         height, width = sample.shape
         transform = window_transform(window, dataset.transform) * rasterio.Affine.scale(
             window.width / width, window.height / height
@@ -385,12 +430,12 @@ def read_sampling_box_mean(
         )
         valid = sample.data[inside & ~numpy.ma.getmaskarray(sample)].astype(numpy.float64, copy=False)
         require_active_raster_read(cancellation_requested)
-        if not valid.size:
-            return RasterBoxMean(method="exact" if native else "unavailable", value=None, unit=unit)
-        # Scaling keeps the arithmetic mean finite even near the float64 limits.
-        scale = max(abs(float(valid.min())), abs(float(valid.max())))
-        value = float(numpy.mean(valid / scale)) * scale if scale else 0.0
-        return RasterBoxMean(method="exact" if native else "estimated", value=value, unit=unit)
+        precision: Literal["exact", "estimated", "unavailable"] = "exact"
+        if native is None:
+            precision = "estimated" if valid.size else "unavailable"
+        preview = _summarize_box_pixels(valid, statistics, precision, unit)
+        require_active_raster_read(cancellation_requested)
+        return preview
 
 
 def read_raster_statistics(

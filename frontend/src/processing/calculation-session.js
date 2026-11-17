@@ -1,5 +1,6 @@
 /** Save raster and temporal calculation inputs for recovery after a tab reload. */
 import { labeledRasterSource } from "../raster-source.js";
+import { samplingBoxFormula } from "../sampling-box-statistics.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
 const CLIENT = /^raster-series:(0|[1-9][0-9]{0,15})$/;
@@ -143,17 +144,19 @@ export class CalculationSessionStorage {
                 !Array.isArray(presentation.names) || presentation.names.length !== value.intent.calculations.length ||
                 presentation.names.some(name => typeof name !== "string" || name.length > 80) ||
                 value.intent.calculations.some(formula => !/^stat-[1-9][0-9]*$/.test(formula.label) || !Number.isSafeInteger(Number(formula.label.slice(5))))) return null;
-            if (presentation.boxMeans !== undefined) {
-                const means = presentation.boxMeans;
-                if (!Array.isArray(means) || means.length > 5 || typeof presentation.exactBox !== "boolean" ||
-                    means.some(mean => !Number.isSafeInteger(mean?.id) || mean.id < 1 ||
-                        typeof mean.label !== "string" || mean.label.length > 80) ||
-                    new Set(means.map(mean => mean.id)).size !== means.length) return null;
+            if (presentation.previewFormulas !== undefined) {
+                const previews = presentation.previewFormulas;
+                if (!Array.isArray(previews) || previews.length > 5 || typeof presentation.exactBox !== "boolean" ||
+                    previews.some(formula => !Number.isSafeInteger(formula?.id) || formula.id < 1 ||
+                        typeof formula.label !== "string" || formula.label.length > 80 ||
+                        (formula.unit != null && typeof formula.unit !== "string")) ||
+                    new Set(previews.map(formula => formula.id)).size !== previews.length) return null;
                 const labels = new Set(value.intent.calculations.map(formula => formula.label));
-                for (const mean of means) {
-                    const label = "stat-" + mean.id;
+                for (const formula of previews) {
+                    const label = "stat-" + formula.id;
                     const captured = value.intent.calculations.find(formula => formula.label === label);
-                    if (captured && captured.expression !== "mean(a)") return null;
+                    const definition = samplingBoxFormula(formula.preview);
+                    if (!definition || (captured && captured.expression !== definition.expression)) return null;
                     labels.add(label);
                 }
                 if (labels.size > 5) return null;

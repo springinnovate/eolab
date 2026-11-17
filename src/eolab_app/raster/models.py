@@ -27,7 +27,7 @@ RasterStatisticsCacheKey = tuple[
     tuple[object, ...],
     str,
     tuple[object, ...],
-    tuple[int, ...],
+    tuple[object, ...],
 ]
 CategoryCode = Annotated[
     int, Field(strict=True, ge=-9_007_199_254_740_991, le=9_007_199_254_740_991)
@@ -159,6 +159,16 @@ class Wgs84Bounds(BaseModel):
         return (self.west, self.south, self.east, self.north)
 
 
+class PercentAbove(BaseModel):
+    """Request the percentage of valid box pixels strictly above a finite threshold."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    threshold: float = Field(alias="percentAbove", strict=True, allow_inf_nan=False)
+
+
+BoxStatistic = Literal["mean", "stdev"] | PercentAbove
+
+
 class RasterStatisticsArea(BaseModel):
     """Choose one sampling area and optional category codes for raster statistics.
 
@@ -169,7 +179,10 @@ class RasterStatisticsArea(BaseModel):
             absence selects the other explicit area or the whole raster.
         sampling_box: Optional kilometer-based geodesic box, exclusive of the other areas.
         polygon_area: Optional temporary browser-owned polygon reference.
-        measure: Return a distribution or the arithmetic mean of a sampling box.
+        measure: Return a distribution or one preview of the selected box statistics.
+        preview_statistics: Ordered statistics to compute from the same valid pixels.
+            Use the literal strings "mean" or "stdev", or an object such as
+            {"percentAbove": 10} for a percentage.
         category_values: Optional distinct numeric classification codes. Labels,
             colors and opacity remain outside the analysis contract.
     """
@@ -186,7 +199,10 @@ class RasterStatisticsArea(BaseModel):
     sampling_box: Wgs84SamplingBox | None = Field(default=None, alias="samplingBox")
     polygon_area: PolygonAreaReference | None = Field(default=None, alias="polygonArea")
 
-    measure: Literal["distribution", "mean"] = "distribution"
+    measure: Literal["distribution", "preview"] = "distribution"
+    preview_statistics: tuple[BoxStatistic, ...] | None = Field(
+        default=None, alias="previewStatistics", min_length=1, max_length=5
+    )
     category_values: tuple[CategoryCode, ...] | None = Field(
         default=None, alias="categoryValues", min_length=1, max_length=256
     )
@@ -218,8 +234,11 @@ class RasterStatisticsArea(BaseModel):
             raise ValueError(
                 "selectedBounds, samplingBox, catalogSelection and polygonArea are mutually exclusive"
             )
-        if self.measure == "mean" and (self.sampling_box is None or self.category_values is not None):
-            raise ValueError("A mean requires a samplingBox without categoryValues")
+        if self.measure == "preview":
+            if self.sampling_box is None or self.preview_statistics is None or self.category_values is not None:
+                raise ValueError("A preview requires samplingBox and previewStatistics without categoryValues")
+        elif self.preview_statistics is not None:
+            raise ValueError("previewStatistics requires a preview request")
         if self.category_values is not None and len(set(self.category_values)) != len(
             self.category_values
         ):
@@ -358,19 +377,26 @@ class RasterPercentiles(BaseModel):
     p95: FiniteFloat
 
 
-class RasterBoxMean(BaseModel):
-    """Arithmetic mean of valid stored pixel values inside the requested box.
+class RasterPreviewValue(BaseModel):
+    """One box statistic in source units or percent, with null for an empty sample."""
+
+    value: FiniteFloat | None
+    unit: str | None
+
+
+class RasterBoxPreview(BaseModel):
+    """Statistics calculated together from one sample inside the requested box.
 
     Attributes:
         method: Exact for a complete native window, estimated for a nearest
-            overview, or unavailable when an overview cannot represent the mean.
-        value: Finite arithmetic mean, or None when no value can be supplied.
-        unit: Original band unit, when declared, without scaling or conversion.
+            overview, or unavailable when no representative sample can be read.
+        values: One value per requested statistic, in request order. Mean and
+            population standard deviation use the source band unit. Percentages
+            use "%" and count strictly greater values among all valid pixels.
     """
 
     method: Literal["exact", "estimated", "unavailable"]
-    value: FiniteFloat | None
-    unit: str | None
+    values: tuple[RasterPreviewValue, ...]
 
 
 class RasterHistogram(BaseModel):

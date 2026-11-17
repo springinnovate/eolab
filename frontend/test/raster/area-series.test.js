@@ -64,7 +64,7 @@ function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
         getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const jobs=new ProcessingJobs(api,clock);
     const calculationRequests=new CalculationRequests({api,jobs,storage,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
-    const area=new RasterSeriesCalculations({requests:calculationRequests,clock,readBoxMean: overrides.readBoxMean});
+    const area=new RasterSeriesCalculations({requests:calculationRequests,clock,readBoxPreview: overrides.readBoxPreview});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
     const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){},onAreaChoice});
     controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(box(0),"First box");
@@ -1442,39 +1442,49 @@ test("composed filtered zoom preserves statistics filter intent and rejects obso
     } finally {globalThis.fetch = originalFetch; c.close(); h.close();}
 });
 
-test("sampling-box means appear per raster, cancel on replacement and run exact only on request", async () => {
+test("sampling-box statistics use one read per raster, cancel together and run exact only on request", async () => {
     const reads = [];
-    const h = fixture({readBoxMean(source, box, signal) {
+    const h = fixture({readBoxPreview(source, box, statistics, signal) {
         const reply = deferred();
-        reads.push({source, box, signal, reply});
+        reads.push({source, box, statistics, signal, reply});
         return reply.promise;
     }});
     const selection = longitude => ({kind: "samplingBox", samplingBox: {center: {longitude, latitude: 42}, sideLengthKm: 1255}});
+    h.controller.addFormula("stdev");
+    h.controller.addFormula("percent");
+    h.controller.addFormula("percent");
+    h.controller.editFormula(4, {threshold: -2.5});
     h.controller.setArea(selection(-93)); await h.open();
     assert.equal(reads.length, 2);
+    assert.deepEqual(reads.map(read => read.statistics), Array(2).fill(["mean", "stdev", {percentAbove: 10}, {percentAbove: -2.5}]));
     h.controller.setArea(selection(-94)); await h.tick();
     assert.ok(reads.slice(0, 2).every(read => read.signal.aborted));
-    for (const old of reads.slice(0, 2)) old.reply.resolve({method: "estimated", value: 999, unit: null});
-    reads[2].reply.resolve({method: "estimated", value: 0, unit: "USD"}); await flush();
+    const values = [0, 3, 12, 75].map((value, i) => ({value, unit: i < 2 ? "USD" : "%"}));
+    for (const old of reads.slice(0, 2)) old.reply.resolve({method: "estimated", values: values.map(row => ({...row, value: 999}))});
+    reads[2].reply.resolve({method: "estimated", values}); await flush();
     assert.equal(h.view.state.rows[0].statisticLabel, "Estimated mean");
     assert.equal(h.view.state.rows[0].value, 0);
-    reads[3].reply.resolve({method: "exact", value: 18, unit: "USD"}); await flush();
-    assert.deepEqual(h.view.state.rows.map(row => row.statisticLabel), ["Estimated mean", "Exact mean"]);
-    assert.ok(h.view.state.area.canCalculateExactMean);
-    assert.deepEqual(csvParse(h.controller.exportCsv()).map(row => [row.statistic, row.method, row.value, row.job_id]),
+    reads[3].reply.resolve({method: "exact", values: [{value: 18, unit: "USD"}, ...values.slice(1)]}); await flush();
+    const names = ["mean", "standard deviation", "percent above 10", "percent above -2.5"];
+    assert.deepEqual(h.view.state.rows.map(row => row.statisticLabel), ["Estimated", "Exact"].flatMap(method => names.map(name => method + " " + name)));
+    assert.ok(h.view.state.area.canCalculateExactStatistics);
+    const csv = csvParse(h.controller.exportCsv());
+    assert.deepEqual(csv.filter(row => row.formula === "mean(a)").map(row => [row.statistic, row.method, row.value, row.job_id]),
         [["Estimated mean", "estimated", "0", ""], ["Exact mean", "exact", "18", ""]]);
+    assert.deepEqual(csv.slice(0, 4).map(row => [row.value, row.unit]), [["0","USD"], ["3","USD"], ["12","%"], ["75","%"]]);
     assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 0);
-    h.view.actions.onExactMean(); await h.tick();
+    h.view.actions.onExactStatistics(); await h.tick();
     assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 1);
     await h.finish();
-    assert.ok(h.view.state.rows.every(row => row.statisticLabel === "Exact mean"));
+    assert.ok(h.view.state.rows.every(row => row.method === "exact"));
+    assert.deepEqual(h.view.state.rows.slice(0, 4).map(row => row.unit), ["USD","USD","%","%"]);
     h.controller.setArea(selection(-95)); await h.tick();
     assert.equal(reads.length, 6);
     h.close();
 });
 
 test("a custom mean remains exact alongside an unavailable built-in estimate", async () => {
-    const h = fixture({readBoxMean: async () => ({method: "unavailable", value: null, unit: null})});
+    const h = fixture({readBoxPreview: async () => ({method: "unavailable", values: [{value: null, unit: null}]})});
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("custom");
     h.controller.editFormula(2, {label: "My exact formula", expression: "mean(a)"});
@@ -1485,6 +1495,68 @@ test("a custom mean remains exact alongside an unavailable built-in estimate", a
     await h.finish(); await h.finish();
     assert.deepEqual(h.view.state.rows.slice(0, 2).map(row => [row.state, row.method]),
         [["error", "unavailable"], ["value", null]]);
-    assert.ok(h.view.state.area.canCalculateExactMean);
+    assert.ok(h.view.state.area.canCalculateExactStatistics);
     h.close();
+});
+
+test("standard deviation and threshold percentage share a preview without selecting mean", async () => {
+    const reads = [];
+    const h = fixture({readBoxPreview: async (source, box, statistics) => {
+        reads.push({source, box, statistics});
+        return {method: "estimated", values: [{value: 3, unit: null}, {value: 25, unit: "%"}]};
+    }});
+    h.controller.addFormula("stdev");
+    h.controller.addFormula("percent");
+    h.controller.removeFormula(1);
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    await h.open();
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 0, "previewable area statistics should not launch native jobs");
+    assert.deepEqual(reads.map(read => read.statistics), Array(2).fill(["stdev", {percentAbove: 10}]));
+    assert.deepEqual(h.view.state.rows.slice(0, 2).map(row => [row.value, row.method]), [[3,"estimated"], [25,"estimated"]]);
+    h.close();
+});
+
+test("duplicate views share a raster preview while maximum runs exactly and retries independently", async () => {
+    const reads = [];
+    const h = fixture({readBoxPreview: async (source, box, statistics) => {
+        reads.push(statistics);
+        return {method: "estimated", values: [{value: 7, unit: "m"}]};
+    }});
+    h.controller.updateAvailableRasters([source("1"), {...source("1"), key: "copy", label: "Second view"}]);
+    h.controller.addFormula("max");
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    await h.open();
+    assert.deepEqual(reads, [["mean"]]);
+    assert.deepEqual(h.view.state.rows.map(row => row.state), ["value", "waiting", "value", "waiting"]);
+    for (const [, intent] of h.requests.filter(([kind]) => kind === "submit")) {
+        assert.deepEqual(intent.calculations, [{label: "stat-2", expression: "max(a)"}]);
+    }
+    await h.finish("failed");
+    await h.finish();
+    h.view.actions.onRetry(); await flush();
+    assert.equal(reads.length, 1);
+    await h.finish();
+    assert.deepEqual(h.view.state.rows.map(row => [row.state, row.method]), [
+        ["value", "estimated"], ["value", null], ["value", "estimated"], ["value", null],
+    ]);
+    h.close();
+});
+
+test("reloading an exact box calculation restores the chosen threshold, units and pending jobs", async () => {
+    const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 1, unit: "m"}, {value: 20, unit: "%"}]})});
+    h.controller.addFormula("percent");
+    h.controller.editFormula(2, {threshold: 4.5});
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    await h.open();
+    h.view.actions.onExactStatistics(); await h.tick();
+    const originals = [...h.server.values()];
+    h.close();
+    const restored = fixture({}, h.data);
+    for (const job of originals) restored.server.set(job.jobId, job);
+    await restored.controller.start();
+    await restored.finish(); await restored.finish();
+    assert.deepEqual(restored.view.state.rows.slice(0, 2).map(row => [row.statisticLabel, row.unit]),
+        [["Exact mean", "m"], ["Exact percent above 4.5", "%"]]);
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    restored.close();
 });

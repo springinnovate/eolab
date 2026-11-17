@@ -3,6 +3,7 @@
 import math
 from itertools import product
 from pathlib import Path
+from unittest.mock import patch
 from numpy.typing import NDArray
 
 import numpy as np
@@ -22,8 +23,10 @@ from eolab_app.raster.bounded_window import selected_raster_area_for_sampling_bo
 from eolab_app.raster.models import (
     CatalogRasterStatisticsRequest,
     CatalogRasterPairRequest,
+    PercentAbove,
 )
-from eolab_app.raster.statistics import read_raster_statistics, read_sampling_box_mean
+from eolab_app.raster.statistics import read_raster_statistics, read_sampling_box_preview
+from eolab_app.raster.sample_grid import read_bounded_overview
 from eolab_app.raster.paired_statistics import read_raster_paired_statistics
 from eolab_app.raster.categorical_statistics import read_raster_categorical_statistics
 from eolab_app.processing.aggregate_models import AggregateArea, AggregatePlanRequest
@@ -257,13 +260,14 @@ def test_processing_aggregate_clip_and_hectares_use_the_same_box(
     assert not area.geometries and "geometries" not in area.model_dump(
         exclude_defaults=True
     )
-    spec = make_spec(path, ["mean(a)", "count(a)", "areaha(a >= 0)"], area)
+    spec = make_spec(path, ["mean(a)", "count(a)", "areaha(a >= 0)", "stdev(a)", "100 * count(a > 10) / count(a)"], area)
     aggregate_dir = tmp_path / "aggregate"
     aggregate_dir.mkdir()
     result = calculate_raster_statistics_for_area(path, spec, aggregate_dir, LIMITS)
-    box_mean = read_sampling_box_mean(path, SamplingBoxArea(BOX))
-    assert box_mean.method == "exact"
-    assert box_mean.value == pytest.approx(float(result.rows[0]["value"]), rel=1e-13)
+    preview = read_sampling_box_preview(path, SamplingBoxArea(BOX), statistics=("mean", "stdev", PercentAbove(percentAbove=10)))
+    assert preview.method == "exact"
+    assert [row.value for row in preview.values] == pytest.approx([float(result.rows[i]["value"]) for i in (0, 3, 4)], rel=1e-13)
+    assert preview.values[2].unit == "%"
     ring = reference_box_ring(BOX)
     outcomes = reference_numeric_outcomes(values, transform, False)
     means = [float(outcome.mean()) for outcome in outcomes]
@@ -351,8 +355,20 @@ def test_sampling_box_requests_binding_and_cache_identity_preserve_rectangles() 
     with pytest.raises(ValidationError):
         ClipArea(kind="bounds", bounds=sampling_box_bounds(BOX), samplingBox=BOX)
 
+    for fields in (
+        {"measure": "preview", "samplingBox": descriptor},
+        {"measure": "preview", "previewStatistics": ["mean"]},
+        {"measure": "preview", "samplingBox": descriptor, "previewStatistics": ["max"]},
+        {"measure": "preview", "samplingBox": descriptor, "previewStatistics": [{"percentAbove": float("inf")}]},
+        {"measure": "preview", "samplingBox": descriptor, "previewStatistics": ["mean"], "categoryValues": [1]},
+        {"samplingBox": descriptor, "previewStatistics": ["stdev"]},
+    ):
+        with pytest.raises(ValidationError):
+            CatalogRasterStatisticsRequest(**SOURCE, **fields)
+
+
 @pytest.mark.parametrize("method", ["nearest", "average", "mode", "unknown", "masked"])
-def test_mean_uses_only_representative_overviews(tmp_path: Path, method: str) -> None:
+def test_box_statistics_share_one_representative_overview(tmp_path: Path, method: str) -> None:
     """Keep valid zeros and sparse peaks, and reject levels with unknown weights.
 
     Args:
@@ -378,13 +394,45 @@ def test_mean_uses_only_representative_overviews(tmp_path: Path, method: str) ->
         if method != "unknown":
             target.update_tags(ns="rio_overview", resampling=algorithm)
     box = Wgs84SamplingBox(center={"longitude": 0, "latitude": 0}, sideLengthKm=225)
-    mean = read_sampling_box_mean(path, SamplingBoxArea(box))
+    statistics = ("mean", "stdev", PercentAbove(percentAbove=0), PercentAbove(percentAbove=800))
+    with patch("eolab_app.raster.statistics.read_bounded_overview", wraps=read_bounded_overview) as read:
+        preview = read_sampling_box_preview(path, SamplingBoxArea(box), statistics=statistics)
     if method != "nearest":
-        assert (mean.method, mean.value) == ("unavailable", None)
+        assert preview.method == "unavailable" and [row.value for row in preview.values] == [None] * 4
         return
+    read.assert_called_once()
     area = AggregateArea(kind="samplingBox", bounds=sampling_box_bounds(box), samplingBox=box)
-    spec = make_spec(path, ["mean(a)"], area)
+    spec = make_spec(path, ["mean(a)", "stdev(a)", "100 * count(a > 0) / count(a)", "100 * count(a > 800) / count(a)"], area)
     native = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
-    assert mean.method == "estimated"
-    assert 50 < mean.value < 125
-    assert mean.value == pytest.approx(float(native.rows[0]["value"]), rel=0.02)
+    assert preview.method == "estimated"
+    assert 50 < preview.values[0].value < 125
+    assert [row.value for row in preview.values] == pytest.approx([float(row["value"]) for row in native.rows], rel=0.02)
+    assert preview.values[-1].value == 0
+
+
+@pytest.mark.parametrize(
+    ("values", "threshold", "expected"),
+    [
+        ([0.0, 1.0, float("inf"), float("nan")], 0, (0.5, 0.5, 50)),
+        ([float("nan")] * 4, 10, (None, None, None)),
+        ([1e15, 1e15 + 1] * 2, 1e15, (1e15 + 0.5, 0.5, 50)),
+        ([-np.finfo(float).max, np.finfo(float).max] * 2, 0, (0, np.finfo(float).max, 50)),
+    ],
+)
+def test_exact_box_preview_values(
+    tmp_path: Path, values: list[float], threshold: float, expected: tuple[float | None, ...]
+) -> None:
+    """Verify native pixel inclusion, units, empty samples and population moments.
+
+    Args:
+        tmp_path: Directory for the original four-pixel raster.
+        values: Stored band values inside the box.
+        threshold: Exclusive cutoff for the percentage.
+        expected: Mean, population standard deviation and valid-pixel percentage.
+    """
+    path = write_source(tmp_path / "box.tif", np.array(values).reshape(2, 2))
+    box = Wgs84SamplingBox(center={"longitude": 0.01, "latitude": 9.99}, sideLengthKm=10)
+    preview = read_sampling_box_preview(path, SamplingBoxArea(box), statistics=("mean", "stdev", PercentAbove(percentAbove=threshold)))
+    assert preview.method == "exact"
+    assert tuple(row.value for row in preview.values) == expected
+    assert [row.unit for row in preview.values] == ["m", "m", "%"]
