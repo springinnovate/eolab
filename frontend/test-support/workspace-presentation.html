@@ -126,6 +126,10 @@
       firstWord.setEnd(toolName.firstChild, "Download".length);
       check(firstWord.getClientRects().length === 1 && isReachable(expandLeft) && isReachable(chooser),
         "The tool title wraps mid-word or covers the left panel tab");
+      const catalogTab = expandLeft.getBoundingClientRect();
+      const sampleArea = document.querySelector("#raster-sampling-tool").getBoundingClientRect();
+      check(catalogTab.right <= sampleArea.left || catalogTab.bottom <= sampleArea.top,
+        "The sample area overlaps the left panel tab");
       inspection.hideRasterClips();
       collapseRight.click();
       await settleLayout();

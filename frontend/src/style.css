@@ -5130,6 +5130,7 @@ summary:hover > .raster-disclosure-chevron {
     --left-panel-tab-width: min(12rem, 35vw);
   }
   .map-tools-header { order: -3; }
+  .map-panel-opener { gap: 4px; padding-inline: 6px; }
   #app.is-control-panel-collapsed:has(#map-tools-toolbar:not([hidden])) #open-panel {
     max-inline-size: var(--left-panel-tab-width);
   }
