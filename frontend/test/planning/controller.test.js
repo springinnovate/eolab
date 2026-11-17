@@ -5,6 +5,7 @@ import {PlanningController} from "../../src/planning/controller.js";
 const TOOL_ID = "10000000-0000-4000-8000-000000000001";
 const LAYER_ID = "20000000-0000-4000-8000-000000000001";
 const INTERVENTION_ID = "30000000-0000-4000-8000-000000000001";
+const DRAWING_ID = "50000000-0000-4000-8000-000000000001";
 
 /** Return an externally completed operation for race tests. @return {{promise:Promise<unknown>,resolve:Function,reject:Function}} Deferred operation. */
 function deferred() {
@@ -61,6 +62,32 @@ function configure(controller, parcelKey = "view-a") {
     controller.newTool(); controller.editTitle("Restoration choices"); controller.chooseLayer("aoi", "view-a");
     controller.chooseLayer("parcels", parcelKey); controller.chooseIdField("parcel_id"); controller.addIntervention();
     controller.editIntervention(controller.state.draft.interventions[0].id, "Reforestation");
+}
+
+/** Add a committed drawing choice whose server source has not been prepared yet.
+ * @param {Object} f Controller fixture. @param {string} [key="drawn"] Runtime view key.
+ * @return {Object} Mutable descriptor whose server reference is set after preparation.
+ */
+function addDrawing(f, key = "drawn") {
+    const choice = {key, label: "Drawn parcels", source: {localLayerId: key}, builtInId: "id",
+        idFields: [{name: "id", type: "str"}], featureCount: 2, filterSummary: "All drawn polygons"};
+    f.choices.push(choice);
+    const originalExport = f.controller.exportLayer;
+    f.controller.exportLayer = current => {
+        if (current === key && !f.definitions.has(key)) throw new Error("Save this drawing before exporting its reference.");
+        return originalExport(current);
+    };
+    f.controller.refreshMapLayers();
+    return choice;
+}
+
+/** Return portable view settings for one already admitted drawing source.
+ * @return {Object} Path-free drawing reference, without copied polygon geometry.
+ */
+function drawingDefinition() {
+    return {drawingLayerId: DRAWING_ID, isCustom: true, customName: "Drawn parcels", visible: true, opacity: 0.7,
+        appearance: {color: "#123456", outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true},
+        filter: {enabled: false, match: "all", rules: []}};
 }
 
 test("same view in both roles saves once, keeps intervention IDs and reads live filters at save", async () => {
@@ -164,4 +191,92 @@ test("successful save ignores server object-key ordering but still notices chang
     }});
     configure(f.controller); await f.controller.save(); assert.equal(f.view.state.dirty, false);
     f.definitions.get("view-a").filter.enabled = true; f.controller.refreshMapLayers(); assert.equal(f.view.state.dirty, true);
+});
+
+test("drawn parcels use automatic IDs and prepare their source once before a same-layer tool save", async () => {
+    const f = fixture({validateIds: async () => { throw new Error("Drawings must not use the Catalog ID endpoint"); }});
+    const choice = addDrawing(f), preparation = deferred(), preparedKeys = [];
+    f.controller.prepareLayers = keys => { preparedKeys.push(keys); return preparation.promise; };
+    configure(f.controller, choice.key); f.controller.chooseLayer("aoi", choice.key);
+    assert.equal(f.view.state.draft.parcelIdField, "id");
+    f.controller.refreshMapLayers(); await f.controller.checkIds();
+    assert.deepEqual(preparedKeys, [], "ordinary rendering and automatic IDs never create a server source");
+    assert.equal(f.view.state.dirty, true);
+    const saving = f.controller.save();
+    assert.deepEqual(preparedKeys, [[choice.key]]);
+    assert.equal(f.submissions.length, 0, "the tool cannot refer to a source that is still being saved");
+    assert.equal(f.view.state.saving, true);
+    f.definitions.set(choice.key, drawingDefinition()); choice.source.drawingLayerId = DRAWING_ID;
+    preparation.resolve(); await saving;
+    assert.equal(f.submissions.length, 1);
+    const saved = f.submissions[0];
+    assert.equal(saved.aoiLayerId, saved.parcelLayerId);
+    assert.equal(saved.parcelIdField, "id");
+    assert.deepEqual(saved.layers.map(layer => layer.definition), [drawingDefinition()]);
+    assert.equal(JSON.stringify(saved).includes("coordinates"), false);
+    assert.equal(f.view.state.dirty, false);
+});
+
+for (const drawnRole of ["aoi", "parcels"]) {
+    test(`a drawn ${drawnRole} can be combined with a Catalog role and retain each ordinary filter`, async () => {
+        const f = fixture(), choice = addDrawing(f), preparedKeys = [];
+        configure(f.controller);
+        f.controller.chooseLayer(drawnRole, choice.key);
+        f.controller.prepareLayers = async keys => {
+            preparedKeys.push(keys); f.definitions.set(choice.key, drawingDefinition());
+            f.definitions.get(choice.key).filter = {enabled: true, match: "all", rules: [{field: "name", operator: "eq", value: "West"}]};
+            choice.source.drawingLayerId = DRAWING_ID;
+        };
+        await f.controller.save();
+        assert.deepEqual(preparedKeys, [[choice.key]]);
+        const saved = f.submissions[0];
+        assert.equal(saved.layers.length, 2);
+        assert.equal(saved.parcelIdField, drawnRole === "parcels" ? "id" : "parcel_id");
+        const drawn = saved.layers.find(layer => layer.id === (drawnRole === "aoi" ? saved.aoiLayerId : saved.parcelLayerId));
+        assert.equal(drawn.definition.drawingLayerId, DRAWING_ID);
+        assert.equal(drawn.definition.filter.rules[0].value, "West");
+        assert.equal(saved.layers.find(layer => layer !== drawn).definition.filter.enabled, false);
+    });
+}
+
+test("invalid form choices never create a drawing source and preparation failure retains the draft", async () => {
+    const f = fixture(), choice = addDrawing(f); let preparations = 0;
+    f.controller.prepareLayers = async () => { preparations++; throw Object.assign(new Error("The drawing changed elsewhere. Your local drawing is retained."), {status: 409}); };
+    configure(f.controller, choice.key);
+    f.controller.editTitle(""); await f.controller.save(); assert.equal(preparations, 0);
+    f.controller.editTitle("Restoration");
+    const intervention = f.view.state.draft.interventions[0].id;
+    f.controller.editIntervention(intervention, " "); await f.controller.save(); assert.equal(preparations, 0);
+    f.controller.editIntervention(intervention, "Reforestation"); await f.controller.save();
+    assert.equal(preparations, 1); assert.equal(f.submissions.length, 0);
+    assert.equal(f.view.state.saving, false); assert.equal(f.view.state.dirty, true);
+    assert.equal(f.view.state.draft.parcelKey, choice.key);
+    assert.equal(f.view.state.error, "The drawing changed elsewhere. Your local drawing is retained.");
+});
+
+test("a disappearing drawing or destroyed editor cannot submit a tool after source preparation", async () => {
+    for (const change of ["remove", "destroy"]) {
+        const f = fixture(), choice = addDrawing(f), preparation = deferred();
+        configure(f.controller, choice.key);
+        f.controller.prepareLayers = () => preparation.promise;
+        const saving = f.controller.save();
+        if (change === "remove") f.setChoices(f.choices.filter(candidate => candidate !== choice));
+        else f.controller.destroy();
+        f.definitions.set(choice.key, drawingDefinition()); preparation.resolve(); await saving;
+        assert.equal(f.submissions.length, 0);
+        if (change === "remove") assert.match(f.view.state.error, /available custom layers/);
+    }
+});
+
+test("drawn-source identity changes clear obsolete Catalog validation while preserving automatic IDs", async () => {
+    const pending = deferred(), f = fixture({validateIds: () => pending.promise}), first = addDrawing(f), second = addDrawing(f, "drawn-two");
+    configure(f.controller); const checking = f.controller.checkIds();
+    f.controller.chooseLayer("parcels", first.key);
+    pending.resolve({featureCount: 99}); await checking;
+    assert.equal(f.view.state.idCheck.phase, "idle"); assert.equal(f.view.state.draft.parcelIdField, "id");
+    const firstIdentity = f.controller.validationIdentity();
+    f.controller.chooseLayer("parcels", second.key);
+    assert.notEqual(f.controller.validationIdentity(), firstIdentity);
+    f.controller.chooseIdField("name");
+    assert.equal(f.view.state.draft.parcelIdField, "id", "a drawn layer always uses its producer-owned ID");
 });

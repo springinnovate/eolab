@@ -429,10 +429,19 @@ model; missing pixels are never treated as zero.
 ### Configure a planning tool
 
 Open **Tools → Planning tools** to save an area, parcel layer and allowed
-intervention names. First add polygon datasets from the Catalog and use
-**Duplicate vector** to create custom layers. Choose those custom layers for the
-area and parcels, then choose an original text or integer parcel ID field.
-IDs must be nonempty and unique across the whole source dataset.
+intervention names. Choose custom polygon layers drawn in EOLab or created with
+**Duplicate vector** from Catalog datasets. Either kind can supply the area or
+parcels, and one layer can supply both. Catalog parcels require an original text
+or integer ID field, nonempty and unique across the whole source. Drawn parcels
+use their built-in polygon IDs; their names do not need to be unique.
+
+Saving a tool saves its selected drawings to this instance as reusable linked
+sources. Later saved polygon edits update the source used by every linked tool;
+reopening reads its latest saved polygons. Finish or cancel an unfinished polygon
+before saving the tool. Tool references permit reading the drawings,
+while only the browser that created a source can edit it. Other local drawings
+remain on the device. View names, filters and appearance stay independent of
+the source. Removing a map layer does not delete its saved drawing source.
 
 Use the ordinary layer filters while configuring the tool; saving includes their
 current settings. Reopening a tool adds editable custom views with those settings
@@ -449,6 +458,9 @@ but never another browser's scenarios. Each scenario saves one allowed
 intervention per original parcel ID; clearing it leaves the parcel unassigned.
 Changing filters or the area never deletes saved assignments. Edits require the
 last read scenario and tool revisions so conflicting saves return an error.
+Deleting a drawn polygon also retains its assignment, which can be cleared or
+reused if undo restores that same polygon ID. Drawing saves have their own
+revision checks; a conflict retains local edits instead of overwriting newer data.
 The participant map/list editor and model execution are not available yet.
 
 ### Collaborate with others

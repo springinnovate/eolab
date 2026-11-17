@@ -17,6 +17,7 @@ import httpx2
 
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.drawings.models import DrawingLayer
 from eolab_app.planning.models import (
     MAX_REQUEST_BYTES,
     PlanningError,
@@ -557,6 +558,7 @@ def test_application_authorizes_original_polygon_metadata_and_live_filters(
         validate_parcel_ids: Callable[
             [ParcelIdRequest], Awaitable[ParcelIdValidationResponse]
         ],
+        read_drawing: Callable[[UUID], Awaitable[DrawingLayer]],
     ) -> PlanningToolService:
         """Capture the actual composition callback while retaining the ordinary service.
 
@@ -564,12 +566,15 @@ def test_application_authorizes_original_polygon_metadata_and_live_filters(
             store: Production Planning store, unused by this source check.
             authorize_layer: Actual production Catalog polygon authorization.
             validate_parcel_ids: Existing native parcel validation dependency.
+            read_drawing: Composition's current saved-drawing reader.
 
         Returns:
             Normally composed Planning service.
         """
         captured.append(authorize_layer)
-        return PlanningToolService(store, authorize_layer, validate_parcel_ids)
+        return PlanningToolService(
+            store, authorize_layer, validate_parcel_ids, read_drawing
+        )
 
     def catalog_response(request: httpx2.Request) -> httpx2.Response:
         """Return admitted Catalog metadata without any rendering assessment.

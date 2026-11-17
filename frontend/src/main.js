@@ -38,6 +38,7 @@ import {
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
 import { AnnotationPanelView } from "./annotations/panel-view.js";
 import { AnnotationController } from "./annotations/controller.js";
+import { DrawingSourceApi } from "./annotations/source-api.js";
 import "./annotations/style.css";
 import { AnnotationSessionsController } from "./annotation-sessions/controller.js";
 import "./annotation-sessions/style.css";
@@ -1667,10 +1668,10 @@ async function initializeCatalog(
         planning = new PlanningController({
             api: new PlanningApiClient(),
             view: new PlanningView(document),
-            /** List custom Catalog polygons and their original ID field candidates.
+            /** List custom Catalog polygons and local drawings through their source owners.
              * @return {Object[]} Detached choices from the current ordinary map views.
              */
-            getLayerChoices: () => mapLayerController.retainedRecords.flatMap(record => {
+            getLayerChoices: () => [...mapLayerController.retainedRecords.flatMap(record => {
                 if (!record.entry.isCustom || record.adapter !== vectorMapLayerAdapter) return [];
                 const source = record.adapter.describeSource(record);
                 if (source.origin !== "catalog" || source.geometryKind !== "polygon") return [];
@@ -1683,18 +1684,51 @@ async function initializeCatalog(
                         && ["str", "string", "int", "int16", "int32", "int64"].includes(field.type.toLowerCase().split(":")[0])),
                     filterSummary: vectorFilterSummary(filter ?? EMPTY_VECTOR_FILTER),
                 }];
-            }),
-            exportLayer: key => savedMapViewController.exportCatalogLayer(key),
+            }), ...(annotations?.drawingLayers() ?? []).map(layer => ({
+                key: layer.key, label: layer.label,
+                source: {localLayerId: layer.localLayerId, ...(layer.drawingLayerId ? {drawingLayerId: layer.drawingLayerId} : {})},
+                builtInId: "id", idFields: [{name: "id", type: "str"}], featureCount: layer.polygonCount,
+                filterSummary: vectorFilterSummary(layer.filter),
+            }))],
+            /** Persist drawings before a tool retains their reusable source references.
+             * @param {string[]} keys Selected live map layers.
+             * @return {Promise<void>} Completion after every selected drawing's committed edits are saved.
+             */
+            prepareLayers: async keys => {
+                const drawings = new Set((annotations?.drawingLayers() ?? []).map(layer => layer.key));
+                for (const key of keys) if (drawings.has(key)) await annotations.ensureDrawingSource(key);
+            },
+            exportLayer: key => annotations?.exportDrawingLayer(key) ?? savedMapViewController.exportCatalogLayer(key),
             /** Restore each durable view once, then bind it to its fresh map key.
              * @param {Object[]} layers Saved view IDs and ordinary layer definitions.
              * @param {()=>boolean} isCurrent Whether this tool is still being opened.
              * @return {Promise<Object[]>} View IDs paired with restored keys or failures.
              */
             restoreLayers: async (layers, isCurrent) => {
-                const restored = await savedMapViewController.restoreCatalogLayers(
-                    layers.map(layer => layer.definition), isCurrent,
-                );
-                return layers.map((layer, index) => ({id: layer.id, ...restored[index]}));
+                await annotationsReady;
+                const results = new Map(), attached = [];
+                try {
+                    const catalog = layers.filter(layer => !layer.definition.drawingLayerId);
+                    if (catalog.length) {
+                        const restored = await savedMapViewController.restoreCatalogLayers(catalog.map(layer => layer.definition), isCurrent);
+                        for (const [index, result] of restored.entries()) {
+                            if (result.key) attached.push(result.key);
+                            results.set(catalog[index].id, result);
+                        }
+                        const failure = restored.find(result => !result.key);
+                        if (failure) throw new Error(failure.error);
+                    }
+                    for (const layer of layers.filter(value => value.definition.drawingLayerId)) {
+                        const key = await annotations.restoreDrawingLayer(layer.definition, isCurrent);
+                        if (!key) throw new Error("Layer restoration was cancelled.");
+                        attached.push(key); results.set(layer.id, {key, error: null});
+                    }
+                    if (!isCurrent()) throw new Error("Layer restoration was cancelled.");
+                    return layers.map(layer => ({id: layer.id, ...results.get(layer.id)}));
+                } catch (error) {
+                    for (const key of attached) mapLayerController.removeKey(key);
+                    return layers.map(layer => ({id: layer.id, key: null, error: error.message}));
+                }
             },
             editLayerFilter: key => vectorFilterControls.open(key),
             onOpen: () => mapInspection.showPlanning(),
@@ -1855,6 +1889,7 @@ async function initializeCatalog(
             onOpen: () => mapInspection.showAnnotations(),
             onClose: () => { annotations.clearInspection(); mapInspection.hideAnnotations(); } });
         annotations = new AnnotationController({
+            sourceApi: new DrawingSourceApi(),
             panel: annotationPanel,
             mapSlug: namedMapSlug?.length <= 80 && MAP_LINK_NAME_PATTERN.test(namedMapSlug) ? namedMapSlug : null,
             leaflet: L,

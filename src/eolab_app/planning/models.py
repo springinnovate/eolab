@@ -1,12 +1,19 @@
 """Validate durable Planning roles, original parcel IDs and intervention choices."""
 
 from datetime import datetime
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+    model_validator,
+)
 
-from eolab_app.attribute_filter import VectorFilter
+from eolab_app.attribute_filter import VectorFilter, validate_filter
 from eolab_app.map_layer_documents import MapLayer, Title
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.parcel_models import ParcelField
@@ -21,19 +28,59 @@ class PlanningDocumentPart(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class PlanningDrawingAppearance(PlanningDocumentPart):
+    """Retain a drawn layer's ordinary polygon styling independently of its source."""
+
+    color: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
+    outline: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
+    weight: Annotated[float, Field(strict=True, ge=0, le=10)]
+    fillOpacity: Annotated[float, Field(strict=True, ge=0, le=1)]
+    labels: StrictBool
+
+
+class PlanningDrawingView(PlanningDocumentPart):
+    """Reference a live drawing source with view-local appearance and filters.
+
+    The opaque drawingLayerId permits reading the latest saved polygons, never
+    editing the source. No geometry or source revision is captured in the tool.
+    """
+
+    drawingLayerId: UUID
+    isCustom: Literal[True] = True
+    customName: Title | None = None
+    visible: StrictBool
+    legendIncluded: StrictBool = True
+    opacity: Annotated[float, Field(strict=True, ge=0, le=1)]
+    appearance: PlanningDrawingAppearance
+    filter: VectorFilter = Field(default_factory=VectorFilter)
+
+    @model_validator(mode="after")
+    def validate_drawing_filter(self) -> Self:
+        """Require the ordinary name/note filter fields supplied by drawings.
+
+        Returns:
+            This view with an admitted ordinary annotation filter.
+
+        Raises:
+            ValueError: A rule does not match the source's text attributes.
+        """
+        validate_filter(self.filter, {"name": "str", "note": "str"})
+        return self
+
+
 class PlanningLayer(PlanningDocumentPart):
-    """Bind a durable UUID to one ordinary custom Catalog vector-layer document.
+    """Bind a durable UUID to an ordinary Catalog or drawn polygon view.
 
     The UUID identifies this stored definition, never a browser map row. The
     definition retains ordinary appearance, filters and calculated fields.
     """
 
     id: UUID
-    definition: MapLayer
+    definition: MapLayer | PlanningDrawingView
 
     @model_validator(mode="after")
-    def validate_custom_catalog_vector(self) -> Self:
-        """Require a custom mounted-vector view and a valid ordinary filter shape.
+    def validate_custom_polygon_view(self) -> Self:
+        """Require a custom polygon view and validate its source-specific filter.
 
         Returns:
             This layer; its source owner checks polygon/schema eligibility later.
@@ -41,10 +88,26 @@ class PlanningLayer(PlanningDocumentPart):
         Raises:
             ValueError: The view is not custom/vector or its source/filter is invalid.
         """
+        if isinstance(self.definition, PlanningDrawingView):
+            return self
         if not self.definition.isCustom or self.definition.style.kind != "vector":
             raise ValueError("Choose a custom Catalog polygon layer for Planning")
         self.to_selection_request()
         return self
+
+    def source_identity(self) -> tuple[str, ...]:
+        """Identify the original source independently of its map view and filter.
+
+        Returns:
+            Source kind plus its opaque drawing ID or Catalog collection/item IDs.
+        """
+        if isinstance(self.definition, PlanningDrawingView):
+            return ("drawing", str(self.definition.drawingLayerId))
+        return (
+            "catalog",
+            self.definition.catalogItem.collection,
+            self.definition.catalogItem.id,
+        )
 
     def to_selection_request(self) -> CatalogVectorFilterRequest:
         """Return Catalog identity and this view's live filter for authorization.
@@ -53,8 +116,10 @@ class PlanningLayer(PlanningDocumentPart):
             Path-free vector request retaining ordered calculated-field definitions.
 
         Raises:
-            ValueError: The portable source or filter is incompatible.
+            ValueError: This is a drawing view or its Catalog filter is incompatible.
         """
+        if isinstance(self.definition, PlanningDrawingView):
+            raise ValueError("Drawn layers use their drawing source reference")
         return CatalogVectorFilterRequest(
             collectionId=self.definition.catalogItem.collection,
             itemId=self.definition.catalogItem.id,
@@ -109,6 +174,12 @@ class PlanningToolDocument(PlanningDocumentPart):
             raise ValueError(
                 "Every Planning layer must be bound to the AOI or parcel role"
             )
+        parcels = next(layer for layer in self.layers if layer.id == self.parcelLayerId)
+        if (
+            isinstance(parcels.definition, PlanningDrawingView)
+            and self.parcelIdField != "id"
+        ):
+            raise ValueError("Drawn parcels use their built-in polygon IDs")
         choice_ids = [choice.id for choice in self.interventions]
         labels = [choice.label.casefold() for choice in self.interventions]
         if len(set(choice_ids)) != len(choice_ids) or len(set(labels)) != len(labels):
