@@ -35,7 +35,7 @@
           </div>
           <p id="published-map-edit-status" role="status" aria-live="polite">Loading published map…</p>
         </form>
-        <header class="panel-header" id="app-header">
+        <header class="map-panel-header panel-header" id="app-header">
           <div class="panel-identity">
             <h1 id="app-title">TITLE TO BE SET BY CONFIGURATION</h1>
             <p class="subtitle" id="app-subtitle">
@@ -114,13 +114,13 @@
               <span class="panel-header-action-label" id="unavailable-map-layers-label">Unavailable layers</span>
             </button>
             <button
-              class="map-panel-toggle map-panel-toggle--left"
+              class="map-panel-toggle map-panel-collapse"
               id="collapse-panel"
               type="button"
               aria-label="Collapse Catalog and map contents"
               aria-controls="control-panel"
               aria-expanded="true"
-            ></button>
+            ><span aria-hidden="true">×</span></button>
           </div>
         </header>
         </div>
@@ -667,14 +667,14 @@
               Select a raster to choose its sample area.
             </p>
         </section>
-        <div class="map-tools-toolbar-actions">
-          <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-toggle--right"
+        <header class="map-panel-header map-tools-header">
+          <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-collapse"
             type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="true"
-            aria-label="Collapse map tools" title="Collapse map tools"></button>
-          <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
+            aria-label="Collapse map tools" title="Collapse map tools"><span aria-hidden="true">×</span></button>
+          <button id="map-tool-chooser" class="map-tool-chooser" type="button"
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
-            aria-label="Map and analysis tools">Tools <span aria-hidden="true">▾</span></button>
-        </div>
+            title="Choose a map tool"><span id="map-tool-name">Choose a tool</span><span aria-hidden="true">▾</span></button>
+        </header>
         <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
@@ -702,9 +702,8 @@
           <button id="toggle-map-legend" class="workspace-tool-action" type="button" aria-pressed="true">Hide legend</button>
         </div>
       </div>
-      <aside id="map-inspection" popover="manual" aria-labelledby="map-inspection-dock-title" aria-describedby="map-inspection-context">
+      <aside id="map-inspection" popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
         <header class="map-inspection-dock-header">
-          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Analysis results">
             <div class="map-inspection-result-header">

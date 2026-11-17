@@ -9,6 +9,8 @@
   <p>Serve the frontend with Vite, then open this page. These browser checks use the current application markup, CSS and presentation controllers; Node does not run them.</p>
   <pre id="results" role="status">Running...</pre>
   <script type="module">
+    import L from "leaflet";
+    import { OnMapLegend } from "../src/map-layers/on-map-legend.js";
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
     import { MapInspectionController } from "../src/map-inspection-controller.js";
@@ -59,6 +61,38 @@
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
     }
 
+    /** Hide the on-map legend with its own ×, then restore it from the active tool's chooser.
+     * @param {MapInspectionController} inspection Mounted right panel with the Style tool selected.
+     * @returns {void}
+     * @throws {Error} If either action loses its focus target or changes the active tool.
+     */
+    function checkLegendControls(inspection) {
+      const map = L.map(document.querySelector("#map"), {zoomControl: false, attributionControl: false}).setView([0, 0], 2);
+      const command = document.querySelector("#toggle-map-legend");
+      const menu = document.querySelector("#workspace-tool-actions");
+      const legend = new OnMapLegend(L, map, {
+        toggleButton: command, onRestoreRequested: () => inspection.showToolActions(),
+        onChange() {}, onInclusion() {},
+      });
+      try {
+        document.querySelector("#toggle-map-inspection-dock").click();
+        const hide = legend.root.querySelector('button[aria-label="Hide map legend"]');
+        check(hide.textContent === "×", "The legend has no local ×");
+        hide.click();
+        check(legend.root.hidden && menu.matches(":popover-open") &&
+          command.textContent === "Show legend" && command === document.activeElement,
+          "The legend's × did not hide it and focus its restore command");
+        command.click();
+        check(!legend.root.hidden && !menu.matches(":popover-open") && document.activeElement === legend.collapse,
+          "Show legend did not restore the legend and its keyboard focus");
+        check(document.querySelector("#map-tool-name").textContent === "Style" &&
+          inspection.activeTool === "style", "The legend command replaced the foreground tool");
+      } finally {
+        legend.remove();
+        map.remove();
+      }
+    }
+
     /** Check that both panel tabs free map space, retain context, and stay reachable.
      * @param {EomapLayoutController} layout Mounted workspace shell.
      * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
@@ -72,10 +106,18 @@
       const expandLeft = document.querySelector("#open-panel");
       const collapseRight = document.querySelector("#toggle-map-inspection-dock");
       const expandRight = document.querySelector("#open-map-tools");
-      const chooser = document.querySelector("#map-tools-more-summary");
+      const chooser = document.querySelector("#map-tool-chooser");
+      const toolName = chooser.querySelector("#map-tool-name");
+      check(toolName.textContent === "Choose a tool", "The empty panel has no named tool chooser");
+      const leftButton = collapseLeft.getBoundingClientRect(), rightButton = collapseRight.getBoundingClientRect();
+      check(leftButton.width === rightButton.width && leftButton.height === rightButton.height &&
+        leftButton.width === leftButton.height && [collapseLeft, collapseRight].every(button =>
+          button.textContent.trim() === "×" && getComputedStyle(button).borderRadius === "50%"),
+        "The expanded panels have different collapse controls");
       collapseLeft.click();
       inspection.showStyle("Land cover");
       await settleLayout();
+      check(toolName.textContent === "Style" && isReachable(chooser), "The active tool name cannot open the chooser");
       check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
       collapseRight.click();
       await settleLayout();
@@ -96,6 +138,7 @@
       check(isReachable(document.querySelector("#close-layer-style")) &&
         document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
         "The style editor did not reopen on Land cover");
+      checkLegendControls(inspection);
       inspection.destroy();
     }
 
