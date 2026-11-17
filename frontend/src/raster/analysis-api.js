@@ -158,26 +158,26 @@ export async function loadRasterStatistics(
     return statistics;
 }
 
-/** Get the native or estimated mean of original pixels in one geodesic box.
+/** Read the selected statistics from one window of one original raster.
  * @param {Object} source Original raster identity.
  * @param {Object} box Validated sampling box with its center and side length.
+ * @param {import("../sampling-box-statistics.js").BoxStatistic[]} statistics Ordered box statistics to calculate together.
  * @param {AbortSignal} signal Aborts the read when the box changes.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
- * @return {Promise<{method:string,value:number|null,unit:string|null}>} Mean and precision, or an unavailable sample.
- * @throws {Error} If the request fails or the result violates the mean contract.
+ * @return {Promise<import("../sampling-box-statistics.js").SamplingBoxPreview>} Sample method and one result per requested statistic.
+ * @throws {Error} If the request fails or the returned values do not match the request.
  */
-export async function loadSamplingBoxMean(source, box, signal, fetchImplementation = globalThis.fetch) {
+export async function loadSamplingBoxPreview(source, box, statistics, signal, fetchImplementation = globalThis.fetch) {
     const response = await requestRasterStatistics(source,
-        {...analysisSourceBody(source), samplingBox: box, measure: "mean"}, signal, fetchImplementation);
-    const mean = await response.json();
-    if (!["exact", "estimated", "unavailable"].includes(mean.method) ||
-        !(mean.value === null || Number.isFinite(mean.value)) ||
-        (mean.method === "estimated" && mean.value === null) ||
-        (mean.method === "unavailable" && mean.value !== null) ||
-        !(mean.unit === null || typeof mean.unit === "string")) {
-        throw new Error("The raster mean could not be read.");
+        {...analysisSourceBody(source), samplingBox: box, measure: "preview", previewStatistics: statistics}, signal, fetchImplementation);
+    const preview = await response.json();
+    if (!["exact", "estimated", "unavailable"].includes(preview?.method) ||
+        !Array.isArray(preview.values) || preview.values.length !== statistics.length ||
+        preview.values.some(row => !row || !(row.unit === null || typeof row.unit === "string") ||
+            (row.value === null ? preview.method === "estimated" : !Number.isFinite(row.value) || preview.method === "unavailable"))) {
+        throw new Error("The sampling-box statistics could not be read.");
     }
-    return mean;
+    return preview;
 }
 
 /** Post an authorized statistic request and translate structured analysis errors.

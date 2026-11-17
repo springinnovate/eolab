@@ -82,7 +82,7 @@ import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
-import { loadSamplingBoxMean } from "./raster/analysis-api.js";
+import { loadSamplingBoxPreview } from "./raster/analysis-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
 import { RasterSeriesView } from "./raster/series-view.js";
@@ -1033,7 +1033,7 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
-    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxMean: loadSamplingBoxMean });
+    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxPreview: loadSamplingBoxPreview });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),

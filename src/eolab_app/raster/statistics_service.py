@@ -39,7 +39,7 @@ from eolab_app.raster.models import (
     CatalogRasterStatisticsRequest,
     CanonicalWgs84Bounds,
     RasterPairedStatistics,
-    RasterBoxMean,
+    RasterBoxPreview,
     RasterStatistics,
     RasterStatisticsCacheKey,
 )
@@ -65,9 +65,9 @@ from eolab_app.raster.read_cancellation import (
     require_active_raster_read,
 )
 from eolab_app.raster.statistics import (
-    BOX_MEAN_ALGORITHM,
-    BOX_MEAN_MAX_OVERVIEW_DIMENSION,
-    read_sampling_box_mean,
+    BOX_PREVIEW_ALGORITHM,
+    BOX_PREVIEW_MAX_OVERVIEW_DIMENSION,
+    read_sampling_box_preview,
     NoRasterBoundsOverlapError,
     NoValidRasterSamplesError,
     RASTER_STATISTICS_ALGORITHM,
@@ -98,7 +98,7 @@ def _private_vector_area(area: RasterSamplingArea) -> bool:
     )
 
 
-_SingleRasterResult = RasterStatistics | RasterBoxMean
+_SingleRasterResult = RasterStatistics | RasterBoxPreview
 _StatisticsResult = _SingleRasterResult | RasterPairedStatistics
 _StatisticsReader = Callable[
     [RasterData, RasterSamplingArea, RasterReadCancellationCheck | None], _SingleRasterResult
@@ -278,7 +278,7 @@ class RasterStatisticsService:
             upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
-            The requested distribution or box mean with its sampling method.
+            The requested distribution or box preview with its sampling method.
 
         Raises:
             RasterFeatureError: If source, area or bounded reading is unavailable.
@@ -326,13 +326,13 @@ class RasterStatisticsService:
             else None
         )
         algorithm = RASTER_STATISTICS_ALGORITHM
-        parameters = raster_statistics_policy_parameters()
+        parameters: tuple[object, ...] = raster_statistics_policy_parameters()
         reader = self._statistics_reader
-        if request.measure == "mean":
-            algorithm = BOX_MEAN_ALGORITHM
-            parameters = (*parameters, BOX_MEAN_MAX_OVERVIEW_DIMENSION)
-            # The request model permits this measure only for SamplingBoxArea.
-            reader = cast(_StatisticsReader, read_sampling_box_mean)
+        if request.preview_statistics is not None:
+            algorithm = BOX_PREVIEW_ALGORITHM
+            parameters = (*parameters, BOX_PREVIEW_MAX_OVERVIEW_DIMENSION, *request.preview_statistics)
+            # The request model admits preview statistics only for a sampling box.
+            reader = cast(_StatisticsReader, partial(read_sampling_box_preview, statistics=request.preview_statistics))
         elif category_values is not None:
             algorithm = CATEGORICAL_STATISTICS_ALGORITHM
             parameters = (*categorical_statistics_policy_parameters(), len(category_values), *category_values)

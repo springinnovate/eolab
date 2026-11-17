@@ -217,6 +217,11 @@ or measure how many hectares exceed a chosen threshold. Hidden raster layers
 can still be selected as calculation inputs.
 
 The built-in choices cover common statistics, counts, areas and percentages.
+For a sampling box, **Mean**, **Standard deviation**, and **Percent above a
+threshold** share a preview. Large boxes show **Estimated** values when a
+suitable raster overview is available. Choose **Calculate exact statistics**
+to use the original pixels. Open the percentage statistic's **Edit** control
+to change its threshold. Other statistics and custom formulas use the original pixels.
 For a custom formula, `a` means each selected raster in turn:
 
 | Question | Formula |
