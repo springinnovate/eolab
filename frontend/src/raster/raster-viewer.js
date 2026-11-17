@@ -1354,8 +1354,20 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Render histogram summaries for visible rasters in automatic mode, or
-     * all retained rasters otherwise, with the current analysis key marked.
+     * Check whether the source reader excluded this layer from the sampling box.
+     * @param {Object} session Retained raster with its current sampling result.
+     * @return {boolean} Whether to omit its automatic histogram card.
+     */
+    function isOutsideHistogramBox(session) {
+        const error = session.analysis.selectedRasterStatisticsError;
+        return followsVisibleLayers && session.analysis.selectedRasterBounds !== null &&
+            error instanceof RasterAnalysisRequestError &&
+            error.code === "sampling_box_outside_raster";
+    }
+
+    /**
+     * Render applicable histogram cards in layer order and identify a box
+     * that missed every participating raster.
      *
      * @return {void}
      */
@@ -1365,24 +1377,10 @@ export function initializeRasterViewer(
             onHistogramChange(null);
             return;
         }
-        const summaries = (followsVisibleLayers
-            ? visibleRasterRecords() : mapLayers.retainedRecords)
-            .filter(
-                /**
-                 * Keep only records owned by the raster analysis adapter.
-                 * @param {{adapter:Object}} record Candidate retained layer.
-                 * @return {boolean} Whether this viewer owns the record.
-                 */
-                ({ adapter }) => adapter === rasterMapLayerAdapter
-            )
-            .map(
-                /**
-                 * Convert retained interaction state to histogram presentation.
-                 * @param {{state:Object}} record Raster record with session state.
-                 * @return {Object} Histogram summary from buildLayerHistogramSummary.
-                 */
-                ({ state }) => buildLayerHistogramSummary(state)
-            );
+        const records = followsVisibleLayers ? visibleRasterRecords()
+            : mapLayers.retainedRecords.filter(({ adapter }) => adapter === rasterMapLayerAdapter);
+        const summaries = records.filter(({ state }) => !isOutsideHistogramBox(state))
+            .map(({ state }) => buildLayerHistogramSummary(state));
         const activeRetainedKey = summaries.some(
             /**
              * Check whether active analysis appears among the displayed summaries.
@@ -1393,7 +1391,8 @@ export function initializeRasterViewer(
         )
             ? activeLayerKey
             : null;
-        controlsView.renderLayerHistograms(summaries, activeRetainedKey);
+        const allOutsideBox = records.length > 0 && summaries.length === 0;
+        controlsView.renderLayerHistograms(summaries, activeRetainedKey, allOutsideBox);
         publishHistogramPresentation();
     }
 
@@ -1407,14 +1406,16 @@ export function initializeRasterViewer(
             ? visibleRasterRecords().map(record => record.state)
             : activeLayerKey === null ? [] : [mapLayers.getRecord(activeLayerKey)?.state].filter(Boolean);
         if (sessions.length === 0) { onHistogramChange(null); return; }
-        const presentations = sessions.map(getLayerHistogramPresentation);
-        const states = bivariateMode.active ? [pairedHistogramState] : presentations.map(item => item.state);
-        const loading = rasterSampleWindowResizeTimeout !== null || states.some(state => state === "loading" || state === "idle");
+        const states = bivariateMode.active ? [pairedHistogramState] : sessions
+            .filter(session => !isOutsideHistogramBox(session))
+            .map(session => getLayerHistogramPresentation(session).state);
+        const loading = rasterSampleWindowResizeTimeout !== null ||
+            states.some(state => state === "loading" || state === "idle");
         const state = loading ? "loading" : states.includes("error") ? "error" : "ready";
         const selection = bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling;
         const scope = bivariateMode.active
             ? selection ? `Selected polygons · ${selection.filename}` : bivariateSelectedBounds ? "Sampling box · 2D comparison" : "Whole overlap · 2D comparison"
-            : presentations[0].scope;
+            : getLayerHistogramPresentation(sessions[0]).scope;
         const visibleCount = followsVisibleLayers ? allVisibleRasterRecords().length : sessions.length;
         const participation = visibleCount > sessions.length
             ? `Top ${sessions.length} of ${visibleCount} visible rasters`

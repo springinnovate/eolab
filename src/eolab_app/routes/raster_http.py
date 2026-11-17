@@ -9,6 +9,7 @@ from eolab_app.raster.errors import (
     RasterNotFoundError,
     RasterPublicationError,
     RasterRequestError,
+    RasterSamplingBoxOutsideSourceError,
     RasterStatisticsCapacityError,
     RasterStatisticsQueueTimeoutError,
     RasterUpstreamError,
@@ -27,6 +28,11 @@ def raster_http_exception(error: RasterFeatureError) -> HTTPException:
     Raises:
         TypeError: If a new failure type has no explicit HTTP mapping.
     """
+    if isinstance(error, RasterSamplingBoxOutsideSourceError):
+        return HTTPException(
+            status_code=409,
+            detail={"code": "sampling_box_outside_raster", "message": error.detail},
+        )
     if isinstance(error, RasterStatisticsQueueTimeoutError):
         return HTTPException(
             status_code=503,

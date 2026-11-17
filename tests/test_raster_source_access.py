@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx2
 import numpy as np
 import pytest
 import rasterio
@@ -427,6 +428,69 @@ def test_metadata_and_services_support_embedded_validity_masks(
     assert str(path) not in str(result) and not authority.leases
 
 
+@pytest.mark.parametrize("categories", [None, [7]], ids=["continuous", "categorical"])
+def test_sampling_box_coverage_uses_the_original_grid(
+    tmp_path: Path,
+    categories: list[int] | None,
+) -> None:
+    """Keep edge pixels, geographic misses and fully masked samples distinct over HTTP.
+
+    Args:
+        tmp_path: Directory for a four-by-four raster spanning -2 to 2 degrees.
+        categories: Optional classification for the categorical reader.
+    """
+    path = write_source(tmp_path / "masked.tif", masked=True)
+    sources = RasterSourceAccess(CatalogAuthority(path))
+    app = FastAPI()
+    app.include_router(
+        create_raster_analysis_router(
+            RasterPixelService(sources, 1), RasterStatisticsService(sources, 1, 8)
+        )
+    )
+    with TestClient(app) as client:
+
+        def sample(longitude: float, latitude: float, size_km: int) -> httpx2.Response:
+            """Request a histogram of the box centered at the supplied WGS84 point.
+
+            Args:
+                longitude: Center longitude in degrees.
+                latitude: Center latitude in degrees.
+                size_km: Length of each box side in kilometers.
+
+            Returns:
+                The original-source statistics endpoint's response.
+            """
+            return client.post(
+                "/api/raster-analysis/statistics",
+                json={
+                    **CATALOG,
+                    **({"categoryValues": categories} if categories else {}),
+                    "samplingBox": {
+                        "center": {"longitude": longitude, "latitude": latitude},
+                        "sideLengthKm": size_km,
+                    },
+                },
+            )
+
+        edge = sample(2.15, 0.5, 100)
+        assert edge.status_code == 200, edge.text
+        assert edge.json()["validSampleCount"] == 1
+        assert edge.json()["sampleMinimum"] == edge.json()["sampleMaximum"] == 7
+
+        outside = sample(2.65, 0.5, 100)  # Only the read window's padding intersects.
+        assert outside.status_code == 409
+        assert outside.json()["detail"]["code"] == "sampling_box_outside_raster"
+
+        masked = sample(-1.5, 1.5, 50)
+        assert masked.status_code == 409
+        assert "No finite, non-nodata pixels" in masked.json()["detail"]
+
+        if categories:
+            sliver = sample(2.2, 0.5, 50)  # Overlaps, but misses every subcell center.
+            assert sliver.status_code == 409
+            assert "No selected ground area was represented" in sliver.json()["detail"]
+
+
 def test_private_analysis_requests_are_path_free_and_keep_legacy_catalog_requests(
     tmp_path: Path,
 ) -> None:
@@ -459,6 +523,18 @@ def test_private_analysis_requests_are_path_free_and_keep_legacy_catalog_request
             client.post("/api/raster-analysis/statistics", json=CATALOG).status_code
             == 200
         )
+        outside = client.post(
+            "/api/raster-analysis/statistics",
+            json={
+                "source": PRIVATE,
+                "samplingBox": {
+                    "center": {"longitude": 40, "latitude": 0},
+                    "sideLengthKm": 50,
+                },
+            },
+        )
+        assert outside.status_code == 409
+        assert outside.json()["detail"]["code"] == "sampling_box_outside_raster"
         assert (
             client.post(
                 "/api/raster-analysis/sources", json={"source": PRIVATE}

@@ -29,7 +29,10 @@ from eolab_app.raster.source_contract import (
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
 )
-from eolab_app.raster.bounded_window import selected_raster_area_for_sampling_box
+from eolab_app.raster.bounded_window import (
+    NoRasterBoundsOverlapError,
+    selected_raster_area_for_sampling_box,
+)
 from eolab_app.raster.statistics import (
     selected_raster_area_for_wgs84_bounds,
     selected_raster_area_for_catalog_selection,
@@ -89,11 +92,12 @@ def estimate_sample_cell_areas_hectares(
         cancellation_requested: Optional last-waiter cancellation predicate.
 
     Returns:
-        Nonnegative selected hectares per representative sample cell.
+        Nonnegative selected hectares per sample cell, all zero when the
+        subcell grid represents no selected ground area.
 
     Raises:
         ValueError: If coordinate work, CRS transformation or longitude domain
-            is unsupported, or no selected coverage is represented.
+            is unsupported.
         RasterReadCancelled: If all request waiters have disconnected.
     """
     require_active_raster_read(cancellation_requested)
@@ -162,10 +166,6 @@ def estimate_sample_cell_areas_hectares(
     sample_areas_hectares = subcell_areas_hectares.reshape(
         height, subdivisions, width, subdivisions
     ).sum(axis=(1, 3))
-    if not numpy.any(sample_areas_hectares > 0):
-        raise ValueError(
-            "No selected ground area was represented by the categorical sample. Use a smaller sampling area."
-        )
     require_active_raster_read(cancellation_requested)
     return sample_areas_hectares
 
@@ -190,7 +190,8 @@ def read_raster_categorical_statistics(
         Unmapped and NoData. Areas are explicitly approximate.
 
     Raises:
-        NoRasterBoundsOverlapError: If the selected envelope misses the raster.
+        NoRasterBoundsOverlapError: If the selected envelope or sampling box
+            misses the original raster grid.
         NoValidRasterSamplesError: If no finite selected samples remain.
         RasterReadCancelled: If the request loses all active waiters.
         OSError: If the signed source cannot be opened.
@@ -251,6 +252,25 @@ def read_raster_categorical_statistics(
                 selected_area.projected_geometries if selected_area else None,
                 cancellation_requested,
             )
+            if not numpy.any(sample_areas_hectares > 0):
+                # A narrow overlap can miss every subcell center. Test the
+                # whole clipped window as one cell before declaring a box miss.
+                if (
+                    isinstance(sampling_area, SamplingBoxArea)
+                    and not pixels_inside_area(
+                        selected_area.projected_geometries,
+                        out_shape=(1, 1),
+                        transform=window_transform(source_window, dataset.transform)
+                        * rasterio.Affine.scale(
+                            source_window.width, source_window.height
+                        ),
+                        all_touched=True,
+                    )[0, 0]
+                ):
+                    raise NoRasterBoundsOverlapError
+                raise ValueError(
+                    "No selected ground area was represented by the categorical sample. Use a smaller sampling area."
+                )
         finally:
             if selected_area and isinstance(
                 selected_area.projected_geometries, PolygonRasterizer
