@@ -415,8 +415,8 @@ export class RasterControlsView {
         this.#histogramView.setSamplingAreaMode(mode);
     }
 
-    /** Return whether Sampling box is selected for pointer preview.
-     * @return {boolean} Whether the Sampling box radio is checked.
+    /** Return whether map input should act on the active workflow's sampling box.
+     * @return {boolean} Whether the sampling controls present a box selection.
      */
     isSamplingBoxSelected() {
         return this.#samplingAreaView.isSamplingBoxSelected();

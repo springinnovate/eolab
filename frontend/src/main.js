@@ -204,9 +204,45 @@ async function loadAppGlobalConfiguration() {
 }
 
 /**
- * Create the map, coordinate guide and viewport resize observation.
- * Place coordinate feedback inside the map's allocated viewport.
- * The persistent tool toolbar remains anchored outside that changing viewport.
+ * Float the sample-area chooser with the desktop map navigation controls. On smaller
+ * screens the workspace drawers cover the map, so keep it in their measured toolbar.
+ * @param {L.Map} map Map whose controls share the visible viewport.
+ * @return {void}
+ */
+function placeSamplingTool(map) {
+    const tool = document.querySelector("#raster-sampling-tool");
+    const toolbar = tool.parentElement;
+    const desktop = window.matchMedia("(min-width: 1200px)");
+    const control = L.control({position: "bottomleft"});
+    /** @return {HTMLElement} Map control containing the existing chooser and its inputs. */
+    control.onAdd = () => {
+        const slot = L.DomUtil.create("div", "map-sampling-control");
+        L.DomEvent.disableClickPropagation(slot);
+        L.DomEvent.disableScrollPropagation(slot);
+        L.DomEvent.on(slot, "mousemove keydown", L.DomEvent.stopPropagation);
+        slot.append(tool);
+        return slot;
+    };
+    /** Return the chooser to the toolbar when the map releases its control. @return {void} */
+    control.onRemove = () => {
+        L.DomEvent.off(control.getContainer());
+        toolbar.prepend(tool);
+    };
+
+    /** Move the chooser between layouts and retain focus on its active control. @return {void} */
+    function updatePlacement() {
+        const focused = tool.contains(document.activeElement) ? document.activeElement : null;
+        if (desktop.matches) control.addTo(map);
+        else control.remove();
+        focused?.focus({preventScroll: true});
+    }
+    updatePlacement();
+    desktop.addEventListener("change", updatePlacement);
+    map.once("unload", () => desktop.removeEventListener("change", updatePlacement));
+}
+
+/**
+ * Create the map, coordinate guide, sampling control and viewport resize observation.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @return {L.Map} The initialized Leaflet map.
@@ -215,6 +251,7 @@ function initializeMap(appGlobalConfiguration) {
     const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
     observeMapViewportSize(leafletMap);
     addMapCoordinateGuide(L, leafletMap);
+    placeSamplingTool(leafletMap);
 
     const mapPositionElement = document.querySelector("#map-position");
     leafletMap.getContainer().append(mapPositionElement);
