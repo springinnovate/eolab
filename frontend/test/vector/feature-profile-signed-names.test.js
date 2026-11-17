@@ -48,8 +48,13 @@ for (const fields of [
   ["response(−5°C)", "response(−20°C)"],
   ["response(- 5°C)", "response(- 20°C)"],
   ["year-2000", "year-2005"],
+  ["pressure_-1e3_Pa", "pressure_-1e4_Pa"],
+  ["response(-2e0)", "response(-2e1)"],
+  ["signal_1E+2", "signal_1E+4"],
+  ["signal_1e-2", "signal_1e-4"],
+  ["signal_1.e2", "signal_1.e4"],
 ]) {
-  test(`ambiguous signs retain complete axis labels: ${fields.join(", ")}`, () => {
+  test(`ambiguous numeric names retain complete axis labels: ${fields.join(", ")}`, () => {
     const properties = { name: "Cold site", [fields[0]]: 5, [fields[1]]: -12, unrelated: 99 };
     const current = observation(properties);
     assert.deepEqual(suggestFeatureProfileFields(current), fields,
