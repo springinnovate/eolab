@@ -125,7 +125,8 @@ export function setRasterLayerAdditiveBlend(rasterLayer, isAdditive) {
  * @param {"preview"|"selection"} layerKind Preview or committed-selection presentation.
  * @param {import("../sampling-box.js").SamplingBox|null} [samplingBox=null] Geodesic descriptor.
  * @param {Object|null} [leafletMap=null] Map supplying actual display-pixel projection for a box.
- * @return {Object} Leaflet polygon with setSampleWindow() for presentation-only redraws.
+ * @return {Object} Leaflet layer with setSampleWindow() for display-only redraws.
+ * A geodesic preview includes a fixed-size center mark even when its edges are offscreen.
  */
 export function createRasterSampleWindowLayer(leaflet, bounds, layerKind, samplingBox = null, leafletMap = null) {
     /** Construct Leaflet positions from the captured area on this map's pixel grid.
@@ -143,14 +144,25 @@ export function createRasterSampleWindowLayer(leaflet, bounds, layerKind, sampli
             return [point.x, point.y];
         })).map(([longitude, latitude]) => [latitude, longitude]);
     }
-    const layer = leaflet.polygon(positions(bounds, samplingBox), layerKind === "preview"
-        ? {pane: RASTER_SAMPLE_WINDOW_PANE, color: "#f97316", weight: 2, fill: false, interactive: false, smoothFactor: 0}
+    const preview = layerKind === "preview";
+    const outline = leaflet.polygon(positions(bounds, samplingBox), preview
+        ? {pane: RASTER_SAMPLE_WINDOW_PANE, color: "#f97316", weight: 2, dashArray: "6 4", fill: false, interactive: false, smoothFactor: 0}
         : {pane: RASTER_SAMPLE_WINDOW_PANE, color: "#2563eb", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.12, interactive: false, smoothFactor: 0});
+    const centerMark = preview && samplingBox ? leaflet.circleMarker(
+        [samplingBox.center.latitude, samplingBox.center.longitude],
+        {pane: RASTER_SAMPLE_WINDOW_PANE, radius: 3, color: "#fff", weight: 1.5,
+            fillColor: "#b45309", fillOpacity: 1, interactive: false},
+    ) : null;
+    const layer = centerMark ? leaflet.layerGroup([outline, centerMark]) : outline;
     /** Redraw the captured geometry at the current zoom without changing its area.
      * @param {number[][]} envelope Southwest/northeast read-window envelope.
      * @param {import("../sampling-box.js").SamplingBox|null} box Optional geodesic descriptor.
      * @return {void}
      */
-    layer.setSampleWindow = (envelope, box) => { layer.setLatLngs(positions(envelope, box)); };
+    layer.setSampleWindow = (envelope, box) => {
+        outline.setLatLngs(positions(envelope, box));
+        if (centerMark) centerMark.setLatLng(box
+            ? [box.center.latitude, box.center.longitude] : outline.getBounds().getCenter());
+    };
     return layer;
 }

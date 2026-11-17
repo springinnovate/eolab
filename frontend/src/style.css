@@ -110,6 +110,42 @@ select:hover:not(:disabled) {
   font-family: inherit;
 }
 
+#raster-first-sample-hint {
+  margin: 0;
+  padding: 0 8px 8px;
+  color: var(--text-1);
+  font-size: var(--font-size-ui);
+  pointer-events: none;
+}
+#map > #raster-first-sample-hint {
+  position: absolute;
+  z-index: 800;
+  bottom: 42px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-control);
+  background: var(--surface-2);
+  text-align: center;
+}
+@media (max-width: 1199px) {
+  #app:not(.is-control-panel-collapsed) #map > #raster-first-sample-hint {
+    top: 4px;
+    bottom: auto;
+    left: 8px;
+    transform: none;
+    max-width: calc(100% - 9rem);
+  }
+}
+.sample-tap-verb { display: none; }
+@media (pointer: coarse) {
+  .sample-click-verb { display: none; }
+  .sample-tap-verb { display: inline; }
+}
+
 .eolab-basemap {
   opacity: 0.72 !important;
   filter: saturate(0.6) contrast(0.86);

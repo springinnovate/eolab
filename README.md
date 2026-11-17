@@ -152,7 +152,9 @@ their attributes in **Feature inspector**. Use **Previous** and **Next** when
 several features overlap. Clicking empty space does not open an empty result.
 
 For rasters, inspect the value at the clicked pixel or open **Histograms** in
-**1D** mode to see how values are distributed within a sampling box. With
+**1D** mode to see how values are distributed within a sampling box. Before
+the first sample, move the pointer over a raster to preview the area outlined
+by the dashed box. Click or tap once to place it and open the histogram. With
 **Sampling box** selected, click the map to move the box. Drag the slider or
 hold **Alt** and scroll over the map to resize it. Open the control to enter an
 exact side length in kilometers. Each visible raster has its own chart.

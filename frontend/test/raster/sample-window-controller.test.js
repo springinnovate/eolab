@@ -57,7 +57,7 @@ test("sample window previews and commits composition-owned positions", () => {
   assert.ok(bounds.west < -122);
   assert.ok(bounds.east > -122);
   assert.equal(layers.at(-1).kind, "selection");
-  assert.equal(map.layers.length, 2);
+  assert.deepEqual(map.layers, [layers.at(-1)], "the committed outline replaces the pointer preview");
   assert.deepEqual(rasterSamplingAreaBounds(controller.selectedArea), bounds);
   assert.equal(guidance.at(-1), "");
   for (const eventName of ["mousemove", "mouseout", "mouseover", "click"]) {

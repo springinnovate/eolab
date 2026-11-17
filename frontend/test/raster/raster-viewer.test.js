@@ -217,7 +217,11 @@ function createFakeLeaflet() {
         wmsLayers,
         rectangleLayers,
         leaflet: {
-            layerGroup: () => createFakeLayer({kind: "empty"}),
+            layerGroup: (members = []) => createFakeLayer({kind: members[0]?.kind ?? "empty", members}),
+            circleMarker: (position, options) => ({position, options,
+                /** Move the center mark with its outline. @param {number[]} next Leaflet coordinates. @return {void} */
+                setLatLng(next) { this.position = next; },
+            }),
             tileLayer: {
                 wms(url, options) {
                     const layer = createFakeLayer({
@@ -363,6 +367,8 @@ function createFakeControlsView() {
             this.samplingAreaMode = mode;
             this.samplingAreaLabel = label;
         },
+        /** Record whether the map invites a first sample. @param {boolean} visible Hint visibility. @return {void} */
+        setFirstSampleHintVisible(visible) { this.firstSampleHintVisible = visible; },
         /** @return {boolean} Whether the presented area is a sampling box. */
         isSamplingBoxSelected() {
             return this.samplingAreaMode === "selectedArea";
@@ -3891,6 +3897,71 @@ test("clearing analysis invalidates a pending renderer activation", async () => 
     viewer.destroy();
 });
 
+test("first sample previews the clicked footprint without opening a histogram or starting an area read", async () => {
+    const reads = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        reads.push(area);
+        return createCategoryStatistics(item, area);
+    }, {publishRaster: async () => ({layerName: "eolab:sample", bbox: [-8, -8, 8, 8]})});
+    /** Move over the map and return the displayed sampling preview. @param {number} lng Longitude. @return {Object|undefined} Preview overlay. */
+    const hover = lng => {
+        h.leafletMap.emit("mousemove", {latlng: {lat: 0, lng}});
+        return [...h.leafletMap.layers].find(layer => layer.kind === "preview");
+    };
+    try {
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        await h.viewer.show(createRasterItem("sample-hint"));
+        await flushPromises();
+        const key = h.mapLayers.retainedRecords[0].entry.key;
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
+        assert.equal(hover(-20), undefined);
+        assert.equal(h.viewer.exploreAt({lng: -20, lat: 0}), false);
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
+        const beforeHover = reads.length;
+        const preview = hover(1);
+        assert.equal(hover(2), preview);
+        const [outline, mark] = preview.members;
+        assert.deepEqual(mark.position, [0, 2]);
+        assert.equal(mark.options.interactive, false);
+        assert.equal(outline.rectangleOptions.dashArray, "6 4");
+        assert.equal(h.viewer.getSelectedArea(), null);
+        assert.equal(h.controlsView.histogramWidgetOpenCount ?? 0, 0);
+        assert.equal(reads.length, beforeHover);
+
+        h.leafletMap.emit("dragstart");
+        assert.equal(hover(2), undefined);
+        h.leafletMap.emit("dragend");
+        assert.ok(hover(2));
+        h.viewer.setPointerInspectionEnabled(false);
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        assert.equal(hover(2), undefined);
+        h.viewer.setPointerInspectionEnabled(true);
+        h.viewer.setFirstSampleHintEnabled(false);
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        assert.equal(hover(2), undefined);
+        h.viewer.setFirstSampleHintEnabled(true);
+        h.mapLayers.setVisible(key, false);
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        assert.equal(hover(2), undefined);
+        h.mapLayers.setVisible(key, true);
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
+
+        const expectedOutline = hover(3).members[0].boundsHistory.at(-1);
+        assert.equal(h.viewer.exploreAt({lng: 3, lat: 0}), true);
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        assert.equal([...h.leafletMap.layers].some(layer => layer.kind === "preview"), false);
+        const selected = [...h.leafletMap.layers].find(layer => layer.kind === "selection");
+        assert.deepEqual(selected.boundsHistory.at(-1), expectedOutline);
+        assert.deepEqual(h.viewer.getSelectedArea().samplingBox.center, {longitude: 3, latitude: 0});
+        assert.ok(h.controlsView.histogramWidgetOpenCount > 0);
+        h.controlsView.handlers.onClearSampleWindow();
+        h.mapLayers.setVisible(key, false);
+        h.mapLayers.setVisible(key, true);
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        assert.equal(hover(2), undefined);
+    } finally { h.destroy(); }
+});
+
 test("sampling radios stop hover boxes and clear the previous area while vector features are pending", async () => {
     const timers = new Map(), cursorRequests = [];
     let timerId = 0;
@@ -3925,7 +3996,7 @@ test("sampling radios stop hover boxes and clear the previous area while vector 
         await h.viewer.show(createRasterItem("preview-area"));
         await flushPromises();
         await hover(0);
-        assert.equal(hasPreview(), false, "Whole raster starts without a box preview");
+        assert.equal(hasPreview(), true, "the first hover previews the box without changing whole-raster sampling");
         assert.equal(cursorRequests.length, 1);
         choose(sampling.useMapWindowButton);
         await hover(1);
@@ -3990,7 +4061,7 @@ test("raster viewer selects histogram areas only inside the single map world", a
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
     assert.deepEqual(pixelRequests, []);
-    assert.equal(rectangleLayers.length, 0, "Whole raster does not preview a box");
+    assert.deepEqual(rectangleLayers.map(layer => layer.kind), ["preview"]);
     viewer.exploreAt({ lng: -122, lat: 48 });
     await flushPromises();
     assert.deepEqual(pixelRequests, []);

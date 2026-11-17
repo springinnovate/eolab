@@ -205,6 +205,21 @@ async function loadAppGlobalConfiguration() {
 }
 
 /**
+ * Keep the first-sample instruction in the map's available space. With the sidebar open,
+ * the existing sample-area control reserves room at the desktop map edge or in the compact toolbar.
+ * @param {L.Map} map Map containing the unobstructed placement for a collapsed sidebar.
+ * @return {void}
+ */
+function placeFirstSampleHint(map) {
+    const hint = document.querySelector("#raster-first-sample-hint");
+    const tool = document.querySelector("#raster-sampling-tool");
+    const sidebarOpen = !document.querySelector("#control-panel").inert;
+    const chooserVisible = !tool.closest("[hidden]");
+    const host = sidebarOpen && chooserVisible ? tool : map.getContainer();
+    if (hint.parentElement !== host) host.append(hint);
+}
+
+/**
  * Float the sample-area chooser with the desktop map navigation controls. On smaller
  * screens the workspace drawers cover the map, so keep it in their measured toolbar.
  * @param {L.Map} map Map whose controls share the visible viewport.
@@ -235,6 +250,7 @@ function placeSamplingTool(map) {
         const focused = tool.contains(document.activeElement) ? document.activeElement : null;
         if (desktop.matches) control.addTo(map);
         else control.remove();
+        placeFirstSampleHint(map);
         focused?.focus({preventScroll: true});
     }
     updatePlacement();
@@ -1102,6 +1118,7 @@ async function initializeCatalog(
         cursorValuesView: new RasterCursorValuesView(),
         getTemporalItem: identity => catalogItemClient.get(identity),
     });
+    mapInspection.subscribeActiveTool(tool => rasterVisualization.setFirstSampleHintEnabled(tool === null));
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
         onFilterChange: () => mapLayerController.render(),
         leaflet: L,
@@ -2568,7 +2585,10 @@ async function startApplication() {
     layoutController = new EomapLayoutController({
         documentContext: document,
         schedule: window.setTimeout.bind(window),
-        invalidateMapSize: () => leafletMap.invalidateSize(),
+        invalidateMapSize: () => {
+            leafletMap.invalidateSize();
+            placeFirstSampleHint(leafletMap);
+        },
         allowCatalog: !isSharedViewer,
         allowOperationalStatus: !isSharedViewer,
         workspaceStorage: isSharedViewer || editableMapSlug !== null

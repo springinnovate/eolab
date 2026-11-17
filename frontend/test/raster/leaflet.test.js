@@ -109,6 +109,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       pane: RASTER_SAMPLE_WINDOW_PANE,
       color: "#f97316",
       weight: 2,
+      dashArray: "6 4",
       fill: false,
       interactive: false,
       smoothFactor: 0,
