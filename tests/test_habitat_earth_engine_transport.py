@@ -2,8 +2,11 @@
 
 from http.client import IncompleteRead
 from pathlib import Path
+from threading import Thread
+from typing import Literal
 from unittest.mock import Mock
 
+from google.auth import _regional_access_boundary_utils
 from google.auth.crypt import Signer
 from google.oauth2.service_account import Credentials
 from httplib2 import Http, Response
@@ -148,13 +151,16 @@ def test_exhausted_socket_retries_preserve_other_tiles(
         connection.close.assert_called_once_with()
 
 
+@pytest.mark.parametrize("lookup_timing", ["before_image", "after_image"])
 def test_credential_refresh_uses_the_bounded_thread_transport(
     monkeypatch: pytest.MonkeyPatch,
+    lookup_timing: Literal["before_image", "after_image"],
 ) -> None:
     """Use the same finite socket timeout for token refresh and image requests.
 
     Args:
-        monkeypatch: Replace only network I/O beneath the real auth/HTTP adapters.
+        monkeypatch: Replace network I/O and control the SDK background worker start.
+        lookup_timing: Complete the optional lookup before or after the image request.
     """
     signer = Mock(spec=Signer, key_id=None)
     signer.sign.return_value = b"offline-signature"
@@ -164,7 +170,27 @@ def test_credential_refresh_uses_the_bounded_thread_transport(
         "https://oauth2.googleapis.com/token",
         scopes=["https://www.googleapis.com/auth/earthengine"],
     )
-    timeouts: list[float] = []
+    token_url = "https://oauth2.googleapis.com/token"
+    image_url = (
+        "https://earthengine.googleapis.com/v1/projects/test/image:computePixels"
+    )
+    boundary_url = (
+        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+        "offline-test@example.org/allowedLocations"
+    )
+    timeouts: dict[str, list[float]] = {}
+    workers: list[Thread] = []
+
+    def start_boundary_lookup(worker: Thread) -> None:
+        """Run the SDK lookup now or retain it for completion after the image request.
+
+        Args:
+            worker: Real SDK worker using its copied authenticated HTTP transport.
+        """
+        workers.append(worker)
+        if lookup_timing == "before_image":
+            Thread.start(worker)
+            worker.join()
 
     def request(
         connection: Http, uri: str, method: str = "GET", **options: object
@@ -173,29 +199,44 @@ def test_credential_refresh_uses_the_bounded_thread_transport(
 
         Args:
             connection: Underlying HTTP instance supplied by the auth adapter.
-            uri: Token or Earth Engine URL.
+            uri: Token, Earth Engine or Regional Access Boundary URL.
             method: Method selected by the credential or image request.
             **options: Forwarded HTTP request arguments.
 
         Returns:
-            Token credentials or an empty successful image response.
+            Successful token, image or Regional Access Boundary response.
         """
-        timeouts.append(connection.timeout)
-        if uri == "https://oauth2.googleapis.com/token":
+        timeouts.setdefault(uri, []).append(connection.timeout)
+        if uri == token_url:
             return Response({"status": "200"}), (
                 b'{"access_token":"offline-test-token","expires_in":3600}'
             )
         assert options["headers"]["authorization"] == "Bearer offline-test-token"
+        if uri == boundary_url:
+            return Response({"status": "200"}), b'{"encodedLocations":"0x0"}'
+        assert uri == image_url
+        assert (boundary_url in timeouts) == (lookup_timing == "before_image")
         return Response({"status": "200"}), b"{}"
 
     monkeypatch.setattr(Http, "request", request)
+    monkeypatch.setattr(
+        _regional_access_boundary_utils._RegionalAccessBoundaryRefreshThread,
+        "start",
+        start_boundary_lookup,
+    )
     transport = habitat_earth_engine._HabitatEarthEngineTransport(credentials)
     try:
-        transport.request(
-            "https://earthengine.googleapis.com/v1/projects/test/image:computePixels",
-            "POST",
-        )
+        transport.request(image_url, "POST")
+        assert timeouts[token_url] == [360]
+        assert timeouts[image_url] == [360]
     finally:
+        # Finish every SDK lookup while the network mock is still installed,
+        # including when a request or its assertions fail.
+        for worker in workers:
+            if worker.ident is None:
+                Thread.start(worker)
+            worker.join()
         transport.close()
-    assert timeouts == [360, 360]
+    assert workers and all(not worker.is_alive() for worker in workers)
+    assert timeouts[boundary_url] == [360]
     assert credentials.token is None
