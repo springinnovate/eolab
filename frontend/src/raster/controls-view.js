@@ -103,14 +103,15 @@ export class RasterControlsView {
     }
 
     /**
-     * Render one summary per retained raster without exposing layer-stack DOM.
+     * Show applicable raster histograms or the reason the sampling box is empty.
      *
      * @param {Object[]} summaries Presentation-ready histogram summaries.
      * @param {string|null} activeKey Active retained raster key, or null.
+     * @param {boolean} [allOutsideBox=false] Every participating source missed the box.
      * @return {void}
      */
-    renderLayerHistograms(summaries, activeKey) {
-        this.#histogramView.renderLayerHistograms(summaries, activeKey);
+    renderLayerHistograms(summaries, activeKey, allOutsideBox = false) {
+        this.#histogramView.renderLayerHistograms(summaries, activeKey, allOutsideBox);
     }
 
     /**
