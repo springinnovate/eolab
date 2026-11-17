@@ -2,7 +2,7 @@
 import { validateCalculatedFields } from "../calculated-fields.js";
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
-export const SAVED_MAP_VIEW_SCHEMA_VERSION = 4;
+export const SAVED_MAP_VIEW_SCHEMA_VERSION = 5;
 export const MAX_SAVED_MAP_VIEW_BYTES = 512 * 1024;
 export const MAX_SAVED_MAP_VIEW_LAYERS = 50;
 
@@ -90,7 +90,7 @@ export function serializeSavedMapView(savedMapView) {
  */
 function validateSavedMapView(candidate) {
     requirePlainObject(candidate, "Saved map");
-    if (![1, 2, 3, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
+    if (![1, 2, 3, 4, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
         throw new SavedMapViewValidationError(
             `Saved map schema ${String(candidate.schemaVersion)} is not supported.`
         );
@@ -143,6 +143,10 @@ function validateSavedMapView(candidate) {
         if (Object.hasOwn(layer, "isCustom") && typeof layer.isCustom !== "boolean") {
             throw new SavedMapViewValidationError("Custom layer presentation must be boolean.");
         }
+        if (Object.hasOwn(layer, "drawingLayerId")) {
+            if (candidate.schemaVersion < 5) throw new SavedMapViewValidationError("Saved drawings require saved-map version five.");
+            return validateDrawingReference(layer);
+        }
         if (layer?.sharedAnnotation !== undefined) {
             if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
@@ -179,6 +183,39 @@ function validateSavedMapView(candidate) {
         layers: Object.freeze(layers),
         ...(candidate.mapLegend ? { mapLegend: Object.freeze({ ...candidate.mapLegend }) } : {}),
     });
+}
+
+/**
+ * Validate a linked drawing's identity and local view without accepting its geometry or edit access.
+ * Repeated references may have independent names, filters and appearances.
+ * @param {Object} candidate Untrusted drawing layer entry.
+ * @return {Readonly<Object>} Independent portable drawing view.
+ * @throws {SavedMapViewValidationError} If identity or view fields are invalid.
+ */
+function validateDrawingReference(candidate) {
+    requireExactKeys(candidate, ["drawingLayerId", "visible", "opacity", "appearance",
+        ...["isCustom", "customName", "legendIncluded", "filter"].filter(key => Object.hasOwn(candidate, key))], "Saved drawing");
+    if (typeof candidate.drawingLayerId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(candidate.drawingLayerId)) {
+        throw new SavedMapViewValidationError("Saved drawing identifier is invalid.");
+    }
+    if (Object.hasOwn(candidate, "isCustom") && candidate.isCustom !== true) {
+        throw new SavedMapViewValidationError("Saved drawings must be Custom layers.");
+    }
+    const appearance = candidate.appearance;
+    requirePlainObject(appearance, "Drawing appearance");
+    requireExactKeys(appearance, ["color", "outline", "weight", "fillOpacity", "labels"], "Drawing appearance");
+    if (typeof candidate.visible !== "boolean" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 1 ||
+        typeof appearance.color !== "string" || !/^#[0-9a-f]{6}$/i.test(appearance.color) ||
+        typeof appearance.outline !== "string" || !/^#[0-9a-f]{6}$/i.test(appearance.outline) ||
+        !Number.isFinite(appearance.weight) || appearance.weight < 0 || appearance.weight > 10 ||
+        !Number.isFinite(appearance.fillOpacity) || appearance.fillOpacity < 0 || appearance.fillOpacity > 1 ||
+        typeof appearance.labels !== "boolean") {
+        throw new SavedMapViewValidationError("Saved drawing appearance is invalid.");
+    }
+    if (Object.hasOwn(candidate, "filter")) validateSavedFilter(candidate.filter);
+    return Object.freeze({...structuredClone(candidate),
+        ...(Object.hasOwn(candidate, "customName") ? {customName: validateLayerName(candidate.customName)} : {})});
 }
 
 /**
@@ -239,13 +276,7 @@ function validateLayer(candidate) {
     );
     let customName;
     if (Object.hasOwn(candidate, "customName")) {
-        customName = candidate.customName;
-        if (customName !== null) {
-            if (typeof customName !== "string" || !customName.trim() || [...customName.trim()].length > 160) {
-                throw new SavedMapViewValidationError("Layer name must contain 1 to 160 characters.");
-            }
-            customName = customName.trim();
-        }
+        customName = validateLayerName(candidate.customName);
     }
     let identity;
     if (isTemporal) {
@@ -313,10 +344,7 @@ function validateLayer(candidate) {
     }
     validateSavedStyleStructure(candidate.style);
     if (Object.hasOwn(candidate, "filter")) {
-        requirePlainObject(candidate.filter, "Saved filter");
-        if (JSON.stringify(candidate.filter).length > 8192) {
-            throw new SavedMapViewValidationError("Saved filter exceeds its size limit.");
-        }
+        validateSavedFilter(candidate.filter);
     }
     return Object.freeze({
         ...identity,
@@ -329,6 +357,33 @@ function validateLayer(candidate) {
         ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
         ...(Object.hasOwn(candidate, "calculatedFields") ? {calculatedFields: validateCalculatedFields(candidate.calculatedFields)} : {}),
     });
+}
+
+/**
+ * Validate and trim an optional custom display name without changing source identity.
+ * @param {unknown} candidate Display name, or null for the source's name.
+ * @return {string|null} Trimmed name or null.
+ * @throws {SavedMapViewValidationError} If the name is empty or too long.
+ */
+function validateLayerName(candidate) {
+    if (candidate === null) return null;
+    if (typeof candidate !== "string" || !candidate.trim() || [...candidate.trim()].length > 160) {
+        throw new SavedMapViewValidationError("Layer name must contain 1 to 160 characters.");
+    }
+    return candidate.trim();
+}
+
+/**
+ * Bound a saved predicate document before its source owner validates available fields and operators.
+ * @param {unknown} candidate Untrusted saved filter.
+ * @return {void}
+ * @throws {SavedMapViewValidationError} If the filter is not an object or exceeds its limit.
+ */
+function validateSavedFilter(candidate) {
+    requirePlainObject(candidate, "Saved filter");
+    if (JSON.stringify(candidate).length > 8192) {
+        throw new SavedMapViewValidationError("Saved filter exceeds its size limit.");
+    }
 }
 
 /**

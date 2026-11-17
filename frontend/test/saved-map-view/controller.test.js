@@ -42,7 +42,8 @@ function additiveCatalogFixture(options = {}) {
       records.splice(index, 0, value.record);
     },
     setLegendIncluded(key, included) { records.find(record => record.entry.key === key).entry.legendIncluded = included; },
-    removeKey(key) { removed.push(key); records.splice(records.findIndex(record => record.entry.key === key), 1); },
+    removeKey(key) { removed.push(key); const index = records.findIndex(record => record.entry.key === key); if (index >= 0) records.splice(index, 1); },
+    restoreOrder(keys) { records.splice(0, records.length, ...keys.map(key => records.find(record => record.entry.key === key))); },
   };
   const controller = createController({view: createView(), viewerVersion: "1", viewerOrigin: "https://viewer.example",
     viewport: {restore() { assert.fail("Additive layer restore must not move the map"); }}, mapLayers,
@@ -59,25 +60,108 @@ function additiveCatalogFixture(options = {}) {
         }};
         const value = {key: presentation.key, record, layer: {remove() {}}}; staged.push(value); return value;
       }},
+    ...options.configuration,
   });
   return {controller, definition, records, existing, staged, discarded, removed, order};
 }
 
 test("additive Catalog restore preserves existing map, strict settings and detached export values", async () => {
   const f = additiveCatalogFixture();
-  const results = await f.controller.restoreCatalogLayers([f.definition], () => true);
+  const results = await f.controller.restoreLayers([f.definition], () => true);
   assert.equal(results.length, 1); assert.equal(results[0].error, null); assert.match(results[0].key, /^local:view:/);
   assert.deepEqual(f.order, ["fields", "style", "filter"]); assert.equal(f.records[1], f.existing);
-  assert.deepEqual(f.controller.exportCatalogLayer(results[0].key), f.definition);
-  const exported = f.controller.exportCatalogLayer(results[0].key); exported.filter.rules[0].value = "south";
-  assert.equal(f.controller.exportCatalogLayer(results[0].key).filter.rules[0].value, "north");
-  assert.throws(() => f.controller.exportCatalogLayer("removed"), /available Catalog layer/);
+  assert.deepEqual(f.controller.exportLayer(results[0].key), f.definition);
+  const exported = f.controller.exportLayer(results[0].key); exported.filter.rules[0].value = "south";
+  assert.equal(f.controller.exportLayer(results[0].key).filter.rules[0].value, "north");
+  assert.throws(() => f.controller.exportLayer("removed"), /available layer/);
+});
+
+/** Build an ordinary linked drawing view with distinct local display settings.
+ * @param {string} [customName] Local view name.
+ * @return {Object} Portable source reference and appearance.
+ */
+function drawingDefinition(customName = "Priority parcels") {
+  return {drawingLayerId: "11111111-1111-4111-8111-111111111111", isCustom: true, customName,
+    visible: false, opacity: 0.6, legendIncluded: false,
+    appearance: {color: "#1686b0", outline: "#202020", weight: 2, fillOpacity: 0.4, labels: true},
+    filter: {enabled: true, match: "all", rules: [{field: "name", operator: "eq", value: "Priority"}]}};
+}
+
+/** Connect drawing callbacks to the same retained map used by additive Catalog restoration.
+ * @param {Object} [options] Catalog failures and a drawing source read callback.
+ * @return {Object} Fixture with drawing restoration observations.
+ */
+function additiveDrawingFixture(options = {}) {
+  const restored = [];
+  const f = additiveCatalogFixture({...options, configuration: {
+    exportDrawing: record => record.definition ?? null,
+    restoreDrawing: async (definition, isCurrent) => {
+      if (options.catalogExpected !== false) assert.equal(f.order.includes("filter"), true, "Catalog style and filter stage before attaching drawings");
+      await options.readDrawing?.(definition);
+      if (!isCurrent()) return null;
+      const key = `local:annotation:${restored.length}`;
+      const record = {entry: {key, item: null, isCustom: true}, definition: structuredClone(definition)};
+      restored.push(record); f.records.unshift(record);
+      return key;
+    },
+  }});
+  return {...f, restored};
+}
+
+test("additive mixed views preserve original order and export drawings through the common layer path", async () => {
+  const f = additiveDrawingFixture();
+  const drawing = drawingDefinition(), second = {...drawingDefinition("Another view"), visible: true, legendIncluded: true};
+  const definitions = [drawing, f.definition, second];
+  const results = await f.controller.restoreLayers(definitions, () => true);
+  assert.ok(results.every(result => result.key && result.error === null));
+  assert.deepEqual(f.records.map(record => record.entry.key), [...results.map(result => result.key), "existing"]);
+  assert.deepEqual(results.map(result => f.controller.exportLayer(result.key)), definitions);
+  const exported = f.controller.exportLayer(results[0].key);
+  exported.appearance.color = "#ffffff"; exported.filter.rules[0].value = "Changed";
+  assert.deepEqual(f.controller.exportLayer(results[0].key), drawing);
+  assert.equal(f.restored.length, 2, "Repeated source references receive independent views");
+});
+
+test("a drawing-only addition uses the shared restore path without needing Catalog preparation", async () => {
+  const f = additiveDrawingFixture({catalogExpected: false});
+  const definition = drawingDefinition();
+  const [result] = await f.controller.restoreLayers([definition], () => true);
+  assert.equal(result.error, null);
+  assert.deepEqual(f.records.map(record => record.entry.key), [result.key, "existing"]);
+  assert.deepEqual(f.controller.exportLayer(result.key), definition);
+  assert.equal(f.staged.length, 0);
+});
+
+test("a drawing read failure rolls back added drawings and detached Catalog views", async () => {
+  const f = additiveDrawingFixture({readDrawing: async layer => { if (layer.customName === "Missing") throw new Error("Drawing unavailable"); }});
+  const results = await f.controller.restoreLayers([drawingDefinition(), f.definition, drawingDefinition("Missing")], () => true);
+  assert.ok(results.every(result => result.key === null && /Drawing unavailable/.test(result.error)));
+  assert.deepEqual(f.records, [f.existing]);
+  assert.deepEqual(f.discarded, ["parcels"]);
+  assert.deepEqual(f.removed, [f.restored[0].entry.key]);
+});
+
+test("Catalog attachment failure rolls back drawing additions without touching preexisting views", async () => {
+  const f = additiveDrawingFixture({failAttach: "parcels"});
+  const results = await f.controller.restoreLayers([drawingDefinition(), f.definition], () => true);
+  assert.ok(results.every(result => result.key === null && /Attach failed/.test(result.error)));
+  assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded, ["parcels"]);
+  assert.deepEqual(f.removed, [f.restored[0].entry.key]);
+});
+
+test("superseded mixed additions remove earlier drawings and discard staged Catalog views", async () => {
+  let current = true;
+  const f = additiveDrawingFixture({readDrawing: async layer => { if (layer.customName === "Slow") current = false; }});
+  const results = await f.controller.restoreLayers([f.definition, drawingDefinition(), drawingDefinition("Slow")], () => current);
+  assert.ok(results.every(result => result.key === null && /cancelled/.test(result.error)));
+  assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded, ["parcels"]);
+  assert.deepEqual(f.removed, [f.restored[0].entry.key]);
 });
 
 test("additive Catalog restore rejects failed style and discards all detached preparations", async () => {
   const f = additiveCatalogFixture({failStyle: "broken"});
   const broken = {...f.definition, catalogItem: {collection: "local", id: "broken"}, calculatedFields: []};
-  const results = await f.controller.restoreCatalogLayers([f.definition, broken], () => true);
+  const results = await f.controller.restoreLayers([f.definition, broken], () => true);
   assert.equal(results.every(result => result.key === null && /Invalid saved style/.test(result.error)), true);
   assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded.sort(), ["broken", "parcels"]);
 });
@@ -85,7 +169,7 @@ test("additive Catalog restore rejects failed style and discards all detached pr
 test("additive Catalog attachment failure rolls back only layers from that operation", async () => {
   const f = additiveCatalogFixture({failAttach: "broken"});
   const broken = {...f.definition, catalogItem: {collection: "local", id: "broken"}};
-  const results = await f.controller.restoreCatalogLayers([f.definition, broken], () => true);
+  const results = await f.controller.restoreLayers([f.definition, broken], () => true);
   assert.equal(results.every(result => result.key === null && /Attach failed/.test(result.error)), true);
   assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.removed, [f.staged[0].key]);
   assert.deepEqual(f.discarded, ["broken"]);
@@ -94,7 +178,7 @@ test("additive Catalog attachment failure rolls back only layers from that opera
 test("superseded additive Catalog restore discards prepared layers without attaching them", async () => {
   let current = true;
   const f = additiveCatalogFixture({beforeRead: async () => { current = false; }});
-  const results = await f.controller.restoreCatalogLayers([f.definition], () => current);
+  const results = await f.controller.restoreLayers([f.definition], () => current);
   assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded, ["parcels"]);
   assert.equal(results[0].key, null); assert.match(results[0].error, /cancelled/);
 });
@@ -172,7 +256,7 @@ test("unavailable private references keep their origin and can be explicitly rem
   assert.deepEqual(copied.layers, saved.layers);
   records.push({entry: {key: "local-result", item: null, isCustom: true}, layer: saved.layers[0]});
   await controller.copyMapLink();
-  assert.match(view.error.message, /private layers from another EOLab site/);
+  assert.match(view.error.message, /layers linked to different EOLab sites/);
   assert.equal(view.unavailableCount, 1);
   view.handlers.onShowUnavailableLayers();
   assert.deepEqual(view.unavailableLayers, [{index: 0, label: "Private run result", sourceSite: saved.viewer.origin, fields: ["Scaled"]}]);
@@ -410,6 +494,84 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
   assert.match(view.result.details[0], /original EOLab site/);
   assert.equal(restorations.length, 2, "foreign invitations never reach the annotation API");
 });
+
+test("ordinary map save and restore includes independent drawing views with Catalog layers", async () => {
+  const catalog = {catalogItem: {collection: "vectors", id: "regions"}, isCustom: true,
+    visible: true, opacity: 1, style: {kind: "vector", definition: {}}};
+  const first = drawingDefinition(), second = {...drawingDefinition("Second drawing view"), visible: true};
+  const saved = createSavedMapView({...emptySavedMap(12, 22, 7), layers: [first, catalog, second]});
+  const records = [], view = createView(), storage = createStorage(serializeSavedMapView(saved)), timers = createTimers();
+  const reads = [];
+  const controller = createController({view, storage, setTimer: timers.setTimer, clearTimer: timers.clearTimer,
+    viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+    initialViewport: saved.viewport,
+    viewport: {snapshot: () => saved.viewport, restore() {}},
+    beforeRestore: () => { records.length = 0; },
+    mapLayers: {retainedRecords: records,
+      setCustomLayer(key, value) { records.find(record => record.entry.key === key).entry.isCustom = value; },
+      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
+      commitStaged(staged) { records.push(...staged.map(value => value.record)); },
+      restoreOrder(keys) { records.splice(0, records.length, ...keys.map(key => records.find(record => record.entry.key === key))); },
+    },
+    catalogItems: {get: async identity => identity},
+    catalogVisualization: {clear() {}, prepare: async item => item,
+      stage: async (item, presentation) => ({record: {entry: {item, ...presentation},
+        adapter: {applySavedState() {}, exportSavedState: () => catalog.style}}})},
+    exportDrawing: record => record.definition ?? null,
+    restoreDrawing: async (definition, isCurrent) => {
+      assert.equal(isCurrent(), true); reads.push(definition.drawingLayerId);
+      const key = `drawing:${reads.length}`;
+      records.push({entry: {key, item: null, isCustom: true}, definition: structuredClone(definition)});
+      return key;
+    },
+  });
+  await controller.restoreStartupView("");
+  assert.equal(records.length, 3);
+  assert.deepEqual(records.map(record => record.entry.item?.id ?? record.definition.customName), [first.customName, "regions", second.customName]);
+  assert.deepEqual(reads, [first.drawingLayerId, first.drawingLayerId]);
+  records.push({entry: {key: "unsaved-local", item: null}, polygons: ["private local geometry"]});
+  controller.scheduleRemember(); timers.runOnly();
+  assert.deepEqual(JSON.parse(storage.serialized).layers, saved.layers);
+  await controller.copyMapLink();
+  const shared = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  assert.deepEqual(shared.layers, saved.layers);
+  assert.equal(JSON.stringify(shared).includes("private local geometry"), false);
+  await controller.resetView();
+  assert.equal(records.length, 0);
+  await controller.undoReset();
+  assert.equal(records.length, 3);
+  assert.deepEqual(records.map(record => record.entry.item?.id ?? record.definition.customName), [first.customName, "regions", second.customName]);
+});
+
+for (const foreign of [false, true]) {
+  test(`unavailable drawing references remain saved with their source origin (${foreign ? "foreign site" : "source error"})`, async () => {
+    const drawing = drawingDefinition(); delete drawing.customName;
+    const saved = createSavedMapView({...emptySavedMap(0, 0, 2), layers: [drawing]});
+    const view = createView(), records = []; let reads = 0;
+    const controller = createController({view, viewerVersion: "1", viewerOrigin: foreign ? "https://other.example" : saved.viewer.origin,
+      viewport: {snapshot: () => saved.viewport, restore() {}},
+      mapLayers: {retainedRecords: records, commitStaged() {}}, catalogVisualization: {clear() {}},
+      exportDrawing: record => record.definition ?? null,
+      restoreDrawing: async () => { reads++; throw new Error("Drawing unavailable"); },
+    });
+    await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+    assert.equal(view.result.loaded, 0); assert.equal(reads, foreign ? 0 : 1);
+    assert.match(view.result.details.join(" "), foreign ? /original EOLab site/ : /Drawing unavailable/);
+    assert.equal(view.unavailableCount, 1);
+    controller.showUnavailableLayers();
+    assert.deepEqual(view.unavailableLayers, [{index: 0, label: "Saved drawing", sourceSite: foreign ? saved.viewer.origin : null, fields: []}]);
+    await controller.copyMapLink();
+    const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+    assert.deepEqual(copied.layers, saved.layers); assert.equal(copied.viewer.origin, saved.viewer.origin);
+    if (foreign) {
+      records.push({entry: {key: "this-site-drawing", item: null, isCustom: true}, definition: drawingDefinition("This site's drawing")});
+      await controller.copyMapLink();
+      assert.match(view.error.message, /layers linked to different EOLab sites/);
+    }
+    controller.removeUnavailableLayer(0);
+    assert.equal(view.unavailableCount, 0);
+  });
+}
 
 test("shared viewer restores its starting presentation and never reads or writes author autosave", async () => {
   const view = createView(), storage = createStorage("private map"), applied = [];
@@ -1230,10 +1392,14 @@ test("destroyed startup cannot prepare or commit layers after composition become
       const restoreStarted = new Promise(resolve => { markRestoreStarted = resolve; });
       const positions = [];
       const requested = [];
+      const readinessCurrent = [];
       let cleared = 0;
       const view = createView();
       const controller = createController({ view, storage,
-        beforeRestore: () => { markRestoreStarted(); return pendingReadiness; },
+        beforeRestore: async isCurrent => {
+          readinessCurrent.push(isCurrent()); markRestoreStarted(); await pendingReadiness;
+          readinessCurrent.push(isCurrent());
+        },
         viewport: { restore: value => positions.push(value) },
         catalogItems: { get(identity) { requested.push(identity); return identity; } },
         catalogVisualization: { clear() { cleared++; } },
@@ -1250,6 +1416,7 @@ test("destroyed startup cannot prepare or commit layers after composition become
       assert.deepEqual(positions, shared ? [] : [saved.viewport]);
       assert.equal(cleared, 1, "never clear again after waiting");
       assert.deepEqual(requested, [], "stale startup must not prepare layers");
+      assert.deepEqual(readinessCurrent, [true, false], "composition can stop stale cleanup after awaiting readiness");
       assert.deepEqual(storage.writes, []);
       assert.equal(storage.clears, 0);
       assert.equal(view.error, null);

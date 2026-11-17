@@ -1,0 +1,35 @@
+{
+  "format": "eolab-map-view",
+  "schemaVersion": 5,
+  "viewer": {"version": "0.9.0", "origin": "https://testserver"},
+  "createdAt": "2026-11-17T12:00:00.000Z",
+  "viewport": {"center": {"latitude": 0, "longitude": 0}, "zoom": 4},
+  "basemap": "detailed",
+  "mapLegend": {"visible": true, "collapsed": false},
+  "layers": [
+    {
+      "catalogItem": {"collection": "vectors", "id": "watersheds"},
+      "isCustom": true,
+      "customName": "Watershed",
+      "visible": true,
+      "opacity": 0.7,
+      "style": {"kind": "vector", "definition": {"geometryKind": "polygon"}}
+    },
+    {
+      "drawingLayerId": "11111111-1111-4111-8111-111111111111",
+      "isCustom": true,
+      "customName": "Restoration parcels",
+      "visible": true,
+      "legendIncluded": false,
+      "opacity": 0.8,
+      "appearance": {"color": "#1686b0", "outline": "#202020", "weight": 1, "fillOpacity": 0.25, "labels": true},
+      "filter": {"enabled": true, "match": "all", "rules": [{"field": "name", "operator": "eq", "value": "Priority"}]}
+    },
+    {
+      "drawingLayerId": "11111111-1111-4111-8111-111111111111",
+      "visible": false,
+      "opacity": 0.4,
+      "appearance": {"color": "#aa5500", "outline": "#404040", "weight": 2, "fillOpacity": 0.5, "labels": false}
+    }
+  ]
+}

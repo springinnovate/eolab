@@ -6,9 +6,9 @@ from uuid import UUID
 
 from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
 from eolab_app.drawings.models import DrawingError, DrawingLayer
+from eolab_app.map_layer_documents import MapDrawingLayer
 from eolab_app.planning.models import (
     PlanningError,
-    PlanningDrawingView,
     PlanningTool,
     PlanningToolDocument,
     UpdatePlanningTool,
@@ -61,7 +61,7 @@ class PlanningToolService:
         selections: dict[UUID, CatalogSelection] = {}
         try:
             for layer in document.layers:
-                if isinstance(layer.definition, PlanningDrawingView):
+                if isinstance(layer.definition, MapDrawingLayer):
                     if self._read_drawing is None:
                         raise PlanningError(
                             503, "Saved drawing layers are unavailable."

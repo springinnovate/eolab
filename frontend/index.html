@@ -879,7 +879,7 @@
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
-              <p>Local layers are saved on this device. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its shared polygons. Choose Download on the layer card to keep a GeoJSON copy. Map links include live shared layers, but not private polygons or editing credentials.</p>
+              <p>Local layers stay on this device until you save them through Planning. Those linked drawings and live shared layers are included in map links; other local drawings are not. Anyone with the link can read the latest saved polygons, but the link does not grant editing permission. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its saved polygons. Choose Download on the layer card to keep a GeoJSON copy.</p>
               <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
@@ -1688,6 +1688,7 @@
         <p class="models-help" data-private-result-notice hidden>Private result previews will not be published. The shared map includes only its other saved layers.</p>
         <p>Create a named map with your selected layers, styling, and starting view. Viewers can explore it without the catalog.</p>
         <p>Uploaded polygons stay private to this browser. Other browsers can open the map, but cannot open your uploaded layers.</p>
+        <p>Drawings saved through Planning are included as linked layers. Anyone with this map link can read their latest saved polygons; only the browser that created a drawing can edit it.</p>
         <fieldset id="publish-map-fields">
           <label>Map title<input id="publish-map-title" required maxlength="160" autocomplete="off"></label>
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>

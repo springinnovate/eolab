@@ -1,7 +1,8 @@
-"""Validate portable Catalog layer documents independently of their storage owner."""
+"""Validate portable Catalog and drawing views independently of their storage owner."""
 
 import json
 from typing import Annotated, Literal, Self
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -13,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from eolab_app.attribute_filter import VectorFilter, validate_filter
 from eolab_app.calculated_fields import CalculatedField
 
 MAX_APPEARANCE_DEFINITION_BYTES = 65_536
@@ -187,3 +189,46 @@ class MapLayer(MapStyledLayer):
     """One map view of a Catalog item, with its own style and filter."""
 
     catalogItem: MapCatalogItem
+
+
+class MapDrawingAppearance(MapDocumentPart):
+    """Retain a drawn layer's polygon styling independently of its source."""
+
+    color: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
+    outline: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
+    weight: Annotated[float, Field(ge=0, le=10)]
+    fillOpacity: Annotated[float, Field(ge=0, le=1)]
+    labels: bool
+
+
+class MapDrawingLayer(MapDocumentPart):
+    """Reference a live drawing source with view-local appearance and filters.
+
+    The opaque drawingLayerId permits reading the latest saved polygons, never
+    editing the source. The document retains no geometry or source revision.
+    Repeated references represent independent views of the same source.
+    Omitted filter leaves every polygon visible; omitted legendIncluded includes
+    the visible drawing in the map legend.
+    """
+
+    drawingLayerId: Annotated[UUID, Field(strict=False)]
+    isCustom: Literal[True] = True
+    customName: Title | None = None
+    visible: bool
+    legendIncluded: bool = True
+    opacity: Annotated[float, Field(ge=0, le=1)]
+    appearance: MapDrawingAppearance
+    filter: VectorFilter = Field(default_factory=VectorFilter)
+
+    @model_validator(mode="after")
+    def validate_drawing_filter(self) -> Self:
+        """Require the name and note attributes supplied by drawing sources.
+
+        Returns:
+            This view with a valid drawing attribute filter.
+
+        Raises:
+            ValueError: A rule does not match the source's text attributes.
+        """
+        validate_filter(self.filter, {"name": "str", "note": "str"})
+        return self

@@ -925,17 +925,39 @@ export class AnnotationController {
 
     /** Export a linked drawing's current view settings without its polygon geometry.
      * @param {string} key Local drawing view key.
-     * @return {Object|null} Portable source reference and appearance, or null for another owner.
-     * @throws {Error} If the drawing has not yet been linked successfully.
+     * Unlinked device-only drawings stay outside portable map documents.
+     * @return {Object|null} Portable source reference and appearance, or null for an unlinked or unrelated layer.
      */
     exportDrawingLayer(key) {
         const layer = this.model.layers.find(candidate => `local:annotation:${candidate.id}` === key);
-        if (!layer) return null;
-        if (!layer.drawingSource) throw new Error("Save this drawing before saving its reference.");
+        if (!layer?.drawingSource) return null;
         const record = this.mapLayers.getRecord(key);
         return {drawingLayerId: layer.drawingSource.id, isCustom: true, customName: layer.name,
             visible: layer.visible, opacity: layer.opacity, legendIncluded: record.entry.legendIncluded !== false,
             appearance: {...layer.style}, filter: annotationFilterRules(layer.filter)};
+    }
+
+    /** Remove clean cached drawing views before a complete map restores its saved views.
+     * Portable maps own linked view settings; device storage still protects pending edits and drafts.
+     * Unlinked drawings and shared-session contributions keep their existing device lifecycle.
+     * @param {()=>boolean} isCurrent Whether the requesting full-map restoration is still active.
+     * @return {Promise<void>} Completion after obsolete clean views are removed from map and device storage.
+     */
+    async prepareDrawingMapRestore(isCurrent) {
+        if (this.savePromise) await this.savePromise;
+        if (!isCurrent()) return;
+        const replaced = this.model.layers.filter(layer => layer.drawingSource && !this.drawingHasLocalChanges(layer));
+        if (!replaced.length) return;
+        for (const layer of replaced) {
+            const key = `local:annotation:${layer.id}`;
+            if (this.layers.has(layer.id)) this.mapLayers.removeKey(key);
+            else {
+                this.model.layers = this.model.layers.filter(candidate => candidate !== layer);
+                this.savedDrawingContents.delete(layer.id);
+                this.unavailableDrawingSources.delete(layer.id);
+            }
+        }
+        await this.save();
     }
 
     /** Add a fresh ordinary view of the latest linked drawing, preserving original polygon IDs.
@@ -951,13 +973,13 @@ export class AnnotationController {
         if (peers.some(layer => this.drawingHasLocalChanges(layer))) throw new Error("This drawing has local changes. Save or cancel its unfinished polygon; if saving conflicts, download your polygons before removing this view and reopening the saved drawing.");
         const record = await this.sourceApi.get(definition.drawingLayerId);
         if (!isCurrent()) return null;
-        if (peers.some(layer => this.drawingHasLocalChanges(layer))) throw new Error("This drawing has local changes. Save or cancel its unfinished polygon; if saving conflicts, download your polygons before removing this view and reopening the saved drawing.");
+        if (this.model.layers.some(layer => layer.drawingSource?.id === record.id && this.drawingHasLocalChanges(layer))) throw new Error("This drawing has local changes. Save or cancel its unfinished polygon; if saving conflicts, download your polygons before removing this view and reopening the saved drawing.");
         const layer = readDrawingView(record, this.model.newId());
         layer.name = definition.customName ?? layer.name;
         layer.visible = definition.visible;
         layer.opacity = definition.opacity;
         layer.style = validateAnnotationStyle(definition.appearance);
-        layer.filter = annotationFilterRules(definition.filter);
+        layer.filter = annotationFilterRules(definition.filter ?? layer.filter);
         readAnnotationLayers({version: 1, layers: [...this.model.layers, layer]});
         this.acceptDrawingSource(record);
         this.model.layers.unshift(layer);
@@ -1000,14 +1022,19 @@ export class AnnotationController {
         }
     }
 
-    /** Apply an acknowledged source to its clean views; changed peers retain their revision for conflict detection.
+    /** Apply an acknowledged source to its clean views without replacing newer revisions or pending edits.
      * @param {Object} record Server-validated source response.
      * @param {string|null} [savedViewId=null] View whose submitted contents were just acknowledged.
      * @return {void}
+     * @throws {Error} If a delayed response is older than an already acknowledged source revision.
      */
     acceptDrawingSource(record, savedViewId = null) {
+        const peers = this.model.layers.filter(layer => layer.drawingSource?.id === record.id);
+        if (peers.some(layer => layer.drawingSource.revision > record.revision)) {
+            throw new Error("This drawing changed while it was opening. Reopen the map or tool, or retry saving, to read its latest polygons.");
+        }
         const contents = serializeDrawingContent(record.collection);
-        for (const layer of this.model.layers.filter(candidate => candidate.drawingSource?.id === record.id)) {
+        for (const layer of peers) {
             const saved = layer.id === savedViewId;
             if (!saved && this.drawingHasLocalChanges(layer)) continue;
             const restored = readDrawingView(record, layer.id);

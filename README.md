@@ -442,6 +442,9 @@ before saving the tool. Tool references permit reading the drawings,
 while only the browser that created a source can edit it. Other local drawings
 remain on the device. View names, filters and appearance stay independent of
 the source. Removing a map layer does not delete its saved drawing source.
+Linked drawings also stay in remembered and published maps, with their own view
+names, filters and appearance. Reopening a map reads the latest saved polygons;
+sharing a map permits reading its linked drawings, not editing their source.
 
 Use the ordinary layer filters while configuring the tool; saving includes their
 current settings. Reopening a tool adds editable custom views with those settings
@@ -490,7 +493,8 @@ site's current datasets; missing data can prevent full restoration.
 #### Draw and share polygons
 
 Use **Map contents → Draw polygon** to create a private polygon layer and start
-drawing. Drawings stay on this device. Edit their boundaries, add names and
+drawing. Drawings stay on this device unless saved through Planning as linked
+sources. Edit their boundaries, add names and
 notes, and save before using them in an analysis. Use **Draw polygon** on the
 layer to add more polygons.
 

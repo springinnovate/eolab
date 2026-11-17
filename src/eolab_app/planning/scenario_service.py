@@ -6,7 +6,8 @@ from uuid import UUID
 
 from eolab_app.catalog_selection import SelectionUnavailableError
 from eolab_app.drawings.models import DrawingError, DrawingLayer
-from eolab_app.planning.models import PlanningDrawingView, PlanningError
+from eolab_app.map_layer_documents import MapDrawingLayer
+from eolab_app.planning.models import PlanningError
 from eolab_app.planning.scenario_models import (
     Scenario,
     SetScenarioAssignment,
@@ -82,7 +83,7 @@ class PlanningScenarioService:
             layer for layer in tool.layers if layer.id == tool.parcelLayerId
         ).definition
         try:
-            if isinstance(parcels, PlanningDrawingView):
+            if isinstance(parcels, MapDrawingLayer):
                 if request.parcelId.type != "string":
                     raise PlanningError(422, "Drawn parcels use text polygon IDs.")
                 if request.interventionId is None:

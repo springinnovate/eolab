@@ -1598,7 +1598,14 @@ async function initializeCatalog(
             },
             zoom: appGlobalConfiguration.initialView.zoom,
         },
-        beforeRestore: () => {
+        /** Clear replaceable map views after their source owners finish startup.
+         * @param {()=>boolean} isCurrent Whether this map restoration is still active.
+         * @return {Promise<void>} Completion after current-view cleanup, or supersession.
+         */
+        beforeRestore: async isCurrent => {
+            await annotationsReady;
+            await annotations.prepareDrawingMapRestore(isCurrent);
+            if (!isCurrent()) return;
             clearCatalogSelection();
             for (const layer of mapLayerController.snapshots()) {
                 if (layer.source?.kind === "uploadedRaster") mapLayerController.removeKey(layer.key);
@@ -1608,7 +1615,6 @@ async function initializeCatalog(
                     mapLayerController.removeKey(record.entry.key);
                 }
             }
-            return annotationsReady;
         },
         exportUpload: record => {
             const raster = mapLayerController.snapshots().find(layer => layer.key === record.entry.key)?.source;
@@ -1666,6 +1672,8 @@ async function initializeCatalog(
             const id = await annotationSessions.openMapReference(layer.sharedAnnotation, isCurrent);
             return id && isCurrent() ? annotations.restoreMapAppearance(id, layer) : null;
         },
+        exportDrawing: record => annotations?.exportDrawingLayer(record.entry.key) ?? null,
+        restoreDrawing: (layer, isCurrent) => annotations.restoreDrawingLayer(layer, isCurrent),
     });
     if (!isSharedViewer) {
         planning = new PlanningController({
@@ -1701,7 +1709,7 @@ async function initializeCatalog(
                 const drawings = new Set((annotations?.drawingLayers() ?? []).map(layer => layer.key));
                 for (const key of keys) if (drawings.has(key)) await annotations.ensureDrawingSource(key);
             },
-            exportLayer: key => annotations?.exportDrawingLayer(key) ?? savedMapViewController.exportCatalogLayer(key),
+            exportLayer: key => savedMapViewController.exportLayer(key),
             /** Restore each durable view once, then bind it to its fresh map key.
              * @param {Object[]} layers Saved view IDs and ordinary layer definitions.
              * @param {()=>boolean} isCurrent Whether this tool is still being opened.
@@ -1709,29 +1717,8 @@ async function initializeCatalog(
              */
             restoreLayers: async (layers, isCurrent) => {
                 await annotationsReady;
-                const results = new Map(), attached = [];
-                try {
-                    const catalog = layers.filter(layer => !layer.definition.drawingLayerId);
-                    if (catalog.length) {
-                        const restored = await savedMapViewController.restoreCatalogLayers(catalog.map(layer => layer.definition), isCurrent);
-                        for (const [index, result] of restored.entries()) {
-                            if (result.key) attached.push(result.key);
-                            results.set(catalog[index].id, result);
-                        }
-                        const failure = restored.find(result => !result.key);
-                        if (failure) throw new Error(failure.error);
-                    }
-                    for (const layer of layers.filter(value => value.definition.drawingLayerId)) {
-                        const key = await annotations.restoreDrawingLayer(layer.definition, isCurrent);
-                        if (!key) throw new Error("Layer restoration was cancelled.");
-                        attached.push(key); results.set(layer.id, {key, error: null});
-                    }
-                    if (!isCurrent()) throw new Error("Layer restoration was cancelled.");
-                    return layers.map(layer => ({id: layer.id, ...results.get(layer.id)}));
-                } catch (error) {
-                    for (const key of attached) mapLayerController.removeKey(key);
-                    return layers.map(layer => ({id: layer.id, key: null, error: error.message}));
-                }
+                const restored = await savedMapViewController.restoreLayers(layers.map(layer => layer.definition), isCurrent);
+                return restored.map((result, index) => ({id: layers[index].id, ...result}));
             },
             editLayerFilter: key => vectorFilterControls.open(key),
             onOpen: () => mapInspection.showPlanning(),
@@ -1902,7 +1889,7 @@ async function initializeCatalog(
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
             onRenameContributor: id => annotationSessions.editContributorName(id),
             requestEditing: id => annotationSessions.requestDrawing(id),
-            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); },
+            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
             onFilter: key => vectorFilterControls.open(key),
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
@@ -1934,7 +1921,8 @@ async function initializeCatalog(
         const restoringMap = savedMapViewController.restoreStartupView(globalThis.location.hash);
         void Promise.all([annotationsReady, restoringMap]).then(() => {
             annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash,
-                mapOrderedLayerIds: annotationSessions.bookmarkedLayerIds() });
+                mapOrderedLayerIds: [...annotationSessions.bookmarkedLayerIds(),
+                    ...annotations.drawingLayers().filter(layer => layer.drawingLayerId).map(layer => layer.localLayerId)] });
             void annotationSessions.refresh();
         });
     }
