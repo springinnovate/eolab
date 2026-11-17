@@ -11,6 +11,7 @@
   <script type="module">
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
+    import { MapInspectionController } from "../src/map-inspection-controller.js";
 
     /** Fail this scenario when a user-visible condition is false.
      * @param {boolean} condition Expected outcome.
@@ -58,7 +59,39 @@
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
     }
 
-    /** Exercise search/details focus, independent content scrolling and diagnostic bounds.
+    /** Exercise both raster views as histogram results arrive in the shared dock.
+     * @returns {void}
+     * @throws {Error} If a result changes the header text, layout, selected view or focus.
+     */
+    function checkHistogramResultNavigation() {
+      const dock = new MapInspectionController();
+      const header = document.querySelector("#map-inspection-raster-analysis");
+      for (const [buttonId, open] of [
+        ["open-raster-series-dock", () => dock.showRasterSeries()],
+        ["map-click-histogram", () => dock.showHistogram()],
+      ]) {
+        open();
+        dock.beginMapClick({ lat: -5, lng: -63 });
+        const button = document.getElementById(buttonId);
+        button.focus();
+        const text = header.innerText;
+        const height = header.offsetHeight;
+        check(height > 0, "Analysis navigation must be visible before results arrive");
+        for (const state of ["loading", "ready", "error"]) {
+          dock.setClickResult("histogram", { state });
+          check(header.innerText === text && header.offsetHeight === height,
+            `Histogram ${state} changed the shared header with ${button.textContent} open`);
+          check(button.getAttribute("aria-pressed") === "true" && document.activeElement === button,
+            `Histogram ${state} changed the selected view or moved keyboard focus`);
+        }
+      }
+      const featureError = "The selected feature could not be read.";
+      dock.setClickResult("feature", { state: "error", message: featureError });
+      check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
+      dock.destroy();
+    }
+
+    /** Exercise the rendered workspace layout, focus and result navigation.
      * @returns {Promise<void>} Resolves after the current viewport passes.
      * @throws {Error} If markup cannot load or a presentation outcome fails.
      */
@@ -138,6 +171,7 @@
       const lastLocation = locations.lastElementChild;
       lastLocation.scrollIntoView({ block: "nearest" });
       check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
+      checkHistogramResultNavigation();
       layout.destroy();
     }
 

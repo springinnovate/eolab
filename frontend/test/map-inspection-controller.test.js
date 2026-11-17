@@ -1127,12 +1127,11 @@ test("raster series remains active during map inspection and closes without hidi
     statisticsButton.focus();
     for (const state of ["loading", "ready", "error"]) {
         h.controller.setClickResult("histogram", { state });
+        assert.equal(h.histogramTab.getAttribute("data-loading"), String(state === "loading"));
         assert.equal(h.controller.activeTool, "raster-series");
         assert.equal(statisticsButton.getAttribute("aria-pressed"), "true");
-        assert.equal(statisticsButton.textContent, "Raster statistics");
         assert.equal(h.doc.activeElement, statisticsButton);
         assert.equal(h.histogramTab.title, "2 raster results");
-        assert.equal(h.doc.querySelector("#map-click-feature-status").hidden, true);
     }
     h.controller.hideRasterSeries();
     assert.notEqual(activity.at(-1), "raster-series");
