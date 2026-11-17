@@ -4282,7 +4282,7 @@ article.raster-histogram-summary {
   overflow: hidden;
 }
 
-.map-inspection-tab[data-unread="true"]::after { content: " •"; color: var(--brand); }
+.map-inspection-tab[data-unread="true"]::after { content: " •" / ""; color: var(--brand); }
 .map-inspection-tab[data-loading="true"]::after {
   content: "";
   display: inline-block;
