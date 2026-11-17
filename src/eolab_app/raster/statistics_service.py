@@ -39,6 +39,7 @@ from eolab_app.raster.models import (
     CatalogRasterStatisticsRequest,
     CanonicalWgs84Bounds,
     RasterPairedStatistics,
+    RasterBoxMean,
     RasterStatistics,
     RasterStatisticsCacheKey,
 )
@@ -64,6 +65,9 @@ from eolab_app.raster.read_cancellation import (
     require_active_raster_read,
 )
 from eolab_app.raster.statistics import (
+    BOX_MEAN_ALGORITHM,
+    BOX_MEAN_MAX_OVERVIEW_DIMENSION,
+    read_sampling_box_mean,
     NoRasterBoundsOverlapError,
     NoValidRasterSamplesError,
     RASTER_STATISTICS_ALGORITHM,
@@ -94,7 +98,11 @@ def _private_vector_area(area: RasterSamplingArea) -> bool:
     )
 
 
-_StatisticsResult = RasterStatistics | RasterPairedStatistics
+_SingleRasterResult = RasterStatistics | RasterBoxMean
+_StatisticsResult = _SingleRasterResult | RasterPairedStatistics
+_StatisticsReader = Callable[
+    [RasterData, RasterSamplingArea, RasterReadCancellationCheck | None], _SingleRasterResult
+]
 
 
 class _CategoricalStatisticsReader(Protocol):
@@ -261,7 +269,7 @@ class RasterStatisticsService:
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         owner: str | None = None,
         upload_owner: str | None = None,
-    ) -> RasterStatistics:
+    ) -> _SingleRasterResult:
         """Summarize original raster data while retaining its authorized source.
 
         Args:
@@ -270,7 +278,7 @@ class RasterStatisticsService:
             upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
-            Counts, ranges, percentiles and a histogram with sampling details.
+            The requested distribution or box mean with its sampling method.
 
         Raises:
             RasterFeatureError: If source, area or bounded reading is unavailable.
@@ -293,7 +301,7 @@ class RasterStatisticsService:
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         authorized_raster: RasterReadSource,
         sampling_area: RasterSamplingArea,
-    ) -> RasterStatistics:
+    ) -> _SingleRasterResult:
         """Reuse or calculate statistics for an authorized raster and sampling area.
 
         Args:
@@ -317,23 +325,22 @@ class RasterStatisticsService:
             if request.category_values is not None
             else None
         )
+        algorithm = RASTER_STATISTICS_ALGORITHM
+        parameters = raster_statistics_policy_parameters()
+        reader = self._statistics_reader
+        if request.measure == "mean":
+            algorithm = BOX_MEAN_ALGORITHM
+            parameters = (*parameters, BOX_MEAN_MAX_OVERVIEW_DIMENSION)
+            # The request model permits this measure only for SamplingBoxArea.
+            reader = cast(_StatisticsReader, read_sampling_box_mean)
+        elif category_values is not None:
+            algorithm = CATEGORICAL_STATISTICS_ALGORITHM
+            parameters = (*categorical_statistics_policy_parameters(), len(category_values), *category_values)
+            reader = partial(
+                self._categorical_statistics_reader, category_values=category_values,
+            )
         cache_key: RasterStatisticsCacheKey = (
-            authorized_raster.cache_identity,
-            (
-                CATEGORICAL_STATISTICS_ALGORITHM
-                if category_values is not None
-                else RASTER_STATISTICS_ALGORITHM
-            ),
-            sampling_area.cache_identity(),
-            (
-                (
-                    *categorical_statistics_policy_parameters(),
-                    len(category_values),
-                    *category_values,
-                )
-                if category_values is not None
-                else raster_statistics_policy_parameters()
-            ),
+            authorized_raster.cache_identity, algorithm, sampling_area.cache_identity(), parameters
         )
         async with self._state_lock:
             cached = self._cache.get(cache_key)
@@ -348,17 +355,17 @@ class RasterStatisticsService:
                         cache_key,
                         sampling_area,
                         cancellation,
-                        category_values,
+                        reader,
                     ),
                 )
 
         if cached is not None:
-            return cast(RasterStatistics, cached)
+            return cast(_SingleRasterResult, cached)
 
         if work is None:
             raise RuntimeError("Raster statistics work was not established")
         try:
-            return cast(RasterStatistics, await asyncio.shield(work.task))
+            return cast(_SingleRasterResult, await asyncio.shield(work.task))
         except NoRasterBoundsOverlapError as error:
             if isinstance(sampling_area, SamplingBoxArea):
                 raise RasterSamplingBoxOutsideSourceError(
@@ -743,8 +750,8 @@ class RasterStatisticsService:
         cache_key: RasterStatisticsCacheKey,
         sampling_area: RasterSamplingArea,
         cancellation_requested: threading.Event,
-        category_values: tuple[int, ...] | None = None,
-    ) -> RasterStatistics:
+        reader: _StatisticsReader,
+    ) -> _SingleRasterResult:
         """Calculate and cache raster statistics while holding a reader slot.
 
         Args:
@@ -752,8 +759,7 @@ class RasterStatisticsService:
             cache_key: Source, area, algorithm, and parameter cache identity.
             sampling_area: Resolved whole-raster, rectangle, geodesic box or catalog-selection area.
             cancellation_requested: Thread-safe last-waiter signal.
-            category_values: Sorted numeric classification codes, or None for
-                the unchanged continuous distribution.
+            reader: Authorized statistic selected for this cache identity.
 
         Returns:
             Newly computed bounded raster statistics.
@@ -777,14 +783,7 @@ class RasterStatisticsService:
                     else asyncio.to_thread
                 )
                 statistics = await execute(
-                    (
-                        partial(
-                            self._categorical_statistics_reader,
-                            category_values=category_values,
-                        )
-                        if category_values is not None
-                        else self._statistics_reader
-                    ),
+                    reader,
                     authorized_raster.data,
                     sampling_area,
                     (
@@ -817,7 +816,7 @@ class RasterStatisticsService:
     def _remember_completed(
         self,
         cache_key: tuple[object, ...],
-        statistics: RasterStatistics | RasterPairedStatistics,
+        statistics: _StatisticsResult,
     ) -> None:
         """Retain one completed result within the combined LRU budget.
 

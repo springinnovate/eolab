@@ -244,14 +244,18 @@ def _source_window_cell_positions(
     )
 
 
-def _read_bounded_overview(
+def read_bounded_overview(
     dataset: RasterDataset,
     source_window: Window,
     sample_width: int,
     sample_height: int,
     cancellation_requested: RasterReadCancellationCheck | None,
+    *,
+    maximum_dimension: int = SAMPLE_GRID_MAX_OVERVIEW_DIMENSION,
+    prefer_finest: bool = False,
+    maximum_decoded_bytes: int | None = None,
 ) -> numpy.ma.MaskedArray | None:
-    """Read the coarsest embedded level that fits the grid and tile budgets.
+    """Read an embedded level that fits the requested grid and tile budgets.
 
     Args:
         dataset: Open authorized source. Embedded dataset masks require native
@@ -260,6 +264,9 @@ def _read_bounded_overview(
         sample_width: Minimum intermediate width in pixels.
         sample_height: Minimum intermediate height in pixels.
         cancellation_requested: Check for an obsolete read before and after I/O.
+        maximum_dimension: Maximum intermediate width and height.
+        prefer_finest: Try the finest admissible overview first for denser coverage.
+        maximum_decoded_bytes: Optional tighter total tile budget for this read.
 
     Returns:
         Masked values covering the requested window, or None when no level fits.
@@ -271,7 +278,11 @@ def _read_bounded_overview(
     require_active_raster_read(cancellation_requested)
     if MaskFlags.per_dataset in dataset.mask_flag_enums[0]:
         return None
-    for index in reversed(range(len(dataset.overviews(1)))):
+    levels = range(len(dataset.overviews(1)))
+    byte_limit = SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
+    if maximum_decoded_bytes is not None:
+        byte_limit = min(byte_limit, maximum_decoded_bytes)
+    for index in levels if prefer_finest else reversed(levels):
         # GDAL reports rounded factors. Use the stored level's grid and prevent
         # RasterIO from silently selecting a different level for this window.
         with rasterio.open(
@@ -286,8 +297,8 @@ def _read_bounded_overview(
                 source_window.height * y_scale,
             )
             width, height = math.ceil(window.width), math.ceil(window.height)
-            if max(width, height) > SAMPLE_GRID_MAX_OVERVIEW_DIMENSION:
-                break
+            if max(width, height) > maximum_dimension:
+                continue
             if width < sample_width or height < sample_height:
                 continue
             tile_height, tile_width = level.block_shapes[0]
@@ -305,7 +316,7 @@ def _read_bounded_overview(
             if (
                 tile_bytes > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
                 or tile_count > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
-                or tile_bytes * tile_count > SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
+                or tile_bytes * tile_count > byte_limit
             ):
                 continue
             require_active_raster_read(cancellation_requested)
@@ -342,7 +353,7 @@ def _read_overview_sample_grid(
         RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If the overview read fails.
     """
-    overview = _read_bounded_overview(
+    overview = read_bounded_overview(
         dataset,
         source_window,
         width,
@@ -399,7 +410,7 @@ def read_planned_sample_grid_from_overview(
         ValueError: If a planned position lies outside ``source_window`` or
             Rasterio returns an unexpected shape.
     """
-    overview = _read_bounded_overview(
+    overview = read_bounded_overview(
         dataset,
         source_window,
         plan.width,

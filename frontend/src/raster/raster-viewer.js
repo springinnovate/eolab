@@ -171,7 +171,7 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object) => void} remove Remove one Item from the stack.
  * @property {(key?:string|null,mode?:string)=>Readonly<Object>|null} getSelectedArea
  * Read an immutable explicit selection, independently of statistics readiness.
- * @property {()=>Readonly<Object>|null} selectSamplingBox Capture a geodesic box at the map center,
+ * @property {(position?:{lng:number,lat:number})=>Readonly<Object>|null} selectSamplingBox Capture a geodesic box at the supplied position or map center,
  * returning null when its pole/date-line boundary is unsupported.
  * @property {(area:Object|null)=>void} setSamplingActivity Mark the matching committed box or rectangle
  * while a calculation uses it, without changing the selected geometry.
@@ -5107,10 +5107,11 @@ export function initializeRasterViewer(
         getSelectedArea,
         // Composition reuses these same map-sampling actions from the floating
         // area form; Processing retains its own polygon selection lifecycle.
-        /** Select a map-centered geodesic box without requiring a histogram source.
+        /** Select a geodesic box for area consumers independently of histogram coverage.
+         * @param {{lng:number,lat:number}} [position] Clicked position, defaulting to the map center.
          * @return {Object|null} Captured samplingBox descriptor, or null near a pole/date line.
          */
-        selectSamplingBox: () => rasterSampleWindowController.selectAt(leafletMap.getCenter()) === null
+        selectSamplingBox: (position = leafletMap.getCenter()) => rasterSampleWindowController.selectAt(position) === null
             ? null : rasterSampleWindowController.selectedArea,
         selectWholeRaster: handleClearSampleWindow,
         setSamplingActivity: area => rasterSampleWindowController.setActivityArea(area),
