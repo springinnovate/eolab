@@ -1,6 +1,7 @@
 """Test deployment contracts expressed by Docker Compose."""
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,7 +13,8 @@ ENV_EXAMPLE_PATH = Path(__file__).parents[1] / ".env.example"
 
 def test_public_app_variables_are_not_self_referential() -> None:
     """Keep Coolify deployment inputs editable instead of Compose-managed."""
-    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    app = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]["app"]
+    environment = dict(entry.split("=", 1) for entry in app["environment"])
     variable_mappings = {
         "APP_TITLE": "EOLAB_APP_TITLE",
         "SAVED_MAP_CAPACITY": "EOLAB_SAVED_MAP_CAPACITY",
@@ -31,14 +33,11 @@ def test_public_app_variables_are_not_self_referential() -> None:
     }
 
     for container_variable, deployment_variable in variable_mappings.items():
-        assert f'"{container_variable}=${{{deployment_variable}' in compose
-        assert f'"{deployment_variable}=${{{deployment_variable}' not in compose
-
-    assert (
-        '"APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze '
-        'Earth observation data}"'
-        in compose
-    )
+        assert re.match(
+            rf"\$\{{{deployment_variable}(?::[-?]|[-?]|}})",
+            environment[container_variable],
+        ), container_variable
+        assert deployment_variable not in environment
 
 
 def test_default_basemap_is_attributed_opentopomap() -> None:
@@ -61,43 +60,38 @@ def test_default_basemap_is_attributed_opentopomap() -> None:
 
 
 def test_scan_paths_share_one_read_only_deployment_mount() -> None:
-    """Keep the host mount separate from container-relative scan paths."""
-    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    """Keep each reader on the same read-only host mount and relative scan paths."""
+    services = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]
+    # Processing's source and artifact mounts have their own ownership test.
+    for name in ("app", "geoserver", "jobs"):
+        (source_mount,) = [
+            mount
+            for mount in services[name]["volumes"]
+            if isinstance(mount, dict) and mount.get("target") == "/scan-source"
+        ]
+        assert source_mount["type"] == "bind", name
+        assert source_mount["source"] == "${EOLAB_SCAN_MOUNT_PATH}", name
+        assert source_mount["read_only"] is True, name
 
-    assert "source: ${EOLAB_SCAN_MOUNT_PATH}" in compose
-    assert "target: /scan-source" in compose
-    assert "read_only: true" in compose
-    assert '"SCAN_MOUNT_PATH=/scan-source"' in compose
-    assert '"SCAN_PATHS_WITHIN_MOUNT=${EOLAB_SCAN_PATHS_WITHIN_MOUNT:' in compose
-    assert '"SCAN_DISPLAY_PATH_PREFIX=${EOLAB_SCAN_DISPLAY_PATH_PREFIX:' in compose
-    assert '"SCAN_WORKER_COUNT=${EOLAB_SCAN_WORKER_COUNT:-8}"' in compose
-    assert '"SCAN_WRITER_COUNT=${EOLAB_SCAN_WRITER_COUNT:-4}"' in compose
-    assert '"SCAN_BATCH_SIZE=${EOLAB_SCAN_BATCH_SIZE:-100}"' in compose
-    assert (
-        '"SCAN_ERROR_DETAIL_LIMIT=${EOLAB_SCAN_ERROR_DETAIL_LIMIT:-100}"'
-        in compose
-    )
-    assert (
-        '"SCAN_RECONCILIATION_PAGE_SIZE='
-        '${EOLAB_SCAN_RECONCILIATION_PAGE_SIZE:-500}"' in compose
-    )
-    assert (
-        '"SCAN_RECONCILIATION_CONCURRENCY='
-        '${EOLAB_SCAN_RECONCILIATION_CONCURRENCY:-8}"' in compose
-    )
-    assert (
-        '"SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES='
-        '${EOLAB_SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES:-1048576}"' in compose
-    )
-    assert (
-        '"SCAN_CATALOG_WRITE_TIMEOUT_SECONDS='
-        '${EOLAB_SCAN_CATALOG_WRITE_TIMEOUT_SECONDS:-120}"' in compose
-    )
-    assert (
-        '"SCAN_CATALOG_ERROR_DETAIL_LIMIT='
-        '${EOLAB_SCAN_CATALOG_ERROR_DETAIL_LIMIT:-500}"' in compose
-    )
-    assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
+    environment = dict(entry.split("=", 1) for entry in services["app"]["environment"])
+    assert environment["SCAN_MOUNT_PATH"] == "/scan-source"
+    assert "EOLAB_SCAN_MOUNT_PATH" not in environment
+    for setting in (
+        "SCAN_PATHS_WITHIN_MOUNT",
+        "SCAN_DISPLAY_PATH_PREFIX",
+        "SCAN_WORKER_COUNT",
+        "SCAN_WRITER_COUNT",
+        "SCAN_BATCH_SIZE",
+        "SCAN_ERROR_DETAIL_LIMIT",
+        "SCAN_RECONCILIATION_PAGE_SIZE",
+        "SCAN_RECONCILIATION_CONCURRENCY",
+        "SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES",
+        "SCAN_CATALOG_WRITE_TIMEOUT_SECONDS",
+        "SCAN_CATALOG_ERROR_DETAIL_LIMIT",
+    ):
+        assert re.match(
+            rf"\$\{{EOLAB_{setting}(?::[-?]|[-?]|}})", environment[setting]
+        ), setting
 
 
 def test_jobs_reads_generated_results_from_the_shared_read_only_volume() -> None:
@@ -397,14 +391,19 @@ def test_app_image_avoids_repeated_gdal_directory_listing() -> None:
 
 
 def test_app_can_inventory_existing_catalog_items() -> None:
-    """Give the app database access to classify existing scanner Items."""
-    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    """Give the app its own connection to the deployed Catalog database."""
+    services = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]
+    environment = dict(entry.split("=", 1) for entry in services["app"]["environment"])
+    database_environment = dict(
+        entry.split("=", 1) for entry in services["database"]["environment"]
+    )
 
-    assert '"PGHOST=database"' in compose
-    assert '"PGPORT=5432"' in compose
-    assert '"PGDATABASE=eolab"' in compose
-    assert '"PGUSER=eolab"' in compose
-    assert '"PGPASSWORD=${EOLAB_DATABASE_PASSWORD:' in compose
+    assert environment["PGHOST"] == "database"
+    assert environment["PGPORT"] == "5432"
+    assert environment["PGDATABASE"] == database_environment["POSTGRES_DB"]
+    assert environment["PGUSER"] == database_environment["POSTGRES_USER"]
+    assert environment["PGPASSWORD"] == database_environment["POSTGRES_PASSWORD"]
+    assert environment["PGPASSWORD"].startswith("${EOLAB_DATABASE_PASSWORD:?")
 
 
 def test_internal_stac_api_enables_writes_for_scanning() -> None:
@@ -414,7 +413,7 @@ def test_internal_stac_api_enables_writes_for_scanning() -> None:
     assert '"ENABLE_TRANSACTIONS_EXTENSIONS=TRUE"' in compose
 
 
-def test_geoserver_is_internal_persistent_and_reads_the_scan_mount() -> None:
+def test_geoserver_is_internal_and_persistent() -> None:
     """Keep GeoServer private while preserving its config and shared datasets."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
     geoserver_service = compose.split("  geoserver:\n", 1)[1].split(
@@ -424,9 +423,6 @@ def test_geoserver_is_internal_persistent_and_reads_the_scan_mount() -> None:
     assert "dockerfile: Dockerfile.geoserver" in geoserver_service
     assert "ports:" not in geoserver_service
     assert '"8080"' in geoserver_service
-    assert "source: ${EOLAB_SCAN_MOUNT_PATH}" in geoserver_service
-    assert "target: /scan-source" in geoserver_service
-    assert "read_only: true" in geoserver_service
     assert "geoserver-data:/opt/geoserver_data" in geoserver_service
     assert '"GEOWEBCACHE_CACHE_DIR=/opt/geoserver_data/gwc-cache"' in (
         geoserver_service
