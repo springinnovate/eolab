@@ -60,11 +60,11 @@
     }
 
     /** Exercise both raster views as histogram results arrive in the shared dock.
+     * @param {MapInspectionController} dock Mounted map inspection panel.
      * @returns {void}
      * @throws {Error} If a result changes the header text, layout, selected view or focus.
      */
-    function checkHistogramResultNavigation() {
-      const dock = new MapInspectionController();
+    function checkHistogramResultNavigation(dock) {
       const header = document.querySelector("#map-inspection-raster-analysis");
       for (const [buttonId, open] of [
         ["open-raster-series-dock", () => dock.showRasterSeries()],
@@ -88,10 +88,45 @@
       const featureError = "The selected feature could not be read.";
       dock.setClickResult("feature", { state: "error", message: featureError });
       check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
-      dock.destroy();
     }
 
-    /** Exercise the rendered workspace layout, focus and result navigation.
+    /** Check that both panel tabs free map space, retain context, and stay reachable.
+     * @param {MapInspectionController} inspection Mounted map inspection panel.
+     * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
+     * @throws {Error} If either disclosure is obscured or restores the wrong state.
+     */
+    async function checkPanelDisclosures(inspection) {
+      const collapseLeft = document.querySelector("#collapse-panel");
+      const expandLeft = document.querySelector("#open-panel");
+      const collapseRight = document.querySelector("#toggle-map-inspection-dock");
+      const expandRight = document.querySelector("#open-map-tools");
+      const chooser = document.querySelector("#map-tools-more-summary");
+      collapseLeft.click();
+      inspection.showStyle("Land cover");
+      await settleLayout();
+      check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
+      collapseRight.click();
+      await settleLayout();
+      check(document.activeElement === expandRight, "Collapsing Map tools lost focus");
+      check(chooser.getClientRects().length === 0, "The tool chooser still occupies map space");
+      check(isReachable(expandLeft) && isReachable(expandRight), "A collapsed panel tab cannot be reached");
+      const left = expandLeft.getBoundingClientRect();
+      const right = expandRight.getBoundingClientRect();
+      check(left.top === right.top && left.height === right.height && left.left === innerWidth - right.right,
+        "Collapsed panel tabs differ in height or edge placement");
+      expandLeft.click();
+      await settleLayout();
+      check(document.activeElement === collapseLeft && isReachable(collapseLeft), "The left panel lost keyboard focus");
+      check(isReachable(expandRight), "Opening the left panel covered the Map tools tab");
+      expandRight.click();
+      await settleLayout();
+      check(document.activeElement === collapseRight && isReachable(chooser), "The tool chooser did not return");
+      check(isReachable(document.querySelector("#close-layer-style")) &&
+        document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
+        "The style editor did not reopen on Land cover");
+    }
+
+    /** Exercise workspace scrolling, panel disclosures and result navigation at this viewport size.
      * @returns {Promise<void>} Resolves after the current viewport passes.
      * @throws {Error} If markup cannot load or a presentation outcome fails.
      */
@@ -171,7 +206,12 @@
       const lastLocation = locations.lastElementChild;
       lastLocation.scrollIntoView({ block: "nearest" });
       check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
-      checkHistogramResultNavigation();
+      const inspection = new MapInspectionController({
+        onLayoutChange: state => layout.setInspectionLayout(state),
+      });
+      await checkPanelDisclosures(inspection);
+      checkHistogramResultNavigation(inspection);
+      inspection.destroy();
       layout.destroy();
     }
 

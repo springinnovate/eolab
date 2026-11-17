@@ -372,6 +372,7 @@ export function initializeRasterViewer(
     /** @type {Map<string, import("./percentile-controls-view.js").HistogramPercentileSettings>} Pair-local settings by retained view identity. */
     const bivariatePercentiles = new Map();
     let rasterSampleWindowResizeTimeout = null;
+    let boxWheelRemainder = 0;
     let rasterStyleWasEdited = false;
     let activeRasterItem = null;
     let rasterAnalysis = createRasterAnalysisState();
@@ -3787,7 +3788,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Apply one valid size from either synchronized sample-window control.
+     * Apply a side length from the slider, numeric field or map wheel shortcut.
      *
      * @param {string|number} value Candidate side length in kilometers.
      * @return {boolean} Whether the candidate satisfied the size contract.
@@ -3839,6 +3840,37 @@ export function initializeRasterViewer(
             }
         }
         return true;
+    }
+
+    /**
+     * Resize the selected box on Alt + vertical scroll before Leaflet handles zoom.
+     * Accumulate small trackpad movements. One wheel step changes the side length
+     * by about ten percent and always moves at least one kilometer within the limits.
+     * @param {WheelEvent} event Wheel input over the map viewport.
+     * @return {void}
+     */
+    function handleSampleBoxWheel(event) {
+        if (!pointerInspectionEnabled || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+            !event.deltaY || !controlsView.isSamplingBoxSelected() ||
+            event.target.closest(".leaflet-control, .leaflet-popup")) {
+            boxWheelRemainder = 0;
+            return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // A wheel notch is commonly reported as 100 pixels, three lines or one page.
+        const unitsPerStep = event.deltaMode === 1 ? 3 : event.deltaMode === 2 ? 1 : 100;
+        const movement = -event.deltaY / unitsPerStep;
+        if (boxWheelRemainder * movement < 0) boxWheelRemainder = 0;
+        boxWheelRemainder += movement;
+        const steps = Math.trunc(boxWheelRemainder);
+        if (!steps) return;
+        boxWheelRemainder -= steps;
+        const current = rasterSampleWindowController.windowSizeKm;
+        const scaled = Math.round(current * 1.1 ** steps);
+        const next = steps > 0 ? Math.max(current + steps, scaled) : Math.min(current + steps, scaled);
+        const size = Math.max(1, Math.min(MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM, next));
+        if (size !== current) setRasterSampleWindowSize(size);
     }
 
     /**
@@ -4418,6 +4450,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapMouseLeave() {
+        boxWheelRemainder = 0;
         rasterSampleWindowController.clearPreview();
         rasterCursorPosition = null;
         cursorSamplesController.clear();
@@ -4960,6 +4993,7 @@ export function initializeRasterViewer(
         }
         cursorValuesView.unbind?.();
         mapContainer.removeEventListener("mouseleave", handleMapMouseLeave);
+        mapContainer.removeEventListener("wheel", handleSampleBoxWheel, true);
         leafletMap.off("mousemove", handleMapMouseMove);
         leafletMap.off("dragstart", handleMapDragStart);
         leafletMap.off("dragend", handleMapDragEnd);
@@ -5034,6 +5068,7 @@ export function initializeRasterViewer(
     leafletMap.on("zoomend", handleMapZoomEnd);
     leafletMap.on("resize", handleMapMouseLeave);
     mapContainer.addEventListener("mouseleave", handleMapMouseLeave);
+    mapContainer.addEventListener("wheel", handleSampleBoxWheel, {capture: true, passive: false});
 
     resetRasterSampleWindow();
     resetRasterStyle();

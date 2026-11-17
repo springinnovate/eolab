@@ -31,6 +31,8 @@ export class HistogramAxisControls {
         this.summary = summary;
         this.root.append(summary);
         this.rows = new Map();
+        /** @type {HTMLButtonElement[]} Buttons installed beside the 1D bar-height axis. */
+        this.barHeightButtons = [];
         for (const definition of definitions) {
             state.options[definition.key] ??= defaultHistogramAxisOptions();
             this.#addRow(definition);
@@ -59,6 +61,39 @@ export class HistogramAxisControls {
         });
         this.root.append(reset);
         this.axes = this.#buildAxesFromSettings();
+    }
+
+    /**
+     * Create the 1D histogram's Y-axis label and one-click bar-height scale choices.
+     * The pressed button follows the displayed scale, including after reset or fallback.
+     * An incompatible choice opens the axis editor so its range error is visible.
+     * @return {HTMLDivElement} Labeled button group to mount above this chart.
+     */
+    createBarHeightScaleControl() {
+        const group = this.documentContext.createElement("div");
+        group.className = "histogram-bar-height-scale";
+        group.setAttribute("role", "group");
+        group.setAttribute("aria-label", "Bar height scale");
+        const label = this.documentContext.createElement("span");
+        label.textContent = "Sampled pixels (%)";
+        group.append(label);
+        const scaleInput = this.rows.get("y").fields.scale.input;
+        for (const option of scaleInput.children) {
+            const button = this.documentContext.createElement("button");
+            button.type = "button";
+            button.className = "secondary-button";
+            button.value = option.value;
+            button.textContent = option.textContent;
+            button.setAttribute("aria-pressed", String(button.value === this.axes.y.scale));
+            button.addEventListener("click", () => {
+                if (!this.enabled) return;
+                scaleInput.value = button.value;
+                if (!this.#applyAxisInputs("y")) this.root.open = true;
+            });
+            this.barHeightButtons.push(button);
+            group.append(button);
+        }
+        return group;
     }
 
     /**
@@ -116,7 +151,7 @@ export class HistogramAxisControls {
         status.className = "histogram-axis-status";
         status.setAttribute("role", "status");
         fieldset.append(status);
-        this.rows.set(definition.key, { fields, status });
+        this.rows.set(definition.key, { fields, status, usingFallback: false });
         this.root.append(fieldset);
         this.#populateAxisInputs(definition.key);
     }
@@ -157,36 +192,37 @@ export class HistogramAxisControls {
      * @throws {RangeError} If the histogram cannot form even an Auto/Linear axis.
      */
     #buildAxesFromSettings() {
-        let fallback = false;
         const axes = Object.fromEntries(this.definitions.map(definition => {
-            const { status } = this.rows.get(definition.key);
+            const row = this.rows.get(definition.key);
+            row.usingFallback = false;
             let axis, warning = "";
             try {
                 axis = createHistogramAxis(definition, this.state.options[definition.key]);
             } catch (error) {
                 if (!(error instanceof RangeError)) throw error;
-                fallback = true;
+                row.usingFallback = true;
                 warning = `${error.message} Showing Auto/Linear for this sample. `;
                 axis = createHistogramAxis(definition);
             }
-            status.textContent = warning + this.#describe(axis);
+            row.status.textContent = warning + this.#describe(axis);
             return [definition.key, axis];
         }));
-        this.#updateDisclosureLabel(axes, fallback);
+        this.#updateScaleLabels(axes);
         return axes;
     }
 
     /**
-     * Set the "Adjust histogram axes" disclosure label, adding "log", "clipped", or
-     * "using Auto/Linear" when those conditions apply to the displayed axes.
-     * The label remains visible when the controls are collapsed.
-     * @param {Object} axes Displayed axis limits, scales, and notices.
-     * @param {boolean} [fallback=false] Whether a requested range failed for this sample.
+     * Show the displayed scales on the axis disclosure and the 1D bar-height buttons.
+     * The disclosure also identifies clipped ranges and fallbacks for the current sample.
+     * @param {Record<string, ReturnType<typeof createHistogramAxis>>} axes Displayed axis limits and scales.
      * @return {void}
      */
-    #updateDisclosureLabel(axes, fallback = false) {
+    #updateScaleLabels(axes) {
+        for (const button of this.barHeightButtons) {
+            button.setAttribute("aria-pressed", String(button.value === axes.y.scale));
+        }
         const notes = [];
-        if (fallback) notes.push("using Auto/Linear");
+        if ([...this.rows.values()].some(row => row.usingFallback)) notes.push("using Auto/Linear");
         if (Object.values(axes).some(axis => axis.scale === "log")) notes.push("log");
         if (Object.values(axes).some(axis => axis.notice.includes("clipped"))) notes.push("clipped");
         this.summary.textContent = "Adjust histogram axes" + (notes.length ? " · " + notes.join(" · ") : "");
@@ -203,18 +239,19 @@ export class HistogramAxisControls {
     }
 
     /**
-     * Read and validate the axis scale, range mode, and Min/Max form inputs.
-     * If every axis is valid, save the settings and ask the chart to redraw.
-     * Otherwise show validation messages and keep the saved settings and chart.
-     * Called after a dropdown change or a pause in typing a numeric limit.
-     * @return {void}
+     * Apply the selected axes' scale and range together after validating their inputs.
+     * An axis shortcut leaves the other axes' drafts and pending edits in place.
+     * @param {string} [axisKey] Axis to apply. The detailed form applies all axes.
+     * @return {boolean} Whether the chart accepted the requested settings.
      */
-    #applyAxisInputs() {
-        clearTimeout(this.timer);
-        if (!this.enabled) return;
-        const options = {}, axes = {};
+    #applyAxisInputs(axisKey) {
+        if (axisKey === undefined) clearTimeout(this.timer);
+        if (!this.enabled) return false;
+        const definitions = axisKey === undefined ? this.definitions
+            : this.definitions.filter(definition => definition.key === axisKey);
+        const options = { ...this.state.options }, axes = { ...this.axes };
         let invalid = false;
-        for (const definition of this.definitions) {
+        for (const definition of definitions) {
             const { fields, status } = this.rows.get(definition.key);
             this.#rangeFields(definition.key);
             const option = Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, field.input.value]));
@@ -230,15 +267,18 @@ export class HistogramAxisControls {
             }
         }
         if (invalid) {
-            for (const { status } of this.rows.values()) {
+            for (const { key } of definitions) {
+                const { status } = this.rows.get(key);
                 if (!status.textContent.endsWith("Chart unchanged.")) status.textContent += " Chart unchanged.";
             }
-            return;
+            return false;
         }
         this.state.options = options;
         this.axes = axes;
-        this.#updateDisclosureLabel(axes);
+        for (const { key } of definitions) this.rows.get(key).usingFallback = false;
+        this.#updateScaleLabels(axes);
         this.onChange(axes);
+        return true;
     }
 
     /**
@@ -253,6 +293,7 @@ export class HistogramAxisControls {
             for (const { input } of Object.values(fields)) input.disabled = !enabled;
         }
         this.reset.disabled = !enabled;
+        for (const button of this.barHeightButtons) button.disabled = !enabled;
     }
 
     /** Stop pending edits when the owning chart is replaced or cleared. @return {void} */

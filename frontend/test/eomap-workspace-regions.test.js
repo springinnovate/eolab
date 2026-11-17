@@ -340,7 +340,6 @@ test("composition forwards inspection layout and CSS does not infer it from chan
     assert.doesNotMatch(STYLESHEET, /#map-inspection:has\(/);
     assert.match(STYLESHEET, /#app\[data-inspection-expanded="true"\]/);
     assert.match(STYLESHEET, /#app\[data-inspection-wide="true"\]/);
-    assert.match(STYLESHEET, /#app \.panel-opener\s*\{\s*inset: calc\(16px \+ var\(--map-tools-height, 42px\)\) auto auto 16px;/);
 });
 
 test("composition forwards compatible map areas and closes inspection when no raster accepts a click", () => {
@@ -463,7 +462,6 @@ test("histogram charts precede optional help, point details and mode controls", 
         assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
     }
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
-    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*inset:\s*calc\(16px \+ var\(--map-tools-height, 42px\)\) 20px 16px auto[^}]*height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
     assert.match(STYLESHEET, /#map-histogram-panel,[^{]*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*display:\s*flex[^}]*justify-content:\s*space-between/s);
@@ -526,9 +524,10 @@ test("workspace overflow shares one native action list", () => {
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
-test("one persistent toolbar owns Tools, minimize and active filters outside retained panels", () => {
+test("the collapsible toolbar contains the tool chooser and filters, with a restore tab outside it", () => {
     const toolbar = requireElementRange("map-tools-toolbar");
     const dock = requireElementRange("map-inspection");
+    assert.ok(requireElementRange("open-map-tools").end < toolbar.start);
     assert.ok(toolbar.end < dock.start);
     for (const id of ["map-tools-more-summary", "toggle-map-inspection-dock", "map-filter-indicators"]) {
         const control = requireElementRange(id);
@@ -559,11 +558,13 @@ test("supporting analysis controls preserve native buttons, clear names and disc
         assert.match(source, /popovertarget="workspace-tool-actions"/);
         assert.match(source, />Tools <span aria-hidden="true">▾<\/span><\/button>$/);
     }
-    const minimize = requireElementRange("toggle-map-inspection-dock").source;
-    assert.match(minimize, /^<button\b[^>]*\btype="button"/);
-    assert.match(minimize, /aria-expanded="true"/);
-    assert.match(minimize, /aria-controls="map-inspection"/);
-    assert.match(minimize, />Minimize<\/button>$/);
+    for (const [id, action] of [["toggle-map-inspection-dock", "Collapse"], ["open-map-tools", "Expand"]]) {
+        const button = requireElementRange(id).source;
+        assert.match(button, /^<button\b[^>]*\btype="button"/);
+        assert.ok(button.includes(`aria-expanded="${action === "Collapse"}"`));
+        assert.ok(button.includes(`aria-label="${action} map tools"`));
+        assert.ok(button.includes('aria-controls="map-tools-toolbar map-inspection"'));
+    }
     for (const id of ["workspace-tool-actions", "map-inspection-raster-analysis", "map-inspection-tabs", "map-inspection-panels"]) {
         assert.equal(countMarkupId(id), 1, `supporting control target ${id} exists once`);
     }
