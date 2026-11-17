@@ -93,6 +93,8 @@ Ordinary period statistics weight available observations equally. Gaps remain mi
 
 ### Clip and download a raster
 
+In **Map contents**, select **Download** on the raster you want. Review the layer and choose a sampling box or selected polygons. Select **Prepare download**, then **Download GeoTIFF** when it is ready.
+
 In **Data tools**, choose **Raster clip**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
 
 <details>

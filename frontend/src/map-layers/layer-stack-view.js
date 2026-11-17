@@ -34,6 +34,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {"upload"|"catalog"|"runArtifact"} [sourceOrigin] Source owner's origin, independent of Custom presentation.
  * @property {{collection:string,id:string}|null} item Catalog identity, or null for an owner-supplied layer.
  * @property {string} datasetKind Owner-reported layer type.
+ * @property {{calculations:boolean}} [capabilities] Whether the raster supports statistics and clip downloads.
  * @property {boolean} visible Independent map visibility.
  * @property {number} opacity Whole-layer opacity.
  * @property {number} [effectiveOpacity] Display opacity when the owner locks opacity.
@@ -688,6 +689,12 @@ export class MapLayerStackView {
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             ...(filter ? [filter] : []),
         );
+        if (layer.capabilities?.calculations) {
+            layerActions.append(this.#button(
+                "Download", `Download raster: ${accessibleName}`, layer.key,
+                "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
+            ));
+        }
         if (this.allowRemoval && layer.canAddView) {
             const actionLabel = `Duplicate ${layer.datasetKind}`;
             const addView = this.#button(
@@ -723,10 +730,6 @@ export class MapLayerStackView {
             )] : []),
             ...(legend ? [legend.trigger] : []),
             ...(info ? [info] : []),
-            ...(layer.capabilities?.calculations ? [this.#button(
-                "Download clip", `Download clip of ${accessibleName}`, layer.key,
-                "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
-            )] : [])
         );
         const details = this.#buildDetails(layer, utilities, focusTargets);
         if (legend) details.panel.append(legend.panel);
@@ -761,7 +764,7 @@ export class MapLayerStackView {
      * The card already shows the full name and data type; repeat neither here.
      * Source identity and action permissions remain unchanged.
      * @param {MapLayerStackSnapshot} layer Current owner-supplied presentation.
-     * @param {HTMLDivElement} utilities Existing statistics, legend, metadata and download actions.
+     * @param {HTMLDivElement} utilities Statistics, legend and source information actions.
      * @param {Map<string,Element>} focusTargets Controls keyed for focus restoration.
      * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}} Details controls and current expansion state.
      */

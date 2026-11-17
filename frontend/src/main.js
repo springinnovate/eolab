@@ -1087,7 +1087,6 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onDownloadRequested: (item, area, label) => rasterClips.open(describeCalculationSource(item, label), area),
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
