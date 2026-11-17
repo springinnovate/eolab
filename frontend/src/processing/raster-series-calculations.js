@@ -15,7 +15,7 @@ import { describeJobProgress, describeClipArea } from "./presentation.js";
 function calculationInputKey(sources, area, formulas, point, temporalSource) {
     return JSON.stringify([temporalSource === undefined ? "rasters" : "temporal", temporalSource,
         sources.map(source => [source.key, rasterSourceKey(source)]).sort(), area,
-        formulas.map(({id, expression}) => [id, expression.trim()]), point]);
+        formulas.map(({id, expression, boxMean}) => [id, expression.trim(), !!boxMean]), point]);
 }
 
 /**
@@ -32,10 +32,13 @@ export class RasterSeriesCalculations {
      * @param {Object} options Providers.
      * @param {import("./calculation-requests.js").CalculationRequests} options.requests Independent recoverable requests.
      * @param {import("./api.js").ProcessingApiClient} [options.api] Temporal model discovery and owned CSV reader.
+     * @param {(source:Object,box:Object,signal:AbortSignal)=>Promise<Object>} options.readBoxMean Bounded raster statistics API.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
      */
-    constructor({ requests, api, clock = globalThis }) {
-        Object.assign(this, { requests, api, clock });
+    constructor({ requests, api, readBoxMean, clock = globalThis }) {
+        Object.assign(this, { requests, api, readBoxMean, clock });
+        this.meanReads = new Map();
+        this.exactBox = false;
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -152,7 +155,9 @@ export class RasterSeriesCalculations {
         const key = calculationInputKey(sources, normalized, formulas, point, temporalSource);
         const inputsChanged = this.inputKey !== key;
         const capturedResults = this.temporalMode ? [this.temporalResult] : [...this.results.values()];
-        const reuseCompleted = this.complete && !this.busy && !this.hasErrors && !this.needsRecovery &&
+        // A sampled mean cannot satisfy a custom formula with the same expression.
+        const hasBoxMeans = capturedResults.some(result => result?.boxMean);
+        const reuseCompleted = !hasBoxMeans && this.complete && !this.busy && !this.hasErrors && !this.needsRecovery &&
             calculationInputKey(sources, normalized, [], point, temporalSource) ===
                 calculationInputKey(this.sources, this.area, [], this.pixelPoint, this.temporalSource) &&
             formulas.every(({expression}) => capturedResults.every(result =>
@@ -165,7 +170,10 @@ export class RasterSeriesCalculations {
         this.area = normalized;
         this.areaLabel = label;
         this.pixelPoint = point;
-        if (inputsChanged && !reuseCompleted) this.resetResultsForChangedInputs(formulasChanged);
+        if (inputsChanged && !reuseCompleted) {
+            this.exactBox = false;
+            this.resetResultsForChangedInputs(formulasChanged);
+        }
         else this.onChange();
     }
 
@@ -233,6 +241,8 @@ export class RasterSeriesCalculations {
         this.resultAbort?.abort();
         this.dispatching = false;
         this.pending.clear();
+        for (const abort of this.meanReads.values()) abort.abort();
+        this.meanReads.clear();
         this.temporalWork = null;
         this.progress.clear();
         this.busy = false;
@@ -254,6 +264,51 @@ export class RasterSeriesCalculations {
         this.busy = true;
         this.timer = this.clock.setTimeout(() => void this.calculateRemainingRasters(false), debounce ? 700 : 0);
         this.onChange();
+    }
+
+    /** Whether the built-in mean uses the interactive sampling-box reader.
+     * @return {boolean} True for ordinary raster boxes until exact is requested.
+     */
+    get useBoxMean() {
+        return !this.temporalMode && this.area?.kind === "samplingBox" && !this.exactBox &&
+            this.formulas.some(formula => formula.boxMean);
+    }
+
+    /** Replace interactive means for this box with the existing exact calculation.
+     * Area replacement restores automatic estimates and cancels the old job.
+     * @return {void}
+     */
+    calculateExactBoxMean() {
+        if (!this.useBoxMean) return;
+        const alreadyNative = [...this.results].filter(([, result]) =>
+            result.boxMean?.method === "exact" || result.boxMean?.outside);
+        this.exactBox = true;
+        this.resetResultsForChangedInputs(false);
+        this.results = new Map(alreadyNative);
+        this.onChange();
+    }
+
+    /** Read a mean independently of other formulas and publish it as soon as it arrives.
+     * @param {Object} source Selected original raster and its stable row key.
+     * @return {Promise<void>} The result or a source-specific failure has been displayed.
+     */
+    async readMeanForSource(source) {
+        const abort = new AbortController();
+        this.meanReads.set(source.key, abort);
+        const area = this.area;
+        let boxMean;
+        try {
+            boxMean = await this.readBoxMean(source, area.samplingBox, abort.signal);
+        } catch (error) {
+            if (abort.signal.aborted) return;
+            boxMean = {method: "unavailable", value: null, unit: null, error: error.message,
+                outside: error.code === "sampling_box_outside_raster"};
+        }
+        if (abort.signal.aborted) return;
+        this.meanReads.delete(source.key);
+        const previous = this.results.get(source.key);
+        this.results.set(source.key, {calculationInputs: {area, calculations: []}, ...previous, boxMean});
+        this.updateSeriesProgress();
     }
 
     /** Calculate a temporal interval or submit all unfinished ordinary rasters.
@@ -280,17 +335,35 @@ export class RasterSeriesCalculations {
         const version = this.version;
         this.hasCapturedInputs = true;
         if (retryFailures) {
-            for (const [key, result] of this.results) if (result.error) this.results.delete(key);
+            for (const [key, result] of this.results) {
+                if (result.error) this.results.delete(key);
+                else if (result.boxMean?.error) delete result.boxMean;
+            }
         }
         this.busy = this.dispatching = true;
         try {
-            const formulas = this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
+            const jobFormulas = this.formulas.filter(formula => !(this.useBoxMean && formula.boxMean));
+            if (this.useBoxMean) {
+                for (const source of this.sources) {
+                    if (!this.results.get(source.key)?.boxMean && !this.meanReads.has(source.key)) {
+                        void this.readMeanForSource(source);
+                    }
+                }
+            }
+            if (!jobFormulas.length) {
+                this.dispatching = false;
+                this.updateSeriesProgress();
+                return;
+            }
+            const formulas = jobFormulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
             const firstCalculationInputs = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area,
                 calculations: formulas, pixelPoint: this.pixelPoint });
             // Record all identities before submission can synchronously notify listeners.
             const additions = [];
             for (const source of this.sources) {
-                if (this.results.has(source.key) || [...this.pending.values()].some(request => request.key === source.key)) continue;
+                const result = this.results.get(source.key);
+                if (result?.job || result?.error || [...this.pending.values()].some(request => request.key === source.key)) continue;
+                if (this.exactBox && result?.boxMean && jobFormulas.every(formula => formula.boxMean)) continue;
                 const index = this.sources.map(source => source.key).sort().indexOf(source.key);
                 const client = this.getOrCreateRasterExecutor(index);
                 const request = { key: source.key, calculationInputs: calculationIntent({ ...firstCalculationInputs, source: this.getRasterReference(source) }),
@@ -302,7 +375,7 @@ export class RasterSeriesCalculations {
             for (const [client, request] of additions) {
                 if (version !== this.version) return;
                 client.submit(request.calculationInputs, {automatic: false,
-                    presentation: {key: request.key, names: this.formulas.map(formula => formula.label)}});
+                    presentation: {key: request.key, names: jobFormulas.map(formula => formula.label)}});
             }
             this.dispatching = false;
             this.updateSeriesProgress();
@@ -396,12 +469,12 @@ export class RasterSeriesCalculations {
                 }
                 this.updateSeriesProgress(); return;
             }
-            this.results.set(request.key, { job: state.completedJob, calculationInputs: request.calculationInputs });
+            this.results.set(request.key, { ...this.results.get(request.key), job: state.completedJob, calculationInputs: request.calculationInputs });
             this.pending.delete(index);
         } else if (state.recoverable) {
             request.phase = "recovery"; request.message = state.message;
         } else if (state.admission === "retry" || (request.submitted && state.isIdle && !state.unfinishedCalculation)) {
-            this.results.set(request.key, { calculationInputs: request.calculationInputs, error: state.message || "No result returned." });
+            this.results.set(request.key, { ...this.results.get(request.key), calculationInputs: request.calculationInputs, error: state.message || "No result returned." });
             this.pending.delete(index);
         } else {
             request.phase = state.phase;
@@ -441,8 +514,8 @@ export class RasterSeriesCalculations {
     updateSeriesProgress() {
         this.temporalWork = this.temporalMode ? [...this.pending.values()][0]?.work ?? null : null;
         this.progress = new Map([...this.pending.values()].map(request => [request.key, { phase: request.phase, message: request.message }]));
-        this.busy = this.dispatching || [...this.pending.values()].some(request => request.phase !== "recovery");
-        this.complete = this.temporalMode ? !!this.temporalResult : !!this.sources.length && this.results.size === this.sources.length;
+        this.busy = this.dispatching || this.meanReads.size > 0 || [...this.pending.values()].some(request => request.phase !== "recovery");
+        this.complete = this.temporalMode ? !!this.temporalResult : !!this.sources.length && !this.busy && !this.pending.size && this.results.size === this.sources.length;
         if (this.temporalMode) {
             this.message = this.complete ? `${this.temporalResult.observations.length} observations calculated.`
                 : this.needsRecovery ? "Recover the interrupted request to confirm or cancel the same job."
@@ -459,7 +532,7 @@ export class RasterSeriesCalculations {
     }
 
     /** Check whether any raster has a failed result. @return {boolean} True if at least one result contains an error. */
-    get hasErrors() { return [...this.results.values()].some(result => result.error); }
+    get hasErrors() { return [...this.results.values()].some(result => result.error || (result.boxMean?.error && !result.boxMean.outside)); }
 
     /** Show an identical failure for the entire stack once, above the results.
      * @return {string} Shared error only when every selected raster failed identically.
@@ -488,6 +561,7 @@ export class RasterSeriesCalculations {
     destroy() {
         this.clock.clearTimeout(this.timer);
         this.resultAbort?.abort();
+        for (const abort of this.meanReads.values()) abort.abort();
         for (const client of this.clients.values()) client.destroy();
     }
 }

@@ -17,6 +17,7 @@ from eolab_app.raster.models import (
     RasterPixel,
     RasterPairedStatistics,
     RasterStatistics,
+    RasterBoxMean,
 )
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService
@@ -203,13 +204,13 @@ def create_raster_analysis_router(
 
     @router.post(
         "/statistics",
-        response_model=RasterStatistics,
+        response_model=RasterStatistics | RasterBoxMean,
     )
     async def sample_raster_statistics(
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         http_request: Request,
         response: Response,
-    ) -> RasterStatistics:
+    ) -> RasterStatistics | RasterBoxMean:
         """Summarize one original raster and normalized sampling area.
 
         Args:
@@ -218,7 +219,7 @@ def create_raster_analysis_router(
             response: Private response headers.
 
         Returns:
-            Bounded band-1 statistics independent of rendering state.
+            Bounded band-one distribution or sampling-box mean with its method.
 
         Raises:
             HTTPException: A 409 with detail code ``sampling_box_outside_raster``

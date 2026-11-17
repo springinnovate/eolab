@@ -64,7 +64,7 @@ function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
         getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const jobs=new ProcessingJobs(api,clock);
     const calculationRequests=new CalculationRequests({api,jobs,storage,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
-    const area=new RasterSeriesCalculations({requests:calculationRequests,clock});
+    const area=new RasterSeriesCalculations({requests:calculationRequests,clock,readBoxMean: overrides.readBoxMean});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
     const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){},onAreaChoice});
     controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(box(0),"First box");
@@ -1440,4 +1440,51 @@ test("composed filtered zoom preserves statistics filter intent and rejects obso
         assert.equal(c.fits.length, 1, "a user pan invalidates a pending composed fit");
         assert.equal(h.requests.length, committedCalls);
     } finally {globalThis.fetch = originalFetch; c.close(); h.close();}
+});
+
+test("sampling-box means appear per raster, cancel on replacement and run exact only on request", async () => {
+    const reads = [];
+    const h = fixture({readBoxMean(source, box, signal) {
+        const reply = deferred();
+        reads.push({source, box, signal, reply});
+        return reply.promise;
+    }});
+    const selection = longitude => ({kind: "samplingBox", samplingBox: {center: {longitude, latitude: 42}, sideLengthKm: 1255}});
+    h.controller.setArea(selection(-93)); await h.open();
+    assert.equal(reads.length, 2);
+    h.controller.setArea(selection(-94)); await h.tick();
+    assert.ok(reads.slice(0, 2).every(read => read.signal.aborted));
+    for (const old of reads.slice(0, 2)) old.reply.resolve({method: "estimated", value: 999, unit: null});
+    reads[2].reply.resolve({method: "estimated", value: 0, unit: "USD"}); await flush();
+    assert.equal(h.view.state.rows[0].statisticLabel, "Estimated mean");
+    assert.equal(h.view.state.rows[0].value, 0);
+    reads[3].reply.resolve({method: "exact", value: 18, unit: "USD"}); await flush();
+    assert.deepEqual(h.view.state.rows.map(row => row.statisticLabel), ["Estimated mean", "Exact mean"]);
+    assert.ok(h.view.state.area.canCalculateExactMean);
+    assert.deepEqual(csvParse(h.controller.exportCsv()).map(row => [row.statistic, row.method, row.value, row.job_id]),
+        [["Estimated mean", "estimated", "0", ""], ["Exact mean", "exact", "18", ""]]);
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 0);
+    h.view.actions.onExactMean(); await h.tick();
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 1);
+    await h.finish();
+    assert.ok(h.view.state.rows.every(row => row.statisticLabel === "Exact mean"));
+    h.controller.setArea(selection(-95)); await h.tick();
+    assert.equal(reads.length, 6);
+    h.close();
+});
+
+test("a custom mean remains exact alongside an unavailable built-in estimate", async () => {
+    const h = fixture({readBoxMean: async () => ({method: "unavailable", value: null, unit: null})});
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    h.controller.addFormula("custom");
+    h.controller.editFormula(2, {label: "My exact formula", expression: "mean(a)"});
+    await h.open();
+    for (const [, intent] of h.requests.filter(([kind]) => kind === "submit")) {
+        assert.deepEqual(intent.calculations, [{label: "stat-2", expression: "mean(a)"}]);
+    }
+    await h.finish(); await h.finish();
+    assert.deepEqual(h.view.state.rows.slice(0, 2).map(row => [row.state, row.method]),
+        [["error", "unavailable"], ["value", null]]);
+    assert.ok(h.view.state.area.canCalculateExactMean);
+    h.close();
 });

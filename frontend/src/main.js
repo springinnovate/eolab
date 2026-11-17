@@ -82,6 +82,7 @@ import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
+import { loadSamplingBoxMean } from "./raster/analysis-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
 import { RasterSeriesView } from "./raster/series-view.js";
@@ -981,7 +982,7 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
-    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi });
+    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxMean: loadSamplingBoxMean });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
@@ -1844,7 +1845,9 @@ async function initializeCatalog(
             });
             if (!rasterClickSelected) {
                 mapInspection.closeHistogram(false);
-                updateRasterSeriesArea(null, "");
+                const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
+                    ? rasterVisualization.selectSamplingBox(event.latlng) : null;
+                updateRasterSeriesArea(box, box ? "Sampling box" : "");
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);

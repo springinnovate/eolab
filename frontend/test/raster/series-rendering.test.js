@@ -830,3 +830,20 @@ test("adding a secondary plot reveals it once; initial drawing and updates prese
     assert.equal(view.cards.get(1).scale.value, "linear");
     assert.equal(added.scale.value, "log");
 });
+
+test("a mixed mean plot names each point's precision in its legend and accessible tooltip", () => {
+    const h = fixture();
+    const view = new RasterSeriesPlotsView(h.document, {});
+    const rows = [
+        {label: "Iowa", state: "value", method: "estimated", statisticLabel: "Estimated mean", value: 0.8, rawValue: "0.8"},
+        {label: "Small raster", state: "value", method: "exact", statisticLabel: "Exact mean", value: 1, rawValue: "1"},
+    ];
+    const plot = {id: 1, displayNumber: 1, scale: "linear", bounds: null, xBounds: null};
+    const statistic = {id: 1, label: "Mean", expression: "mean(a)", styleIndex: 0, visible: true, plotId: 1, rows};
+    view.renderPlots({plots: [plot], statistics: [statistic], chartType: "scatter", showingPrevious: false});
+    const card = view.cards.get(1);
+    assert.match(card.legend.children[0].getAttribute("aria-label"), /Estimated mean.*Exact mean/);
+    assert.match(card.chart.getAttribute("aria-label"), /Estimated mean.*Exact mean/);
+    assert.match(card.chart.querySelectorAll(".series-chart-point")[0].getAttribute("aria-label"), /Iowa.*Estimated mean: 0.8/s);
+    assert.match(card.chart.querySelectorAll(".series-chart-point")[1].getAttribute("aria-label"), /Small raster.*Exact mean: 1/s);
+});

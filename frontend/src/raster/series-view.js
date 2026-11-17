@@ -10,6 +10,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @typedef {Object} SeriesValueRow
  * @property {string} label Full raster name.
  * @property {number} [xValue] UTC timestamp in milliseconds for a temporal observation.
+ * @property {string|null} [method] Precision of a sampling-box mean.
  * @property {string} statisticLabel Statistic name for the values table.
  * @property {string} state Value, pending or failure state from the owner.
  * @property {number|null} value Numeric plotting value.
@@ -56,7 +57,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {{completed?:number|null,total?:number|null,unit?:string|null}|null} [workProgress] Measured temporal work; absent before the server reports counts.
  * @property {"line"|"scatter"|"bar"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
- * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,hasPendingVectorArea:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and retry/recovery availability.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,hasPendingVectorArea:boolean,canCalculateExactMean?:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and retry/recovery availability.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {SeriesPlot[]} plots Display numbers and settings in plot order.
  * @property {"forward"|"reverse"} direction Display direction; temporal data and CSV retain observation order.
@@ -132,6 +133,7 @@ export class RasterSeriesView {
      * @param {()=>void} actions.onAddPlot Add a linear plot.
      * @param {(id:number)=>void} actions.onRemovePlot Remove a secondary plot.
      * @param {(id:number,change:Object)=>void} actions.onPlotOptions Change one plot's validated axes, point size and font settings.
+     * @param {()=>void} actions.onExactMean Calculate native pixel means for the displayed box.
      * @param {()=>void} actions.onRetry Retry failed sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
@@ -190,7 +192,7 @@ export class RasterSeriesView {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
-        for (const [id, action] of [["retry", actions.onRetry],
+        for (const [id, action] of [["retry", actions.onRetry], ["exact-mean", actions.onExactMean],
             ["cancel", actions.onCancel], ["recover", actions.onRecover]]) {
             this.document.querySelector("#raster-series-" + id).addEventListener("click", action);
         }
@@ -533,6 +535,8 @@ export class RasterSeriesView {
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
         const addFormula = this.document.querySelector("#raster-series-add-formula");
         if (addFormula.disabled !== (area.formulas.length >= 5)) addFormula.disabled = area.formulas.length >= 5;
+        const exact = this.document.querySelector("#raster-series-exact-mean");
+        if (exact.hidden !== !area.canCalculateExactMean) exact.hidden = !area.canCalculateExactMean;
         const retry = this.document.querySelector("#raster-series-retry");
         const hideRetry = state.busy || !area.hasErrors || area.recoverable;
         if (retry.hidden !== hideRetry) retry.hidden = hideRetry;

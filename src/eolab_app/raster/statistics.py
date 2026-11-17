@@ -28,6 +28,7 @@ from eolab_app.raster.exact_source import (
 )
 from eolab_app.raster.models import (
     CanonicalWgs84Bounds,
+    RasterBoxMean,
     RasterHistogram,
     RasterPercentiles,
     RasterStatistics,
@@ -41,6 +42,7 @@ from eolab_app.raster.read_cancellation import (
 )
 from eolab_app.raster.sample_grid import (
     overview_sample_grid_policy_parameters,
+    read_bounded_overview,
     read_source_window_sample_grid,
     sample_grid_policy_parameters,
 )
@@ -313,6 +315,82 @@ def selected_raster_area_for_polygon_input(
         RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
         selected_bounds=sampling_area.polygons.bounds(),
     )
+
+
+# A mean can use all the representatives in an overview. A 2,048-pixel
+# window retains detail in sparse rasters while fitting the interactive byte limit.
+BOX_MEAN_MAX_OVERVIEW_DIMENSION = 2048
+BOX_MEAN_ALGORITHM = "box-mean-native-or-nearest-v1"
+
+
+def read_sampling_box_mean(
+    source: RasterData,
+    sampling_area: SamplingBoxArea,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+) -> RasterBoxMean:
+    """Average stored values using the exact box's pixel-center inclusion rule.
+
+    A nearest-neighbor pyramid samples one original value per regularly spaced
+    cell. Zeros participate and NoData and nonfinite representatives are omitted.
+    Means of averaged cells with unknown valid counts, or of mode/min/max
+    overviews, cannot estimate this statistic on the same basis.
+
+    Args:
+        source: Authorized original raster or admitted temporal observation.
+        sampling_area: Validated geodesic sampling box.
+        cancellation_requested: Last-waiter cancellation check.
+
+    Returns:
+        Native or estimated mean with its units and method. An empty exact box
+        has a null value. Unsuitable or empty overview samples are unavailable.
+
+    Raises:
+        NoRasterBoundsOverlapError: If the box misses the source.
+        ValueError: If source structure, validity or georeferencing is unsupported.
+        RasterReadCancelled: If the read is superseded.
+        rasterio.errors.RasterioError: If opening or reading the source fails.
+    """
+    require_active_raster_read(cancellation_requested)
+    with open_raster_data(source) as dataset:
+        require_signed_raster_dependencies(dataset, source)
+        require_raster_analysis_georeferencing(dataset)
+        area = selected_raster_area_for_sampling_box(
+            dataset, sampling_area.box, RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES
+        )
+        window = area.source_window
+        unit = dataset.units[0]
+        native = plan_exact_source_window(dataset, window)
+        if native is not None:
+            sample = read_exact_source_window(dataset, native, cancellation_requested)
+        else:
+            method = dataset.tags(ns="IMAGE_STRUCTURE").get("OVERVIEW_RESAMPLING")
+            if method is None:
+                method = dataset.tags(ns="rio_overview").get("resampling", "")
+            if method.lower() != "nearest":
+                return RasterBoxMean(method="unavailable", value=None, unit=unit)
+            sample = read_bounded_overview(
+                dataset, window, 1, 1, cancellation_requested,
+                maximum_dimension=BOX_MEAN_MAX_OVERVIEW_DIMENSION,
+                prefer_finest=True, maximum_decoded_bytes=EXACT_SOURCE_MAX_DECODED_BYTES,
+            )
+            if sample is None:
+                return RasterBoxMean(method="unavailable", value=None, unit=unit)
+        height, width = sample.shape
+        transform = window_transform(window, dataset.transform) * rasterio.Affine.scale(
+            window.width / width, window.height / height
+        )
+        inside = pixels_inside_area(
+            area.projected_geometries, out_shape=sample.shape, transform=transform,
+            all_touched=False,
+        )
+        valid = sample.data[inside & ~numpy.ma.getmaskarray(sample)].astype(numpy.float64, copy=False)
+        require_active_raster_read(cancellation_requested)
+        if not valid.size:
+            return RasterBoxMean(method="exact" if native else "unavailable", value=None, unit=unit)
+        # Scaling keeps the arithmetic mean finite even near the float64 limits.
+        scale = max(abs(float(valid.min())), abs(float(valid.max())))
+        value = float(numpy.mean(valid / scale)) * scale if scale else 0.0
+        return RasterBoxMean(method="exact" if native else "estimated", value=value, unit=unit)
 
 
 def read_raster_statistics(
