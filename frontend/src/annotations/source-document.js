@@ -1,5 +1,6 @@
 /** Translate linked drawing contents without copying local view settings into the source. */
 import { exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
+import { counterclockwisePolygonRing } from "./geometry.js";
 import { readAnnotationLayers, DEFAULT_ANNOTATION_STYLE } from "./model.js";
 
 /** Export all committed original polygons while keeping the source's name independent of a view label.
@@ -10,13 +11,13 @@ export function exportDrawingCollection(layer) {
     return exportAnnotationGeoJSON({...layer, name: layer.drawingSource?.sourceName ?? layer.name});
 }
 
-/** Compare acknowledged drawing content independently of JSON object-key ordering.
+/** Compare acknowledged drawing content using the same ring orientation as ordinary GeoJSON exports.
  * @param {Object} collection Validated source FeatureCollection.
- * @return {string} Exact content comparison value; not a source identity or version.
+ * @return {string} Content comparison value independent of object-key order and ring winding; feature order, starting vertices and text remain significant. Not a source identity or version.
  */
 export function serializeDrawingContent(collection) {
     return JSON.stringify([collection.name, collection.features.map(feature =>
-        [feature.id, feature.properties.name, feature.properties.note, feature.geometry.coordinates])]);
+        [feature.id, feature.properties.name, feature.properties.note, [counterclockwisePolygonRing(feature.geometry.coordinates[0])]])]);
 }
 
 /** Validate server geometry and preserve its original feature IDs when creating a local view.

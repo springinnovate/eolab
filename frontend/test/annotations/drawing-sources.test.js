@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import { AnnotationController } from "../../src/annotations/controller.js";
 import { AnnotationModel, readAnnotationLayers } from "../../src/annotations/model.js";
 import { DrawingSourceApi, DrawingSourceError } from "../../src/annotations/source-api.js";
@@ -525,6 +526,37 @@ test("another browser's drawing is read-only but still supports local filters, s
     assert.equal(await h.controller.ensureDrawingSource(key), SOURCE);
     assert.equal(h.calls.filter(call => call.method === "PUT").length, 0);
     assert.equal(h.controller.exportDrawingLayer(key).appearance.color, "#abcdef");
+});
+
+test("accepted clockwise sources reopen as clean views without writes or read-only conflicts", async () => {
+    const cases = JSON.parse(readFileSync(new URL("../../../tests/fixtures/drawing-admission.json", import.meta.url), "utf8"));
+    const clockwise = cases.geometry.find(example => example.name === "ordinary clockwise triangle");
+    for (const canEdit of [false, true]) {
+        const h = fixture(); await h.controller.ensureDrawingSource(h.key);
+        const view = definition(h);
+        await h.controller.prepareDrawingMapRestore(() => true);
+        h.server.record.canEdit = canEdit;
+        h.server.record.revision = 2;
+        h.server.record.collection.features[0].geometry = structuredClone(clockwise.geometry);
+        const original = structuredClone(h.server.record);
+        const key = await restoreDrawing(h.controller, view, () => true);
+        const restored = h.controller.model.layers[0];
+        assert.equal(h.controller.drawingHasLocalChanges(restored), false, "reopening must not invent a geometry edit");
+        assert.equal(restored.drawingSource.pending, false);
+        assert.equal(restored.drawingSource.revision, 2);
+        const second = await restoreDrawing(h.controller, view, () => true);
+        assert.notEqual(second, key);
+        assert.deepEqual(h.server.record, original, "reopening must not rewrite the source or advance its revision");
+        assert.equal(h.calls.filter(call => call.method === "PUT").length, 0);
+        if (canEdit) {
+            restored.polygons[0].note = "A real user edit";
+            await h.controller.save();
+            assert.equal(h.calls.filter(call => call.method === "PUT").length, 1);
+            assert.equal(h.server.record.revision, 3);
+            assert.equal(h.server.record.collection.features[0].id, "parcel-a");
+            assert.equal(h.server.record.collection.features[0].properties.note, "A real user edit");
+        }
+    }
 });
 
 test("saved drawing definitions without a custom label retain the source name", async () => {
