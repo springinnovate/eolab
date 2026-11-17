@@ -206,7 +206,7 @@ async function loadAppGlobalConfiguration() {
 /**
  * Create the map, coordinate guide and viewport resize observation.
  * Place coordinate feedback inside the map's allocated viewport.
- * The persistent tool toolbar remains anchored outside that changing viewport.
+ * The map-tool controls stay anchored to the workspace while the viewport resizes.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @return {L.Map} The initialized Leaflet map.
@@ -288,8 +288,6 @@ function applyMapHeading(title, subtitle) {
             "aria-label",
             `${title} controls`
         );
-    document.querySelector("#open-panel").textContent =
-        `Open ${title}`;
 }
 
 /**

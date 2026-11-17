@@ -117,6 +117,15 @@ export class EomapLayoutController {
             documentContext,
             "#open-panel"
         );
+        const panelName = allowCatalog ? "Catalog & map contents" : "Map contents";
+        this.openPanelButton.textContent = panelName;
+        for (const [button, action] of [
+            [this.collapsePanelButton, "Collapse"], [this.openPanelButton, "Expand"],
+        ]) {
+            const label = `${action} ${panelName}`;
+            button.setAttribute("aria-label", label);
+            button.title = label;
+        }
         this.operationalRegion = requireLayoutElement(
             documentContext,
             "#eomap-operational-status-region"

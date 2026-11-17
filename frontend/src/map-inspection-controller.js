@@ -7,7 +7,7 @@
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
-     * Bind retained task context, navigation, native Tools popover and close controls.
+     * Bind the collapsible Map tools panel, its tool chooser, and retained results.
      *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
@@ -59,9 +59,8 @@ export class MapInspectionController {
             if (entry && !entry.button.disabled) this.#showTool(entry.name);
         };
         for (const {button} of this.clickResults) button.addEventListener("click", this.onSummaryClick);
-        this.minimizeButton = documentContext.querySelector(
-            "#toggle-map-inspection-dock"
-        );
+        this.collapseButton = documentContext.querySelector("#toggle-map-inspection-dock");
+        this.expandButton = documentContext.querySelector("#open-map-tools");
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.filter = documentContext.querySelector("#vector-filter-panel");
@@ -151,9 +150,15 @@ export class MapInspectionController {
         /** @type {ReturnType<typeof setTimeout>|null} Expiry of the explicit destination cue. */
         this.toolAttentionTimer = null;
         this.onClose = () => this.closeHistogram();
-        this.onMinimize = () => {
-            this.minimized = !this.minimized;
+        /** Collapse or restore all Map tools controls and focus the matching disclosure.
+         * @param {MouseEvent} event Activation of the visible panel button.
+         * @return {void}
+         */
+        this.onTogglePanel = event => {
+            this.minimized = event.currentTarget === this.collapseButton;
+            if (this.minimized) this.#closeToolActions();
             this.#renderDock();
+            (this.minimized ? this.expandButton : this.collapseButton).focus();
         };
         this.onTabClick = (event) => {
             const tool = this.tools.find(({ tab }) => tab === event.currentTarget);
@@ -171,7 +176,8 @@ export class MapInspectionController {
             this.closeHistogram();
         };
         this.closeButton.addEventListener("click", this.onClose);
-        this.minimizeButton.addEventListener("click", this.onMinimize);
+        this.collapseButton.addEventListener("click", this.onTogglePanel);
+        this.expandButton.addEventListener("click", this.onTogglePanel);
         for (const { tab } of this.tools.filter(tool => !tool.resultNavigation)) {
             tab.addEventListener("click", this.onTabClick);
             tab.addEventListener("keydown", this.onTabKeydown);
@@ -194,11 +200,14 @@ export class MapInspectionController {
     }
 
     /**
-     * Open the Tools menu from its persistent toolbar button.
-     * The caller can then focus the command it wants the user to return to.
+     * Expand Map tools and open its chooser so the caller can focus a command.
      * @return {void}
      */
     showToolActions() {
+        if (this.minimized) {
+            this.minimized = false;
+            this.#renderDock();
+        }
         if (!this.toolActionsOpen) {
             this.mapToolsButton.click();
         }
@@ -801,7 +810,6 @@ export class MapInspectionController {
         if (!shouldOpen) {
             this.activeTool = null;
             this.activationOrder = [];
-            this.minimized = false;
         }
         const openChanged = shouldOpen !== this.isOpen;
         this.isOpen = shouldOpen;
@@ -842,7 +850,7 @@ export class MapInspectionController {
      * Opening or updating a tool never replaces its focused raster destination.
      * Hide the panel surface when no tool is active so the retained result header
      * cannot leave an invisible container intercepting map input below it.
-     * Return focus to Tools if closing the last panel removes its minimize action.
+     * A collapsed toolbar leaves a single Map tools tab for restoring the controls.
      *
      * @return {void}
      */
@@ -859,16 +867,10 @@ export class MapInspectionController {
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
         this.dockContext.hidden = this.dockTitle.hidden || !this.dockContext.textContent;
-        const restoreToolbarFocus = !this.isOpen && this.document.activeElement === this.minimizeButton;
-        this.minimizeButton.hidden = !this.isOpen;
-        if (restoreToolbarFocus) this.mapToolsButton.focus();
-        this.minimizeButton.textContent = this.minimized ? "Expand" : "Minimize";
-        this.minimizeButton.setAttribute(
-            "aria-expanded", String(!this.minimized)
-        );
-        this.minimizeButton.setAttribute(
-            "aria-label", this.minimized ? "Expand map tools" : "Minimize map tools"
-        );
+        const expandWasFocused = this.document.activeElement === this.expandButton;
+        this.toolbar.hidden = this.minimized;
+        this.expandButton.hidden = !this.minimized;
+        if (!this.minimized && expandWasFocused) this.collapseButton.focus();
         for (const { name, panel, tab, resultNavigation } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
@@ -938,7 +940,8 @@ export class MapInspectionController {
         for (const {button} of this.clickResults) button.removeEventListener("click", this.onSummaryClick);
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
-        this.minimizeButton.removeEventListener("click", this.onMinimize);
+        this.collapseButton.removeEventListener("click", this.onTogglePanel);
+        this.expandButton.removeEventListener("click", this.onTogglePanel);
         for (const { tab } of this.tools.filter(tool => !tool.resultNavigation)) {
             tab.removeEventListener("click", this.onTabClick);
             tab.removeEventListener("keydown", this.onTabKeydown);

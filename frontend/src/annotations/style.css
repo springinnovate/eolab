@@ -66,6 +66,7 @@
 
 /* Composition applies this mode to leave room for drawing while preserving panel state. */
 .is-editing-map-layer .map-tool-openers,
+.is-editing-map-layer #open-map-tools,
 .is-editing-map-layer #map-inspection,
 .is-editing-map-layer #map-inspection-panels { visibility: hidden; }
 .leaflet-container.is-editing-annotation { cursor: crosshair; }
