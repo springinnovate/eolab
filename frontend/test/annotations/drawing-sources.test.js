@@ -6,6 +6,7 @@ import { DrawingSourceApi, DrawingSourceError } from "../../src/annotations/sour
 import { exportDrawingCollection } from "../../src/annotations/source-document.js";
 
 const SOURCE = "11111111-1111-4111-8111-111111111111";
+const OTHER_SOURCE = "22222222-2222-4222-8222-222222222222";
 
 /** Construct a linked-drawing owner with real model/save behavior and explicit I/O boundaries.
  * @return {Object} Controller, original layer, recorded storage/HTTP calls and a mutable server record.
@@ -38,6 +39,7 @@ function fixture() {
     };
     Object.assign(controller, {model, sourceApi, loaded: true, layers: new Map(), controls: new Map(), shared: new Map(),
         savedDrawingContents: new Map(), creatingDrawingSources: new Map(), unavailableDrawingSources: new Set(),
+        drawingSaveErrors: new Map(), deviceSaveError: null,
         savedSharingLayers: [], dirty: false, pendingSave: false, savePromise: null, saving: false,
         status: {textContent: ""}, retryButton: {hidden: true}, drawButton: {}, importButton: {},
         panel: {show() {}}, clearedFilterLayerIds: new Set(), restoredLayers: new WeakMap(),
@@ -57,6 +59,7 @@ function fixture() {
                 controller.model.layers = controller.model.layers.filter(value => value.id !== id);
                 controller.layers.delete(id); records.delete(key);
                 controller.savedDrawingContents.delete(id); controller.unavailableDrawingSources.delete(id);
+                controller.drawingSaveErrors.delete(id);
             },
         },
     });
@@ -68,6 +71,183 @@ function fixture() {
  * @param {Object} fixture Drawing fixture. @return {Object} Geometry-free definition.
  */
 function definition({controller, key}) { return {...controller.exportDrawingLayer(key), customName: "Independent view"}; }
+
+/** Add a separate source so failures can be checked across drawing identities.
+ * @param {{linkSecond?:boolean}} [options] Whether to save the second source before exercising it.
+ * @return {Promise<Object>} Two local layers, independent server revisions and the existing I/O observations.
+ */
+async function independentDrawings({linkSecond = true} = {}) {
+    const h = fixture(); await h.controller.ensureDrawingSource(h.key);
+    const other = h.controller.model.createLayer();
+    other.name = "Unrelated drawing";
+    other.polygons = structuredClone(h.layer.polygons);
+    h.controller.attachLayer(other);
+    const otherKey = `local:annotation:${other.id}`;
+    const original = h.controller.sourceApi;
+    h.controller.sourceApi = {
+        async create(localLayerId, collection) {
+            assert.equal(localLayerId, other.id);
+            h.calls.push({method: "POST", localLayerId});
+            h.server.other = {id: OTHER_SOURCE, revision: 1, collection: structuredClone(collection), canEdit: true};
+            return structuredClone(h.server.other);
+        },
+        async get(id) {
+            if (id === SOURCE) return original.get(id);
+            assert.equal(id, OTHER_SOURCE); h.calls.push({method: "GET", id});
+            return structuredClone(h.server.other);
+        },
+        async update(id, expectedRevision, collection) {
+            if (id === SOURCE) return original.update(id, expectedRevision, collection);
+            assert.equal(id, OTHER_SOURCE);
+            h.calls.push({method: "PUT", id, expectedRevision, collection: structuredClone(collection)});
+            assert.equal(expectedRevision, h.server.other.revision);
+            h.server.other = {...h.server.other, revision: expectedRevision + 1, collection: structuredClone(collection)};
+            return structuredClone(h.server.other);
+        },
+    };
+    if (linkSecond) await h.controller.ensureDrawingSource(otherKey);
+    h.controller.model.layers = [h.layer, other];
+    return {...h, other, otherKey};
+}
+
+test("a conflicting drawing cannot stop another source from saving or being used", async () => {
+    const h = await independentDrawings();
+    let shown = 0;
+    h.controller.panel.show = () => { shown++; };
+    h.server.record.revision = 2;
+    h.layer.polygons[0].note = "Conflicting A edits";
+    h.other.polygons[0].note = "Saved B edits";
+    await h.controller.save();
+    assert.equal(shown, 1, "a new conflict reveals feedback");
+    assert.equal(h.server.other.collection.features[0].properties.note, "Saved B edits");
+    assert.equal(h.other.drawingSource.pending, false);
+    assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
+    assert.equal(shown, 1, "an existing unrelated warning must not replace the user's active panel");
+    await assert.rejects(h.controller.ensureDrawingSource(h.key), /changed/);
+    assert.equal(h.layer.polygons[0].note, "Conflicting A edits");
+    assert.equal(h.layer.drawingSource.revision, 1);
+    assert.equal(h.layer.drawingSource.pending, true);
+    assert.equal(h.controller.hasUnsavedChanges(), true);
+    assert.match(h.controller.status.textContent, /Original drawing/);
+    assert.match(h.controller.status.textContent, /changed/);
+    assert.equal(h.saved.at(-1).layers.find(layer => layer.id === h.layer.id).polygons[0].note, "Conflicting A edits");
+});
+
+test("an unrelated conflict cannot prevent linking or reopening another drawing", async () => {
+    const h = await independentDrawings({linkSecond: false});
+    h.server.record.revision = 2;
+    h.layer.polygons[0].note = "Keep A edits";
+    await h.controller.save();
+    assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
+    const key = await h.controller.restoreDrawingLayer(h.controller.exportDrawingLayer(h.otherKey), () => true);
+    assert.ok(h.controller.mapLayers.getRecord(key));
+    assert.equal(h.layer.drawingSource.pending, true);
+    assert.equal(h.layer.polygons[0].note, "Keep A edits");
+    assert.match(h.controller.status.textContent, /Original drawing/);
+});
+
+test("an unavailable source does not gate another drawing's save or restore", async () => {
+    const h = await independentDrawings();
+    const get = h.controller.sourceApi.get;
+    h.controller.sourceApi.get = id => id === SOURCE ? Promise.reject(new Error("Source offline")) : get(id);
+    await h.controller.refreshDrawingSources();
+    h.other.polygons[0].note = "B remains writable";
+    await h.controller.save();
+    assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
+    const key = await h.controller.restoreDrawingLayer(h.controller.exportDrawingLayer(h.otherKey), () => true);
+    assert.ok(h.controller.mapLayers.getRecord(key));
+    assert.equal(h.controller.hasUnsavedChanges(), false, "an unavailable clean source is not an unsaved edit");
+    assert.equal(h.layer.drawingSource.canEdit, false);
+    assert.match(h.controller.status.textContent, /Original drawing/);
+    assert.equal(h.controller.retryButton.hidden, false);
+});
+
+test("unrelated conflicts do not block local sharing or restoring a removed drawing", async () => {
+    const h = await independentDrawings();
+    h.server.record.revision = 2;
+    h.layer.polygons[0].note = "Retain conflicting A";
+    const snapshot = {key: h.otherKey, index: 1, local: structuredClone(h.other)};
+    h.controller.mapLayers.removeKey(h.otherKey);
+    await h.controller.restoreRemovedLayer(snapshot, () => true);
+    assert.equal(h.controller.model.layer(h.other.id).drawingSource.id, OTHER_SOURCE);
+    await h.controller.saveForSharing();
+    const id = await h.controller.restoreSharedContribution("Separate shared layer", {type: "FeatureCollection", features: []});
+    assert.ok(h.controller.sharableLayers().some(layer => layer.id === id));
+    assert.equal(h.layer.polygons[0].note, "Retain conflicting A");
+    assert.equal(h.layer.drawingSource.pending, true);
+});
+
+test("a shared device-write failure blocks every remote source until device saving succeeds", async () => {
+    const h = await independentDrawings();
+    h.layer.polygons[0].note = "A needs saving";
+    h.other.polygons[0].note = "B needs saving";
+    const persist = h.controller.storage.save;
+    h.controller.storage.save = async () => { throw new Error("This tab's local copy is stale"); };
+    await h.controller.save();
+    await assert.rejects(h.controller.ensureDrawingSource(h.otherKey), /local copy is stale/);
+    await assert.rejects(h.controller.saveForSharing(), /local copy is stale/);
+    assert.equal(h.calls.filter(call => call.method === "PUT").length, 0);
+    assert.equal(h.controller.hasUnsavedChanges(), true);
+    h.controller.storage.save = persist;
+    await h.controller.retrySaving();
+    assert.equal(h.server.record.collection.features[0].properties.note, "A needs saving");
+    assert.equal(h.server.other.collection.features[0].properties.note, "B needs saving");
+    assert.equal(h.controller.hasUnsavedChanges(), false);
+    assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
+});
+
+test("retry saves a failed source's latest edits without resubmitting an unaffected source", async () => {
+    const h = await independentDrawings();
+    const update = h.controller.sourceApi.update;
+    let rejectFirst;
+    h.controller.sourceApi.update = (id, revision, collection) => id === SOURCE
+        ? new Promise((resolve, reject) => { rejectFirst = reject; })
+        : update(id, revision, collection);
+    h.layer.polygons[0].note = "First A edit";
+    h.other.polygons[0].note = "Saved B edit";
+    const first = h.controller.save();
+    await Promise.resolve();
+    h.layer.polygons[0].note = "Later A edit";
+    const coalesced = h.controller.save();
+    rejectFirst(new Error("Network offline"));
+    await Promise.all([first, coalesced]);
+    assert.equal(h.server.other.collection.features[0].properties.note, "Saved B edit");
+    assert.equal(h.saved.at(-1).layers.find(layer => layer.id === h.layer.id).polygons[0].note, "Later A edit");
+    assert.match(h.controller.status.textContent, /Original drawing.*Network offline/);
+    assert.equal(h.layer.drawingSource.revision, 1);
+    h.controller.sourceApi.update = update;
+    await h.controller.retrySaving();
+    assert.equal(h.server.record.collection.features[0].properties.note, "Later A edit");
+    assert.equal(h.calls.filter(call => call.method === "PUT" && call.id === OTHER_SOURCE).length, 1);
+    assert.equal(h.controller.hasUnsavedChanges(), false);
+    assert.equal(h.controller.status.textContent, "");
+    assert.equal(h.controller.retryButton.hidden, true);
+});
+
+test("a clean view cannot bypass conflicting edits in another view of the same source", async () => {
+    const h = fixture(); await h.controller.ensureDrawingSource(h.key);
+    const otherKey = await h.controller.restoreDrawingLayer(definition(h), () => true);
+    h.server.record.revision = 2;
+    h.layer.polygons[0].note = "Conflicting view";
+    await h.controller.save();
+    await assert.rejects(h.controller.ensureDrawingSource(otherKey), /Original drawing.*changed in another tab/);
+    assert.equal(h.layer.drawingSource.revision, 1);
+    assert.equal(h.layer.polygons[0].note, "Conflicting view");
+});
+
+test("read-only pending edits stay protected without blocking an unrelated source", async () => {
+    const h = await independentDrawings();
+    h.layer.polygons[0].note = "Pending A before permission was lost";
+    h.layer.drawingSource.pending = true;
+    h.server.record.canEdit = false;
+    await h.controller.refreshDrawingSources();
+    h.other.polygons[0].note = "Saved B edit";
+    assert.equal(await h.controller.ensureDrawingSource(h.otherKey), OTHER_SOURCE);
+    await assert.rejects(h.controller.ensureDrawingSource(h.key), /Original drawing.*saved only on this device/);
+    assert.equal(h.calls.filter(call => call.method === "PUT" && call.id === SOURCE).length, 0);
+    assert.equal(h.layer.polygons[0].note, "Pending A before permission was lost");
+    assert.equal(h.controller.hasUnsavedChanges(), true);
+});
 
 test("ordinary drawings remain local until explicitly linked; linking includes filtered-out original IDs", async () => {
     const h = fixture();
