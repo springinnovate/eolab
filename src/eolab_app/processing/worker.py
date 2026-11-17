@@ -95,6 +95,7 @@ class ProcessingWorker:
         self.artifacts = artifacts
         self.limits = limits
         self.native = native
+        self._stopped_attempt: tuple[str, str] | None = None
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
         # Fail startup for invalid packaged definitions rather than hiding them
         # from discovery or accepting work the worker cannot dispatch.
@@ -484,8 +485,37 @@ class ProcessingWorker:
         # Database finish still fences cancellation/late attempts after the rename.
         return replace(artifact, manifest=manifest, additional_outputs=())
 
+    async def _finish_stopped_attempt(self) -> None:
+        """Retry the terminal acknowledgement of this lane's confirmed stopped attempt.
+
+        Keep its job and attempt identities until durable storage answers, including
+        a fenced rejection when an earlier write committed without a response.
+        The ordinary queue loop supplies retry pacing after storage failures.
+
+        Raises:
+            ProcessingError: If storage still cannot acknowledge native exit.
+        """
+        if self._stopped_attempt is None:
+            return
+        identifier, attempt = self._stopped_attempt
+        await asyncio.to_thread(
+            self.jobs.finish,
+            identifier,
+            attempt,
+            None,
+            {
+                "code": "interrupted",
+                "detail": "The worker stopped before the job completed. Submit a new job to retry.",
+            },
+        )
+        self._stopped_attempt = None
+
     async def run_once(self) -> bool:
-        """Claim and fully supervise one attempt, or report that the slot is busy.
+        """Acknowledge stopped work, then claim and fully supervise one attempt.
+
+        A failed terminal write retains the exact stopped attempt for the next
+        call. Claims and cleanup continue to respect its durable running state
+        until that acknowledgement succeeds; lease expiry never releases it.
 
         Returns:
             True after handling a claimed job; False when nothing can be claimed.
@@ -494,6 +524,7 @@ class ProcessingWorker:
             ProcessingError: If durable storage is unavailable.
             asyncio.CancelledError: After stopping native work on worker shutdown.
         """
+        await self._finish_stopped_attempt()
         row = await asyncio.to_thread(self.jobs.claim_next_job)
         if row is None:
             return False
@@ -579,17 +610,9 @@ class ProcessingWorker:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             if not finished:
+                self._stopped_attempt = identifier, attempt
                 with suppress(ProcessingError):
-                    await asyncio.to_thread(
-                        self.jobs.finish,
-                        identifier,
-                        attempt,
-                        None,
-                        {
-                            "code": "interrupted",
-                            "detail": "The worker stopped before the job completed. Submit a new job to retry.",
-                        },
-                    )
+                    await self._finish_stopped_attempt()
         return True
 
     async def cleanup(self) -> None:
