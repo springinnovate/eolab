@@ -133,11 +133,14 @@ def test_application_image_context_excludes_sources_and_environment(
             assert not any(name.startswith("src/") for name in names)
             assert not any(".env" in name or ".git" in name for name in names)
             assert "tests/test_processing_events_postgres.py" in names
-            fixture = "tests/fixtures/saved-map-v5.json"
-            assert (
-                archive.extractfile(fixture).read()
-                == (launcher.ROOT / fixture).read_bytes()
-            )
+            for fixture in (
+                "tests/fixtures/saved-map-v5.json",
+                "tests/fixtures/drawing-admission.json",
+            ):
+                assert (
+                    archive.extractfile(fixture).read()
+                    == (launcher.ROOT / fixture).read_bytes()
+                )
             recipe = archive.extractfile("Dockerfile").read().decode()
             assert recipe.startswith("FROM eolab-application:test\n")
             assert "pip install --no-cache-dir ." not in recipe

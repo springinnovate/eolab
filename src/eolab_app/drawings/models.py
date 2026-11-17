@@ -1,20 +1,51 @@
 """Describe linked drawing sources with stable polygon IDs and explicit revisions."""
 
 from datetime import datetime
+from functools import partial
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from eolab_app.editable_polygon import PolygonGeometry
 
 MAX_DRAWING_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_DRAWING_BYTES + 4096
+
+
+def validate_editor_text_length(value: str, *, maximum: int) -> str:
+    """Retain source text only when it fits the browser editor's UTF-16 length limit.
+
+    Args:
+        value: Source name, polygon name or note already validated as text.
+        maximum: Maximum UTF-16 code units; supplementary characters use two.
+
+    Returns:
+        The original text without trimming or Unicode normalization.
+
+    Raises:
+        ValueError: The text exceeds the editor's limit.
+    """
+    if sum(2 if ord(character) > 0xFFFF else 1 for character in value) > maximum:
+        raise ValueError(
+            "This text is too long for the drawing editor. Shorten it and try again."
+        )
+    return value
+
+
 DrawingName = Annotated[
     str,
     StringConstraints(strict=True, min_length=1, max_length=160, pattern=r"\S"),
+    AfterValidator(partial(validate_editor_text_length, maximum=160)),
 ]
-"""Nonblank source or polygon label, preserving imported surrounding whitespace."""
+"""Nonblank label of at most 160 UTF-16 units, preserving imported whitespace."""
 DrawingIdentifier = Annotated[
     str, StringConstraints(strict=True, pattern=r"^[a-zA-Z0-9-]{1,100}$")
 ]
@@ -30,10 +61,14 @@ class DrawingDocumentPart(BaseModel):
 
 
 class DrawingProperties(DrawingDocumentPart):
-    """Retain a polygon's editable name and note as plain text."""
+    """Retain plain-text names and notes within the editor's UTF-16 length limits."""
 
     name: DrawingName
-    note: Annotated[str, StringConstraints(strict=True, max_length=10000)] = ""
+    note: Annotated[
+        str,
+        StringConstraints(strict=True, max_length=10000),
+        AfterValidator(partial(validate_editor_text_length, maximum=10000)),
+    ] = ""
 
 
 class DrawingFeature(DrawingDocumentPart):

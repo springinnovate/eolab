@@ -1,6 +1,7 @@
 """Validate original drawn-source identity and the shared editable polygon contract."""
 
 import ast
+import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,12 @@ from eolab_app.drawings.models import (
     DrawingCollection,
     DrawingFeature,
     UpdateDrawingLayer,
+)
+
+ADMISSION_CASES = json.loads(
+    (Path(__file__).parent / "fixtures" / "drawing-admission.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 
@@ -120,6 +127,11 @@ def test_duplicate_ids_are_rejected_even_when_polygon_names_differ() -> None:
         {"type": "Polygon", "coordinates": [[[0, 0], [2, 0], [2, 90], [0, 0]]]},
         {"type": "Polygon", "coordinates": [[[0, 0], [2, 0], [2, 2], [0, 0]]] * 2},
         {"type": "MultiPolygon", "coordinates": [[[[0, 0], [2, 0], [2, 2], [0, 0]]]]},
+        *[
+            case["geometry"]
+            for case in ADMISSION_CASES["geometry"]
+            if not case["valid"]
+        ],
     ],
 )
 def test_drawing_and_collaboration_keep_the_same_editable_geometry_contract(
@@ -135,6 +147,52 @@ def test_drawing_and_collaboration_keep_the_same_editable_geometry_contract(
     for contract in (DrawingFeature, AnnotationFeature):
         with pytest.raises(ValidationError):
             contract.model_validate(feature)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [case for case in ADMISSION_CASES["geometry"] if case["valid"]],
+    ids=lambda case: case["name"],
+)
+def test_editable_geometry_admission_preserves_supported_boundaries(
+    case: dict[str, Any],
+) -> None:
+    """Admit the same valid boundary examples used by the browser source reader.
+
+    Args:
+        case: Shared accepted geometry example.
+    """
+    feature = collection()["features"][0]
+    feature["geometry"] = case["geometry"]
+    for contract in (DrawingFeature, AnnotationFeature):
+        assert (
+            contract.model_validate(feature).model_dump(mode="json")["geometry"]
+            == case["geometry"]
+        )
+
+
+@pytest.mark.parametrize("case", ADMISSION_CASES["text"], ids=lambda case: case["name"])
+def test_drawing_text_admission_matches_browser_limits(case: dict[str, Any]) -> None:
+    """Use the browser's UTF-16 limits while preserving admitted imported text exactly.
+
+    Args:
+        case: Shared source-name, polygon-name or note boundary example.
+    """
+    document = collection()
+    text = case["unit"] * case["count"]
+    if case["field"] == "sourceName":
+        document["name"] = text
+    else:
+        field = "name" if case["field"] == "polygonName" else "note"
+        document["features"][0]["properties"][field] = text
+    if case["valid"]:
+        assert (
+            DrawingCollection.model_validate(document).model_dump(mode="json")
+            == document
+        )
+    else:
+        with pytest.raises(ValidationError):
+            DrawingCollection.model_validate(document)
 
 
 @pytest.mark.parametrize(

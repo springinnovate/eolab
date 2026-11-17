@@ -25,7 +25,7 @@ class PolygonGeometry(BaseModel):
 
     @model_validator(mode="after")
     def validate_polygon(self) -> Self:
-        """Reject open, self-crossing, or zero-area polygon rings.
+        """Reject rings the editor cannot reopen, including repeated vertices and near-zero area.
 
         Returns:
             This geometry when the exterior ring is usable by the editor.
@@ -36,9 +36,22 @@ class PolygonGeometry(BaseModel):
         ring = self.coordinates[0]
         if ring[0] != ring[-1]:
             raise ValueError("The polygon ring must end at its starting coordinate.")
+        if len(set(ring[:-1])) != len(ring) - 1:
+            raise ValueError("Two polygon vertices occupy the same position.")
         polygon = Polygon(ring)
         if not polygon.is_valid or polygon.area == 0:
             raise ValueError(
                 "The polygon must have at least three distinct vertices and must not cross itself."
+            )
+        # Match the editor's longitude/latitude shoelace arithmetic and tolerance,
+        # including its operation order for small polygons at offset coordinates.
+        doubled_area = 0.0
+        for point, following in zip(ring, ring[1:]):
+            doubled_area = (
+                doubled_area + point[0] * following[1] - following[0] * point[1]
+            )
+        if abs(doubled_area) < 1e-12:
+            raise ValueError(
+                "Polygon vertices must enclose an area the editor can retain."
             )
         return self

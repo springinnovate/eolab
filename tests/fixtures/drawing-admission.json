@@ -1,0 +1,19 @@
+{
+  "geometry": [
+    {"name": "adjacent repeated vertex", "valid": false, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[1,0],[1,0],[0,1],[0,0]]]}},
+    {"name": "area below editor threshold", "valid": false, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[0.0000001,0],[0,0.0000001],[0,0]]]}},
+    {"name": "area lost at offset coordinates", "valid": false, "geometry": {"type": "Polygon", "coordinates": [[[100,50],[100.0000001,50],[100,50.0000001],[100,50]]]}},
+    {"name": "area at editor threshold", "valid": true, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[0.000001,0],[0,0.000001],[0,0]]]}},
+    {"name": "ordinary clockwise triangle", "valid": true, "geometry": {"type": "Polygon", "coordinates": [[[-75,40],[-75,40.1],[-74.9,40],[-75,40]]]}, "exportGeometry": {"type": "Polygon", "coordinates": [[[-75,40],[-74.9,40],[-75,40.1],[-75,40]]]}}
+  ],
+  "text": [
+    {"name": "source name at UTF-16 limit", "field": "sourceName", "unit": "🌳", "count": 80, "valid": true},
+    {"name": "source name exceeds UTF-16 limit", "field": "sourceName", "unit": "🌳", "count": 81, "valid": false},
+    {"name": "polygon name at UTF-16 limit", "field": "polygonName", "unit": "🌳", "count": 80, "valid": true},
+    {"name": "polygon name exceeds UTF-16 limit", "field": "polygonName", "unit": "🌳", "count": 81, "valid": false},
+    {"name": "note at UTF-16 limit", "field": "note", "unit": "🌳", "count": 5000, "valid": true},
+    {"name": "note exceeds UTF-16 limit", "field": "note", "unit": "🌳", "count": 5001, "valid": false},
+    {"name": "imported whitespace and Unicode", "field": "polygonName", "unit": "  Árbol 🌳\t", "count": 1, "valid": true},
+    {"name": "imported note line endings", "field": "note", "unit": "First\r\nSecond\t🌳", "count": 1, "valid": true}
+  ]
+}
