@@ -169,6 +169,7 @@ class RasterStatisticsArea(BaseModel):
             absence selects the other explicit area or the whole raster.
         sampling_box: Optional kilometer-based geodesic box, exclusive of the other areas.
         polygon_area: Optional temporary browser-owned polygon reference.
+        measure: Return a distribution or the arithmetic mean of a sampling box.
         category_values: Optional distinct numeric classification codes. Labels,
             colors and opacity remain outside the analysis contract.
     """
@@ -185,6 +186,7 @@ class RasterStatisticsArea(BaseModel):
     sampling_box: Wgs84SamplingBox | None = Field(default=None, alias="samplingBox")
     polygon_area: PolygonAreaReference | None = Field(default=None, alias="polygonArea")
 
+    measure: Literal["distribution", "mean"] = "distribution"
     category_values: tuple[CategoryCode, ...] | None = Field(
         default=None, alias="categoryValues", min_length=1, max_length=256
     )
@@ -216,6 +218,8 @@ class RasterStatisticsArea(BaseModel):
             raise ValueError(
                 "selectedBounds, samplingBox, catalogSelection and polygonArea are mutually exclusive"
             )
+        if self.measure == "mean" and (self.sampling_box is None or self.category_values is not None):
+            raise ValueError("A mean requires a samplingBox without categoryValues")
         if self.category_values is not None and len(set(self.category_values)) != len(
             self.category_values
         ):
@@ -352,6 +356,21 @@ class RasterPercentiles(BaseModel):
     p05: FiniteFloat
     p50: FiniteFloat
     p95: FiniteFloat
+
+
+class RasterBoxMean(BaseModel):
+    """Arithmetic mean of valid stored pixel values inside the requested box.
+
+    Attributes:
+        method: Exact for a complete native window, estimated for a nearest
+            overview, or unavailable when an overview cannot represent the mean.
+        value: Finite arithmetic mean, or None when no value can be supplied.
+        unit: Original band unit, when declared, without scaling or conversion.
+    """
+
+    method: Literal["exact", "estimated", "unavailable"]
+    value: FiniteFloat | None
+    unit: str | None
 
 
 class RasterHistogram(BaseModel):

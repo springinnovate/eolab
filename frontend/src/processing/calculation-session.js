@@ -143,6 +143,21 @@ export class CalculationSessionStorage {
                 !Array.isArray(presentation.names) || presentation.names.length !== value.intent.calculations.length ||
                 presentation.names.some(name => typeof name !== "string" || name.length > 80) ||
                 value.intent.calculations.some(formula => !/^stat-[1-9][0-9]*$/.test(formula.label) || !Number.isSafeInteger(Number(formula.label.slice(5))))) return null;
+            if (presentation.boxMeans !== undefined) {
+                const means = presentation.boxMeans;
+                if (!Array.isArray(means) || means.length > 5 || typeof presentation.exactBox !== "boolean" ||
+                    means.some(mean => !Number.isSafeInteger(mean?.id) || mean.id < 1 ||
+                        typeof mean.label !== "string" || mean.label.length > 80) ||
+                    new Set(means.map(mean => mean.id)).size !== means.length) return null;
+                const labels = new Set(value.intent.calculations.map(formula => formula.label));
+                for (const mean of means) {
+                    const label = "stat-" + mean.id;
+                    const captured = value.intent.calculations.find(formula => formula.label === label);
+                    if (captured && captured.expression !== "mean(a)") return null;
+                    labels.add(label);
+                }
+                if (labels.size > 5) return null;
+            }
             return { intent: calculationIntent(value.intent), jobId: value.jobId, pending: value.pending,
                 context: Object.freeze({ automatic: value.automatic, presentation }), cancelRequested: value.cancelRequested };
         } catch { return null; }

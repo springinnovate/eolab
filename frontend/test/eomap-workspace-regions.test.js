@@ -345,7 +345,7 @@ test("composition forwards inspection layout and CSS does not infer it from chan
 test("composition forwards compatible map areas and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*updateRasterSeriesArea\(null, ""\);/
+        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*const box = pixelPoint && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
 });

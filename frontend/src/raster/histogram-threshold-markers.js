@@ -20,8 +20,39 @@ function createMarkerElement(documentContext, name, attributes) {
 }
 
 /**
- * Append keyboard-focusable glyphs, short ticks, and hover/focus guides.
- * Keep adjacent glyphs apart even when their exact guides share a coordinate.
+ * Place crowded letters around their threshold values, keeping every letter on the label track.
+ * @param {ThresholdMarker[]} markers Thresholds in screen order for ties.
+ * @param {number} minimum First available center on the track in SVG units.
+ * @param {number} maximum Last available center on the track in SVG units.
+ * @param {number} spacing Minimum distance between the centers of adjacent letters.
+ * @return {Map<ThresholdMarker, number>} Display position for each letter.
+ */
+function positionThresholdLabels(markers, minimum, maximum, spacing) {
+    const ordered = markers.map(marker => ({marker, fromLeft: marker.position}))
+        .sort((left, right) => left.marker.position - right.marker.position);
+    let next = minimum;
+    for (const entry of ordered) {
+        entry.fromLeft = Math.max(next, entry.marker.position);
+        next = entry.fromLeft + spacing;
+    }
+    const positions = new Map();
+    next = maximum;
+    for (let i = ordered.length - 1; i >= 0; i--) {
+        const {marker, fromLeft} = ordered[i];
+        const fromRight = Math.min(next, marker.position);
+        next = fromRight - spacing;
+        // Center each cluster between the two sweeps, leaving room at both ends.
+        const center = (fromLeft + fromRight) / 2;
+        const first = minimum + i * spacing;
+        const last = maximum - (ordered.length - 1 - i) * spacing;
+        positions.set(marker, Math.max(first, Math.min(last, center)));
+    }
+    return positions;
+}
+
+/**
+ * Connect separately focusable percentile letters to dashed guides at their exact chart positions.
+ * Tied markers share a faint guide at rest. Hover or keyboard focus emphasizes that marker's color.
  * @param {Document} documentContext Owning document.
  * @param {SVGElement} group Marker layer.
  * @param {ThresholdMarker[]} markers Thresholds in reading order.
@@ -32,20 +63,9 @@ function createMarkerElement(documentContext, name, attributes) {
 export function appendHistogramThresholdMarkers(documentContext, group, markers, layout) {
     const {axis, edge, guideEnd, minimum, maximum, glyphSize} = layout;
     const above = axis === "x";
-    const gap = glyphSize + 4;
-    const ordered = markers.map(marker => ({marker, position: marker.position}))
-        .sort((left, right) => left.position - right.position);
-    let next = minimum;
-    for (const entry of ordered) {
-        entry.position = Math.max(next, entry.position);
-        next = entry.position + gap;
-    }
-    next = maximum;
-    for (const entry of ordered.toReversed()) {
-        entry.position = Math.min(next, entry.position);
-        next = entry.position - gap;
-    }
-    const labelPositions = new Map(ordered.map(({marker, position}) => [marker, position]));
+    const labelPositions = positionThresholdLabels(above ? markers : markers.toReversed(),
+        minimum, maximum, glyphSize * 2 + 2);
+    const guidePositions = new Set();
     const tickLength = 4;
     const targetSize = glyphSize + 2;
     const targets = markers.map(marker => {
@@ -62,11 +82,13 @@ export function appendHistogramThresholdMarkers(documentContext, group, markers,
                 ? {x1: marker.position, x2: marker.position, y1: edge, y2: guideEnd}
                 : {x1: edge, x2: guideEnd, y1: marker.position, y2: marker.position}),
         });
+        if (guidePositions.has(marker.position)) guide.classList.add("is-coincident");
+        guidePositions.add(marker.position);
         const tick = createMarkerElement(documentContext, "line", {
             class: "raster-histogram-threshold-tick", "aria-hidden": "true",
             ...(above
-                ? {x1: marker.position, x2: marker.position, y1: edge - tickLength, y2: edge}
-                : {x1: edge + tickLength, x2: edge, y1: marker.position, y2: marker.position}),
+                ? {x1: labelPosition, x2: marker.position, y1: edge - tickLength, y2: edge}
+                : {x1: edge + tickLength, x2: edge, y1: labelPosition, y2: marker.position}),
         });
         guide.style.stroke = tick.style.stroke = marker.color;
         const hitArea = createMarkerElement(documentContext, "rect", {

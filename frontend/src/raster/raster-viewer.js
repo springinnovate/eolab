@@ -171,7 +171,7 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object) => void} remove Remove one Item from the stack.
  * @property {(key?:string|null,mode?:string)=>Readonly<Object>|null} getSelectedArea
  * Read an immutable explicit selection, independently of statistics readiness.
- * @property {()=>Readonly<Object>|null} selectSamplingBox Capture a geodesic box at the map center,
+ * @property {(position?:{lng:number,lat:number})=>Readonly<Object>|null} selectSamplingBox Capture a geodesic box at the supplied position or map center,
  * returning null when its pole/date-line boundary is unsupported.
  * @property {(area:Object|null)=>void} setSamplingActivity Mark the matching committed box or rectangle
  * while a calculation uses it, without changing the selected geometry.
@@ -200,8 +200,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
- * @property {(snapshot:{state:string,message:string,source:string,scope:string}|null)=>void} [onHistogramChange]
- * Receives current histogram participation, owned source/area labels and status without exposing analysis state.
+ * @property {(snapshot:{state:"loading"|"error"|"ready",source:string,scope:string}|null)=>void} [onHistogramChange]
+ * Receives the histogram activity, participating rasters and sampling area for dock navigation.
  * @property {(method:"box"|"whole"|"vector")=>void} [onSamplingMethodChange]
  * Notify composition when the user chooses an area method, so obsolete vector reads can be cancelled.
  * @property {(area:Readonly<Object>|null,change:{waitingForPolygons:boolean,invalidatedArea:Readonly<Object>|null})=>void} [onSamplingAreaChange]
@@ -1397,8 +1397,7 @@ export function initializeRasterViewer(
         publishHistogramPresentation();
     }
 
-    /** Publish display-only status for the current histogram targets and area.
-     * Uses the same owned sessions as the charts; no additional reads or timers.
+    /** Report activity for the Histograms button and the source and area for its dock context.
      * @return {void}
      */
     function publishHistogramPresentation() {
@@ -1411,10 +1410,9 @@ export function initializeRasterViewer(
         const states = bivariateMode.active ? [pairedHistogramState] : sessions
             .filter(session => !isOutsideHistogramBox(session))
             .map(session => getLayerHistogramPresentation(session).state);
-        const resizing = rasterSampleWindowResizeTimeout !== null;
-        const loading = resizing || states.some(state => state === "loading" || state === "idle");
-        const failures = states.filter(state => state === "error").length;
-        const state = loading ? "loading" : failures ? "error" : "ready";
+        const loading = rasterSampleWindowResizeTimeout !== null ||
+            states.some(state => state === "loading" || state === "idle");
+        const state = loading ? "loading" : states.includes("error") ? "error" : "ready";
         const selection = bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling;
         const scope = bivariateMode.active
             ? selection ? `Selected polygons · ${selection.filename}` : bivariateSelectedBounds ? "Sampling box · 2D comparison" : "Whole overlap · 2D comparison"
@@ -1423,9 +1421,7 @@ export function initializeRasterViewer(
         const participation = visibleCount > sessions.length
             ? `Top ${sessions.length} of ${visibleCount} visible rasters`
             : `${sessions.length} raster layer${sessions.length === 1 ? "" : "s"}`;
-        const progress = resizing ? "Resizing box; results show the previous area…" : loading ? "Updating for this selection…" : failures
-            ? "Some histograms unavailable — see details" : "Ready";
-        onHistogramChange(Object.freeze({state, source: participation, scope, message: `${participation} · ${scope} · ${progress}`}));
+        onHistogramChange(Object.freeze({state, source: participation, scope}));
     }
 
     /**
@@ -3826,7 +3822,7 @@ export function initializeRasterViewer(
             } else {
                 controlsView.setSampleWindowStatus(
                     `Updating the selected map box to ${sideLengthKm} km × ` +
-                    `${sideLengthKm} km…`
+                    `${sideLengthKm} km. Histograms still show the previous area.`, true
                 );
                 scheduleRasterSampleWindowResize(presentedBounds, resizedBounds, center);
             }
@@ -5107,10 +5103,11 @@ export function initializeRasterViewer(
         getSelectedArea,
         // Composition reuses these same map-sampling actions from the floating
         // area form; Processing retains its own polygon selection lifecycle.
-        /** Select a map-centered geodesic box without requiring a histogram source.
+        /** Select a geodesic box for area consumers independently of histogram coverage.
+         * @param {{lng:number,lat:number}} [position] Clicked position, defaulting to the map center.
          * @return {Object|null} Captured samplingBox descriptor, or null near a pole/date line.
          */
-        selectSamplingBox: () => rasterSampleWindowController.selectAt(leafletMap.getCenter()) === null
+        selectSamplingBox: (position = leafletMap.getCenter()) => rasterSampleWindowController.selectAt(position) === null
             ? null : rasterSampleWindowController.selectedArea,
         selectWholeRaster: handleClearSampleWindow,
         setSamplingActivity: area => rasterSampleWindowController.setActivityArea(area),
