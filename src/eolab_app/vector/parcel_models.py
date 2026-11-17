@@ -93,6 +93,26 @@ class ParcelIdValidation(BaseModel):
     featureCount: Annotated[int, Field(strict=True, ge=0)]
 
 
+class ParcelLookupRequest(ParcelIdRequest):
+    """Find one typed ID in an original Catalog layer, independently of its filter."""
+
+    parcelId: ParcelId
+
+
+class ParcelLookupInput(ParcelIdInput):
+    """Supply the original authorized layer and exact typed ID to a lookup job."""
+
+    parcelId: ParcelId
+
+
+class ParcelLookupResponse(BaseModel):
+    """Report original-layer membership tied to authoritative Catalog identity."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    found: Annotated[bool, Field(strict=True)]
+    selection: CatalogSelection
+
+
 class ParcelRow(BaseModel):
     """Return a typed parcel ID and original attributes formatted for display.
 

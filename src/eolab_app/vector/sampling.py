@@ -28,9 +28,12 @@ from eolab_app.vector.filters import (
 )
 from eolab_app.vector.ports import VectorCatalog
 from eolab_app.vector.parcel_models import (
+    ParcelId,
     ParcelIdRequest,
     ParcelIdValidation,
     ParcelIdValidationResponse,
+    ParcelLookupRequest,
+    ParcelLookupResponse,
     ParcelRowsRequest,
     ParcelRowsPage,
     ParcelRowsResponse,
@@ -68,7 +71,7 @@ class VectorSelectionExecutor(Protocol):
 
 
 class VectorParcelExecutor(Protocol):
-    """Execute Catalog parcel validation and page reads without rendering state."""
+    """Execute Catalog parcel validation, lookups and pages without rendering state."""
 
     async def validate_ids(
         self, selection: CatalogSelection, id_field: str
@@ -84,6 +87,24 @@ class VectorParcelExecutor(Protocol):
 
         Raises:
             VectorConflictError: The source, IDs or execution are unavailable.
+        """
+        ...
+
+    async def lookup_parcel(
+        self, selection: CatalogSelection, id_field: str, parcel_id: ParcelId
+    ) -> bool:
+        """Find an exact typed ID in the complete original Catalog layer.
+
+        Args:
+            selection: Authorized Catalog descriptor with an inactive filter.
+            id_field: Original field previously validated for parcel identity.
+            parcel_id: Exact typed ID to find.
+
+        Returns:
+            Whether the original layer contains the requested typed ID.
+
+        Raises:
+            VectorConflictError: Source reading or execution is unavailable.
         """
         ...
 
@@ -141,8 +162,8 @@ class VectorSamplingService:
                 then reports unavailable without launching a local process.
             extent_executor: Jobs adapter for original-source bounds; omit when
                 the consumer does not offer filtered map zoom.
-            parcel_executor: Jobs adapter for Catalog parcel ID validation and
-                page reads; omit for consumers without parcel-list endpoints.
+            parcel_executor: Jobs adapter for Catalog parcel ID validation,
+                membership lookups and page reads; omit for consumers without them.
             uploads: Original browser-owned GeoPackages and their admission metadata.
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
@@ -189,6 +210,39 @@ class VectorSamplingService:
         return ParcelIdValidationResponse(
             **validation.model_dump(), selection=resolved.selection
         )
+
+    async def lookup_parcel(self, request: ParcelLookupRequest) -> ParcelLookupResponse:
+        """Authorize a Catalog layer and find one typed ID across its original features.
+
+        Whole-layer uniqueness is validated when choosing the ID field. This lookup
+        checks only membership and does not apply the current view filter.
+
+        Args:
+            request: Catalog source, original ID field and exact typed parcel ID.
+
+        Returns:
+            Original-layer membership and the authoritative source descriptor.
+
+        Raises:
+            VectorFeatureError: Catalog identity or source resolution failed.
+            VectorConflictError: Native reading or the executor is unavailable.
+            asyncio.CancelledError: After the executor's bounded cancellation cleanup.
+        """
+        if self._parcel_executor is None:
+            raise VectorConflictError("The parcel reader is unavailable")
+        resolved = await resolve_selection(
+            self.catalog,
+            self.resolver,
+            CatalogVectorFilterRequest(
+                collectionId=request.collection_id,
+                itemId=request.item_id,
+                filter=VectorFilter(),
+            ),
+        )
+        found = await self._parcel_executor.lookup_parcel(
+            resolved.selection, request.idField, request.parcelId
+        )
+        return ParcelLookupResponse(found=found, selection=resolved.selection)
 
     async def read_parcel_rows(self, request: ParcelRowsRequest) -> ParcelRowsResponse:
         """Authorize and page the currently filtered original Catalog parcels.

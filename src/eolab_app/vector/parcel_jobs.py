@@ -9,18 +9,26 @@ from eolab_jobs.client import JobFailed, JobsClient
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.parcel_models import (
+    ParcelId,
     ParcelIdInput,
     ParcelIdValidation,
+    ParcelLookupInput,
     ParcelRowsInput,
     ParcelRowsPage,
 )
-from eolab_app.vector.parcel_operation import ParcelIdResult, ParcelRowsResult
+from eolab_app.vector.parcel_operation import (
+    ParcelIdResult,
+    ParcelLookupResult,
+    ParcelRowsResult,
+)
 
-ParcelResult = TypeVar("ParcelResult", ParcelIdResult, ParcelRowsResult)
+ParcelResult = TypeVar(
+    "ParcelResult", ParcelIdResult, ParcelLookupResult, ParcelRowsResult
+)
 
 
 class ParcelJobs:
-    """Submit parcel validation/page reads with ordinary queue and cancellation rules."""
+    """Submit parcel validation, lookups and pages with ordinary Jobs lifetime rules."""
 
     def __init__(self, jobs: JobsClient) -> None:
         """Use the authenticated Jobs connection supplied by application composition.
@@ -54,6 +62,34 @@ class ParcelJobs:
         if outcome.error is not None:
             raise VectorConflictError(outcome.error)
         return outcome.validation
+
+    async def lookup_parcel(
+        self, selection: CatalogSelection, id_field: str, parcel_id: ParcelId
+    ) -> bool:
+        """Find a typed original parcel ID through the supervised Jobs service.
+
+        Args:
+            selection: Authorized whole-layer Catalog descriptor.
+            id_field: Original ID field validated when choosing parcel identity.
+            parcel_id: Exact typed ID, preserving integer precision and string spelling.
+
+        Returns:
+            Whether the original layer contains this typed ID.
+
+        Raises:
+            VectorConflictError: Source access, native reading or Jobs failed.
+            asyncio.CancelledError: After abandoned job cleanup.
+        """
+        outcome = await self._run(
+            "vector.parcel-lookup.v1",
+            ParcelLookupInput(
+                selection=selection, idField=id_field, parcelId=parcel_id
+            ),
+            ParcelLookupResult,
+        )
+        if outcome.error is not None:
+            raise VectorConflictError(outcome.error)
+        return outcome.found
 
     async def read_rows(
         self,

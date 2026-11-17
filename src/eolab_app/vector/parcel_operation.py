@@ -1,9 +1,9 @@
-"""Validate parcel IDs and read parcel rows in isolated Jobs execution processes."""
+"""Validate, find and page original parcels in isolated Jobs execution processes."""
 
 import asyncio
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from eolab_app.catalog_selection import (
     CatalogSelection,
@@ -13,6 +13,7 @@ from eolab_app.catalog_selection import (
 from eolab_app.vector.parcel_models import (
     ParcelIdInput,
     ParcelIdValidation,
+    ParcelLookupInput,
     ParcelRowsInput,
     ParcelRowsPage,
 )
@@ -63,6 +64,73 @@ class ParcelRowsResult(BaseModel):
         if (self.page is None) == (self.error is None):
             raise ValueError("Expected a parcel page or a read error")
         return self
+
+
+class ParcelLookupResult(BaseModel):
+    """Original-layer membership, including absence, or a safe expected read error."""
+
+    model_config = ConfigDict(extra="forbid")
+    found: StrictBool | None = None
+    error: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @model_validator(mode="after")
+    def require_membership_or_error(self) -> "ParcelLookupResult":
+        """Require a membership Boolean or an error across the native boundary.
+
+        Returns:
+            This validated result, with false representing a successful absent lookup.
+
+        Raises:
+            ValueError: Both outcomes are present or neither is present.
+        """
+        if (self.found is None) == (self.error is None):
+            raise ValueError("Expected parcel membership or a read error")
+        return self
+
+
+def lookup_catalog_parcel(inputs: ParcelLookupInput) -> ParcelLookupResult:
+    """Find one original typed parcel ID through the registered native operation.
+
+    Args:
+        inputs: Catalog layer identity, original ID field and requested typed ID.
+
+    Returns:
+        Membership, including absent success, or a safe source/budget explanation.
+
+    Raises:
+        VectorFeatureError: Catalog authorization failed.
+        OSError: The process memory allowance could not be applied.
+    """
+    from eolab_app.bounded_geometry import GeometryValidationError
+
+    try:
+        return asyncio.run(_lookup_catalog_parcel(inputs))
+    except (GeometryValidationError, SelectionUnavailableError) as error:
+        return ParcelLookupResult(error=str(error))
+
+
+async def _lookup_catalog_parcel(inputs: ParcelLookupInput) -> ParcelLookupResult:
+    """Reauthorize the original source and find an ID under existing native budgets.
+
+    Args:
+        inputs: Accepted Catalog identity, original ID field and requested typed ID.
+
+    Returns:
+        Exact original-layer membership.
+
+    Raises:
+        SelectionUnavailableError: Source identity changed or reading failed.
+        GeometryValidationError: Schema, candidate IDs or read budgets are invalid.
+        VectorFeatureError: Catalog authorization failed.
+        OSError: The process memory allowance could not be applied.
+    """
+    from eolab_app.bounded_vector import _limit_memory
+    from eolab_app.vector.parcels import lookup_parcel
+
+    resolved = await _resolve_parcel_source(inputs.selection)
+    with _limit_memory():
+        found = lookup_parcel(resolved, inputs.idField, inputs.parcelId)
+    return ParcelLookupResult(found=found)
 
 
 def validate_catalog_parcel_ids(inputs: ParcelIdInput) -> ParcelIdResult:

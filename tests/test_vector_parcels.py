@@ -17,9 +17,14 @@ from eolab_app.vector.parcel_models import (
     ParcelId,
     ParcelIdInput,
     ParcelIdRequest,
+    ParcelLookupRequest,
     ParcelRowsRequest,
 )
-from eolab_app.vector.parcels import read_parcel_rows, validate_parcel_ids
+from eolab_app.vector.parcels import (
+    lookup_parcel,
+    read_parcel_rows,
+    validate_parcel_ids,
+)
 
 
 def write_parcels(
@@ -31,6 +36,7 @@ def write_parcels(
     geometry_type: int = ogr.wkbPolygon,
     driver_name: str = "GPKG",
     predicate: VectorFilter | None = None,
+    id_field: str = "parcel_id",
 ) -> ResolvedCatalogSelection:
     """Write a real layer with null geometries and known original scalar fields.
 
@@ -42,6 +48,7 @@ def write_parcels(
         geometry_type: Declared geometry schema; geometry itself stays null.
         driver_name: Native writer, GeoPackage or Shapefile.
         predicate: Optional selected-row predicate, excluded from ID validation.
+        id_field: Original identifier column name, including quoted names.
 
     Returns:
         An authorized fixture descriptor pointing to the exact native layer.
@@ -49,7 +56,7 @@ def write_parcels(
     path = tmp_path / ("parcels.gpkg" if driver_name == "GPKG" else "parcels.shp")
     with ogr.GetDriverByName(driver_name).CreateDataSource(str(path)) as dataset:
         layer = dataset.CreateLayer("parcels", geom_type=geometry_type)
-        identifier = ogr.FieldDefn("parcel_id", id_type)
+        identifier = ogr.FieldDefn(id_field, id_type)
         identifier.SetSubType(id_subtype)
         layer.CreateField(identifier)
         for name, kind in (
@@ -429,3 +436,184 @@ def test_parcel_contracts_reject_paths_and_unsafe_request_shapes() -> None:
         with pytest.raises(ValidationError):
             ParcelId(type="integer", value=value)
     assert ParcelId(type="string", value=" 1 ").value == " 1 "
+
+
+@pytest.mark.parametrize(
+    "value, found",
+    [
+        ("9223372036854775807", True),
+        ("-9223372036854775808", True),
+        ("9007199254740993", True),
+        ("-9007199254740993", True),
+        ("9007199254740992", False),
+        ("-9007199254740992", False),
+        ("9223372036854775808", False),
+        ("-9223372036854775809", False),
+    ],
+)
+def test_lookup_preserves_exact_int64_membership(
+    tmp_path: Path, value: str, found: bool
+) -> None:
+    """Find original integer IDs without browser-number rounding or filter exclusion.
+
+    Args:
+        tmp_path: Isolated native source directory.
+        value: Exact canonical integer ID requested as text.
+        found: Expected membership in the original source.
+    """
+    resolved = write_parcels(
+        tmp_path,
+        [
+            {"parcel_id": 9223372036854775807},
+            {"parcel_id": -9223372036854775808},
+            {"parcel_id": 9007199254740993},
+            {"parcel_id": -9007199254740993},
+        ],
+        predicate=VectorFilter(
+            rules=[{"field": "parcel_id", "operator": "eq", "value": 0}]
+        ),
+    )
+    assert (
+        lookup_parcel(resolved, "parcel_id", ParcelId(type="integer", value=value))
+        is found
+    )
+    assert not lookup_parcel(
+        resolved, "parcel_id", ParcelId(type="string", value=value)
+    )
+
+
+@pytest.mark.parametrize("driver_name", ["GPKG", "ESRI Shapefile"])
+@pytest.mark.parametrize(
+    "value, found",
+    [
+        ("42", True),
+        ("042", True),
+        ("A", True),
+        ("a", False),
+        ("O'Brien", True),
+        ("quote' OR 1=1 --", True),
+        ("missing' OR 1=1 --", False),
+    ],
+)
+def test_lookup_matches_original_strings_exactly(
+    tmp_path: Path, driver_name: str, value: str, found: bool
+) -> None:
+    """Preserve spelling and quote SQL literals without trusting native collation.
+
+    Args:
+        tmp_path: Isolated native source directory.
+        driver_name: Mounted vector format with its own native equality rules.
+        value: Original or absent ID text.
+        found: Expected exact membership.
+    """
+    resolved = write_parcels(
+        tmp_path,
+        [
+            {"parcel_id": original}
+            for original in ("42", "042", "A", "O'Brien", "quote' OR 1=1 --")
+        ],
+        id_type=ogr.OFTString,
+        driver_name=driver_name,
+    )
+    assert (
+        lookup_parcel(resolved, "parcel_id", ParcelId(type="string", value=value))
+        is found
+    )
+    assert not lookup_parcel(
+        resolved, "parcel_id", ParcelId(type="integer", value="42")
+    )
+
+
+def test_lookup_quotes_original_field_names_and_preserves_unicode(
+    tmp_path: Path,
+) -> None:
+    """Handle quoted identifiers, Unicode and surrounding spaces in original values.
+
+    Args:
+        tmp_path: Isolated native source directory.
+    """
+    id_field = 'parcel "identifier"'
+    resolved = write_parcels(
+        tmp_path,
+        [{id_field: "森林"}, {id_field: " 42 "}],
+        id_type=ogr.OFTString,
+        id_field=id_field,
+    )
+    for value in ("森林", " 42 "):
+        assert lookup_parcel(resolved, id_field, ParcelId(type="string", value=value))
+    assert not lookup_parcel(resolved, id_field, ParcelId(type="string", value="42"))
+
+
+def test_lookup_reads_only_matching_candidates_and_accepts_empty_sources(
+    tmp_path: Path,
+) -> None:
+    """Avoid repeated full-source validation and distinguish absent from failed reads.
+
+    Args:
+        tmp_path: Isolated native source directory.
+    """
+    empty_path = tmp_path / "empty"
+    empty_path.mkdir()
+    empty = write_parcels(empty_path, [])
+    assert not lookup_parcel(empty, "parcel_id", ParcelId(type="integer", value="99"))
+    resolved = write_parcels(tmp_path, [{"parcel_id": value} for value in range(100)])
+    assert lookup_parcel(
+        resolved,
+        "parcel_id",
+        ParcelId(type="integer", value="99"),
+        limits=VectorReadLimits(features=1),
+    )
+    with pytest.raises(GeometryValidationError, match="original parcel ID"):
+        lookup_parcel(empty, "missing", ParcelId(type="integer", value="99"))
+
+
+def test_lookup_honors_cancellation_and_elapsed_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never return membership after cancellation or expiry during a native read.
+
+    Args:
+        tmp_path: Isolated native source directory.
+        monkeypatch: Replace elapsed time with deterministic deadline ticks.
+    """
+    resolved = write_parcels(tmp_path, [{"parcel_id": 1}])
+    parcel_id = ParcelId(type="integer", value="1")
+    with pytest.raises(CancelledError):
+        lookup_parcel(
+            resolved, "parcel_id", parcel_id, cancellation_requested=lambda: True
+        )
+    checks = iter((False, False, True))
+    with pytest.raises(CancelledError):
+        lookup_parcel(
+            resolved,
+            "parcel_id",
+            parcel_id,
+            cancellation_requested=lambda: next(checks),
+        )
+    ticks = iter((0, 16))
+    monkeypatch.setattr("eolab_app.vector.parcels.monotonic", lambda: next(ticks))
+    with pytest.raises(GeometryValidationError, match="time budget"):
+        lookup_parcel(resolved, "parcel_id", parcel_id)
+
+
+@pytest.mark.parametrize(
+    "extra", [{"path": "/private/source.gpkg"}, {"filter": {}}, {"uploadId": "private"}]
+)
+def test_lookup_request_accepts_only_original_catalog_identity(
+    extra: dict[str, Any],
+) -> None:
+    """Reject paths, private-source substitutions and current-filter lookup requests.
+
+    Args:
+        extra: Unsupported external source or filter option.
+    """
+    with pytest.raises(ValidationError):
+        ParcelLookupRequest.model_validate(
+            {
+                "collectionId": "eolab-mounted-vectors",
+                "itemId": "parcels",
+                "idField": "parcel_id",
+                "parcelId": {"type": "integer", "value": "9007199254740993"},
+                **extra,
+            }
+        )

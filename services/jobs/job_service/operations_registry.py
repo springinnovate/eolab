@@ -31,13 +31,20 @@ from eolab_app.vector.field_calculation_operation import (
     FieldCalculationOutcome,
     calculate_vector_fields,
 )
-from eolab_app.vector.parcel_models import ParcelIdInput, ParcelRowsInput
+from eolab_app.vector.parcel_models import (
+    ParcelIdInput,
+    ParcelLookupInput,
+    ParcelRowsInput,
+)
 from eolab_app.vector.parcel_operation import (
     ParcelIdResult,
+    ParcelLookupResult,
     ParcelRowsResult,
     validate_catalog_parcel_ids,
+    lookup_catalog_parcel,
     read_catalog_parcel_rows,
 )
+
 
 @dataclass(frozen=True)
 class InstalledOperation:
@@ -117,5 +124,12 @@ OPERATIONS = {
         ParcelRowsInput,
         ParcelRowsResult,
         read_catalog_parcel_rows,
+    ),
+    "vector.parcel-lookup.v1": InstalledOperation(
+        "vector.parcel-lookup.v1",
+        "Find an exact typed ID in the original Catalog parcel layer.",
+        ParcelLookupInput,
+        ParcelLookupResult,
+        lookup_catalog_parcel,
     ),
 }
