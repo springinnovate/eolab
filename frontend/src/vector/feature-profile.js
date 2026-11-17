@@ -533,6 +533,7 @@ export class VectorFeatureProfileController {
             points: profile.points,
             chartType: settings.chartType,
             xScale: profile.xScale,
+            xReverse: profile.xScale === "numeric" && settings.direction === "descending",
             xAxisLabel: profile.xAxisLabel,
             yAxisLabel: "Value",
             ariaLabel: `${settings.chartType} chart of ${profile.finiteCount} ` +
