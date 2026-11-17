@@ -171,6 +171,95 @@ def era5_archive(tmp_path: Path) -> Path:
     return archive
 
 
+def publish_observation_summary(archive: Path) -> None:
+    """Materialize the producer's grouped summary contract for fixture observations.
+
+    Args:
+        archive: Test archive whose published observations supply metadata groups,
+            repeated variable totals and time bounds. Ready publication hides the
+            public summary until publication settles.
+    """
+    with closing(sqlite3.connect(archive / "catalog.sqlite")) as db, db:
+        db.executescript("""
+            DROP VIEW IF EXISTS observation_summary;
+            DROP TABLE IF EXISTS summary_rows;
+            CREATE TABLE summary_rows AS
+            SELECT variable, name, units, band, dtype, nodata, temporal_type,
+                   crs, transform, height, width,
+                   COUNT(*) AS group_observation_count,
+                   SUM(COUNT(*)) OVER (PARTITION BY variable) AS observation_count,
+                   MIN(MIN(valid_time)) OVER (PARTITION BY variable) AS valid_time_min,
+                   MAX(MAX(valid_time)) OVER (PARTITION BY variable) AS valid_time_max,
+                   MIN(MIN(interval_start)) OVER (PARTITION BY variable) AS interval_start_min,
+                   MAX(MAX(interval_end)) OVER (PARTITION BY variable) AS interval_end_max
+            FROM observations
+            GROUP BY variable, name, units, band, dtype, nodata, temporal_type,
+                     crs, transform, height, width;
+            CREATE VIEW observation_summary AS SELECT * FROM summary_rows
+            WHERE NOT EXISTS (SELECT 1 FROM publications WHERE status = 'ready');
+        """)
+
+
+def restrict_catalog_reads(
+    monkeypatch: pytest.MonkeyPatch, *, forbidden: set[str]
+) -> list[str]:
+    """Record real SQLite queries while rejecting reads of selected relations.
+
+    Args:
+        monkeypatch: Scope that temporarily replaces connection creation.
+        forbidden: Tables or views whose rows the reader must not access.
+
+    Returns:
+        Queries executed by connections opened within the patch scope.
+    """
+    connect = sqlite3.connect
+    queries: list[str] = []
+
+    def authorize(
+        action: int,
+        relation: str | None,
+        column: str | None,
+        database: str | None,
+        trigger: str | None,
+    ) -> int:
+        """Reject forbidden source reads at SQLite's authorization boundary.
+
+        Args:
+            action: SQLite operation code.
+            relation: Table or view affected by the operation.
+            column: Column read, when applicable.
+            database: SQLite database name.
+            trigger: Initiating view or trigger name.
+
+        Returns:
+            SQLite's allow or deny result for this operation.
+        """
+        del column, database, trigger
+        return (
+            sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_READ and relation in forbidden
+            else sqlite3.SQLITE_OK
+        )
+
+    def open_catalog(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        """Open a real catalog connection with read tracing and authorization.
+
+        Args:
+            *args: SQLite connection arguments.
+            **kwargs: SQLite connection options.
+
+        Returns:
+            Connection retaining actual SQLite query and error behavior.
+        """
+        connection = connect(*args, **kwargs)
+        connection.set_authorizer(authorize)
+        connection.set_trace_callback(queries.append)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", open_catalog)
+    return queries
+
+
 def create_scanner(source_root: Path) -> tuple[ScanManager, RecordingCatalogWriter]:
     """Compose the real discovery and metadata pipeline with an in-memory catalog.
 
@@ -760,3 +849,323 @@ def test_equivalent_grid_and_nodata_representations_keep_the_same_item(
         )
     assert asyncio.run(scan(manager))["failed"] == 0
     assert writer.write_session.items[ITEM_KEY] == original
+
+
+@pytest.mark.parametrize("year", [1950, 2000])
+def test_summary_matches_full_item_without_reading_observations_or_tiffs(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    year: int,
+) -> None:
+    """Use compact metadata for identical partial-date Items before and after 1970.
+
+    Args:
+        era5_archive: Sparse published observations with variable-specific gaps.
+        tmp_path: Isolated source mount.
+        monkeypatch: Denies row reads and raster opens after summary publication.
+        year: Calendar year to represent with the fixture timestamps.
+    """
+    offset = int((datetime(year, 1, 1) - datetime(2000, 1, 1)).total_seconds())
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(
+            "UPDATE coverage SET valid_time=valid_time+?, reference_time=reference_time+?, "
+            "interval_start=interval_start+?, interval_end=interval_end+?",
+            (offset,) * 4,
+        )
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    original = deepcopy(writer.write_session.items[ITEM_KEY])
+    publish_observation_summary(era5_archive)
+    queries = restrict_catalog_reads(
+        monkeypatch, forbidden={"observations", "coverage"}
+    )
+
+    def reject_raster_open(*args: Any, **kwargs: Any) -> None:
+        """Fail if temporal metadata extraction tries to open a raster.
+
+        Args:
+            *args: Raster open arguments that must not be used.
+            **kwargs: Raster open options that must not be used.
+
+        Raises:
+            AssertionError: Any attempted raster open.
+        """
+        raise AssertionError("Summary admission must not open TIFFs")
+
+    monkeypatch.setattr(rasterio, "open", reject_raster_open)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    assert writer.write_session.items[ITEM_KEY] == original
+    assert any("FROM observation_summary" in query for query in queries)
+    assert original["properties"]["start_datetime"].startswith(str(year))
+
+
+def test_summary_normalizes_equivalent_metadata_groups(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accept distinct raw groups whose parsed grid and NoData are equivalent.
+
+    Args:
+        era5_archive: Archive receiving an alternate encoding on one observation.
+        tmp_path: Isolated source mount.
+        monkeypatch: Prevents the compact reader from traversing observations.
+    """
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        transform = db.execute("SELECT transform FROM coverage LIMIT 1").fetchone()[0]
+        db.execute(
+            "UPDATE coverage SET crs=?, transform=?, nodata='nan' WHERE rowid=1",
+            (
+                rasterio.crs.CRS.from_epsg(4326).to_wkt(),
+                json.dumps(json.loads(transform), indent=2),
+            ),
+        )
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    original = deepcopy(writer.write_session.items[ITEM_KEY])
+    publish_observation_summary(era5_archive)
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db:
+        assert db.execute("SELECT COUNT(*) FROM observation_summary").fetchone()[0] == 4
+    restrict_catalog_reads(monkeypatch, forbidden={"observations", "coverage"})
+    assert asyncio.run(scan(manager))["failed"] == 0
+    assert writer.write_session.items[ITEM_KEY] == original
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("group_observation_count", 0, "Invalid observation summary count"),
+        ("group_observation_count", 1.5, "Invalid observation summary count"),
+        ("observation_count", None, "Invalid observation summary count"),
+        ("observation_count", -1, "Invalid observation summary count"),
+        ("group_observation_count", 100, "group counts do not match total"),
+        ("valid_time_min", None, "Invalid time or interval"),
+        ("valid_time_max", 0.5, "Invalid time or interval"),
+        ("valid_time_min", 0, "Invalid time or interval"),
+        ("interval_start_min", 0.5, "Invalid time or interval"),
+        ("interval_end_max", 0, "Invalid time or interval"),
+        ("band", 2, "Unsupported raster grid"),
+        ("height", 0, "Unsupported raster grid"),
+        ("width", 0.5, "Unsupported raster grid"),
+        ("crs", "EPSG:3857", "share one raster grid"),
+        ("dtype", "object", "Unsupported variable metadata"),
+        ("units", "", "Unsupported variable metadata"),
+    ],
+)
+def test_malformed_summary_is_rejected_without_observation_fallback(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: Any,
+    message: str,
+) -> None:
+    """Reject invalid advertised summary values at the admission boundary.
+
+    Args:
+        era5_archive: Valid source whose summary receives one malformed field.
+        tmp_path: Isolated source mount.
+        monkeypatch: Forbids silently replacing a bad summary with a full scan.
+        field: External summary field to corrupt.
+        value: Invalid value stored in that field.
+        message: Expected useful admission failure.
+    """
+    publish_observation_summary(era5_archive)
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(
+            f"UPDATE summary_rows SET {field}=? WHERE variable=?", (value, TEMPERATURE)
+        )
+    restrict_catalog_reads(monkeypatch, forbidden={"observations", "coverage"})
+    manager, writer = create_scanner(tmp_path)
+    status = asyncio.run(scan(manager))
+    assert status["failed"] == 1
+    assert message in status["errors"][0]["error"]
+    assert writer.write_session.items == {}
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("units", "different", "Variable metadata differs"),
+        ("width", 720, "share one raster grid"),
+        ("temporal_type", "mean", "Variable metadata differs"),
+    ],
+)
+def test_summary_preserves_metadata_homogeneity_rejection(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: Any,
+    message: str,
+) -> None:
+    """Reject mixed valid metadata groups instead of hiding them in a summary.
+
+    Args:
+        era5_archive: Published observations with one inconsistent group.
+        tmp_path: Isolated source mount.
+        monkeypatch: Forbids full observation reads.
+        field: Metadata field changed in one observation.
+        value: Individually parseable value that conflicts with its peers.
+        message: The owning metadata validation failure.
+    """
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(f"UPDATE coverage SET {field}=? WHERE rowid=1", (value,))
+        if field == "temporal_type":
+            db.execute(
+                "UPDATE coverage SET interval_start=valid_time-3600 WHERE rowid=1"
+            )
+    publish_observation_summary(era5_archive)
+    restrict_catalog_reads(monkeypatch, forbidden={"observations", "coverage"})
+    manager, writer = create_scanner(tmp_path)
+    status = asyncio.run(scan(manager))
+    assert status["failed"] == 1
+    assert message in status["errors"][0]["error"]
+    assert writer.write_session.items == {}
+
+
+@pytest.mark.parametrize("field", ["observation_count", "time_bounds"])
+def test_summary_rejects_inconsistent_repeated_variable_totals(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    """Require every metadata group to report the same variable totals and bounds.
+
+    Args:
+        era5_archive: Source split into equivalent NoData metadata groups.
+        tmp_path: Isolated source mount.
+        monkeypatch: Forbids observation fallback.
+        field: Repeated count or time bounds changed in one group.
+    """
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute("UPDATE coverage SET nodata='nan' WHERE rowid=1")
+    publish_observation_summary(era5_archive)
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        assignment = (
+            "observation_count=observation_count+1"
+            if field == "observation_count"
+            else "valid_time_max=valid_time_max+3600, interval_end_max=interval_end_max+3600"
+        )
+        db.execute(f"UPDATE summary_rows SET {assignment} WHERE nodata='nan'")
+    restrict_catalog_reads(monkeypatch, forbidden={"observations", "coverage"})
+    manager, writer = create_scanner(tmp_path)
+    status = asyncio.run(scan(manager))
+    assert status["failed"] == 1
+    assert "totals or time bounds differ" in status["errors"][0]["error"]
+    assert writer.write_session.items == {}
+
+
+@pytest.mark.parametrize("unavailable", ["empty", "ready"])
+def test_empty_summary_reads_current_published_observations(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unavailable: str,
+) -> None:
+    """Fall back when a summary is uninitialized or hidden during ready publication.
+
+    Args:
+        era5_archive: Source whose summary is intentionally unavailable.
+        tmp_path: Isolated source mount.
+        monkeypatch: Records actual fallback queries.
+        unavailable: Empty backing rows or an unfinished ready publication.
+    """
+    if unavailable == "ready":
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute(
+                "INSERT INTO publications SELECT variable, valid_time, 'ready' "
+                "FROM coverage WHERE valid_time=(SELECT MAX(valid_time) FROM coverage)"
+            )
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    original = deepcopy(writer.write_session.items[ITEM_KEY])
+    publish_observation_summary(era5_archive)
+    if unavailable == "empty":
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute("DELETE FROM summary_rows")
+    queries = restrict_catalog_reads(monkeypatch, forbidden=set())
+    assert asyncio.run(scan(manager))["failed"] == 0
+    assert writer.write_session.items[ITEM_KEY] == original
+    assert any("FROM observations ORDER BY" in query for query in queries)
+
+
+@pytest.mark.parametrize(
+    "failure,message",
+    [
+        ("broken-view", "no such table"),
+        ("missing-column", "no such column"),
+        ("read-denied", "prohibited"),
+    ],
+)
+def test_summary_source_errors_remain_visible(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    """Report broken or unreadable summary relations rather than silently scanning.
+
+    Args:
+        era5_archive: Source with an advertised summary that cannot be read.
+        tmp_path: Isolated source mount.
+        monkeypatch: Rejects unauthorized reads at the real SQLite boundary.
+        failure: Broken relation, missing required field, or denied source read.
+        message: Source error expected in the scan result.
+    """
+    publish_observation_summary(era5_archive)
+    if failure != "read-denied":
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute("DROP VIEW observation_summary")
+            query = (
+                "SELECT * FROM missing_summary"
+                if failure == "broken-view"
+                else "SELECT variable FROM summary_rows"
+            )
+            db.execute(f"CREATE VIEW observation_summary AS {query}")
+    forbidden = {"observations", "coverage"}
+    if failure == "read-denied":
+        forbidden.add("summary_rows")
+    restrict_catalog_reads(monkeypatch, forbidden=forbidden)
+    manager, writer = create_scanner(tmp_path)
+    status = asyncio.run(scan(manager))
+    assert status["failed"] == 1
+    assert message in status["errors"][0]["error"]
+    assert writer.write_session.items == {}
+
+
+def test_summary_refresh_publishes_added_dates_and_replaced_metadata(
+    era5_archive: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refresh the same Item and notify caches after producer summary publication.
+
+    Args:
+        era5_archive: Source receiving additional coverage and a metadata replacement.
+        tmp_path: Isolated source mount.
+        monkeypatch: Forbids observation reads during both compact admissions.
+    """
+    publish_observation_summary(era5_archive)
+    manager, writer = create_scanner(tmp_path)
+    with monkeypatch.context() as patch:
+        restrict_catalog_reads(patch, forbidden={"observations", "coverage"})
+        assert asyncio.run(scan(manager))["failed"] == 0
+    publish_month(era5_archive, 2, {TEMPERATURE: (0, 1, 2, 3)})
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(
+            "UPDATE coverage SET units='kelvin' WHERE variable=?", (TEMPERATURE,)
+        )
+    publish_observation_summary(era5_archive)
+    updated_items = AsyncMock()
+    manager.items_updated = updated_items
+    restrict_catalog_reads(monkeypatch, forbidden={"observations", "coverage"})
+    assert asyncio.run(scan(manager))["failed"] == 0
+    assert set(writer.write_session.items) == {ITEM_KEY}
+    item = writer.write_session.items[ITEM_KEY]
+    assert item["properties"]["end_datetime"] == "2000-02-01T03:00:00Z"
+    assert item["properties"]["cube:variables"][TEMPERATURE]["unit"] == "kelvin"
+    updated_items.assert_awaited_once_with((ITEM_KEY,))
