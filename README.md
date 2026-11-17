@@ -120,8 +120,9 @@ copy and paste icons transfer styles between compatible items. Paste stays
 visible when unavailable; hover or focus it to see why.
 **Duplicate vector** and **Duplicate raster** make a custom copy with independent
 display choices. Custom vectors also support calculated fields. These copies
-and their appearances are saved with the map. Open **More actions** for source
-information, **Legend**, **Statistics**, **Download clip**, and other available actions.
+and their appearances are saved with the map. Select **Download** on a raster
+to prepare a GeoTIFF clip of that layer. Open **More actions** for source
+information, **Legend**, **Statistics**, and other available actions.
 
 Open **Style** to bring out the pattern you care about:
 
@@ -297,14 +298,12 @@ total** when offered to turn rainfall rates into an accumulated depth.
 
 ### Clip and download data
 
-Open **Tools → Data tools** and choose **Raster clip** to extract the part of a raster
-you need. Choose a raster and a sampling box or selected polygons, then download
-the result as a GeoTIFF. The clip preserves the original pixel resolution and
-values, ready for further analysis in GIS software. For example, extract biomass
-data within a project's boundary instead of downloading the whole regional
-dataset.
+In **Map contents**, select **Download** on the raster you want. The download
+form shows the layer name and the sampling area. Choose a sampling box or
+selected polygons, select **Prepare download**, then **Download GeoTIFF** when
+the file is ready. The clip preserves the original pixel resolution and values.
 
-#### How do I download a clip?
+#### Clip the visible map area with the Raster clip tool
 
 1. Add a raster to **Map contents**, then pan and zoom to the area you need.
 2. Open **Tools → Data tools** and choose **Raster clip**.

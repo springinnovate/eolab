@@ -181,7 +181,6 @@ test("unavailable presentation replaces continuous charts without changing lifec
     view.bind({
         onStyleHistogram: (key) => actions.push(["style", key]),
         onCalculateHistogram: (key) => actions.push(["summarize", key]),
-        onDownloadHistogram: (key) => actions.push(["download", key]),
     });
     const unavailableMessage = "Categorical area summaries are not available yet.";
     const list = doc.querySelector("#raster-histogram-list");
@@ -211,7 +210,7 @@ test("unavailable presentation replaces continuous charts without changing lifec
         button.dispatchEvent(new Event("click"));
     }
     assert.deepEqual(actions, [
-        ["style", "landcover"], ["summarize", "landcover"], ["download", "landcover"],
+        ["style", "landcover"], ["summarize", "landcover"],
     ]);
     view.unbind();
 });
@@ -251,13 +250,11 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     const selected = [];
     const styled = [];
     const summarized = [];
-    const downloaded = [];
     view.bind({
         onRetryStatistics() {},
         onSelectHistogram: (key) => selected.push(key),
         onStyleHistogram: (key) => styled.push(key),
         onCalculateHistogram: (key) => summarized.push(key),
-        onDownloadHistogram: (key) => downloaded.push(key),
     });
     view.setActiveRasterAvailable(true);
     view.setActiveLayer("second-raster.tif");
@@ -288,17 +285,14 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     firstRow.children.at(-1).children[0].dispatchEvent(new Event("click"));
     const actions = firstRow.children.at(-1).children;
     assert.deepEqual(actions.map(button => button.getAttribute("aria-label")), [
-        "Style first-raster.tif", "Calculate statistics for first-raster.tif over this area", "Download clip of first-raster.tif",
+        "Style first-raster.tif", "Calculate statistics for first-raster.tif over this area",
     ]);
-    assert.equal(actions[2].title, "Download clip");
     actions[1].dispatchEvent(new Event("click"));
-    actions[2].dispatchEvent(new Event("click"));
     view.showWidget();
 
     assert.deepEqual(selected, ["first"]);
     assert.deepEqual(styled, ["first"]);
     assert.deepEqual(summarized, ["first"]);
-    assert.deepEqual(downloaded, ["first"]);
     assert.equal(list.children.length, 2);
     assert.equal(firstRow.getAttribute("aria-label"),
         "Histogram — first-raster.tif");
@@ -658,7 +652,7 @@ test("histogram Processing actions follow the source capability while interactiv
     assert.equal(list.children[0].children[0].getAttribute("aria-label"), "Show detailed histogram for Temperature");
     view.renderLayerHistograms([{ ...summary, canCalculate: true }], "weather");
     assert.deepEqual(list.children[0].children.at(-1).children.map(button => button.getAttribute("aria-label")), [
-        "Style Temperature", "Calculate statistics for Temperature over this area", "Download clip of Temperature",
+        "Style Temperature", "Calculate statistics for Temperature over this area",
     ]);
     view.renderLayerHistograms([summary], "weather");
     assert.equal(list.children[0].children.at(-1).children.length, 1);

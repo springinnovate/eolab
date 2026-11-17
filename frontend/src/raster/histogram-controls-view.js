@@ -22,7 +22,6 @@ import { requireRasterControl } from "./required-control.js";
  * raster whose histogram summary was selected.
  * @property {(key: string) => void} onStyleHistogram Opens Style for one
  * retained raster represented by a histogram summary.
- * @property {(key:string)=>void} [onDownloadHistogram] Review a clip of this source and selection.
  * @property {(key:string)=>void} [onCalculateHistogram] Open statistics for this raster and area.
  * @property {(key:string)=>void} [onRetryHistogram] Retry this raster's histogram.
  * @property {(key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings)=>void}
@@ -44,7 +43,7 @@ import { requireRasterControl } from "./required-control.js";
  * @property {Object|null} [statistics] Validated statistics for the full chart.
  * @property {Object} [style] Committed continuous raster style.
  * @property {boolean} [canRetry] Offer retry after a recoverable failure.
- * @property {boolean} canCalculate Offer Processing statistics and download actions for this source.
+ * @property {boolean} canCalculate Offer statistics for this source and sampling area.
  * @property {import("./percentile-controls-view.js").HistogramPercentileSettings} [percentileSettings] Continuous histogram inspection settings.
  * @property {boolean} canRescale Whether this result may set this view's colors.
  * @property {string} percentileMessage Reason rescaling is unavailable, or empty text.
@@ -569,34 +568,13 @@ export class RasterHistogramControlsView {
         this.#bindSummaryAction(card, style, "onStyleHistogram");
         actions.append(style);
         if (summary.canCalculate) {
-            const download = this.documentContext.createElement("button");
-            download.type = "button";
-            download.className = "secondary-button raster-histogram-download";
-            download.title = "Download clip";
-            const downloadIcon = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
-            downloadIcon.setAttribute("viewBox", "0 0 24 24");
-            downloadIcon.setAttribute("width", "16");
-            downloadIcon.setAttribute("height", "16");
-            downloadIcon.setAttribute("aria-hidden", "true");
-            downloadIcon.setAttribute("focusable", "false");
-            const downloadPath = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "path");
-            downloadPath.setAttribute("d", "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5");
-            downloadPath.setAttribute("fill", "none");
-            downloadPath.setAttribute("stroke", "currentColor");
-            downloadPath.setAttribute("stroke-width", "1.75");
-            downloadPath.setAttribute("stroke-linecap", "round");
-            downloadPath.setAttribute("stroke-linejoin", "round");
-            downloadIcon.append(downloadPath);
-            download.append(downloadIcon);
-            download.setAttribute("aria-label", `Download clip of ${summary.label}`);
-            this.#bindSummaryAction(card, download, "onDownloadHistogram");
             const calculate = this.documentContext.createElement("button");
             calculate.type = "button";
             calculate.className = "secondary-button";
             calculate.textContent = "Calculate statistics for this area";
             calculate.setAttribute("aria-label", "Calculate statistics for " + summary.label + " over this area");
             this.#bindSummaryAction(card, calculate, "onCalculateHistogram");
-            actions.append(calculate, download);
+            actions.append(calculate);
         }
         if (summary.automatic) {
             if (summary.canRetry) {
