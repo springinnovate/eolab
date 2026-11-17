@@ -3,7 +3,10 @@
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
-from multiprocessing import get_context
+from multiprocessing import active_children, get_context
+import os
+from threading import Event
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -284,5 +287,225 @@ def test_stopping_one_native_child_does_not_stop_other_jobs(
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.gather(*(native.close() for native in natives))
+
+    asyncio.run(scenario())
+
+
+def _wait_for_worker_cancellation(
+    queue: Any, operation: str, arguments: tuple[Any, ...]
+) -> None:
+    """Keep a native clip alive until production supervision stops its process.
+
+    Args:
+        queue: Native result writer used for preparation requests.
+        operation: Clip or preparation action selected by the operation adapter.
+        arguments: Native source, specification, output directory and limits.
+    """
+    if operation == "plan":
+        from eolab_app.processing.raster_clip import clip_process_target
+
+        clip_process_target(queue, operation, arguments)
+        return
+    _, _, directory, _ = arguments
+    (directory / "checkpoint").write_text(str(os.getpid()))
+    while True:
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize(
+    "pending_state", ["running", "cancelled", "committed", "replaced"]
+)
+def test_worker_retries_stopped_attempt_after_storage_recovers(
+    boundary: Any,
+    store: PostgresJobStore,
+    monkeypatch: pytest.MonkeyPatch,
+    pending_state: str,
+) -> None:
+    """Recover a stopped native job without reclaiming live or superseded attempts.
+
+    Args:
+        boundary: Real HTTP, source, artifact and worker providers.
+        store: Disposable PostgreSQL queue with one execution slot.
+        monkeypatch: Inject only native waiting and transient storage-call failures.
+        pending_state: Keep the attempt running, cancel it, lose a committed write's
+            response, or replace its token before retrying the acknowledgement.
+    """
+    import eolab_app.processing.raster_operations as operations
+
+    client, worker, _, artifacts, _ = boundary
+    original_target = operations.clip_process_target
+    monkeypatch.setattr(
+        operations, "clip_process_target", _wait_for_worker_cancellation
+    )
+    payload = clip_inputs(client)
+    jobs = []
+    for west in (0.1, 0.2):
+        response = client.post(
+            "/api/processing/raster-clips",
+            json={
+                **payload,
+                "selectedBounds": {**payload["selectedBounds"], "west": west},
+                "requestId": uuid4().hex,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 202, response.text
+        jobs.append(response.json())
+    heartbeat, finish = store.heartbeat, store.finish
+    unavailable = Event()
+    allow_heartbeat_failure = Event()
+    finish_calls: list[tuple[str, str]] = []
+
+    def fail_heartbeat(identifier: str, attempt: str, progress: dict[str, Any]) -> bool:
+        """Fail heartbeats after the test has observed a live native child.
+
+        Args:
+            identifier: Claimed computation ID.
+            attempt: Current execution token.
+            progress: Operation-owned progress snapshot.
+
+        Returns:
+            Whether the real database still permits execution.
+
+        Raises:
+            ProcessingError: While the injected storage outage is active.
+            TimeoutError: If the test does not release the controlled heartbeat.
+        """
+        if unavailable.is_set():
+            if not allow_heartbeat_failure.wait(30):
+                raise TimeoutError("Test did not release the heartbeat failure")
+            raise ProcessingError(
+                "processing_unavailable", "Temporary storage failure", 503
+            )
+        return heartbeat(identifier, attempt, progress)
+
+    def fail_finish(
+        identifier: str,
+        attempt: str,
+        artifact: Artifact | None,
+        error: dict[str, str] | None = None,
+        reusable_results: dict[str, dict[str, object]] | None = None,
+    ) -> bool:
+        """Fail terminal writes until recovery, optionally losing a committed response.
+
+        Args:
+            identifier: Stopped computation ID.
+            attempt: Exact execution token whose exit is being acknowledged.
+            artifact: Completed result, or None for the stopped operation.
+            error: Sanitized failure supplied by production supervision.
+            reusable_results: Optional scalar results to publish atomically.
+
+        Returns:
+            The real database's fenced transition result after recovery.
+
+        Raises:
+            ProcessingError: While the injected storage outage is active.
+        """
+        finish_calls.append((identifier, attempt))
+        if unavailable.is_set():
+            if pending_state == "committed" and len(finish_calls) == 1:
+                assert finish(identifier, attempt, artifact, error, reusable_results)
+            raise ProcessingError(
+                "processing_unavailable", "Temporary storage failure", 503
+            )
+        return finish(identifier, attempt, artifact, error, reusable_results)
+
+    monkeypatch.setattr(store, "heartbeat", fail_heartbeat)
+    monkeypatch.setattr(store, "finish", fail_finish)
+
+    async def scenario() -> None:
+        """Observe native exit, durable retention, repeated failure and fenced recovery."""
+        task = asyncio.create_task(worker.run_once())
+        try:
+            async with asyncio.timeout(30):
+                while not list((artifacts.root / "attempts").glob("*/checkpoint")):
+                    if task.done():
+                        await task
+                        pytest.fail("Worker stopped before the native checkpoint")
+                    await asyncio.sleep(0.02)
+            checkpoint = next((artifacts.root / "attempts").glob("*/checkpoint"))
+            native_pid = int(checkpoint.read_text())
+            assert native_pid in {child.pid for child in active_children()}
+            assert store.claim_next_job() is None
+            # Hold the failing heartbeat until the live-child checks are complete.
+            unavailable.set()
+            # Expired leases and cleanup cannot release an executing native child.
+            with psycopg.connect(store.conninfo) as connection:
+                connection.execute(
+                    "UPDATE processing.jobs SET lease_until=now()-interval '1 minute' "
+                    "WHERE attempt_id=%s",
+                    (checkpoint.parent.name,),
+                )
+            await worker.cleanup()
+            assert checkpoint.exists()
+            assert native_pid in {child.pid for child in active_children()}
+            assert store.claim_next_job() is None
+            allow_heartbeat_failure.set()
+            with pytest.raises(ProcessingError, match="Temporary storage failure"):
+                await asyncio.wait_for(task, 30)
+            assert native_pid not in {child.pid for child in active_children()}
+            assert len(finish_calls) == 2
+            identifier, attempt = finish_calls[0]
+            assert finish_calls[1] == (identifier, attempt)
+            assert attempt == checkpoint.parent.name
+            if pending_state == "cancelled":
+                response = client.post(
+                    f"/api/processing/jobs/{jobs[0]['jobId']}/cancel", headers=HEADERS
+                )
+                assert response.json()["status"] == "cancelling"
+            elif pending_state == "replaced":
+                replacement_attempt = uuid4().hex
+                with psycopg.connect(store.conninfo) as connection:
+                    connection.execute(
+                        "UPDATE processing.jobs SET attempt_id=%s WHERE id=%s",
+                        (replacement_attempt, identifier),
+                    )
+            # More than the two immediate writes can fail without losing the retry.
+            with pytest.raises(ProcessingError, match="Temporary storage failure"):
+                await worker.run_once()
+            assert len(finish_calls) == 3
+            if pending_state in {"running", "cancelled"}:
+                await worker.cleanup()
+                assert checkpoint.exists()
+                assert store.claim_next_job() is None
+            assert (
+                client.get(f"/api/processing/jobs/{jobs[1]['jobId']}").json()["status"]
+                == "queued"
+            )
+            unavailable.clear()
+            monkeypatch.setattr(operations, "clip_process_target", original_target)
+            if pending_state == "replaced":
+                assert not await worker.run_once()
+                with psycopg.connect(store.conninfo) as connection:
+                    assert connection.execute(
+                        "SELECT status,attempt_id FROM processing.jobs WHERE id=%s",
+                        (identifier,),
+                    ).fetchone() == ("running", replacement_attempt)
+                assert finish(identifier, replacement_attempt, None)
+            assert await worker.run_once()
+            statuses = [
+                client.get(f"/api/processing/jobs/{job['jobId']}").json()["status"]
+                for job in jobs
+            ]
+            expected = {
+                "running": "interrupted",
+                "cancelled": "cancelled",
+                "committed": "failed",
+                "replaced": "failed",
+            }
+            assert statuses == [expected[pending_state], "ready"]
+            assert finish_calls[:4] == [(identifier, attempt)] * 4
+            completed_calls = len(finish_calls)
+            if pending_state == "replaced":
+                # Superseded files use the existing orphan-cleanup grace period.
+                os.utime(checkpoint.parent, (0, 0))
+            await worker.cleanup()
+            assert not checkpoint.exists()
+            assert not await worker.run_once()
+            assert len(finish_calls) == completed_calls
+        finally:
+            allow_heartbeat_failure.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
