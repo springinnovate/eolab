@@ -59,8 +59,8 @@ class PlanningScenarioService:
                 membership or storage prevents saving.
             asyncio.CancelledError: The request abandoned native validation.
         """
-        _, tool = await asyncio.to_thread(
-            self.store.get_scenario_for_edit,
+        tool = await asyncio.to_thread(
+            self.store.get_scenario_tool_for_edit,
             owner,
             identifier,
             request.expectedRevision,
