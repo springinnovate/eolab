@@ -100,6 +100,9 @@ and **Style** without making you leave the search results.
 
 #### Build and style the map
 
+The panels fade together so you can see the map beneath them. Hover over a
+panel or move keyboard focus into it to bring all panels back to full opacity.
+
 Use the circular **×** on either panel to hide it. Select its named tab to
 reopen it where you left off. The right panel’s title opens the tool menu.
 It reads **Choose a tool** until you open one, then shows the active tool’s

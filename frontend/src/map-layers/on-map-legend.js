@@ -240,7 +240,7 @@ export class OnMapLegend {
         const columns = Math.min(Math.max(1, this.contents.childElementCount),
             Math.max(1, Math.floor(available / 216)),
             Math.max(1, Math.ceil(contentHeight / Math.max(180, height * 0.45))));
-        this.root.style.maxWidth = `${available}px`;
+        this.root.style.maxWidth = `min(${available}px, var(--map-controls-max-width, 100vw))`;
         this.root.style.width = this.collapsed ? "auto" : `${columns * 216}px`;
         this.root.style.maxHeight = `max(0px, calc(${height - 20}px - ${topMargin}))`;
         this.contents.style.columnCount = String(columns);

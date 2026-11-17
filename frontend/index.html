@@ -24,6 +24,7 @@
       <section
         class="control-panel"
         id="control-panel"
+        data-map-panel
         aria-label="CONTROL LABEL TO BE SET BY CONFIGURATION"
       >
         <div class="panel-heading">
@@ -553,17 +554,19 @@
       <button
         class="map-panel-toggle map-panel-toggle--left map-panel-opener"
         id="open-panel"
+        data-map-panel
         type="button"
         aria-controls="control-panel"
         aria-expanded="false"
         hidden
       >Catalog &amp; map contents</button>
-      <div class="map-position" id="map-position">0.000, 0.000</div>
+      <div class="map-position" id="map-position" data-map-panel>0.000, 0.000</div>
       <div id="raster-cursor-marker" class="raster-cursor-marker"
         aria-hidden="true" hidden></div>
       <aside
         class="raster-cursor-values"
         id="raster-cursor-values"
+        data-map-panel
         aria-labelledby="raster-cursor-values-heading"
         aria-busy="false"
         hidden
@@ -585,13 +588,14 @@
       <button
         class="raster-cursor-values-restore"
         id="restore-raster-cursor-values"
+        data-map-panel
         type="button"
         hidden
       >Pixel picker hidden · Press P to show</button>
-      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener"
+      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
-      <div id="map-tools-toolbar" class="map-tool-openers" role="region" aria-label="Map tools">
+      <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
         <section id="raster-sampling-tool" aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">

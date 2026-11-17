@@ -239,7 +239,7 @@ function createLayoutFixture() {
     const timers = [];
     const observers = [];
     const document = new FakeLayoutDocument(elements);
-    document.defaultView = {
+    document.defaultView = Object.assign(new EventTarget(), {
         /** Observe shell dimensions without creating a browser layout engine. */
         ResizeObserver: class {
             /** @param {()=>void} callback Reports a changed layout size. */
@@ -249,7 +249,7 @@ function createLayoutFixture() {
             /** Stop future size reports. @return {void} */
             disconnect() { this.disconnected = true; }
         },
-    };
+    });
     return {
         app,
         catalogContent,

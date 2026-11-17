@@ -10,6 +10,8 @@
   <pre id="results" role="status">Running...</pre>
   <script type="module">
     import L from "leaflet";
+    import "leaflet/dist/leaflet.css";
+    import { createSingleWorldMap } from "../src/map.js";
     import { OnMapLegend } from "../src/map-layers/on-map-legend.js";
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
@@ -68,7 +70,10 @@
      * @throws {Error} If either action loses its focus target or changes the active tool.
      */
     function checkLegendControls(inspection) {
-      const map = L.map(document.querySelector("#map"), {zoomControl: false, attributionControl: false}).setView([0, 0], 2);
+      const map = createSingleWorldMap(L, {
+        initialView: {latitude: 0, longitude: 0, zoom: 2},
+        basemap: {url: L.Util.emptyImageUrl, attribution: "Test map"},
+      });
       const command = document.querySelector("#toggle-map-legend");
       const menu = document.querySelector("#workspace-tool-actions");
       const legend = new OnMapLegend(L, map, {
@@ -76,6 +81,14 @@
         onChange() {}, onInclusion() {},
       });
       try {
+        checkPanelFade(map.getContainer(), legend.root);
+        if (innerWidth >= 1200) {
+          map.fitBounds([[0, 0], [0, 0]], {maxZoom: 8, animate: false});
+          const x = map.latLngToContainerPoint([0, 0]).x + map.getContainer().getBoundingClientRect().left;
+          const freeLeft = document.querySelector("#control-panel").getBoundingClientRect().right;
+          const freeRight = document.querySelector("#map-inspection").getBoundingClientRect().left;
+          check(Math.abs(x - (freeLeft + freeRight) / 2) <= 2, "Zoom to layer missed the clear center between the open panels");
+        }
         document.querySelector("#toggle-map-inspection-dock").click();
         const hide = legend.root.querySelector('button[aria-label="Hide map legend"]');
         check(hide.textContent === "×", "The legend has no local ×");
@@ -91,6 +104,47 @@
       } finally {
         legend.remove();
         map.remove();
+      }
+    }
+
+    /** Verify shared panel opacity, a cancelled exit and the map beneath the desktop sidebar.
+     * @param {HTMLElement} map Live Leaflet map container.
+     * @param {HTMLElement} legend Leaflet's interactive legend.
+     * @returns {void}
+     * @throws {Error} If a panel fades independently or the sidebar covers empty space.
+     */
+    function checkPanelFade(map, legend) {
+      const sidebar = document.querySelector("#control-panel");
+      const openers = document.querySelector("#map-tools-toolbar");
+      const panels = [sidebar, openers, legend];
+      const pointer = {bubbles: true, pointerType: "mouse", pointerId: 7};
+      /** Finish only the panel opacity transitions to inspect their rendered endpoints.
+       * @param {string} opacity Expected opacity of every panel.
+       * @returns {void}
+       */
+      function checkOpacity(opacity) {
+        for (const panel of panels) {
+          for (const animation of panel.getAnimations()) {
+            if (animation.transitionProperty === "opacity") animation.finish();
+          }
+          check(getComputedStyle(panel).opacity === opacity, `Expected ${panel.id || panel.className} opacity ${opacity}`);
+        }
+      }
+      map.dispatchEvent(new PointerEvent("pointermove", pointer));
+      checkOpacity("0.4");
+      legend.dispatchEvent(new PointerEvent("pointerover", pointer));
+      checkOpacity("1");
+      legend.dispatchEvent(new PointerEvent("pointerout", {...pointer, relatedTarget: map}));
+      check(getComputedStyle(legend).opacity === "1", "Leaving the legend skipped the exit delay");
+      sidebar.dispatchEvent(new PointerEvent("pointerover", pointer));
+      checkOpacity("1");
+      sidebar.dispatchEvent(new PointerEvent("pointerout", {...pointer, relatedTarget: map}));
+      checkOpacity("0.4");
+      if (innerWidth >= 1200) {
+        const canvas = map.getBoundingClientRect(), left = sidebar.getBoundingClientRect();
+        check(canvas.left <= left.left && canvas.right >= openers.getBoundingClientRect().right,
+          "The map does not extend beneath both panels");
+        check(legend.getBoundingClientRect().left >= left.right, "The sidebar covers the map legend");
       }
     }
 
