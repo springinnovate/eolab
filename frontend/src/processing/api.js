@@ -301,7 +301,7 @@ export class ProcessingApiClient {
     async submitClip(submission) {
         const {source, requestId} = submission;
         const selected = normalizeRasterSamplingArea(submission.area);
-        if (!["selectedArea", "samplingBox", "catalogSelection"].includes(selected.kind)) throw new Error("Select a box or vector layer first.");
+        if (!submission.area || selected.kind === "polygonArea") throw new Error("Choose a download area first.");
         const reference = processingRasterReference(source);
         const raster = reference.kind !== undefined || reference.variable !== undefined
             ? {source: reference} : reference;
@@ -310,7 +310,7 @@ export class ProcessingApiClient {
             ...raster, requestId,
             ...(selected.kind === "selectedArea" ? {selectedBounds: selected.selectedBounds}
                 : selected.kind === "samplingBox" ? {samplingBox: selected.samplingBox}
-                : {catalogSelection: selected.catalogSelection}),
+                : selected.kind === "wholeRaster" ? {wholeRaster: true} : {catalogSelection: selected.catalogSelection}),
         }));
     }
 

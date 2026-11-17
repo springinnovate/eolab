@@ -48,9 +48,10 @@ class ClipControlDocument extends FakeRasterControlDocument {
  * @param {Map<string,string>} [data=new Map()] Session data shared across reload tests.
  * @param {boolean} [realView=false] Bind the actual clip view and HTML controls.
  * @param {Function|null} [getQuerySources=null] Composed default candidate policy.
+ * @param {Object|null} [layerView=null] Floating layer download controls.
  * @return {Object} Observable controller, storage, DOM and transport harness.
  */
-function fixture(overrides = {}, data = new Map(), realView = false, getQuerySources = null) {
+function fixture(overrides = {}, data = new Map(), realView = false, getQuerySources = null, layerView = null) {
     const storage = new PendingSubmissionStorage({ getItem: key => data.get(key), setItem: (key,value) => data.set(key,value), removeItem: key => data.delete(key) });
     const requests = [];
     const api = { listJobs: async () => [],
@@ -69,7 +70,7 @@ function fixture(overrides = {}, data = new Map(), realView = false, getQuerySou
         : { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
     const timers = [];
     let controller;
-    const options = { api, view, storage, getQuerySources, getContext: () => context, onOpen() {}, onClose: () => controller.setActive(false), onEditArea() {},
+    const options = { api, view, layerView, storage, getQuerySources, getContext: () => context, onOpen() {}, onClose: () => controller.setActive(false), onEditArea() {},
         clock: { setTimeout(callback, delay) { timers.push([callback,delay]); return timers.length; }, clearTimeout() {} }, requestId: () => "request-1234567890" };
     controller = new RasterClipsController(options);
     return { controller, api, view, storage, requests, timers, options, data, doc, contexts, get context() { return context; }, setContext(value) { context = value; } };
@@ -86,6 +87,43 @@ test("submission freezes the selected source and box independently of later map 
     await h.controller.submit();
     h.controller.open(source, { ...box, selectedBounds: { west: 1, south: 2, east: 3, north: 4 } });
     assert.deepEqual(h.view.state.jobs[0].area.bounds, [77,22,78,23]);
+});
+
+test("map item toggles keep views of one raster distinct and return to their own download", async t => {
+    const sheet = {bind(handlers) { this.handlers = handlers; }, open(key) { this.key = key; },
+        close() { this.key = null; }, render(draft, job) { this.draft = draft; this.job = job; }, destroy() {}};
+    let accept;
+    const h = fixture({submitClip: () => new Promise(resolve => { accept = resolve; })}, new Map(), false, null, sheet);
+    t.after(() => h.controller.destroy());
+    const areas = {viewport: box, selection: null};
+    const second = {...source, label: "Renamed habitat"};
+    h.controller.toggleLayer("first", source, areas);
+    assert.equal(sheet.key, "first");
+    h.controller.toggleLayer("first", source, areas);
+    assert.equal(sheet.key, null);
+    h.controller.toggleLayer("first", source, areas);
+    sheet.handlers.onChoice("whole");
+    const submitting = sheet.handlers.onPrepare();
+    assert.deepEqual(h.storage.read().area, {kind:"wholeRaster"});
+    h.controller.toggleLayer("copy", second, areas);
+    assert.equal(sheet.draft.source.label, second.label);
+    assert.equal(sheet.draft.choice, "viewport");
+    await sheet.handlers.onPrepare();
+    assert.deepEqual(h.storage.read().area, {kind:"wholeRaster"});
+    accept(ready);
+    await submitting;
+    assert.equal(sheet.job, null);
+    h.controller.toggleLayer("first", source, areas);
+    assert.equal(sheet.job.jobId, ready.jobId);
+    assert.equal(sheet.draft.choice, "whole");
+    assert.equal(h.controller.active, false);
+    sheet.handlers.onNew();
+    const polygons = {kind:"catalogSelection", catalogSelection:CATALOG_SELECTION};
+    h.controller.setSelection(polygons);
+    assert.deepEqual(sheet.draft.areas.polygons, polygons);
+    assert.deepEqual(sheet.draft.areas.viewport, box);
+    h.controller.syncLayerDownloads([{key:"copy", source:second, label:second.label, capabilities:{calculations:true}}]);
+    assert.equal(sheet.key, null);
 });
 
 test("the clip form rejects a histogram drawing without changing the selected clip area", async t => {
@@ -266,7 +304,12 @@ test("clip submission and recovery preserve source identities and exact areas wi
     assert.deepEqual(JSON.parse(uploadRequest.body), {collectionId: source.collectionId, itemId: source.itemId,
         catalogSelection: uploaded, requestId: submission.requestId});
     assert.equal(uploadRequest.headers["X-EOLab-Processing"], "1");
-    await assert.rejects(api.submitClip({source, area:{kind:"wholeRaster"}}), /Select a box/);
+    const whole = {...submission, area: {kind: "wholeRaster"}};
+    h.storage.write(whole);
+    assert.deepEqual(h.storage.read(), whole);
+    await api.submitClip(whole);
+    assert.deepEqual(JSON.parse(requests.at(-1)[1].body), {collectionId: source.collectionId,
+        itemId: source.itemId, wholeRaster: true, requestId: submission.requestId});
 });
 
 test("API preserves actionable no-overlap and capacity errors", async () => {

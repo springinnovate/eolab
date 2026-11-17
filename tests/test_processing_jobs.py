@@ -273,17 +273,19 @@ def test_requested_statuses_are_complete_owned_and_independent_of_history(
     )
 
 
+@pytest.mark.parametrize("whole", [False, True])
 def test_real_clip_worker_download_ranges_ownership_and_idempotency(
-    boundary: Any, tmp_path: Path
+    boundary: Any, tmp_path: Path, whole: bool
 ) -> None:
     """Exercise a complete native clip via PostgreSQL and real HTTP file delivery.
 
     Args:
         boundary: Real feature-boundary fixture.
         tmp_path: Download validation storage.
+        whole: Request the full native grid instead of the fixture rectangle.
     """
     client, worker, source, artifacts, app = boundary
-    plan = clip_inputs(client)
+    plan = {**SOURCE, "wholeRaster": True} if whole else clip_inputs(client)
     assert (
         client.post(
             "/api/processing/raster-clips", content=b"x" * 20000, headers=HEADERS
@@ -330,6 +332,11 @@ def test_real_clip_worker_download_ranges_ownership_and_idempotency(
     with rasterio.open(downloaded) as raster:
         assert raster.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
         assert raster.read(1, masked=True).count() == ready["result"]["validPixels"]
+        if whole:
+            assert ready["area"] == {"kind": "wholeRaster", "bounds": None}
+            with rasterio.open(source) as original:
+                assert raster.transform == original.transform
+                assert numpy.array_equal(raster.read(1), original.read(1))
     with TestClient(app, base_url="https://testserver") as stranger:
         assert stranger.get(url).status_code == 404
         assert stranger.get(f"/api/processing/jobs/{identifier}").status_code == 404
