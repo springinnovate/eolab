@@ -43,7 +43,9 @@ def store(request: pytest.FixtureRequest) -> PlanningToolStore:
     result.initialize_schema()
     result.initialize_schema()
     with result.transaction() as cursor:
-        cursor.execute("TRUNCATE planning.tools")
+        cursor.execute(
+            "TRUNCATE planning.scenario_assignments, planning.scenarios, planning.tools"
+        )
     return result
 
 

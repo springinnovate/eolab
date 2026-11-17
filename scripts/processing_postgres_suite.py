@@ -26,6 +26,8 @@ SUITES = (
     "test_annotation_sessions_postgres.py",
     "test_saved_maps_postgres.py",
     "test_planning_tools_postgres.py",
+    "test_planning_scenarios_postgres.py",
+    "test_planning_scenarios_http_postgres.py",
     "test_processing_calculations.py",
     "test_processing_unified_calculations.py",
     "test_processing_shared_jobs.py",
