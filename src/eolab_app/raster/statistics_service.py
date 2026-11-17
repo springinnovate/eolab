@@ -100,6 +100,9 @@ def _private_vector_area(area: RasterSamplingArea) -> bool:
 
 _SingleRasterResult = RasterStatistics | RasterBoxMean
 _StatisticsResult = _SingleRasterResult | RasterPairedStatistics
+_StatisticsReader = Callable[
+    [RasterData, RasterSamplingArea, RasterReadCancellationCheck | None], _SingleRasterResult
+]
 
 
 class _CategoricalStatisticsReader(Protocol):
@@ -324,17 +327,17 @@ class RasterStatisticsService:
         )
         algorithm = RASTER_STATISTICS_ALGORITHM
         parameters = raster_statistics_policy_parameters()
-        reader = partial(self._statistics_reader, authorized_raster.data, sampling_area)
+        reader = self._statistics_reader
         if request.measure == "mean":
             algorithm = BOX_MEAN_ALGORITHM
             parameters = (*parameters, BOX_MEAN_MAX_OVERVIEW_DIMENSION)
-            reader = partial(read_sampling_box_mean, authorized_raster.data, cast(SamplingBoxArea, sampling_area))
+            # The request model permits this measure only for SamplingBoxArea.
+            reader = cast(_StatisticsReader, read_sampling_box_mean)
         elif category_values is not None:
             algorithm = CATEGORICAL_STATISTICS_ALGORITHM
             parameters = (*categorical_statistics_policy_parameters(), len(category_values), *category_values)
             reader = partial(
-                self._categorical_statistics_reader, authorized_raster.data,
-                sampling_area, category_values=category_values,
+                self._categorical_statistics_reader, category_values=category_values,
             )
         cache_key: RasterStatisticsCacheKey = (
             authorized_raster.cache_identity, algorithm, sampling_area.cache_identity(), parameters
@@ -747,7 +750,7 @@ class RasterStatisticsService:
         cache_key: RasterStatisticsCacheKey,
         sampling_area: RasterSamplingArea,
         cancellation_requested: threading.Event,
-        reader: Callable[[RasterReadCancellationCheck | None], _SingleRasterResult],
+        reader: _StatisticsReader,
     ) -> _SingleRasterResult:
         """Calculate and cache raster statistics while holding a reader slot.
 
@@ -781,6 +784,8 @@ class RasterStatisticsService:
                 )
                 statistics = await execute(
                     reader,
+                    authorized_raster.data,
+                    sampling_area,
                     (
                         None
                         if authorized_raster.private

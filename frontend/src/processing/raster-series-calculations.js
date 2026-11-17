@@ -89,6 +89,14 @@ export class RasterSeriesCalculations {
             const intent = first.calculation;
             this.formulas = intent.calculations.map((formula, index) => ({id: Number(formula.label.slice(5)),
                 label: first.context.presentation.names[index], expression: formula.expression}));
+            const savedMeans = first.context.presentation.boxMeans ?? [];
+            for (const savedMean of savedMeans) {
+                const formula = this.formulas.find(item => item.id === savedMean.id);
+                if (formula) formula.boxMean = true;
+                else this.formulas.push({...savedMean, expression: "mean(a)", boxMean: true});
+            }
+            this.formulas.sort((left, right) => left.id - right.id);
+            this.exactBox = first.context.presentation.exactBox === true;
             this.sources = retained.filter(([, client]) => client.snapshot.unfinishedCalculation.calculation.kind !== "temporal")
                 .map(([, client]) => {
                     const saved = client.snapshot.unfinishedCalculation;
@@ -106,6 +114,9 @@ export class RasterSeriesCalculations {
                 const saved = client.snapshot.unfinishedCalculation;
                 this.pending.set(index, {key: saved.context.presentation.key, calculationInputs: saved.calculation,
                     submitted: true, phase: "recovering", message: "Recovering calculation…"});
+            }
+            if (this.useBoxMean) {
+                for (const source of this.sources) void this.readMeanForSource(source);
             }
             this.updateSeriesProgress();
         }
@@ -374,8 +385,10 @@ export class RasterSeriesCalculations {
             }
             for (const [client, request] of additions) {
                 if (version !== this.version) return;
-                client.submit(request.calculationInputs, {automatic: false,
-                    presentation: {key: request.key, names: jobFormulas.map(formula => formula.label)}});
+                const presentation = {key: request.key, names: jobFormulas.map(formula => formula.label)};
+                const boxMeans = this.formulas.filter(formula => formula.boxMean).map(({id, label}) => ({id, label}));
+                if (boxMeans.length) Object.assign(presentation, {boxMeans, exactBox: this.exactBox});
+                client.submit(request.calculationInputs, {automatic: false, presentation});
             }
             this.dispatching = false;
             this.updateSeriesProgress();
