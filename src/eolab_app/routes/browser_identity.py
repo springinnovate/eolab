@@ -10,6 +10,37 @@ from fastapi import HTTPException, Request, Response
 COOKIE = "__Host-eolab-annotations"
 
 
+def establish_browser_identity(request: Request, response: Response) -> str:
+    """Set the private ownership cookie before browser features begin requests.
+
+    The same-origin startup request establishes an identity before uploads and
+    shared layers run concurrently. Existing API boundaries also use this helper
+    after checking their own mutation headers.
+
+    Args:
+        request: Incoming request with an existing cookie, if any.
+        response: Response that renews the Secure, HttpOnly, SameSite Strict
+            cookie for one year; its caller must prevent response caching.
+
+    Returns:
+        SHA-256 of the existing valid cookie or a newly generated random token.
+        The raw token is sent only in the private cookie.
+    """
+    token = request.cookies.get(COOKIE, "")
+    if not re.fullmatch(r"[a-f0-9]{64}", token):
+        token = secrets.token_hex(32)
+    response.set_cookie(
+        COOKIE,
+        token,
+        max_age=365 * 86400,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def get_browser_owner_hash(
     request: Request, response: Response, *, mutation_header: str
 ) -> str:
@@ -39,16 +70,4 @@ def get_browser_owner_hash(
             raise HTTPException(
                 403, f"Use a same-origin request with {mutation_header}: 1."
             )
-    token = request.cookies.get(COOKIE, "")
-    if not re.fullmatch(r"[a-f0-9]{64}", token):
-        token = secrets.token_hex(32)
-    response.set_cookie(
-        COOKIE,
-        token,
-        max_age=365 * 86400,
-        secure=True,
-        httponly=True,
-        samesite="strict",
-        path="/",
-    )
-    return hashlib.sha256(token.encode()).hexdigest()
+    return establish_browser_identity(request, response)
