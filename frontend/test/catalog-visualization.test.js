@@ -136,7 +136,7 @@ test("Undo re-fetches the source and applies appearance and filtering before att
     const calls = [];
     let discarded = false;
     const record = { entry: { label: "Fresh title" }, adapter: {
-        restoreRemovedStyle: async (_record, style) => { calls.push(["style", style]); },
+        restoreSavedState: async (_record, style) => { calls.push(["style", style]); },
         applyFilterState: async (_record, filter) => { calls.push(["filter", filter]); },
         discardStaged: () => { discarded = true; },
     } };

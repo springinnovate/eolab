@@ -772,11 +772,12 @@ export function createVectorMapLayerAdapter({
             return checkPortableVectorStyleCompatibility(record, savedState);
         },
         /**
-         * Validate and apply one portable vector appearance through GeoServer.
+         * Paste a portable vector appearance, recalculating numeric ranges for the target source.
          *
          * @param {Object} record Neutral retained-layer record.
          * @param {Object} savedState Candidate saved style envelope.
          * @return {Promise<void>} Completion after the current style is applied.
+         * @throws {Error} If the saved style is invalid, classification fails, or styling fails.
          */
         async applySavedState(record, savedState) {
             if (savedState?.kind !== "vector") {
@@ -795,13 +796,14 @@ export function createVectorMapLayerAdapter({
             );
         },
         /**
-         * Restore the exact appearance of the same removed vector, including chosen class ranges.
+         * Restore the exact appearance of the same vector source, including chosen class ranges.
+         * Use for saved maps, removal Undo and independent views of the original source.
          * @param {Object} record Freshly published vector layer.
          * @param {Object} savedState Previously exported appearance.
          * @return {Promise<void>} Completion after the style service validates and applies it.
          * @throws {Error} If the current source no longer supports the saved appearance or styling fails.
          */
-        async restoreRemovedStyle(record, savedState) {
+        async restoreSavedState(record, savedState) {
             const problem = checkPortableVectorStyleCompatibility(record, savedState);
             if (problem) throw new Error(problem);
             await this.applyStyle(record, savedState.definition);

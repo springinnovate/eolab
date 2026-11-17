@@ -117,7 +117,7 @@ export class CatalogVisualizationCoordinator {
             const { record } = staged;
             record.entry.label = snapshot.label;
             if (snapshot.calculatedFields?.length) await record.adapter.restoreCalculatedFields(record, snapshot.calculatedFields);
-            if (record.adapter.restoreRemovedStyle) await record.adapter.restoreRemovedStyle(record, snapshot.style);
+            if (record.adapter.restoreSavedState) await record.adapter.restoreSavedState(record, snapshot.style);
             else await record.adapter.applySavedState(record, snapshot.style);
             if (Object.hasOwn(snapshot, "filter")) await record.adapter.applyFilterState(record, snapshot.filter);
             if (!isCurrent()) throw new Error("Layer restoration was superseded.");

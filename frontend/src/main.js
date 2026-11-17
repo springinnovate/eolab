@@ -1172,7 +1172,7 @@ async function initializeCatalog(
         try {
             if (presentation.calculatedFields?.length) await vectorMapLayerAdapter.restoreCalculatedFields(record, presentation.calculatedFields, presentation.signal);
             if (!isCurrent()) return null;
-            if (presentation.appearance) await vectorMapLayerAdapter.restoreRemovedStyle(record, presentation.appearance);
+            if (presentation.appearance) await vectorMapLayerAdapter.restoreSavedState(record, presentation.appearance);
             if (!isCurrent()) return null;
             if (presentation.filter) await vectorMapLayerAdapter.applyFilterState(record, presentation.filter);
             if (!isCurrent()) return null;
