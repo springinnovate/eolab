@@ -221,7 +221,9 @@ def create_raster_analysis_router(
             Bounded band-1 statistics independent of rendering state.
 
         Raises:
-            HTTPException: If analysis fails or the browser disconnects.
+            HTTPException: A 409 with detail code ``sampling_box_outside_raster``
+                means the box misses the original grid. Other failures include
+                a covered area with no valid pixels and a disconnected caller.
         """
 
         try:

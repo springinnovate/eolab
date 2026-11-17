@@ -25,6 +25,29 @@ test("an empty vector histogram describes the missing area instead of missing ra
     view.unbind();
 });
 
+test("a box outside every raster shows one empty result and hides the detailed histogram", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const empty = doc.querySelector("#raster-histogram-empty");
+    const detail = doc.querySelector("#raster-histogram");
+    view.setActiveRasterAvailable(true);
+    view.renderLayerHistograms([], null, true);
+    view.setSamplingAreaMode("selectedArea");
+    view.showWidget();
+    assert.equal(doc.querySelector("#raster-histogram-list").children.length, 0);
+    assert.equal(detail.hidden, true);
+    assert.equal(detail.getAttribute("aria-hidden"), "true");
+    assert.equal(empty.hidden, false);
+    assert.equal(empty.textContent, "No raster layers overlap this sampling box.");
+    view.setModeCompatible(false);
+    assert.equal(empty.hidden, true);
+    view.setModeCompatible(true);
+    assert.equal(empty.hidden, false);
+    view.renderLayerHistograms([], null);
+    assert.match(empty.textContent, /No visible raster layers/);
+    view.unbind();
+});
+
 test("histogram adapter owns status, chart, retry, and direct presentation", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(documentContext);
