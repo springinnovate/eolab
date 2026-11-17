@@ -371,6 +371,9 @@ test("one collapsed sampling control stays outside the inspection panel and resu
         "persistent map tools retain sampling independently of the inspection popover");
     assert.ok(disclosure.end < inspection.start);
     assert.ok(box.start > disclosure.start && box.end < disclosure.end, "one disclosure exposes box sizing and area choices");
+    assert.equal(countMarkupId("raster-sample-window-range"), 1);
+    assert.match(toolbar.source, /<\/details>\s*<div id="raster-compact-box-size" hidden><\/div>\s*<p id="raster-box-scroll-hint"/,
+        "the compact slider has its own slot beside the native disclosure and resize hint");
     assert.doesNotMatch(exploration.source, /id="raster-sampling-/);
     assert.ok(exploration.start > panel.end);
     assert.match(exploration.source, /role="tabpanel"/);
