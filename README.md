@@ -448,10 +448,22 @@ model; missing pixels are never treated as zero.
 ### Configure a planning tool
 
 Choose **Planning tools** from the tool menu to save an area, parcel layer and allowed
-intervention names. First add polygon datasets from the Catalog and use
-**Duplicate vector** to create custom layers. Choose those custom layers for the
-area and parcels, then choose an original text or integer parcel ID field.
-IDs must be nonempty and unique across the whole source dataset.
+intervention names. Choose custom polygon layers drawn in EOLab or created with
+**Duplicate vector** from Catalog datasets. Either kind can supply the area or
+parcels, and one layer can supply both. Catalog parcels require an original text
+or integer ID field, nonempty and unique across the whole source. Drawn parcels
+use their built-in polygon IDs; their names do not need to be unique.
+
+Saving a tool saves its selected drawings to this instance as reusable linked
+sources. Later saved polygon edits update the source used by every linked tool;
+reopening reads its latest saved polygons. Finish or cancel an unfinished polygon
+before saving the tool. Tool references permit reading the drawings,
+while only the browser that created a source can edit it. Other local drawings
+remain on the device. View names, filters and appearance stay independent of
+the source. Removing a map layer does not delete its saved drawing source.
+Linked drawings also stay in remembered and published maps, with their own view
+names, filters and appearance. Reopening a map reads the latest saved polygons;
+sharing a map permits reading its linked drawings, not editing their source.
 
 Use the ordinary layer filters while configuring the tool; saving includes their
 current settings. Reopening a tool adds editable custom views with those settings
@@ -463,6 +475,8 @@ still change the area, filters, appearance and title, or add interventions.
 
 The Planning API lets each participant save private scenarios with one
 intervention per parcel. Changing the area or filters retains saved assignments.
+Deleting a drawn polygon also retains its assignment, which can be cleared or
+reused if Undo restores the same polygon.
 See the application's `/docs` page for scenario operations and required revisions.
 The participant map/list editor and model execution are not available yet.
 
@@ -498,7 +512,8 @@ site's current datasets; missing data can prevent full restoration.
 #### Draw and share polygons
 
 Use **Map contents → Draw polygon** to create a private polygon layer and start
-drawing. Drawings stay on this device. Edit their boundaries, add names and
+drawing. Drawings stay on this device unless saved through Planning as linked
+sources. Edit their boundaries, add names and
 notes, and save before using them in an analysis. Use **Draw polygon** on the
 layer to add more polygons.
 

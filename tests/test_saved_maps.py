@@ -357,9 +357,9 @@ def test_shared_annotation_reference_contract() -> None:
         CreateSavedMap.model_validate(candidate)
 
 
-@pytest.mark.parametrize("source", ["annotation", "upload", "artifact"])
+@pytest.mark.parametrize("source", ["annotation", "upload", "artifact", "drawing"])
 def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
-    """Reject private uploads and shared invitations from another EOLab site.
+    """Reject saved drawings, private sources and invitations from another site.
 
     Args:
         source: Saved layer reference to exercise through create and edit routes.
@@ -367,7 +367,11 @@ def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
     view = json.loads(
         (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
     )
-    if source == "upload":
+    if source == "drawing":
+        view = json.loads(
+            (Path(__file__).parent / "fixtures" / "saved-map-v5.json").read_text()
+        )
+    elif source == "upload":
         view.update(schemaVersion=3, basemap="detailed")
         view["layers"] = [
             {

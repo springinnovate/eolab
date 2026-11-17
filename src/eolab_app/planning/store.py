@@ -223,8 +223,8 @@ class PlanningToolStore:
     ) -> PlanningTool:
         """Replace an author's definition while preserving existing scenario meanings.
 
-        Once any participant creates a scenario, the original parcel Catalog
-        source, ID field and existing intervention IDs/names cannot change.
+        Once any participant creates a scenario, the original parcel source
+        reference, ID field and existing intervention IDs/names cannot change.
         Filters, presentation, AOI and additional interventions remain editable.
 
         Args:
@@ -284,19 +284,18 @@ class PlanningToolStore:
         """
         old_parcels = next(
             layer for layer in current.layers if layer.id == current.parcelLayerId
-        ).definition.catalogItem
+        ).source_identity()
         new_parcels = next(
             layer
             for layer in replacement.layers
             if layer.id == replacement.parcelLayerId
-        ).definition.catalogItem
+        ).source_identity()
         old_choices = {(choice.id, choice.label) for choice in current.interventions}
         new_choices = {
             (choice.id, choice.label) for choice in replacement.interventions
         }
-        if (old_parcels.collection, old_parcels.id, current.parcelIdField) != (
-            new_parcels.collection,
-            new_parcels.id,
+        if (old_parcels, current.parcelIdField) != (
+            new_parcels,
             replacement.parcelIdField,
         ) or not old_choices.issubset(new_choices):
             raise PlanningError(
@@ -571,7 +570,8 @@ class PlanningToolStore:
     ) -> Scenario:
         """Save or clear one validated original parcel choice under both row locks.
 
-        The caller validates original-source membership before this transaction.
+        The caller checks the source's assignment rules before this transaction.
+        This permits clearing a deleted drawing polygon's stored choice.
         Exact type/value matching preserves arbitrary-length string IDs without
         an indexed copy or digest. Locking the scenario serializes insertions.
 

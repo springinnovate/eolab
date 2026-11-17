@@ -77,6 +77,38 @@ test("staged custom names survive attachment and removal Undo snapshots", async 
     controller.destroy();
 });
 
+test("local views stay detached until the ordinary staged commit and retain owner presentation", () => {
+    for (const batch of [false, true]) {
+        const map = createMap(), view = createView();
+        const controller = new MapLayerController({leafletMap: map, view});
+        const adapter = createAdapter("Local");
+        adapter.snapshot = () => ({datasetKind: "annotation"});
+        let additions = 0;
+        adapter.added = () => { additions++; };
+        const source = {key: "local:drawing", label: "Source", sourceName: "Source", customName: "Parcels",
+            visible: false, opacity: 0.4, isCustom: true, group: {id: "local:group", label: "Drawings"}, canAddView: true};
+        const staged = controller.stageLocal(source, adapter);
+        assert.equal(controller.getRecord(source.key), null);
+        assert.equal(view.layers.length, 0);
+        assert.equal(map.attached.size, 0);
+        assert.equal(additions, 0);
+        if (batch) controller.commitStaged([staged], {fitToBounds: false});
+        else controller.restoreStagedLayer(staged, 0);
+        assert.equal(additions, 1);
+        assert.equal(map.attached.size, 0, "hidden local views stay hidden after commit");
+        const record = controller.getRecord(source.key);
+        assert.equal(record.entry.label, "Parcels");
+        assert.equal(record.entry.sourceName, "Source");
+        assert.equal(record.entry.opacity, 0.4);
+        assert.equal(record.entry.isCustom, true);
+        assert.deepEqual(record.entry.group, source.group);
+        assert.equal(record.canAddView, true);
+        assert.throws(() => controller.commitStaged([staged]), /duplicated/);
+        assert.equal(controller.getRecord(source.key), record);
+        controller.destroy();
+    }
+});
+
 test("Catalog removal targets follow live names and topmost source matches, including hidden views", async () => {
     const item = catalogItem("rain"), adapter = createAdapter("Raster"), updates = [];
     let controller;

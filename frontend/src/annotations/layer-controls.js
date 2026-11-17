@@ -245,7 +245,9 @@ export class AnnotationLayerControls {
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));
         if (!polygons.length) {
             const empty = this.document.createElement("li");
-            empty.textContent = filtered ? "No polygons match the filter." : this.collaborating
+            empty.textContent = filtered ? "No polygons match the filter." : this.readOnlyDrawing
+                ? "This saved drawing has no polygons. Its owner can add them."
+                : this.collaborating
                 ? "Draw a polygon and add its name and notes in the editor. Save shares the complete polygon with this layer's contributors."
                 : "Draw a polygon and add its name and notes in the editor. Save stores the complete polygon on this device.";
             this.polygonList.append(empty);
@@ -254,6 +256,18 @@ export class AnnotationLayerControls {
             this.polygons.open = true;
             this.polygonList.querySelector(`[data-polygon-id="${focusPolygon}"] button`)?.focus();
         }
+    }
+
+    /** Show source edit permission without restricting this view's filters or appearance.
+     * @param {boolean} canEdit Whether the current browser owns the reusable drawing.
+     * @return {void}
+     */
+    setDrawingSource(canEdit) {
+        this.readOnlyDrawing = !canEdit;
+        this.draw.disabled = !canEdit;
+        this.share.hidden = true;
+        this.sharedStatus.textContent = canEdit ? "Saved drawing · polygon edits update its linked uses" : "Read-only drawing · filters and style affect your view";
+        this.refresh();
     }
 
     /** Show contributor details and separate shared color from local appearance controls.
@@ -337,7 +351,7 @@ export class AnnotationLayerControls {
         actions.className = "annotation-actions";
         const edit = this.button("Edit polygon", () => this.actions.edit(polygon.id));
         edit.title = "Edit shape, name and notes";
-        actions.append(edit,
+        if (!this.readOnlyDrawing) actions.append(edit,
             this.button("Delete", () => this.actions.removePolygon(polygon.id)));
         row.append(name);
         if (polygon.note) {

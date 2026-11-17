@@ -18,6 +18,9 @@ from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.planning.store import PlanningToolStore
 from eolab_app.planning.service import PlanningToolService
 from eolab_app.planning.scenario_service import PlanningScenarioService
+from eolab_app.drawings.models import DrawingLayer
+from eolab_app.drawings.store import DrawingLayerStore
+from eolab_app.routes.drawings import create_drawings_router
 from eolab_app.routes.planning_tools import (
     create_planning_scenarios_router,
     create_planning_tools_router,
@@ -769,15 +772,35 @@ def create_app(
         )
         return resolved.selection
 
+    drawing_store = DrawingLayerStore()
+    application.include_router(create_drawings_router(drawing_store))
+
+    async def read_drawing_source(identifier: UUID) -> DrawingLayer:
+        """Read the latest polygons through an opaque shared drawing reference.
+
+        Args:
+            identifier: Drawing-source UUID retained in the Planning tool.
+
+        Returns:
+            Admitted committed polygons without source-edit permission.
+
+        Raises:
+            DrawingError: The source is missing or storage is unavailable.
+        """
+        return await asyncio.to_thread(drawing_store.read_layer, identifier)
+
     planning_store = PlanningToolStore()
     planning_tools = PlanningToolService(
         planning_store,
         authorize_layer=authorize_planning_layer,
         validate_parcel_ids=vector_selection_reader.validate_parcel_ids,
+        read_drawing=read_drawing_source,
     )
     application.include_router(create_planning_tools_router(planning_tools))
     planning_scenarios = PlanningScenarioService(
-        planning_store, lookup_parcel=vector_selection_reader.lookup_parcel
+        planning_store,
+        lookup_parcel=vector_selection_reader.lookup_parcel,
+        read_drawing=read_drawing_source,
     )
     application.include_router(create_planning_scenarios_router(planning_scenarios))
     application.include_router(create_saved_maps_router(saved_maps))

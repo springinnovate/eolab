@@ -162,6 +162,46 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     )
 
 
+def test_drawing_views_persist_through_map_publication_edit_and_restart(
+    store: SavedMapStore,
+) -> None:
+    """Save drawing references through ordinary map APIs without reading their source.
+
+    Args:
+        store: Empty disposable PostgreSQL saved-map store.
+    """
+    request = map_request("drawn-parcels")
+    request["view"] = json.loads(
+        (Path(__file__).parent / "fixtures" / "saved-map-v5.json").read_text()
+    )
+    password = "test-map-administrator"
+    app = FastAPI()
+    app.include_router(create_saved_maps_router(store))
+    app.include_router(create_saved_maps_admin_router(store, password))
+    with TestClient(app, base_url="https://testserver", headers=HEADERS) as client:
+        created = client.post(BASE, json=request)
+        assert created.status_code == 201, created.text
+        assert created.json()["view"] == request["view"]
+        assert client.get(created.headers["location"]).json() == created.json()
+        replacement = deepcopy(request)
+        replacement["view"]["layers"][1]["customName"] = "Edited map view"
+        replacement["view"]["layers"][1]["filter"]["rules"] = [
+            {"field": "note", "operator": "contains", "value": "restore"}
+        ]
+        edited = client.put(
+            "/api/admin/saved-maps/drawn-parcels",
+            headers={"X-EOLab-Admin": "1"},
+            auth=("admin", password),
+            json={**replacement, "revision": 1},
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["revision"] == 2
+        assert edited.json()["view"] == replacement["view"]
+        assert client.get(created.headers["location"]).json() == edited.json()
+    restarted = SavedMapStore(store.conninfo).get_saved_map("drawn-parcels")
+    assert restarted.model_dump(mode="json", exclude_unset=True) == edited.json()
+
+
 def test_only_one_concurrent_admin_update_wins(store: SavedMapStore) -> None:
     """An atomic revision comparison prevents two editors from overwriting each other.
 
