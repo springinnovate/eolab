@@ -119,6 +119,14 @@
       await settleLayout();
       check(toolName.textContent === "Style" && isReachable(chooser), "The active tool name cannot open the chooser");
       check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
+      inspection.showRasterClips();
+      await settleLayout();
+      const firstWord = document.createRange();
+      firstWord.setStart(toolName.firstChild, 0);
+      firstWord.setEnd(toolName.firstChild, "Download".length);
+      check(firstWord.getClientRects().length === 1 && isReachable(expandLeft) && isReachable(chooser),
+        "The tool title wraps mid-word or covers the left panel tab");
+      inspection.hideRasterClips();
       collapseRight.click();
       await settleLayout();
       check(document.activeElement === expandRight, "Collapsing Map tools lost focus");

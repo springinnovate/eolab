@@ -5127,13 +5127,16 @@ summary:hover > .raster-disclosure-chevron {
 @media (max-width: 1199px) {
   #app {
     --tools-clearance: max(var(--map-tools-height, 42px), calc(var(--panel-toggle-size) + 6px));
+    --left-panel-tab-width: min(12rem, 35vw);
   }
   .map-tools-header { order: -3; }
-  #app.is-control-panel-collapsed:has(#map-tools-toolbar:not([hidden])) #open-panel,
-  #app.is-control-panel-collapsed .map-tools-header {
-    max-inline-size: calc((100vw - 2 * var(--workspace-edge) - 6px) / 2);
+  #app.is-control-panel-collapsed:has(#map-tools-toolbar:not([hidden])) #open-panel {
+    max-inline-size: var(--left-panel-tab-width);
   }
-  #app.is-control-panel-collapsed .map-tools-header { align-self: flex-end; }
+  #app.is-control-panel-collapsed .map-tools-header {
+    align-self: flex-end;
+    max-inline-size: min(100%, calc(var(--map-tools-available-width) - var(--left-panel-tab-width) - 6px));
+  }
   #map, #app.is-control-panel-collapsed #map {
     inset: 0;
   }
