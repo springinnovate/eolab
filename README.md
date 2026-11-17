@@ -426,6 +426,21 @@ already queued preparations running.
 Partial coverage still needs enough usable data and reference sites to fit the
 model; missing pixels are never treated as zero.
 
+### Configure a planning tool
+
+Open **Tools → Planning tools** to save an area, parcel layer and allowed
+intervention names. First add polygon datasets from the Catalog and use
+**Duplicate vector** to create custom layers. Choose those custom layers for the
+area and parcels, then choose an original text or integer parcel ID field.
+IDs must be nonempty and unique across the whole source dataset.
+
+Use the ordinary layer filters while configuring the tool; saving includes their
+current settings. Reopening a tool adds editable custom views with those settings
+without changing the Catalog datasets or replacing your other map layers.
+Saved planning tools belong to the browser that created them. This first stage
+saves configuration only; assigning interventions to parcels and running models
+come later.
+
 ### Collaborate with others
 
 #### Share your map

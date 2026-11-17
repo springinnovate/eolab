@@ -15,6 +15,9 @@ from fastapi.responses import FileResponse
 
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
 from eolab_app.saved_maps.store import SavedMapStore
+from eolab_app.planning.store import PlanningToolStore
+from eolab_app.planning.service import PlanningToolService
+from eolab_app.routes.planning_tools import create_planning_tools_router
 from eolab_app.routes.saved_maps import (
     create_saved_maps_router,
     create_saved_maps_admin_router,
@@ -144,6 +147,10 @@ from eolab_app.vector.sources import (
     PublishedVectorRegistry,
 )
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector.filters import CatalogVectorFilterRequest
+from eolab_app.vector.selection_source import resolve_selection
+from eolab_app.vector.errors import VectorConflictError
+from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.selection_jobs import SelectionJobs
 from eolab_app.vector.extent_jobs import ExtentJobs
@@ -720,6 +727,50 @@ def create_app(
         )
 
     saved_maps = SavedMapStore(capacity=app_global_configuration.saved_map_capacity)
+
+    async def authorize_planning_layer(
+        request: CatalogVectorFilterRequest,
+    ) -> CatalogSelection:
+        """Authorize a Planning polygon view using its original Catalog source.
+
+        Args:
+            request: Catalog identity and ordinary filter/calculated-field settings.
+
+        Returns:
+            Authorized path-free source and predicate for the custom view.
+
+        Raises:
+            VectorFeatureError: If the Catalog source, geometry or filter is invalid.
+        """
+        item = await vector_catalog.get_item(request)
+        properties = item.get("properties", {})
+        if not isinstance(properties, dict):
+            raise VectorConflictError("The Catalog layer has invalid polygon metadata.")
+        primary_geometry = properties.get("table:primary_geometry")
+        columns = properties.get("table:columns", [])
+        if not isinstance(columns, list):
+            raise VectorConflictError("The Catalog layer has invalid polygon metadata.")
+        geometry = next(
+            (
+                column.get("type")
+                for column in columns
+                if isinstance(column, dict) and column.get("name") == primary_geometry
+            ),
+            None,
+        )
+        if geometry not in ("Polygon", "MultiPolygon"):
+            raise VectorConflictError("Choose a Catalog polygon layer for Planning.")
+        resolved = await resolve_selection(
+            vector_catalog, vector_source_resolver, request
+        )
+        return resolved.selection
+
+    planning_tools = PlanningToolService(
+        PlanningToolStore(),
+        authorize_layer=authorize_planning_layer,
+        validate_parcel_ids=vector_selection_reader.validate_parcel_ids,
+    )
+    application.include_router(create_planning_tools_router(planning_tools))
     application.include_router(create_saved_maps_router(saved_maps))
     application.include_router(
         create_saved_maps_admin_router(saved_maps, app_global_configuration.admin_password)

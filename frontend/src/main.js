@@ -94,6 +94,10 @@ import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, MAP_L
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
+import { PlanningController } from "./planning/controller.js";
+import { PlanningView } from "./planning/view.js";
+import { PlanningApiClient } from "./planning/api.js";
+import "./planning/style.css";
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { VectorFeatureProfileController } from "./vector/feature-profile.js";
 import {
@@ -101,7 +105,7 @@ import {
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
 import { VectorFieldCalculator } from "./vector/field-calculator.js";
-import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
+import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { UploadsDialog } from "./uploads/dialog.js";
 import { getUpload, getRasterUpload } from "./uploads/api.js";
@@ -804,6 +808,7 @@ async function initializeCatalog(
     let layerStyleEditor = null;
     let outputLayers = null;
     let savedMapViewController = null;
+    let planning = null;
     let vectorFeatureInspector = null;
     let mapFeatureHover = null;
     let vectorFilterControls = null;
@@ -842,6 +847,7 @@ async function initializeCatalog(
         leafletLayers,
         onLayersChange: (layers, change) => {
             mapLegend.update(layers);
+            planning?.refreshMapLayers();
             if (change?.kind === "opacity") {
                 layerStyleEditor?.refresh();
                 mapFeatureHover?.hide();
@@ -1657,6 +1663,45 @@ async function initializeCatalog(
             return id && isCurrent() ? annotations.restoreMapAppearance(id, layer) : null;
         },
     });
+    if (!isSharedViewer) {
+        planning = new PlanningController({
+            api: new PlanningApiClient(),
+            view: new PlanningView(document),
+            /** List custom Catalog polygons and their original ID field candidates.
+             * @return {Object[]} Detached choices from the current ordinary map views.
+             */
+            getLayerChoices: () => mapLayerController.retainedRecords.flatMap(record => {
+                if (!record.entry.isCustom || record.adapter !== vectorMapLayerAdapter) return [];
+                const source = record.adapter.describeSource(record);
+                if (source.origin !== "catalog" || source.geometryKind !== "polygon") return [];
+                const calculated = new Set(record.adapter.exportCalculatedFields(record).map(field => field.name));
+                const filter = record.adapter.exportFilterState(record);
+                return [{
+                    key: record.entry.key, label: record.entry.label,
+                    source: {collectionId: source.source.collectionId, itemId: source.source.itemId},
+                    idFields: source.fields.filter(field => !calculated.has(field.name)
+                        && ["str", "string", "int", "int16", "int32", "int64"].includes(field.type.toLowerCase().split(":")[0])),
+                    filterSummary: vectorFilterSummary(filter ?? EMPTY_VECTOR_FILTER),
+                }];
+            }),
+            exportLayer: key => savedMapViewController.exportCatalogLayer(key),
+            /** Restore each durable view once, then bind it to its fresh map key.
+             * @param {Object[]} layers Saved view IDs and ordinary layer definitions.
+             * @param {()=>boolean} isCurrent Whether this tool is still being opened.
+             * @return {Promise<Object[]>} View IDs paired with restored keys or failures.
+             */
+            restoreLayers: async (layers, isCurrent) => {
+                const restored = await savedMapViewController.restoreCatalogLayers(
+                    layers.map(layer => layer.definition), isCurrent,
+                );
+                return layers.map((layer, index) => ({id: layer.id, ...restored[index]}));
+            },
+            editLayerFilter: key => vectorFilterControls.open(key),
+            onOpen: () => mapInspection.showPlanning(),
+            onClose: () => { mapInspection.hidePlanning(); leafletMap.getContainer().focus(); },
+        });
+        mapInspection.subscribeActiveTool(tool => planning.setActive(tool === "planning"));
+    } else document.querySelector("#open-planning").hidden = true;
     leafletMap.on("moveend", () =>
         savedMapViewController?.scheduleRemember()
     );

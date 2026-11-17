@@ -1191,7 +1191,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     const observer = new Function("mapLegend", "layerStyleEditor", "mapFeatureHover", "savedMapViewController",
         "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
         "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
-        "temporalDatasets", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
+        "temporalDatasets", "planning", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
         { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
         { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
         () => calls.push(["catalog"]), { observeLayerOrder: () => calls.push(["annotations-order"]) },
@@ -1200,6 +1200,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
         { refresh: () => calls.push(["fields"]) }, { refresh: () => calls.push(["sampling"]) },
         { refresh: () => calls.push(["summary"]) }, { refreshMapLayers: () => calls.push(["models"]) },
         { setClickResult() {}, closeHistogram() { calls.push(["histogram-close"]); } }, () => [],
+        { refreshMapLayers: () => calls.push(["planning"]) },
     );
     const map = createMap();
     controller = new MapLayerController({ leafletMap: map, view, onLayersChange: observer,
@@ -1212,7 +1213,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     calls.length = saved.length = plans.length = 0;
     for (const opacity of [0.4, 0, 0.75]) controller.setOpacity(key, opacity);
     assert.deepEqual([...view.list.children], rows, "controller uses the opacity-only view path");
-    assert.deepEqual(calls.map(([name]) => name), Array(3).fill(["legend", "style", "hover"]).flat());
+    assert.deepEqual(calls.map(([name]) => name), Array(3).fill(["legend", "planning", "style", "hover"]).flat());
     assert.deepEqual(calls.filter(([name]) => name === "legend").map(([, layers]) => layers[0].opacity), [0.4, 0, 0.75]);
     assert.deepEqual(saved.map(layers => layers[0].opacity), [0.4, 0, 0.75], "autosave captures each latest value");
     assert.deepEqual(ownerSaves, [[key, 0.4], [key, 0], [key, 0.75]], "annotation-style persistence hooks still run");
@@ -1220,7 +1221,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     assert.equal(controller.getLeafletLayer(key).opacity, 0.75);
     calls.length = 0;
     controller.setVisible(key, false);
-    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models"]) {
+    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models", "planning"]) {
         assert.ok(calls.some(([called]) => called === name), `${name} still receives general layer changes`);
     }
     controller.destroy();

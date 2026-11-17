@@ -1,0 +1,25 @@
+/* Planning uses the application's existing panel, control and color tokens. */
+#planning-panel { min-width: 0; font-size: var(--font-size-ui); }
+.planning-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.planning-header h2 { margin: 0; font-size: 1rem; }
+.planning-form { display: grid; gap: 14px; }
+.planning-form[hidden], .planning-library[hidden] { display: none; }
+.planning-form fieldset { display: grid; gap: 8px; min-width: 0; padding: 12px; margin: 0; border: 1px solid var(--border-1); border-radius: var(--radius); }
+.planning-form legend { padding: 0 4px; font-weight: 600; }
+.planning-field { display: grid; gap: 4px; min-width: 0; }
+.planning-field label { font-weight: 600; }
+#planning-panel input, #planning-panel select { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: 7px; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border-1); border-radius: var(--radius); }
+.planning-action, .planning-tool { min-height: 34px; padding: 6px 10px; color: var(--brand-hover); background: var(--surface-2); border: 1px solid var(--border-1); border-radius: var(--radius); font: inherit; cursor: pointer; }
+.planning-action:hover:not(:disabled), .planning-tool:hover:not(:disabled) { background: var(--surface-hover); }
+.planning-action:disabled, .planning-tool:disabled, #planning-panel input:disabled, #planning-panel select:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.planning-action:focus-visible, .planning-tool:focus-visible, #planning-panel input:focus-visible, #planning-panel select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.planning-primary { border-color: var(--brand); font-weight: 600; }
+.planning-form > .planning-action, .planning-form fieldset > .planning-action { justify-self: start; }
+.planning-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.planning-help, .planning-error { margin: 0; font-size: var(--font-size-support); overflow-wrap: anywhere; }
+.planning-help { color: var(--text-2); }
+.planning-error { color: var(--text-1); padding: 8px; border-inline-start: 3px solid var(--brand); margin-bottom: 10px; }
+.planning-error[hidden], .planning-help[hidden] { display: none; }
+.planning-tool-list, .planning-interventions { display: grid; gap: 8px; }
+.planning-tool { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.planning-intervention-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }

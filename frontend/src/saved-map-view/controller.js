@@ -536,6 +536,58 @@ export class SavedMapViewController {
         this.view.unbind();
     }
 
+    /** Export one retained Catalog layer through its ordinary portable definition.
+     * Runtime map keys are omitted; independent callers retain their own bindings.
+     * @param {string} key Retained Catalog view key.
+     * @return {Object} Detached source identity, filter, fields and appearance.
+     * @throws {Error} If the view is missing, private, temporal or cannot be exported.
+     */
+    exportCatalogLayer(key) {
+        const record = this.mapLayers.retainedRecords.find(value => value.entry.key === key);
+        if (!record || record.entry.item === null || this.exportTemporal(record) !== null) {
+            throw new Error("Choose an available Catalog layer to save.");
+        }
+        return structuredClone({...this.#exportLayer(record), isCustom: record.entry.isCustom,
+            ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})});
+    }
+
+    /** Add portable Catalog layers without replacing the map or changing its viewport.
+     * Every definition must restore exactly before any layer is attached. Failure or
+     * cancellation discards this addition while preserving existing map layers.
+     * @param {Object[]} definitions Ordinary portable Catalog layer definitions.
+     * @param {()=>boolean} isCurrent Whether the caller still wants this addition.
+     * @return {Promise<Array<{key:string|null,error:string|null}>>} Results in input order.
+     * @throws {Error} If the portable document is invalid or contains another source kind.
+     */
+    async restoreCatalogLayers(definitions, isCurrent) {
+        const document = createSavedMapView({viewer: {version: this.viewerVersion, origin: this.viewerOrigin},
+            createdAt: this.clock().toISOString(), viewport: {center: {latitude: 0, longitude: 0}, zoom: 0}, layers: definitions});
+        if (document.layers.some(layer => !layer.catalogItem)) throw new Error("Only Catalog layers can be added here.");
+        const prepared = [];
+        const attached = new Set();
+        try {
+            for (const layer of document.layers) {
+                if (this.destroyed || !isCurrent()) throw new Error("Layer restoration was cancelled.");
+                const result = await this.#prepareLayer(layer, {strictStyle: true});
+                if (!result.staged) throw new Error(result.detail);
+                prepared.push(result.staged);
+            }
+            if (this.destroyed || !isCurrent()) throw new Error("Layer restoration was cancelled.");
+            for (const [index, staged] of prepared.entries()) {
+                this.mapLayers.restoreStagedLayer(staged, index);
+                attached.add(staged.key);
+                this.mapLayers.setLegendIncluded(staged.key, document.layers[index].legendIncluded !== false);
+            }
+            return prepared.map(staged => ({key: staged.key, error: null}));
+        } catch (error) {
+            for (const staged of prepared) {
+                if (attached.has(staged.key)) this.mapLayers.removeKey(staged.key);
+                else { staged.record.adapter.discardStaged?.(staged.record); staged.layer?.remove?.(); }
+            }
+            return definitions.map(() => ({key: null, error: asError(error).message}));
+        }
+    }
+
     /**
      * Capture layer identifiers and map appearance in drawing order.
      * Every exported layer records whether its card is Catalog or Custom.
@@ -740,12 +792,14 @@ export class SavedMapViewController {
      * Retain its explicit Catalog or Custom card presentation independently of its row key.
      *
      * @param {Object} layer Validated saved-layer document.
+     * @param {{strictStyle?:boolean}} [options] Reject a failed style instead of restoring with a warning.
      * @return {Promise<{staged:Object|null,detail:string|null}>} Detached layer and
      * ordered user-facing outcome, or a failure detail without a layer.
      */
-    async #prepareLayer(layer) {
+    async #prepareLayer(layer, {strictStyle = false} = {}) {
         const identityLabel =
             `${layer.catalogItem.collection}/${layer.catalogItem.id}`;
+        let staged = null;
         try {
             const catalogItem = await this.catalogItems.get(
                 layer.catalogItem
@@ -753,7 +807,7 @@ export class SavedMapViewController {
             const preparedItem = await this.catalogVisualization.prepare(
                 catalogItem
             );
-            const staged = await this.catalogVisualization.stage(
+            staged = await this.catalogVisualization.stage(
                 preparedItem,
                 { key: `local:view:${globalThis.crypto.randomUUID()}`, visible: layer.visible, opacity: layer.opacity,
                     isCustom: layer.isCustom ?? false,
@@ -768,7 +822,7 @@ export class SavedMapViewController {
             try {
                 await record.adapter.applySavedState(record, layer.style);
             } catch (error) {
-                if (layer.calculatedFields?.length) throw error;
+                if (strictStyle || layer.calculatedFields?.length) throw error;
                 styleWarning = asError(error).message;
             }
             // A failed filter must never restore an unexpectedly unfiltered layer.
@@ -783,6 +837,7 @@ export class SavedMapViewController {
                 : `${record.entry.label}: saved style was not applied: ${styleWarning}.`;
             return { staged, detail };
         } catch (error) {
+            if (staged) { staged.record.adapter.discardStaged?.(staged.record); staged.layer?.remove?.(); }
             return {
                 staged: null,
                 detail: `${identityLabel}: ${asError(error).message}`,

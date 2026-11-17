@@ -25,6 +25,80 @@ function createController(configuration) {
   });
 }
 
+/** Build an additive Catalog restore fixture with observable staging and cleanup.
+ * @param {Object} [options={}] Failure and delay controls.
+ * @return {Object} Controller, retained records and source-owner observations.
+ */
+function additiveCatalogFixture(options = {}) {
+  const definition = {catalogItem: {collection: "local", id: "parcels"}, isCustom: true, visible: false, opacity: 0.6,
+    customName: "Restoration parcels", legendIncluded: false, style: {kind: "vector", definition: {}},
+    filter: {enabled: true, match: "all", rules: [{field: "region", operator: "eq", value: "north"}]},
+    calculatedFields: [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}]};
+  const existing = {entry: {key: "existing", item: {collection: "local", id: "existing"}}};
+  const records = [existing], staged = [], discarded = [], removed = [], order = [];
+  const mapLayers = {retainedRecords: records,
+    restoreStagedLayer(value, index) {
+      if (value.record.entry.item.id === options.failAttach) throw new Error("Attach failed");
+      records.splice(index, 0, value.record);
+    },
+    setLegendIncluded(key, included) { records.find(record => record.entry.key === key).entry.legendIncluded = included; },
+    removeKey(key) { removed.push(key); records.splice(records.findIndex(record => record.entry.key === key), 1); },
+  };
+  const controller = createController({view: createView(), viewerVersion: "1", viewerOrigin: "https://viewer.example",
+    viewport: {restore() { assert.fail("Additive layer restore must not move the map"); }}, mapLayers,
+    catalogItems: {get: async identity => { await options.beforeRead?.(identity); return identity; }},
+    catalogVisualization: {clear() { assert.fail("Additive layer restore must retain existing layers"); }, prepare: async item => item,
+      stage: async (item, presentation) => {
+        const record = {entry: {...presentation, item, label: item.id}, definitions: [], adapter: {
+          restoreCalculatedFields(_record, fields) { order.push("fields"); record.definitions = fields; },
+          applySavedState(_record, style) { order.push("style"); if (item.id === options.failStyle) throw new Error("Invalid saved style"); record.style = style; },
+          applyFilterState(_record, filter) { order.push("filter"); record.filter = filter; },
+          exportSavedState: () => record.style, exportFilterState: () => record.filter,
+          exportCalculatedFields: () => record.definitions,
+          discardStaged() { discarded.push(item.id); },
+        }};
+        const value = {key: presentation.key, record, layer: {remove() {}}}; staged.push(value); return value;
+      }},
+  });
+  return {controller, definition, records, existing, staged, discarded, removed, order};
+}
+
+test("additive Catalog restore preserves existing map, strict settings and detached export values", async () => {
+  const f = additiveCatalogFixture();
+  const results = await f.controller.restoreCatalogLayers([f.definition], () => true);
+  assert.equal(results.length, 1); assert.equal(results[0].error, null); assert.match(results[0].key, /^local:view:/);
+  assert.deepEqual(f.order, ["fields", "style", "filter"]); assert.equal(f.records[1], f.existing);
+  assert.deepEqual(f.controller.exportCatalogLayer(results[0].key), f.definition);
+  const exported = f.controller.exportCatalogLayer(results[0].key); exported.filter.rules[0].value = "south";
+  assert.equal(f.controller.exportCatalogLayer(results[0].key).filter.rules[0].value, "north");
+  assert.throws(() => f.controller.exportCatalogLayer("removed"), /available Catalog layer/);
+});
+
+test("additive Catalog restore rejects failed style and discards all detached preparations", async () => {
+  const f = additiveCatalogFixture({failStyle: "broken"});
+  const broken = {...f.definition, catalogItem: {collection: "local", id: "broken"}, calculatedFields: []};
+  const results = await f.controller.restoreCatalogLayers([f.definition, broken], () => true);
+  assert.equal(results.every(result => result.key === null && /Invalid saved style/.test(result.error)), true);
+  assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded.sort(), ["broken", "parcels"]);
+});
+
+test("additive Catalog attachment failure rolls back only layers from that operation", async () => {
+  const f = additiveCatalogFixture({failAttach: "broken"});
+  const broken = {...f.definition, catalogItem: {collection: "local", id: "broken"}};
+  const results = await f.controller.restoreCatalogLayers([f.definition, broken], () => true);
+  assert.equal(results.every(result => result.key === null && /Attach failed/.test(result.error)), true);
+  assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.removed, [f.staged[0].key]);
+  assert.deepEqual(f.discarded, ["broken"]);
+});
+
+test("superseded additive Catalog restore discards prepared layers without attaching them", async () => {
+  let current = true;
+  const f = additiveCatalogFixture({beforeRead: async () => { current = false; }});
+  const results = await f.controller.restoreCatalogLayers([f.definition], () => current);
+  assert.deepEqual(f.records, [f.existing]); assert.deepEqual(f.discarded, ["parcels"]);
+  assert.equal(results[0].key, null); assert.match(results[0].error, /cancelled/);
+});
+
 test("calculated fields restore before dependent styles and filters and unavailable definitions survive the next save", async () => {
   const fields = [{version: 1, name: "Density", expression: "'Population' / 10", numericText: false}];
   const layer = {catalogItem: {collection: "vectors", id: "available"}, isCustom: true, visible: true, opacity: 1,
