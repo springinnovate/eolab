@@ -648,3 +648,46 @@ test("paired Processing actions follow each axis source without hiding the compa
     assert.equal(doc.querySelector(`#${action}-bivariate-y`).hidden, true);
   }
 });
+
+for (const axis of ["x", "y"]) {
+  test(`paired ${axis} clamps only the edited slider before notifying its coordinator`, () => {
+    const doc = new FakeBivariateDocument();
+    const view = new BivariateRasterControlsView(doc);
+    const received = [];
+    const initial = { lower: 5, middle: 50, upper: 95, rescale: true };
+    const state = { settings: initial, available: true, values: null, range: null,
+      applicable: true, invalid: false, message: "Estimated" };
+    view.bind({ onBivariatePercentileInput: changedAxis => {
+      const settings = view.readPercentiles(changedAxis);
+      received.push({ axis: changedAxis, settings });
+      view.renderPercentiles(changedAxis, { ...state, settings });
+    } });
+    const otherAxis = axis === "x" ? "y" : "x";
+    const untouched = view.readPercentiles(otherAxis);
+    for (const [name, requests, expected] of [
+      ["lower", [60, 100, 49, 30], [49, 49, 49, 30]],
+      ["middle", [0, 5, 6, 20, 100, 95, 94, 70], [6, 6, 6, 20, 94, 94, 94, 70]],
+      ["upper", [40, 0, 51, 80], [51, 51, 51, 80]],
+    ]) {
+      view.renderPercentiles(axis, state);
+      const input = view.rangeControls[axis].inputs[name];
+      input.focus();
+      for (let index = 0; index < requests.length; index++) {
+        input.value = String(requests[index]);
+        input.dispatchEvent(new Event("input"));
+        assert.deepEqual(received.at(-1), { axis, settings: { ...initial, [name]: expected[index] } });
+        assert.deepEqual(view.readPercentiles(otherAxis), untouched);
+        assert.equal(doc.activeElement, input);
+        assert.equal(input.value, String(expected[index]));
+        assert.equal(input.getAttribute("aria-invalid"), "false");
+        assert.ok(view.rangeControls[axis].values[name].textContent.startsWith(`${expected[index]}%`));
+      }
+    }
+    view.renderPercentiles(axis, { ...state, applicable: false, invalid: true,
+      message: "These percentiles give the same value. Choose a wider range or another sample." });
+    assert.equal(view.rangeControls[axis].inputs.lower.getAttribute("aria-invalid"), "true");
+    assert.match(view.rangeControls[axis].status.textContent, /same value/);
+    assert.equal(view.rangeControls[axis].rescale.disabled, false);
+    view.unbind();
+  });
+}
