@@ -80,9 +80,14 @@ test("inspection composition delivers distinct observations to both chart consum
   inspector.onSampleChange(Object.freeze({
     state: "ready", message: "Ready", observations,
   }));
-  inspector.onCurrentObservationChange(observations[1]);
+  inspector.onCurrentObservationChange(observations[1], {
+    position: 2, total: 2, canPrevious: true, canNext: false,
+  });
 
   assert.equal(profile.currentObservation, observations[1]);
+  assert.equal(documentContext.querySelector("#vector-feature-profile-position").textContent, "2 of 2 features");
+  assert.equal(documentContext.querySelector("#previous-vector-feature-profile").disabled, false);
+  assert.equal(documentContext.querySelector("#next-vector-feature-profile").disabled, true);
   assert.equal(series.observations[0], observations[0]);
   assert.equal(series.observations[1], observations[1]);
   assert.deepEqual(documentContext.querySelector("#vector-feature-profile-table-body")
