@@ -40,6 +40,8 @@ def test_vector_domain_does_not_depend_on_raster_processing_or_http_delivery() -
         or module.startswith("eolab_app.raster.")
         or module == "eolab_app.processing"
         or module.startswith("eolab_app.processing.")
+        or module == "eolab_app.planning"
+        or module.startswith("eolab_app.planning.")
         or module == "eolab_app.routes"
         or module.startswith("eolab_app.routes.")
         or module == "fastapi"

@@ -1,4 +1,4 @@
-"""Serve private author-owned Planning tools with cancellable source validation."""
+"""Serve Planning definitions and private browser-owned parcel scenarios."""
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -7,7 +7,7 @@ import logging
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.routing import APIRoute
@@ -22,6 +22,14 @@ from eolab_app.planning.models import (
     UpdatePlanningTool,
 )
 from eolab_app.planning.service import PlanningToolService
+from eolab_app.planning.scenario_models import (
+    CreateScenario,
+    RenameScenario,
+    Scenario,
+    ScenarioAssignmentPage,
+    SetScenarioAssignment,
+)
+from eolab_app.planning.scenario_service import PlanningScenarioService
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
@@ -29,8 +37,8 @@ from eolab_app.routes.http_disconnect import (
 )
 
 
-class PlanningToolRoute(APIRoute):
-    """Bound definition uploads and keep every Planning response private."""
+class PlanningRoute(APIRoute):
+    """Bound Planning request bodies and keep every response private."""
 
     def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
         """Wrap FastAPI validation with private, bounded document delivery.
@@ -105,7 +113,7 @@ class PlanningToolRoute(APIRoute):
         return private
 
 
-def planning_author(request: Request, response: Response) -> str:
+def planning_browser_owner(request: Request, response: Response) -> str:
     """Read browser identity and require same-origin Planning mutations.
 
     Args:
@@ -169,10 +177,10 @@ def create_planning_tools_router(service: PlanningToolService) -> APIRouter:
     router = APIRouter(
         prefix="/api/planning/tools",
         tags=["planning"],
-        route_class=PlanningToolRoute,
+        route_class=PlanningRoute,
         lifespan=lifespan,
     )
-    Author = Annotated[str, Depends(planning_author)]
+    Author = Annotated[str, Depends(planning_browser_owner)]
 
     @router.get("", response_model=list[PlanningToolSummary])
     def list_tools(author: Author) -> list[PlanningToolSummary]:
@@ -270,5 +278,172 @@ def create_planning_tools_router(service: PlanningToolService) -> APIRouter:
             )
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Planning tool update cancelled") from error
+
+    return router
+
+
+def create_planning_scenarios_router(service: PlanningScenarioService) -> APIRouter:
+    """Expose tool-link reads and private, revision-checked scenario editing.
+
+    Args:
+        service: Scenario owner using the shared Planning store and parcel reader.
+
+    Returns:
+        Router reusing Planning's browser identity and bounded private responses.
+    """
+    router = APIRouter(
+        prefix="/api/planning", tags=["planning"], route_class=PlanningRoute
+    )
+    Owner = Annotated[str, Depends(planning_browser_owner)]
+
+    @router.get(
+        "/tools/{identifier}/definition",
+        response_model=PlanningTool,
+        response_model_exclude_unset=True,
+    )
+    def get_definition(identifier: UUID, owner: Owner) -> PlanningTool:
+        """Read a tool's current definition without granting access to its scenarios.
+
+        Args:
+            identifier: Opaque tool ID shared with the participant.
+            owner: Browser identity established for subsequent private scenarios.
+
+        Returns:
+            Current definition with no author identity or participant data.
+
+        Raises:
+            PlanningError: The tool is missing or storage is unavailable.
+        """
+        return service.store.get_tool_definition(identifier)
+
+    @router.get("/tools/{identifier}/scenarios", response_model=list[Scenario])
+    def list_scenarios(identifier: UUID, owner: Owner) -> list[Scenario]:
+        """List only this browser's scenarios for the linked tool.
+
+        Args:
+            identifier: Opaque tool ID.
+            owner: Server-derived participant identity.
+
+        Returns:
+            Owned scenario metadata, excluding parcel assignments.
+
+        Raises:
+            PlanningError: The tool is missing or storage is unavailable.
+        """
+        return service.store.list_scenarios(owner, identifier)
+
+    @router.post(
+        "/tools/{identifier}/scenarios", response_model=Scenario, status_code=201
+    )
+    def create_scenario(
+        identifier: UUID, payload: CreateScenario, response: Response, owner: Owner
+    ) -> Scenario:
+        """Create an empty private scenario against an acknowledged tool revision.
+
+        Args:
+            identifier: Opaque tool ID.
+            payload: Scenario name and expected current tool revision.
+            response: Response receiving the scenario location.
+            owner: Server-derived participant identity.
+
+        Returns:
+            New scenario metadata with revision one.
+
+        Raises:
+            PlanningError: The tool is missing, changed, or storage is unavailable.
+        """
+        result = service.store.create_scenario(owner, identifier, payload)
+        response.headers["Location"] = f"/api/planning/scenarios/{result.id}"
+        return result
+
+    @router.get("/scenarios/{identifier}", response_model=Scenario)
+    def get_scenario(identifier: UUID, owner: Owner) -> Scenario:
+        """Return scenario metadata only to the browser that created it.
+
+        Args:
+            identifier: Opaque scenario ID.
+            owner: Server-derived participant identity.
+
+        Returns:
+            Owned metadata and the current tool revision.
+
+        Raises:
+            PlanningError: The scenario is unavailable to this browser or storage failed.
+        """
+        return service.store.get_scenario(owner, identifier)
+
+    @router.put("/scenarios/{identifier}", response_model=Scenario)
+    def rename_scenario(
+        identifier: UUID, payload: RenameScenario, owner: Owner
+    ) -> Scenario:
+        """Rename an owned scenario without overwriting a newer saved revision.
+
+        Args:
+            identifier: Opaque scenario ID.
+            payload: Name and expected scenario/tool revisions.
+            owner: Server-derived participant identity.
+
+        Returns:
+            Updated metadata and incremented scenario revision.
+
+        Raises:
+            PlanningError: Ownership, revision, or storage prevents the edit.
+        """
+        return service.store.rename_scenario(owner, identifier, payload)
+
+    @router.get(
+        "/scenarios/{identifier}/assignments", response_model=ScenarioAssignmentPage
+    )
+    def read_assignments(
+        identifier: UUID,
+        owner: Owner,
+        expectedRevision: Annotated[int, Query(ge=1)],
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    ) -> ScenarioAssignmentPage:
+        """Read a bounded assignment page from one acknowledged scenario revision.
+
+        Args:
+            identifier: Opaque scenario ID.
+            owner: Server-derived participant identity.
+            expectedRevision: Revision required for consistent multi-page reads.
+            offset: Number of saved assignments to skip.
+            limit: Maximum assignments in this response.
+
+        Returns:
+            Typed original parcel IDs and interventions, including filtered-out parcels.
+
+        Raises:
+            PlanningError: Ownership, revision, or storage prevents the read.
+        """
+        return service.store.read_assignments(
+            owner, identifier, expectedRevision, offset, limit
+        )
+
+    @router.put("/scenarios/{identifier}/assignment", response_model=Scenario)
+    async def set_assignment(
+        identifier: UUID, payload: SetScenarioAssignment, request: Request, owner: Owner
+    ) -> Scenario:
+        """Assign, change or clear one original parcel's intervention and save it.
+
+        Args:
+            identifier: Opaque scenario ID.
+            payload: Typed parcel ID, intervention or null, and both expected revisions.
+            request: Request whose disconnect cancels native parcel validation.
+            owner: Server-derived participant identity.
+
+        Returns:
+            Updated scenario metadata after the assignment is saved.
+
+        Raises:
+            HTTPException: The browser disconnected during source validation.
+            PlanningError: Ownership, revision, source validation or storage failed.
+        """
+        try:
+            return await run_until_http_disconnect(
+                request, service.set_assignment(owner, identifier, payload)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Parcel assignment cancelled") from error
 
     return router

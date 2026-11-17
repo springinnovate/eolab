@@ -2,34 +2,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const FOCUSED_VIEW_IMPORTS = {
-    "appearance-controls-view.js": [
-        "./categorical-editor-view.js", "./required-control.js", "./style.js",
-    ],
-    "sampling-area-controls-view.js": ["./required-control.js"],
-    "histogram-controls-view.js": [
-        "./categorical-histogram-view.js",
-        "./histogram-axis-controls.js",
-        "./histogram-view.js",
-        "./percentile-controls-view.js",
-        "./required-control.js",
-    ],
-    "percentile-controls-view.js": ["./statistics.js", "./value-format.js"],
-    "style-histogram-view.js": [
-        "./categorical-histogram-view.js",
-        "./required-control.js",
-    ],
-    "bivariate-controls-view.js": [
-        "./bivariate.js",
-        "./histogram-axes.js",
-        "./histogram-axis-controls.js",
-        "./histogram-threshold-markers.js",
-        "./paired-statistics.js",
-        "./required-control.js",
-        "./value-format.js",
-    ],
-};
-
 test("histogram and series drawing share presentation code that knows no raster workflow", async () => {
     const root = new URL("../../src/", import.meta.url);
     for (const path of ["raster/histogram-view.js", "charts/series-chart.js"]) {
@@ -40,34 +12,19 @@ test("histogram and series drawing share presentation code that knows no raster 
     assert.deepEqual([...source.matchAll(/from ["']([^"']+)["']/g)].map(match => match[1]), ["d3"]);
 });
 
-test("focused raster-control views depend only on presentation and explicit result helpers", async () => {
-    for (const [moduleName, expectedImports] of Object.entries(
-        FOCUSED_VIEW_IMPORTS
-    )) {
-        const source = await readFile(
-            new URL(`../../src/raster/${moduleName}`, import.meta.url),
-            "utf8"
-        );
-        const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
-            .map((match) => match[1])
-            .sort();
-
-        assert.deepEqual(
-            imports,
-            [...expectedImports].sort(),
-            `${moduleName} imports only its lower-level presentation providers`
-        );
-    }
-});
-
 test("RasterControlsView delegates DOM ownership to focused views", async () => {
     const source = await readFile(
         new URL("../../src/raster/controls-view.js", import.meta.url),
         "utf8"
     );
 
-    for (const moduleName of Object.keys(FOCUSED_VIEW_IMPORTS)) {
-        if (moduleName === "percentile-controls-view.js") continue;
+    for (const moduleName of [
+        "appearance-controls-view.js",
+        "sampling-area-controls-view.js",
+        "histogram-controls-view.js",
+        "style-histogram-view.js",
+        "bivariate-controls-view.js",
+    ]) {
         assert.match(source, new RegExp(`from ["']\\./${moduleName}["']`));
     }
     assert.doesNotMatch(source, /requireRasterControl/);

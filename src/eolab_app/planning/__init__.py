@@ -1,1 +1,1 @@
-"""Author and persist Planning tools using existing Catalog layer definitions."""
+"""Persist Planning tools and private scenarios using original Catalog identities."""

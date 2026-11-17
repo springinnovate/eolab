@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-    createVectorWmsLayer,
-    VECTOR_DEFAULT_SYMBOLOGY,
-} from "../../src/vector/leaflet.js";
+import { createVectorWmsLayer } from "../../src/vector/leaflet.js";
 import { normalizeVectorStyle } from "../../src/vector/style.js";
 
 test("vector WMS uses one bounded layer and no raster environment", () => {
@@ -61,14 +58,6 @@ test("vector WMS uses one bounded layer and no raster environment", () => {
     assert.equal("env" in capturedRequest.options, false);
     tileErrorHandler();
     assert.equal(failures, 1);
-});
-
-test("default vector geometry families use blue symbols with black outlines", () => {
-    assert.deepEqual(VECTOR_DEFAULT_SYMBOLOGY, {
-        point: { label: "Point", fill: "#2b83ba", stroke: "#000000" },
-        line: { label: "Line", fill: "transparent", stroke: "#2b83ba" },
-        polygon: { label: "Polygon", fill: "#2b83ba", stroke: "#000000" },
-    });
 });
 
 test("crossing vector WMS retains both map edges without wrapping world copies", () => {

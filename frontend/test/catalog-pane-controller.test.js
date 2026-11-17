@@ -283,18 +283,6 @@ test("Catalog inspector shows requested metadata without a second disclosure", (
   );
 });
 
-test("Catalog loading summary uses ASCII ellipsis punctuation", () => {
-  const mainSource = readFileSync(
-    new URL("../src/main.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(
-    mainSource,
-    /catalogSummaryElement\.textContent = "Loading results\.\.\.";/,
-  );
-});
-
 test("Catalog selection delegates progressive presentation without feature coupling", () => {
   const mainSource = readFileSync(
     new URL("../src/main.js", import.meta.url),

@@ -17,7 +17,11 @@ from eolab_app.annotation_sessions.store import AnnotationSessionStore
 from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.planning.store import PlanningToolStore
 from eolab_app.planning.service import PlanningToolService
-from eolab_app.routes.planning_tools import create_planning_tools_router
+from eolab_app.planning.scenario_service import PlanningScenarioService
+from eolab_app.routes.planning_tools import (
+    create_planning_scenarios_router,
+    create_planning_tools_router,
+)
 from eolab_app.routes.saved_maps import (
     create_saved_maps_router,
     create_saved_maps_admin_router,
@@ -765,12 +769,17 @@ def create_app(
         )
         return resolved.selection
 
+    planning_store = PlanningToolStore()
     planning_tools = PlanningToolService(
-        PlanningToolStore(),
+        planning_store,
         authorize_layer=authorize_planning_layer,
         validate_parcel_ids=vector_selection_reader.validate_parcel_ids,
     )
     application.include_router(create_planning_tools_router(planning_tools))
+    planning_scenarios = PlanningScenarioService(
+        planning_store, lookup_parcel=vector_selection_reader.lookup_parcel
+    )
+    application.include_router(create_planning_scenarios_router(planning_scenarios))
     application.include_router(create_saved_maps_router(saved_maps))
     application.include_router(
         create_saved_maps_admin_router(saved_maps, app_global_configuration.admin_password)

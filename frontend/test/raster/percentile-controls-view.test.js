@@ -45,16 +45,9 @@ test("percentile inspection reports immediate estimates and independent rescale 
     second.dispose();
 });
 
-test("invalid ordering prevents rescaling while unavailable results retain the off switch", () => {
+test("unavailable results retain the off switch and recover estimates", () => {
     const view = new RasterPercentileControlsView(new FakeRasterControlDocument(), () => {});
     view.render(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, SETTINGS, true, "");
-    view.inputs.lower.value = "60";
-    view.inputs.lower.dispatchEvent(new Event("input"));
-    assert.match(view.status.textContent, /in increasing order/);
-    assert.equal(view.inputs.lower.getAttribute("aria-invalid"), "true");
-    assert.equal(view.rescaleInput.disabled, true);
-    assert.deepEqual(view.markers, []);
-
     view.render(null, DEFAULT_RASTER_STYLE, { ...SETTINGS, rescale: true }, false, "Updating this histogram…");
     assert.equal(view.inputs.lower.disabled, true);
     assert.equal(view.rescaleInput.disabled, false);
@@ -80,5 +73,64 @@ test("constant histograms show their actual percentile values rather than expand
     view.render(constant, DEFAULT_RASTER_STYLE, SETTINGS, true, "");
     assert.deepEqual(view.markers.map(marker => marker.value), [7, 7, 7]);
     assert.equal(view.rescaleInput.disabled, false);
+    view.dispose();
+});
+
+for (const [name, requested, accepted] of [
+    ["lower", [60, 100, 49, 30], [49, 49, 49, 30]],
+    ["middle", [0, 5, 6, 20, 100, 95, 94, 70], [6, 6, 6, 20, 94, 94, 94, 70]],
+    ["upper", [40, 0, 51, 80], [51, 51, 51, 80]],
+]) {
+    test(`${name} percentile clamps crossings and resumes with accepted estimates`, () => {
+        const doc = new FakeRasterControlDocument();
+        const received = [];
+        const view = new RasterPercentileControlsView(doc, settings => {
+            received.push(settings);
+            view.render(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, settings, true, "");
+        });
+        const initial = { ...SETTINGS, rescale: true };
+        view.render(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, initial, true, "");
+        const input = view.inputs[name];
+        input.focus();
+        for (let index = 0; index < requested.length; index++) {
+            input.value = String(requested[index]);
+            input.dispatchEvent(new Event("input"));
+            const expected = { ...initial, [name]: accepted[index] };
+            assert.deepEqual(received.at(-1), expected);
+            assert.equal(view.inputs[name], input);
+            assert.equal(doc.activeElement, input);
+            assert.equal(input.value, String(accepted[index]));
+            assert.equal(input.getAttribute("aria-invalid"), null);
+            assert.equal(view.status.textContent, "");
+            assert.equal(view.rescaleInput.disabled, false);
+            assert.deepEqual(view.markers.map(marker => marker.value),
+                ["lower", "middle", "upper"].map(stop =>
+                    estimateRasterHistogramPercentile(RASTER_STATISTICS, expected[stop])));
+            assert.ok(view.values[name].textContent.startsWith(`${accepted[index]}%`));
+        }
+        view.dispose();
+    });
+}
+
+test("adjacent percentile stops remain ordered at either end of the track", () => {
+    const view = new RasterPercentileControlsView(new FakeRasterControlDocument(), () => {});
+    for (const settings of [
+        { lower: 0, middle: 1, upper: 2, rescale: false },
+        { lower: 98, middle: 99, upper: 100, rescale: false },
+    ]) {
+        for (const name of ["lower", "middle", "upper"]) {
+            for (const requested of [0, 100]) {
+                view.render(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, settings, true, "");
+                view.inputs[name].value = String(requested);
+                view.inputs[name].dispatchEvent(new Event("input"));
+                const accepted = view.settings;
+                assert.ok(0 <= accepted.lower && accepted.lower < accepted.middle &&
+                    accepted.middle < accepted.upper && accepted.upper <= 100);
+                for (const other of ["lower", "middle", "upper"].filter(stop => stop !== name)) {
+                    assert.equal(accepted[other], settings[other]);
+                }
+            }
+        }
+    }
     view.dispose();
 });

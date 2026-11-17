@@ -1,4 +1,4 @@
-"""Validate original parcel IDs and read attribute pages without loading geometry."""
+"""Validate, find and page original parcel identities without loading geometry."""
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import CancelledError
@@ -139,6 +139,7 @@ def _visit_parcel_attributes(
     *,
     filtered: bool,
     deadline: float | None,
+    original_where: str | None = None,
 ) -> bool:
     """Read original attributes under a job's time, work and cancellation budgets.
 
@@ -146,14 +147,16 @@ def _visit_parcel_attributes(
         resolved: Authorized source and optional exact selection.
         fields: Original or compiled attributes needed by the caller.
         visit: Callback accepting each native candidate row.
-        stop: Set by the page accumulator after finding an additional match.
+        stop: Set by the caller once the requested result has been found.
         limits: Interactive read limits, or None for externally supervised work.
         cancellation_requested: Optional cooperative cancellation check.
         filtered: Whether to apply the source's candidate filter and calculations.
         deadline: Absolute monotonic deadline, including schema-reading time.
+        original_where: Native candidate predicate for an unfiltered original-layer
+            lookup; the caller must compare candidate attributes exactly.
 
     Returns:
-        Whether every candidate was consumed without the page accumulator stopping.
+        Whether every candidate was consumed without the caller stopping the read.
 
     Raises:
         GeometryValidationError: The read exceeded its time or candidate budget.
@@ -196,7 +199,7 @@ def _visit_parcel_attributes(
             stop,
             receive,
             calculated_fields=resolved.calculated_fields if filtered else (),
-            where=resolved.where if filtered else None,
+            where=resolved.where if filtered else original_where,
         )
     except (RuntimeError, OSError, UnicodeDecodeError) as error:
         raise SelectionUnavailableError(
@@ -269,6 +272,80 @@ def validate_parcel_ids(
         deadline=deadline,
     )
     return ParcelIdValidation(idField=id_field, idType=id_type, featureCount=len(seen))
+
+
+def lookup_parcel(
+    resolved: ResolvedCatalogSelection,
+    id_field: str,
+    parcel_id: ParcelId,
+    *,
+    limits: VectorReadLimits | None = VectorReadLimits(),
+    cancellation_requested: Callable[[], bool] | None = None,
+) -> bool:
+    """Find one exact typed ID in the original layer without revalidating uniqueness.
+
+    Ignore selection filters and calculated fields. Native equality narrows candidates
+    using an existing source index when available; exact comparison preserves string
+    case and int64 identity despite driver-specific comparison rules.
+
+    Args:
+        resolved: Authorized immutable Catalog source and native layer.
+        id_field: Original ID field already validated for whole-layer uniqueness.
+        parcel_id: Requested integer decimal text or original string identity.
+        limits: Interactive read limits, or None for externally supervised work.
+        cancellation_requested: Optional cooperative cancellation callback.
+
+    Returns:
+        Whether the original layer contains that exact typed ID. A mismatched type
+        or integer outside the native int64 range is absent.
+
+    Raises:
+        GeometryValidationError: Schema or a candidate ID is invalid, or a budget expires.
+        SelectionUnavailableError: The original native source cannot be read.
+        CancelledError: The caller abandoned the read.
+    """
+    deadline = monotonic() + limits.seconds if limits else None
+    if cancellation_requested is not None and cancellation_requested():
+        raise CancelledError("Parcel reading was canceled")
+    id_type = _validate_parcel_schema(resolved, id_field, ())
+    if parcel_id.type != id_type:
+        return False
+    if id_type == "integer":
+        if not -(2**63) <= int(parcel_id.value) < 2**63:
+            return False
+        literal = parcel_id.value
+    else:
+        literal = "'" + parcel_id.value.replace("'", "''") + "'"
+    identifier = '"' + id_field.replace('"', '""') + '"'
+    found = False
+    stop = Event()
+
+    def receive(properties: Mapping[str, Any]) -> None:
+        """Stop after finding the exact typed ID among native equality candidates.
+
+        Args:
+            properties: The original ID attribute from one candidate row.
+
+        Raises:
+            GeometryValidationError: A candidate has an invalid original ID.
+        """
+        nonlocal found
+        if _encode_parcel_id(properties[id_field], id_type) == parcel_id:
+            found = True
+            stop.set()
+
+    _visit_parcel_attributes(
+        resolved,
+        (id_field,),
+        receive,
+        stop,
+        limits,
+        cancellation_requested,
+        filtered=False,
+        deadline=deadline,
+        original_where=f"{identifier} = {literal}",
+    )
+    return found
 
 
 def read_parcel_rows(

@@ -20,7 +20,13 @@ from eolab_app.main import create_app
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.parcel_jobs import ParcelJobs
-from eolab_app.vector.parcel_models import ParcelIdRequest, ParcelRowsRequest
+from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.parcel_models import (
+    ParcelId,
+    ParcelIdRequest,
+    ParcelLookupRequest,
+    ParcelRowsRequest,
+)
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_jobs.client import JobsClient
@@ -38,12 +44,21 @@ PAGE = {
 }
 
 
-@pytest.mark.parametrize("operation", ["parcel-id-validation", "parcel-rows"])
+@pytest.mark.parametrize(
+    "operation, parcel_value",
+    [
+        ("parcel-id-validation", None),
+        ("parcel-rows", None),
+        ("parcel-lookup", "1"),
+        ("parcel-lookup", "9"),
+    ],
+)
 @pytest.mark.parametrize("wrong_layer", [False, True])
 def test_registered_parcel_reader_uses_original_catalog_source(
     outline_case: tuple[CatalogSelection, dict[str, Any], str],
     tmp_path: Path,
     operation: str,
+    parcel_value: str | None,
     wrong_layer: bool,
 ) -> None:
     """Read real polygon attributes through the registered isolated native runner.
@@ -51,11 +66,12 @@ def test_registered_parcel_reader_uses_original_catalog_source(
     Args:
         outline_case: HTTP Catalog and two original GeoPackage polygons.
         tmp_path: Source mount supplied as deployment configuration.
-        operation: Full ID validation or one selected attribute page.
+        operation: Full ID validation, selected page or original typed ID lookup.
+        parcel_value: Existing or absent integer lookup value, or None for other reads.
         wrong_layer: Substitute the descriptor's native layer to prove reauthorization.
     """
     selection, _, catalog_url = outline_case
-    if operation == "parcel-id-validation":
+    if operation != "parcel-rows":
         selection = selection.model_copy(update={"filter": VectorFilter()})
     if wrong_layer:
         selection = selection.model_copy(update={"layerName": "other"})
@@ -65,6 +81,8 @@ def test_registered_parcel_reader_uses_original_catalog_source(
     }
     if operation == "parcel-rows":
         inputs.update(fields=["selected"], offset=0, limit=1)
+    elif operation == "parcel-lookup":
+        inputs["parcelId"] = {"type": "integer", "value": parcel_value}
     command = (
         "from pathlib import Path; from eolab_app.vector import parcel_operation as op; "
         f"op.CATALOG_URL={catalog_url!r}; op.SCAN_MOUNT=Path({str(tmp_path)!r}); "
@@ -85,11 +103,11 @@ def test_registered_parcel_reader_uses_original_catalog_source(
     if wrong_layer:
         assert "identity changed" in reply["value"]["error"]
     else:
-        key, expected = (
-            ("validation", VALIDATION)
-            if operation == "parcel-id-validation"
-            else ("page", PAGE)
-        )
+        key, expected = {
+            "parcel-id-validation": ("validation", VALIDATION),
+            "parcel-rows": ("page", PAGE),
+            "parcel-lookup": ("found", parcel_value == "1"),
+        }[operation]
         assert reply["value"][key] == expected
         assert reply["value"]["error"] is None
     assert str(tmp_path) not in result.stdout.decode()
@@ -322,6 +340,154 @@ def test_parcel_disconnect_cancels_its_admitted_job(
             with pytest.raises(HTTPException) as failure:
                 await asyncio.wait_for(task, 5)
             assert failure.value.status_code == 499
+        assert ("POST", f"/api/jobs/{job_id}/cancel") in calls
+        assert calls[-1] == ("DELETE", f"/api/jobs/{job_id}")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome", ["found", "absent", "invalid", "malformed"])
+def test_lookup_service_preserves_typed_ids_and_whole_source_through_jobs(
+    outline_case: tuple[CatalogSelection, dict[str, Any], str],
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    """Bind lookup results to original Catalog identity and retain existing Jobs cleanup.
+
+    Args:
+        outline_case: Real Catalog with an ordinarily filtered original source.
+        tmp_path: Mounted source directory.
+        outcome: Successful membership, absence or invalid native result.
+    """
+    selection, _, catalog_url = outline_case
+
+    async def scenario() -> None:
+        """Exercise the composed service, authenticated Jobs client and result boundary."""
+        job_id = str(uuid4())
+        calls: list[httpx2.Request] = []
+        parcel_id = ParcelId(type="integer", value="9223372036854775807")
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            """Return controlled native results while recording actual Jobs requests.
+
+            Args:
+                request: Authenticated Jobs lifecycle request.
+
+            Returns:
+                Admission, native result or deletion acknowledgement.
+            """
+            calls.append(request)
+            assert request.headers["authorization"] == f"Bearer {TOKEN}"
+            if request.method == "DELETE":
+                return httpx2.Response(204)
+            if request.url.path.endswith("/result"):
+                value = {
+                    "found": {"found": True},
+                    "absent": {"found": False},
+                    "invalid": {"error": "The exact parcel source layer is missing"},
+                    "malformed": {"found": "false"},
+                }[outcome]
+                return httpx2.Response(200, json={"jobId": job_id, "value": value})
+            return httpx2.Response(202, json={"jobId": job_id, "status": "succeeded"})
+
+        async with (
+            httpx2.AsyncClient() as catalog_http,
+            httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as job_http,
+        ):
+            service = VectorSamplingService(
+                StacVectorCatalog(catalog_http, catalog_url),
+                MountedVectorResolver(tmp_path),
+                parcel_executor=ParcelJobs(JobsClient(job_http, TOKEN)),
+            )
+            payload = ParcelLookupRequest(
+                collectionId=selection.collection_id,
+                itemId=selection.item_id,
+                idField="selected",
+                parcelId=parcel_id,
+            )
+            if outcome in {"invalid", "malformed"}:
+                with pytest.raises(VectorConflictError):
+                    await service.lookup_parcel(payload)
+            else:
+                result = await service.lookup_parcel(payload)
+                assert result.found is (outcome == "found")
+                assert result.selection == selection.model_copy(
+                    update={"filter": VectorFilter()}
+                )
+        submitted = json.loads(calls[0].content)
+        assert submitted["operation"] == "vector.parcel-lookup.v1"
+        assert submitted["executionTimeoutSeconds"] == 15
+        assert submitted["queueTimeoutSeconds"] == 30
+        assert submitted["inputs"]["parcelId"] == parcel_id.model_dump()
+        assert submitted["inputs"]["selection"]["filter"] == VectorFilter().model_dump(
+            mode="json"
+        )
+        assert str(tmp_path) not in calls[0].content.decode()
+        assert calls[-1].method == "DELETE"
+
+    asyncio.run(scenario())
+
+
+def test_lookup_cancellation_cleans_up_admitted_job(
+    outline_case: tuple[CatalogSelection, dict[str, Any], str],
+    tmp_path: Path,
+) -> None:
+    """Cancel an abandoned original-ID lookup through ordinary Jobs cleanup.
+
+    Args:
+        outline_case: Real HTTP Catalog and accepted source.
+        tmp_path: Mounted source directory.
+    """
+    selection, _, catalog_url = outline_case
+
+    async def scenario() -> None:
+        """Cancel during admission, then verify cancellation and terminal deletion."""
+        admitted, release = asyncio.Event(), asyncio.Event()
+        job_id = str(uuid4())
+        calls: list[tuple[str, str]] = []
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            """Hold admission until cancellation and acknowledge terminal cleanup.
+
+            Args:
+                request: Authenticated Jobs lifecycle request.
+
+            Returns:
+                Admission, cancellation or deletion acknowledgement.
+            """
+            calls.append((request.method, request.url.path))
+            if request.url.path == "/api/jobs":
+                admitted.set()
+                await release.wait()
+                return httpx2.Response(202, json={"jobId": job_id, "status": "running"})
+            if request.method == "DELETE":
+                return httpx2.Response(204)
+            return httpx2.Response(200, json={"jobId": job_id, "status": "cancelled"})
+
+        async with (
+            httpx2.AsyncClient() as catalog_http,
+            httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as job_http,
+        ):
+            service = VectorSamplingService(
+                StacVectorCatalog(catalog_http, catalog_url),
+                MountedVectorResolver(tmp_path),
+                parcel_executor=ParcelJobs(JobsClient(job_http, TOKEN)),
+            )
+            task = asyncio.create_task(
+                service.lookup_parcel(
+                    ParcelLookupRequest(
+                        collectionId=selection.collection_id,
+                        itemId=selection.item_id,
+                        idField="selected",
+                        parcelId=ParcelId(type="integer", value="1"),
+                    )
+                )
+            )
+            await asyncio.wait_for(admitted.wait(), 5)
+            task.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
         assert ("POST", f"/api/jobs/{job_id}/cancel") in calls
         assert calls[-1] == ("DELETE", f"/api/jobs/{job_id}")
 

@@ -437,9 +437,15 @@ IDs must be nonempty and unique across the whole source dataset.
 Use the ordinary layer filters while configuring the tool; saving includes their
 current settings. Reopening a tool adds editable custom views with those settings
 without changing the Catalog datasets or replacing your other map layers.
-Saved planning tools belong to the browser that created them. This first stage
-saves configuration only; assigning interventions to parcels and running models
-come later.
+Saved planning tools can be edited only by the browser that created them.
+Once a tool has scenarios, its original parcel dataset, ID field and existing
+intervention names cannot change; create another tool for those changes. You can
+still change the area, filters, appearance and title, or add interventions.
+
+The Planning API lets each participant save private scenarios with one
+intervention per parcel. Changing the area or filters retains saved assignments.
+See the application's `/docs` page for scenario operations and required revisions.
+The participant map/list editor and model execution are not available yet.
 
 ### Collaborate with others
 
