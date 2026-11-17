@@ -771,22 +771,18 @@ test("inspection summaries describe bounded raster participation and asynchronou
     assert.ok(snapshots.some(snapshot => snapshot?.state === "loading"));
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
-    assert.match(snapshots.at(-1).message, /Top 16 of 17 visible rasters/);
     assert.equal(snapshots.at(-1).source, "Top 16 of 17 visible rasters");
     assert.match(snapshots.at(-1).scope, /Sampling box/);
-    assert.match(snapshots.at(-1).message, /Sampling box/);
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
-    assert.match(snapshots.at(-1).message, /2D/);
     assert.equal(snapshots.at(-1).source, "Top 2 of 17 visible rasters");
     assert.match(snapshots.at(-1).scope, /2D/);
-    assert.match(snapshots.at(-1).message, /Top 2 of 17 visible rasters/);
     assert.equal(h.controlsView.layerHistograms.length, 2);
     h.controlsView.handlers.onBivariateModeChange("overlay");
     await flushPromises();
     assert.equal(h.controlsView.layerHistograms.length, 16);
-    assert.match(snapshots.at(-1).message, /Top 16 of 17 visible rasters/);
+    assert.equal(snapshots.at(-1).source, "Top 16 of 17 visible rasters");
     h.viewer.clear();
     assert.equal(snapshots.at(-1), null);
     h.destroy();
@@ -4768,7 +4764,6 @@ test("map box resizes immediately while committing only the final debounced area
     assert.equal(committed.length, committedBefore);
     assert.deepEqual(viewer.getSelectedArea(), centeredRequest.samplingArea);
     assert.equal(presentations.at(-1).state, "loading");
-    assert.match(presentations.at(-1).message, /results show the previous area/);
     assert.deepEqual(viewer.getSelectedArea().samplingBox.center, {longitude:0,latitude:0});
     assert.equal(timers.size, 1);
     const pending = [...timers.values()][0];
@@ -4778,7 +4773,7 @@ test("map box resizes immediately while committing only the final debounced area
     );
     assert.match(
         controlsView.sampleWindowStatus,
-        /Updating the selected map box to 90 km × 90 km/
+        /Updating the selected map box to 90 km × 90 km\. Histograms still show the previous area/
     );
     timers.clear();
     pending.callback();
@@ -4855,7 +4850,7 @@ test("late histogram results stay scoped to the old area during a resize", async
     await flushPromises();
     assert.deepEqual(h.controlsView.displayedStatistics.samplingBox, requests[0].area.samplingBox);
     assert.equal(presentations.at(-1).state, "loading");
-    assert.match(presentations.at(-1).message, /results show the previous area/);
+    assert.match(h.controlsView.sampleWindowStatus, /Histograms still show the previous area/);
     const commit = [...timers.values()][0]; timers.clear(); commit();
     await flushPromises();
     assert.equal(requests.length, 2);

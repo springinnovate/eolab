@@ -200,8 +200,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
- * @property {(snapshot:{state:string,message:string,source:string,scope:string}|null)=>void} [onHistogramChange]
- * Receives current histogram participation, owned source/area labels and status without exposing analysis state.
+ * @property {(snapshot:{state:"loading"|"error"|"ready",source:string,scope:string}|null)=>void} [onHistogramChange]
+ * Receives the histogram activity, participating rasters and sampling area for dock navigation.
  * @property {(method:"box"|"whole"|"vector")=>void} [onSamplingMethodChange]
  * Notify composition when the user chooses an area method, so obsolete vector reads can be cancelled.
  * @property {(area:Readonly<Object>|null,change:{waitingForPolygons:boolean,invalidatedArea:Readonly<Object>|null})=>void} [onSamplingAreaChange]
@@ -1397,8 +1397,7 @@ export function initializeRasterViewer(
         publishHistogramPresentation();
     }
 
-    /** Publish display-only status for the current histogram targets and area.
-     * Uses the same owned sessions as the charts; no additional reads or timers.
+    /** Report activity for the Histograms button and the source and area for its dock context.
      * @return {void}
      */
     function publishHistogramPresentation() {
@@ -1410,10 +1409,8 @@ export function initializeRasterViewer(
         if (sessions.length === 0) { onHistogramChange(null); return; }
         const presentations = sessions.map(getLayerHistogramPresentation);
         const states = bivariateMode.active ? [pairedHistogramState] : presentations.map(item => item.state);
-        const resizing = rasterSampleWindowResizeTimeout !== null;
-        const loading = resizing || states.some(state => state === "loading" || state === "idle");
-        const failures = states.filter(state => state === "error").length;
-        const state = loading ? "loading" : failures ? "error" : "ready";
+        const loading = rasterSampleWindowResizeTimeout !== null || states.some(state => state === "loading" || state === "idle");
+        const state = loading ? "loading" : states.includes("error") ? "error" : "ready";
         const selection = bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling;
         const scope = bivariateMode.active
             ? selection ? `Selected polygons · ${selection.filename}` : bivariateSelectedBounds ? "Sampling box · 2D comparison" : "Whole overlap · 2D comparison"
@@ -1422,9 +1419,7 @@ export function initializeRasterViewer(
         const participation = visibleCount > sessions.length
             ? `Top ${sessions.length} of ${visibleCount} visible rasters`
             : `${sessions.length} raster layer${sessions.length === 1 ? "" : "s"}`;
-        const progress = resizing ? "Resizing box; results show the previous area…" : loading ? "Updating for this selection…" : failures
-            ? "Some histograms unavailable — see details" : "Ready";
-        onHistogramChange(Object.freeze({state, source: participation, scope, message: `${participation} · ${scope} · ${progress}`}));
+        onHistogramChange(Object.freeze({state, source: participation, scope}));
     }
 
     /**
@@ -3825,7 +3820,7 @@ export function initializeRasterViewer(
             } else {
                 controlsView.setSampleWindowStatus(
                     `Updating the selected map box to ${sideLengthKm} km × ` +
-                    `${sideLengthKm} km…`
+                    `${sideLengthKm} km. Histograms still show the previous area.`, true
                 );
                 scheduleRasterSampleWindowResize(presentedBounds, resizedBounds, center);
             }

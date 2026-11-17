@@ -434,6 +434,7 @@ test("analysis destinations share one compact navigation above the selected resu
         assert.ok(control.source.includes(`>${caption}</button>`));
     }
     assert.ok(navigation.end < histogram.start);
+    assert.doesNotMatch(MARKUP, /\bmap-click-histogram-status\b/, "the retired status has no element or accessibility references");
     for (const id of ["close-map-histogram", "close-raster-series", "close-vector-inspector"]) {
         const close = requireElementRange(id);
         assert.equal(countMarkupId(id), 1);
