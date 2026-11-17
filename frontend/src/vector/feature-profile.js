@@ -67,17 +67,18 @@ export function numericFeatureFields(observation) {
 }
 
 /**
- * Split a field name around its last finite decimal number.
+ * Split a field name around its last finite unsigned decimal token.
  *
  * The unchanged prefix and suffix identify a numeric series, so CO2_2000 and
  * CO2_2005 can share an axis while CO2_total and CO2_mean remain field labels.
+ * Signs remain in the prefix; axis selection must not treat them as delimiters.
  *
  * @param {string} fieldName Attribute name.
  * @return {{value:number,prefix:string,suffix:string}|null} Numeric token and
  * surrounding text, or null when the name has no finite numeric token.
  */
 function parseNumericFieldName(fieldName) {
-    const matches = [...fieldName.matchAll(/\d+(?:\.\d+)?/g)];
+    const matches = [...fieldName.matchAll(/\d+(?:\.\d+)?|\.\d+/g)];
     if (matches.length === 0) return null;
     const match = matches.at(-1);
     const value = Number(match[0]);
@@ -190,9 +191,10 @@ export function suggestFeatureProfileFields(observation) {
 /**
  * Build ordered points from selected fields while preserving missing values.
  * Numeric spacing requires at least two distinct numbers with identical text
- * around the final numeric token in every selected name. All other selections
- * use complete field labels and natural ordering on an ordinal axis. Missing
- * values retain their field's position without affecting this decision.
+ * around the final numeric token in every selected name. A preceding hyphen or
+ * minus may be a sign or delimiter, so those names keep complete ordinal labels.
+ * Other unmatched selections also use complete labels and natural ordering.
+ * Missing values retain their field's position without affecting this decision.
  *
  * @param {import("./inspection-observation.js").VectorInspectionObservation}
  * observation Validated inspection observation.
@@ -217,6 +219,7 @@ export function buildVectorFeatureProfile(observation, settings) {
     const firstNumericName = numericNames[0];
     const usesNumericNames = numericNames.length >= 2 && firstNumericName !== null &&
         numericNames.every((parts) => parts !== null &&
+            !/[-\u2212]\s*$/.test(parts.prefix) &&
             parts.prefix === firstNumericName.prefix &&
             parts.suffix === firstNumericName.suffix
         ) && new Set(numericNames.map((parts) => parts.value)).size === numericNames.length;
