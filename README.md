@@ -100,8 +100,11 @@ and **Style** without making you leave the search results.
 
 #### Build and style the map
 
-Use the chevron on either side of the map to collapse that panel. Select its
-named tab to reopen it where you left off. The **Tools** menu is in the right panel.
+Use the circular **×** on either panel to hide it. Select its named tab to
+reopen it where you left off. The right panel’s title opens the tool menu.
+It reads **Choose a tool** until you open one, then shows the active tool’s
+name. The legend has its own **×**. Choose **Show legend** in the tool menu
+to bring it back.
 
 Open **Map contents** to see the current stack. The first item in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
@@ -206,7 +209,7 @@ statistics** when you need calculated area totals or formulas.
 
 #### Measure an area and compare rasters
 
-Open **Raster statistics** from a layer or **Tools**. Choose the raster inputs,
+Open **Raster statistics** from a layer or the tool menu. Choose the raster inputs,
 an area and the statistic you want. One result is shown as a value; several
 results can be compared in plots and a table, then downloaded as CSV.
 
@@ -231,7 +234,7 @@ area does not turn it into an average. Up to five formulas can be calculated
 together for each raster. The tool's formula reference explains the available
 functions.
 
-The **Raster summary** tool in **Tools → Data tools** also calculates a statistic
+The **Raster summary** tool in **Data tools** also calculates a statistic
 or formula for a raster and area.
 
 ![The top of the Raster summary setup card, with a run name, Aboveground biomass raster and Visible map area selected](docs/images/eolab-model-raster-summary.jpg)
@@ -270,7 +273,7 @@ independent styles.
 *Follow changing weather by choosing another hour or variable from the same
 dataset. Here, blue shading shows rainfall at one available observation time.*
 
-To go beyond one observation, open **Tools → Data tools**.
+To go beyond one observation, choose **Data tools** from the tool menu.
 
 #### Create a raster from a time series
 
@@ -301,7 +304,7 @@ total** when offered to turn rainfall rates into an accumulated depth.
 
 ### Clip and download data
 
-Open **Tools → Data tools** and choose **Raster clip** to extract the part of a raster
+Open **Data tools** from the tool menu and choose **Raster clip** to extract the part of a raster
 you need. Choose a raster and a sampling box or selected polygons, then download
 the result as a GeoTIFF. The clip preserves the original pixel resolution and
 values, ready for further analysis in GIS software. For example, extract biomass
@@ -311,7 +314,7 @@ dataset.
 #### How do I download a clip?
 
 1. Add a raster to **Map contents**, then pan and zoom to the area you need.
-2. Open **Tools → Data tools** and choose **Raster clip**.
+2. Open **Data tools** from the tool menu and choose **Raster clip**.
 3. Give the run a name, choose **Raster**, and set **Analysis area** to
    **Visible map area**. Choose **Sampling box** to use the box shown on the map,
    or choose a vector layer directly to use its selected polygons.
@@ -331,7 +334,7 @@ expiry shown in the run.*
 
 ### Estimate downstream beneficiaries
 
-Open **Tools → Data tools** and choose **Downstream ecosystem beneficiaries** to
+Open **Data tools** from the tool menu and choose **Downstream ecosystem beneficiaries** to
 explore which places lie downstream of a starting area and summarize what is
 there. Choose polygons or a raster mask for **Starting mask**, then a raster for
 **Values to summarize**, such as a population dataset. The model follows water
@@ -355,7 +358,7 @@ downstream question.
 
 ### Assess ecosystem condition
 
-Open **Tools → Data tools** and choose **Ecosystem Condition** to assess how closely a
+Open **Data tools** from the tool menu and choose **Ecosystem Condition** to assess how closely a
 landscape resembles conditions expected from selected reference sites. Choose an
 analysis area, reference sites, environmental predictor rasters and observed
 habitat-response rasters. The model learns the relationship between the
@@ -437,7 +440,7 @@ model; missing pixels are never treated as zero.
 
 ### Configure a planning tool
 
-Open **Tools → Planning tools** to save an area, parcel layer and allowed
+Choose **Planning tools** from the tool menu to save an area, parcel layer and allowed
 intervention names. First add polygon datasets from the Catalog and use
 **Duplicate vector** to create custom layers. Choose those custom layers for the
 area and parcels, then choose an original text or integer parcel ID field.
@@ -571,7 +574,7 @@ remain private, and saving a map does not extend a run result's expiry.
 
 ## Run data tools and use their results
 
-Open **Tools → Data tools** to clip data, summarize observations or run
+Choose **Data tools** from the tool menu to clip data, summarize observations or run
 environmental models. Choose a tool to select its inputs and analysis area.
 
 Select **Run tool** and follow progress in **Runs** while continuing to use the
