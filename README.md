@@ -442,13 +442,9 @@ Once a tool has scenarios, its original parcel dataset, ID field and existing
 intervention names cannot change; create another tool for those changes. You can
 still change the area, filters, appearance and title, or add interventions.
 
-The Planning API supports private scenarios through
-`/api/planning/tools/{toolId}/scenarios`. A tool's
-`/api/planning/tools/{toolId}/definition` link permits reading its configuration,
-but never another browser's scenarios. Each scenario saves one allowed
-intervention per original parcel ID; clearing it leaves the parcel unassigned.
-Changing filters or the area never deletes saved assignments. Edits require the
-last read scenario and tool revisions so conflicting saves return an error.
+The Planning API lets each participant save private scenarios with one
+intervention per parcel. Changing the area or filters retains saved assignments.
+See the application's `/docs` page for scenario operations and required revisions.
 The participant map/list editor and model execution are not available yet.
 
 ### Collaborate with others
