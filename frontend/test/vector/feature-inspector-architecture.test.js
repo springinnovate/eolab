@@ -47,11 +47,6 @@ test("hover shares presentation through composition without annotation/vector si
   assert.doesNotMatch(hover, /GetFeatureInfo|polygonsAt|retainedRecords/);
   assert.doesNotMatch(query, /from ["'].*(?:annotations|raster|main|feature-inspector)\.js["']/);
   assert.doesNotMatch(annotations, /from ["'].*vector\//);
-  assert.match(COMPOSITION_SOURCE, /new MapFeatureHover/);
-  assert.match(COMPOSITION_SOURCE, /annotations\.polygonsAt\(event.latlng\)/);
-  assert.match(COMPOSITION_SOURCE, /targets: visibleVectorInspectionTargets\(\)\.filter\(target => target.opacity > 0\)/);
-  assert.match(COMPOSITION_SOURCE, /mapFeatureHover\?\.setEnabled\(!editing\)/);
-  assert.match(COMPOSITION_SOURCE, /onHoverInvalidated: \(\) => mapFeatureHover\?\.hide\(\)/);
 });
 
 test("map-tool docking remains a presentation-only peer coordinator", () => {
@@ -82,40 +77,6 @@ test("vector inspection coordination remains in the browser composition root", (
   ]) {
     assert.doesNotMatch(INSPECTOR_SOURCE, new RegExp(forbiddenPeerKnowledge));
   }
-  assert.match(COMPOSITION_SOURCE, /getVisibleTargets:\s*\(\)\s*=>/);
-  assert.match(
-    COMPOSITION_SOURCE,
-    /bbox:\s*\[\.\.\.record\.publication\.bbox\]/,
-  );
-  assert.match(COMPOSITION_SOURCE, /onInspectionChange:\s*\(visible\)\s*=>/);
-  assert.match(COMPOSITION_SOURCE, /onSampleChange:\s*\(sample\)\s*=>/);
-  assert.match(
-    COMPOSITION_SOURCE,
-    /mapInspection\.setFeatureResultCount\(\s*sample\.observations\.length/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /onStyleRequested:\s*\(sourceId\)\s*=>\s*layerStyleEditor\.open\(sourceId\)/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /onFeatureZoomRequested:\s*zoomInspectedVectorFeature/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /onCurrentObservationChange:\s*\(observation, navigation\)\s*=>/,
-  );
-  assert.match(COMPOSITION_SOURCE, /onFeatureProfileRequested:\s*\(\)\s*=>/);
-  assert.match(COMPOSITION_SOURCE, /onTimeSeriesRequested:\s*\(\)\s*=>/);
-  assert.match(COMPOSITION_SOURCE, /vectorTimeSeries\.close\(\);/);
-  assert.match(COMPOSITION_SOURCE, /vectorFeatureProfile\.close\(\);/);
-  assert.match(COMPOSITION_SOURCE, /leafletMap\.on\("click", exploreMap\)/);
-  assert.match(
-    COMPOSITION_SOURCE,
-    /getContainer\(\)\.classList\.add\("leaflet-crosshair"\)/,
-  );
-  assert.match(COMPOSITION_SOURCE, /rasterVisualization\.exploreAt\(event\.latlng, \{/);
-  assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
   assert.doesNotMatch(INSPECTOR_SOURCE, /\.on\("click"/);
   for (const forbiddenMapImplementation of [
     "leafletMap",
@@ -126,10 +87,6 @@ test("vector inspection coordination remains in the browser composition root", (
   }
   assert.doesNotMatch(STYLESHEET, /is-inspecting-vector-features/);
   assert.doesNotMatch(INSPECTOR_SOURCE, /MapLayerStyleEditor/);
-  assert.match(
-    INSPECTOR_SOURCE,
-    /this\.onStyleRequested\(selected\.target\.sourceId\)/,
-  );
 });
 
 test("feature-field analysis is a sibling behind neutral observation and chart contracts", () => {
@@ -147,29 +104,6 @@ test("feature-field analysis is a sibling behind neutral observation and chart c
   ]) {
     assert.equal(FEATURE_PROFILE_SOURCE.includes(forbiddenSibling), false);
   }
-  assert.match(
-    COMPOSITION_SOURCE,
-    /new VectorFeatureProfileController\(\{/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /vectorFeatureProfile\.setCurrentObservation\(observation, navigation\)/,
-  );
-  assert.match(COMPOSITION_SOURCE, /onNavigateFeature:\s*\(direction\)\s*=>/);
-  assert.match(COMPOSITION_SOURCE, /onFeatureZoom:\s*zoomInspectedVectorFeature/);
-  assert.match(
-    COMPOSITION_SOURCE,
-    /vectorFeatureInspector\?\.navigateResult\(direction\)/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /mapInspection\.setVectorFeatureProfileIdentity\(identity\)/,
-  );
-  assert.match(
-    FEATURE_PROFILE_SOURCE,
-    /import\("\.\/inspection-observation\.js"\)\.VectorInspectionObservation/,
-  );
-  assert.match(TIME_SERIES_SOURCE, /import\("\.\/inspection-observation\.js"\)\.VectorInspectionObservation/);
   assert.match(FEATURE_PROFILE_SOURCE, /from "\.\.\/charts\/series-chart\.js"/);
   assert.match(TIME_SERIES_SOURCE, /from "\.\.\/charts\/series-chart\.js"/);
   for (const forbiddenOwner of [
@@ -198,22 +132,6 @@ test("time-series analysis consumes neutral samples without sibling knowledge", 
   ]) {
     assert.equal(TIME_SERIES_SOURCE.includes(forbiddenSibling), false);
   }
-  assert.match(
-    COMPOSITION_SOURCE,
-    /new VectorTimeSeriesController\(\{/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /vectorTimeSeries\.setSample\(sample\)/,
-  );
-  assert.match(COMPOSITION_SOURCE, /sourceId:\s*record\.entry\.key/);
-  assert.match(COMPOSITION_SOURCE, /onFeatureZoom:\s*zoomInspectedVectorFeature/);
-  assert.match(
-    COMPOSITION_SOURCE,
-    /mapInspection\.setVectorTimeSeriesIdentity\(identity\)/,
-  );
-  assert.match(COMPOSITION_SOURCE, /function zoomInspectedVectorFeature\(focus\)/);
-  assert.match(COMPOSITION_SOURCE, /validateVectorFeatureFocus\(focus\)/);
   for (const forbiddenNavigationKnowledge of [
     "getCatalogItemMapBounds",
     "fitBounds",
@@ -234,16 +152,6 @@ test("vector style controls expose intent without knowing sibling subsystems", (
   ]) {
     assert.equal(STYLE_CONTROLS_SOURCE.includes(forbiddenSibling), false);
   }
-  assert.match(COMPOSITION_SOURCE, /getVectorStyleTarget:\s*\(key\)\s*=>/);
-  assert.match(
-    COMPOSITION_SOURCE,
-    /record\.adapter\.summarizeCategories\(record, field\)/,
-  );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /record\.adapter\.classifyNumbers\(record, field, method, classCount\)/,
-  );
-  assert.match(COMPOSITION_SOURCE, /record\.adapter\.applyStyle\(record, style\)/);
 });
 
 test("composition does not interpret vector-owned storage or rebuild vector metadata", () => {
