@@ -1586,7 +1586,7 @@ async function initializeCatalog(
         namedMapSlug,
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
-        publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: appGlobalConfiguration.appSubtitle },
+        publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
         applyMapHeading,
         basemap: basemapControl,
         mapLegend,
