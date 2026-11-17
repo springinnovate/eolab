@@ -62,7 +62,7 @@ function normalizeCustomLayerName(value) {
  * Observe successful layer creation. Batch callers may suppress automatic
  * viewport fitting while restoring an authoritative saved viewport.
  * @property {(record:Object)=>void} [tileError] Observe an owned tile failure.
- * @property {(record:Object,saved:Object)=>Promise<void>} [restoreRemovedStyle] Restore same-source appearance without recalculating classification ranges.
+ * @property {(record:Object,saved:Object)=>Promise<void>} [restoreSavedState] Restore same-source appearance without recalculating classification ranges; adapters without this hook use applySavedState.
  * @property {(record:Object)=>void} [discardStaged] Cancel work for a layer that was never attached.
  * @property {(record:Object)=>Object} [copyLayerForUndo] Copy owner data needed to undo a local removal; may reject an unfinished draft.
  * @property {string} tileErrorMessage Browser-safe tile failure message.

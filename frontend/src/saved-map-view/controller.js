@@ -789,6 +789,7 @@ export class SavedMapViewController {
 
     /**
      * Resolve, validate, publish, and style one detached saved Catalog source.
+     * Restore its exact appearance when the adapter distinguishes restoration from style paste.
      * Retain its explicit Catalog or Custom card presentation independently of its row key.
      *
      * @param {Object} layer Validated saved-layer document.
@@ -820,7 +821,8 @@ export class SavedMapViewController {
             let styleWarning = null;
             if (layer.calculatedFields?.length) await record.adapter.restoreCalculatedFields(record, layer.calculatedFields);
             try {
-                await record.adapter.applySavedState(record, layer.style);
+                if (record.adapter.restoreSavedState) await record.adapter.restoreSavedState(record, layer.style);
+                else await record.adapter.applySavedState(record, layer.style);
             } catch (error) {
                 if (strictStyle || layer.calculatedFields?.length) throw error;
                 styleWarning = asError(error).message;
