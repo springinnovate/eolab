@@ -25,7 +25,7 @@ import { rasterSampleBoundsToLeaflet } from "./leaflet.js";
  * @param {"preview"|"selection"} kind Requested layer presentation.
  * @param {import("../sampling-box.js").SamplingBox|null} samplingBox Optional geodesic geometry.
  * @return {{addTo: (map: Object) => Object, setSampleWindow: (bounds: Array<Array<number>>, samplingBox: Object|null) => void}}
- * Leaflet-compatible polygon layer.
+ * Leaflet-compatible sampling overlay.
  */
 
 /**
@@ -267,6 +267,7 @@ export class RasterSampleWindowController {
         if (sampleWindow === null) {
             return null;
         }
+        this.clearPreview();
         this.restoreSelection(sampleWindow.bounds, sampleWindow.samplingBox);
         this.onSelect(sampleWindow.bounds, Object.freeze({
             longitude: position.lng,

@@ -155,6 +155,7 @@ function canRetryRasterStatistics(error) {
  * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void}) => boolean} exploreAt Select
  * one validated, in-bounds map window and request its histogram when analysis
  * is active.
+ * @property {(enabled:boolean) => void} setFirstSampleHintEnabled Allow the first-sample hint and preview while browsing the map.
  * @property {(key:string) => boolean} openStyle Select a retained raster for
  * editing; return false when the key has no raster session.
  * @property {(key:string) => boolean} openPairedStyle Reveal the shared 2D
@@ -365,6 +366,8 @@ export function initializeRasterViewer(
     let mapDragging = false;
     let pixelPickerEnabled = true;
     let pointerInspectionEnabled = true;
+    let firstSampleHintEnabled = true;
+    let hasPlacedSamplingBox = false;
     let rasterCursorPosition = null;
     let rasterStyleCommitTimeout = null;
     const histogramStyleTimers = new Map();
@@ -1171,21 +1174,21 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Decide whether a click should open the histogram using published extents.
+     * Decide whether to offer a histogram at a map position for preview or placement.
      * Ordinary visible-layer mode considers every visible raster extent; 2D
      * mode and detached Catalog analysis retain their click participants.
      * This presentation decision does not restrict backend pixel requests.
      *
-     * @param {Array<{key:string}>} participants Current click participants.
      * @param {{longitude:number,latitude:number}} position Canonical point.
      * @return {boolean} Whether any published extent covers the point, or a
      * participant has no retained renderer.
      */
-    function shouldOpenRasterHistogram(participants, position) {
-        const coverageParticipants = followsVisibleLayers && !bivariateMode.active
-            ? allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.statistics !== false).map(({ entry }) => entry)
-            : participants;
-        return coverageParticipants.some(({ key }) => {
+    function shouldOpenRasterHistogram(position) {
+        if (followsVisibleLayers && !bivariateMode.active) {
+            return allVisibleRasterRecords().some(({state}) => state.item.capabilities?.statistics !== false &&
+                publishedBoundsContainPosition(state.publishedRaster.bbox, position));
+        }
+        return rasterPointSampleParticipants().some(({ key }) => {
             const record = mapLayers.getRecord(key);
             return record === null || publishedBoundsContainPosition(
                 record.state.publishedRaster.bbox,
@@ -1290,6 +1293,7 @@ export function initializeRasterViewer(
             return;
         }
         visibleHistogramSignature = signature;
+        rasterSampleWindowController.clearPreview();
         const previousCandidates = bivariateCandidates;
         const pairChanged = bivariateMode.active && (
             records.length !== 2 ||
@@ -1825,6 +1829,24 @@ export function initializeRasterViewer(
         return area;
     }
 
+    /** Return whether ordinary map browsing can offer a first sample from a visible raster.
+     * @return {boolean} True until a box is placed, except while drawing or using another sample area or tool.
+     */
+    function canOfferFirstSample() {
+        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && !pendingVectorSelection &&
+            initialPolygonSamplingArea() === null && activeRasterItem?.capabilities?.statistics !== false &&
+            mapLayers.getRecord(activeLayerKey)?.entry.visible === true;
+    }
+
+    /** Synchronize the on-map invitation and remove an idle preview that no longer applies.
+     * @return {void}
+     */
+    function updateFirstSampleHint() {
+        const offer = canOfferFirstSample();
+        controlsView.setFirstSampleHintVisible(offer);
+        if (!offer && !controlsView.isSamplingBoxSelected()) rasterSampleWindowController.clearPreview();
+    }
+
     /** Synchronize histogram-area choices with lifecycle state.
      * @param {Readonly<Object>|null} [invalidatedArea=null] Area whose removal prompted this update.
      * @return {void}
@@ -1832,6 +1854,7 @@ export function initializeRasterViewer(
     function renderRasterSamplingAreaControls(invalidatedArea = null) {
         onSamplingAreaChange(getSelectedArea(), {waitingForPolygons: pendingVectorSelection, invalidatedArea});
         controlsView.setPairedAreaActionsAvailable?.(!pendingVectorSelection && bivariatePolygonSampling?.area.kind !== "polygonArea");
+        updateFirstSampleHint();
         if (pendingVectorSelection) {
             controlsView.setSamplingAreaMode("vector", "Polygon layer");
             renderRasterSampleWindowGuidance("");
@@ -2599,6 +2622,7 @@ export function initializeRasterViewer(
         refreshActiveSessionPresentation();
         activeLayerKey = null;
         activeRasterItem = null;
+        updateFirstSampleHint();
     }
 
     /**
@@ -3640,6 +3664,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function selectRasterSampleWindow(bounds, center, openHistogram = true) {
+        if (canUseRasterMapInteractions()) hasPlacedSamplingBox = true;
         onSamplingMethodChange("box");
         pendingVectorSelection = false;
         cancelRasterSampleWindowResize();
@@ -3703,8 +3728,7 @@ export function initializeRasterViewer(
             pointSamplesController.clear();
             return false;
         }
-        const participants = rasterPointSampleParticipants();
-        const openHistogram = shouldOpenRasterHistogram(participants, point);
+        const openHistogram = shouldOpenRasterHistogram(point);
         if (openHistogram) {
             if (rasterAnalysis.selectedPolygonSampling !== null) {
                 restoreWholeRasterStatistics();
@@ -3715,7 +3739,7 @@ export function initializeRasterViewer(
                 return true;
             }
         }
-        if (bivariateMode.active) pointSamplesController.sample(participants, point);
+        if (bivariateMode.active) pointSamplesController.sample(rasterPointSampleParticipants(), point);
         if (openHistogram) {
             onSelected(getSelectedArea());
         }
@@ -4033,6 +4057,16 @@ export function initializeRasterViewer(
     function setPointerInspectionEnabled(enabled) {
         pointerInspectionEnabled = enabled;
         if (!enabled) handleMapMouseLeave();
+        updateFirstSampleHint();
+    }
+
+    /** Offer the first sample when the map returns from a foreground tool to ordinary browsing.
+     * @param {boolean} enabled Whether the map has no expanded foreground tool.
+     * @return {void}
+     */
+    function setFirstSampleHintEnabled(enabled) {
+        firstSampleHintEnabled = enabled;
+        updateFirstSampleHint();
     }
 
     /** Hide the pixel picker and cancel its transient sampling operation. */
@@ -4409,13 +4443,13 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Preview a selected sampling box and request pixel values at the pointer.
+     * Preview the first eligible or currently selected box and update the independent pixel picker.
      *
      * @param {Object} mapEvent Leaflet mousemove event in the single map world.
      * @return {void}
      */
     function handleMapMouseMove(mapEvent) {
-        if (!pointerInspectionEnabled) return;
+        if (!pointerInspectionEnabled || mapDragging) return;
         const point = {
             longitude: mapEvent.latlng.lng,
             latitude: mapEvent.latlng.lat,
@@ -4426,13 +4460,12 @@ export function initializeRasterViewer(
             cursorSamplesController.clear();
             return;
         }
-        if (canUseRasterMapInteractions() && controlsView.isSamplingBoxSelected()) {
+        const overMapControl = mapEvent.originalEvent?.target?.closest?.(".leaflet-control");
+        if (!overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
+            (canOfferFirstSample() && shouldOpenRasterHistogram(point)))) {
             rasterSampleWindowController.previewAt(mapEvent.latlng);
         } else {
             rasterSampleWindowController.clearPreview();
-        }
-        if (mapDragging) {
-            return;
         }
         if (!pixelPickerEnabled) {
             return;
@@ -4460,9 +4493,10 @@ export function initializeRasterViewer(
         cursorSamplesController.clear();
     }
 
-    /** Suspend reads and clear screen anchors while the map moves. @return {void} */
+    /** Remove the hover box and suspend cursor reads while the map moves. @return {void} */
     function handleMapDragStart() {
         mapDragging = true;
+        rasterSampleWindowController.clearPreview();
         rasterCursorPosition = null;
         cursorSamplesController.clear();
     }
@@ -5094,6 +5128,7 @@ export function initializeRasterViewer(
         stage,
         syncVisibleLayers,
         setPointerInspectionEnabled,
+        setFirstSampleHintEnabled,
         exploreAt,
         openStyle,
         openPairedStyle,
