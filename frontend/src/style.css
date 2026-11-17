@@ -954,11 +954,12 @@ h5 {
   .vector-field-calculator .fc-output-row { grid-row: 3; }
 }
 .raster-layer-visibility {
-  display: inline;
+  /* Wrap the title within the space beside the floated checkbox and Zoom button. */
+  display: flow-root;
   font-size: var(--font-size-title);
   line-height: 1.3;
-  cursor: pointer;
 }
+.raster-layer-visibility label { cursor: pointer; }
 .raster-layer-name {
   overflow-wrap: anywhere;
   font-size: var(--font-size-ui);
