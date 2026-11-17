@@ -42,16 +42,18 @@ from eolab_app.raster.source_contract import (
 def _select_clip_area(
     dataset: Any, area: ClipArea, limits: RasterClipLimits
 ) -> SelectedRasterArea:
-    """Locate the clip area on the source raster and prepare its polygon-mask source.
+    """Locate the requested native grid and any polygon mask for the exported pixels.
 
     Args:
         dataset: Validated open native raster.
-        area: Immutable clip bounds/polygon selection.
+        area: Immutable whole-grid, bounds or polygon selection.
         limits: Shared clip job lifecycle settings.
 
     Returns:
         Native window and projected mask geometry.
     """
+    if area.kind == "wholeRaster":
+        return SelectedRasterArea(Window(0, 0, dataset.width, dataset.height), ())
     return select_area(
         dataset,
         area.kind,
@@ -208,7 +210,11 @@ def create_clip(
                         source_tags["EOLAB_SOURCE_SHA256"] = spec.sourceChecksum
                 destination.update_tags(
                     EOLAB_OPERATION=spec.operation,
-                    EOLAB_MASK_RULE="all_touched",
+                    EOLAB_MASK_RULE=(
+                        "source_validity"
+                        if spec.area.kind == "wholeRaster"
+                        else "all_touched"
+                    ),
                     EOLAB_AREA_BOUNDS=json.dumps(spec.area.bounds),
                     EOLAB_AREA_KIND=spec.area.kind,
                     **source_tags,
@@ -225,17 +231,14 @@ def create_clip(
                         intersection.height,
                     )
                     values = native[local.toslices()]
-                    inside = pixels_inside_area(
-                        selected.projected_geometries,
-                        out_shape=values.shape,
-                        transform=window_transform(intersection, source.transform),
-                        all_touched=True,
-                    )
-                    valid = (
-                        inside
-                        & ~numpy.ma.getmaskarray(values)
-                        & numpy.isfinite(values.data)
-                    )
+                    valid = ~numpy.ma.getmaskarray(values) & numpy.isfinite(values.data)
+                    if spec.area.kind != "wholeRaster":
+                        valid &= pixels_inside_area(
+                            selected.projected_geometries,
+                            out_shape=values.shape,
+                            transform=window_transform(intersection, source.transform),
+                            all_touched=True,
+                        )
                     valid_count += int(numpy.count_nonzero(valid))
                     output = Window(
                         intersection.col_off - window.col_off,
@@ -321,7 +324,7 @@ def create_clip(
         **({"sourceChecksum": spec.sourceChecksum} if spec.sourceChecksum else {}),
         "area": spec.area.model_dump(mode="json"),
         "grid": spec.grid.model_dump(),
-        "allTouched": True,
+        "allTouched": spec.area.kind != "wholeRaster",
         "sourceValidity": RASTER_VALIDITY_POLICY,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         **asdict(artifact),

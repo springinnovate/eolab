@@ -2,7 +2,7 @@ import {
     createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink,
     catalogReferenceIdentity, createCatalogDisclosure,
 } from "./catalog-curated-metadata.js";
-import { rasterSamplingAreaBounds } from "./selected-area.js";
+import { captureMapViewportArea, rasterSamplingAreaBounds } from "./selected-area.js";
 import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
 import { getFeatureInfoViewport } from "./vector/feature-info-viewport.js";
@@ -126,6 +126,7 @@ import { CalculationSessionStorage } from "./processing/calculation-session.js";
 import { ProcessingJobs } from "./processing/jobs.js";
 import { RasterClipsController } from "./processing/raster-clips-controller.js";
 import { RasterClipsView } from "./processing/raster-clips-view.js";
+import { RasterDownloadSheet } from "./processing/raster-download-sheet.js";
 import { PendingSubmissionStorage } from "./processing/pending-submission.js";
 
 /** Describe a calculation input using its original source identity and map label.
@@ -857,6 +858,7 @@ async function initializeCatalog(
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
     const mapLayerStackView = new MapLayerStackView(document, { allowRemoval: !isSharedViewer });
+    let rasterClips = null;
     const mapLegend = new OnMapLegend(L, leafletMap, {
         toggleButton: document.querySelector("#toggle-map-legend"),
         onRestoreRequested: () => mapInspection.showToolActions(),
@@ -892,9 +894,11 @@ async function initializeCatalog(
                 savedMapViewController?.scheduleRemember();
                 return;
             }
+            const calculationLayers = layers.filter(layer => layer.capabilities?.calculations);
+            rasterClips?.syncLayerDownloads(calculationLayers);
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
-            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.capabilities?.calculations), temporalDatasets(layers));
+            rasterSeries?.updateAvailableRasters(calculationLayers, temporalDatasets(layers));
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
@@ -1034,9 +1038,13 @@ async function initializeCatalog(
         }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
-    const rasterClips = new RasterClipsController({
+    rasterClips = new RasterClipsController({
         api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
             onContextChange: context => presentSamplingContext("raster-clips", context),
+        }),
+        layerView: new RasterDownloadSheet({
+            document, map: leafletMap.getContainer(), list: mapLayerStackView.list, scrollContainer: mapLayerStackView.scrollContainer,
+            getButton: key => mapLayerStackView.getDownloadButton(key),
         }),
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: processingContext,
@@ -1050,8 +1058,15 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => rasterClips.setActive(tool === "raster-clips"));
     mapLayerController.onDownload = (key) => {
-        const record = mapLayerController.getRecord(key);
-        if (record) rasterClips.open(describeCalculationSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
+        const layer = mapLayerController.snapshots().find(item => item.key === key);
+        if (!layer?.capabilities?.calculations) return;
+        const bounds = leafletMap.getBounds();
+        let viewport = null, viewportError = "";
+        try {
+            viewport = captureMapViewportArea({west:bounds.getWest(), east:bounds.getEast(), south:bounds.getSouth(), north:bounds.getNorth()});
+        } catch (error) { viewportError = error.message; }
+        rasterClips.toggleLayer(key, describeCalculationSource(layer.source, layer.label),
+            {viewport, viewportError, selection: rasterVisualization?.getSelectedArea()});
     };
     mapLayerController.onCalculate = (key) => {
         const record = mapLayerController.getRecord(key);

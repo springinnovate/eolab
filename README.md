@@ -298,10 +298,13 @@ total** when offered to turn rainfall rates into an accumulated depth.
 
 ### Clip and download data
 
-In **Map contents**, select **Download** on the raster you want. The download
-form shows the layer name and the sampling area. Choose a sampling box or
-selected polygons, select **Prepare download**, then **Download GeoTIFF** when
-the file is ready. The clip preserves the original pixel resolution and values.
+In **Map contents**, select **Download** on the raster you want. The panel
+opens beside the layer and fits within the screen. Choose **Visible map area**
+to use the view captured when you opened it, **Entire raster** for its full
+native extent, or a sampling box or polygon selection already on the map.
+Choose **Prepare GeoTIFF**, then **Download GeoTIFF** when the file is ready.
+Click the same layer’s **Download** again to close the panel. Preparation
+continues while the panel is closed.
 
 #### Clip the visible map area with the Raster clip tool
 

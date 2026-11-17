@@ -289,7 +289,9 @@ async def prepare_clip(
             if authorized.source_signature is not None
             else None
         )
-    if request.samplingBox is not None:
+    if request.wholeRaster:
+        area = ClipArea(kind="wholeRaster", bounds=None)
+    elif request.samplingBox is not None:
         area = ClipArea(
             kind="samplingBox",
             bounds=sampling_box_bounds(request.samplingBox),
@@ -522,29 +524,25 @@ def build_clip_submission(request: ClipJobRequest, polygons: None) -> PreparedJo
     """
     inputs = request
     queued = UnpreparedClip(request=inputs)
-    bounds = inputs.selectedBounds
+    if inputs.samplingBox:
+        area = {
+            "kind": "samplingBox",
+            "bounds": sampling_box_bounds(inputs.samplingBox),
+            "samplingBox": inputs.samplingBox.model_dump(mode="json"),
+        }
+    elif inputs.selectedBounds:
+        area = {"kind": "bounds", "bounds": inputs.selectedBounds.canonical_tuple()}
+    else:
+        area = {
+            "kind": "wholeRaster" if inputs.wholeRaster else "catalogSelection",
+            "bounds": None,
+        }
     return PreparedJobPlan(
         specification=queued.model_dump(mode="json", by_alias=True),
         summary={
             "source": get_clip_source(request).model_dump(mode="json", by_alias=True),
             "grid": None,
-            "area": {
-                "kind": (
-                    "samplingBox"
-                    if inputs.samplingBox
-                    else "bounds" if bounds else "catalogSelection"
-                ),
-                "bounds": (
-                    sampling_box_bounds(inputs.samplingBox)
-                    if inputs.samplingBox
-                    else bounds.canonical_tuple() if bounds else None
-                ),
-                **(
-                    {"samplingBox": inputs.samplingBox.model_dump(mode="json")}
-                    if inputs.samplingBox
-                    else {}
-                ),
-            },
+            "area": area,
         },
         reserved_bytes=0,
         operation=queued.operation,

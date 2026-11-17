@@ -1191,7 +1191,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     const observer = new Function("mapLegend", "layerStyleEditor", "mapFeatureHover", "savedMapViewController",
         "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
         "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
-        "temporalDatasets", "planning", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
+        "temporalDatasets", "planning", "rasterClips", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
         { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
         { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
         () => calls.push(["catalog"]), { observeLayerOrder: () => calls.push(["annotations-order"]) },
@@ -1201,6 +1201,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
         { refresh: () => calls.push(["summary"]) }, { refreshMapLayers: () => calls.push(["models"]) },
         { setClickResult() {}, closeHistogram() { calls.push(["histogram-close"]); } }, () => [],
         { refreshMapLayers: () => calls.push(["planning"]) },
+        { syncLayerDownloads: () => calls.push(["downloads"]) },
     );
     const map = createMap();
     controller = new MapLayerController({ leafletMap: map, view, onLayersChange: observer,
@@ -1221,7 +1222,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     assert.equal(controller.getLeafletLayer(key).opacity, 0.75);
     calls.length = 0;
     controller.setVisible(key, false);
-    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models", "planning"]) {
+    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models", "planning", "downloads"]) {
         assert.ok(calls.some(([called]) => called === name), `${name} still receives general layer changes`);
     }
     controller.destroy();

@@ -38,6 +38,10 @@ from raster_fixture_support import write_source
         },
         {"sourcePath": "/secret.tif"},
         {"url": "https://example.org/file.tif"},
+        {
+            "wholeRaster": True,
+            "selectedBounds": {"west": 0, "south": 1, "east": 2, "north": 3},
+        },
         {"selectedBounds": {"west": 170, "south": 0, "east": -170, "north": 1}},
     ],
 )
@@ -53,19 +57,26 @@ def test_plan_rejects_implicit_whole_arbitrary_sources_and_ambiguous_area(
         ClipInputs(**SOURCE, **extra)
 
 
+@pytest.mark.parametrize("whole", [False, True])
 def test_clip_preserves_native_grid_values_zero_metadata_and_cog(
     tmp_path: Path,
+    whole: bool,
 ) -> None:
     """Compare every exported pixel and validity value against the original grid.
 
     Args:
         tmp_path: Isolated source and attempt directories.
+        whole: Export every native pixel instead of a geographic rectangle.
     """
     values = numpy.arange(720 * 720, dtype="int32").reshape(720, 720) - 100
     values[10:20, 10:20] = -9999
     values[100:120, 100:120] = 0
     path = write_source(tmp_path / "input.tif", values, nodata=-9999)
-    area = ClipArea(kind="bounds", bounds=(0.03, 3.1, 6.8, 9.98))
+    area = (
+        ClipArea(kind="wholeRaster", bounds=None)
+        if whole
+        else ClipArea(kind="bounds", bounds=(0.03, 3.1, 6.8, 9.98))
+    )
     spec = make_spec(path, area)
     spec = ClipSpec.model_validate_json(spec.model_dump_json(by_alias=True))
     attempt = tmp_path / "attempt"
@@ -84,6 +95,11 @@ def test_clip_preserves_native_grid_values_zero_metadata_and_cog(
         assert tuple(result.transform)[:6] == spec.grid.transform
         data = result.read(1, masked=True)
         col, row, width, height = spec.grid.window
+        if whole:
+            assert (col, row, height, width) == (0, 0, *values.shape)
+            with rasterio.open(path) as original:
+                assert result.transform == original.transform
+                assert numpy.array_equal(result.read_masks(1), original.read_masks(1))
         expected = values[row : row + height, col : col + width]
         assert numpy.array_equal(data.data[~data.mask], expected[~data.mask])
         assert numpy.count_nonzero((data.data == 0) & ~data.mask) >= 400

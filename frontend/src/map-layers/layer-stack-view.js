@@ -690,10 +690,13 @@ export class MapLayerStackView {
             ...(filter ? [filter] : []),
         );
         if (layer.capabilities?.calculations) {
-            layerActions.append(this.#button(
+            const download = this.#button(
                 "Download", `Download raster: ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
-            ));
+            );
+            download.setAttribute("aria-haspopup", "dialog");
+            download.setAttribute("aria-expanded", "false");
+            layerActions.append(download);
         }
         if (this.allowRemoval && layer.canAddView) {
             const actionLabel = `Duplicate ${layer.datasetKind}`;
@@ -816,6 +819,14 @@ export class MapLayerStackView {
         state.expanded = expanded;
         state.trigger.setAttribute("aria-expanded", String(expanded));
         state.panel.hidden = !expanded;
+    }
+
+    /** Return the current Download button after a map row is replaced, or null if the action is unavailable.
+     * @param {string} key Map view identity, including distinct views of the same raster.
+     * @return {HTMLButtonElement|null} Live button to use as a keyboard and positioning anchor.
+     */
+    getDownloadButton(key) {
+        return this.list.querySelector(`button[data-layer-action="download"][data-layer-key="${CSS.escape(key)}"]`);
     }
 
     /**
