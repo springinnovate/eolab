@@ -60,7 +60,7 @@ export function formatSingleWorldPosition(position) {
 }
 
 /**
- * Add Shift fine zoom while retaining Leaflet's ordinary wheel and fit behavior.
+ * Add fine zoom with Shift and the wheel or +/- keys while preserving ordinary map navigation.
  * These map-local subclasses delegate to the pinned Leaflet 1.9.4 hooks; they
  * do not modify Leaflet's prototypes or any other map instance.
  * @param {Object} leaflet Leaflet namespace.
@@ -149,34 +149,6 @@ function addFineMapZoom(leaflet, map) {
             this.options.zoomSnap = snap;
         }
     };
-
-    const FineZoomControl = leaflet.Control.Zoom.extend({
-        /** Zoom in by a tenth with Shift, retaining ordinary control behavior.
-         * @param {MouseEvent} event Zoom-button click. @return {void}
-         */
-        _zoomIn(event) {
-            if (!event.shiftKey) return leaflet.Control.Zoom.prototype._zoomIn.call(this, event);
-            if (!this._disabled) {
-                finishZoomAnimation();
-                map.zoomIn(0.1, {animate: false});
-            }
-        },
-        /** Zoom out by a tenth with Shift, retaining ordinary control behavior.
-         * @param {MouseEvent} event Zoom-button click. @return {void}
-         */
-        _zoomOut(event) {
-            if (!event.shiftKey) return leaflet.Control.Zoom.prototype._zoomOut.call(this, event);
-            if (!this._disabled) {
-                finishZoomAnimation();
-                map.zoomOut(0.1, {animate: false});
-            }
-        },
-    });
-    new FineZoomControl({
-        position: "bottomleft",
-        zoomInTitle: "Zoom in (hold Shift for smaller steps)",
-        zoomOutTitle: "Zoom out (hold Shift for smaller steps)",
-    }).addTo(map);
 }
 
 /**

@@ -34,7 +34,7 @@ test("saved basemaps expose provider IDs and unavailable providers report a fall
  * @return {Promise<void>} Settles after pending selection callbacks.
  */
 async function choose(control, value) {
-    const select = control.getContainer().children[0].children[1];
+    const select = control.getContainer().querySelector("select");
     select.value = value;
     select.dispatchEvent(new Event("change"));
     await new Promise(resolve => setImmediate(resolve));
@@ -43,8 +43,9 @@ async function choose(control, value) {
 test("basemap control starts with configured tiles and omits unconfigured CARTO", () => {
     const { leaflet, leafletMap: map, calls } = createLeafletDouble();
     const control = addBasemapControl(leaflet, map, configured, bounds);
-    const select = control.root.children[0].children[1];
+    const select = control.root.querySelector("select");
     assert.equal(control.options.position, "bottomright");
+    assert.deepEqual(control.root.children.filter(element => !element.hidden), [select]);
     assert.equal(select.getAttribute("aria-label"), "Basemap");
     assert.deepEqual(select.children.map(option => option.value), ["detailed", "outlines", "none"]);
     assert.equal(select.value, "detailed");
@@ -121,7 +122,7 @@ test("satellite loads only when selected, preserves overlays, and removes its at
     const viewport = calls.setView;
     const control = addBasemapControl(leaflet, map, { ...configured, carto, maptiler }, bounds);
     assert.equal(calls.layers.length, 2, "satellite tiles are not created before selection");
-    assert.deepEqual(control.root.children[0].children[1].children.map(option => option.value),
+    assert.deepEqual(control.root.querySelector("select").children.map(option => option.value),
         ["detailed", "carto", "maptiler", "outlines", "none"]);
     await choose(control, "maptiler");
     const satellite = calls.layers.at(-1);
@@ -186,7 +187,7 @@ test("outline load failure shows a retryable message and leaves None selected", 
         return { ok: true, json: async () => geometry };
     });
     await choose(control, "outlines");
-    assert.equal(control.root.children[0].children[1].value, "none");
+    assert.equal(control.root.querySelector("select").value, "none");
     assert.match(control.root.children[1].textContent, /unavailable.*retry/);
     assert.equal(map.attached.size, 0);
     fail = false;

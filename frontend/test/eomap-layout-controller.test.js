@@ -321,6 +321,8 @@ test("shared viewer omits catalog and status while retaining layer and sidebar c
     assert.equal(fixture.renderingRegion.hidden, false);
     layout.setControlPanelCollapsed(true);
     assert.equal(fixture.openPanel.hidden, false);
+    assert.equal(fixture.openPanel.textContent, "Map contents");
+    assert.equal(fixture.collapsePanel.getAttribute("aria-label"), "Collapse Map contents");
     layout.setControlPanelCollapsed(false);
     assert.equal(fixture.renderingRegion.hidden, false);
     assert.equal(fixture.catalogRegion.hidden, true);

@@ -11,6 +11,7 @@
   <script type="module">
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
+    import { MapInspectionController } from "../src/map-inspection-controller.js";
 
     /** Fail this scenario when a user-visible condition is false.
      * @param {boolean} condition Expected outcome.
@@ -56,6 +57,46 @@
         `${name}: scroll region is outside the viewport`);
       element.scrollTop = element.scrollHeight;
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
+    }
+
+    /** Check that both panel tabs free map space, retain context, and stay reachable.
+     * @param {EomapLayoutController} layout Mounted workspace shell.
+     * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
+     * @throws {Error} If either disclosure is obscured or restores the wrong state.
+     */
+    async function checkPanelDisclosures(layout) {
+      const inspection = new MapInspectionController({
+        onLayoutChange: state => layout.setInspectionLayout(state),
+      });
+      const collapseLeft = document.querySelector("#collapse-panel");
+      const expandLeft = document.querySelector("#open-panel");
+      const collapseRight = document.querySelector("#toggle-map-inspection-dock");
+      const expandRight = document.querySelector("#open-map-tools");
+      const chooser = document.querySelector("#map-tools-more-summary");
+      collapseLeft.click();
+      inspection.showStyle("Land cover");
+      await settleLayout();
+      check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
+      collapseRight.click();
+      await settleLayout();
+      check(document.activeElement === expandRight, "Collapsing Map tools lost focus");
+      check(chooser.getClientRects().length === 0, "The tool chooser still occupies map space");
+      check(isReachable(expandLeft) && isReachable(expandRight), "A collapsed panel tab cannot be reached");
+      const left = expandLeft.getBoundingClientRect();
+      const right = expandRight.getBoundingClientRect();
+      check(left.top === right.top && left.height === right.height && left.left === innerWidth - right.right,
+        "Collapsed panel tabs differ in height or edge placement");
+      expandLeft.click();
+      await settleLayout();
+      check(document.activeElement === collapseLeft && isReachable(collapseLeft), "The left panel lost keyboard focus");
+      check(isReachable(expandRight), "Opening the left panel covered the Map tools tab");
+      expandRight.click();
+      await settleLayout();
+      check(document.activeElement === collapseRight && isReachable(chooser), "The tool chooser did not return");
+      check(isReachable(document.querySelector("#close-layer-style")) &&
+        document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
+        "The style editor did not reopen on Land cover");
+      inspection.destroy();
     }
 
     /** Exercise search/details focus, independent content scrolling and diagnostic bounds.
@@ -138,6 +179,7 @@
       const lastLocation = locations.lastElementChild;
       lastLocation.scrollIntoView({ block: "nearest" });
       check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
+      await checkPanelDisclosures(layout);
       layout.destroy();
     }
 
