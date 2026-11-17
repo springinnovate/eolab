@@ -37,6 +37,7 @@ export class ModelsController {
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
      * @param {()=>void} dependencies.onOpen Open the composed Analysis panel.
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
+     * @param {(label:string)=>void} [dependencies.onViewLabel] Present the current page, selected model or run name in the workspace.
      * @param {(job:Object,file:Object)=>Promise<void>} [dependencies.showOutput] Show one chosen file through composition.
      * @param {(jobId:string,artifactId:string,file:Object)=>Object} [dependencies.outputState] Display-only map capability, inclusion and feedback.
      * @param {(job:Object)=>void} [dependencies.onRunChange] Notify composition of authoritative run availability and expiry.
@@ -47,7 +48,7 @@ export class ModelsController {
      * @param {(model:Object)=>import("./model-setup.js").ModelSetupIntegration|null} [dependencies.getSetupIntegration] Resolve the installed setup adapter.
      */
     constructor({api, jobs, view, getContext, getCatalogItem, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
-        showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
+        showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {}, onViewLabel = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", ""), getSetupIntegration = getModelSetupIntegration}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
@@ -55,6 +56,7 @@ export class ModelsController {
         this.getSetupIntegration = getSetupIntegration;
         this.outputState = outputState;
         this.onRunChange = onRunChange;
+        this.onViewLabel = onViewLabel;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
         this.deletions = new Map();
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
@@ -945,12 +947,16 @@ export class ModelsController {
         this.render();
     }
 
-    /** Present state without allowing a disposed component to update the page.
+    /** Render the current Data tools page and publish its display name to the workspace.
      * @return {void}
      */
     render() {
         if (this.destroyed) return;
         const job = this.runSnapshots.get(this.state.selectedRun);
+        this.onViewLabel({
+            library: "Choose a tool", setup: this.state.draft?.model.title ?? "Setup",
+            runs: "Runs", run: job?.label ?? "Data tool run",
+        }[this.state.page]);
         this.view.render({...this.state, deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
     }

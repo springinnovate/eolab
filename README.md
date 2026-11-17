@@ -147,6 +147,10 @@ Styling changes the appearance of your map, leaving the original values intact.*
 A normal click explores the visible data at that location. Dragging still pans
 the map.
 
+Switch between views using the tabs in the right panel. When space runs out,
+**All tabs** lists the available views with their layer or model names. A dot
+marks new results in another tab.
+
 For visible vectors, EOLab highlights the features under the click and opens
 their attributes in **Feature inspector**. Use **Previous** and **Next** when
 several features overlap. Clicking empty space does not open an empty result.

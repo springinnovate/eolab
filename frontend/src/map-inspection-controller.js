@@ -26,7 +26,7 @@ export class MapInspectionController {
         this.panels = documentContext.querySelector("#map-inspection-panels");
         this.toolName = documentContext.querySelector("#map-tool-name");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
-        this.tabList = documentContext.querySelector("#map-inspection-tabs");
+        this.tabStrip = new MapInspectionTabs(documentContext);
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
         this.mapToolsButton = documentContext.querySelector("#map-tool-chooser");
         this.toolActionsOpen = false;
@@ -87,7 +87,7 @@ export class MapInspectionController {
                 tab: documentContext.querySelector("#map-inspection-tab-planning") },
             { name: "models", label: "Data tools", panel: documentContext.querySelector("#models-panel"),
                 tab: documentContext.querySelector("#map-inspection-tab-models") },
-            { name: "raster-series", label: "Raster statistics", panel: this.rasterSeries, raster: true, resultNavigation: true,
+            { name: "raster-series", label: "Raster statistics", panel: this.rasterSeries, raster: true, resultTab: true,
                 tab: documentContext.querySelector("#open-raster-series-dock") },
             { name: "annotations", label: "Polygons", panel: this.annotations,
                 tab: documentContext.querySelector("#map-inspection-tab-annotations") },
@@ -97,13 +97,13 @@ export class MapInspectionController {
             },
             {
                 name: "histogram",
-                label: "Histograms", raster: true, resultNavigation: true,
+                label: "Histograms", raster: true, resultTab: true,
                 panel: this.histogram,
                 tab: documentContext.querySelector("#map-click-histogram"),
             },
             {
                 name: "feature",
-                label: "Features", resultNavigation: true,
+                label: "Features", resultTab: true,
                 panel: this.feature,
                 tab: documentContext.querySelector("#map-inspection-tab-feature"),
             },
@@ -155,7 +155,6 @@ export class MapInspectionController {
             const tool = this.tools.find(({ tab }) => tab === event.currentTarget);
             if (tool !== undefined) this.#activateTool(tool.name);
         };
-        this.onTabKeydown = (event) => this.#moveTabFocus(event);
         this.onToggleFeatureDetails = () =>
             this.setFeatureInspectorExpanded(this.featureDetails.hidden);
         this.onKeydown = (event) => {
@@ -169,9 +168,8 @@ export class MapInspectionController {
         this.closeButton.addEventListener("click", this.onClose);
         this.collapseButton.addEventListener("click", this.onTogglePanel);
         this.expandButton.addEventListener("click", this.onTogglePanel);
-        for (const { tab } of this.tools.filter(tool => !tool.resultNavigation)) {
+        for (const { tab } of this.tools.filter(tool => !tool.resultTab)) {
             tab.addEventListener("click", this.onTabClick);
-            tab.addEventListener("keydown", this.onTabKeydown);
         }
         this.featureDetailsToggle.addEventListener(
             "click", this.onToggleFeatureDetails
@@ -217,13 +215,7 @@ export class MapInspectionController {
      */
     #positionToolActions() {
         if (!this.toolActionsOpen) return;
-        const { innerWidth, innerHeight } = this.document.defaultView;
-        const anchor = this.mapToolsButton.getBoundingClientRect();
-        const menu = this.toolActions.getBoundingClientRect();
-        const below = anchor.bottom + 6;
-        const top = below + menu.height <= innerHeight - 8 ? below : anchor.top - menu.height - 6;
-        this.toolActions.style.top = `${Math.max(8, Math.min(top, innerHeight - menu.height - 8))}px`;
-        this.toolActions.style.left = `${Math.max(8, Math.min(anchor.right - menu.width, innerWidth - menu.width - 8))}px`;
+        positionMapToolMenu(this.toolActions, this.mapToolsButton);
     }
 
     /**
@@ -458,7 +450,8 @@ export class MapInspectionController {
             button.disabled = name === "feature" && tool.panel.hidden && snapshot === null;
             button.setAttribute("data-unread", String(entry.unread));
             button.setAttribute("data-loading", String(loading));
-            button.setAttribute("aria-pressed", String(this.activeTool === name && !this.minimized));
+            if (entry.unread) button.setAttribute("aria-description", "New results");
+            else button.removeAttribute("aria-description");
             if (name === "feature") {
                 this.featureStatus.textContent = snapshot === null ? "" : snapshot.message + (entry.unread ? " · New results" : "");
                 this.featureStatus.hidden = snapshot === null || this.minimized ||
@@ -488,16 +481,17 @@ export class MapInspectionController {
             this.#setToolLabel(
                 "feature", "Features…", "Inspecting vector features"
             );
-            return;
+        } else {
+            const noun = resultCount === 1 ? "feature" : "features";
+            this.#setToolLabel(
+                "feature",
+                `Features · ${resultCount}${loading ? "…" : ""}`,
+                loading
+                    ? `${resultCount} ${noun} found; vector inspection continues`
+                    : `${resultCount} ${noun} at the selected map location`
+            );
         }
-        const noun = resultCount === 1 ? "feature" : "features";
-        this.#setToolLabel(
-            "feature",
-            `Features · ${resultCount}${loading ? "…" : ""}`,
-            loading
-                ? `${resultCount} ${noun} found; vector inspection continues`
-                : `${resultCount} ${noun} at the selected map location`
-        );
+        this.#renderDock();
     }
 
     /**
@@ -653,7 +647,7 @@ export class MapInspectionController {
      * Resolve one controller-owned presentation descriptor.
      *
      * @param {string} name Stable presentation name.
-     * @return {{name:string,label:string,task:string,context:MapInspectionToolContext|null,panel:HTMLElement,tab:HTMLButtonElement,raster?:boolean,resultNavigation?:boolean}}
+     * @return {{name:string,label:string,task:string,context:MapInspectionToolContext|null,panel:HTMLElement,tab:HTMLButtonElement,raster?:boolean,resultTab?:boolean}}
      * Tool descriptor.
      * @throws {RangeError} When the controller receives an unknown tool name.
      */
@@ -761,32 +755,6 @@ export class MapInspectionController {
     }
 
     /**
-     * Apply horizontal tab-list keyboard navigation to currently open tools.
-     *
-     * @param {KeyboardEvent} event Keyboard event dispatched by one dock tab.
-     * @return {void}
-     */
-    #moveTabFocus(event) {
-        const openTools = this.#openTools().filter(({tab, resultNavigation}) => !resultNavigation && !tab.hidden);
-        const currentIndex = openTools.findIndex(
-            ({ tab }) => tab === event.currentTarget
-        );
-        if (currentIndex < 0) return;
-        let targetIndex;
-        if (event.key === "Home") targetIndex = 0;
-        else if (event.key === "End") targetIndex = openTools.length - 1;
-        else if (event.key === "ArrowRight") {
-            targetIndex = (currentIndex + 1) % openTools.length;
-        } else if (event.key === "ArrowLeft") {
-            targetIndex = (currentIndex - 1 + openTools.length) % openTools.length;
-        } else return;
-        event.preventDefault();
-        const target = openTools[targetIndex];
-        this.#activateTool(target.name);
-        target.tab.focus();
-    }
-
-    /**
      * Synchronize retained panels while keeping Tools above a newly opened dock.
      * Commands dismiss the native menu before their owner runs; passive opening
      * raises an already open menu again and restores its focused command.
@@ -835,14 +803,13 @@ export class MapInspectionController {
     }
 
     /**
-     * Show the active tool's name in the chooser, its content, and any other retained tabs.
-     * Raster results keep their own navigation and the sampling panel keeps its inputs
-     * when collapsed. The named Map tools tab restores the same active tool.
+     * Show the active tool in the header chooser and fit its available peer views on the tab strip.
+     * Raster destinations retain their existing open actions. Passive results update labels
+     * without moving keyboard focus or changing the chosen foreground tool.
      *
      * @return {void}
      */
     #renderDock() {
-        const retainedTabHadFocus = this.tabList.contains(this.document.activeElement);
         this.panels.hidden = this.minimized || this.activeTool === null;
         this.root.setAttribute("data-minimized", String(this.minimized));
         this.root.setAttribute("data-active-tool", this.activeTool ?? "");
@@ -859,30 +826,28 @@ export class MapInspectionController {
         this.toolbar.hidden = this.minimized;
         this.expandButton.hidden = !this.minimized;
         if (!this.minimized && expandWasFocused) this.collapseButton.focus();
-        for (const { name, panel, tab, resultNavigation } of this.tools) {
+        for (const { name, panel, tab, resultTab } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
-            tab.hidden = resultNavigation ? false : !open ||
+            tab.hidden = resultTab ? false : !open ||
                 (name === "style" && this.activeTool === "raster-series");
-            if (resultNavigation) tab.setAttribute("aria-pressed", String(active && !this.minimized));
-            else {
-                tab.setAttribute("aria-selected", String(active));
-                tab.tabIndex = active ? 0 : -1;
-            }
+            tab.setAttribute("aria-selected", String(active));
             panel.setAttribute("data-map-inspection-active", String(active));
             panel.setAttribute(
                 "aria-hidden", String(!active || this.minimized)
             );
             panel.setAttribute("aria-labelledby", tab.id);
         }
-        const visibleTabs = this.tools.filter(({tab, resultNavigation}) => !resultNavigation && !tab.hidden);
-        this.tabList.hidden = this.minimized || !visibleTabs.some(({name}) => name !== this.activeTool);
-        if (this.tabList.hidden && retainedTabHadFocus && !this.minimized) this.mapToolsButton.focus();
-        if (!visibleTabs.some(({tab}) => tab.tabIndex === 0) && visibleTabs.length > 0) {
-            visibleTabs[0].tab.tabIndex = 0;
-        }
         const active = this.minimized ? null : this.activeTool;
         this.#renderResultNavigation();
+        const contexts = new Map(this.tools.map(({ tab, context, name }) => [
+            tab, [context?.source, context?.scope].filter(Boolean).join(" · ") ||
+                (name === "feature" ? this.clickLabel : ""),
+        ]));
+        const previous = this.activationOrder.at(-2);
+        const loneToolTitle = tool && !tool.resultTab && !this.hasClick && this.#openTools().length === 1
+            ? this.mapToolsButton : null;
+        this.tabStrip.render(tool?.tab ?? null, previous ? this.#tool(previous).tab : null, contexts, this.minimized, loneToolTitle);
         if (active !== this.reportedActiveTool) {
             this.#clearToolAttention();
             this.reportedActiveTool = active;
@@ -931,9 +896,8 @@ export class MapInspectionController {
         this.closeButton.removeEventListener("click", this.onClose);
         this.collapseButton.removeEventListener("click", this.onTogglePanel);
         this.expandButton.removeEventListener("click", this.onTogglePanel);
-        for (const { tab } of this.tools.filter(tool => !tool.resultNavigation)) {
+        for (const { tab } of this.tools.filter(tool => !tool.resultTab)) {
             tab.removeEventListener("click", this.onTabClick);
-            tab.removeEventListener("keydown", this.onTabKeydown);
         }
         this.featureDetailsToggle.removeEventListener(
             "click", this.onToggleFeatureDetails
@@ -954,6 +918,222 @@ export class MapInspectionController {
         this.minimized = false;
         this.setFeatureInspectorExpanded(true);
         this.#synchronize();
+        this.tabStrip.destroy();
         this.activityListeners.clear();
+    }
+}
+
+/**
+ * Position an open map menu beside its button, flipping above when needed.
+ * @param {HTMLElement} menu Open popover with its final contents.
+ * @param {HTMLButtonElement} button Button that opened the menu.
+ * @return {void}
+ */
+function positionMapToolMenu(menu, button) {
+    const { innerWidth, innerHeight } = button.ownerDocument.defaultView;
+    const anchor = button.getBoundingClientRect();
+    const bounds = menu.getBoundingClientRect();
+    const below = anchor.bottom + 6;
+    const top = below + bounds.height <= innerHeight - 8 ? below : anchor.top - bounds.height - 6;
+    menu.style.top = `${Math.max(8, Math.min(top, innerHeight - bounds.height - 8))}px`;
+    menu.style.left = `${Math.max(8, Math.min(anchor.right - bounds.width, innerWidth - bounds.width - 8))}px`;
+}
+
+/** Keep the active view and, when space permits, the previous view on the map panel's tab strip. */
+class MapInspectionTabs {
+    /**
+     * Pair each existing tab with a persistent menu item that activates the same button.
+     * @param {Document} documentContext Document containing the map panel.
+     */
+    constructor(documentContext) {
+        this.document = documentContext;
+        this.list = documentContext.querySelector("#map-inspection-tabs");
+        this.trigger = documentContext.querySelector("#map-inspection-all-tabs");
+        this.count = documentContext.querySelector("#map-inspection-tab-count");
+        this.menu = documentContext.querySelector("#map-inspection-tab-menu");
+        this.activeTab = null;
+        this.previousTab = null;
+        this.loneToolTitle = null;
+        this.visibleTabs = [];
+        this.events = new AbortController();
+        const options = { signal: this.events.signal };
+        this.items = Array.from(this.list.children, tab => {
+            const choice = documentContext.createElement("button");
+            choice.type = "button";
+            choice.tabIndex = -1;
+            choice.setAttribute("role", "menuitemradio");
+            const label = documentContext.createElement("span");
+            const detail = documentContext.createElement("small");
+            choice.append(label, detail);
+            this.menu.append(choice);
+            choice.addEventListener("click", () => {
+                this.menu.hidePopover();
+                this.#activateTab(tab);
+            }, options);
+            tab.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
+            return { tab, choice, label, detail };
+        });
+        this.menu.addEventListener("keydown", event => this.#handleNavigationKey(event, true), options);
+        this.menu.addEventListener("toggle", event => {
+            if (event.newState === "open") {
+                positionMapToolMenu(this.menu, this.trigger);
+                this.#focusMenuChoice();
+            }
+        }, options);
+        this.trigger.addEventListener("keydown", event => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                this.trigger.click();
+            }
+        }, options);
+        const ResizeObserverClass = documentContext.defaultView.ResizeObserver;
+        this.observer = ResizeObserverClass && new ResizeObserverClass(() => this.#fitTabs());
+        this.observer?.observe(this.list);
+        for (const { tab } of this.items) this.observer?.observe(tab);
+    }
+
+    /**
+     * Update destinations and their descriptions without replacing focused controls.
+     * @param {HTMLButtonElement|null} active Tab for the visible panel, or null when none is open.
+     * @param {HTMLButtonElement|null} previous Most recently used peer tab.
+     * @param {Map<HTMLButtonElement,string>} contexts Layer, model or scope supplied by the tool owner.
+     * @param {boolean} minimized Whether the entire dock is collapsed.
+     * @param {HTMLButtonElement|null} loneToolTitle Header chooser naming the only open tool, if applicable.
+     * @return {void}
+     */
+    render(active, previous, contexts, minimized, loneToolTitle) {
+        this.activeTab = active;
+        this.previousTab = previous;
+        this.loneToolTitle = loneToolTitle;
+        this.list.hidden = minimized;
+        if (minimized) {
+            this.trigger.hidden = true;
+            this.menu.hidePopover();
+            return;
+        }
+        const first = this.items.find(({ tab }) => !tab.hidden && !tab.disabled);
+        for (const { tab, choice, label, detail } of this.items) {
+            tab.tabIndex = tab === (active ?? first?.tab) ? 0 : -1;
+            choice.hidden = tab.hidden;
+            choice.disabled = tab.disabled;
+            choice.setAttribute("aria-checked", String(tab === active));
+            label.textContent = tab.textContent;
+            const context = contexts.get(tab);
+            const unread = tab.getAttribute("data-unread") === "true";
+            detail.textContent = [context, unread && "New results"].filter(Boolean).join(" · ");
+            detail.hidden = !detail.textContent;
+        }
+        this.#fitTabs();
+    }
+
+    /**
+     * Fit complete labels in DOM order. When only one tool is open, its header title
+     * suffices alongside the default shortcuts. In overflow the active tab always stays visible.
+     * Overflowed buttons remain measurable so resizing and font changes can bring them back.
+     * @return {void}
+     */
+    #fitTabs() {
+        if (this.list.hidden) return;
+        const width = this.list.getBoundingClientRect().width +
+            (this.trigger.hidden ? 0 : this.trigger.getBoundingClientRect().width);
+        if (!width) return;
+        const available = this.items.filter(({ tab }) => !tab.hidden);
+        const widths = new Map(available.map(({ tab }) => [
+            tab, Math.max(tab.scrollWidth, tab.getBoundingClientRect().width),
+        ]));
+        const totalWidth = Array.from(widths.values()).reduce((sum, value) => sum + value, 0);
+        const loneTabWidth = this.loneToolTitle ? widths.get(this.activeTab) : 0;
+        const overflow = totalWidth - loneTabWidth > width;
+        const headerOnlyTab = this.loneToolTitle && !overflow ? this.activeTab : null;
+        const hadIndexFocus = this.document.activeElement === this.trigger || this.menu.contains(this.document.activeElement);
+        const hadTitleTabFocus = headerOnlyTab && this.document.activeElement === headerOnlyTab;
+        this.count.textContent = String(available.length);
+        this.trigger.hidden = !overflow;
+        let space = width - (overflow ? this.trigger.getBoundingClientRect().width : 0);
+        const priority = new Set([this.activeTab, this.previousTab, ...this.visibleTabs, ...widths.keys()]);
+        const visible = new Set();
+        for (const tab of priority) {
+            if (!widths.has(tab) || tab === headerOnlyTab) continue;
+            const tabWidth = widths.get(tab);
+            if (!overflow || tab === this.activeTab || tabWidth <= space) {
+                visible.add(tab);
+                space -= tabWidth;
+            }
+        }
+        this.visibleTabs = Array.from(widths.keys()).filter(tab => visible.has(tab));
+        const keyboardTab = visible.has(this.activeTab) ? this.activeTab : this.visibleTabs.find(tab => !tab.disabled);
+        const unread = [];
+        for (const { tab } of available) {
+            const outside = !visible.has(tab);
+            tab.tabIndex = tab === keyboardTab ? 0 : -1;
+            tab.setAttribute("data-overflow", String(outside));
+            if (outside && tab.getAttribute("data-unread") === "true") unread.push(tab.textContent);
+        }
+        const notice = unread.length ? `, new results in ${unread.join(", ")}` : "";
+        this.trigger.setAttribute("data-unread", String(Boolean(notice)));
+        this.trigger.setAttribute("aria-label", `All tabs (${available.length})${notice}`);
+        this.trigger.title = notice ? `New results in ${unread.join(", ")}` : "";
+        if (!overflow) {
+            this.menu.hidePopover();
+            if (hadIndexFocus || hadTitleTabFocus) (this.loneToolTitle ?? keyboardTab)?.focus();
+        } else if (this.menu.matches(":popover-open")) {
+            positionMapToolMenu(this.menu, this.trigger);
+            if (this.document.activeElement?.hidden || this.document.activeElement?.disabled) this.#focusMenuChoice();
+        }
+    }
+
+    /** Focus the selected menu row or the first available destination. @return {void} */
+    #focusMenuChoice() {
+        const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled);
+        (enabled.find(({ tab }) => tab === this.activeTab) ?? enabled[0])?.choice.focus();
+    }
+
+    /**
+     * Open a destination through its existing action and focus its revealed tab.
+     * @param {HTMLButtonElement} tab Available result or retained tool button.
+     * @return {void}
+     */
+    #activateTab(tab) {
+        tab.click();
+        tab.focus();
+    }
+
+    /**
+     * Switch views along the strip or move focus vertically within All tabs.
+     * @param {KeyboardEvent} event Key pressed on a tab or a menu item.
+     * @param {boolean} inMenu Whether the key came from the open menu.
+     * @return {void}
+     */
+    #handleNavigationKey(event, inMenu) {
+        if (inMenu && (event.key === "Escape" || event.key === "Tab")) {
+            this.menu.hidePopover();
+            this.trigger.focus();
+            if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            return;
+        }
+        const headerOnlyTab = this.loneToolTitle && this.trigger.hidden ? this.activeTab : null;
+        const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled && (inMenu || tab !== headerOnlyTab));
+        const current = enabled.findIndex(item => (inMenu ? item.choice : item.tab) === event.target);
+        let next;
+        if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = enabled.length - 1;
+        else if (event.key === (inMenu ? "ArrowDown" : "ArrowRight")) next = (current + 1) % enabled.length;
+        else if (event.key === (inMenu ? "ArrowUp" : "ArrowLeft")) next = (current - 1 + enabled.length) % enabled.length;
+        else return;
+        if (current === -1) return;
+        event.preventDefault();
+        if (inMenu) enabled[next].choice.focus();
+        else this.#activateTab(enabled[next].tab);
+    }
+
+    /** Release tab listeners, menu entries and size observation. @return {void} */
+    destroy() {
+        this.events.abort();
+        this.observer?.disconnect();
+        this.menu.hidePopover();
+        this.menu.replaceChildren();
     }
 }

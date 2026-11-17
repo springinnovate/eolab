@@ -1500,6 +1500,7 @@ async function initializeCatalog(
                 {matched: area.matched, total: area.total, complete: true});
         },
         onOpen: () => mapInspection.showModels(),
+        onViewLabel: label => mapInspection.setToolContext("models", { source: label, scope: "" }),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
     });
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
