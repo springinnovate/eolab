@@ -279,3 +279,69 @@ test("unavailable saved layers remain reachable after closing the dialog and rem
   assert.match(elements.get("#saved-map-view-dialog-summary").textContent, /No unavailable/);
   view.unbind();
 });
+
+test("workspace publication starts with a blank subtitle on every fresh dialog", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { SavedMapViewController } = await import("../../src/saved-map-view/controller.js");
+  const { SavedMapApiClient } = await import("../../src/saved-map-view/api-client.js");
+  const { SavedMapViewLocalStorage } = await import("../../src/saved-map-view/local-storage.js");
+  const { view, elements } = viewFixture();
+  const submissions = [];
+  const client = new SavedMapApiClient(async (_url, options) => {
+    const record = JSON.parse(options.body);
+    submissions.push(record);
+    return new Response(JSON.stringify(record), { status: 201 });
+  });
+  const source = await readFile(new URL("../../src/main.js", import.meta.url), "utf8");
+  const start = source.indexOf("savedMapViewController = new SavedMapViewController({");
+  const end = source.indexOf("\n    });", start) + "\n    });".length;
+  assert.ok(start >= 0 && end > start, "workspace saved-map composition is present");
+  const site = { appTitle: "Rainforest atlas", appSubtitle: "Explore regional habitats",
+    appVersion: "0.9.0", initialView: { latitude: 10, longitude: 20, zoom: 6 } };
+  const environment = {
+    SavedMapViewController, SavedMapViewLocalStorage,
+    SavedMapViewDomView: function () { return view; },
+    SavedMapApiClient: function () { return client; },
+    createSavedMapLeafletViewport: () => ({ snapshot: () => ({
+      center: { latitude: 10, longitude: 20 }, zoom: 6,
+    }) }),
+    leafletMap: {}, mapLayerController: { retainedRecords: [] },
+    catalogVisualization: {}, catalogItemClient: {}, appGlobalConfiguration: site,
+    globalThis: { location: { origin: "https://viewer.example" } },
+    isSharedViewer: false, editableMapSlug: null, namedMapSlug: null,
+    applyMapHeading: () => assert.fail("publishing changed the workspace heading"),
+    basemapControl: { snapshot: () => "none" }, mapLegend: null,
+    restoreSavedUpload: async () => null,
+  };
+  const controller = new Function(...Object.keys(environment),
+    `let savedMapViewController;\n${source.slice(start, end)}\nreturn savedMapViewController;`
+  )(...Object.values(environment));
+  const el = name => elements.get(`#publish-map-${name}`);
+  try {
+    for (const [slug, subtitle] of [["blank-map", ""], ["named-map", "Wetland restoration"]]) {
+      elements.get("#copy-map-link").click();
+      assert.equal(el("dialog").open, true);
+      assert.equal(el("title").value, site.appTitle);
+      assert.equal(el("subtitle").value, "");
+      el("slug").value = slug;
+      el("subtitle").value = subtitle;
+      el("form").dispatch("submit", { preventDefault() {} });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(el("result").hidden, false);
+      assert.equal(el("open").href, `https://viewer.example/maps/${slug}`);
+      assert.equal(submissions.at(-1).subtitle, subtitle);
+      assert.equal(submissions.at(-1).title, site.appTitle);
+      el("close").click();
+    }
+    elements.get("#copy-map-link").click();
+    assert.equal(el("subtitle").value, "", "a previous map's subtitle is not reused");
+    el("subtitle").value = "Abandoned draft";
+    el("close").click();
+    elements.get("#copy-map-link").click();
+    assert.equal(el("subtitle").value, "", "cancelling also resets the next form");
+    assert.equal(site.appSubtitle, "Explore regional habitats");
+    assert.equal(submissions.length, 2);
+  } finally {
+    controller.destroy();
+  }
+});
