@@ -4625,7 +4625,7 @@ article.raster-histogram-summary {
   overflow-wrap: anywhere;
 }
 #raster-sampling-tool {
-  --compact-sampling-target: 20px;
+  --compact-sampling-target: 24px;
   order: -2;
   pointer-events: auto;
   z-index: 1101;
