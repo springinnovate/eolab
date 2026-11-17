@@ -56,6 +56,10 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sample-window-range"
         );
+        this.rangeLabel = requireRasterControl(documentContext, 'label[for="raster-sample-window-range"]');
+        this.expandedSizeControls = requireRasterControl(documentContext, "#raster-sample-window-size");
+        this.compactSizeControls = requireRasterControl(documentContext, "#raster-compact-box-size");
+        this.scrollHint = requireRasterControl(documentContext, "#raster-box-scroll-hint");
         this.sampleWindowNumber = requireRasterControl(
             documentContext,
             "#raster-sample-window-number"
@@ -199,8 +203,8 @@ export class RasterSamplingAreaControlsView {
         this.clearSampleWindowButton.disabled = !available;
     }
 
-    /** Return whether Sampling box is selected for pointer preview.
-     * @return {boolean} Whether the Sampling box radio is checked.
+    /** Return whether map input and size controls should act on a sampling box.
+     * @return {boolean} The foreground workflow's box choice, or the map sampler's radio choice.
      */
     isSamplingBoxSelected() {
         return this.areaContext?.usesSamplingBox ?? this.useMapWindowButton.checked;
@@ -215,11 +219,16 @@ export class RasterSamplingAreaControlsView {
         this.disclosureSummary.focus();
     }
 
-    /** Show subordinate controls only for the chosen area, without applying it.
+    /** Keep the same slider available for box sampling, including when the area choices are closed.
      * @return {void}
      */
     #renderSelectedControls() {
-        const boxSelected = this.areaContext?.usesSamplingBox ?? this.useMapWindowButton.checked;
+        const boxSelected = this.isSamplingBoxSelected();
+        const compact = boxSelected && !this.disclosure.open;
+        const sliderParent = compact ? this.compactSizeControls : this.expandedSizeControls;
+        if (this.rangeLabel.parentNode !== sliderParent) sliderParent.prepend(this.rangeLabel);
+        this.compactSizeControls.hidden = !compact;
+        this.scrollHint.hidden = !boxSelected;
         this.mapBoxControls.hidden = !boxSelected;
         this.vectorControls.hidden = !this.vectorChoice.checked;
         this.#renderAreaSummary();

@@ -19,6 +19,7 @@ import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
 import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
+import { MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM } from "../../src/raster/geometry.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { buildRasterLegend, DEFAULT_RASTER_STYLE, deriveRasterStyleFromStatistics } from "../../src/raster/style.js";
@@ -4688,6 +4689,72 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     assert.equal(thirdRequests.length, 2);
     assert.equal(controlsView.displayedStatistics.itemId, third.id);
     viewer.destroy();
+});
+
+test("Alt-scroll resizes the committed box around its center and leaves other map gestures alone", async () => {
+    const clock = createManualClock(), requests = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        requests.push(area);
+        return createLayerStatistics(item, area);
+    }, {clock});
+    const container = h.leafletMap.container;
+    /** Send wheel input and report whether the sampler took it from map zoom.
+     * @param {number} deltaY Vertical wheel distance.
+     * @param {Partial<WheelEvent>} [options] Modifiers, units or target to override.
+     * @return {boolean} Whether the map's default gesture was prevented.
+     */
+    function scroll(deltaY, options = {}) {
+        const event = new Event("wheel", {cancelable: true});
+        const {target = {closest: () => null}, ...input} = options;
+        Object.defineProperty(event, "target", {value: target});
+        Object.assign(event, {altKey: true, deltaMode: 0, deltaY}, input);
+        for (const listener of container.listeners.get("wheel")) listener(event);
+        return event.defaultPrevented;
+    }
+    try {
+        await h.viewer.show(createRasterItem("wheel"));
+        assert.equal(scroll(-100), false, "whole-raster mode keeps wheel zoom");
+        h.controlsView.handlers.onSampleWindowRangeInput(100);
+        h.viewer.exploreAt({lng: 12, lat: 20});
+        await flushPromises();
+        const original = h.viewer.getSelectedArea();
+        const before = requests.length;
+        for (const modifiers of [{altKey: false}, {shiftKey: true}, {ctrlKey: true}, {metaKey: true}]) {
+            assert.equal(scroll(-100, modifiers), false);
+        }
+        assert.equal(scroll(0), false);
+        assert.equal(scroll(-100, {target: {closest: () => ({})}}), false, "scrolling a map control stays local");
+        h.viewer.setPointerInspectionEnabled(false);
+        assert.equal(scroll(-100), false);
+        h.viewer.setPointerInspectionEnabled(true);
+        assert.equal(scroll(-40), true);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 100);
+        scroll(-60);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 110);
+        scroll(-3, {deltaMode: 1});
+        assert.equal(h.controlsView.sampleWindowSizeKm, 121);
+        scroll(1, {deltaMode: 2});
+        assert.equal(h.controlsView.sampleWindowSizeKm, 110);
+        assert.deepEqual(h.viewer.getSelectedArea(), original);
+        assert.equal(requests.length, before);
+        clock.flush();
+        await flushPromises();
+        assert.equal(requests.length, before + 1);
+        assert.deepEqual(requests.at(-1).samplingBox, {...original.samplingBox, sideLengthKm: 110});
+        h.controlsView.handlers.onSampleWindowRangeInput(1);
+        assert.equal(scroll(100), true);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 1);
+        scroll(-100);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 2);
+        h.controlsView.handlers.onSampleWindowRangeInput(MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+        assert.equal(scroll(-100), true);
+        assert.equal(h.controlsView.sampleWindowSizeKm, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+        h.controlsView.handlers.onUseVectorArea();
+        assert.equal(scroll(-100), false);
+    } finally {
+        h.destroy();
+    }
+    assert.equal(container.listenerCount("wheel"), 0);
 });
 
 test("map box resizes immediately while committing only the final debounced area", async () => {
