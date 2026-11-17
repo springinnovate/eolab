@@ -7,9 +7,9 @@ import { clampHistogramPercentileInput } from "./percentile-slider-input.js";
 
 /** Percentile names and the committed colors used by their chart markers. */
 const PERCENTILE_STOPS = Object.freeze([
-    ["lower", "Lower", "minimumColor"],
-    ["middle", "Middle", "midpointColor"],
-    ["upper", "Upper", "maximumColor"],
+    ["lower", "Lower (L)", "minimumColor"],
+    ["middle", "Middle (M)", "midpointColor"],
+    ["upper", "Upper (U)", "maximumColor"],
 ]);
 
 /** Own one histogram's percentile sliders, estimates and rescale choice. */

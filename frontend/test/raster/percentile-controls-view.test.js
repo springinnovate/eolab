@@ -17,6 +17,11 @@ test("percentile inspection reports immediate estimates and independent rescale 
     view.render(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, SETTINGS, true, "");
     second.render(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, SETTINGS, true, "");
 
+    for (const [name, label] of [["lower", "Lower (L)"], ["middle", "Middle (M)"], ["upper", "Upper (U)"]]) {
+        const input = view.inputs[name];
+        assert.equal(input.parentElement.children[0].textContent, label);
+        assert.equal(input.getAttribute("aria-label"), label + " percentile");
+    }
     assert.equal(view.rescaleInput.checked, false);
     assert.match(view.values.lower.textContent, /^5% ≈ /);
     assert.equal(view.inputs.lower.getAttribute("aria-valuetext"), view.values.lower.textContent);

@@ -19,7 +19,8 @@ import { clampHistogramPercentileInput } from "./percentile-slider-input.js";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const LEGEND_GRID_SIZE = 12;
-const HISTOGRAM_VIEWBOX_WIDTH = 660;
+const HISTOGRAM_VIEWBOX_WIDTH = 672;
+const HISTOGRAM_MARKER_TOP_MARGIN = 12;
 const HISTOGRAM_BASE_VIEWBOX_HEIGHT = 620;
 const HISTOGRAM_PLOT_X = 160;
 const HISTOGRAM_PLOT_Y = 74;
@@ -654,7 +655,7 @@ export class BivariateRasterControlsView {
         );
         this.histogram.setAttribute(
             "viewBox",
-            `0 0 ${HISTOGRAM_VIEWBOX_WIDTH} ${viewBoxHeight}`
+            `0 -${HISTOGRAM_MARKER_TOP_MARGIN} ${HISTOGRAM_VIEWBOX_WIDTH} ${viewBoxHeight + HISTOGRAM_MARKER_TOP_MARGIN}`
         );
         const plotRight = HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE;
         const plotBottom = HISTOGRAM_PLOT_Y + HISTOGRAM_PLOT_SIZE;
@@ -1136,11 +1137,14 @@ export class BivariateRasterControlsView {
                         description: `${description} threshold for ${this.labels[`${axis}Label`]} (${axis.toUpperCase()}) at ${formatRasterPixelValue(value)}`,
                     }];
                 });
-            const targets = appendHistogramThresholdMarkers(this.documentContext, group, markers, axis === "x"
-                ? {axis, edge: HISTOGRAM_PLOT_Y - HISTOGRAM_MARGINAL_SIZE, guideEnd: HISTOGRAM_PLOT_Y,
-                    minimum: HISTOGRAM_PLOT_X, maximum: plotRight, glyphSize: 14}
-                : {axis, edge: plotRight + HISTOGRAM_MARGINAL_SIZE, guideEnd: plotRight,
-                    minimum: HISTOGRAM_PLOT_Y, maximum: plotBottom, glyphSize: 14});
+            const targets = appendHistogramThresholdMarkers(this.documentContext, group, markers, {
+                axis, glyphSize: 24,
+                ...(axis === "x"
+                    ? {edge: HISTOGRAM_PLOT_Y - HISTOGRAM_MARGINAL_SIZE, guideEnd: HISTOGRAM_PLOT_Y,
+                        minimum: HISTOGRAM_PLOT_X, maximum: plotRight}
+                    : {edge: plotRight + HISTOGRAM_MARGINAL_SIZE, guideEnd: plotRight,
+                        minimum: HISTOGRAM_PLOT_Y, maximum: plotBottom}),
+            });
             focusTarget ??= targets.find(marker => marker.getAttribute("data-threshold-id") === focusedId);
             this.thresholdMarkers.append(group);
         }
