@@ -242,10 +242,10 @@ def test_sampled_continuous_categorical_and_paired_reads_keep_native_masks(
         validity[np.ix_(centers, centers)] & np.isfinite(selected) & (selected != -9999)
     )
     with rasterio.open(path) as source:
-        sampled, plan = sample_grid.read_source_window_sample_grid(
+        sampled = sample_grid.read_source_window_sample_grid(
             source, Window(0, 0, 600, 600)
         )
-        assert plan.width == plan.height == 127
+        assert sampled.shape == (127, 127)
         assert np.array_equal(~np.ma.getmaskarray(sampled), selected_valid)
         assert np.array_equal(sampled.compressed(), selected[selected_valid])
     continuous = read_raster_statistics(path, WholeRasterSamplingArea())
@@ -324,7 +324,8 @@ def test_overview_statistics_preserve_source_validity(
         target.build_overviews([2, 4], Resampling.nearest)
     with rasterio.open(path) as source:
         window = Window(0, 0, 1024, 1024)
-        sampled, plan = sample_grid.read_source_window_sample_grid(source, window)
+        sampled = sample_grid.read_source_window_sample_grid(source, window)
+        plan = sample_grid.plan_source_window_sample_grid(source, window)
         paired_sample = sample_grid.read_planned_sample_grid_from_overview(
             source, window, plan, None
         )

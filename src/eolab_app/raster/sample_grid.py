@@ -11,6 +11,7 @@ from rasterio.windows import Window
 from eolab_app.raster.reader import RasterDataset
 
 from eolab_app.raster.source_contract import (
+    BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
     SourceBlockIndex,
     source_work_for_blocks,
     mask_invalid_raster_values,
@@ -243,117 +244,94 @@ def _source_window_cell_positions(
     )
 
 
-def _overview_read_shape(
-    dataset: RasterDataset,
-    source_window: Window,
-    sample_grid_width: int,
-    sample_grid_height: int,
-) -> tuple[int, int] | None:
-    """Choose the coarsest overview that retains the final grid resolution.
-
-    The returned shape matches one advertised overview factor closely enough
-    that GDAL selects that overview for a nearest-neighbor decimated read. A
-    shallow overview pyramid is ignored when reading it would require a broad
-    intermediate allocation.
-
-    Args:
-        dataset: Open source whose overview factors may be inspected.
-        source_window: Positive integral window inside the source.
-        sample_grid_width: Final sample-grid width.
-        sample_grid_height: Final sample-grid height.
-
-    Returns:
-        Intermediate overview height and width, or ``None`` when no advertised
-        overview preserves the final grid within the fixed edge limit.
-    """
-    source_width = int(source_window.width)
-    source_height = int(source_window.height)
-    overview_factors = sorted(
-        {
-            int(factor)
-            for factor in dataset.overviews(1)
-            if int(factor) > 1
-        },
-        reverse=True,
-    )
-    for factor in overview_factors:
-        if source_width < factor or source_height < factor:
-            continue
-        read_width = math.ceil(source_width / factor)
-        read_height = math.ceil(source_height / factor)
-        if (
-            sample_grid_width <= read_width <= SAMPLE_GRID_MAX_OVERVIEW_DIMENSION
-            and sample_grid_height
-            <= read_height
-            <= SAMPLE_GRID_MAX_OVERVIEW_DIMENSION
-        ):
-            return read_height, read_width
-    return None
-
-
 def _read_bounded_overview(
     dataset: RasterDataset,
     source_window: Window,
-    plan: "SampleGridPlan",
+    sample_width: int,
+    sample_height: int,
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> numpy.ma.MaskedArray | None:
-    """Read one suitable embedded overview into a bounded masked array.
-
-    Dataset masks force native sampling: a coarse or stale overview cannot
-    establish validity at the original sample positions.
+    """Read the coarsest embedded level that fits the grid and tile budgets.
 
     Args:
-        dataset: Open source used to build ``plan``.
-        source_window: Positive integral source window represented by the grid.
-        plan: Admitted final sample-grid plan.
-        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
+        dataset: Open authorized source. Embedded dataset masks require native
+            center samples to preserve their validity.
+        source_window: Integral source window covered by the grid.
+        sample_width: Minimum intermediate width in pixels.
+        sample_height: Minimum intermediate height in pixels.
+        cancellation_requested: Check for an obsolete read before and after I/O.
 
     Returns:
-        Bounded masked overview values, or ``None`` when the overview pyramid
-        has no suitable level or the source has an embedded dataset mask.
+        Masked values covering the requested window, or None when no level fits.
 
     Raises:
-        RasterReadCancelled: If every request waiter disconnects.
-        rasterio.errors.RasterioError: If the overview read fails.
-        ValueError: If Rasterio returns a shape other than the bounded request.
+        RasterReadCancelled: If the request was cancelled.
+        rasterio.errors.RasterioError: If opening or reading a level fails.
     """
-
+    require_active_raster_read(cancellation_requested)
     if MaskFlags.per_dataset in dataset.mask_flag_enums[0]:
         return None
-    read_shape = _overview_read_shape(
-        dataset,
-        source_window,
-        plan.width,
-        plan.height,
-    )
-    if read_shape is None:
-        return None
-    require_active_raster_read(cancellation_requested)
-    values = dataset.read(
-        1,
-        window=source_window,
-        out_shape=read_shape,
-        masked=False,
-        resampling=Resampling.nearest,
-    )
-    require_active_raster_read(cancellation_requested)
-    if values.shape != read_shape:
-        raise ValueError("Raster overview read returned an unexpected shape")
-    return mask_invalid_raster_values(values, dataset.nodatavals[0])
+    for index in reversed(range(len(dataset.overviews(1)))):
+        # GDAL reports rounded factors. Use the stored level's grid and prevent
+        # RasterIO from silently selecting a different level for this window.
+        with rasterio.open(
+            dataset.name, driver="GTiff", OVERVIEW_LEVEL=f"{index}only"
+        ) as level:
+            x_scale = level.width / dataset.width
+            y_scale = level.height / dataset.height
+            window = Window(
+                source_window.col_off * x_scale,
+                source_window.row_off * y_scale,
+                source_window.width * x_scale,
+                source_window.height * y_scale,
+            )
+            width, height = math.ceil(window.width), math.ceil(window.height)
+            if max(width, height) > SAMPLE_GRID_MAX_OVERVIEW_DIMENSION:
+                break
+            if width < sample_width or height < sample_height:
+                continue
+            tile_height, tile_width = level.block_shapes[0]
+            bytes_per_pixel = numpy.dtype(level.dtypes[0]).itemsize + 1
+            tile_bytes = tile_width * tile_height * bytes_per_pixel
+            tile_columns = (
+                math.ceil((window.col_off + window.width) / tile_width)
+                - math.floor(window.col_off / tile_width)
+            )
+            tile_rows = (
+                math.ceil((window.row_off + window.height) / tile_height)
+                - math.floor(window.row_off / tile_height)
+            )
+            tile_count = tile_rows * tile_columns
+            if (
+                tile_bytes > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
+                or tile_count > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
+                or tile_bytes * tile_count > SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
+            ):
+                continue
+            require_active_raster_read(cancellation_requested)
+            values = level.read(
+                1, window=window, out_shape=(height, width),
+                masked=False, resampling=Resampling.nearest,
+            )
+            require_active_raster_read(cancellation_requested)
+            return mask_invalid_raster_values(values, dataset.nodatavals[0])
+    return None
 
 
 def _read_overview_sample_grid(
     dataset: RasterDataset,
     source_window: Window,
-    plan: "SampleGridPlan",
+    width: int,
+    height: int,
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> numpy.ma.MaskedArray | None:
     """Read and center-sample one suitable embedded overview.
 
     Args:
-        dataset: Open source used to build ``plan``.
+        dataset: Authorized raster source.
         source_window: Positive integral source window represented by the grid.
-        plan: Admitted final sample-grid plan.
+        width: Final sample-grid width.
+        height: Final sample-grid height.
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
@@ -363,12 +341,12 @@ def _read_overview_sample_grid(
     Raises:
         RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If the overview read fails.
-        ValueError: If Rasterio returns a shape other than the bounded request.
     """
     overview = _read_bounded_overview(
         dataset,
         source_window,
-        plan,
+        width,
+        height,
         cancellation_requested,
     )
     if overview is None:
@@ -376,8 +354,8 @@ def _read_overview_sample_grid(
     positions = _cell_positions(
         overview.shape[1],
         overview.shape[0],
-        plan.width,
-        plan.height,
+        width,
+        height,
     )
     rows = numpy.fromiter(
         (cell[0][0] for cell in positions),
@@ -389,7 +367,7 @@ def _read_overview_sample_grid(
         dtype=numpy.int64,
         count=len(positions),
     )
-    return overview[rows, columns].reshape((plan.height, plan.width))
+    return overview[rows, columns].reshape((height, width))
 
 
 def read_planned_sample_grid_from_overview(
@@ -424,7 +402,8 @@ def read_planned_sample_grid_from_overview(
     overview = _read_bounded_overview(
         dataset,
         source_window,
-        plan,
+        plan.width,
+        plan.height,
         cancellation_requested,
     )
     if overview is None:
@@ -485,25 +464,18 @@ def _block_index(
     return row // block_height, column // block_width
 
 
-def plan_source_window_sample_grid(
-    dataset: RasterDataset,
-    source_window: Window,
-) -> SampleGridPlan:
-    """Plan a fixed center grid inside one bounded source-pixel window.
-
-    The grid retains source-window aspect ratio and satisfies the fixed
-    native-block and decoded-work ceilings before any source reads.
+def _source_window_grid_shape(dataset: RasterDataset, source_window: Window) -> tuple[int, int]:
+    """Validate a source window and fit the final grid to its aspect ratio.
 
     Args:
-        dataset: Open structurally authorized one-band raster.
-        source_window: Positive integral window wholly inside the source.
+        dataset: Authorized open one-band source.
+        source_window: Integral window expressed in native pixel coordinates.
 
     Returns:
-        Sample grid with the native blocks and decoded-byte estimate needed to read it.
+        Sample height and width before selecting an overview or native blocks.
 
     Raises:
-        ValueError: If the source/window contract is invalid or the fixed grid
-            exceeds a source-work limit.
+        ValueError: If the raster structure or source window is unsupported.
     """
     require_bounded_source_structure(dataset)
     numeric_window = tuple(
@@ -530,11 +502,34 @@ def plan_source_window_sample_grid(
     ):
         raise ValueError("Raster analysis source window is outside the source")
 
-    sample_height, sample_width = _sample_grid_dimensions(
+    return _sample_grid_dimensions(
         width,
         height,
         min(SAMPLE_GRID_MAX_DIMENSION, max(width, height)),
     )
+
+
+def plan_source_window_sample_grid(
+    dataset: RasterDataset,
+    source_window: Window,
+) -> SampleGridPlan:
+    """Plan a fixed center grid inside one bounded source-pixel window.
+
+    The grid retains source-window aspect ratio and satisfies the fixed
+    native-block and decoded-work ceilings before any source reads.
+
+    Args:
+        dataset: Open structurally authorized one-band raster.
+        source_window: Positive integral window wholly inside the source.
+
+    Returns:
+        Sample grid with the native blocks and decoded-byte estimate needed to read it.
+
+    Raises:
+        ValueError: If the source/window contract is invalid or the fixed grid
+            exceeds a source-work limit.
+    """
+    sample_height, sample_width = _source_window_grid_shape(dataset, source_window)
     positions = _source_window_cell_positions(
         source_window,
         sample_width,
@@ -722,7 +717,7 @@ def read_source_window_sample_grid(
     dataset: RasterDataset,
     source_window: Window,
     cancellation_requested: RasterReadCancellationCheck | None = None,
-) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:
+) -> numpy.ma.MaskedArray:
     """Read a fixed center grid from one bounded source-pixel window.
 
     A suitable advertised overview is read at its own resolution and sampled
@@ -735,23 +730,20 @@ def read_source_window_sample_grid(
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
-        Masked source-aligned sample values and the plan used to read them.
+        Masked source-aligned sample values.
 
     Raises:
         ValueError: If planning cannot satisfy the fixed source-read contract.
         RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If a bounded native-block read fails.
     """
-    plan = plan_source_window_sample_grid(dataset, source_window)
+    height, width = _source_window_grid_shape(dataset, source_window)
     overview_sample = _read_overview_sample_grid(
-        dataset,
-        source_window,
-        plan,
-        cancellation_requested,
+        dataset, source_window, width, height, cancellation_requested
     )
     if overview_sample is not None:
-        return overview_sample, plan
-    return (
-        read_planned_sample_grid(dataset, plan, cancellation_requested),
-        plan,
+        return overview_sample
+    plan = plan_sample_grid_for_source_positions(
+        dataset, width, height, _source_window_cell_positions(source_window, width, height)
     )
+    return read_planned_sample_grid(dataset, plan, cancellation_requested)

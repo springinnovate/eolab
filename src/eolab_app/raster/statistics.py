@@ -59,7 +59,7 @@ from eolab_app.sampling_area import (
     WholeRasterSamplingArea,
 )
 
-RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v8"
+RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v9"
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES = 500_000
 # Match the ESOS-C catalog selection contract: a resampled cell contributes when the
@@ -389,7 +389,7 @@ def read_raster_statistics(
         source_height = int(source_window.height)
         exact_plan = plan_exact_source_window(dataset, source_window)
         if exact_plan is None:
-            sample, _ = read_source_window_sample_grid(
+            sample = read_source_window_sample_grid(
                 dataset,
                 source_window,
                 cancellation_requested,
