@@ -145,7 +145,6 @@ function drawRasterHistogramChart(
         {scale: scaleLinear([0, 1], [plot.bottom, plot.top]), values: yTicks,
             format: fraction => formatHistogramTick(scales.yAxis.valueAt(fraction), scales.yAxis.scale === "log" ?
                 scales.yAxis.valueAt(fraction) / 10 : (scales.yAxis.maximum - scales.yAxis.minimum) / 2)}, [
-            {text: `Sampled pixels (%)${scales.yAxis.scale === "log" ? " · log" : ""}`, x: plot.left, y: markers.length ? 12 : 15, anchor: "start"},
             {text: (scales.offset === 0 ? valueLabel : `${valueLabel} (offset ${scales.offset >= 0 ? "+" : ""}${scales.offset})`) +
                 (scales.xAxis.scale === "log" ? " · log" : ""), x: plot.left + plot.width / 2, y: plot.bottom + 38},
         ]);
@@ -222,7 +221,8 @@ function drawRasterHistogramChart(
 }
 
 /**
- * Render a self-contained responsive chart, including axes and coordinates.
+ * Render histogram bars, ticks, raster-value units, and inspection in the chart SVG.
+ * The adjacent bar-height controls supply the visible Y-axis label.
  * Resize observation keeps fonts/margins in CSS pixels rather than shrinking
  * labels along with the bars. Re-render/clear disconnects the previous owner.
  * @param {SVGSVGElement} chart Histogram SVG (static or dynamically created).

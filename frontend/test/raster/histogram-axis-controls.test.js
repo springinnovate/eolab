@@ -56,6 +56,31 @@ test("axis editor retains settings across samples and explicitly falls back for 
     assert.match(next.rows.get("y").status.textContent, /positive edges/);
 });
 
+test("bar-height changes preserve a fallback value axis and its unfinished range", () => {
+    const state = {options: {x: {scale: "log", bounds: "auto", minimum: "", maximum: ""}}};
+    const valueAxis = {...definition, key: "x", frequency: false, edges: [-3, -2, -1, 0]};
+    const view = new HistogramAxisControls(new FakeRasterControlDocument(), [definition, valueAxis], state, () => {});
+    const [, linear, log] = view.createBarHeightScaleControl().children;
+    const original = view.axes.x;
+    log.dispatchEvent(new Event("click"));
+    assert.equal(view.axes.x, original);
+    assert.equal(state.options.x.scale, "log");
+    assert.equal(view.axes.y.scale, "log");
+    assert.match(view.summary.textContent, /using Auto\/Linear/);
+    const {fields, status} = view.rows.get("x");
+    fields.bounds.input.value = "values";
+    fields.bounds.input.dispatchEvent(new Event("change"));
+    fields.minimum.input.value = "";
+    fields.minimum.input.dispatchEvent(new Event("change"));
+    const draftError = status.textContent;
+    linear.dispatchEvent(new Event("click"));
+    assert.equal(view.axes.y.scale, "linear");
+    assert.equal(view.axes.x, original);
+    assert.equal(fields.minimum.input.value, "");
+    assert.equal(status.textContent, draftError);
+    assert.match(view.summary.textContent, /using Auto\/Linear/);
+});
+
 test("disabled or disposed editors cannot redraw a stale sample after delayed input", async () => {
     const doc = new FakeRasterControlDocument(), updates = [];
     const view = new HistogramAxisControls(doc, [definition], {}, axes => updates.push(axes));

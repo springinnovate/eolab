@@ -30,6 +30,7 @@ from eolab_app.raster.reader import RasterData
 
 from eolab_app.raster.errors import (
     RasterConflictError,
+    RasterSamplingBoxOutsideSourceError,
     RasterStatisticsCapacityError,
     RasterStatisticsQueueTimeoutError,
 )
@@ -305,6 +306,7 @@ class RasterStatisticsService:
 
         Raises:
             RasterFeatureError: If catalog/source authorization fails.
+            RasterSamplingBoxOutsideSourceError: If the box misses the original grid.
             RasterConflictError: If raster, catalog selection, or bounded reading fails.
             RasterStatisticsCapacityError: If the pending-read or caller limit is full.
             RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
@@ -358,6 +360,10 @@ class RasterStatisticsService:
         try:
             return cast(RasterStatistics, await asyncio.shield(work.task))
         except NoRasterBoundsOverlapError as error:
+            if isinstance(sampling_area, SamplingBoxArea):
+                raise RasterSamplingBoxOutsideSourceError(
+                    "The sampling box does not overlap this raster."
+                ) from error
             detail = (
                 "The selected polygons do not overlap the raster. Choose another "
                 "polygon selection or use the whole raster."

@@ -53,6 +53,7 @@ body,
   --catalog-results-width: clamp(300px, 27vw, 380px);
   --catalog-inspector-width: clamp(340px, 25vw, 400px);
   --workspace-edge: 16px;
+  --panel-toggle-size: 34px;
   --workspace-gap: 16px;
 }
 
@@ -102,7 +103,7 @@ select:hover:not(:disabled) {
     );
   min-width: 0;
   background: var(--surface-1);
-  transition: left 220ms ease;
+  transition: left 220ms ease, right 220ms ease;
 }
 
 .leaflet-container {
@@ -137,34 +138,6 @@ select:hover:not(:disabled) {
 }
 .map-render-status[data-phase="incomplete"], .map-render-status[data-phase="error"] {
   border-left: 3px solid var(--status-warning);
-}
-
-.leaflet-control-zoom a {
-  border-color: var(--border-1) !important;
-  background: var(--surface-2) !important;
-  color: var(--text-2) !important;
-}
-
-.leaflet-control-zoom {
-  border: 0 !important;
-  box-shadow: var(--elevation-control) !important;
-}
-
-.leaflet-control-zoom a:hover {
-  background: var(--surface-hover) !important;
-  color: var(--brand-hover) !important;
-}
-
-.leaflet-control-zoom a:active {
-  background: var(--surface-selected) !important;
-  color: var(--brand-press) !important;
-}
-
-.leaflet-control-zoom a:focus-visible {
-  position: relative;
-  z-index: 1;
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 .leaflet-control-attribution {
@@ -244,29 +217,42 @@ h5 {
   font-size: 0.76rem;
 }
 
-.icon-button {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  cursor: pointer;
-  place-items: center;
-  border: 1px solid var(--border-2);
-  border-radius: 50%;
+.map-panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  gap: 8px;
+  min-inline-size: var(--panel-toggle-size);
+  min-block-size: var(--panel-toggle-size);
+  padding: 4px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text-2);
+  font-size: var(--font-size-support);
+  font-weight: 600;
+  cursor: pointer;
 }
 
-.icon-button:hover {
-  border-color: var(--brand-hover);
-  background: var(--surface-hover);
-  color: var(--brand-hover);
-}
+.map-panel-toggle[hidden], .map-tool-openers[hidden] { display: none; }
+.map-panel-toggle:hover { border-color: var(--text-3); background: var(--surface-hover); }
+.map-panel-toggle:active { background: var(--surface-selected); }
 
-.icon-button:active {
-  border-color: var(--brand-press);
-  background: var(--surface-selected);
-  color: var(--brand-press);
+.map-panel-toggle::before {
+  content: "";
+  inline-size: 7px;
+  block-size: 7px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg);
+}
+.map-panel-toggle--left::before { order: 1; }
+.map-panel-toggle--left[aria-expanded="true"]::before,
+.map-panel-toggle--right[aria-expanded="false"]::before { transform: rotate(135deg); }
+
+@media (pointer: coarse) {
+  #app { --panel-toggle-size: 44px; }
 }
 
 .workspace-region-body {
@@ -1484,7 +1470,7 @@ h5 {
   font-weight: 600;
 }
 
-.raster-sample-window-size input[type="range"] {
+#raster-sample-window-range {
   width: 100%;
   min-width: 0;
   accent-color: var(--brand);
@@ -2432,31 +2418,14 @@ div.chart-tooltip {
   font-size: 0.8rem;
 }
 
-.panel-opener {
+.map-panel-opener {
   position: absolute;
   z-index: 1100;
-  top: auto;
-  right: auto;
-  bottom: var(--workspace-edge);
-  left: var(--workspace-edge);
-  cursor: pointer;
-  border: 1px solid var(--brand);
-  border-radius: 6px;
-  background: var(--brand);
-  padding: 11px 15px;
-  color: #ffffff;
+  top: var(--workspace-edge);
   box-shadow: var(--elevation-control);
 }
-
-.panel-opener:hover {
-  border-color: var(--brand-hover);
-  background: var(--brand-hover);
-}
-
-.panel-opener:active {
-  border-color: var(--brand-press);
-  background: var(--brand-press);
-}
+.map-panel-opener.map-panel-toggle--left { left: var(--workspace-edge); }
+.map-panel-opener.map-panel-toggle--right { right: var(--workspace-edge); }
 
 .map-position {
   position: absolute;
@@ -2643,7 +2612,7 @@ div.chart-tooltip {
 #app {
   --inspection-width: 420px;
   --inspection-space: 0px;
-  --map-tools-available-width: calc(100vw - 40px);
+  --map-tools-available-width: calc(100vw - 2 * var(--workspace-edge));
   --workspace-sidebar-width: clamp(340px, 27vw, 420px);
   --workspace-column-rail-width: 44px;
   --workspace-catalog-region-width: clamp(340px, 27vw, 420px);
@@ -2686,6 +2655,7 @@ div.chart-tooltip {
 
 #app.is-control-panel-collapsed #map {
   left: var(--workspace-edge);
+  --map-controls-top-clearance: calc(var(--panel-toggle-size) + var(--workspace-gap));
 }
 
 .control-panel {
@@ -2707,19 +2677,12 @@ div.chart-tooltip {
   border-radius: 8px;
   background: rgb(255 255 255 / 98%);
   box-shadow: var(--elevation-panel);
-  transition:
-    width 220ms ease,
-    transform 220ms ease,
-    opacity 180ms ease;
+  transition: width 220ms ease;
 }
 
 .panel-heading { min-width: 0; }
 
-.control-panel.is-collapsed {
-  pointer-events: none;
-  transform: translateX(calc(-100% - var(--workspace-edge)));
-  opacity: 0;
-}
+.control-panel.is-collapsed { display: none; }
 
 /* Closed workspaces keep their existing controls in a compact card over the map. */
 #app:not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #control-panel {
@@ -2944,12 +2907,7 @@ div.chart-tooltip {
   gap: 8px;
 }
 
-.panel-header-actions .icon-button {
-  width: 34px;
-  height: 34px;
-}
-
-.panel-header-actions [aria-expanded="true"]:not(.icon-button) {
+.panel-header-actions .secondary-button[aria-expanded="true"] {
   background: var(--surface-selected);
 }
 
@@ -3648,10 +3606,6 @@ article.raster-histogram-summary {
     height: min(76dvh, 680px);
   }
 
-  .control-panel.is-collapsed {
-    transform: translateY(calc(100% + 16px));
-  }
-
   .panel-header {
     padding: 9px 11px;
   }
@@ -3665,13 +3619,6 @@ article.raster-histogram-summary {
   .map-layers-region,
   .raster-interpretation-region {
     padding: 11px;
-  }
-
-  .panel-opener {
-    top: auto;
-    right: auto;
-    bottom: 8px;
-    left: 8px;
   }
 
   .map-position {
@@ -3703,11 +3650,6 @@ article.raster-histogram-summary {
 
   .panel-header h1 {
     font-size: 0.92rem;
-  }
-
-  .panel-header .icon-button {
-    width: 32px;
-    height: 32px;
   }
 
   .panel-header-actions .secondary-button {
@@ -4024,14 +3966,14 @@ article.raster-histogram-summary {
 @media (min-width: 1200px) {
   #app:not(.is-control-panel-collapsed) {
     --map-tools-available-width: calc(
-      100vw - var(--active-workspace-width) - var(--workspace-edge) - var(--workspace-gap) - 20px
+      100vw - var(--active-workspace-width) - 2 * var(--workspace-edge) - var(--workspace-gap)
     );
   }
 }
 .map-tool-openers {
   position: fixed;
-  top: 16px;
-  right: 20px;
+  top: var(--workspace-edge);
+  right: var(--workspace-edge);
   z-index: 1101;
   display: flex;
   flex-direction: column;
@@ -4043,7 +3985,6 @@ article.raster-histogram-summary {
 }
 .map-tools-toolbar-actions { display: flex; align-self: flex-end; align-items: center; gap: 6px; }
 .map-tools-toolbar-actions > button { pointer-events: auto; }
-.map-tools-toolbar-actions > [hidden] { display: none; }
 #map-tools-more-summary { gap: 6px; }
 
 /* Compact enabled controls retain clear boundaries, contrast and focus rings. */
@@ -4126,14 +4067,14 @@ article.raster-histogram-summary {
 #map-inspection {
   box-sizing: border-box;
   position: fixed;
-  inset: calc(16px + var(--map-tools-height, 42px)) 20px 16px auto;
+  inset: calc(var(--workspace-edge) + var(--map-tools-height, 42px)) var(--workspace-edge) var(--workspace-edge) auto;
   display: flex;
   height: calc(100dvh - 32px - var(--map-tools-height, 42px));
   max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
   flex-direction: column;
   gap: 0;
   margin: 0;
-  width: min(var(--inspection-width), calc(100vw - 40px));
+  width: min(var(--inspection-width), calc(100vw - 2 * var(--workspace-edge)));
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   padding: 0;
@@ -4145,24 +4086,26 @@ article.raster-histogram-summary {
   pointer-events: none;
 }
 
-/* Expanded actions and results share one card; filters remain a separate surface above it. */
-#app[data-inspection-expanded="true"] .map-tool-openers {
-  padding-bottom: 0;
-}
-#app[data-inspection-expanded="true"] .map-filter-summary-group { order: -1; }
-#app[data-inspection-expanded="true"] .map-tools-toolbar-actions {
-  align-self: stretch;
-  justify-content: flex-end;
-  padding: 4px 6px;
-  border: 1px solid var(--border-1);
-  border-bottom: 0;
-  border-radius: var(--radius) var(--radius) 0 0;
-  background: var(--surface-1);
-  pointer-events: auto;
-}
-#app[data-inspection-expanded="true"] #map-inspection {
-  border-top: 0;
-  border-radius: 0 0 var(--radius) var(--radius);
+/* On wide screens the actions and results share one card beside the map. */
+@media (min-width: 1200px) {
+  #app[data-inspection-expanded="true"] .map-tool-openers {
+    padding-bottom: 0;
+  }
+  #app[data-inspection-expanded="true"] .map-filter-summary-group { order: -1; }
+  #app[data-inspection-expanded="true"] .map-tools-toolbar-actions {
+    align-self: stretch;
+    justify-content: space-between;
+    padding: 4px 6px;
+    border: 1px solid var(--border-1);
+    border-bottom: 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: var(--surface-1);
+    pointer-events: auto;
+  }
+  #app[data-inspection-expanded="true"] #map-inspection {
+    border-top: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
 }
 
 #app[data-inspection-wide="true"] {
@@ -4393,7 +4336,6 @@ article.raster-histogram-summary {
 }
 
 #map-inspection:not(:popover-open),
-#map-tools-more-summary[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],
 #annotations-panel[hidden],
@@ -4665,6 +4607,19 @@ article.raster-histogram-summary {
   border-radius: var(--radius);
   background: var(--surface-2);
 }
+.map-sampling-control {
+  width: 224px;
+}
+.is-editing-map-layer #raster-sampling-tool { visibility: hidden; }
+#raster-compact-box-size { padding: 0 10px; }
+#raster-compact-box-size label { display: block; }
+#raster-compact-box-size input { display: block; margin: 0; }
+#raster-box-scroll-hint {
+  margin: 3px 10px 6px;
+  color: var(--text-2);
+  font-size: 0.7rem;
+  line-height: 1.25;
+}
 .raster-sampling-disclosure { margin: 0; }
 .raster-sampling-disclosure > summary {
   display: grid;
@@ -4784,6 +4739,7 @@ summary:hover > .raster-disclosure-chevron {
 #map-histogram-panel .raster-histogram-list { margin-top: 0; }
 #map-histogram-panel .raster-histogram-overview { padding: 0; border: 0; background: transparent; }
 @media (pointer: coarse) {
+  #raster-sample-window-range { min-height: 44px; }
   .raster-sampling-disclosure > summary,
   .raster-sampling-area-option,
   #raster-sampling-tool .secondary-button { min-height: 44px; }
@@ -5146,27 +5102,31 @@ summary:hover > .raster-disclosure-chevron {
 .style-percentiles { margin-top: 16px; }
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
 
-/* Narrow screens keep the full map behind the collapsible side panels. */
+/* On narrow screens the menu and panel tabs share the top row above the map. */
 @media (max-width: 1199px) {
+  #app {
+    --tools-clearance: max(var(--map-tools-height, 42px), calc(var(--panel-toggle-size) + 6px));
+  }
+  .map-tools-toolbar-actions { order: -3; }
   #map, #app.is-control-panel-collapsed #map {
     inset: 0;
   }
   #app:not(.is-control-panel-collapsed):not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #map {
-    --map-controls-top-clearance: calc(var(--workspace-card-height, 0px) + 16px + var(--map-tools-height, 42px) + var(--workspace-gap));
+    --map-controls-top-clearance: calc(var(--workspace-card-height, 0px) + var(--workspace-edge) + var(--tools-clearance) + var(--workspace-gap));
   }
   #app #control-panel {
-    top: calc(16px + var(--map-tools-height, 42px));
-    bottom: 16px;
+    top: calc(var(--workspace-edge) + var(--tools-clearance));
+    bottom: var(--workspace-edge);
     height: auto;
-    max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
+    max-height: calc(100dvh - 2 * var(--workspace-edge) - var(--tools-clearance));
   }
   .map-inspection-tabs {
     min-height: 0;
     max-height: calc((45dvh - 80px) / 3);
     overflow-y: auto;
   }
-  #app .panel-opener {
-    inset: calc(16px + var(--map-tools-height, 42px)) auto auto 16px;
+  #app.is-control-panel-collapsed #map {
+    --map-controls-top-clearance: calc(var(--workspace-edge) + var(--panel-toggle-size) + var(--workspace-gap));
   }
 }
 
@@ -5304,6 +5264,28 @@ summary:hover > .raster-disclosure-chevron {
     .leaflet-pane path.is-calculating { fill-opacity: 0.15; }
 }
 
+.histogram-bar-height-scale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-inline-start: 48px;
+  color: var(--text-2);
+  font-size: var(--font-size-ui);
+}
+
+.histogram-bar-height-scale .secondary-button {
+  margin: 0;
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: inherit;
+}
+
+.histogram-bar-height-scale .secondary-button[aria-pressed="true"] {
+  background: var(--brand-hover);
+  color: var(--surface-2);
+}
+
 .histogram-axis-controls {
   margin: 2px 0;
   font-size: 0.76rem;
@@ -5347,19 +5329,32 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .eolab-basemap-control {
-  max-width: 230px;
-  padding: 8px 10px;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  max-width: min(230px, 100%);
+}
+.eolab-basemap-control select,
+.eolab-basemap-control p {
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   background: var(--surface-2);
-  color: var(--text-1);
+  color: var(--text-2);
   box-shadow: var(--elevation-control);
 }
-.eolab-basemap-control label { display: grid; gap: 4px; margin: 0; }
-.eolab-basemap-control label > span { font-size: 0.7rem; font-weight: 600; }
-.eolab-basemap-control select { width: 100%; min-width: 0; font-size: 0.8rem; padding: 4px; }
-.eolab-basemap-control p { max-width: 200px; margin: 6px 0 0; font-size: 0.75rem; }
+.eolab-basemap-control select {
+  field-sizing: content;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.eolab-basemap-control p { margin: 0; padding: 5px 8px; font-size: var(--font-size-support); }
 .eolab-basemap-control p[hidden] { display: none; }
+@media (pointer: coarse) {
+  .eolab-basemap-control select { min-height: 44px; }
+}
 .eolab-maptiler-logo { vertical-align: middle; }
 
 /* Coordinate guide is a map-owned overlay; its marks never capture input. */

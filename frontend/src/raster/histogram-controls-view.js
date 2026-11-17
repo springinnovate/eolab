@@ -87,6 +87,7 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-histogram-chart"
         );
+        this.detailBarHeightHost = requireRasterControl(documentContext, "#raster-histogram-bar-height");
         this.retryStatisticsButton = requireRasterControl(
             documentContext,
             "#retry-raster-statistics"
@@ -119,6 +120,8 @@ export class RasterHistogramControlsView {
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
         this.isAvailable = false;
         this.modeIsCompatible = true;
+        this.samplingAreaMode = "none";
+        this.allOutsideBox = false;
     }
 
     /**
@@ -157,10 +160,12 @@ export class RasterHistogramControlsView {
      * @param {RasterHistogramSummary[]} summaries Presentation-ready summaries.
      * @param {string|null} activeKey Active retained raster key, or null when
      * analysis is detached from the layer stack.
+     * @param {boolean} [allOutsideBox=false] Show a single empty result when
+     * every participating original raster missed the sampling box.
      * @return {void}
      * @throws {TypeError} If a summary violates the view boundary contract.
      */
-    renderLayerHistograms(summaries, activeKey) {
+    renderLayerHistograms(summaries, activeKey, allOutsideBox = false) {
         if (!Array.isArray(summaries)) {
             throw new TypeError("Raster histogram summaries must be an array");
         }
@@ -182,8 +187,8 @@ export class RasterHistogramControlsView {
             }
         }
         this.activeHistogramKey = activeKey;
-        this.automatic = summaries.some((summary) => summary.automatic);
-        this.histogram.hidden = !this.isAvailable || !this.modeIsCompatible || this.automatic;
+        this.allOutsideBox = allOutsideBox;
+        this.automatic = allOutsideBox || summaries.some((summary) => summary.automatic);
         for (const [index, summary] of summaries.entries()) {
             let card = this.summaryCards.get(summary.key);
             if (!card) {
@@ -200,8 +205,8 @@ export class RasterHistogramControlsView {
             const current = this.histogramList.children[index] ?? null;
             if (current !== card.root) this.histogramList.insertBefore(card.root, current);
         }
-        this.histogramEmpty.hidden = summaries.length > 0;
-        this.#synchronizeSummaryExpansion();
+        this.#updateEmptyMessage();
+        this.setActiveRasterAvailable(this.isAvailable);
         if (focusedCard) {
             // Reordering can blur a retained input. Removal instead needs a
             // surviving card (or the empty message) as a keyboard destination.
@@ -249,6 +254,7 @@ export class RasterHistogramControlsView {
     setModeCompatible(isCompatible) {
         this.modeIsCompatible = isCompatible;
         this.histogramList.hidden = !isCompatible;
+        this.#updateEmptyMessage();
         const isVisible = isCompatible && this.isAvailable && !this.automatic;
         this.histogram.hidden = !isVisible;
         this.histogram.setAttribute("aria-hidden", String(!isVisible));
@@ -288,16 +294,28 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Explain whether an empty histogram needs a vector area or visible rasters.
+     * Refresh the empty histogram message for the chosen sampling mode.
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"catalogSelection"|"polygonArea"|"vector"} mode
      * Active sampling-area discriminator.
      * @return {void}
      */
     setSamplingAreaMode(mode) {
-        this.histogramEmpty.textContent = mode === "vector" && this.summaryCards.size === 0
-            ? "No polygon sample area is available."
-            : "No visible raster layers. Show a raster layer to see its histogram.";
+        this.samplingAreaMode = mode;
+        this.#updateEmptyMessage();
+    }
+
+    /** Explain why the histogram list is empty. @return {void} */
+    #updateEmptyMessage() {
+        this.histogramEmpty.hidden = !this.modeIsCompatible || this.summaryCards.size > 0;
+        if (this.histogramEmpty.hidden) return;
+        if (this.allOutsideBox) {
+            this.histogramEmpty.textContent = "No raster layers overlap this sampling box.";
+        } else if (this.samplingAreaMode === "vector") {
+            this.histogramEmpty.textContent = "No polygon sample area is available.";
+        } else {
+            this.histogramEmpty.textContent = "No visible raster layers. Show a raster layer to see its histogram.";
+        }
     }
 
     /** Enable statistics retry for an active raster. @return {void} */
@@ -371,6 +389,8 @@ export class RasterHistogramControlsView {
         const { controls, redraw } = this.#createAxisControls(key, this.histogramChart, statistics,
             () => presentation.style, valueLabel, () => this.detailPercentileControls?.markers ?? []);
         this.detailAxisControls = controls;
+        this.detailBarHeightHost.replaceChildren(controls.createBarHeightScaleControl());
+        controls.setEnabled(this.histogram.getAttribute("aria-busy") !== "true");
         presentation.redraw = redraw;
         this.detailAxesHost.replaceChildren(
             ...(this.detailPercentileControls ? [this.detailPercentileControls.root] : []), controls.root);
@@ -394,6 +414,7 @@ export class RasterHistogramControlsView {
         this.detailPercentileControls?.dispose();
         this.detailPercentileControls = null;
         this.detailPresentation = null;
+        this.detailBarHeightHost.replaceChildren();
         this.detailAxesHost.replaceChildren();
         this.categoryHost.replaceChildren();
         this.histogramChart.hidden = true;
@@ -530,7 +551,7 @@ export class RasterHistogramControlsView {
             card.axisControls = controls;
             card.chart = chart;
             card.redraw = redraw;
-            content.append(chart);
+            content.append(controls.createBarHeightScaleControl(), chart);
             if (card.percentileControls) content.append(card.percentileControls.root);
             content.append(controls.root);
         } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {

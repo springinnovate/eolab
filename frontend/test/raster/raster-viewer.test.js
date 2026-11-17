@@ -15,10 +15,11 @@ import {
     initializeRasterViewer,
     RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS,
 } from "../../src/raster/raster-viewer.js";
-import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
+import { loadRasterStatistics, RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
 import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
+import { MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM } from "../../src/raster/geometry.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { buildRasterLegend, DEFAULT_RASTER_STYLE, deriveRasterStyleFromStatistics } from "../../src/raster/style.js";
@@ -370,7 +371,13 @@ function createFakeControlsView() {
             this.histogramWidgetOpenCount =
                 (this.histogramWidgetOpenCount ?? 0) + 1;
         },
-        renderLayerHistograms(summaries, activeKey) {
+        /** Record the results and empty state supplied to the histogram panel.
+         * @param {Object[]} summaries Applicable cards in display order.
+         * @param {string|null} activeKey Active card, if displayed.
+         * @param {boolean} [allOutsideBox=false] Every source missed the box.
+         * @return {void}
+         */
+        renderLayerHistograms(summaries, activeKey, allOutsideBox = false) {
             this.layerHistograms = summaries.map((summary) => ({
                 ...summary,
                 counts: summary.counts === null
@@ -378,6 +385,7 @@ function createFakeControlsView() {
                     : [...summary.counts],
             }));
             this.activeHistogramKey = activeKey;
+            this.allOutsideBox = allOutsideBox;
         },
         setRenderingControlsAvailable(isAvailable) {
             this.renderingControlsAvailable = isAvailable;
@@ -2272,6 +2280,87 @@ test('visible raster histograms follow order, skip vectors and never follow the 
     h.mapLayers.removeKey(firstKey);
     h.viewer.closeStyle();
     h.destroy();
+});
+
+test("automatic histograms follow original-source box coverage in either layer order", async t => {
+    const us = createRasterItem("us-health");
+    const amazon = createRasterItem("amazon-barriers");
+    const rivers = createRasterItem("amazon-rivers");
+    const coveredItems = new Map([
+        [-63.28, [amazon, rivers]], [-98, [us]], [-48, [amazon, rivers]], [0, []],
+    ]);
+    const reports = [];
+    const h = visibleLayerFixture((item, area, signal) => loadRasterStatistics(
+        item, area, signal, async () => {
+            if (area.kind === "samplingBox" && !coveredItems.get(area.samplingBox.center.longitude).includes(item)) {
+                return Response.json({detail: {code: "sampling_box_outside_raster", message: "Outside."}}, {status: 409});
+            }
+            return Response.json(createLayerStatistics(item, area));
+        },
+    ), {
+        publishRaster: async item => ({layerName: "eolab:" + item.id,
+            bbox: item === us ? [-125, 25, -66, 50] : [-75, -12, -50, 3]}),
+    }, {onHistogramChange: report => reports.push(report)});
+    t.after(h.destroy);
+    for (const item of [amazon, rivers, us]) await h.viewer.show(item);
+    const [usLayer] = h.mapLayers.snapshots();
+    h.controlsView.handlers.onSampleWindowRangeInput("1255");
+    const labels = () => h.controlsView.layerHistograms.map(summary => summary.label);
+
+    for (const usIndex of [0, 2]) {
+        h.mapLayers.reorder(usLayer.key, usIndex);
+        assert.equal(h.viewer.exploreAt({lng: -63.28, lat: -4.92}), true);
+        await flushPromises();
+        assert.deepEqual(labels(), ["amazon-rivers.tif", "amazon-barriers.tif"]);
+        assert.ok(h.controlsView.layerHistograms.every(summary => summary.statistics?.validSampleCount === 8000));
+        assert.equal(reports.at(-1).state, "ready");
+        assert.equal(h.viewer.exploreAt({lng: -98, lat: 39}), true);
+        await flushPromises();
+        assert.deepEqual(labels(), ["us-health.tif"]);
+    }
+
+    const lastBox = h.viewer.getSelectedArea();
+    assert.equal(h.viewer.exploreAt({lng: 0, lat: 0}), false);
+    assert.deepEqual(h.viewer.getSelectedArea(), lastBox);
+    assert.deepEqual(labels(), ["us-health.tif"]);
+
+    // Commit a box from the area control, even when no layer contains its center.
+    h.leafletMap.getCenter = () => ({lng: -48, lat: -4.92});
+    h.viewer.selectSamplingBox();
+    await flushPromises();
+    assert.deepEqual(labels(), ["amazon-rivers.tif", "amazon-barriers.tif"]);
+    h.leafletMap.getCenter = () => ({lng: 0, lat: 0});
+    h.viewer.selectSamplingBox();
+    await flushPromises();
+    assert.deepEqual(labels(), []);
+    assert.equal(h.controlsView.allOutsideBox, true);
+    assert.equal(reports.at(-1).state, "ready");
+
+    h.viewer.selectWholeRaster();
+    await flushPromises();
+    assert.equal(h.controlsView.allOutsideBox, false);
+    assert.deepEqual(labels(), ["amazon-rivers.tif", "amazon-barriers.tif", "us-health.tif"]);
+});
+
+test("a covered empty sample and a read failure keep their own histogram cards", async t => {
+    const masked = createRasterItem("masked"), unreadable = createRasterItem("unreadable");
+    const h = visibleLayerFixture((item, area, signal) => loadRasterStatistics(
+        item, area, signal, async () => area.kind === "wholeRaster"
+            ? Response.json(createLayerStatistics(item, area))
+            : Response.json({detail: item === masked ? "No finite, non-nodata pixels were found."
+                : "The selected raster statistics could not be read."}, {status: 409}),
+    ));
+    t.after(h.destroy);
+    await h.viewer.show(masked);
+    await h.viewer.show(unreadable);
+    h.viewer.exploreAt({lng: 10, lat: 10});
+    await flushPromises();
+    assert.deepEqual(h.controlsView.layerHistograms.map(({label, state, errorMessage}) =>
+        [label, state, errorMessage]), [
+        ["unreadable.tif", "error", "The selected raster statistics could not be read."],
+        ["masked.tif", "error", "No finite, non-nodata pixels were found."],
+    ]);
+    assert.equal(h.controlsView.allOutsideBox, false);
 });
 
 test('sequential raster removals release analysis before a vector is added', async () => {
@@ -4688,6 +4777,72 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     assert.equal(thirdRequests.length, 2);
     assert.equal(controlsView.displayedStatistics.itemId, third.id);
     viewer.destroy();
+});
+
+test("Alt-scroll resizes the committed box around its center and leaves other map gestures alone", async () => {
+    const clock = createManualClock(), requests = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        requests.push(area);
+        return createLayerStatistics(item, area);
+    }, {clock});
+    const container = h.leafletMap.container;
+    /** Send wheel input and report whether the sampler took it from map zoom.
+     * @param {number} deltaY Vertical wheel distance.
+     * @param {Partial<WheelEvent>} [options] Modifiers, units or target to override.
+     * @return {boolean} Whether the map's default gesture was prevented.
+     */
+    function scroll(deltaY, options = {}) {
+        const event = new Event("wheel", {cancelable: true});
+        const {target = {closest: () => null}, ...input} = options;
+        Object.defineProperty(event, "target", {value: target});
+        Object.assign(event, {altKey: true, deltaMode: 0, deltaY}, input);
+        for (const listener of container.listeners.get("wheel")) listener(event);
+        return event.defaultPrevented;
+    }
+    try {
+        await h.viewer.show(createRasterItem("wheel"));
+        assert.equal(scroll(-100), false, "whole-raster mode keeps wheel zoom");
+        h.controlsView.handlers.onSampleWindowRangeInput(100);
+        h.viewer.exploreAt({lng: 12, lat: 20});
+        await flushPromises();
+        const original = h.viewer.getSelectedArea();
+        const before = requests.length;
+        for (const modifiers of [{altKey: false}, {shiftKey: true}, {ctrlKey: true}, {metaKey: true}]) {
+            assert.equal(scroll(-100, modifiers), false);
+        }
+        assert.equal(scroll(0), false);
+        assert.equal(scroll(-100, {target: {closest: () => ({})}}), false, "scrolling a map control stays local");
+        h.viewer.setPointerInspectionEnabled(false);
+        assert.equal(scroll(-100), false);
+        h.viewer.setPointerInspectionEnabled(true);
+        assert.equal(scroll(-40), true);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 100);
+        scroll(-60);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 110);
+        scroll(-3, {deltaMode: 1});
+        assert.equal(h.controlsView.sampleWindowSizeKm, 121);
+        scroll(1, {deltaMode: 2});
+        assert.equal(h.controlsView.sampleWindowSizeKm, 110);
+        assert.deepEqual(h.viewer.getSelectedArea(), original);
+        assert.equal(requests.length, before);
+        clock.flush();
+        await flushPromises();
+        assert.equal(requests.length, before + 1);
+        assert.deepEqual(requests.at(-1).samplingBox, {...original.samplingBox, sideLengthKm: 110});
+        h.controlsView.handlers.onSampleWindowRangeInput(1);
+        assert.equal(scroll(100), true);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 1);
+        scroll(-100);
+        assert.equal(h.controlsView.sampleWindowSizeKm, 2);
+        h.controlsView.handlers.onSampleWindowRangeInput(MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+        assert.equal(scroll(-100), true);
+        assert.equal(h.controlsView.sampleWindowSizeKm, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+        h.controlsView.handlers.onUseVectorArea();
+        assert.equal(scroll(-100), false);
+    } finally {
+        h.destroy();
+    }
+    assert.equal(container.listenerCount("wheel"), 0);
 });
 
 test("map box resizes immediately while committing only the final debounced area", async () => {

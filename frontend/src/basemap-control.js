@@ -7,7 +7,7 @@ const OUTLINES_URL = new URL("./assets/country-outlines.geojson", import.meta.ur
 const ERROR_TILE_URL = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E";
 
 /**
- * Add a labeled basemap dropdown to the lower-right map corner.
+ * Show the selected basemap in a native dropdown in the lower-right map corner.
  * The configured detailed map is selected initially. Country outlines are a
  * bundled display asset fetched only when selected; None removes the background.
  *
@@ -150,14 +150,11 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         event.stopPropagation();
     }
 
-    /** Build the map control with standard labeled HTML inputs. @return {HTMLElement} */
+    /** Build the basemap selector and its loading or error message. @return {HTMLElement} Map control. */
     control.onAdd = function onAdd() {
         const doc = map.getContainer().ownerDocument;
         const root = doc.createElement("div");
         root.className = "eolab-basemap-control";
-        const label = doc.createElement("label");
-        const caption = doc.createElement("span");
-        caption.textContent = "Basemap";
         select = doc.createElement("select");
         select.setAttribute("aria-label", "Basemap");
         const options = [
@@ -177,8 +174,7 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         status = doc.createElement("p");
         status.setAttribute("role", "status");
         status.hidden = true;
-        label.append(caption, select);
-        root.append(label, status);
+        root.append(select, status);
         leaflet.DomEvent.disableClickPropagation(root);
         leaflet.DomEvent.disableScrollPropagation(root);
         root.addEventListener("keydown", stopMapKeys);

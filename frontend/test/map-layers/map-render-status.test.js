@@ -12,7 +12,11 @@ test("status reports incomplete tiles accessibly and sends a targeted retry acti
     assert.equal(root.hidden, true);
     assert.equal(message.getAttribute("role"), "status");
     assert.equal(message.getAttribute("aria-atomic"), "true");
+    view.update({ phase: "preparing", total: 0, loaded: 0, failed: 0 });
+    assert.equal(root.hidden, false);
+    assert.match(message.textContent, /Preparing/);
     view.update({ phase: "loading", total: 6, loaded: 2, failed: 0 });
+    assert.equal(root.hidden, false);
     assert.match(message.textContent, /Loading.*2 of 6 visible tiles/);
     assert.equal(button.hidden, true);
     view.update({ phase: "incomplete", total: 6, loaded: 4, failed: 2 });
@@ -25,8 +29,13 @@ test("status reports incomplete tiles accessibly and sends a targeted retry acti
     assert.match(message.textContent, /Retrying/);
     assert.equal(button.hidden, true);
     view.update({ phase: "complete", total: 6, loaded: 6, failed: 0 });
-    assert.equal(message.textContent, "Map contents loaded");
+    assert.equal(root.hidden, true);
+    assert.equal(message.textContent, "");
+    view.update({ phase: "loading", total: 3, loaded: 1, failed: 0 });
+    assert.equal(root.hidden, false);
+    assert.match(message.textContent, /Loading.*1 of 3 visible tiles/);
     view.update({ phase: "error", total: 0, loaded: 0, failed: 0, message: "Try later." });
+    assert.equal(root.hidden, false);
     assert.match(message.textContent, /Try later/);
     assert.equal(button.textContent, "Retry map contents");
     view.update({ phase: "idle", total: 0, loaded: 0, failed: 0 });

@@ -51,6 +51,10 @@ class RasterConflictError(RasterFeatureError):
     """Raised when current raster state cannot satisfy an operation."""
 
 
+class RasterSamplingBoxOutsideSourceError(RasterConflictError):
+    """The sampling box does not overlap the original raster's grid."""
+
+
 class RasterStatisticsCapacityError(RasterConflictError):
     """The statistics backlog or waiting-caller limit is full; retry later."""
 
