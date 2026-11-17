@@ -7,7 +7,7 @@
 <body>
   <h1>Workspace presentation checks</h1>
   <p>Serve the frontend with Vite, then open this page. These browser checks use the current application markup, CSS and presentation controllers; Node does not run them.</p>
-  <pre id="results" role="status">Runningâ€¦</pre>
+  <pre id="results" role="status">Running...</pre>
   <script type="module">
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
@@ -170,7 +170,7 @@
         frame.src = `${location.pathname}?frame`;
         document.body.append(frame);
         const outcome = await result;
-        results.textContent += `${width}Ã—${height}: ${outcome.workspacePresentation}${outcome.message ? ` â€” ${outcome.message}` : ""}\n`;
+        results.textContent += `${width}x${height}: ${outcome.workspacePresentation}${outcome.message ? ` - ${outcome.message}` : ""}\n`;
       }
     }
   </script>
