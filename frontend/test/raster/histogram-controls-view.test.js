@@ -25,6 +25,29 @@ test("an empty vector histogram describes the missing area instead of missing ra
     view.unbind();
 });
 
+test("a box outside every raster shows one empty result and hides the detailed histogram", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const empty = doc.querySelector("#raster-histogram-empty");
+    const detail = doc.querySelector("#raster-histogram");
+    view.setActiveRasterAvailable(true);
+    view.renderLayerHistograms([], null, true);
+    view.setSamplingAreaMode("selectedArea");
+    view.showWidget();
+    assert.equal(doc.querySelector("#raster-histogram-list").children.length, 0);
+    assert.equal(detail.hidden, true);
+    assert.equal(detail.getAttribute("aria-hidden"), "true");
+    assert.equal(empty.hidden, false);
+    assert.equal(empty.textContent, "No raster layers overlap this sampling box.");
+    view.setModeCompatible(false);
+    assert.equal(empty.hidden, true);
+    view.setModeCompatible(true);
+    assert.equal(empty.hidden, false);
+    view.renderLayerHistograms([], null);
+    assert.match(empty.textContent, /No visible raster layers/);
+    view.unbind();
+});
+
 test("histogram adapter owns status, chart, retry, and direct presentation", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(documentContext);
@@ -142,9 +165,9 @@ test("pending and failed summaries do not present cached charts as the current s
         }[state]);
         assert.equal(row.children[1].hidden, state === "ready");
         if (state === "ready") {
-            assert.equal(row.children[2].classList.contains("raster-histogram-chart"), true);
-            assert.equal(row.children[2].getAttribute("viewBox"), "0 0 640 190");
-            assert.match(row.children[2].getAttribute("aria-label"), /Horizontal axis: Raster value \(%\)/);
+            const chart = row.children.find(child => child.classList.contains("raster-histogram-chart"));
+            assert.equal(chart.getAttribute("viewBox"), "0 0 640 190");
+            assert.match(chart.getAttribute("aria-label"), /Horizontal axis: Raster value \(%\)/);
         }
     }
     view.renderLayerHistograms([{ ...summary, state: "error", errorMessage: "No finite pixels in this sample." }], "first");
@@ -319,6 +342,14 @@ test("axis edits redraw only the local chart and persist through a new sample", 
     view.bind({ onRetryStatistics: () => assert.fail("Axes must not request statistics") });
     view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
     const original = structuredClone(RASTER_STATISTICS);
+    const header = doc.querySelector("#raster-histogram-bar-height");
+    const log = header.children[0].querySelectorAll("button")[1];
+    view.setStatisticsBusy(true);
+    assert.equal(log.disabled, true);
+    view.setStatisticsBusy(false);
+    log.dispatchEvent(new Event("click"));
+    assert.match(view.histogramChart.getAttribute("aria-label"), /Y scale: log/);
+    view.detailAxisControls.reset.dispatchEvent(new Event("click"));
     const fields = view.detailAxisControls.rows.get("y").fields;
     fields.bounds.input.value = "values";
     fields.bounds.input.dispatchEvent(new Event("change"));
@@ -330,6 +361,56 @@ test("axis edits redraw only the local chart and persist through a new sample", 
     assert.deepEqual(RASTER_STATISTICS, original);
     view.clearStatistics();
     assert.equal(view.detailAxesHost.children.length, 0);
+    assert.equal(header.children.length, 0);
+    assert.equal(log.disabled, true);
+    view.unbind();
+});
+
+test("a card's bar-height buttons reveal rare bins and stay in sync with its axis editor", () => {
+    const doc = new FakeRasterControlDocument(), view = new RasterHistogramControlsView(doc);
+    const statistics = { ...RASTER_STATISTICS, validSampleCount: 10000,
+        sampleMinimum: 0, sampleMaximum: 2.5, histogram: {edges: [0, 1, 2, 3, 4], counts: [9990, 9, 1, 0]} };
+    const summary = { key: "first", label: "Flood depth", automatic: true, state: "ready",
+        counts: statistics.histogram.counts, statistics, style: DEFAULT_RASTER_STYLE };
+    view.renderLayerHistograms([summary, {...summary, key: "second", label: "Rainfall"}], "first");
+    const [first, second] = doc.querySelector("#raster-histogram-list").children;
+    const group = first.children.find(child => child.className === "histogram-bar-height-scale");
+    const [label, linear, log] = group.children;
+    assert.equal(label.textContent, "Sampled pixels (%)");
+    const chart = first.querySelector("svg");
+    const otherChart = second.querySelector("svg");
+    const bars = () => chart.children.filter(child => child.classList.contains("raster-histogram-bar"));
+    const originalBars = bars();
+    assert.ok(Number(originalBars[2].getAttribute("height")) < 1);
+    assert.equal(linear.getAttribute("aria-pressed"), "true");
+    log.focus();
+    log.dispatchEvent(new Event("click"));
+    const editor = view.summaryCards.get("first").axisControls;
+    const fields = editor.rows.get("y").fields;
+    assert.equal(editor.root.open, false);
+    assert.equal(fields.scale.input.value, "log");
+    assert.equal(log.getAttribute("aria-pressed"), "true");
+    assert.equal(doc.activeElement, log);
+    assert.ok(Number(bars()[2].getAttribute("height")) > 10);
+    assert.equal(Number(bars()[3].getAttribute("height")), 0);
+    for (const attr of ["x", "width", "aria-label"]) {
+        assert.deepEqual(bars().map(bar => bar.getAttribute(attr)), originalBars.map(bar => bar.getAttribute(attr)));
+    }
+    assert.match(otherChart.getAttribute("aria-label"), /Y scale: linear/);
+    fields.scale.input.value = "linear";
+    fields.scale.input.dispatchEvent(new Event("change"));
+    assert.equal(linear.getAttribute("aria-pressed"), "true");
+    assert.deepEqual(bars().map(bar => bar.getAttribute("height")), originalBars.map(bar => bar.getAttribute("height")));
+    fields.bounds.input.value = "values";
+    fields.bounds.input.dispatchEvent(new Event("change"));
+    log.dispatchEvent(new Event("click"));
+    assert.equal(editor.root.open, true);
+    assert.match(editor.rows.get("y").status.textContent, /positive minimum/);
+    assert.equal(log.getAttribute("aria-pressed"), "false");
+    editor.reset.dispatchEvent(new Event("click"));
+    log.dispatchEvent(new Event("click"));
+    editor.reset.dispatchEvent(new Event("click"));
+    assert.equal(linear.getAttribute("aria-pressed"), "true");
     view.unbind();
 });
 
