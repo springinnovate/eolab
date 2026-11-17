@@ -63,6 +63,8 @@ function ordinalTickIndexes(count, maximum = 7) {
  *
  * Null Y values retain their X position and break line segments, so callers can
  * communicate missing observations without inventing numeric values.
+ * Bars at the same numeric X share a group: observation order first, then series.
+ * Missing values retain their aligned slot; no observations are combined.
  * Linear bars start at zero when it is visible, otherwise the nearest axis bound;
  * log bars start at the lower Y-axis bound. Custom domains clip display marks only.
  *
@@ -199,7 +201,13 @@ export function renderOrdinalSeriesChart({
         .range(xReverse ? [margin.left + plotWidth, margin.left] : [margin.left, margin.left + plotWidth]);
     const x = index => horizontal(xScale === "numeric" ? numericX[index] : index);
     const groupWidth = Math.min(60, Math.abs(horizontal(xDomain[0] + spacing) - horizontal(xDomain[0])) * 0.8);
-    const barWidth = groupWidth / plottedSeries.length;
+    const occurrenceCounts = new Map();
+    const occurrenceIndexes = chartType === "bar" && xScale === "numeric"
+        ? numericX.map(value => {
+            const occurrence = occurrenceCounts.get(value) ?? 0;
+            occurrenceCounts.set(value, occurrence + 1);
+            return occurrence;
+        }) : [];
     const y = (yScale === "log" ? scaleLog() : scaleLinear())
         .domain(yBounds ?? (yScale === "log"
             ? [Math.max(Number.MIN_VALUE, 10 ** minimum), Math.min(Number.MAX_VALUE, 10 ** maximum)]
@@ -271,6 +279,8 @@ export function renderOrdinalSeriesChart({
                 triangle: "M0,-6L5,4L-5,4z", cross: "M-5,0h10M0,-5v10" };
             const markerPath = markerPaths[item.marker];
             const barHeight = Math.abs(y(point.yValue) - barBaseline);
+            const barWidth = groupWidth / ((occurrenceCounts.get(point.xValue) ?? 1) * plottedSeries.length);
+            const barSlot = (occurrenceIndexes[index] ?? 0) * plottedSeries.length + seriesIndex;
             const circle = createSvgElement(documentContext, chartType === "bar" ? "rect" : markerPath ? "path" : "circle", {
                 class: chartType === "bar" ? "series-chart-point series-chart-bar" : "series-chart-point",
                 cx: x(index),
@@ -280,7 +290,7 @@ export function renderOrdinalSeriesChart({
                 role: selectable ? "button" : "img",
                 ...(selectable ? { "aria-pressed": "false" } : {}),
                 ...(chartType === "bar" ? {
-                    x: x(index) - groupWidth / 2 + seriesIndex * barWidth,
+                    x: x(index) - groupWidth / 2 + barSlot * barWidth,
                     y: barHeight === 0 ? barBaseline - 0.5 : Math.min(y(point.yValue), barBaseline),
                     width: barWidth * 0.9,
                     height: Math.max(1, barHeight),
