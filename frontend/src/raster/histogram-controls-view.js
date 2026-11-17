@@ -87,6 +87,7 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-histogram-chart"
         );
+        this.detailBarHeightHost = requireRasterControl(documentContext, "#raster-histogram-bar-height");
         this.retryStatisticsButton = requireRasterControl(
             documentContext,
             "#retry-raster-statistics"
@@ -371,6 +372,8 @@ export class RasterHistogramControlsView {
         const { controls, redraw } = this.#createAxisControls(key, this.histogramChart, statistics,
             () => presentation.style, valueLabel, () => this.detailPercentileControls?.markers ?? []);
         this.detailAxisControls = controls;
+        this.detailBarHeightHost.replaceChildren(controls.createBarHeightScaleControl());
+        controls.setEnabled(this.histogram.getAttribute("aria-busy") !== "true");
         presentation.redraw = redraw;
         this.detailAxesHost.replaceChildren(
             ...(this.detailPercentileControls ? [this.detailPercentileControls.root] : []), controls.root);
@@ -394,6 +397,7 @@ export class RasterHistogramControlsView {
         this.detailPercentileControls?.dispose();
         this.detailPercentileControls = null;
         this.detailPresentation = null;
+        this.detailBarHeightHost.replaceChildren();
         this.detailAxesHost.replaceChildren();
         this.categoryHost.replaceChildren();
         this.histogramChart.hidden = true;
@@ -530,7 +534,7 @@ export class RasterHistogramControlsView {
             card.axisControls = controls;
             card.chart = chart;
             card.redraw = redraw;
-            content.append(chart);
+            content.append(controls.createBarHeightScaleControl(), chart);
             if (card.percentileControls) content.append(card.percentileControls.root);
             content.append(controls.root);
         } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {

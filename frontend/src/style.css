@@ -5299,6 +5299,28 @@ summary:hover > .raster-disclosure-chevron {
     .leaflet-pane path.is-calculating { fill-opacity: 0.15; }
 }
 
+.histogram-bar-height-scale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-inline-start: 48px;
+  color: var(--text-2);
+  font-size: var(--font-size-ui);
+}
+
+.histogram-bar-height-scale .secondary-button {
+  margin: 0;
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: inherit;
+}
+
+.histogram-bar-height-scale .secondary-button[aria-pressed="true"] {
+  background: var(--brand-hover);
+  color: var(--surface-2);
+}
+
 .histogram-axis-controls {
   margin: 2px 0;
   font-size: 0.76rem;
