@@ -198,7 +198,15 @@ HabitatStack = HabitatRasterStack | HabitatEarthEngineStack
 
 
 class RasterReferenceSites(HabitatSchema):
-    """Use cells equal to one after the selected resampling as reference sites."""
+    """Use valid finite non-zero raster cells as reference sites.
+
+    Nearest-neighbor alignment preserves source membership. Zero, NoData and
+    nonfinite cells are excluded; valid negative values are reference sites.
+
+    Attributes:
+        kind: Selects the literal string "raster".
+        source: Catalog or session-owned raster selected for reference sites.
+    """
 
     kind: Literal["raster"]
     source: RasterSourceReference
@@ -231,11 +239,12 @@ HabitatReferences = Annotated[
 
 
 class HabitatPreparation(HabitatSchema):
-    """One user-selected resampling method for each input raster.
+    """One resampling method for each input raster.
 
     Attributes:
         resampling: Methods keyed by predictor_N, response_N, reference_mask or
             habitat_mask, matching the selected source roles exactly.
+            Reference masks require nearest-neighbor alignment.
             Automatic bands use nearest-neighbor resampling; in automatic mode
             this mapping contains only the user-selected raster masks.
     """
@@ -343,10 +352,16 @@ class HabitatRequest(HabitatSchema):
             This request with one method per raster.
 
         Raises:
-            ValueError: If a method is missing or names an inactive source.
+            ValueError: If a method is missing or names an inactive source, or
+                reference sites do not use nearest-neighbor alignment.
         """
         if set(self.preparation.resampling) != set(self.get_raster_sources()):
             raise ValueError("Choose one resampling method for each selected raster.")
+        if (
+            isinstance(self.references, RasterReferenceSites)
+            and self.preparation.resampling["reference_mask"] != "nearest"
+        ):
+            raise ValueError("Reference sites require nearest-neighbor resampling.")
         return self
 
     @model_validator(mode="after")

@@ -336,6 +336,7 @@ function createInput(definition) {
 }
 
 /** Capture Habitat's stack, prepared AOI or raster resampling through the invocation contract.
+ * Reference masks always use nearest neighbor to preserve reference membership.
  * @param {Object} draft Editable Habitat inputs and preparation state.
  * @param {string} name Recipe input to capture.
  * @param {{captureRaster:(raster:Object,sources:Object[])=>Object}} helpers Ordinary source-value capture.
@@ -345,7 +346,8 @@ function createInput(definition) {
 function captureInput(draft, name, {captureRaster}) {
     const definition = draft.model.inputs[name];
     if (definition.type === "raster_preparation")
-        return {resampling: Object.fromEntries(getRasterResamplingStates(draft).map(source => [source.key, source.state.resampling]))};
+        return {resampling: Object.fromEntries(getRasterResamplingStates(draft).map(source =>
+            [source.key, source.key === "reference_mask" ? "nearest" : source.state.resampling]))};
     if (definition.type === "habitat_stack") return captureHabitatStack(draft.inputs[name], draft.sources, captureRaster);
     if (definition.type === "summary_area" && getHabitatEarthEngineInput(draft)) return captureHabitatPreparationSelection(draft);
     return undefined;
@@ -372,13 +374,15 @@ function restoreInput(draft, name, value) {
 }
 
 /** Restore selected raster methods and require an Earth Engine AOI to match current prepared selections.
+ * Duplicated reference masks use nearest neighbor even if the saved method differs.
  * @param {Object} draft Draft after its ordinary inputs have been restored.
  * @param {Object} inputs Saved invocation values keyed by recipe input name.
  * @return {void}
  */
 function restoreState(draft, inputs) {
     const preparationName = Object.keys(draft.model.inputs).find(name => draft.model.inputs[name].type === "raster_preparation");
-    for (const source of getRasterResamplingStates(draft)) source.state.resampling = inputs[preparationName].resampling[source.key];
+    for (const source of getRasterResamplingStates(draft))
+        source.state.resampling = source.key === "reference_mask" ? "nearest" : inputs[preparationName].resampling[source.key];
     if (!getHabitatEarthEngineInput(draft)) return;
     const name = Object.keys(draft.model.inputs).find(key => draft.model.inputs[key].type === "summary_area");
     const area = inputs[name];
@@ -495,15 +499,7 @@ function buildInput(ui, handlers, name, definition, draft) {
     }
     if (definition.type === "habitat_references") {
         const controls = ui.buildSpatialInput(name, definition);
-        Object.assign(controls, buildResamplingInput(ui, controls.maskGroup, name, resampling => handlers.onInput(name, {resampling})));
-        controls.maskGroup.prepend(controls.resamplingField);
-        controls.renderModelInput = (value, state) => {
-            const input = value.inputs[name];
-            const ready = ui.renderSpatialInput(controls, definition, input, state);
-            controls.resampling.value = input.resampling;
-            controls.resampling.disabled = input.areaMode !== "raster";
-            return ready;
-        };
+        controls.renderModelInput = (value, state) => ui.renderSpatialInput(controls, definition, value.inputs[name], state);
         return controls;
     }
     if (definition.type !== "summary_area") return null;

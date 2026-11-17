@@ -357,6 +357,11 @@ conditions.
 Results use a fixed 500 m grid in EPSG:6933. Input rasters are aligned to this
 grid using their selected resampling methods.
 
+When you choose a raster for **Reference sites**, valid finite non-zero cells
+are reference sites, including negative values. Zero, NoData and nonfinite
+values are excluded. Nearest-neighbor alignment preserves reference membership;
+only reference sites inside the analysis area are used.
+
 Choose a layer under **Drawn polygons** for **Reference sites**. With custom
 raster inputs, drawn polygons are also available for **Analysis area**, and each
 input can use a different layer. The tool uses saved polygons that match the

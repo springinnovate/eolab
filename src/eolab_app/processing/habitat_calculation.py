@@ -288,6 +288,9 @@ def calculate_habitat(
 ) -> HabitatArtifact:
     """Read prepared or selected rasters, fit references and write model outputs.
 
+    Convert aligned finite non-zero reference cells to the runner's binary mask.
+    Preparation retains NoData and clips reference membership to the AOI.
+
     Args:
         sources: Authorized raster/vector inputs and the private prepared-input cache.
         prepared: Captured stack, selected dataset roles, AOI, output grid,
@@ -397,6 +400,12 @@ def calculate_habitat(
         dataset = resources.enter_context(rasterio.open(rasters["predictor_0"]))
         if request.references.kind == "raster":
             reference_path = rasters["reference_mask"]
+            with rasterio.open(reference_path, "r+") as reference:
+                for _, window in reference.block_windows(1):
+                    values = reference.read(1, window=window)
+                    valid = np.isfinite(values)
+                    values[valid] = values[valid] != 0
+                    reference.write(values, 1, window=window)
         else:
             if request.references.kind == "vector":
                 polygons = read_habitat_polygons(
