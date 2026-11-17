@@ -110,7 +110,7 @@ test("every bin fits inside labeled axes across container widths", () => {
     }
     const axes = chart.querySelector(".chart-axes");
     const labels = axes.querySelectorAll("text").map(child => child.textContent);
-    assert.ok(labels.includes("Sampled pixels (%)"));
+    assert.match(chart.getAttribute("aria-label"), /Vertical axis: percentage of valid sampled pixels/);
     assert.ok(labels.includes("Raster value"));
     assert.deepEqual(axes.querySelector(".series-chart-y-axis").querySelectorAll("text").map(tick => tick.textContent), ["0", "1", "2"]);
     assert.ok(labels.includes("-10") && labels.includes("30"));

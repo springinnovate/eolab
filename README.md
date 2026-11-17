@@ -151,9 +151,9 @@ For rasters, inspect the value at the clicked pixel or open **Histograms** in
 hold **Alt** and scroll over the map to resize it. Open the control to enter an
 exact side length in kilometers. Each visible raster has its own chart.
 
-Use **Axes & scale** to inspect a useful range or switch to logarithmic axes
-when values span several orders of magnitude. These controls change the chart
-display. They do not change the sampled data or the map's colors.
+Choose **Log** beside **Sampled pixels (%)** to see small bars when one bin
+dominates. Choose **Linear** to switch back. Open **Adjust histogram axes** to
+set display limits or change the raster-value scale.
 
 ![A magenta drought-severity map over Asia with a blue sampling box and its one-dimensional histogram](docs/images/eolab-histograms.jpg)
 
