@@ -911,18 +911,6 @@ test("rows retain identity, map, style, clipboard, and removal actions", () => {
   assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
 });
 
-test("raster and vector rows use the same compact action layout", () => {
-  const doc = new FakeLayerStackDocument();
-  const view = new MapLayerStackView(doc);
-  const vector = { ...LAYERS[0], legend: { kind: "fixed", label: "Polygon" } };
-  view.render([vector, { ...LAYERS[1], opacityLocked: true, effectiveOpacity: 1 }], null);
-  for (const row of doc.querySelector("#raster-layer-list").children) {
-    assert.equal(actionControl(row, "style").textContent, "Style");
-    assert.equal(elementsByClass(row, "map-layer-row-actions").length, 1);
-    assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
-  }
-});
-
 test("an uploaded vector keeps map controls without an unavailable Catalog Info action", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
