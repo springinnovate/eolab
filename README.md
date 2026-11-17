@@ -131,7 +131,9 @@ Open **Style** to bring out the pattern you care about:
 - For continuous rasters, choose a palette and adjust its low, middle and high
   values, colors and transparency. A percentile stretch uses the sampled
   distribution to spread colors across a useful range instead of letting a few
-  extreme values dominate.
+  extreme values dominate. Turn on **Style one value separately** to give a
+  value its own color and opacity. For example, if a flood-depth raster records
+  dry ground as `0`, set that value to 0% opacity to show the map underneath.
 - For categorical rasters, give classes such as land-cover types their own
   names and colors. Category tables can be imported from CSV.
 - For vectors, use one symbol, categories, or numeric classes with editable

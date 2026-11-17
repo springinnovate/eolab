@@ -1576,9 +1576,26 @@
                                 <span><small>Midpoint</small><span id="raster-legend-midpoint"></span></span>
                                 <span><small>Maximum</small><span id="raster-legend-maximum"></span></span>
                               </div>
+                              <ul id="raster-override-legend" class="map-layer-legend-list" hidden>
+                                <li><span class="map-layer-legend-gradient" aria-hidden="true"><span id="raster-override-legend-color"></span></span>
+                                  <span id="raster-override-legend-label"></span></li>
+                              </ul>
                               <p class="raster-style-error" id="raster-style-error" role="status"></p>
                             </div>
                           </details>
+                          <div class="raster-value-override">
+                            <label class="raster-value-toggle">
+                              <input id="raster-value-override-enabled" type="checkbox" aria-controls="raster-value-override-fields" />
+                              Style one value separately
+                            </label>
+                            <div id="raster-value-override-fields" class="raster-style-stops" hidden>
+                              <label>Pixel value<input id="raster-override-value" type="number" step="any" value="0" aria-describedby="raster-override-error" /></label>
+                              <label>Color<input id="raster-override-color" type="color" value="#e57149" aria-label="Color for matching pixels" /></label>
+                              <label>Opacity %<input id="raster-override-opacity" type="number" min="0" max="100" step="any" value="0" aria-label="Opacity for matching pixels (%)" aria-describedby="raster-override-error" /></label>
+                              <p class="raster-category-guidance">0% opacity hides pixels with this exact value.</p>
+                              <p id="raster-override-error" class="raster-style-error" role="status"></p>
+                            </div>
+                          </div>
                           </div>
                           <section id="raster-categorical-editor" class="raster-categorical-editor" aria-labelledby="raster-category-heading" hidden>
                             <h4 id="raster-category-heading">Categories</h4>

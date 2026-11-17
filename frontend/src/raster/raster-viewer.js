@@ -72,6 +72,7 @@ import { buildRasterStyleEnvironment, buildCategoricalRasterStyleParameter } fro
 import { normalizeRasterAppearanceState } from "./appearance-state.js";
 import {
     buildCategoricalRasterLegend,
+    rasterFillLegendSymbol,
     presentRasterPixelSnapshot,
     presentCategoricalRasterDistribution,
 } from "./categorical-presentation.js";
@@ -2313,6 +2314,10 @@ export function initializeRasterViewer(
                     kind: "gradient",
                     gradient: definition.gradient,
                     description: definition.description,
+                    ...(presentationStyle.valueOverride ? { entries: [{
+                        label: definition.overrideLabel,
+                        symbol: rasterFillLegendSymbol(presentationStyle.valueOverride),
+                    }] } : {}),
                     label: opacityLocked
                         ? `${record.entry.key === bivariateMode.xKey ? "X" : "Y"} color contribution; combines with the other raster on the map.`
                         : "Raster values",
@@ -5006,6 +5011,7 @@ export function initializeRasterViewer(
     controlsView.populatePalettes(RASTER_COLOR_PALETTES);
     controlsView.bind({
         onStyleInput: handleStyleInput,
+        onValueOverrideInput: scheduleRasterStyleCommit,
         onStyleChange: commitRasterStyle,
         onAppearanceModeChange: handleAppearanceModeChange,
         onCategoricalStyleInput: handleCategoricalStyleInput,

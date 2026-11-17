@@ -1,10 +1,11 @@
-"""Raster-owned SLD generation for a validated composite map layer."""
+"""Build inline GeoServer styles for continuous raster layers."""
 
 from collections.abc import Mapping
 from xml.etree import ElementTree
 
 
 SLD_NAMESPACE = "http://www.opengis.net/sld"
+OGC_NAMESPACE = "http://www.opengis.net/ogc"
 
 
 def build_raster_composite_sld(
@@ -12,15 +13,16 @@ def build_raster_composite_sld(
     assignments: Mapping[str, str],
     opacity: float,
 ) -> bytes:
-    """Build one inline raster style from validated dynamic assignments.
+    """Build a gradient with an optional exact-value color for WMS rendering.
 
     Args:
         layer_name: Current workspace-qualified GeoServer raster layer.
-        assignments: Validated threshold, color, and stop-opacity values.
+        assignments: Authorized gradient stops and optional complete exact-value rule.
         opacity: Neutral retained-layer opacity from zero through one.
 
     Returns:
-        Complete single-layer SLD document for composite rendering.
+        Single-layer SLD for direct or composite rendering, with whole-layer
+        opacity applied after coloring the samples.
     """
     root = ElementTree.Element(
         f"{{{SLD_NAMESPACE}}}StyledLayerDescriptor",
@@ -54,6 +56,19 @@ def build_raster_composite_sld(
         symbolizer,
         f"{{{SLD_NAMESPACE}}}Opacity",
     ).text = format(opacity, ".15g")
+    if "vexact" in assignments:
+        transformation = ElementTree.Element(f"{{{SLD_NAMESPACE}}}Transformation")
+        feature_type_style.insert(0, transformation)
+        function = ElementTree.SubElement(
+            transformation, f"{{{OGC_NAMESPACE}}}Function", {"name": "eolabRasterValueOverride"}
+        )
+        for quantity, suffix in (("min", "min"), ("med", "med"), ("max", "max"), ("vexact", "exact")):
+            value = float(assignments[quantity])
+            alpha = float(assignments.get(f"a{suffix}", "1"))
+            ElementTree.SubElement(function, f"{{{OGC_NAMESPACE}}}Literal").text = (
+                f"{value}:{assignments[f'c{suffix}']}:{alpha}"
+            )
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
     color_map = ElementTree.SubElement(
         symbolizer,
         f"{{{SLD_NAMESPACE}}}ColorMap",

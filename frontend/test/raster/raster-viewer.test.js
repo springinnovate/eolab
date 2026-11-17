@@ -1414,11 +1414,15 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     const record = h.mapLayers.retainedRecords[0];
     const key = record.entry.key;
     h.viewer.openStyle(key);
-    h.controlsView.style = { ...h.controlsView.style, minimum: -5, midpoint: 0, maximum: 30 };
+    h.controlsView.style = { ...h.controlsView.style, minimum: -5, midpoint: 0, maximum: 30,
+        valueOverride: {value: -9999.5, color: "#e57149", opacity: 0} };
     h.controlsView.paletteName = "custom";
     h.controlsView.handlers.onStyleInput(false);
     h.controlsView.handlers.onStyleChange();
     const continuous = record.adapter.exportSavedState(record).continuous;
+    assert.deepEqual(continuous.definition.valueOverride, h.controlsView.style.valueOverride);
+    assert.deepEqual(h.mapLayers.snapshots()[0].legend.entries.map(entry => [entry.label, entry.symbol.fillOpacity]),
+        [["Value -9999.5 · Transparent", 0]]);
     const style = categoricalAppearance();
     assert.ok(h.controlsView.layerHistograms.every((summary) =>
         !Object.hasOwn(summary, "unavailableMessage")
@@ -1454,6 +1458,7 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     await flushPromises();
     assert.equal(Object.hasOwn(record.state.layer.wmsParams, "raster_style"), false);
     assert.match(record.state.layer.wmsParams.env, /min:-5;med:0;max:30/);
+    assert.match(record.state.layer.wmsParams.env, /;vexact:-9999.5;cexact:#e57149;aexact:0$/);
     assert.equal(Object.hasOwn(record.adapter.renderDescriptor(record), "styleDefinition"), false);
     assert.equal(h.mapLayers.snapshots().find((layer) => layer.key === key).legend.kind, "gradient");
     assert.deepEqual(h.controlsView.style, continuous.definition);

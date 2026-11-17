@@ -19,6 +19,9 @@ test("raster style builds the dynamic SLD environment contract", () => {
     "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;" +
       "cmax:#d7191c;amin:1;amed:1;amax:1",
   );
+  const valueOverride = { value: -9999.5, color: "#AABBCC", opacity: 0.35 };
+  assert.equal(buildRasterStyleEnvironment({ ...DEFAULT_RASTER_STYLE, valueOverride }),
+    buildRasterStyleEnvironment(DEFAULT_RASTER_STYLE) + ";vexact:-9999.5;cexact:#aabbcc;aexact:0.35");
 });
 
 test("raster style environment rejects invalid thresholds, colors, and alpha", () => {

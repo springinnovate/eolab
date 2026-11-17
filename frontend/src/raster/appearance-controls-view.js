@@ -12,6 +12,7 @@ import { CategoricalRasterEditorView } from "./categorical-editor-view.js";
 /**
  * @typedef {Object} RasterAppearanceHandlers
  * @property {(isColor: boolean) => void} onStyleInput Handles style edits.
+ * @property {() => void} onValueOverrideInput Previews the rule independently of the gradient range and palette.
  * @property {() => void} onStyleChange Commits a completed style edit.
  * @property {() => void} onPaletteChange Applies a selected color palette.
  * @property {() => void} onResetStyle Restores the initial raster style.
@@ -49,6 +50,14 @@ export class RasterAppearanceControlsView {
         this.appearanceMode = requireRasterControl(documentContext, "#raster-appearance-mode");
         this.continuousControls = requireRasterControl(documentContext, "#raster-continuous-controls");
         this.categoricalEditor = new CategoricalRasterEditorView(documentContext);
+        this.overrideEnabled = requireRasterControl(documentContext, "#raster-value-override-enabled");
+        this.overrideFields = requireRasterControl(documentContext, "#raster-value-override-fields");
+        this.overrideError = requireRasterControl(documentContext, "#raster-override-error");
+        this.overrideInputs = {
+            overrideValue: requireRasterControl(documentContext, "#raster-override-value"),
+            overrideColor: requireRasterControl(documentContext, "#raster-override-color"),
+            overrideOpacity: requireRasterControl(documentContext, "#raster-override-opacity"),
+        };
         this.styleInputs = {
             minimum: requireRasterControl(documentContext, "#raster-minimum"),
             midpoint: requireRasterControl(documentContext, "#raster-midpoint"),
@@ -70,6 +79,9 @@ export class RasterAppearanceControlsView {
             maximumOpacity: requireRasterControl(documentContext, "#raster-maximum-opacity"),
         };
         this.legend = requireRasterControl(documentContext, "#raster-legend");
+        this.overrideLegend = requireRasterControl(documentContext, "#raster-override-legend");
+        this.overrideLegendColor = requireRasterControl(documentContext, "#raster-override-legend-color");
+        this.overrideLegendLabel = requireRasterControl(documentContext, "#raster-override-legend-label");
         this.legendLabels = {
             minimum: requireRasterControl(
                 documentContext,
@@ -99,6 +111,10 @@ export class RasterAppearanceControlsView {
         this.handlers = null;
         this.boundStyleInput = this.#handleStyleInput.bind(this);
         this.boundStyleChange = this.#handleStyleChange.bind(this);
+        this.boundOverrideInput = () => {
+            this.overrideFields.hidden = !this.overrideEnabled.checked;
+            this.handlers.onValueOverrideInput();
+        };
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
         this.boundReverseColors = this.#reverseColors.bind(this);
         this.boundResetStyle = this.#handleResetStyle.bind(this);
@@ -140,6 +156,10 @@ export class RasterAppearanceControlsView {
             input.addEventListener("change", this.boundStyleChange);
         }
         this.palette.addEventListener("change", this.boundPaletteChange);
+        for (const input of [this.overrideEnabled, ...Object.values(this.overrideInputs)]) {
+            input.addEventListener("input", this.boundOverrideInput);
+            input.addEventListener("change", this.boundStyleChange);
+        }
         this.reverseColorsButton.addEventListener("click", this.boundReverseColors);
         this.resetStyleButton.addEventListener("click", this.boundResetStyle);
         this.appearanceMode.addEventListener("change", this.boundAppearanceModeChange);
@@ -157,6 +177,10 @@ export class RasterAppearanceControlsView {
             input.removeEventListener("change", this.boundStyleChange);
         }
         this.palette.removeEventListener("change", this.boundPaletteChange);
+        for (const input of [this.overrideEnabled, ...Object.values(this.overrideInputs)]) {
+            input.removeEventListener("input", this.boundOverrideInput);
+            input.removeEventListener("change", this.boundStyleChange);
+        }
         this.reverseColorsButton.removeEventListener("click", this.boundReverseColors);
         this.resetStyleButton.removeEventListener("click", this.boundResetStyle);
         this.appearanceMode.removeEventListener("change", this.boundAppearanceModeChange);
@@ -194,10 +218,17 @@ export class RasterAppearanceControlsView {
     /**
      * Read a candidate raster style from the appearance controls.
      *
-     * @return {Object} Candidate numeric thresholds and color stops.
+     * @return {import("./style.js").RasterStyle} Gradient stops and the enabled
+     * exact-value rule. Empty numeric fields produce NaN for inline validation.
      */
     readStyle() {
+        const {overrideValue, overrideColor, overrideOpacity} = this.overrideInputs;
         return {
+            ...(this.overrideEnabled.checked ? {valueOverride: {
+                value: overrideValue.value === "" ? NaN : Number(overrideValue.value),
+                color: overrideColor.value,
+                opacity: overrideOpacity.value === "" ? NaN : Number(overrideOpacity.value) / 100,
+            }} : {}),
             minimum: this.styleInputs.minimum.value === ""
                 ? Number.NaN
                 : Number(this.styleInputs.minimum.value),
@@ -221,11 +252,17 @@ export class RasterAppearanceControlsView {
     /**
      * Display one committed style and palette in the appearance controls.
      *
-     * @param {Object} style Committed numeric thresholds and color stops.
+     * @param {import("./style.js").RasterStyle} style Committed ramp and optional exact-value rule.
      * @param {string} paletteName Selected palette name.
      * @return {void}
      */
     setStyle(style, paletteName) {
+        const override = style.valueOverride;
+        this.overrideEnabled.checked = Boolean(override);
+        this.overrideFields.hidden = !override;
+        this.overrideInputs.overrideValue.value = override?.value ?? 0;
+        this.overrideInputs.overrideColor.value = override?.color ?? "#e57149";
+        this.overrideInputs.overrideOpacity.value = (override?.opacity ?? 0) * 100;
         for (const fieldName of Object.keys(this.styleInputs)) {
             this.styleInputs[fieldName].value = fieldName.endsWith("Opacity")
                 ? Math.round((style[fieldName] ?? 1) * 10000) / 100
@@ -316,9 +353,15 @@ export class RasterAppearanceControlsView {
      * @return {void}
      */
     renderStyleError(styleError = null) {
-        this.styleError.textContent = styleError?.message ?? "";
-        for (const input of Object.values(this.styleInputs)) {
+        const overrideInput = this.overrideInputs[styleError?.fieldGroup];
+        this.styleError.textContent = overrideInput ? "" : styleError?.message ?? "";
+        this.overrideError.textContent = overrideInput ? styleError.message : "";
+        for (const input of [...Object.values(this.styleInputs), ...Object.values(this.overrideInputs)]) {
             input.removeAttribute("aria-invalid");
+        }
+        if (overrideInput) {
+            overrideInput.setAttribute("aria-invalid", "true");
+            return;
         }
         if (styleError === null) {
             return;
@@ -336,7 +379,7 @@ export class RasterAppearanceControlsView {
     /**
      * Render the accessible legend for one committed raster style.
      *
-     * @param {Object} style Committed numeric thresholds and color stops.
+     * @param {import("./style.js").RasterStyle} style Committed gradient and optional exact-value style.
      * @return {void}
      */
     renderLegend(style) {
@@ -345,6 +388,12 @@ export class RasterAppearanceControlsView {
             ", repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%)";
         this.legend.style.backgroundSize = "100% 100%, 10px 10px";
         this.legend.setAttribute("aria-label", legend.description);
+        this.overrideLegend.hidden = !style.valueOverride;
+        if (style.valueOverride) {
+            this.overrideLegendColor.style.backgroundColor = style.valueOverride.color;
+            this.overrideLegendColor.style.opacity = String(style.valueOverride.opacity);
+            this.overrideLegendLabel.textContent = legend.overrideLabel;
+        }
         for (const thresholdName of ["minimum", "midpoint", "maximum"]) {
             this.legendLabels[thresholdName].textContent = style[thresholdName];
         }
@@ -357,7 +406,7 @@ export class RasterAppearanceControlsView {
      * @return {void}
      */
     setEnabled(isEnabled) {
-        for (const input of Object.values(this.styleInputs)) {
+        for (const input of [this.overrideEnabled, ...Object.values(this.overrideInputs), ...Object.values(this.styleInputs)]) {
             input.disabled = !isEnabled;
         }
         this.palette.disabled = !isEnabled;

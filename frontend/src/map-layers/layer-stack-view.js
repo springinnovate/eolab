@@ -22,7 +22,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {"fixed"|"gradient"|"categories"|"graduated"} kind Legend presentation.
  * @property {string} [label] Geometry name, classified field, or raster context.
  * @property {LegendSymbol} [symbol] Fixed symbol.
- * @property {{label:string,symbol:LegendSymbol}[]} [entries] Class labels and their symbols.
+ * @property {{label:string,symbol:LegendSymbol}[]} [entries] Labeled symbols for categories or individual exceptions to a gradient.
  * @property {string} [gradient] CSS color ramp supplied by the raster owner.
  * @property {number[]} [labels] Minimum, midpoint, and maximum raster values.
  * @property {string} [description] Accessible description of a raster ramp.

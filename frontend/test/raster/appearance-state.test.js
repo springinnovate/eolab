@@ -15,9 +15,13 @@ function appearance() {
 
 test("portable appearance preserves both styles and remains independent of its caller", () => {
     const candidate = appearance();
+    candidate.continuous.definition.valueOverride = {value: -9999, color: "#223344", opacity: 0};
     const normalized = normalizeRasterAppearanceState(candidate);
     assert.deepEqual(normalized, candidate);
     candidate.continuous.definition.minimum = -500;
+    candidate.continuous.definition.valueOverride.value = 1;
+    assert.equal(normalized.continuous.definition.valueOverride.value, -9999);
+    assert.ok(Object.isFrozen(normalized.continuous.definition.valueOverride));
     candidate.categorical.categories[0].label = "Changed";
     assert.equal(normalized.continuous.definition.minimum, 0);
     assert.equal(normalized.categorical.categories[0].label, "Forest");
@@ -31,6 +35,10 @@ test("portable appearance preserves both styles and remains independent of its c
 
 test("portable appearance rejects malformed modes, retained styles, and category tables", () => {
     const mutations = [
+        candidate => { candidate.continuous.definition.valueOverride = {value: 0, color: "#000000", opacity: 1, other: true}; },
+        candidate => { candidate.continuous.definition.valueOverride = {value: 0, color: "blue", opacity: 1}; },
+        candidate => { candidate.continuous.definition.valueOverride = {value: "0", color: "#000000", opacity: 1}; },
+        candidate => { candidate.continuous.definition.valueOverride = {value: 0, color: "#000000", opacity: 1.01}; },
         candidate => { candidate.kind = "vector"; },
         candidate => { delete candidate.appearanceVersion; },
         candidate => { candidate.appearanceVersion = 2; },

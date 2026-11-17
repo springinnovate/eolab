@@ -52,11 +52,11 @@ function formatExactRasterCode(value) {
 /**
  * Describe one raster fill using the existing neutral legend symbol contract.
  *
- * @param {{color:string,opacity:number}} appearance Normalized row or fallback.
+ * @param {{color:string,opacity:number}} appearance Color and opacity of a category, fallback, or individual raster value.
  * @return {Readonly<import("../map-layers/layer-stack-view.js").LegendSymbol>}
  * Immutable fill symbol; the consuming view applies whole-layer opacity.
  */
-function categoryLegendSymbol(appearance) {
+export function rasterFillLegendSymbol(appearance) {
     return Object.freeze({
         shape: "polygon",
         fill: appearance.color,
@@ -78,11 +78,11 @@ function categoryLegendSymbol(appearance) {
 export function buildCategoricalRasterLegend(style) {
     const entries = style.categories.map((category) => Object.freeze({
         label: `${category.label} (${formatExactRasterCode(category.value)})`,
-        symbol: categoryLegendSymbol(category),
+        symbol: rasterFillLegendSymbol(category),
     }));
     entries.push(Object.freeze({
         label: "Unmapped",
-        symbol: categoryLegendSymbol(style.unmapped),
+        symbol: rasterFillLegendSymbol(style.unmapped),
     }));
     return Object.freeze({
         kind: "categories",

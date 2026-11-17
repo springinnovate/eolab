@@ -123,6 +123,46 @@ test("appearance adapter requires its semantic subgroup root", () => {
     );
 });
 
+test("one exact value has its own editor, validation and swatch alongside the gradient", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterAppearanceControlsView(doc);
+    const events = [];
+    view.bind({ onValueOverrideInput: () => events.push("override"), onStyleChange: () => events.push("commit") });
+    view.setStyle(DEFAULT_RASTER_STYLE, "viridis");
+    const toggle = doc.querySelector("#raster-value-override-enabled");
+    const fields = doc.querySelector("#raster-value-override-fields");
+    const value = doc.querySelector("#raster-override-value");
+    assert.equal(fields.hidden, true);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("input"));
+    assert.equal(fields.hidden, false);
+    value.value = "-9999.5";
+    doc.querySelector("#raster-override-opacity").value = "35";
+    const color = doc.querySelector("#raster-override-color");
+    color.value = "#226699";
+    color.dispatchEvent(new Event("input"));
+    color.dispatchEvent(new Event("change"));
+    const override = { value: -9999.5, opacity: 0.35, color: "#226699" };
+    assert.deepEqual(view.readStyle(), { ...DEFAULT_RASTER_STYLE, valueOverride: override });
+    assert.deepEqual(events, ["override", "override", "commit"]);
+    assert.equal(view.getPaletteName(), "viridis");
+    view.renderLegend(view.readStyle());
+    assert.equal(doc.querySelector("#raster-override-legend-label").textContent, "Value -9999.5 · 35% opacity");
+    assert.equal(doc.querySelector("#raster-override-legend-color").style.opacity, "0.35");
+    value.value = "";
+    assert.throws(() => validateRasterStyle(view.readStyle()), error => {
+        view.renderStyleError(error);
+        return value.getAttribute("aria-invalid") === "true" && doc.querySelector("#raster-override-error").textContent !== "";
+    });
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("input"));
+    assert.deepEqual(view.readStyle(), DEFAULT_RASTER_STYLE);
+    view.setEnabled(false);
+    assert.equal(toggle.disabled, true);
+    assert.equal(color.disabled, true);
+    view.unbind();
+});
+
 test("opacity controls convert percent, validate blanks, and share the edit lifecycle", () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterAppearanceControlsView(doc);

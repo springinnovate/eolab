@@ -18,6 +18,7 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
 /**
  * @typedef {Object} RasterControlHandlers
  * @property {(isColor: boolean) => void} onStyleInput Handles style edits.
+ * @property {() => void} onValueOverrideInput Previews an edit to the single-value rule.
  * @property {() => void} onStyleChange Commits a completed style edit.
  * @property {(mode:"continuous"|"categorical")=>void} onAppearanceModeChange Selects the appearance editor.
  * @property {()=>void} onCategoricalStyleInput Validates category drafts.

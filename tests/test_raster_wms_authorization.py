@@ -82,6 +82,8 @@ def test_raster_style_accepts_three_bounded_opacities(alpha: str) -> None:
     ";amin:0;amed:0.5;amax:1.01", ";amin:;amed:0.5;amax:1",
     ";amin:0;amed:0.5;amax:blue", ";amin:0;amed:0.5;amax:1;opacity:0.5",
     ";amin:0;amed:0.5;amax:" + "0" * 384,
+    ";vexact:0;cexact:#123456", ";vexact:NaN;cexact:#123456;aexact:0",
+    ";vexact:-9999;cexact:red;aexact:0", ";vexact:0;cexact:#123456;aexact:1.01",
 ])
 def test_raster_style_rejects_incomplete_or_unsafe_opacities(suffix: str) -> None:
     """Reject invalid alpha without widening the other authorized substitutions.
@@ -103,3 +105,25 @@ def test_deployed_raster_sld_consumes_opacity_with_opaque_legacy_defaults() -> N
         "${env('amin',1.0)}", "${env('amed',1.0)}", "${env('amax',1.0)}"
     ]
     assert document.findtext(".//{http://www.opengis.net/sld}Opacity") == "1.0"
+
+
+def test_exact_raster_rule_uses_the_same_classifier_for_tiles_and_composites() -> None:
+    """Apply the exact match before the ordinary ramp and multiply layer opacity separately."""
+    owner = PublishedRasterAuthorization()
+    env = "min:0;med:1;max:2;cmin:#104080;cmed:#e0c070;cmax:#681030;amin:0.4;amed:1;amax:0.8;vexact:-9999.5;cexact:#e57149;aexact:0.5"
+    query = {"layers": "eolab:depth", "styles": "dynamic-raster", "env": env, "tiled": "true"}
+    owner.validate_parameters("getmap", query)
+    direct = dict(owner.prepare_query("getmap", list(query.items())))
+    assert "env" not in direct and "tiled" not in direct
+    assert direct["interpolations"] == owner.composite_interpolation(None, env) == "nearest neighbor"
+    composite = owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 0.4)
+    for document, layer_opacity in ((direct["sld_body"], "1"), (composite, "0.4")):
+        root = ElementTree.fromstring(document)
+        function = root.find(".//{http://www.opengis.net/ogc}Function")
+        assert function.attrib["name"] == "eolabRasterValueOverride"
+        assert [node.text for node in function] == [
+            "0.0:#104080:0.4", "1.0:#e0c070:1.0", "2.0:#681030:0.8", "-9999.5:#e57149:0.5"
+        ]
+        assert root.findtext(".//{http://www.opengis.net/sld}Opacity") == layer_opacity
+    with pytest.raises(PublishedLayerRequestError, match="requires GetMap"):
+        owner.validate_parameters("getfeatureinfo", query)

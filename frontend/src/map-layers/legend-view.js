@@ -82,7 +82,7 @@ export function buildLegendContents(documentContext, legend, opacity, compactVal
             labels.append(text);
         }
         details.append(ramp, labels);
-        return details;
+        if (!legend.entries?.length) return details;
     }
     const list = documentContext.createElement("ul");
     list.className = "map-layer-legend-list";

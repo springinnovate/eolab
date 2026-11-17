@@ -241,12 +241,13 @@ class PublishedVectorAuthorization:
         return vector_label_rendering_buffer(VectorStyle.model_validate(style_definition))
 
     def composite_interpolation(
-        self, style_definition: Mapping[str, object] | None
+        self, style_definition: Mapping[str, object] | None, style_environment: str | None = None
     ) -> str | None:
         """Keep the service interpolation default for vector appearances.
 
         Args:
             style_definition: Already authorized vector appearance.
+            style_environment: Alternative validated style environment.
 
         Returns:
             None, because vector styling has no raster resampling override.
