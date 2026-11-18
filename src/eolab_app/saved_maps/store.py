@@ -173,9 +173,9 @@ class SavedMapStore:
         """Preview or remove obsolete Catalog and Site Condition label settings.
 
         Call explicitly during an upgrade, after backup and stopping old app
-        writers. Normal application requests never run it. Remove sourceRevision
-        from Catalog layers. For the protected Site Condition map, preserve
-        its displayed labels when retiring its separate note switch.
+        writers. This command updates only the selected map after its complete
+        settings pass validation. The protected Site Condition map keeps its
+        URL and its shared polygon references.
         Shared polygon storage is never accessed. A changed map advances its
         revision once, invalidating old administrator drafts. Compatible maps
         are no-ops, including a retry with the previously applied revision.

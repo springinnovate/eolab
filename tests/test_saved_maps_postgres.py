@@ -485,11 +485,11 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
         assert response.json()["view"]["layers"][0]["sharedAnnotation"] == invitation
     expected = deepcopy(before)
     expected["revision"] = 5
+    for layer in expected["view"]["layers"][1:]:
+        del layer["sourceRevision"]
     appearance = expected["view"]["layers"][0]["appearance"]
     del appearance["notes"]
     appearance["labels"] = True
-    for layer in expected["view"]["layers"][1:]:
-        del layer["sourceRevision"]
     assert migration_record(store, before["slug"]) == expected
     retry = store.migrate_source_revisions(
         before["slug"], apply=True, expected_revision=4
