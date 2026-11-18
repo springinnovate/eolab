@@ -1,4 +1,5 @@
 /** Present data tools, their editable setup and one run's results in Analysis. */
+import { ToolTabStrip } from "../tool-tab-strip.js";
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
@@ -58,10 +59,11 @@ export class ModelsView {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
         this.getSetupIntegration = getSetupIntegration;
         this.deletionNotices = new Map();
-        this.elements = Object.fromEntries(["setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
+        this.elements = Object.fromEntries(["page", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
             "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
+        this.tabStrip = new ToolTabStrip(documentContext, "models");
         this.openers = ["open-models", "open-model-runs"].map(id => documentContext.querySelector(`#${id}`));
     }
 
@@ -709,10 +711,16 @@ export class ModelsView {
     render(state) {
         this.state = state;
         for (const page of ["library", "setup", "runs", "run"]) this.elements[page].hidden = state.page !== page;
-        for (const [page, node] of Object.entries(this.navigation)) node.setAttribute("aria-pressed", String(state.page === page || page === "runs" && state.page === "run"));
+        const activeTab = this.navigation[state.page === "run" ? "runs" : state.page];
+        const setupTitle = state.draft?.model.title ?? "";
         this.navigation.setup.disabled = !state.draft;
+        this.elements.page.setAttribute("aria-labelledby", activeTab.id);
+        this.tabStrip.render(activeTab, {
+            hidden: !state.active,
+            contexts: new Map([[this.navigation.setup, setupTitle || "Choose a tool first"]]),
+        });
         this.elements["setup-heading"].hidden = state.page !== "setup";
-        this.elements["setup-heading"].textContent = state.draft?.model.title ?? "";
+        this.elements["setup-heading"].textContent = setupTitle;
         const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
@@ -763,8 +771,11 @@ export class ModelsView {
         this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
     }
 
-    /** Detach persistent event listeners.
+    /** Release the page tab strip and detach the view’s persistent event listeners.
      * @return {void}
      */
-    destroy() { for (const [node, event, callback] of this.listeners) node.removeEventListener(event, callback); }
+    destroy() {
+        this.tabStrip.destroy();
+        for (const [node, event, callback] of this.listeners) node.removeEventListener(event, callback);
+    }
 }

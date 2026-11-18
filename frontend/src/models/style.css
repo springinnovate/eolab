@@ -2,23 +2,15 @@
 #models-panel { min-width: 0; font-size: var(--font-size-ui); }
 /* Cover the panel's 14px scroll padding so output cannot peek above the header. */
 #models-panel > .models-header {
+  position: sticky;
+  z-index: 2;
   top: -14px;
   margin: -14px -14px 12px;
-  padding: 8px 14px;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  border-bottom: 1px solid var(--border-1);
 }
 #models-panel h2 { font-size: 1rem; margin: 0; }
 #models-panel h3 { font-size: 1rem; margin: 0 0 6px; }
-.models-header > .models-navigation { flex: 1; min-width: 0; }
-.models-header > .analysis-panel-close { margin-inline-start: auto; }
-.models-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border-1); border-radius: var(--radius); }
+.models-header > .analysis-panel-close { align-self: center; }
 .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
-.models-navigation button { min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--brand-hover); font: inherit; font-size: var(--font-size-ui); cursor: pointer; }
-.models-navigation button:hover:not(:disabled) { background: var(--surface-hover); }
-.models-navigation button[aria-pressed="true"] { border-color: var(--brand); background: var(--surface-selected); color: var(--text-1); font-weight: 600; }
-.models-navigation button:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .models-field { display: grid; gap: 3px; min-width: 0; font-size: var(--font-size-ui); }
 #models-panel input, #models-panel select, #models-panel textarea { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }
 #models-panel textarea { font-family: monospace; resize: vertical; }
@@ -106,7 +98,7 @@ article.models-result > .models-actions { margin: 0; }
 #models-recovery { padding: 10px; border: 1px solid var(--status-warning); }
 #models-yaml { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.75rem; border: 1px solid var(--border-1); padding: 10px; max-height: 24rem; overflow: auto; }
 #models-panel [hidden] { display: none; }
-#models-panel :is(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+#models-page :is(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 #models-panel .models-card-open:focus-visible { outline: none; }
 .models-card-open:focus-visible::after { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
