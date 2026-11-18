@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
+from eolab_app.drawings.models import DrawingError, DrawingLayer
+from eolab_app.map_layer_documents import MapDrawingLayer
 from eolab_app.planning.models import (
     PlanningError,
     PlanningTool,
@@ -29,6 +31,7 @@ class PlanningToolService:
         validate_parcel_ids: Callable[
             [ParcelIdRequest], Awaitable[ParcelIdValidationResponse]
         ],
+        read_drawing: Callable[[UUID], Awaitable[DrawingLayer]] | None = None,
     ) -> None:
         """Use composition-supplied polygon-source and whole-layer ID validation.
 
@@ -37,10 +40,13 @@ class PlanningToolService:
             authorize_layer: Require admitted polygon geometry and validate Catalog
                 identity, original source, current filter and calculated fields.
             validate_parcel_ids: Existing vector owner validating all original parcel IDs.
+            read_drawing: Read a linked drawing's current admitted polygons. Omit
+                only for compositions that do not provide drawing sources.
         """
         self.store = store
         self._authorize_layer = authorize_layer
         self._validate_parcel_ids = validate_parcel_ids
+        self._read_drawing = read_drawing
 
     async def _validate_sources(self, document: PlanningToolDocument) -> None:
         """Authorize both stored roles and validate the original parcel ID column.
@@ -55,9 +61,18 @@ class PlanningToolService:
         selections: dict[UUID, CatalogSelection] = {}
         try:
             for layer in document.layers:
+                if isinstance(layer.definition, MapDrawingLayer):
+                    if self._read_drawing is None:
+                        raise PlanningError(
+                            503, "Saved drawing layers are unavailable."
+                        )
+                    await self._read_drawing(layer.definition.drawingLayerId)
+                    continue
                 selections[layer.id] = await self._authorize_layer(
                     layer.to_selection_request()
                 )
+            if document.parcelLayerId not in selections:
+                return
             parcels = selections[document.parcelLayerId]
             validation = await self._validate_parcel_ids(
                 ParcelIdRequest(
@@ -74,6 +89,8 @@ class PlanningToolService:
                     422,
                     "The parcel source changed during validation. Reload the layer and try again.",
                 )
+        except DrawingError as error:
+            raise PlanningError(error.status, str(error)) from error
         except VectorUpstreamError as error:
             raise PlanningError(503, str(error)) from error
         except (VectorFeatureError, SelectionUnavailableError) as error:

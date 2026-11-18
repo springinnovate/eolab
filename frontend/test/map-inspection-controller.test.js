@@ -35,7 +35,7 @@ function fixture(configureDocument = () => {}) {
     histogram.hidden = style.hidden = feature.hidden =
         vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
-    doc.querySelector("#map-inspection-raster-analysis").append(close);
+    doc.querySelector("#map-inspection-tab-bar").append(close);
     const calls = [];
     const presentationOrder = [];
     root.showPopover = () => { calls.push("show"); presentationOrder.push("dock-open"); };
@@ -44,14 +44,17 @@ function fixture(configureDocument = () => {}) {
     toolbar.getBoundingClientRect = () => ({ height: toolbar.hidden ? 0 : 44 });
     const toolActions = doc.querySelector("#workspace-tool-actions");
     const mapToolsButton = doc.querySelector("#map-tool-chooser");
-    for (const [id, caption] of [
-        ["map-click-histogram", "Histograms"],
-        ["open-raster-series-dock", "Raster statistics"],
-    ]) {
+    const tabList = doc.querySelector("#map-inspection-tabs");
+    const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+    for (const [, id, caption] of markup.matchAll(/<button id="([^"]+)" class="map-inspection-tab"[^>]*>([^<]+)<\/button>/g)) {
         const button = doc.querySelector(`#${id}`);
         button.id = id;
         button.textContent = caption;
+        button.scrollWidth = 110;
+        button.click = () => { if (!button.disabled) button.dispatchEvent(new Event("click")); };
+        tabList.append(button);
     }
+    tabList.getBoundingClientRect = () => ({ width: 1600, height: 44 });
     const toolActionsCalls = [];
     let actionsOpen = false;
     /** Model native state events and focus return; dismissal itself is browser-tested.
@@ -76,6 +79,7 @@ function fixture(configureDocument = () => {}) {
     const controller = new MapInspectionController({
         documentContext: doc, onLayoutChange: layout => layouts.push(layout),
     });
+    doc.querySelector("#open-raster-series-dock").addEventListener("click", () => controller.showRasterSeries());
     return {
         layouts,
         toolActions, mapToolsButton, toolbar, toolActionsCalls, presentationOrder,
@@ -349,30 +353,32 @@ test("raster destinations retain their buttons and focus through opening, closin
     h.controller.showStyle("Countries");
     for (const id of ["map-click-histogram", "open-raster-series-dock"]) {
         assert.equal(h.doc.querySelector(`#${id}`).hidden, false);
-        assert.equal(h.doc.querySelector(`#${id}`).getAttribute("aria-pressed"), "false");
+        assert.equal(h.doc.querySelector(`#${id}`).getAttribute("aria-selected"), "false");
     }
 
     opener.focus();
     h.controller.showRasterSeries();
     assert.equal(opener.hidden, false);
-    assert.equal(opener.getAttribute("aria-pressed"), "true");
+    assert.equal(opener.getAttribute("aria-selected"), "true");
     assert.equal(h.doc.activeElement, opener, "opening never replaces the focused destination");
     assert.equal(h.doc.querySelector("#raster-series").getAttribute("aria-labelledby"), opener.id);
     assert.equal(context.textContent, "Resistance · Whole raster");
     const arrow = new Event("keydown", { cancelable: true });
     Object.defineProperty(arrow, "key", { value: "ArrowRight" });
     opener.dispatchEvent(arrow);
-    assert.equal(arrow.defaultPrevented, false, "raster destinations use native button navigation");
+    assert.equal(arrow.defaultPrevented, true, "one tab stop reaches the next enabled destination");
+    assert.equal(h.controller.activeTool, "histogram");
+    h.controller.closeHistogram(false);
     assert.equal(h.controller.activeTool, "raster-series");
 
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(h.panels.hidden, true);
     assert.equal(opener.hidden, false);
-    assert.equal(opener.getAttribute("aria-pressed"), "false");
+    assert.equal(opener.getAttribute("aria-selected"), "true", "collapse retains the selected view");
     opener.focus();
     h.controller.showRasterSeries();
     assert.equal(h.panels.hidden, false);
-    assert.equal(opener.getAttribute("aria-pressed"), "true");
+    assert.equal(opener.getAttribute("aria-selected"), "true");
     assert.equal(h.doc.activeElement, opener);
     assert.equal(context.textContent, "Resistance · Whole raster");
     h.map.focus();
@@ -382,7 +388,7 @@ test("raster destinations retain their buttons and focus through opening, closin
     h.controller.hideRasterSeries();
     assert.equal(h.controller.activeTool, "style");
     assert.equal(opener.hidden, false);
-    assert.equal(opener.getAttribute("aria-pressed"), "false");
+    assert.equal(opener.getAttribute("aria-selected"), "false");
     h.controller.destroy();
 });
 
@@ -430,7 +436,7 @@ test("compact Features navigation preserves progress, errors and unread results 
     h.controller.showRasterSeries();
     assert.equal(h.featureTab.hidden, false);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.featureTab.getAttribute("aria-pressed"), "false");
+    assert.equal(h.featureTab.getAttribute("aria-selected"), "false");
     assert.equal(h.doc.activeElement, h.expandButton);
     h.controller.destroy();
 });
@@ -477,23 +483,24 @@ test("raster buttons stay stable beside point results and other retained tools",
     h.controller.setClickResult("feature", {state: "ready", message: "One feature"});
     assert.equal(h.histogramTab.hidden, false);
     assert.equal(h.featureTab.hidden, false);
-    assert.equal(tabs.hidden, true);
-    assert.equal(raster.getAttribute("aria-pressed"), "true");
-    assert.equal(feature.getAttribute("aria-pressed"), "false");
+    assert.equal(tabs.hidden, false);
+    assert.equal(raster.getAttribute("aria-selected"), "true");
+    assert.equal(feature.getAttribute("aria-selected"), "false");
     h.controller.showStyle("Countries");
     h.controller.showRasterSeries();
     raster.dispatchEvent(new Event("click"));
     assert.equal(tabs.hidden, false);
-    assert.equal(h.styleTab.tabIndex, 0, "the remaining tab list has its own keyboard entry");
+    assert.equal(raster.tabIndex, 0);
+    assert.equal(h.styleTab.tabIndex, -1, "one tab stop serves every view");
     h.styleTab.dispatchEvent(new Event("click"));
-    assert.equal(raster.getAttribute("aria-pressed"), "false");
+    assert.equal(raster.getAttribute("aria-selected"), "false");
     feature.dispatchEvent(new Event("click"));
-    assert.equal(feature.getAttribute("aria-pressed"), "true");
+    assert.equal(feature.getAttribute("aria-selected"), "true");
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(tabs.hidden, true);
     assert.equal(h.doc.querySelector("#map-inspection").getAttribute("data-minimized"), "true");
     h.expandButton.dispatchEvent(new Event("click"));
-    assert.equal(feature.getAttribute("aria-pressed"), "true");
+    assert.equal(feature.getAttribute("aria-selected"), "true");
     h.controller.setClickResult("histogram", null);
     assert.equal(h.histogramTab.hidden, false, "retained histogram remains reachable without a click card");
     h.controller.destroy();
@@ -518,6 +525,42 @@ test("distributions remain reachable before a click and after empty or failed ar
         assert.equal(h.featureTab.disabled, true);
     }
     h.controller.destroy();
+});
+
+test("All tabs keeps the active and previous views in a crowded row and opens the original layer editor", t => {
+    let width = 385;
+    const h = fixture(doc => {
+        const list = doc.querySelector("#map-inspection-tabs");
+        const index = doc.querySelector("#map-inspection-all-tabs");
+        list.getBoundingClientRect = () => ({ width: width - (index.hidden ? 0 : 75), height: 44 });
+        index.getBoundingClientRect = () => ({ width: 75, height: 44 });
+        doc.querySelector("#map-inspection-tab-menu").matches = () => false;
+    });
+    t.after(() => h.controller.destroy());
+    h.controller.showStyle("Iowa land cover");
+    h.controller.showHistogram();
+    h.controller.setToolContext("models", { source: "Ecosystem Condition", scope: "" });
+    h.controller.showModels();
+    const model = h.doc.querySelector("#map-inspection-tab-models");
+    const index = h.doc.querySelector("#map-inspection-all-tabs");
+    const choices = h.doc.querySelector("#map-inspection-tab-menu").children.filter(row => !row.hidden);
+    assert.equal(index.getAttribute("aria-label"), "All tabs (5)");
+    assert.equal(model.getAttribute("data-overflow"), "false");
+    assert.equal(h.histogramTab.getAttribute("data-overflow"), "false");
+    assert.equal(h.styleTab.getAttribute("data-overflow"), "true");
+    assert.deepEqual(choices.map(row => row.children[0].textContent),
+        ["Histograms", "Raster statistics", "Features", "Data tools", "Style"]);
+    assert.equal(choices[3].getAttribute("aria-checked"), "true");
+    assert.equal(choices[3].children[1].textContent, "Ecosystem Condition");
+    assert.equal(choices[4].children[1].textContent, "Iowa land cover");
+    choices[4].dispatchEvent(new Event("click"));
+    assert.equal(h.doc.activeElement, h.styleTab);
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.styleTab.getAttribute("data-overflow"), "false");
+    width = 800;
+    h.controller.updateLayerEditorName("style", "Land cover");
+    assert.equal(index.hidden, true);
+    assert.equal(choices[4].children[1].textContent, "Land cover");
 });
 
 test("empty and failed streams remain understandable without opening unavailable results", () => {
@@ -667,7 +710,9 @@ test("toolbar reflow reports its height without losing retained tools", () => {
             disconnect() { disconnected = true; }
         };
     });
-    assert.deepEqual(observed, [h.doc.querySelector("#map-inspection"), h.toolActions, h.toolbar]);
+    for (const element of [h.doc.querySelector("#map-inspection"), h.toolActions, h.toolbar, h.doc.querySelector("#map-inspection-tabs")]) {
+        assert.ok(observed.includes(element));
+    }
     const rootStyle = h.doc.querySelector("#map-inspection").style;
     assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "48px");
     h.controller.showHistogram();
@@ -704,7 +749,7 @@ test("Raster statistics omits retained Style context without closing its editor"
     h.controller.showStyle(label);
     h.controller.showRasterSeries();
     assert.equal(h.styleTab.hidden, true);
-    assert.equal(h.doc.querySelector("#map-inspection-tabs").hidden, true);
+    assert.equal(h.doc.querySelector("#map-inspection-tabs").hidden, false);
     assert.equal(h.toolName.textContent, "Raster statistics");
     assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);
     assert.equal(h.style.hidden, false, "the editor remains available without its inactive tab");
@@ -764,7 +809,7 @@ test("automatic histogram cleanup retains features and current focus", () => {
 
     assert.equal(h.histogram.hidden, true);
     assert.equal(h.histogramTab.hidden, false);
-    assert.equal(h.histogramTab.getAttribute("aria-pressed"), "false");
+    assert.equal(h.histogramTab.getAttribute("aria-selected"), "false");
     assert.equal(h.feature.hidden, false);
     assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.doc.activeElement, h.featureTab);
@@ -1139,7 +1184,7 @@ test("raster series remains active during map inspection and closes without hidi
         h.controller.setClickResult("histogram", { state });
         assert.equal(h.histogramTab.getAttribute("data-loading"), String(state === "loading"));
         assert.equal(h.controller.activeTool, "raster-series");
-        assert.equal(statisticsButton.getAttribute("aria-pressed"), "true");
+        assert.equal(statisticsButton.getAttribute("aria-selected"), "true");
         assert.equal(h.doc.activeElement, statisticsButton);
         assert.equal(h.histogramTab.title, "2 raster results");
     }
@@ -1233,7 +1278,9 @@ test("Data tools keeps its visible tool title when alone and alongside another e
     h.controller.showModels();
     const retainedTabs = h.doc.querySelector("#map-inspection-tabs");
     assert.equal(h.toolName.textContent, "Data tools");
-    assert.equal(retainedTabs.hidden, true, "a single active tab would duplicate the chooser's title");
+    assert.equal(retainedTabs.hidden, false, "the raster shortcuts remain available");
+    assert.equal(tab.getAttribute("data-overflow"), "true", "a lone tool is already named in the header");
+    assert.equal(h.histogramTab.tabIndex, 0, "the first shortcut is reachable by keyboard");
     assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);
     assert.equal(tab.hidden, false);
     assert.equal(tab.getAttribute("aria-selected"), "true");
@@ -1241,10 +1288,14 @@ test("Data tools keeps its visible tool title when alone and alongside another e
     h.controller.showStyle("Population");
     assert.equal(h.toolName.textContent, "Style");
     assert.equal(retainedTabs.hidden, false, "both retained tools are available for switching");
+    assert.equal(tab.getAttribute("data-overflow"), "false");
     assert.equal(tab.hidden, false);
     tab.dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "models");
     assert.equal(h.toolName.textContent, "Data tools");
+    tab.focus();
+    h.controller.hideStyle();
+    assert.equal(h.doc.activeElement, h.mapToolsButton, "focus follows the lone tool back to its title");
     h.controller.destroy();
 });
 

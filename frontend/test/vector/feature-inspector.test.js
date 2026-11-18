@@ -46,7 +46,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   documentContext.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
   documentContext.querySelector("#vector-feature-inspector").hidden = true;
-  documentContext.querySelector("#map-inspection-raster-analysis").append(documentContext.querySelector("#close-vector-inspector"));
+  documentContext.querySelector("#map-inspection-tab-bar").append(documentContext.querySelector("#close-vector-inspector"));
   documentContext.querySelector("#vector-feature-result").hidden = true;
   documentContext.querySelector("#open-vector-time-series").disabled = true;
   documentContext.querySelector("#open-vector-feature-profile").disabled = true;

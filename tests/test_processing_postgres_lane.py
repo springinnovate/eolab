@@ -111,7 +111,7 @@ def test_lane_rejects_missing_module(pytester: pytest.Pytester) -> None:
 def test_application_image_context_excludes_sources_and_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Inspect the real archive sent to Docker when validating installed packaging.
+    """Include required map fixtures without shadowing the installed application.
 
     Args:
         monkeypatch: Capture the build boundary without requiring a Docker daemon.
@@ -133,6 +133,14 @@ def test_application_image_context_excludes_sources_and_environment(
             assert not any(name.startswith("src/") for name in names)
             assert not any(".env" in name or ".git" in name for name in names)
             assert "tests/test_processing_events_postgres.py" in names
+            for fixture in (
+                "tests/fixtures/saved-map-v5.json",
+                "tests/fixtures/drawing-admission.json",
+            ):
+                assert (
+                    archive.extractfile(fixture).read()
+                    == (launcher.ROOT / fixture).read_bytes()
+                )
             recipe = archive.extractfile("Dockerfile").read().decode()
             assert recipe.startswith("FROM eolab-application:test\n")
             assert "pip install --no-cache-dir ." not in recipe

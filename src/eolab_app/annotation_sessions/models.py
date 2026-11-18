@@ -6,17 +6,12 @@ from uuid import UUID
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
-from shapely.geometry import Polygon
+
+from eolab_app.editable_polygon import PolygonGeometry
 
 MAX_LAYER_BYTES = 8 * 1024 * 1024
 Name = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)
-]
-Coordinate = tuple[
-    Annotated[float, Field(ge=-180, le=180, allow_inf_nan=False, strict=True)],
-    Annotated[
-        float, Field(ge=-85.05112878, le=85.05112878, allow_inf_nan=False, strict=True)
-    ],
 ]
 
 
@@ -55,36 +50,6 @@ class ContributorColor(SessionInput):
     """This browser's polygon fill color in one shared layer; any RGB color is allowed."""
 
     color: Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
-
-
-class PolygonGeometry(SessionInput):
-    """One valid, closed polygon without holes, in editable longitude/latitude."""
-
-    type: Literal["Polygon"] = "Polygon"
-    coordinates: Annotated[
-        list[Annotated[list[Coordinate], Field(min_length=4, max_length=2001)]],
-        Field(min_length=1, max_length=1),
-    ]
-
-    @model_validator(mode="after")
-    def validate_polygon(self) -> Self:
-        """Reject open, self-crossing, or zero-area polygon rings.
-
-        Returns:
-            This geometry when the exterior ring is usable by the editor.
-
-        Raises:
-            ValueError: If the ring does not describe a valid polygon.
-        """
-        ring = self.coordinates[0]
-        if ring[0] != ring[-1]:
-            raise ValueError("The polygon ring must end at its starting coordinate.")
-        polygon = Polygon(ring)
-        if not polygon.is_valid or polygon.area == 0:
-            raise ValueError(
-                "The polygon must have at least three distinct vertices and must not cross itself."
-            )
-        return self
 
 
 class PolygonProperties(SessionInput):

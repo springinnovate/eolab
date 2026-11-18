@@ -38,6 +38,7 @@ import {
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
 import { AnnotationPanelView } from "./annotations/panel-view.js";
 import { AnnotationController } from "./annotations/controller.js";
+import { DrawingSourceApi } from "./annotations/source-api.js";
 import "./annotations/style.css";
 import { AnnotationSessionsController } from "./annotation-sessions/controller.js";
 import "./annotation-sessions/style.css";
@@ -82,7 +83,7 @@ import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
-import { loadSamplingBoxMean } from "./raster/analysis-api.js";
+import { loadSamplingBoxPreview } from "./raster/analysis-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
 import { RasterSeriesView } from "./raster/series-view.js";
@@ -205,6 +206,21 @@ async function loadAppGlobalConfiguration() {
 }
 
 /**
+ * Keep the first-sample instruction in the map's available space. With the sidebar open,
+ * the existing sample-area control reserves room at the desktop map edge or in the compact toolbar.
+ * @param {L.Map} map Map containing the unobstructed placement for a collapsed sidebar.
+ * @return {void}
+ */
+function placeFirstSampleHint(map) {
+    const hint = document.querySelector("#raster-first-sample-hint");
+    const tool = document.querySelector("#raster-sampling-tool");
+    const sidebarOpen = !document.querySelector("#control-panel").inert;
+    const chooserVisible = !tool.closest("[hidden]");
+    const host = sidebarOpen && chooserVisible ? tool : map.getContainer();
+    if (hint.parentElement !== host) host.append(hint);
+}
+
+/**
  * Float the sample-area chooser with the desktop map navigation controls. On smaller
  * screens the workspace drawers cover the map, so keep it in their measured toolbar.
  * @param {L.Map} map Map whose controls share the visible viewport.
@@ -235,6 +251,7 @@ function placeSamplingTool(map) {
         const focused = tool.contains(document.activeElement) ? document.activeElement : null;
         if (desktop.matches) control.addTo(map);
         else control.remove();
+        placeFirstSampleHint(map);
         focused?.focus({preventScroll: true});
     }
     updatePlacement();
@@ -1017,7 +1034,7 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
-    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxMean: loadSamplingBoxMean });
+    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxPreview: loadSamplingBoxPreview });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
@@ -1102,6 +1119,7 @@ async function initializeCatalog(
         cursorValuesView: new RasterCursorValuesView(),
         getTemporalItem: identity => catalogItemClient.get(identity),
     });
+    mapInspection.subscribeActiveTool(tool => rasterVisualization.setFirstSampleHintEnabled(tool === null));
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
         onFilterChange: () => mapLayerController.render(),
         leaflet: L,
@@ -1483,6 +1501,7 @@ async function initializeCatalog(
                 {matched: area.matched, total: area.total, complete: true});
         },
         onOpen: () => mapInspection.showModels(),
+        onViewLabel: label => mapInspection.setToolContext("models", { source: label, scope: "" }),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
     });
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
@@ -1633,7 +1652,14 @@ async function initializeCatalog(
             },
             zoom: appGlobalConfiguration.initialView.zoom,
         },
-        beforeRestore: () => {
+        /** Clear replaceable map views after their source owners finish startup.
+         * @param {()=>boolean} isCurrent Whether this map restoration is still active.
+         * @return {Promise<void>} Completion after current-view cleanup, or supersession.
+         */
+        beforeRestore: async isCurrent => {
+            await annotationsReady;
+            await annotations.prepareDrawingMapRestore(isCurrent);
+            if (!isCurrent()) return;
             clearCatalogSelection();
             for (const layer of mapLayerController.snapshots()) {
                 if (layer.source?.kind === "uploadedRaster") mapLayerController.removeKey(layer.key);
@@ -1643,7 +1669,6 @@ async function initializeCatalog(
                     mapLayerController.removeKey(record.entry.key);
                 }
             }
-            return annotationsReady;
         },
         exportUpload: record => {
             const raster = mapLayerController.snapshots().find(layer => layer.key === record.entry.key)?.source;
@@ -1701,15 +1726,17 @@ async function initializeCatalog(
             const id = await annotationSessions.openMapReference(layer.sharedAnnotation, isCurrent);
             return id && isCurrent() ? annotations.restoreMapAppearance(id, layer) : null;
         },
+        exportDrawing: record => annotations?.exportDrawingLayer(record.entry.key) ?? null,
+        stageDrawing: (layer, isCurrent) => annotations.stageDrawingLayer(layer, isCurrent),
     });
     if (!isSharedViewer) {
         planning = new PlanningController({
             api: new PlanningApiClient(),
             view: new PlanningView(document),
-            /** List custom Catalog polygons and their original ID field candidates.
+            /** List custom Catalog polygons and local drawings through their source owners.
              * @return {Object[]} Detached choices from the current ordinary map views.
              */
-            getLayerChoices: () => mapLayerController.retainedRecords.flatMap(record => {
+            getLayerChoices: () => [...mapLayerController.retainedRecords.flatMap(record => {
                 if (!record.entry.isCustom || record.adapter !== vectorMapLayerAdapter) return [];
                 const source = record.adapter.describeSource(record);
                 if (source.origin !== "catalog" || source.geometryKind !== "polygon") return [];
@@ -1722,18 +1749,30 @@ async function initializeCatalog(
                         && ["str", "string", "int", "int16", "int32", "int64"].includes(field.type.toLowerCase().split(":")[0])),
                     filterSummary: vectorFilterSummary(filter ?? EMPTY_VECTOR_FILTER),
                 }];
-            }),
-            exportLayer: key => savedMapViewController.exportCatalogLayer(key),
+            }), ...(annotations?.drawingLayers() ?? []).map(layer => ({
+                key: layer.key, label: layer.label,
+                source: {localLayerId: layer.localLayerId, ...(layer.drawingLayerId ? {drawingLayerId: layer.drawingLayerId} : {})},
+                builtInId: "id", idFields: [{name: "id", type: "str"}], featureCount: layer.polygonCount,
+                filterSummary: vectorFilterSummary(layer.filter),
+            }))],
+            /** Persist drawings before a tool retains their reusable source references.
+             * @param {string[]} keys Selected live map layers.
+             * @return {Promise<void>} Completion after every selected drawing's committed edits are saved.
+             */
+            prepareLayers: async keys => {
+                const drawings = new Set((annotations?.drawingLayers() ?? []).map(layer => layer.key));
+                for (const key of keys) if (drawings.has(key)) await annotations.ensureDrawingSource(key);
+            },
+            exportLayer: key => savedMapViewController.exportLayer(key),
             /** Restore each durable view once, then bind it to its fresh map key.
              * @param {Object[]} layers Saved view IDs and ordinary layer definitions.
              * @param {()=>boolean} isCurrent Whether this tool is still being opened.
              * @return {Promise<Object[]>} View IDs paired with restored keys or failures.
              */
             restoreLayers: async (layers, isCurrent) => {
-                const restored = await savedMapViewController.restoreCatalogLayers(
-                    layers.map(layer => layer.definition), isCurrent,
-                );
-                return layers.map((layer, index) => ({id: layer.id, ...restored[index]}));
+                await annotationsReady;
+                const restored = await savedMapViewController.restoreLayers(layers.map(layer => layer.definition), isCurrent);
+                return restored.map((result, index) => ({id: layers[index].id, ...result}));
             },
             editLayerFilter: key => vectorFilterControls.open(key),
             onOpen: () => mapInspection.showPlanning(),
@@ -1896,6 +1935,7 @@ async function initializeCatalog(
             onOpen: () => mapInspection.showAnnotations(),
             onClose: () => { annotations.clearInspection(); mapInspection.hideAnnotations(); } });
         annotations = new AnnotationController({
+            sourceApi: new DrawingSourceApi(),
             panel: annotationPanel,
             mapSlug: namedMapSlug?.length <= 80 && MAP_LINK_NAME_PATTERN.test(namedMapSlug) ? namedMapSlug : null,
             leaflet: L,
@@ -1905,7 +1945,7 @@ async function initializeCatalog(
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
             onRenameContributor: id => annotationSessions.editContributorName(id),
             requestEditing: id => annotationSessions.requestDrawing(id),
-            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); },
+            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
             onFilter: key => vectorFilterControls.open(key),
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
@@ -1937,7 +1977,8 @@ async function initializeCatalog(
         const restoringMap = savedMapViewController.restoreStartupView(globalThis.location.hash);
         void Promise.all([annotationsReady, restoringMap]).then(() => {
             annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash,
-                mapOrderedLayerIds: annotationSessions.bookmarkedLayerIds() });
+                mapOrderedLayerIds: [...annotationSessions.bookmarkedLayerIds(),
+                    ...annotations.drawingLayers().filter(layer => layer.drawingLayerId).map(layer => layer.localLayerId)] });
             void annotationSessions.refresh();
         });
     }
@@ -2568,7 +2609,10 @@ async function startApplication() {
     layoutController = new EomapLayoutController({
         documentContext: document,
         schedule: window.setTimeout.bind(window),
-        invalidateMapSize: () => leafletMap.invalidateSize(),
+        invalidateMapSize: () => {
+            leafletMap.invalidateSize();
+            placeFirstSampleHint(leafletMap);
+        },
         allowCatalog: !isSharedViewer,
         allowOperationalStatus: !isSharedViewer,
         workspaceStorage: isSharedViewer || editableMapSlug !== null

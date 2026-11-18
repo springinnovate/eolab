@@ -100,7 +100,7 @@
      * @throws {Error} If a result changes the header text, layout, selected view or focus.
      */
     function checkHistogramResultNavigation(dock) {
-      const header = document.querySelector("#map-inspection-raster-analysis");
+      const header = document.querySelector(".map-inspection-dock-header");
       for (const [buttonId, open] of [
         ["open-raster-series-dock", () => dock.showRasterSeries()],
         ["map-click-histogram", () => dock.showHistogram()],
@@ -116,13 +116,72 @@
           dock.setClickResult("histogram", { state });
           check(header.innerText === text && header.offsetHeight === height,
             `Histogram ${state} changed the shared header with ${button.textContent} open`);
-          check(button.getAttribute("aria-pressed") === "true" && document.activeElement === button,
+          check(button.getAttribute("aria-selected") === "true" && document.activeElement === button,
             `Histogram ${state} changed the selected view or moved keyboard focus`);
         }
       }
       const featureError = "The selected feature could not be read.";
       dock.setClickResult("feature", { state: "error", message: featureError });
       check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
+    }
+
+    /** Check the crowded tab row, context menu, shared typography and retained selection.
+     * @param {MapInspectionController} dock Mounted map inspection panel with the Style editor open.
+     * @returns {Promise<void>} Resolves after switching from model setup back to its peer editor.
+     * @throws {Error} If the row wraps, hides the active view, loses context or changes focus on new results.
+     */
+    async function checkOpenMapViews(dock) {
+      dock.showFilter("Survey plots");
+      dock.showPlanning();
+      dock.showAnnotations();
+      dock.showHistogram();
+      dock.setToolContext("models", { source: "Ecosystem Condition", scope: "" });
+      dock.showModels();
+      await settleLayout();
+      const tabs = [...document.querySelectorAll(".map-inspection-tab:not([hidden])")];
+      const visible = tabs.filter(tab => tab.checkVisibility({ visibilityProperty: true }));
+      check(new Set(visible.map(tab => tab.getBoundingClientRect().top)).size === 1,
+        "Open right-panel views occupy more than one row");
+      const models = document.querySelector("#map-inspection-tab-models");
+      const histogram = document.querySelector("#map-click-histogram");
+      const index = document.querySelector("#map-inspection-all-tabs");
+      const menu = document.querySelector("#map-inspection-tab-menu");
+      check(isReachable(models) && isReachable(histogram) && isReachable(index),
+        "The active model, previous histogram or All tabs is out of reach");
+      models.focus();
+      dock.beginMapClick({ lat: 43, lng: -93 });
+      dock.setClickResult("feature", { state: "ready", message: "One survey plot" });
+      check(document.activeElement === models && models.getAttribute("aria-selected") === "true",
+        "A background result moved focus away from model setup");
+      index.click();
+      await settleLayout();
+      const choices = [...menu.querySelectorAll("button:not([hidden])")];
+      check(menu.matches(":popover-open") && choices.length === tabs.length &&
+        index.textContent.includes(`(${tabs.length})`), "All tabs count and available views disagree");
+      const selected = menu.querySelector('[aria-checked="true"]');
+      check(selected.innerText.includes("Ecosystem Condition") && document.activeElement === selected,
+        "The menu lost the selected model's name or keyboard focus");
+      const control = getComputedStyle(document.querySelector(".catalog-search input"));
+      const supporting = getComputedStyle(document.querySelector(".catalog-search"));
+      for (const label of [models, index, selected]) {
+        const style = getComputedStyle(label);
+        check(style.fontFamily === control.fontFamily && style.fontSize === control.fontSize,
+          "Tab labels do not use the app control typography");
+      }
+      check(getComputedStyle(selected.querySelector("small")).fontSize === supporting.fontSize,
+        "Tab context does not use the app supporting-text size");
+      const feature = choices.find(choice => choice.innerText.includes("New results"));
+      check(feature?.innerText.includes("Features"), "The unseen feature result is missing from All tabs");
+      const editor = choices.find(choice => choice.innerText.includes("Land cover"));
+      check(Boolean(editor), "The open Style editor lost its layer name");
+      editor.click();
+      const style = document.querySelector("#map-inspection-tab-style");
+      check(document.activeElement === style && style.getAttribute("aria-selected") === "true" &&
+        isReachable(style) && !menu.matches(":popover-open"), "Selecting Style did not return to its visible tab");
+      dock.hideModels();
+      dock.hideAnnotations();
+      dock.hidePlanning();
+      dock.hideFilter();
     }
 
     /** Check that both panel tabs free map space, retain context, and stay reachable.
@@ -147,6 +206,11 @@
       inspection.showStyle("Land cover");
       await settleLayout();
       check(toolName.textContent === "Style" && isReachable(chooser), "The active tool name cannot open the chooser");
+      if (document.querySelector("#map-inspection-all-tabs").hidden) {
+        check(!isReachable(document.querySelector("#map-inspection-tab-style")) &&
+          isReachable(document.querySelector("#map-click-histogram")),
+          "A lone Style tab duplicates its header or loses the Histograms shortcut");
+      }
       check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
       inspection.showRasterClips();
       await settleLayout();
@@ -300,6 +364,7 @@
       });
       await checkPanelDisclosures(inspection);
       checkLegendControls(inspection);
+      await checkOpenMapViews(inspection);
       checkHistogramResultNavigation(inspection);
       inspection.destroy();
       layout.destroy();

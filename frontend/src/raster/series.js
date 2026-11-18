@@ -1,5 +1,6 @@
 /** Plot Processing formulas across original raster sources. */
 import { rasterSourceReference, rasterSourceKey } from "../raster-source.js";
+import { samplingBoxFormula } from "../sampling-box-statistics.js";
 import { vectorSelectionsEqual } from "../selected-area.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
 import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
@@ -7,8 +8,8 @@ import { csvParse, csvFormat } from "d3";
 
 const SERIES_STATISTICS = Object.freeze({
     pixel: { label: "Pixel value", expression: "pixelValue(a)" },
-    mean: { label: "Mean", expression: "mean(a)", boxMean: true },
-    stdev: { label: "Standard deviation", expression: "stdev(a)" },
+    mean: samplingBoxFormula("mean"),
+    stdev: samplingBoxFormula("stdev"),
     min: { label: "Minimum", expression: "min(a)" },
     max: { label: "Maximum", expression: "max(a)" },
     sum: { label: "Sum", expression: "sum(a)" },
@@ -16,7 +17,7 @@ const SERIES_STATISTICS = Object.freeze({
     count: { label: "Count above 10", expression: "count(a > 10)" },
     "area-threshold": { label: "Area above 10", expression: "areaha(a > 10)" },
     "area-class": { label: "Area in class 4", expression: "areaha(a == 4)" },
-    percent: { label: "Percent above 10", expression: "100 * count(a > 10) / count(a)" },
+    percent: samplingBoxFormula({percentAbove: 10}),
     range: { label: "Range", expression: "max(a) - min(a)" },
     custom: { label: "Custom", expression: "" },
 });
@@ -48,28 +49,45 @@ function getCapturedStatisticLabel(result, formula) {
     return result?.calculationInputs.calculations.find(calculation => calculation.expression === formula.expression.trim())?.label;
 }
 
+/** Include the precision and statistic name even when a user gives the row a custom name.
+ * @param {string} label User's display name.
+ * @param {string} statistic Default name including any threshold.
+ * @param {string} method Sampling method for this value.
+ * @return {string} Label shared by the chart, table and download.
+ */
+function boxStatisticLabel(label, statistic, method) {
+    if (method === "unavailable") return label;
+    const description = method + " " + statistic.toLowerCase();
+    return label === statistic ? description[0].toUpperCase() + description.slice(1) : `${label} (${description})`;
+}
+
 /** Resolve the displayed scalar, its calculation method, and its owning job.
  * @param {Object|undefined} result Captured measurements for one original source.
  * @param {Object} formula Current named statistic, including its preset identity.
  * @return {{row:Object|undefined,label:string,method:string|null,error:string,job:Object|null}} Value for both the plot and export.
  */
 function seriesValue(result, formula) {
-    const mean = formula.boxMean ? result?.boxMean : null;
     const label = formula.label || formula.expression || "Custom statistic";
-    if (mean) {
-        const wording = {estimated: "Estimated mean", exact: "Exact mean", unavailable: "Mean"}[mean.method];
-        const error = mean.error || (mean.method === "unavailable" ? "Estimate unavailable." : "");
-        return {label: label === "Mean" ? wording : label + " (" + wording.toLowerCase() + ")",
-            method: mean.method, error, job: null, row: {
-                value: mean.value === null ? null : String(mean.value), unit: mean.unit,
-                state: mean.value !== null ? "ok" : mean.method === "exact" ? "no_valid_data" : "error",
-            }};
-    }
     const capturedLabel = getCapturedStatisticLabel(result, formula);
     const row = result?.job?.result?.rows.find(candidate => candidate.label === capturedLabel);
-    const exactMean = formula.boxMean && row && result.calculationInputs.area?.kind === "samplingBox";
-    return {row, method: exactMean ? "exact" : null, job: result?.job ?? null, error: result?.error || "",
-        label: exactMean ? (label === "Mean" ? "Exact mean" : label + " (exact mean)") : label};
+    const definition = formula.preview && result?.calculationInputs.area?.kind === "samplingBox"
+        ? samplingBoxFormula(formula.preview) : null;
+    if (!definition) return {row, label, method: null, job: result?.job ?? null, error: result?.error || ""};
+    const preview = result.boxPreview;
+    const sample = preview?.rows.get(formula.expression);
+    if (sample || preview?.error) {
+        const {method} = preview;
+        return {label: boxStatisticLabel(label, definition.label, method), method, job: null,
+            error: preview.error || (method === "unavailable" ? "Estimate unavailable." : ""),
+            row: {value: sample?.value == null ? null : String(sample.value), unit: sample?.unit,
+                state: sample?.value != null ? "ok" : method === "exact" ? "no_valid_data" : "error"}};
+    }
+    if (result.exactBox && row) {
+        const unit = result.previewUnits?.get(formula.expression) ?? definition.unit ?? row.unit;
+        return {label: boxStatisticLabel(label, definition.label, "exact"), method: "exact",
+            row: {...row, unit}, job: result.job, error: ""};
+    }
+    return {label, method: null, row: undefined, job: null, error: result.exactBox ? result.error || "" : ""};
 }
 
 /** Compare immutable polygon-area or original-source selection identities.
@@ -145,7 +163,7 @@ export class RasterSeriesController {
             onRemovePlot: id => this.removePlot(id),
             onPlotOptions: (id, change) => this.setPlotOptions(id, change),
             onRetry: () => this.retryFailedCalculations(),
-            onExactMean: () => this.areaStatistics.calculateExactBoxMean(),
+            onExactStatistics: () => this.areaStatistics.calculateExactBoxStatistics(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(true),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
@@ -630,18 +648,28 @@ export class RasterSeriesController {
 
     /** Edit a formula or its display name; names never change calculation identity.
      * @param {number} id Formula identity.
-     * @param {{label?:string,expression?:string}} change Editor values. @return {void}
+     * @param {{label?:string,expression?:string,threshold?:number}} change Editor values. A finite threshold keeps the percentage preview eligible.
+     * @return {void}
      */
     editFormula(id, change) {
         const formula = this.formulas.find(item => item.id === id);
         if (!formula) return;
-        const oldExpression = formula.expression;
-        Object.assign(formula, change);
-        if (oldExpression !== formula.expression) {
-            delete formula.boxMean;
+        if (change.threshold !== undefined) {
+            const previous = samplingBoxFormula(formula.preview);
+            const updated = samplingBoxFormula({percentAbove: change.threshold});
+            if (!updated || !previous || typeof formula.preview !== "object") return;
+            if (formula.label !== previous.label) updated.label = formula.label;
+            Object.assign(formula, updated);
             this.updateAreaInputs();
+        } else if (change.expression !== undefined && change.expression !== formula.expression) {
+            Object.assign(formula, change);
+            delete formula.preview;
+            delete formula.unit;
+            this.updateAreaInputs();
+        } else {
+            Object.assign(formula, change);
+            this.render();
         }
-        else this.render();
     }
 
     /** Remove a formula while keeping at least one statistic.
@@ -726,8 +754,8 @@ export class RasterSeriesController {
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
                 results: area.results, hasPendingVectorArea: this.hasPendingVectorArea,
-                canCalculateExactMean: area.useBoxMean && [...area.results.values()].some(({boxMean}) =>
-                    boxMean && boxMean.method !== "exact" && !boxMean.outside),
+                canCalculateExactStatistics: area.previewFormulas.length > 0 && [...area.results.values()].some(({boxPreview}) =>
+                    boxPreview && boxPreview.method !== "exact" && !boxPreview.outside),
                 recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
             sources: this.sourceChoices(),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,

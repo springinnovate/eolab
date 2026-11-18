@@ -15,7 +15,7 @@ import {
 const RESTORE_CONCURRENCY = 4;
 const REMEMBER_DEBOUNCE_MILLISECONDS = 350;
 
-/** Save map settings and restore catalog, temporal, uploaded and shared layers through their owners. */
+/** Save map settings and restore portable layers through their source owners. */
 export class SavedMapViewController {
     /**
      * Connect map save, share and restore controls to layer owners and browser services.
@@ -35,11 +35,14 @@ export class SavedMapViewController {
      * viewport used by Reset view.
      * @param {boolean} [configuration.restoreSharedMap=false] Reset to the opening
      * shared fragment, ignore private autosave, and leave personal storage untouched.
-     * @param {()=>void|Promise<void>} [configuration.beforeRestore] Composition-owned
+     * @param {(isCurrent:()=>boolean)=>void|Promise<void>} [configuration.beforeRestore] Composition-owned
      * readiness and cleanup before restoring layers. Private startup appearance
      * does not wait for this callback; explicit map actions commit appearance later.
+     * Check isCurrent after awaiting readiness before changing retained layers.
      * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
+     * @param {(record:Object)=>Object|null} [configuration.exportDrawing] Export a linked drawing reference and view, or null for another layer kind.
+     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<{key:string,record:Object,layer:Object}|null>} [configuration.stageDrawing] Prepare a detached drawing through its source owner for the ordinary staged commit, or null after supersession.
      * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreUpload Open this browser's upload with its saved appearance and return its map key, or null after supersession.
      * @param {(record:Object)=>Object|null} [configuration.exportArtifact] Export a private vector result reference and view definitions.
@@ -73,6 +76,8 @@ export class SavedMapViewController {
         beforeRestore = () => {},
         exportAnnotation = () => null,
         restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
+        exportDrawing = () => null,
+        stageDrawing = async () => { throw new Error("Saved drawings are unavailable."); },
         exportUpload,
         restoreUpload,
         exportArtifact = () => null,
@@ -116,11 +121,13 @@ export class SavedMapViewController {
         this.beforeRestore = beforeRestore;
         this.exportAnnotation = exportAnnotation;
         this.restoreAnnotation = restoreAnnotation;
+        this.exportDrawing = exportDrawing;
+        this.stageDrawing = stageDrawing;
         this.exportUpload = exportUpload;
         this.restoreUpload = restoreUpload;
         this.exportArtifact = exportArtifact;
         this.restoreArtifact = restoreArtifact;
-        /** @type {Array<{index:number,layer:Object,origin:string}>} Failed calculated views retained for the next save or retry. */
+        /** @type {Array<{index:number,layer:Object,origin:string}>} Unavailable calculated, result and drawing views retained for the next save or retry. */
         this.unavailableLayers = [];
         this.exportTemporal = exportTemporal;
         this.restoreTemporal = restoreTemporal;
@@ -438,7 +445,7 @@ export class SavedMapViewController {
     showUnavailableLayers() {
         if (this.busy || this.destroyed) return;
         this.view.showUnavailableLayers(this.unavailableLayers.map(({index, layer, origin}) => ({index,
-            label: layer.customName ?? layer.catalogItem?.id ?? (layer.uploadId ? "Private uploaded layer" : "Private run result"),
+            label: layer.customName ?? layer.catalogItem?.id ?? (layer.drawingLayerId ? "Saved drawing" : layer.uploadId ? "Private uploaded layer" : "Private run result"),
             sourceSite: origin === this.viewerOrigin ? null : origin,
             fields: (layer.calculatedFields ?? []).map(field => field.name)})));
     }
@@ -536,56 +543,84 @@ export class SavedMapViewController {
         this.view.unbind();
     }
 
-    /** Export one retained Catalog layer through its ordinary portable definition.
+    /** Export one retained layer through its ordinary portable definition.
      * Runtime map keys are omitted; independent callers retain their own bindings.
-     * @param {string} key Retained Catalog view key.
+     * @param {string} key Retained map view key.
      * @return {Object} Detached source identity, filter, fields and appearance.
-     * @throws {Error} If the view is missing, private, temporal or cannot be exported.
+     * @throws {Error} If the view is missing or its source owner cannot export it.
      */
-    exportCatalogLayer(key) {
+    exportLayer(key) {
         const record = this.mapLayers.retainedRecords.find(value => value.entry.key === key);
-        if (!record || record.entry.item === null || this.exportTemporal(record) !== null) {
-            throw new Error("Choose an available Catalog layer to save.");
-        }
-        return structuredClone({...this.#exportLayer(record), isCustom: record.entry.isCustom,
-            ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})});
+        const layer = record ? this.#exportRetainedLayer(record) : null;
+        if (!layer) throw new Error("Choose an available layer to save.");
+        return structuredClone(layer);
     }
 
-    /** Add portable Catalog layers without replacing the map or changing its viewport.
-     * Every definition must restore exactly before any layer is attached. Failure or
-     * cancellation discards this addition while preserving existing map layers.
-     * @param {Object[]} definitions Ordinary portable Catalog layer definitions.
+    /** Add portable Catalog and drawing views without replacing the map or changing its viewport.
+     * All views remain detached until every source is ready. Failure or cancellation
+     * discards this addition while preserving existing map layers and edits.
+     * Other source kinds may reuse existing views and are not accepted by this atomic addition.
+     * @param {Object[]} definitions Ordinary portable Catalog or drawing layer definitions.
      * @param {()=>boolean} isCurrent Whether the caller still wants this addition.
      * @return {Promise<Array<{key:string|null,error:string|null}>>} Results in input order.
      * @throws {Error} If the portable document is invalid or contains another source kind.
      */
-    async restoreCatalogLayers(definitions, isCurrent) {
+    async restoreLayers(definitions, isCurrent) {
         const document = createSavedMapView({viewer: {version: this.viewerVersion, origin: this.viewerOrigin},
             createdAt: this.clock().toISOString(), viewport: {center: {latitude: 0, longitude: 0}, zoom: 0}, layers: definitions});
-        if (document.layers.some(layer => !layer.catalogItem)) throw new Error("Only Catalog layers can be added here.");
-        const prepared = [];
+        if (document.layers.some(layer => !layer.catalogItem && !layer.drawingLayerId)) {
+            throw new Error("Only Catalog layers and saved drawings can be added here.");
+        }
+        const generation = this.restoreGeneration;
+        /** @type {()=>boolean} Whether the caller and map still own this addition. */
+        const stillCurrent = () => !this.destroyed && generation === this.restoreGeneration && isCurrent();
+        const prepared = new Array(document.layers.length);
         const attached = new Set();
         try {
-            for (const layer of document.layers) {
-                if (this.destroyed || !isCurrent()) throw new Error("Layer restoration was cancelled.");
-                const result = await this.#prepareLayer(layer, {strictStyle: true});
+            for (const [index, layer] of document.layers.entries()) {
+                if (!layer.catalogItem) continue;
+                if (!stillCurrent()) throw new Error("Layer restoration was cancelled.");
+                const result = await this.#restoreLayer(layer, document.viewer.origin, stillCurrent, {strictStyle: true});
                 if (!result.staged) throw new Error(result.detail);
-                prepared.push(result.staged);
+                prepared[index] = result;
             }
-            if (this.destroyed || !isCurrent()) throw new Error("Layer restoration was cancelled.");
-            for (const [index, staged] of prepared.entries()) {
-                this.mapLayers.restoreStagedLayer(staged, index);
-                attached.add(staged.key);
-                this.mapLayers.setLegendIncluded(staged.key, document.layers[index].legendIncluded !== false);
+            for (const [index, layer] of document.layers.entries()) {
+                if (!layer.drawingLayerId) continue;
+                if (!stillCurrent()) throw new Error("Layer restoration was cancelled.");
+                const result = await this.#restoreLayer(layer, document.viewer.origin, stillCurrent);
+                if (!result.staged) throw new Error(result.detail ?? "Layer restoration was cancelled.");
+                prepared[index] = result;
             }
-            return prepared.map(staged => ({key: staged.key, error: null}));
+            if (!stillCurrent()) throw new Error("Layer restoration was cancelled.");
+            for (const [index, result] of prepared.entries()) {
+                this.mapLayers.restoreStagedLayer(result.staged, index);
+                attached.add(result.staged.key);
+                this.mapLayers.setLegendIncluded(result.staged.key, document.layers[index].legendIncluded !== false);
+            }
+            const keys = prepared.map(result => result.staged.key);
+            return keys.map(key => ({key, error: null}));
         } catch (error) {
-            for (const staged of prepared) {
-                if (attached.has(staged.key)) this.mapLayers.removeKey(staged.key);
-                else { staged.record.adapter.discardStaged?.(staged.record); staged.layer?.remove?.(); }
+            for (const result of prepared) {
+                if (!result) continue;
+                const key = result.staged.key;
+                if (attached.has(key)) this.mapLayers.removeKey(key);
+                else { result.staged.record.adapter.discardStaged?.(result.staged.record); result.staged.layer?.remove?.(); }
             }
             return definitions.map(() => ({key: null, error: asError(error).message}));
         }
+    }
+
+    /** Export a retained record using its source owner's view contract and common presentation.
+     * @param {Object} record Neutral retained-layer record.
+     * @return {Object|null} Portable view, or null for an unsaved local source.
+     * @throws {Error} If the source owner's saved state cannot be exported.
+     */
+    #exportRetainedLayer(record) {
+        const layer = this.exportTemporal(record) ?? (record.entry.item === null
+            ? this.exportUpload(record) ?? this.exportArtifact(record) ?? this.exportDrawing(record) ?? this.exportAnnotation(record)
+            : this.#exportCatalogLayer(record));
+        return layer === null ? null : {...layer, isCustom: record.entry.isCustom,
+            ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})};
     }
 
     /**
@@ -599,26 +634,18 @@ export class SavedMapViewController {
     #snapshotCurrentView() {
         const records = this.mapLayers.retainedRecords;
         const viewport = this.viewport.snapshot();
-        const layers = records.map((record) => {
-            const layer = this.exportTemporal(record) ?? (record.entry.item === null
-                ? this.exportUpload(record) ?? this.exportArtifact(record) ?? this.exportAnnotation(record)
-                : this.#exportLayer(record));
-            return layer === null ? null : {
-                ...layer, isCustom: record.entry.isCustom,
-                ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}),
-            };
-        });
+        const layers = records.map(record => this.#exportRetainedLayer(record));
         const retainedLayers = layers.filter(layer => layer !== null);
-        const privateOrigins = new Set(retainedLayers.some(layer => layer.uploadId || layer.runArtifact || layer.sharedAnnotation) ? [this.viewerOrigin] : []);
+        const sourceOrigins = new Set(retainedLayers.some(layer => layer.uploadId || layer.runArtifact || layer.sharedAnnotation || layer.drawingLayerId) ? [this.viewerOrigin] : []);
         for (const entry of this.unavailableLayers) {
-            if (entry.layer.uploadId || entry.layer.runArtifact) privateOrigins.add(entry.origin);
+            if (entry.layer.uploadId || entry.layer.runArtifact || entry.layer.drawingLayerId) sourceOrigins.add(entry.origin);
         }
-        if (privateOrigins.size > 1) throw new Error("This map includes private layers from another EOLab site. Open Unavailable layers and remove those saved layers, or remove this site's private layers before saving.");
+        if (sourceOrigins.size > 1) throw new Error("This map includes layers linked to different EOLab sites. Open Unavailable layers and remove those saved layers, or remove this site's linked layers before saving.");
         for (const entry of this.unavailableLayers) retainedLayers.splice(Math.min(entry.index, retainedLayers.length), 0, structuredClone(entry.layer));
         return createSavedMapView({
             viewer: {
                 version: this.viewerVersion,
-                origin: privateOrigins.values().next().value ?? this.viewerOrigin,
+                origin: sourceOrigins.values().next().value ?? this.viewerOrigin,
             },
             createdAt: this.clock().toISOString(),
             viewport,
@@ -635,7 +662,7 @@ export class SavedMapViewController {
      * @return {Object} Portable identity and presentation.
      * @throws {Error} If the adapter cannot export the layer's saved state.
      */
-    #exportLayer(record) {
+    #exportCatalogLayer(record) {
         if (typeof record.adapter.exportSavedState !== "function") {
             throw new Error(
                 `${record.entry.label} cannot yet be saved as a portable layer.`
@@ -658,7 +685,7 @@ export class SavedMapViewController {
     /**
      * Restore saved layers through their owners and apply the saved drawing order.
      * Saved Custom presentation overrides the source owner's admission default.
-     * Private uploads and shared layers must belong to this deployment; their
+     * Private uploads, saved drawings and shared layers must belong to this deployment; their
      * owners enforce browser access before returning a map key.
      * Layers removed while other sources are loading stay out of the final order.
      *
@@ -671,7 +698,7 @@ export class SavedMapViewController {
      * Per-layer restoration report, or null after supersession.
      */
     async #restore(savedMapView, restoreGeneration, { restoreAppearanceEarly = false } = {}) {
-        const restoreReady = this.beforeRestore();
+        const restoreReady = this.beforeRestore(() => !this.destroyed && restoreGeneration === this.restoreGeneration);
         this.catalogVisualization.clear();
         const initialAppearance = restoreAppearanceEarly
             ? this.#restoreViewportAndBasemap(savedMapView) : null;
@@ -683,46 +710,8 @@ export class SavedMapViewController {
             return mapWithConcurrencyLimit(
                 savedMapView.layers,
                 RESTORE_CONCURRENCY,
-                async (layer) => {
-                    if (layer.runArtifact) {
-                        try {
-                            if (savedMapView.viewer.origin !== this.viewerOrigin) throw new Error("Private run results can only be opened on their original EOLab site.");
-                            const key = await this.restoreArtifact(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                            return {key, staged: null, detail: null};
-                        } catch (error) {
-                            return {staged: null, detail: `${layer.customName ?? "Private run result"}: ${asError(error).message}`};
-                        }
-                    }
-                    if (layer.temporalSource) {
-                        try {
-                            const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                            return { key, staged: null, detail: null };
-                        } catch (error) {
-                            return { staged: null, detail: `${layer.customName ?? layer.temporalSource.variable}: ${asError(error).message}` };
-                        }
-                    }
-                    if (layer.uploadId) {
-                        try {
-                            if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                                throw new Error("Private uploaded layers can only be opened on their original EOLab site.");
-                            }
-                            const key = await this.restoreUpload(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                            return { key, staged: null, detail: null };
-                        } catch (error) {
-                            return { staged: null, detail: `${layer.customName ?? "Private uploaded layer"}: ${asError(error).message}` };
-                        }
-                    }
-                    if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
-                    try {
-                        if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                            throw new Error("Shared layers can only be opened on their original EOLab site.");
-                        }
-                        const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
-                        return { key, staged: null, detail: null };
-                    } catch (error) {
-                        return { staged: null, detail: `Shared layer ${layer.sharedAnnotation.id}: ${asError(error).message}` };
-                    }
-                }
+                layer => this.#restoreLayer(layer, savedMapView.viewer.origin,
+                    () => !this.destroyed && restoreGeneration === this.restoreGeneration)
             );
         });
         const [preparations, initialBasemapWarning] = await Promise.all([
@@ -732,13 +721,22 @@ export class SavedMapViewController {
         const stagedLayers = preparations
             .filter(({ staged }) => staged !== null)
             .map(({ staged }) => staged);
-        if (restoreGeneration !== this.restoreGeneration) {
+        if (this.destroyed || restoreGeneration !== this.restoreGeneration) {
+            this.#discardLayers(stagedLayers);
             return null;
         }
         const basemapWarning = restoreAppearanceEarly ? initialBasemapWarning
             : await this.#restoreViewportAndBasemap(savedMapView);
-        if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
-        this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        if (this.destroyed || restoreGeneration !== this.restoreGeneration) {
+            this.#discardLayers(stagedLayers);
+            return null;
+        }
+        try {
+            this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        } catch (error) {
+            this.#discardLayers(stagedLayers);
+            throw error;
+        }
         const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
         for (const [index, result] of preparations.entries()) {
             if (result.key && !retainedKeys.has(result.key)) {
@@ -758,7 +756,7 @@ export class SavedMapViewController {
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         this.unavailableLayers = preparations.flatMap((result, index) => {
             const layer = savedMapView.layers[index];
-            return !result.key && !result.staged && !result.removed && (layer.calculatedFields?.length || layer.runArtifact)
+            return !result.key && !result.staged && !result.removed && (layer.calculatedFields?.length || layer.runArtifact || layer.drawingLayerId)
                 ? [{index, layer: structuredClone(layer), origin: savedMapView.viewer.origin}] : [];
         });
         this.view.setUnavailableLayerCount(this.unavailableLayers.length);
@@ -785,6 +783,59 @@ export class SavedMapViewController {
     async #restoreViewportAndBasemap(savedMapView) {
         this.viewport.restore(savedMapView.viewport);
         return savedMapView.basemap === undefined ? null : this.basemap.restore(savedMapView.basemap);
+    }
+
+    /** Release detached layers after cancellation or a failed synchronous batch commit.
+     * @param {Array<{record:Object,layer:Object}>} stagedLayers Prepared layers that did not complete attachment.
+     * @return {void}
+     */
+    #discardLayers(stagedLayers) {
+        for (const staged of stagedLayers) {
+            staged.record.adapter.discardStaged?.(staged.record);
+            staged.layer?.remove?.();
+        }
+    }
+
+    /** Restore one portable view through its source owner, staging Catalog and drawing views until commit.
+     * Instance-local identifiers never reach a source owner on a different EOLab site.
+     * @param {Object} layer Validated portable layer definition.
+     * @param {string} origin Original EOLab site for instance-local sources.
+     * @param {()=>boolean} isCurrent Whether the restore still owns its result.
+     * @param {{strictStyle?:boolean}} [options] Require exact Catalog appearance for atomic additions.
+     * @return {Promise<{key?:string|null,staged:Object|null,detail:string|null}>} Detached view, attached source-owned key or failure detail.
+     */
+    async #restoreLayer(layer, origin, isCurrent, {strictStyle = false} = {}) {
+        if (layer.catalogItem) return this.#prepareLayer(layer, {strictStyle});
+        let restore, label, sourceLabel;
+        if (layer.drawingLayerId) {
+            restore = this.stageDrawing;
+            label = layer.customName ?? "Saved drawing";
+            sourceLabel = "Saved drawings";
+        } else if (layer.runArtifact) {
+            restore = this.restoreArtifact;
+            label = layer.customName ?? "Private run result";
+            sourceLabel = "Private run results";
+        } else if (layer.temporalSource) {
+            restore = this.restoreTemporal;
+            label = layer.customName ?? layer.temporalSource.variable;
+        } else if (layer.uploadId) {
+            restore = this.restoreUpload;
+            label = layer.customName ?? "Private uploaded layer";
+            sourceLabel = "Private uploaded layers";
+        } else {
+            restore = this.restoreAnnotation;
+            label = `Shared layer ${layer.sharedAnnotation.id}`;
+            sourceLabel = "Shared layers";
+        }
+        try {
+            if (sourceLabel && origin !== this.viewerOrigin) {
+                throw new Error(`${sourceLabel} can only be opened on their original EOLab site.`);
+            }
+            const restored = await restore(layer, isCurrent);
+            return layer.drawingLayerId ? {staged: restored, detail: null} : {key: restored, staged: null, detail: null};
+        } catch (error) {
+            return {staged: null, detail: `${label}: ${asError(error).message}`};
+        }
     }
 
     /**

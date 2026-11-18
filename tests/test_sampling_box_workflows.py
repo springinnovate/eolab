@@ -201,10 +201,13 @@ def test_statistics_service_retains_box_identity_through_authorization_cache_and
                 is first
             )
             assert len(ordinary_reads) == 1 and len(catalog_calls) == 3
-            mean_request = CatalogRasterStatisticsRequest(**sources[0], samplingBox=BOX, measure="mean")
-            mean = await service.get(mean_request)
-            assert mean.method == "exact" and mean.value is not None
-            assert await service.get(mean_request) is mean
+            preview_request = dict(**sources[0], samplingBox=BOX, measure="preview")
+            batch = CatalogRasterStatisticsRequest(**preview_request, previewStatistics=["mean", "stdev", {"percentAbove": 0}])
+            preview = await service.get(batch)
+            assert preview.method == "exact" and all(row.value is not None for row in preview.values)
+            assert await service.get(batch) is preview
+            changed = await service.get(CatalogRasterStatisticsRequest(**preview_request, previewStatistics=[{"percentAbove": 1e30}, "mean"]))
+            assert [row.value for row in changed.values] == [0, preview.values[0].value]
             assert await service.get(request) is first
             moved_box = Wgs84SamplingBox(
                 center={"longitude": 11.0, "latitude": 60.0}, sideLengthKm=2000

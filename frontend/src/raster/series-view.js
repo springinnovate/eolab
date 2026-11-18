@@ -25,6 +25,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {number} id Stable formula identity.
  * @property {string} label Editable statistic name.
  * @property {string} expression Formula over the current raster.
+ * @property {import("../sampling-box-statistics.js").BoxStatistic} [preview] Built-in statistic eligible for a box preview.
  * @property {boolean} visible Whether to plot the statistic.
  * @property {number} plotId Assigned plot identity.
  * @property {number} styleIndex Stable line/marker identity.
@@ -57,7 +58,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {{completed?:number|null,total?:number|null,unit?:string|null}|null} [workProgress] Measured temporal work; absent before the server reports counts.
  * @property {"line"|"scatter"|"bar"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
- * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,hasPendingVectorArea:boolean,canCalculateExactMean?:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and retry/recovery availability.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,hasPendingVectorArea:boolean,canCalculateExactStatistics?:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and retry/recovery availability.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {SeriesPlot[]} plots Display numbers and settings in plot order.
  * @property {"forward"|"reverse"} direction Display direction; temporal data and CSV retain observation order.
@@ -127,13 +128,13 @@ export class RasterSeriesView {
      * @param {(choice:string)=>void} actions.onArea Sampling box, whole raster or polygons.
      * @param {()=>void} actions.onOpenArea Open the floating Sample area tool.
      * @param {(preset:string)=>void} actions.onAddFormula Add statistic.
-     * @param {(id:number,change:{label?:string,expression?:string})=>void} actions.onEditFormula Update formula/name.
+     * @param {(id:number,change:{label?:string,expression?:string,threshold?:number})=>void} actions.onEditFormula Update formula, threshold or display name.
      * @param {(id:number)=>void} actions.onRemoveFormula Remove statistic.
      * @param {(id:number,change:{visible?:boolean,plotId?:number,color?:string})=>void} actions.onStatisticDisplay Change visibility or plot assignment.
      * @param {()=>void} actions.onAddPlot Add a linear plot.
      * @param {(id:number)=>void} actions.onRemovePlot Remove a secondary plot.
      * @param {(id:number,change:Object)=>void} actions.onPlotOptions Change one plot's validated axes, point size and font settings.
-     * @param {()=>void} actions.onExactMean Calculate native pixel means for the displayed box.
+     * @param {()=>void} actions.onExactStatistics Calculate the selected statistics from native pixels in the displayed box.
      * @param {()=>void} actions.onRetry Retry failed sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
@@ -192,7 +193,7 @@ export class RasterSeriesView {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
-        for (const [id, action] of [["retry", actions.onRetry], ["exact-mean", actions.onExactMean],
+        for (const [id, action] of [["retry", actions.onRetry], ["exact-statistics", actions.onExactStatistics],
             ["cancel", actions.onCancel], ["recover", actions.onRecover]]) {
             this.document.querySelector("#raster-series-" + id).addEventListener("click", action);
         }
@@ -498,6 +499,10 @@ export class RasterSeriesView {
                     if (input.checked !== formula.visible) input.checked = formula.visible;
                     const label = `Show ${name} on plot`;
                     if (input.getAttribute("aria-label") !== label) input.setAttribute("aria-label", label);
+                } else if (input.dataset.field === "threshold") {
+                    const threshold = formula.preview?.percentAbove;
+                    input.parentElement.hidden = threshold === undefined;
+                    if (input !== this.document.activeElement && threshold !== undefined) input.value = String(threshold);
                 } else {
                     const value = input.dataset.field === "color" ? color : formula[input.dataset.field];
                     if (input !== this.document.activeElement && input.value !== value) input.value = value;
@@ -535,8 +540,8 @@ export class RasterSeriesView {
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
         const addFormula = this.document.querySelector("#raster-series-add-formula");
         if (addFormula.disabled !== (area.formulas.length >= 5)) addFormula.disabled = area.formulas.length >= 5;
-        const exact = this.document.querySelector("#raster-series-exact-mean");
-        if (exact.hidden !== !area.canCalculateExactMean) exact.hidden = !area.canCalculateExactMean;
+        const exact = this.document.querySelector("#raster-series-exact-statistics");
+        if (exact.hidden !== !area.canCalculateExactStatistics) exact.hidden = !area.canCalculateExactStatistics;
         const retry = this.document.querySelector("#raster-series-retry");
         const hideRetry = state.busy || !area.hasErrors || area.recoverable;
         if (retry.hidden !== hideRetry) retry.hidden = hideRetry;
@@ -549,7 +554,7 @@ export class RasterSeriesView {
 
     /** Create a retained statistic row with visibility, assignment and a native editor disclosure.
      * Blank custom expressions start expanded; subsequent snapshots leave disclosure state alone.
-     * @param {{id:number,label:string,expression:string,styleIndex:number}} formula Statistic identity and presentation.
+     * @param {SeriesStatistic} formula Statistic identity and presentation.
      * @return {HTMLDivElement} Row whose input events use the existing owner callbacks.
      */
     createFormulaRow(formula) {
@@ -567,6 +572,16 @@ export class RasterSeriesView {
         const editor = this.document.createElement("details"); editor.className = "raster-series-formula-editor";
         editor.open = !formula.expression;
         const summary = this.document.createElement("summary"); summary.textContent = "Edit"; editor.append(summary);
+        if (typeof formula.preview === "object") {
+            const label = this.document.createElement("label"); label.textContent = "Threshold";
+            const input = this.document.createElement("input");
+            input.type = "number"; input.step = "any"; input.required = true; input.dataset.field = "threshold";
+            input.setAttribute("aria-label", "Threshold");
+            input.addEventListener("change", () => {
+                if (input.reportValidity()) this.actions.onEditFormula(formula.id, {threshold: input.valueAsNumber});
+            });
+            label.append(input); editor.append(label);
+        }
         for (const [field, label, limit] of [["label", "Statistic name", 80], ["expression", "Formula", 4096]]) {
             const fieldLabel = this.document.createElement("label"); fieldLabel.textContent = label;
             const input = this.document.createElement("input");

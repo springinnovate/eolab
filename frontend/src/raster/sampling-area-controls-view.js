@@ -40,6 +40,7 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sampling-area-controls"
         );
+        this.firstSampleHint = requireRasterControl(documentContext, "#raster-first-sample-hint");
         this.disclosure = requireRasterControl(documentContext, "#raster-sampling-disclosure");
         this.disclosureSummary = requireRasterControl(documentContext, "#raster-sampling-disclosure > summary");
         this.dimensions = requireRasterControl(documentContext, "#raster-sample-window-dimensions");
@@ -201,6 +202,14 @@ export class RasterSamplingAreaControlsView {
     setActiveRasterAvailable(available) {
         this.useMapWindowButton.disabled = !available;
         this.clearSampleWindowButton.disabled = !available;
+    }
+
+    /** Show the first sampling instruction on the map when the viewer offers a histogram.
+     * @param {boolean} visible Whether to display the click or tap instruction.
+     * @return {void}
+     */
+    setFirstSampleHintVisible(visible) {
+        this.firstSampleHint.hidden = !visible;
     }
 
     /** Return whether map input and size controls should act on a sampling box.

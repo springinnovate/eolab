@@ -1,7 +1,8 @@
 /** Own planning-tool drafts, saved-tool navigation and their live custom-layer bindings. */
 
 /**
- * @typedef {{key:string,label:string,source:{collectionId:string,itemId:string},idFields:Array<{name:string,type:string}>,filterSummary:string}} PlanningLayerChoice
+ * @typedef {{collectionId:string,itemId:string}|{localLayerId:string,drawingLayerId?:string}} PlanningLayerSource
+ * @typedef {{key:string,label:string,source:PlanningLayerSource,idFields:Array<{name:string,type:string}>,filterSummary:string,builtInId?:"id",featureCount?:number}} PlanningLayerChoice
  * @typedef {{id:string|null,revision:number|null,title:string,aoiKey:string,parcelKey:string,parcelIdField:string,interventions:import("./api.js").PlanningIntervention[]}} PlanningDraft
  * @typedef {{page:"library"|"editor",active:boolean,library:import("./api.js").PlanningSummary[],choices:PlanningLayerChoice[],draft:PlanningDraft|null,loading:boolean,saving:boolean,error:string,message:string,idCheck:{phase:"idle"|"checking"|"valid"|"error",message:string},dirty:boolean}} PlanningState
  */
@@ -22,8 +23,9 @@ export class PlanningController {
      * @param {Object} dependencies Composition-supplied capabilities.
      * @param {import("./api.js").PlanningApiClient} dependencies.api Planning persistence and ID validation.
      * @param {import("./view.js").PlanningView} dependencies.view Authoring controls.
-     * @param {()=>PlanningLayerChoice[]} dependencies.getLayerChoices Current eligible custom Catalog polygon views.
+     * @param {()=>PlanningLayerChoice[]} dependencies.getLayerChoices Current eligible custom polygon views.
      * @param {(key:string)=>Object} dependencies.exportLayer Export the current ordinary portable layer definition.
+     * @param {(keys:string[])=>Promise<void>} [dependencies.prepareLayers] Save selected drawing sources before exporting their references; Catalog views need no preparation.
      * @param {(layers:import("./api.js").PlanningLayer[],isCurrent:()=>boolean)=>Promise<Array<{id:string,key:string|null,error:string|null}>>} dependencies.restoreLayers Restore definitions once and return fresh runtime bindings.
      * @param {(key:string)=>void} dependencies.editLayerFilter Open that view's ordinary filter editor.
      * @param {()=>void} dependencies.onOpen Show the Planning panel.
@@ -31,8 +33,8 @@ export class PlanningController {
      * @param {()=>string} [dependencies.newId] Generate durable layer/intervention UUIDs.
      */
     constructor({api, view, getLayerChoices, exportLayer, restoreLayers, editLayerFilter, onOpen, onClose,
-        newId = () => globalThis.crypto.randomUUID()}) {
-        Object.assign(this, {api, view, getLayerChoices, exportLayer, restoreLayers, editLayerFilter, onOpen, onClose, newId});
+        prepareLayers = async () => {}, newId = () => globalThis.crypto.randomUUID()}) {
+        Object.assign(this, {api, view, getLayerChoices, exportLayer, prepareLayers, restoreLayers, editLayerFilter, onOpen, onClose, newId});
         /** @type {PlanningState} Author state; map filters remain owned by the selected live views. */
         this.state = {page: "library", active: false, library: [], choices: [], draft: null,
             loading: false, saving: false, error: "", message: "", idCheck: {phase: "idle", message: ""}, dirty: false};
@@ -64,6 +66,8 @@ export class PlanningController {
     refreshMapLayers() {
         if (this.destroyed) return;
         this.state.choices = this.getLayerChoices();
+        const parcels = this.state.choices.find(choice => choice.key === this.state.draft?.parcelKey);
+        if (parcels?.builtInId) this.state.draft.parcelIdField = parcels.builtInId;
         const identity = this.validationIdentity();
         if (identity !== this.checkIdentity) { this.cancelIdCheck(); this.checkIdentity = identity; }
         this.render();
@@ -194,7 +198,11 @@ export class PlanningController {
      */
     validationIdentity() {
         const draft = this.state.draft, choice = this.state.choices.find(value => value.key === draft?.parcelKey);
-        return choice && draft.parcelIdField ? JSON.stringify([choice.source.collectionId, choice.source.itemId, draft.parcelIdField]) : null;
+        if (!choice || !draft.parcelIdField) return null;
+        const source = choice.source;
+        return JSON.stringify(choice.builtInId
+            ? ["drawing", source.drawingLayerId ?? source.localLayerId, draft.parcelIdField]
+            : ["catalog", source.collectionId, source.itemId, draft.parcelIdField]);
     }
 
     /** Cancel only the obsolete parcel ID check and clear its feedback. @return {void} */
@@ -206,7 +214,7 @@ export class PlanningController {
     async checkIds() {
         this.refreshMapLayers();
         const draft = this.state.draft, choice = this.state.choices.find(value => value.key === draft?.parcelKey);
-        if (!choice || !draft.parcelIdField || this.state.saving) return;
+        if (!choice || choice.builtInId || !draft.parcelIdField || this.state.saving) return;
         this.cancelIdCheck(); const generation = this.checkGeneration;
         this.validationAbort = new AbortController(); this.state.idCheck = {phase: "checking", message: "Checking every parcel ID in the original layer…"}; this.render();
         try {
@@ -217,20 +225,32 @@ export class PlanningController {
         } finally { if (!this.destroyed && generation === this.checkGeneration) this.render(); }
     }
 
-    /** Export current layer settings only when saving or comparing ordinary persisted state.
-     * @return {import("./api.js").PlanningDocument} Path-free tool document with durable role IDs.
+    /** Validate author choices without exporting or saving any drawing source.
+     * @return {{keys:string[],interventions:import("./api.js").PlanningIntervention[]}} Distinct selected views and trimmed intervention names.
      * @throws {Error} If required choices are missing or a chosen view is unavailable.
      */
-    buildDocument() {
+    readDraftChoices() {
         const draft = this.state.draft;
         if (!draft?.title.trim()) throw new Error("Enter a name for this planning tool.");
         const aoi = this.state.choices.find(choice => choice.key === draft.aoiKey);
         const parcels = this.state.choices.find(choice => choice.key === draft.parcelKey);
         if (!aoi || !parcels) throw new Error("Choose available custom layers for the area and parcels.");
-        if (!parcels.idFields.some(field => field.name === draft.parcelIdField)) throw new Error("Choose an original integer or text field for parcel IDs.");
+        if (parcels.builtInId ? draft.parcelIdField !== parcels.builtInId : !parcels.idFields.some(field => field.name === draft.parcelIdField)) {
+            throw new Error("Choose an original integer or text field for parcel IDs.");
+        }
         const interventions = draft.interventions.map(item => ({id: item.id, label: item.label.trim()}));
         if (!interventions.length || interventions.some(item => !item.label)) throw new Error("Add at least one intervention and name every intervention.");
-        const layers = [...new Set([draft.aoiKey, draft.parcelKey])].map(key => ({id: this.bindings.get(key), definition: this.exportLayer(key)}));
+        return {keys: [...new Set([draft.aoiKey, draft.parcelKey])], interventions};
+    }
+
+    /** Export current layer settings without creating sources or changing the map.
+     * Drawing references must already exist; saving prepares them before this call.
+     * @return {import("./api.js").PlanningDocument} Path-free tool document with durable role IDs.
+     * @throws {Error} If required choices or a reusable drawing reference are unavailable.
+     */
+    buildDocument() {
+        const {keys, interventions} = this.readDraftChoices(), draft = this.state.draft;
+        const layers = keys.map(key => ({id: this.bindings.get(key), definition: this.exportLayer(key)}));
         return {title: draft.title.trim(), layers, aoiLayerId: this.bindings.get(draft.aoiKey), parcelLayerId: this.bindings.get(draft.parcelKey),
             parcelIdField: draft.parcelIdField, interventions};
     }
@@ -240,11 +260,20 @@ export class PlanningController {
      */
     async save() {
         if (this.state.saving || this.state.loading || !this.state.draft) return;
-        this.refreshMapLayers(); let document;
-        try { document = this.buildDocument(); } catch (error) { this.state.error = error.message; this.render(); return; }
+        this.refreshMapLayers(); let keys;
+        try { ({keys} = this.readDraftChoices()); } catch (error) { this.state.error = error.message; this.render(); return; }
         const draft = this.state.draft, generation = this.generation;
         this.state.saving = true; this.state.error = ""; this.state.message = "Saving and validating parcel IDs…"; this.render();
+        let submittingTool = false;
         try {
+            const drawings = keys.filter(key => this.state.choices.find(choice => choice.key === key).builtInId);
+            if (drawings.length) {
+                await this.prepareLayers(drawings);
+                if (this.destroyed || generation !== this.generation) return;
+                this.refreshMapLayers();
+            }
+            const document = this.buildDocument();
+            submittingTool = true;
             const record = draft.id ? await this.api.update(draft.id, draft.revision, document) : await this.api.create(document);
             if (this.destroyed || generation !== this.generation) return;
             draft.id = record.id; draft.revision = record.revision; draft.title = record.title;
@@ -255,7 +284,7 @@ export class PlanningController {
         } catch (error) {
             if (!this.destroyed && generation === this.generation) {
                 this.state.message = "";
-                this.state.error = error.status === 409 ? `${error.message} Your changes remain here; reopen the saved tool to review its current version.` : error.message;
+                this.state.error = submittingTool && error.status === 409 ? `${error.message} Your changes remain here; reopen the saved tool to review its current version.` : error.message;
             }
         } finally { if (!this.destroyed && generation === this.generation) { this.state.saving = false; this.refreshMapLayers(); } }
     }

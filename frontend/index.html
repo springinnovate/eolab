@@ -16,7 +16,11 @@
         role="region"
         data-eomap-region="map-layers"
         aria-label="MAP LABEL TO BE SET BY CONFIGURATION"
-      ></div>
+      >
+        <p id="raster-first-sample-hint" role="status" hidden>
+          <span class="sample-click-verb">Click</span><span class="sample-tap-verb">Tap</span> a spot on the raster to see a histogram for that area.
+        </p>
+      </div>
       <section
         class="control-panel"
         id="control-panel"
@@ -660,7 +664,7 @@
               </div>
             </details>
             <div id="raster-compact-box-size" hidden></div>
-            <p id="raster-box-scroll-hint" hidden>Alt + scroll on the map to resize the box.</p>
+            <p id="raster-box-scroll-hint" hidden>Alt + scroll on the map to resize.</p>
             <p class="raster-sample-window-status visually-hidden"
               id="raster-sample-window-status" role="status"
               aria-live="polite" aria-atomic="true">
@@ -705,47 +709,43 @@
       <aside id="map-inspection" popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
         <header class="map-inspection-dock-header">
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
-          <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Analysis results">
-            <div class="map-inspection-result-header">
-              <div class="map-inspection-raster-actions">
-                <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
-                  aria-pressed="false">Histograms</button>
-                <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
-                  aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
-                <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button"
-                  aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-pressed="false" disabled>Features</button>
-              </div>
-              <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
-                aria-label="Close raster histograms">×</button>
-              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
-                aria-label="Close raster statistics">&times;</button>
-              <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
-                aria-label="Close feature inspector">×</button>
+          <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
+          <div id="map-inspection-tab-bar" class="map-inspection-tab-bar">
+            <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" aria-label="Map views">
+              <button id="map-click-histogram" class="map-inspection-tab" type="button" role="tab" aria-controls="map-histogram-panel"
+                aria-selected="false" tabindex="0">Histograms</button>
+              <button id="open-raster-series-dock" class="map-inspection-tab" type="button" role="tab"
+                aria-controls="raster-series" aria-selected="false" tabindex="-1">Raster statistics</button>
+              <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button" role="tab"
+                aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-selected="false" tabindex="-1" disabled>Features</button>
+              <button id="map-inspection-tab-models" class="map-inspection-tab" type="button" role="tab" aria-controls="models-panel" aria-selected="false" tabindex="-1" hidden>Data tools</button>
+              <button id="map-inspection-tab-planning" class="map-inspection-tab" type="button" role="tab" aria-controls="planning-panel" aria-selected="false" tabindex="-1" hidden>Planning</button>
+              <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Polygons</button>
+              <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
+                type="button" role="tab" aria-controls="raster-clips-panel"
+                aria-selected="false" tabindex="-1" hidden>Download raster clip</button>
+              <button id="map-inspection-tab-time-series" class="map-inspection-tab"
+                type="button" role="tab" aria-controls="vector-time-series"
+                aria-selected="false" tabindex="-1" hidden>Field across features</button>
+              <button id="map-inspection-tab-feature-profile" class="map-inspection-tab"
+                type="button" role="tab" aria-controls="vector-feature-profile"
+                aria-selected="false" tabindex="-1" hidden>Fields from feature</button>
+              <button id="map-inspection-tab-filter" class="map-inspection-tab"
+                type="button" role="tab" aria-controls="vector-filter-panel"
+                aria-selected="false" tabindex="-1" hidden>Filter</button>
+              <button id="map-inspection-tab-style" class="map-inspection-tab"
+                type="button" role="tab" aria-controls="layer-style-editor"
+                aria-selected="false" tabindex="-1" hidden>Style</button>
             </div>
-            <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
-          </nav>
-          <div class="map-inspection-navigation">
-          <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
-            aria-label="Open map tools">
-            <button id="map-inspection-tab-models" class="map-inspection-tab" type="button" role="tab" aria-controls="models-panel" aria-selected="false" tabindex="-1" hidden>Data tools</button>
-            <button id="map-inspection-tab-planning" class="map-inspection-tab" type="button" role="tab" aria-controls="planning-panel" aria-selected="false" tabindex="-1" hidden>Planning</button>
-            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Polygons</button>
-            <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="raster-clips-panel"
-              aria-selected="false" tabindex="-1" hidden>Download raster clip</button>
-            <button id="map-inspection-tab-time-series" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="vector-time-series"
-              aria-selected="false" tabindex="-1" hidden>Field across features</button>
-            <button id="map-inspection-tab-feature-profile" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="vector-feature-profile"
-              aria-selected="false" tabindex="-1" hidden>Fields from feature</button>
-            <button id="map-inspection-tab-filter" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="vector-filter-panel"
-              aria-selected="false" tabindex="-1" hidden>Filter</button>
-            <button id="map-inspection-tab-style" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="layer-style-editor"
-              aria-selected="false" tabindex="-1" hidden>Style</button>
-          </div>
+            <button id="map-inspection-all-tabs" type="button" aria-haspopup="menu" popovertarget="map-inspection-tab-menu"
+              aria-controls="map-inspection-tab-menu" hidden>All tabs (<span id="map-inspection-tab-count">0</span>) <span aria-hidden="true">▾</span></button>
+            <div id="map-inspection-tab-menu" popover="auto" role="menu" aria-label="All tabs"></div>
+            <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
+              aria-label="Close raster histograms">×</button>
+            <button id="close-raster-series" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
+              aria-label="Close raster statistics">&times;</button>
+            <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
+              aria-label="Close feature inspector">×</button>
           </div>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
@@ -783,7 +783,7 @@
             </div>
             <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
           </section>
-          <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
+          <section id="raster-series" role="tabpanel" aria-labelledby="open-raster-series-dock" hidden>
             <button id="raster-series-toggle-inputs" type="button" aria-expanded="true" aria-controls="raster-series-inputs">Inputs · Hide</button>
             <div id="raster-series-inputs">
               <div id="raster-series-data-inputs">
@@ -810,7 +810,7 @@
             <div class="raster-series-run-controls">
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
-                <button id="raster-series-exact-mean" class="secondary-button" type="button" hidden>Calculate exact mean</button>
+                <button id="raster-series-exact-statistics" class="secondary-button" type="button" hidden>Calculate exact statistics</button>
                 <button id="raster-series-retry" class="secondary-button" type="button" hidden>Retry failed rasters</button>
                 <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel</button>
                 <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
@@ -879,7 +879,7 @@
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
-              <p>Local layers are saved on this device. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its shared polygons. Choose Download on the layer card to keep a GeoJSON copy. Map links include live shared layers, but not private polygons or editing credentials.</p>
+              <p>Local layers stay on this device until you save them through Planning. Those linked drawings and live shared layers are included in map links; other local drawings are not. Anyone with the link can read the latest saved polygons, but the link does not grant editing permission. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its saved polygons. Choose Download on the layer card to keep a GeoJSON copy.</p>
               <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
@@ -911,7 +911,7 @@
               <div id="raster-clips-jobs"></div>
             </details>
           </section>
-          <section id="vector-feature-inspector" role="region"
+          <section id="vector-feature-inspector" role="tabpanel"
             aria-labelledby="map-inspection-tab-feature" hidden>
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
@@ -1114,7 +1114,7 @@
               </div>
             </details>
           </section>
-          <section id="map-histogram-panel" role="region"
+          <section id="map-histogram-panel" role="tabpanel"
             aria-labelledby="map-click-histogram" hidden>
             <section id="map-histogram-overview" class="raster-histogram-overview"
               aria-label="Visible raster histograms">
@@ -1706,6 +1706,7 @@
         <p class="models-help" data-private-result-notice hidden>Private result previews will not be published. The shared map includes only its other saved layers.</p>
         <p>Create a named map with your selected layers, styling, and starting view. Viewers can explore it without the catalog.</p>
         <p>Uploaded polygons stay private to this browser. Other browsers can open the map, but cannot open your uploaded layers.</p>
+        <p>Drawings saved through Planning are included as linked layers. Anyone with this map link can read their latest saved polygons; only the browser that created a drawing can edit it.</p>
         <fieldset id="publish-map-fields">
           <label>Map title<input id="publish-map-title" required maxlength="160" autocomplete="off"></label>
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>

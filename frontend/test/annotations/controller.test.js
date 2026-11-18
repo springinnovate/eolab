@@ -13,6 +13,7 @@ function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
         model: new AnnotationModel(), layers: new Map(), shared: new Map(), mapSlug: null,
+        drawingSaveErrors: new Map(), unavailableDrawingSources: new Set(), deviceSaveError: null,
         downloadDialog: { async choose(filename) { return filename; } }, exportInProgress: false, loaded: true, dirty: false, saving: false, pendingSave: false,
         controls: new Map(), clearedFilterLayerIds: new Set(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },

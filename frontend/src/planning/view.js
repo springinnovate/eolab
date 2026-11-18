@@ -56,16 +56,16 @@ export class PlanningView {
         this.parcelFilter = this.button("Edit parcel filter", () => this.callbacks.onFilter("parcels"));
         this.aoiSummary = this.element("p", "", "planning-help"); this.parcelSummary = this.element("p", "", "planning-help");
         const areaGroup = this.element("fieldset"); areaGroup.append(this.element("legend", "Area and parcels"),
-            this.element("p", "Choose custom polygon layers made with Duplicate vector in Map contents. Filters stay linked to these map layers.", "planning-help"),
+            this.element("p", "Choose drawn polygon layers or custom layers made with Duplicate vector in Map contents. Filters stay linked to these map layers.", "planning-help"),
             this.field("planning-aoi", "Area of interest", this.aoi), this.aoiSummary, this.aoiFilter,
             this.field("planning-parcels", "Parcel layer", this.parcels), this.parcelSummary, this.parcelFilter);
         this.idField = this.element("select"); this.idField.required = true;
         this.idField.addEventListener("change", () => this.callbacks.onIdField(this.idField.value));
         this.checkIds = this.button("Check parcel IDs", () => this.callbacks.onCheckIds());
         this.idMessage = this.element("p", "", "planning-help"); this.idMessage.setAttribute("role", "status");
+        this.idHelp = this.element("p", "", "planning-help");
         areaGroup.append(this.field("planning-parcel-id", "Unique parcel ID field", this.idField),
-            this.element("p", "Use one original integer or text field. IDs must be unique and present across the entire source layer, including parcels outside its filter.", "planning-help"),
-            this.checkIds, this.idMessage);
+            this.idHelp, this.checkIds, this.idMessage);
         const interventions = this.element("fieldset");
         this.interventions = this.element("div", "", "planning-interventions");
         this.addIntervention = this.button("Add intervention", () => this.callbacks.onAddIntervention());
@@ -145,14 +145,20 @@ export class PlanningView {
         const aoi = state.choices.find(choice => choice.key === draft.aoiKey), parcels = state.choices.find(choice => choice.key === draft.parcelKey);
         for (const [choice, key, summary, button] of [[aoi, draft.aoiKey, this.aoiSummary, this.aoiFilter], [parcels, draft.parcelKey, this.parcelSummary, this.parcelFilter]]) {
             const saved = key.startsWith("missing:") ? savedLayers.get(key.slice(8)) : null;
-            summary.textContent = choice ? choice.filterSummary : saved ? `${saved.customName ?? saved.catalogItem.id}: could not restore this saved layer. Choose an available custom layer or reopen to retry.` : key ? "This layer is no longer in Map contents." : "";
+            summary.textContent = choice ? choice.filterSummary : saved ? `${saved.customName ?? saved.catalogItem?.id ?? "Drawn polygons"}: could not restore this saved layer. Choose an available custom layer or reopen to retry.` : key ? "This layer is no longer in Map contents." : "";
             button.disabled = busy || !choice;
         }
-        this.options(this.idField, (parcels?.idFields ?? []).map(field => ({value: field.name, label: field.name})), draft.parcelIdField, "Choose an original ID field…");
+        const automaticIds = !!parcels?.builtInId;
+        this.options(this.idField, automaticIds ? [{value: parcels.builtInId, label: "Polygon ID (automatic)"}]
+            : (parcels?.idFields ?? []).map(field => ({value: field.name, label: field.name})), draft.parcelIdField, "Choose an original ID field…");
+        this.idHelp.textContent = automaticIds
+            ? "Each drawn polygon has a permanent ID. IDs are checked when you save this tool; names and notes can be repeated."
+            : "Use one original integer or text field. IDs must be unique and present across the entire source layer, including parcels outside its filter.";
         this.idMessage.textContent = state.idCheck.message;
         this.idMessage.setAttribute("class", state.idCheck.phase === "error" ? "planning-error" : "planning-help");
         this.checkIds.disabled = busy || !parcels || !draft.parcelIdField || state.idCheck.phase === "checking";
-        this.idField.disabled = busy || !parcels;
+        this.checkIds.hidden = automaticIds;
+        this.idField.disabled = busy || !parcels || automaticIds;
         this.title.disabled = this.aoi.disabled = this.parcels.disabled = busy;
         this.addIntervention.disabled = busy || draft.interventions.length >= 64;
         this.back.disabled = state.saving; this.saveButton.disabled = busy;

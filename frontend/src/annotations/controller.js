@@ -1,7 +1,7 @@
 /** Connect polygon drawing, editing and local storage to the map's layer list. */
 import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
 import { readAnnotationGeoJSONFile, exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
-import { AnnotationModel, matchingAnnotationPolygons, validateAnnotationStyle } from "./model.js";
+import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
 import { AnnotationMapEditor } from "./map-editor.js";
 import { AnnotationLayerControls } from "./layer-controls.js";
@@ -9,8 +9,9 @@ import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
 import { PolygonLabelLayout } from "./polygon-label-layout.js";
 import { createAnnotationDownloadFilename } from "./download-filename.js";
 import { AnnotationDownloadDialog } from "./download-dialog.js";
+import { exportDrawingCollection, serializeDrawingContent, readDrawingView } from "./source-document.js";
 
-/** Own local layers, isolated polygon drafts, annotation controls and autosave. */
+/** Own local and linked drawing views, isolated polygon drafts and serialized saves. */
 export class AnnotationController {
     /**
      * Connect annotations to map presentation and explicit interaction-mode callbacks.
@@ -23,6 +24,7 @@ export class AnnotationController {
      * @param {()=>void} [options.onHoverInvalidated] Clear composed hover after polygon changes.
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
+     * @param {import("./source-api.js").DrawingSourceApi|null} [options.sourceApi=null] Optional reusable drawing-source persistence.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
      * @param {(id:string,color:string)=>void} [options.onColor] Save this contributor's shared polygon color through composition.
      * @param {(id:string)=>void} [options.onRenameContributor] Open contributor-name editing through composition.
@@ -31,12 +33,20 @@ export class AnnotationController {
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      * @param {string|null} [options.mapSlug=null] Published-map URL name supplied by composition for download filenames.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true, mapSlug = null }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), sourceApi = null, onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true, mapSlug = null }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
         this.document = document;
         this.storage = storage;
+        this.sourceApi = sourceApi;
+        this.savedDrawingContents = new Map();
+        this.creatingDrawingSources = new Map();
+        this.unavailableDrawingSources = new Set();
+        /** @type {Map<string,string>} Save errors belonging to individual local drawing views. */
+        this.drawingSaveErrors = new Map();
+        /** @type {Error|null} Failed persistence of the shared device document. */
+        this.deviceSaveError = null;
         this.onShare = onShare;
         this.onColor = onColor;
         this.onRenameContributor = onRenameContributor;
@@ -81,14 +91,8 @@ export class AnnotationController {
             const file = this.importInput.files[0];
             if (file) void this.importGeoJSONFile(file);
         });
-        this.undoButton.addEventListener("click", () => this.perform(() => {
-            const layerId = this.model.deleted?.layerId;
-            if (!this.model.undoDeletion()) return;
-            this.refreshLayer(layerId);
-            this.updateEditor();
-            this.save();
-        }));
-        this.retryButton.addEventListener("click", () => this.save());
+        this.undoButton.addEventListener("click", () => this.perform(() => this.undoPolygonDeletion()));
+        this.retryButton.addEventListener("click", () => this.retrySaving());
         this.beforeUnload = event => { if (this.hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ""; } };
         globalThis.addEventListener?.("beforeunload", this.beforeUnload);
         this.labelLayout = new PolygonLabelLayout(map);
@@ -128,6 +132,7 @@ export class AnnotationController {
      * editor without showing polygon controls over an unrelated map workflow.
      * Recovered filters are identified on their layers until the user applies a filter or reloads.
      * Creating drawing layers and importing files remain disabled until loading succeeds.
+     * Linked sources refresh clean views; pending local edits retain their original revision.
      * @param {Object} [options] Startup presentation policy.
      * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them off the shared map.
      * @param {string[]} [options.sharedLayerIds=[]] Bookmarked shared layers whose inclusion comes from the remembered map, not polygon storage.
@@ -136,6 +141,7 @@ export class AnnotationController {
     async load({ attachSavedLayers = true, sharedLayerIds = [] } = {}) {
         try {
             this.model.layers = await this.storage.load(id => this.clearedFilterLayerIds.add(id));
+            if (this.sourceApi) await this.refreshDrawingSources();
             this.savedSharingLayers = this.model.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
             const shared = new Set(sharedLayerIds);
             if (attachSavedLayers) for (const layer of [...this.model.layers].reverse()) {
@@ -144,7 +150,9 @@ export class AnnotationController {
             this.loaded = true;
             this.drawButton.disabled = false;
             this.importButton.disabled = false;
-            this.status.textContent = "";
+            this.dirty = this.model.layers.some(layer => layer.drawingSource?.pending);
+            this.status.textContent = this.model.layers.map(layer => this.drawingSaveProblem(layer)).filter(Boolean).join(" ");
+            this.retryButton.hidden = !this.status.textContent;
         } catch (error) {
             this.status.textContent = `Cannot open saved polygons: ${error.message}`;
         }
@@ -188,20 +196,20 @@ export class AnnotationController {
         if (!this.layers.has(layer.id)) this.attachLayer(layer);
         else this.refreshLayer(layer.id);
         await this.save();
-        if (this.dirty) throw new Error(this.status.textContent);
+        if (this.deviceSaveError) throw this.deviceSaveError;
         return layer.id;
     }
 
     /**
-     * Finish saving local drawings before creating or joining a shared layer.
-     * Reuse an in-flight save; clean layers do not need another write.
+     * Finish device persistence before creating or joining a shared layer.
+     * Reuse an in-flight save; unrelated drawing-source failures do not block sharing.
      * @return {Promise<void>} Completion once local layers are loaded and saved.
      * @throws {Error} If loading is incomplete or a local save fails.
      */
     async saveForSharing() {
         if (!this.loaded) throw new Error(this.status.textContent);
         if (this.dirty) await (this.savePromise ?? this.save());
-        if (this.dirty) throw new Error(this.status.textContent);
+        if (this.deviceSaveError) throw this.deviceSaveError;
     }
 
     /** Apply a saved map's local appearance without changing polygons or shared colors.
@@ -389,6 +397,16 @@ export class AnnotationController {
      * @return {void}
      */
     attachLayer(layer) {
+        const {source, adapter} = this.createLayerAttachment(layer);
+        adapter.added();
+        this.mapLayers.addLocal(source, adapter);
+    }
+
+    /** Construct detached annotation rendering and controls for immediate attachment or staged restoration.
+     * @param {import("./model.js").AnnotationLayer} layer Validated annotation data.
+     * @return {{source:Object,adapter:Object}} Local map source and adapter; added registers controls, discardStaged releases them.
+     */
+    createLayerAttachment(layer) {
         const key = `local:annotation:${layer.id}`;
         const controls = new AnnotationLayerControls(this.document, layer, {
             open: () => this.openControls(key, "info"),
@@ -408,15 +426,24 @@ export class AnnotationController {
             }),
             opacity: opacity => this.mapLayers.setOpacity(key, opacity),
         });
-        this.controls.set(layer.id, controls);
         const displayLayer = Object.create(layer);
         Object.defineProperty(displayLayer, "polygons", { get: () => this.displayLayer(layer).polygons });
         const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer, this.labelLayout);
-        this.layers.set(layer.id, rendering);
         const adapter = {
+            added: () => {
+                this.controls.set(layer.id, controls);
+                this.layers.set(layer.id, rendering);
+                this.panel.registerLayerControls(key, layer.name, controls.root);
+            },
+            discardStaged: () => {
+                rendering.release();
+                this.layers.delete(layer.id);
+                this.controls.delete(layer.id);
+                this.panel.removeLayer(key);
+            },
             createState: () => layer,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared layer" : "Local layer",
+            snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared layer" : layer.drawingSource ? "Saved drawing" : "Local layer",
                 legend: this.layerLegend(layer),
                 canFilter: true, detailsControl: controls.edit, primaryControl: controls.cardActions, stylePanelId: "annotations-panel",
                 filterActive: layer.filter.enabled && !!layer.filter.rules.length,
@@ -453,7 +480,9 @@ export class AnnotationController {
             opacityChanged: (_record, opacity) => { layer.opacity = opacity; controls.opacity.value = opacity; this.refreshInspection(); this.save(); },
             copyLayerForUndo: () => {
                 if (this.model.draft?.layerId === layer.id) throw new Error("Save or cancel the current polygon before removing this layer.");
-                return structuredClone(layer);
+                const snapshot = structuredClone(layer);
+                if (snapshot.drawingSource) snapshot.drawingSource.pending = this.drawingHasLocalChanges(layer);
+                return snapshot;
             },
             removed: () => {
                 this.clearInspection();
@@ -463,13 +492,16 @@ export class AnnotationController {
                 rendering.release();
                 this.layers.delete(layer.id);
                 this.controls.delete(layer.id);
+                this.savedDrawingContents.delete(layer.id);
+                this.unavailableDrawingSources.delete(layer.id);
+                this.drawingSaveErrors.delete(layer.id);
                 this.panel.removeLayer(key);
                 this.undoButton.hidden = !this.model.deleted;
                 this.save();
             },
         };
-        this.mapLayers.addLocal({ key, label: layer.name, isCustom: true, visible: layer.visible, opacity: layer.opacity }, adapter);
-        this.panel.registerLayerControls(key, layer.name, controls.root);
+        if (layer.drawingSource) controls.setDrawingSource(layer.drawingSource.canEdit);
+        return {source: {key, label: layer.name, isCustom: true, visible: layer.visible, opacity: layer.opacity}, adapter};
     }
 
     /** Describe the layer's polygon colors for the neutral Map layers legend.
@@ -496,7 +528,7 @@ export class AnnotationController {
     }
 
     /**
-     * Restore annotation contents and drawing position, then wait for device storage.
+     * Restore a removed view and drawing position, refreshing clean linked sources first.
      * After a storage failure, retry saving the same restored object without overwriting edits or a separately re-added layer.
      * @param {import("../map-layers/controller.js").RemovedMapLayer} snapshot Neutral removal record containing committed annotation data.
      * @param {()=>boolean} isCurrent Whether the user still wants this Undo attempt.
@@ -505,11 +537,26 @@ export class AnnotationController {
      */
     async restoreRemovedLayer(snapshot, isCurrent) {
         if (!isCurrent()) throw new Error("Layer restoration was superseded.");
+        if (snapshot.local.drawingSource && this.savePromise) {
+            await this.savePromise;
+            if (!isCurrent()) throw new Error("Layer restoration was superseded.");
+        }
         const existing = this.model.layers.find(layer => layer.id === snapshot.local.id);
         if (existing) {
             if (existing !== this.restoredLayers.get(snapshot)) throw new Error("This shared layer is already on the map.");
         } else {
-            const layer = this.model.restoreRemovedLayer(snapshot.local);
+            const contents = structuredClone(snapshot.local);
+            let sourceRecord;
+            if (contents.drawingSource && !contents.drawingSource.pending) {
+                sourceRecord = await this.sourceApi.get(contents.drawingSource.id);
+                if (!isCurrent()) throw new Error("Layer restoration was superseded.");
+                const refreshed = readDrawingView(sourceRecord, contents.id);
+                contents.polygons = refreshed.polygons;
+                contents.drawingSource = refreshed.drawingSource;
+                this.acceptDrawingSource(sourceRecord);
+            }
+            const layer = this.model.restoreRemovedLayer(contents);
+            if (sourceRecord) this.savedDrawingContents.set(layer.id, serializeDrawingContent(sourceRecord.collection));
             try {
                 this.attachLayer(layer);
             } catch (error) {
@@ -523,7 +570,7 @@ export class AnnotationController {
             this.mapLayers.reorder(snapshot.key, Math.min(snapshot.index, this.mapLayers.snapshots().length - 1));
         }
         await this.save();
-        if (this.dirty) throw new Error(this.status.textContent);
+        this.requireSavedDrawing(this.model.layer(snapshot.local.id));
     }
 
     /**
@@ -556,7 +603,8 @@ export class AnnotationController {
      * @return {{id:string,collection:Object}[]} Independent saved layer snapshots.
      */
     sharableLayers() {
-        return this.savedSharingLayers;
+        const linked = new Set(this.model.layers.filter(layer => layer.drawingSource).map(layer => layer.id));
+        return this.savedSharingLayers.filter(layer => !linked.has(layer.id));
     }
 
     /** Check map inclusion independently of stored polygons or server membership.
@@ -581,6 +629,10 @@ export class AnnotationController {
      * @return {void}
      */
     beginPolygon(layerId, polygonId = null, field = null) {
+        if (this.model.layer(layerId).drawingSource?.canEdit === false) {
+            this.perform(() => { throw new Error("This drawing is read-only. Its owner can edit polygons."); });
+            return;
+        }
         if (this.requestEditing && !this.requestEditing(layerId)) return;
         this.perform(() => {
             if (polygonId && this.model.draft?.layerId === layerId && this.model.draft.polygon.id === polygonId) {
@@ -599,12 +651,27 @@ export class AnnotationController {
      * @param {string} layerId Owning layer.
      * @param {string} polygonId Polygon identifier.
      * @return {void}
+     * @throws {Error} If the source is read-only or the polygon cannot be deleted.
      */
     deletePolygon(layerId, polygonId) {
+        if (this.model.layer(layerId).drawingSource?.canEdit === false) throw new Error("This drawing is read-only. Its owner can edit polygons.");
         this.model.deletePolygon(layerId, polygonId);
         this.updateEditor();
         this.panel.show();
         this.refreshLayer(layerId);
+        this.save();
+    }
+
+    /** Restore the last deleted polygon only while this browser can edit its source.
+     * @return {void}
+     * @throws {Error} If the drawing is now read-only or an unfinished edit prevents Undo.
+     */
+    undoPolygonDeletion() {
+        const layerId = this.model.deleted?.layerId;
+        if (layerId && this.model.layer(layerId).drawingSource?.canEdit === false) throw new Error("This drawing is read-only. Its owner can edit polygons.");
+        if (!this.model.undoDeletion()) return;
+        this.refreshLayer(layerId);
+        this.updateEditor();
         this.save();
     }
 
@@ -642,6 +709,7 @@ export class AnnotationController {
     finishPolygon(drawAnother = false) {
         if (!this.model.draft) return;
         const { layerId } = this.model.draft;
+        if (this.model.layer(layerId).drawingSource?.canEdit === false) throw new Error("This drawing is read-only. Your unfinished changes have not been saved.");
         if (this.shared.get(layerId)?.canContribute === false) throw new Error("Join this layer before saving your polygon.");
         const polygon = this.model.savePolygon();
         this.updateEditor();
@@ -686,7 +754,7 @@ export class AnnotationController {
             if (!layer.visible || layer.opacity === 0) return [];
             return (this.layers.get(layer.id)?.polygonsAt(position) ?? []).map(polygon => ({
                 layerId: layer.id, layerName: layer.name, polygon,
-                canEdit: this.shared.get(layer.id)?.canContribute !== false && layer.polygons.some(own => own.id === polygon.id),
+                canEdit: layer.drawingSource?.canEdit !== false && this.shared.get(layer.id)?.canContribute !== false && layer.polygons.some(own => own.id === polygon.id),
             }));
         });
     }
@@ -742,7 +810,7 @@ export class AnnotationController {
             if (!layer?.visible || layer.opacity === 0 || !this.layers.has(layer.id)) return [];
             const polygon = matchingAnnotationPolygons(this.displayLayer(layer)).find(item => item.id === hit.polygon.id);
             return polygon ? [{ layerId: layer.id, layerName: layer.name, polygon,
-                canEdit: this.shared.get(layer.id)?.canContribute !== false && layer.polygons.some(own => own.id === polygon.id) }] : [];
+                canEdit: layer.drawingSource?.canEdit !== false && this.shared.get(layer.id)?.canContribute !== false && layer.polygons.some(own => own.id === polygon.id) }] : [];
         });
         const hit = this.inspectionMatches.find(item => item.layerId === this.inspectedPolygon.layerId && item.polygon.id === this.inspectedPolygon.polygonId);
         if (!hit) { this.clearInspection(); return; }
@@ -820,9 +888,251 @@ export class AnnotationController {
         }
     }
 
+    /** Describe attached local drawings without exposing drafts or shared contributions.
+     * @return {Object[]} Reusable drawing identities, source references, counts and ordinary filters.
+     */
+    drawingLayers() {
+        return this.model.layers.filter(layer => this.layers.has(layer.id) && !this.shared.has(layer.id)).map(layer => ({
+            key: `local:annotation:${layer.id}`, localLayerId: layer.id, label: layer.name,
+            drawingLayerId: layer.drawingSource?.id, polygonCount: layer.polygons.length,
+            filter: annotationFilterRules(layer.filter),
+        }));
+    }
+
+    /** Save the chosen drawing's committed polygons before another capability retains its source reference.
+     * @param {string} key Attached local drawing key.
+     * @return {Promise<string>} Reusable drawing-source UUID after pending changes are saved.
+     * @throws {Error} If a draft, conflict, failed save or unavailable drawing prevents linking.
+     */
+    async ensureDrawingSource(key) {
+        const layer = this.model.layers.find(candidate => `local:annotation:${candidate.id}` === key);
+        if (!layer || !this.layers.has(layer.id) || this.shared.has(layer.id)) throw new Error("Choose an available local drawing.");
+        if (!this.sourceApi) throw new Error("Saving reusable drawings is unavailable.");
+        if (this.model.draft?.layerId === layer.id) throw new Error("Save or cancel the unfinished polygon before using this drawing.");
+        if (!layer.drawingSource) {
+            let pending = this.creatingDrawingSources.get(layer.id);
+            if (!pending) {
+                pending = this.createDrawingSource(layer);
+                this.creatingDrawingSources.set(layer.id, pending);
+            }
+            try { await pending; }
+            finally { if (this.creatingDrawingSources.get(layer.id) === pending) this.creatingDrawingSources.delete(layer.id); }
+        }
+        await this.save();
+        if (!this.model.layers.includes(layer) || !this.layers.has(layer.id)) throw new Error("This drawing was removed. Choose an available drawing before saving.");
+        if (this.model.draft?.layerId === layer.id) throw new Error("Save or cancel the unfinished polygon before using this drawing.");
+        this.requireSavedDrawing(layer);
+        return layer.drawingSource.id;
+    }
+
+    /** Create a durable source from a captured committed drawing while retaining later local edits.
+     * @param {import("./model.js").AnnotationLayer} layer Original local drawing.
+     * @return {Promise<void>} Completion after its reference is attached in memory.
+     * @throws {Error} If creation or idempotent retry does not match the captured original contents.
+     */
+    async createDrawingSource(layer) {
+        await this.saveForSharing();
+        if (this.model.draft?.layerId === layer.id) throw new Error("Save or cancel the unfinished polygon before using this drawing.");
+        const collection = exportDrawingCollection(layer);
+        const record = await this.sourceApi.create(layer.id, collection);
+        const restored = readDrawingView(record, layer.id);
+        if (serializeDrawingContent(record.collection) !== serializeDrawingContent(collection)) throw new Error("This drawing changed in another tab. Download your local polygons before removing this view and reopening the saved drawing.");
+        layer.drawingSource = restored.drawingSource;
+        this.savedDrawingContents.set(layer.id, serializeDrawingContent(record.collection));
+        this.controls.get(layer.id)?.setDrawingSource(record.canEdit);
+    }
+
+    /** Export a linked drawing's current view settings without its polygon geometry.
+     * @param {string} key Local drawing view key.
+     * Unlinked device-only drawings stay outside portable map documents.
+     * @return {Object|null} Portable source reference and appearance, or null for an unlinked or unrelated layer.
+     */
+    exportDrawingLayer(key) {
+        const layer = this.model.layers.find(candidate => `local:annotation:${candidate.id}` === key);
+        if (!layer?.drawingSource) return null;
+        const record = this.mapLayers.getRecord(key);
+        return {drawingLayerId: layer.drawingSource.id, isCustom: true, customName: layer.name,
+            visible: layer.visible, opacity: layer.opacity, legendIncluded: record.entry.legendIncluded !== false,
+            appearance: {...layer.style}, filter: annotationFilterRules(layer.filter)};
+    }
+
+    /** Remove clean cached drawing views before a complete map restores its saved views.
+     * Portable maps own linked view settings; device storage still protects pending edits and drafts.
+     * Unlinked drawings and shared-session contributions keep their existing device lifecycle.
+     * @param {()=>boolean} isCurrent Whether the requesting full-map restoration is still active.
+     * @return {Promise<void>} Completion after obsolete clean views are removed from map and device storage.
+     */
+    async prepareDrawingMapRestore(isCurrent) {
+        if (this.savePromise) await this.savePromise;
+        if (!isCurrent()) return;
+        const replaced = this.model.layers.filter(layer => layer.drawingSource && !this.drawingHasLocalChanges(layer));
+        if (!replaced.length) return;
+        for (const layer of replaced) {
+            const key = `local:annotation:${layer.id}`;
+            if (this.layers.has(layer.id)) this.mapLayers.removeKey(key);
+            else {
+                this.model.layers = this.model.layers.filter(candidate => candidate !== layer);
+                this.savedDrawingContents.delete(layer.id);
+                this.unavailableDrawingSources.delete(layer.id);
+                this.drawingSaveErrors.delete(layer.id);
+            }
+        }
+        await this.save();
+    }
+
+    /** Prepare a detached view of the latest linked drawing, preserving original polygon IDs.
+     * @param {Object} definition Portable drawing reference and local appearance/filter.
+     * @param {()=>boolean} isCurrent Whether the requesting workflow still wants this view.
+     * @return {Promise<{key:string,record:Object,layer:Object}|null>} Ordinary staged layer, or null after cancellation.
+     * @throws {Error} If reading, validation or local edits prevent restoration; commit rechecks edits and revisions.
+     */
+    async stageDrawingLayer(definition, isCurrent) {
+        if (!this.loaded) throw new Error("Wait for your saved drawings to open.");
+        if (this.savePromise) await this.savePromise;
+        const peers = this.model.layers.filter(layer => layer.drawingSource?.id === definition.drawingLayerId);
+        if (peers.some(layer => this.drawingHasLocalChanges(layer))) throw new Error("This drawing has local changes. Save or cancel its unfinished polygon; if saving conflicts, download your polygons before removing this view and reopening the saved drawing.");
+        const record = await this.sourceApi.get(definition.drawingLayerId);
+        if (!isCurrent()) return null;
+        if (this.model.layers.some(layer => layer.drawingSource?.id === record.id && this.drawingHasLocalChanges(layer))) throw new Error("This drawing has local changes. Save or cancel its unfinished polygon; if saving conflicts, download your polygons before removing this view and reopening the saved drawing.");
+        const layer = readDrawingView(record, this.model.newId());
+        layer.name = definition.customName ?? layer.name;
+        layer.visible = definition.visible;
+        layer.opacity = definition.opacity;
+        layer.style = validateAnnotationStyle(definition.appearance);
+        layer.filter = annotationFilterRules(definition.filter ?? layer.filter);
+        readAnnotationLayers({version: 1, layers: [...this.model.layers, layer]});
+        const {source, adapter} = this.createLayerAttachment(layer);
+        const register = adapter.added, discard = adapter.discardStaged;
+        adapter.added = () => {
+            if (this.model.layers.some(peer => peer.drawingSource?.id === record.id && this.drawingHasLocalChanges(peer))) {
+                throw new Error("This drawing has local changes. Save or cancel its unfinished polygon before reopening it.");
+            }
+            readAnnotationLayers({version: 1, layers: [...this.model.layers, layer]});
+            this.acceptDrawingSource(record);
+            this.model.layers.unshift(layer);
+            this.savedDrawingContents.set(layer.id, serializeDrawingContent(record.collection));
+            register();
+            void this.save();
+        };
+        adapter.discardStaged = () => {
+            discard();
+            if (this.model.layers.includes(layer)) {
+                this.model.layers = this.model.layers.filter(candidate => candidate !== layer);
+                this.savedDrawingContents.delete(layer.id);
+                void this.save();
+            }
+        };
+        return this.mapLayers.stageLocal(source, adapter);
+    }
+
+    /** Refresh clean cached views while preserving pending local edits and unfinished drafts.
+     * @return {Promise<void>} Completion with unavailable sources retained as read-only cached views.
+     */
+    async refreshDrawingSources() {
+        const sources = new Set(this.model.layers.flatMap(layer => layer.drawingSource ? [layer.drawingSource.id] : []));
+        for (const id of sources) {
+            try {
+                const record = await this.sourceApi.get(id);
+                this.acceptDrawingSource(record);
+                for (const layer of this.model.layers.filter(candidate => candidate.drawingSource?.id === id)) {
+                    layer.drawingSource.canEdit = record.canEdit;
+                    this.unavailableDrawingSources.delete(layer.id);
+                    this.controls.get(layer.id)?.setDrawingSource(record.canEdit);
+                }
+            } catch {
+                for (const layer of this.model.layers.filter(candidate => candidate.drawingSource?.id === id)) {
+                    layer.drawingSource.canEdit = false;
+                    this.unavailableDrawingSources.add(layer.id);
+                    this.controls.get(layer.id)?.setDrawingSource(false);
+                }
+            }
+        }
+    }
+
+    /** Apply an acknowledged source to its clean views without replacing newer revisions or pending edits.
+     * @param {Object} record Server-validated source response.
+     * @param {string|null} [savedViewId=null] View whose submitted contents were just acknowledged.
+     * @return {void}
+     * @throws {Error} If a delayed response is older than an already acknowledged source revision.
+     */
+    acceptDrawingSource(record, savedViewId = null) {
+        const peers = this.model.layers.filter(layer => layer.drawingSource?.id === record.id);
+        if (peers.some(layer => layer.drawingSource.revision > record.revision)) {
+            throw new Error("This drawing changed while it was opening. Reopen the map or tool, or retry saving, to read its latest polygons.");
+        }
+        const contents = serializeDrawingContent(record.collection);
+        for (const layer of peers) {
+            const saved = layer.id === savedViewId;
+            if (!saved && this.drawingHasLocalChanges(layer)) continue;
+            const restored = readDrawingView(record, layer.id);
+            if (!saved) layer.polygons = restored.polygons;
+            layer.drawingSource = restored.drawingSource;
+            if (saved) layer.drawingSource.pending = serializeDrawingContent(exportDrawingCollection(layer)) !== contents;
+            this.savedDrawingContents.set(layer.id, contents);
+            this.unavailableDrawingSources.delete(layer.id);
+            this.drawingSaveErrors.delete(layer.id);
+            if (this.layers.has(layer.id)) this.refreshLayer(layer.id);
+            this.controls.get(layer.id)?.setDrawingSource(record.canEdit);
+        }
+    }
+
+    /** Check whether refreshing a linked view would discard committed edits or a draft.
+     * @param {import("./model.js").AnnotationLayer} layer Linked local view.
+     * @return {boolean} Whether local data differs from the last acknowledged source.
+     */
+    drawingHasLocalChanges(layer) {
+        const acknowledged = this.savedDrawingContents.get(layer.id);
+        return layer.drawingSource.pending || this.model.draft?.layerId === layer.id
+            || (acknowledged !== undefined && serializeDrawingContent(exportDrawingCollection(layer)) !== acknowledged);
+    }
+
+    /** Retry source refresh failures and the existing serialized local/source save loop.
+     * @return {Promise<void>} Completion with success or actionable retained error feedback.
+     */
+    async retrySaving() {
+        if (this.sourceApi && this.unavailableDrawingSources.size) await this.refreshDrawingSources();
+        await this.save();
+    }
+
+    /** Mark committed changes before persisting their local copy or sending them to the source.
+     * @return {void}
+     */
+    markDrawingChangesPending() {
+        for (const layer of this.model.layers) {
+            if (layer.drawingSource?.canEdit) layer.drawingSource.pending = layer.drawingSource.pending
+                || serializeDrawingContent(exportDrawingCollection(layer)) !== this.savedDrawingContents.get(layer.id);
+        }
+    }
+
+    /** Describe a drawing's retained save or refresh problem without referring to other sources.
+     * @param {import("./model.js").AnnotationLayer} layer Local drawing view.
+     * @return {string} Named problem and next action, or an empty string when this view is saved and available.
+     */
+    drawingSaveProblem(layer) {
+        const error = this.drawingSaveErrors.get(layer.id);
+        if (error) return `“${layer.name}”: ${error}`;
+        if (this.unavailableDrawingSources.has(layer.id)) return `“${layer.name}” could not be refreshed. Its cached polygons are read-only; retry to reconnect.`;
+        if (layer.drawingSource?.pending) return `“${layer.name}”: changes are saved only on this device. Retry saving, or download your local polygons to keep a separate copy.`;
+        return "";
+    }
+
+    /** Require device persistence and saved, available views of this drawing's source.
+     * Other sources' pending edits and refresh failures do not affect this drawing.
+     * @param {import("./model.js").AnnotationLayer} layer Drawing being used or restored.
+     * @return {void}
+     * @throws {Error} If device persistence failed or a view of this same source has unsaved or unavailable content.
+     */
+    requireSavedDrawing(layer) {
+        if (this.deviceSaveError) throw this.deviceSaveError;
+        if (!layer.drawingSource) return;
+        for (const peer of this.model.layers.filter(candidate => candidate.drawingSource?.id === layer.drawingSource.id)) {
+            if (peer.drawingSource.pending || this.unavailableDrawingSources.has(peer.id)) throw new Error(this.drawingSaveProblem(peer));
+        }
+    }
+
     /**
-     * Serialize writes and coalesce pending changes into the latest committed document.
-     * A failed save leaves annotations in memory and opens the panel with the error and retry action.
+     * Serialize device and linked-source writes, coalescing changes into the latest committed document.
+     * Failed source saves retain local edits and named feedback without blocking unrelated sources.
      * @return {Promise<void>} Completion after pending writes settle.
      */
     async save() {
@@ -836,27 +1146,54 @@ export class AnnotationController {
     }
 
     /**
-     * Write the latest annotation document until no edits remain pending; keep failures visible and retryable.
-     * @return {Promise<void>} Completion after writes finish or a storage error is displayed.
+     * Save locally before updating linked sources, continuing past individual source failures.
+     * Failed sources are attempted once per drain; later edits still reach device storage.
+     * Device-write failures stop remote writes and remain a shared persistence failure.
+     * @return {Promise<void>} Completion after writes settle with retained feedback for any failures.
      */
     async writePendingSaves() {
         this.saving = true;
+        const previousProblems = new Set(this.model.layers.map(layer => this.drawingSaveProblem(layer)).filter(Boolean));
         this.status.textContent = "Saving on this device…";
         this.retryButton.hidden = true;
+        const failedSources = new Set();
         try {
             while (this.pendingSave) {
                 this.pendingSave = false;
+                if (this.sourceApi) this.markDrawingChangesPending();
                 const document = this.model.document();
                 await this.storage.save(document);
+                this.deviceSaveError = null;
                 this.savedSharingLayers = document.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
+                if (this.sourceApi) {
+                    for (const layer of document.layers.filter(candidate => candidate.drawingSource?.pending && candidate.drawingSource.canEdit)) {
+                        if (failedSources.has(layer.drawingSource.id) || !this.model.layers.some(candidate => candidate.id === layer.id)) continue;
+                        const collection = exportDrawingCollection(layer);
+                        try {
+                            const record = await this.sourceApi.update(layer.drawingSource.id, layer.drawingSource.revision, collection);
+                            this.acceptDrawingSource(record, layer.id);
+                            this.pendingSave = true;
+                        }
+                        catch (error) {
+                            failedSources.add(layer.drawingSource.id);
+                            if (this.model.layers.some(candidate => candidate.id === layer.id)) this.drawingSaveErrors.set(layer.id, error.status === 409
+                                ? "this drawing changed in another tab. Download your local polygons before removing this view and reopening the saved drawing."
+                                : `Could not save changes to the saved drawing: ${error.message} Retry saving; your local polygons are preserved on this device.`);
+                        }
+                    }
+                }
             }
-            this.dirty = false;
-            this.status.textContent = "";
-            this.onCommittedChange?.();
+            this.dirty = this.model.layers.some(layer => layer.drawingSource?.pending);
+            const problems = this.model.layers.map(layer => this.drawingSaveProblem(layer)).filter(Boolean);
+            this.status.textContent = problems.join(" ");
+            this.retryButton.hidden = !this.status.textContent;
+            if (problems.some(problem => !previousProblems.has(problem))) this.panel.show();
         } catch (error) {
+            this.deviceSaveError = error;
             this.status.textContent = `Not saved: ${error.message} Keep this tab open.`;
             this.retryButton.hidden = false;
             this.panel.show();
         } finally { this.saving = false; }
+        if (!this.deviceSaveError) this.onCommittedChange?.();
     }
 }

@@ -416,6 +416,14 @@ export class RasterControlsView {
         this.#histogramView.setSamplingAreaMode(mode);
     }
 
+    /** Show or hide the map's invitation to place the first histogram sampling box.
+     * @param {boolean} visible Whether a first sample is available while browsing.
+     * @return {void}
+     */
+    setFirstSampleHintVisible(visible) {
+        this.#samplingAreaView.setFirstSampleHintVisible(visible);
+    }
+
     /** Return whether map input should act on the active workflow's sampling box.
      * @return {boolean} Whether the sampling controls present a box selection.
      */

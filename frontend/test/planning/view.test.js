@@ -48,3 +48,29 @@ test("intervention limit disables Add with the limit explained in the form", () 
     view.render(state, new Map()); assert.equal(view.addIntervention.disabled, true);
     state.draft.interventions.pop(); view.render(state, new Map()); assert.equal(view.addIntervention.disabled, false);
 });
+
+test("drawn parcels show automatic IDs and restore Catalog ID controls when the parcel source changes", () => {
+    const view = new PlanningView(new SummaryControlDocument()), state = editorState(); view.bind({});
+    state.choices[0].builtInId = "id";
+    state.choices[0].idFields = [{name: "id", type: "str"}];
+    state.draft.parcelIdField = "id";
+    view.render(state, new Map());
+    assert.equal(view.idField.value, "id"); assert.equal(view.idField.disabled, true);
+    assert.equal(view.checkIds.hidden, true);
+    assert.match(view.idField.children[1].textContent, /Polygon ID \(automatic\)/);
+    assert.match(view.idHelp.textContent, /checked when you save.*names and notes can be repeated/);
+    delete state.choices[0].builtInId;
+    state.choices[0].idFields = [{name: "parcel_id", type: "int"}];
+    state.draft.parcelIdField = "parcel_id";
+    view.render(state, new Map());
+    assert.equal(view.idField.disabled, false); assert.equal(view.checkIds.hidden, false);
+    assert.match(view.idHelp.textContent, /original integer or text field/);
+});
+
+test("an unavailable drawn reference keeps an actionable label without a Catalog identity", () => {
+    const view = new PlanningView(new SummaryControlDocument()), state = editorState(); view.bind({});
+    state.draft.aoiKey = "missing:drawing-view";
+    view.render(state, new Map([["drawing-view", {drawingLayerId: "opaque-source"}]]));
+    assert.match(view.aoiSummary.textContent, /Drawn polygons.*could not restore/);
+    assert.equal(view.aoiFilter.disabled, true);
+});
