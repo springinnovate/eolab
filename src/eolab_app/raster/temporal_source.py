@@ -176,8 +176,9 @@ def get_temporal_time_choices(
 ) -> TemporalTimeChoices:
     """List available months and observation labels without opening rasters.
 
-    Labels come from published observations, including partial months and
-    variable-specific gaps. They are distinct from physical support intervals.
+    Seek from each month's first published observation to the start of the next
+    UTC month using the producer's variable/time index. Observation labels can
+    have gaps and are distinct from physical support intervals.
 
     Args:
         item: Authoritative temporal Catalog Item.
@@ -196,9 +197,25 @@ def get_temporal_time_choices(
         months = tuple(
             month
             for (month,) in connection.execute(
-                "SELECT DISTINCT strftime('%Y-%m', valid_time, 'unixepoch') "
-                "FROM observations WHERE variable = ? ORDER BY 1",
-                (query.variable,),
+                """
+                WITH RECURSIVE populated_months(first_valid_time) AS (
+                    SELECT MIN(valid_time) FROM observations WHERE variable = :variable
+                    UNION ALL
+                    SELECT (
+                        SELECT valid_time FROM observations
+                        WHERE variable = :variable AND valid_time >= CAST(strftime(
+                            '%s', populated_months.first_valid_time, 'unixepoch',
+                            'start of month', '+1 month'
+                        ) AS INTEGER)
+                        ORDER BY valid_time LIMIT 1
+                    )
+                    FROM populated_months WHERE first_valid_time IS NOT NULL
+                )
+                SELECT strftime('%Y-%m', first_valid_time, 'unixepoch')
+                FROM populated_months WHERE first_valid_time IS NOT NULL
+                ORDER BY first_valid_time
+                """,
+                {"variable": query.variable},
             )
         )
         if not months:
