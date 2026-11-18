@@ -9,6 +9,29 @@ import { requireRasterControl } from "./required-control.js";
 import { buildRasterLegend } from "./style.js";
 import { CategoricalRasterEditorView } from "./categorical-editor-view.js";
 
+const opacityPercentFormat = new Intl.NumberFormat("en-US", {
+    style: "percent", useGrouping: false, maximumSignificantDigits: 17,
+});
+
+/**
+ * Show the full saved opacity as a decimal percentage in a number input.
+ * @param {number} opacity Fraction from zero through one.
+ * @return {string} Input text without the percent sign already in the label.
+ */
+function formatOpacityPercent(opacity) {
+    return opacityPercentFormat.format(opacity).slice(0, -1);
+}
+
+/**
+ * Convert percent text to a fraction before rounding it to a JavaScript number.
+ * @param {HTMLInputElement} input Numeric percentage, optionally in scientific notation.
+ * @return {number} Opacity fraction, or NaN for an empty field.
+ */
+function readOpacityPercent(input) {
+    const [digits, exponent = "0"] = String(input.value).toLowerCase().split("e");
+    return digits === "" ? NaN : Number(`${digits}e${Number(exponent) - 2}`);
+}
+
 /**
  * @typedef {Object} RasterAppearanceHandlers
  * @property {(isColor: boolean) => void} onStyleInput Handles style edits.
@@ -227,7 +250,7 @@ export class RasterAppearanceControlsView {
             ...(this.overrideEnabled.checked ? {valueOverride: {
                 value: overrideValue.value === "" ? NaN : Number(overrideValue.value),
                 color: overrideColor.value,
-                opacity: overrideOpacity.value === "" ? NaN : Number(overrideOpacity.value) / 100,
+                opacity: readOpacityPercent(overrideOpacity),
             }} : {}),
             minimum: this.styleInputs.minimum.value === ""
                 ? Number.NaN
@@ -243,8 +266,7 @@ export class RasterAppearanceControlsView {
             maximumColor: this.styleInputs.maximumColor.value,
             ...Object.fromEntries(["minimum", "midpoint", "maximum"].map((stop) => {
                 const field = `${stop}Opacity`;
-                const value = this.styleInputs[field].value;
-                return [field, value === "" ? Number.NaN : Number(value) / 100];
+                return [field, readOpacityPercent(this.styleInputs[field])];
             })),
         };
     }
@@ -262,10 +284,10 @@ export class RasterAppearanceControlsView {
         this.overrideFields.hidden = !override;
         this.overrideInputs.overrideValue.value = override?.value ?? 0;
         this.overrideInputs.overrideColor.value = override?.color ?? "#e57149";
-        this.overrideInputs.overrideOpacity.value = (override?.opacity ?? 0) * 100;
+        this.overrideInputs.overrideOpacity.value = formatOpacityPercent(override?.opacity ?? 0);
         for (const fieldName of Object.keys(this.styleInputs)) {
             this.styleInputs[fieldName].value = fieldName.endsWith("Opacity")
-                ? Math.round((style[fieldName] ?? 1) * 10000) / 100
+                ? formatOpacityPercent(style[fieldName] ?? 1)
                 : style[fieldName];
         }
         this.palette.value = paletteName;
