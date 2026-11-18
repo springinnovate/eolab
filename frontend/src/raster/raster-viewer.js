@@ -232,9 +232,7 @@ function canRetryRasterStatistics(error) {
  * @property {(identity:{collection:string,id:string})=>Promise<Object>} [getTemporalItem] Read refreshed Catalog metadata.
  * @property {(item:Object,fetcher?:Function,signal?:AbortSignal)=>Promise<Object>}
  * [publishRaster=publishRasterSource] Publishes one original raster.
- * @property {(item: Object, samplingArea:Object, signal:AbortSignal)
- * => Promise<Object>} [loadStatistics=loadRasterStatistics] Loads whole
- * or selected statistics.
+ * @property {typeof loadRasterStatistics} [loadStatistics=loadRasterStatistics] Loads full statistics and requested value windows for the same source and area.
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [samplePixel=sampleRasterPixel] Samples one raster
  * pixel.
@@ -334,6 +332,8 @@ export function initializeRasterViewer(
     ) {
         throw new TypeError("Raster cursor-value view is incomplete");
     }
+    // Retain the exact source and area used by each live chart, including detached rasters.
+    const histogramSampleRequests = new WeakMap();
     /**
      * Request ordinary statistics independently, retrying temporary server overload.
      * @param {Object} item Catalog raster to analyze.
@@ -790,11 +790,12 @@ export function initializeRasterViewer(
          * Route current active-raster statistics to the whole or selected view.
          *
          * @param {Object} statistics Validated statistics response.
-         * @param {Object} _ Requested Catalog Item; active state owns its identity.
+         * @param {Object} item Original source retained for subsequent histogram windows.
          * @param {Object} samplingArea Normalized area used for this response.
          * @return {void}
          */
-        (statistics, _, samplingArea) => {
+        (statistics, item, samplingArea) => {
+            histogramSampleRequests.set(statistics, {item, area: samplingArea});
             if (samplingArea.kind === "wholeRaster") {
                 renderWholeRasterStatistics(statistics);
             } else {
@@ -1027,7 +1028,7 @@ export function initializeRasterViewer(
      * Build one presentation-ready histogram summary for a retained raster.
      *
      * @param {Object} session Raster-owned retained interaction state.
-     * @return {{key:string,label:string,state:string,
+     * @return {{key:string,sourceKey:string,label:string,state:string,
      * counts:number[]|null,automatic:boolean,valueLabel:string,
      * statistics:Object|null,style:Object,
      * canRetry:boolean,canCalculate:boolean,errorMessage:string}} Histogram view model with cached
@@ -1042,6 +1043,7 @@ export function initializeRasterViewer(
             ? session.analysis.selectedRasterStatisticsError : session.analysis.wholeRasterStatisticsError;
         return {
             key: session.key,
+            sourceKey: rasterSourceKey(session.item),
             label: session.label,
             state: presentation.state,
             counts: !categorical && Array.isArray(counts) && (!followsVisibleLayers || presentation.state === "ready")
@@ -1596,11 +1598,12 @@ export function initializeRasterViewer(
              * Store a current response in the captured inactive raster session.
              *
              * @param {Object} statistics Validated statistics response.
-             * @param {Object} _ Requested Item; the captured session owns identity.
+             * @param {Object} item Original source retained for subsequent histogram windows.
              * @param {Object} samplingArea Normalized area used for this response.
              * @return {void}
              */
-            (statistics, _, samplingArea) => {
+            (statistics, item, samplingArea) => {
+                histogramSampleRequests.set(statistics, {item, area: samplingArea});
                 storeLayerHistogramResult(session, statistics, samplingArea);
             },
             /**
@@ -5047,6 +5050,18 @@ export function initializeRasterViewer(
         onPaletteChange: handlePaletteChange,
         onResetStyle: handleResetStyle,
         onHistogramPercentiles: handleHistogramPercentiles,
+        /** Recount the displayed sample while preserving its source and area.
+         * @param {Object} statistics Full continuous result shown by the chart.
+         * @param {[number,number]} range Inclusive value limits.
+         * @param {AbortSignal} signal Cancelled when the chart or range changes.
+         * @return {Promise<{edges:number[],counts:number[]}>} Newly counted window.
+         */
+        async onLoadHistogramRange(statistics, range, signal) {
+            const {item, area} = histogramSampleRequests.get(statistics);
+            const result = await requestRasterStatistics(
+                () => loadStatistics(item, area, signal, undefined, null, range), signal, clock);
+            return result.windowHistogram;
+        },
         onOpenHistogram: showHistogramWorkspace,
         onRetryStatistics: handleRetryStatistics,
         /**

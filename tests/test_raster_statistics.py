@@ -873,6 +873,46 @@ def test_raster_statistics_exact_read_filters_nodata_and_nonfinite_values(
     ]
 
 
+def test_histogram_window_separates_values_in_one_original_bin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recount exact window edges from one authorized read, including empty windows.
+
+    Args:
+        monkeypatch: Supplies a small native band with a masked NoData value.
+    """
+    path = Path("raster.tif")
+    dataset = _NativeStatisticsDataset(
+        numpy.array([[0, 10000, 10001, 10001], [10002, 1000000, 99, numpy.nan]]),
+        path, block_shape=(2, 4), nodata=99,
+    )
+    monkeypatch.setattr("eolab_app.raster.statistics.rasterio.open", lambda _: dataset)
+    authorizer = _SourceAuthorizer()
+    service = RasterStatisticsService(RasterSourceAccess(authorizer), 1, 32)
+    identity = {"collectionId": "eolab-mounted-geotiffs", "itemId": ITEM_ID}
+
+    async def inspect_windows() -> None:
+        """Request the full sample, two windows, and the original result again."""
+        full = await service.get(CatalogRasterStatisticsRequest.model_validate(identity))
+        assert full.histogram.counts[0] == 5
+        for limits, expected in (
+            ([10000, 10002], [1, *([0] * 31), 2, *([0] * 30), 1]),
+            ([20000, 30000], [0] * 64),
+        ):
+            result = await service.get(CatalogRasterStatisticsRequest.model_validate(
+                {**identity, "histogramRange": limits}
+            ))
+            assert result.valid_sample_count == 6
+            assert result.window_histogram.counts == expected
+            assert result.window_histogram.edges == numpy.linspace(*limits, 65).tolist()
+            assert result.histogram is full.histogram
+        assert await service.get(CatalogRasterStatisticsRequest.model_validate(identity)) is full
+
+    asyncio.run(inspect_windows())
+    assert dataset.read_windows == [Window(0, 0, 4, 2)]
+    assert authorizer.authorization_count == 4
+
+
 def test_raster_statistics_broad_source_uses_fixed_sample_grid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

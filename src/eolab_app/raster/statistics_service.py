@@ -65,6 +65,7 @@ from eolab_app.raster.read_cancellation import (
     require_active_raster_read,
 )
 from eolab_app.raster.statistics import (
+    ContinuousRasterStatistics,
     BOX_PREVIEW_ALGORITHM,
     BOX_PREVIEW_MAX_OVERVIEW_DIMENSION,
     read_sampling_box_preview,
@@ -278,7 +279,8 @@ class RasterStatisticsService:
             upload_owner: Browser hash for uploaded rasters and polygon selections.
 
         Returns:
-            The requested distribution or box preview with its sampling method.
+            The full distribution and any requested value-window counts, or a
+            box preview with its sampling method.
 
         Raises:
             RasterFeatureError: If source, area or bounded reading is unavailable.
@@ -294,7 +296,14 @@ class RasterStatisticsService:
             sampling_area = await stack.enter_async_context(
                 self._open_sampling_area(request, owner, upload_owner)
             )
-            return await self._get_authorized_statistics(request, source, sampling_area)
+            result = await self._get_authorized_statistics(request, source, sampling_area)
+            if request.histogram_range is None:
+                return result
+            # Only the continuous reader admits value windows. Keep the cache at full range.
+            try:
+                return cast(ContinuousRasterStatistics, result).with_histogram_window(request.histogram_range)
+            except ValueError as error:
+                raise RasterConflictError(str(error)) from error
 
     async def _get_authorized_statistics(
         self,

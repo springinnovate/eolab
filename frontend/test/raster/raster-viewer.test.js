@@ -3569,8 +3569,9 @@ test("renderer-independent analysis supports exact windows without publication",
                 publicationCalls += 1;
                 throw new Error("analysis must not publish a raster");
             },
-            loadStatistics: async (item, samplingArea, signal) => {
-                statisticsRequests.push({ item, samplingArea, signal });
+            loadStatistics: async (item, samplingArea, signal, _fetch, _codes, range) => {
+                statisticsRequests.push({ item, samplingArea, signal, range });
+                if (range) return {windowHistogram: {edges: range, counts: [2]}};
                 return samplingArea.kind === "wholeRaster"
                     ? EXACT_RASTER_STATISTICS
                     : {
@@ -3612,6 +3613,16 @@ test("renderer-independent analysis supports exact windows without publication",
     assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "samplingBox");
     assert.match(controlsView.statisticsStatus, /Selected-area exact/);
+
+    const selectedSample = controlsView.displayedStatistics;
+    const selectedArea = statisticsRequests.at(-1).samplingArea;
+    const windowSignal = new AbortController().signal;
+    const window = await controlsView.handlers.onLoadHistogramRange(selectedSample, [2, 8], windowSignal);
+    assert.deepEqual(window, {edges: [2, 8], counts: [2]});
+    assert.deepEqual(statisticsRequests.at(-1), {
+        item: MOUNTED_GEOTIFF_ITEM, samplingArea: selectedArea, signal: windowSignal, range: [2, 8],
+    });
+    assert.equal(publicationCalls, 0);
 
     controlsView.setPaletteName("viridis");
     controlsView.handlers.onPaletteChange();

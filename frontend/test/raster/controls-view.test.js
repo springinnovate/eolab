@@ -199,7 +199,7 @@ test("RasterControlsView delegates retained histogram summaries", () => {
     assert.equal(
         documentContext.querySelector("#raster-histogram-detail-layer")
             .textContent,
-        "retained-raster.tif"
+        "Histogram – retained-raster.tif"
     );
     assert.equal(
         documentContext.querySelector("#raster-appearance-layer").textContent,
@@ -271,7 +271,7 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
         ).length,
         1
     );
-    assert.equal(chart.getAttribute("viewBox"), "0 0 640 190");
+    assert.equal(chart.getAttribute("viewBox"), "0 0 640 163");
     assert.match(chart.getAttribute("aria-label"), /percentage of valid sampled pixels/);
 
 });

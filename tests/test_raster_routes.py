@@ -195,6 +195,8 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     "request_overrides",
     [
         {"path": "/browser-controlled/source.tif"},
+        {"histogramRange": [2, 1]},
+        {"histogramRange": [0, 1], "categoryValues": [1]},
         {
             "selectedBounds": {
                 "west": -123.0,
@@ -214,7 +216,7 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
             "temporaryAoiId": "temporaryAoiIdentity012345678901",
         },
     ],
-    ids=["browser-path", "nested-source-window", "mixed-area-union"],
+    ids=["browser-path", "reversed-histogram-range", "categorical-histogram-range", "nested-source-window", "mixed-area-union"],
 )
 def test_analysis_statistics_route_rejects_unowned_sampling_parameters(
     request_overrides: dict[str, object],

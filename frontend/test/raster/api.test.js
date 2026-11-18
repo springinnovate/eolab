@@ -376,6 +376,24 @@ test("pixel analysis preserves catalog-source failures", async () => {
 });
 
 
+test("range recounts preserve selected area identity and validate counts and exact endpoints", async () => {
+  const area = {kind: "selectedArea", selectedBounds: SELECTED_BOUNDS};
+  const range = [1, 65];
+  const bins = {edges: Array.from({length: 65}, (_, i) => i + 1), counts: Array(64).fill(0)};
+  const response = {...SELECTED_RASTER_STATISTICS, windowHistogram: bins};
+  const result = await loadRasterStatistics(MOUNTED_GEOTIFF_ITEM, area, undefined, async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), {collectionId: MOUNTED_GEOTIFF_ITEM.collection,
+      itemId: MOUNTED_GEOTIFF_ITEM.id, selectedBounds: SELECTED_BOUNDS, histogramRange: range});
+    return Response.json(response);
+  }, null, range);
+  assert.deepEqual(result.windowHistogram, bins);
+  for (const invalid of [null, {...bins, counts: [-1, ...bins.counts.slice(1)]},
+    {...bins, edges: bins.edges.map(edge => edge + 1)}, {...bins, counts: [result.validSampleCount + 1, ...bins.counts.slice(1)]}]) {
+    await assert.rejects(loadRasterStatistics(MOUNTED_GEOTIFF_ITEM, area, undefined,
+      async () => Response.json({...response, windowHistogram: invalid}), null, range), /invalid bins/);
+  }
+});
+
 test("sampling-box analysis captures center/size and rejects stale or rectangular results", async () => {
   const area = {kind: "samplingBox", samplingBox: {center: {longitude: 0, latitude: 60}, sideLengthKm: 600}};
   const response = {...RASTER_STATISTICS, scope: "samplingBox", samplingBox: area.samplingBox};

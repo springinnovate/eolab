@@ -11,13 +11,14 @@ import {
     renderRasterHistogramChart,
 } from "./histogram-view.js";
 import { createCategoricalRasterHistogram } from "./categorical-histogram-view.js";
-import { HistogramAxisControls } from "./histogram-axis-controls.js";
+import { ContinuousHistogramControls } from "./continuous-histogram-controls.js";
 import { RasterPercentileControlsView } from "./percentile-controls-view.js";
 import { requireRasterControl } from "./required-control.js";
 
 /**
  * @typedef {Object} RasterHistogramHandlers
  * @property {() => void} onRetryStatistics Retries raster statistics.
+ * @property {(statistics:Object,range:number[],signal:AbortSignal)=>Promise<import("./continuous-histogram-controls.js").HistogramBins>} onLoadHistogramRange Recount the same source and area within numeric limits.
  * @property {(key: string) => void} onSelectHistogram Activates one retained
  * raster whose histogram summary was selected.
  * @property {(key: string) => void} onStyleHistogram Opens Style for one
@@ -32,6 +33,7 @@ import { requireRasterControl } from "./required-control.js";
 /**
  * @typedef {Object} RasterHistogramSummary
  * @property {string} key Opaque retained-layer identity.
+ * @property {string} [sourceKey] Original raster or observation represented by this layer.
  * @property {string} label Readable raster basename.
  * @property {"idle"|"loading"|"ready"|"error"} state Statistics lifecycle.
  * @property {number[]|null} counts Histogram bin counts when ready.
@@ -57,7 +59,7 @@ import { requireRasterControl } from "./required-control.js";
  * @property {HTMLElement} root Article owning the chart and actions.
  * @property {HTMLButtonElement|null} button Optional detailed-histogram selection button.
  * @property {SVGSVGElement|null} chart Continuous chart with a resize observer.
- * @property {HistogramAxisControls|null} axisControls Continuous chart's axis editor.
+ * @property {ContinuousHistogramControls|null} axisControls Continuous chart's axis editor and value window.
  * @property {RasterPercentileControlsView|null} percentileControls Continuous histogram's percentile controls.
  * @property {import("./style.js").RasterStyle|undefined} style Current continuous colors and thresholds.
  * @property {(()=>void)|null} redraw Redraw the chart without replacing its controls.
@@ -226,7 +228,7 @@ export class RasterHistogramControlsView {
      * @return {void}
      */
     setActiveLayer(label) {
-        this.histogramDetailLayer.textContent = label;
+        this.histogramDetailLayer.textContent = label ? `Histogram – ${label}` : "";
         this.histogramDetailLayer.title = label;
     }
 
@@ -389,11 +391,13 @@ export class RasterHistogramControlsView {
         const { controls, redraw } = this.#createAxisControls(key, this.histogramChart, statistics,
             () => presentation.style, valueLabel, () => this.detailPercentileControls?.markers ?? []);
         this.detailAxisControls = controls;
-        this.detailBarHeightHost.replaceChildren(controls.createBarHeightScaleControl());
+        const scale = controls.createBarHeightScaleControl();
+        scale.append(controls.binWidth);
+        this.detailBarHeightHost.replaceChildren(controls.pixelCount, scale);
         controls.setEnabled(this.histogram.getAttribute("aria-busy") !== "true");
         presentation.redraw = redraw;
         this.detailAxesHost.replaceChildren(
-            ...(this.detailPercentileControls ? [this.detailPercentileControls.root] : []), controls.root);
+            controls.navigator.root, ...(this.detailPercentileControls ? [this.detailPercentileControls.root] : []), controls.root);
     }
 
     /**
@@ -466,7 +470,7 @@ export class RasterHistogramControlsView {
             throw new TypeError("Raster histogram summary is invalid");
         }
         return JSON.stringify([
-            summary.label, summary.state, summary.counts,
+            summary.sourceKey, summary.label, summary.state, summary.counts,
             summary.errorMessage ?? "", summary.unavailableMessage,
             summary.valueLabel ?? "Raster value", summary.categorical,
             Boolean(summary.automatic), summary.statistics,
@@ -508,7 +512,7 @@ export class RasterHistogramControlsView {
 
         const name = this.documentContext.createElement("span");
         name.className = "raster-histogram-summary-name";
-        name.textContent = summary.label;
+        name.textContent = summary.automatic && !summary.categorical ? `Histogram – ${summary.label}` : summary.label;
         name.title = summary.label;
         const status = this.documentContext.createElement("span");
         status.className = "raster-histogram-summary-status";
@@ -551,7 +555,9 @@ export class RasterHistogramControlsView {
             card.axisControls = controls;
             card.chart = chart;
             card.redraw = redraw;
-            content.append(controls.createBarHeightScaleControl(), chart);
+            const scale = controls.createBarHeightScaleControl();
+            scale.append(controls.binWidth);
+            content.append(controls.pixelCount, scale, chart, controls.navigator.root);
             if (card.percentileControls) content.append(card.percentileControls.root);
             content.append(controls.root);
         } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
@@ -653,24 +659,17 @@ export class RasterHistogramControlsView {
      * @param {()=>import("./style.js").RasterStyle} getStyle Return the current committed raster style.
      * @param {string} valueLabel Value-axis units.
      * @param {()=>Array<{label:string,value:number,color:string}>} [getMarkers] Current percentile inspection markers.
-     * @return {{controls:HistogramAxisControls,redraw:()=>void}} Axis editor and
-     * local redraw using its accepted display settings.
+     * @return {{controls:ContinuousHistogramControls,redraw:()=>void}} Chart controls and a repaint using current style.
      */
     #createAxisControls(key, chart, statistics, getStyle, valueLabel = "Raster value", getMarkers = () => []) {
         if (!this.axisStates.has(key)) this.axisStates.set(key, {});
-        const distribution = { ...statistics.histogram, total: statistics.validSampleCount };
-        /** Redraw the sample with current colors and supplied axes.
-         * @param {Object} axes Accepted axis settings. @return {void}
-         */
-        const draw = axes => renderRasterHistogramChart(
-            chart, statistics, getStyle(), this.documentContext, valueLabel, getMarkers(), axes,
+        const controls = new ContinuousHistogramControls(
+            this.documentContext, statistics, valueLabel, this.axisStates.get(key),
+            (range, signal) => this.handlers.onLoadHistogramRange(statistics, range, signal),
+            (histogram, axes) => renderRasterHistogramChart(chart, {...statistics, histogram},
+                getStyle(), this.documentContext, valueLabel, getMarkers(), axes),
         );
-        const controls = new HistogramAxisControls(this.documentContext, [
-            { ...distribution, key: "y", label: "Bar height (% of pixels)", frequency: true, nice: true },
-            { ...distribution, key: "x", label: valueLabel },
-        ], this.axisStates.get(key), draw);
-        draw(controls.axes);
-        return { controls, redraw: () => draw(controls.axes) };
+        return {controls, redraw: () => controls.redraw()};
     }
 
     /**

@@ -6,6 +6,7 @@ from typing import Literal
 
 import numpy
 from numpy.typing import NDArray
+from pydantic import PrivateAttr
 import rasterio
 from rasterio.warp import transform
 from rasterio.windows import Window, transform as window_transform
@@ -554,11 +555,55 @@ def read_raster_statistics(
     return summarize_raster_sample(sample, source_window, sampling_area, sampling_method)
 
 
+def _count_histogram_bins(
+    sorted_values: NDArray[numpy.float64], edges: NDArray[numpy.float64]
+) -> RasterHistogram:
+    """Count sorted sample values between consecutive edges, including the final edge.
+
+    Args:
+        sorted_values: All finite unmasked values in ascending order.
+        edges: Strictly increasing bin boundaries.
+
+    Returns:
+        Counts and edges for the represented portion of the sample.
+    """
+    positions = sorted_values.searchsorted(edges, side="left")
+    positions[-1] = sorted_values.searchsorted(edges[-1], side="right")
+    return RasterHistogram(counts=numpy.diff(positions).tolist(), edges=edges.tolist())
+
+
+class ContinuousRasterStatistics(RasterStatistics):
+    """Keep the bounded continuous sample in the statistics cache for histogram zoom."""
+
+    _sorted_values: NDArray[numpy.float64] = PrivateAttr()
+
+    def with_histogram_window(self, limits: tuple[float, float]) -> RasterStatistics:
+        """Return statistics with an additional histogram over the inclusive limits.
+
+        Args:
+            limits: Requested finite, increasing minimum and maximum.
+
+        Returns:
+            A response sharing the full distribution and sampling provenance.
+
+        Raises:
+            ValueError: If the limits cannot represent 64 distinct float64 bins.
+        """
+        edges = build_raster_histogram_edges(*limits, RASTER_STATISTICS_BIN_COUNT)
+        if (edges[0], edges[-1]) != limits:
+            raise ValueError("Choose a wider histogram range to fit 64 distinct bins.")
+        return self.model_copy(update={
+            "window_histogram": _count_histogram_bins(self._sorted_values, edges)
+        })
+
+
 def summarize_raster_sample(
     sample: numpy.ma.MaskedArray,
     source_window: Window,
     sampling_area: RasterSamplingArea,
     sampling_method: Literal["sampleGrid", "exactSourceWindow"],
+    *,
+    retain_histogram_sample: bool = True,
 ) -> RasterStatistics:
     """Calculate counts, percentiles and a histogram from masked raster samples.
 
@@ -568,6 +613,7 @@ def summarize_raster_sample(
         source_window: Integral source envelope represented by the sample.
         sampling_area: Validated scope and selection provenance.
         sampling_method: Exact native window or bounded center-grid method.
+        retain_histogram_sample: Keep sorted valid values for continuous histogram zoom.
 
     Returns:
         Numeric counts, percentiles, suggested range and sampling provenance.
@@ -594,11 +640,10 @@ def summarize_raster_sample(
         p50,
         p95,
     )
-    counts, edges = numpy.histogram(
+    sample_values.sort()
+    histogram = _count_histogram_bins(
         sample_values,
-        bins=build_raster_histogram_edges(
-            sample_minimum, sample_maximum, RASTER_STATISTICS_BIN_COUNT
-        ),
+        build_raster_histogram_edges(sample_minimum, sample_maximum, RASTER_STATISTICS_BIN_COUNT),
     )
     source_pixel_count = source_width * source_height
     sampled_pixel_count = sample_width * sample_height
@@ -617,7 +662,8 @@ def summarize_raster_sample(
         if isinstance(sampling_area, CatalogSelectionSamplingArea)
         else None
     )
-    return RasterStatistics(
+    result_type = ContinuousRasterStatistics if retain_histogram_sample else RasterStatistics
+    result = result_type(
         scope=sampling_area.kind,
         selectedBounds=selected_bounds_model,
         catalogSelection=catalog_selection,
@@ -641,9 +687,9 @@ def summarize_raster_sample(
         sampleMinimum=sample_minimum,
         sampleMaximum=sample_maximum,
         percentiles=RasterPercentiles(p05=p05, p50=p50, p95=p95),
-        histogram=RasterHistogram(
-            counts=[int(count) for count in counts],
-            edges=[float(edge) for edge in edges],
-        ),
+        histogram=histogram,
         suggestedRange=suggested_range,
     )
+    if isinstance(result, ContinuousRasterStatistics):
+        result._sorted_values = sample_values
+    return result

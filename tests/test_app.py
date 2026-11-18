@@ -749,6 +749,9 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
             "/api/raster-analysis/statistics",
             json=request_identity,
         )
+        zoomed = client.post("/api/raster-analysis/statistics", json={
+            **request_identity, "histogramRange": [20, 30],
+        })
         selected_response = client.post(
             "/api/raster-analysis/statistics",
             json={
@@ -828,6 +831,12 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
     assert len(response_document["histogram"]["counts"]) == 64
     assert len(response_document["histogram"]["edges"]) == 65
     assert sum(response_document["histogram"]["counts"]) == 4
+    assert zoomed.status_code == 200, zoomed.text
+    zoomed_document = zoomed.json()
+    window = zoomed_document.pop("windowHistogram")
+    assert window["edges"] == [20 + index * 10 / 64 for index in range(65)]
+    assert window["counts"] == [1, *([0] * 62), 1]
+    assert zoomed_document == response_document
 
     assert selected_response.status_code == 200
     selected_document = selected_response.json()

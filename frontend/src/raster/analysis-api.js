@@ -126,7 +126,8 @@ export async function sampleRasterPixel(
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
  * @param {number[]|null} [categoryValues=null] Optional exact category codes.
- * @return {Promise<Object>} Validated statistics and optional ground areas.
+ * @param {[number,number]|null} [histogramRange=null] Inclusive limits for an additional continuous histogram.
+ * @return {Promise<Object>} Validated full statistics and the requested window or category distribution.
  * @throws {Error} If the area or response violates the analysis contract.
  */
 export async function loadRasterStatistics(
@@ -134,7 +135,8 @@ export async function loadRasterStatistics(
     samplingArea,
     signal,
     fetchImplementation = globalThis.fetch,
-    categoryValues = null
+    categoryValues = null,
+    histogramRange = null
 ) {
     const normalizedArea = normalizeRasterSamplingArea(samplingArea);
     const codes = categoryValues === null ? null : normalizeCategoryValues(categoryValues);
@@ -150,10 +152,22 @@ export async function loadRasterStatistics(
         requestDocument.polygonArea = normalizedArea.polygonArea;
     }
     if (codes !== null) requestDocument.categoryValues = codes;
+    if (histogramRange !== null) requestDocument.histogramRange = histogramRange;
     const response = await requestRasterStatistics(item, requestDocument, signal, fetchImplementation);
     const statistics = validateRasterStatisticsForSelection(await response.json(), normalizedArea);
     if (!rasterStatisticsMatchCategories(statistics, codes)) {
         throw new Error("Raster statistics returned a different category classification.");
+    }
+    if (histogramRange !== null) {
+        const {counts, edges} = statistics.windowHistogram ?? {};
+        if (!Array.isArray(counts) || counts.length !== 64 ||
+            !counts.every(count => Number.isInteger(count) && count >= 0) ||
+            counts.reduce((sum, count) => sum + count, 0) > statistics.validSampleCount ||
+            !Array.isArray(edges) || edges.length !== 65 ||
+            edges[0] !== histogramRange[0] || edges.at(-1) !== histogramRange[1] ||
+            !edges.every((edge, i) => Number.isFinite(edge) && (i === 0 || edge > edges[i - 1]))) {
+            throw new Error("The histogram returned invalid bins for this value range.");
+        }
     }
     return statistics;
 }

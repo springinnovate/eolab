@@ -12,7 +12,7 @@ export class HistogramAxisControls {
      * @param {Document} documentContext Element factory.
      * @param {Object[]} definitions Axis key, label and histogram distribution.
      * @param {{options?:Object,open?:boolean}} state Owner-retained display settings.
-     * @param {(axes:Object)=>void} onChange Redraw only the existing sample.
+     * @param {(axes:Object)=>void} onChange Apply the accepted limits to the chart.
      */
     constructor(documentContext, definitions, state, onChange) {
         this.documentContext = documentContext;
@@ -41,7 +41,8 @@ export class HistogramAxisControls {
         help.className = "histogram-axis-help";
         help.textContent = "Values use the labeled axis units. Value percentiles are estimated from sampled bins. " +
             "Bar-height percentiles interpolate the sorted non-empty bar heights; empty bins are excluded. " +
-            "These controls change the display only, not sampling, binning or raster colors.";
+            (definitions.some(axis => axis.rebin) ? "Changing the value range recalculates the histogram bins." :
+                "These controls change the display only, not sampling, binning or raster colors.");
         help.textContent += " Off-scale style markers are pinned to the plot edge; nonpositive markers cannot appear on log axes.";
         this.root.append(help);
         const reset = documentContext.createElement("button");
@@ -140,6 +141,10 @@ export class HistogramAxisControls {
                 this.#applyAxisInputs();
             });
             if (!choices) input.addEventListener("input", () => {
+                if (definition.rebin) {
+                    this.#applyAxisInputs(definition.key);
+                    return;
+                }
                 clearTimeout(this.timer);
                 this.timer = setTimeout(() => this.#applyAxisInputs(), 200);
             });
@@ -294,6 +299,28 @@ export class HistogramAxisControls {
         }
         this.reset.disabled = !enabled;
         for (const button of this.barHeightButtons) button.disabled = !enabled;
+    }
+
+    /** Apply a navigator edit to the same value-axis settings as the detailed editor.
+     * @param {number[]|null} range Minimum and maximum, or null for the full linear domain.
+     * @return {boolean} Whether the axis accepted the edit.
+     */
+    setValueWindow(range) {
+        const {fields} = this.rows.get("x");
+        fields.bounds.input.value = range ? "values" : "auto";
+        if (!range) fields.scale.input.value = "linear";
+        fields.minimum.input.value = range ? String(range[0]) : "";
+        fields.maximum.input.value = range ? String(range[1]) : "";
+        return this.#applyAxisInputs("x");
+    }
+
+    /** Recalculate the bar-height scale from the bins currently plotted.
+     * @param {{edges:number[],counts:number[]}} histogram Visible distribution; empty windows retain a usable full-sample scale.
+     * @return {void}
+     */
+    setBarHeightHistogram(histogram) {
+        Object.assign(this.definitions.find(axis => axis.key === "y"), histogram);
+        this.axes = this.#buildAxesFromSettings();
     }
 
     /** Stop pending edits when the owning chart is replaced or cleared. @return {void} */
