@@ -64,6 +64,10 @@ def serialize_retained_metadata(value: dict[str, object] | None) -> Jsonb | None
     return Jsonb(value)
 
 
+class UnsupportedProcessingSchemaError(RuntimeError):
+    """Stop worker startup so an operator can migrate an incompatible Processing database."""
+
+
 class PostgresJobStore:
     """Own Processing transactions and a bounded, process-local connection pool.
 
@@ -152,14 +156,38 @@ class PostgresJobStore:
             ) from error
 
     def migrate(self) -> None:
-        """Idempotently install the owned schema under the processing mutex.
+        """Install a fresh Processing schema, or verify an existing layout without DDL.
+
+        Fresh installations store version 22 directly. Existing installations of
+        the same layout may have all 22 historical markers. The structure is checked
+        as well because distinct historical Habitat layouts shared marker 22.
 
         Raises:
-            ProcessingError: If the database cannot apply the schema.
+            UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
+            ProcessingError: If the database is temporarily unavailable.
         """
-        sql = files("eolab_app.processing").joinpath("schema.sql").read_text()
+        resources = files("eolab_app.processing")
         with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute(sql)
+            cursor.execute("SELECT to_regnamespace('processing') AS namespace")
+            if cursor.fetchone()["namespace"] is None:
+                cursor.execute(resources.joinpath("schema.sql").read_text())
+                return
+            cursor.execute(resources.joinpath("schema_check.sql").read_text())
+            mismatch = cursor.fetchone()
+            if mismatch is not None:
+                raise UnsupportedProcessingSchemaError(
+                    "The installed Processing schema is unsupported. "
+                    f"Check processing.{mismatch['incompatible_object']} before starting this worker."
+                )
+            cursor.execute(
+                "SELECT version FROM processing.schema_version ORDER BY version"
+            )
+            versions = [row["version"] for row in cursor.fetchall()]
+            if versions not in ([22], list(range(1, 23))):
+                raise UnsupportedProcessingSchemaError(
+                    "The installed Processing schema has an unsupported version history. "
+                    "This worker requires the current version 22 layout."
+                )
 
     def interrupt_unfinished_jobs_on_restart(self) -> int:
         """Discard pending work before the restarted worker consumes new jobs.
@@ -691,7 +719,7 @@ class PostgresJobStore:
                 )
             cursor.execute(
                 "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),"
-                "reserved_bytes=0,required_disk_bytes=0,progress=%s,updated_at=clock_timestamp() "
+                "reserved_bytes=0,progress=%s,updated_at=clock_timestamp() "
                 "WHERE id=%s RETURNING *",
                 (
                     Jsonb(prepared.specification),
@@ -1118,8 +1146,8 @@ class PostgresJobStore:
             if not row:
                 return None
             cursor.execute(
-                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',deadline_at=NULL,"
-                "execution_memory_bytes=0,reserved_bytes=0,required_disk_bytes=0,"
+                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',"
+                "reserved_bytes=0,"
                 "started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
                 (
                     uuid4().hex,
