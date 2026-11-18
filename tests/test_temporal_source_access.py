@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 import shutil
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -25,7 +25,7 @@ from eolab_app.raster.statistics import read_raster_statistics
 from eolab_app.sampling_area import RasterSamplingArea
 from eolab_app.raster.source_access import RasterSourceAccess
 from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
-from eolab_app.raster.source_models import TemporalIntervalSelection
+from eolab_app.raster.source_models import TemporalIntervalSelection, TemporalTimeQuery
 from eolab_app.raster.sources import MountedRasterResolver
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.raster.reader import open_raster_data
@@ -506,6 +506,56 @@ def test_catalog_source_path_cannot_escape_mount(
                 time="2000-02-01T00:00:00Z",
             ),
         )
+
+
+def test_month_discovery_skips_hours_in_other_months(
+    era5_archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify that browsing an empty month skips hours in a densely sampled month.
+
+    Args:
+        era5_archive: Partial January and February observations in a producer catalog.
+        monkeypatch: Supply the SQLite connection that counts visibility checks.
+    """
+    may_hours = tuple(range(24))
+    publish_month(era5_archive, 5, {TEMPERATURE: may_hours})
+    scanner, writer = create_scanner(era5_archive.parent)
+    asyncio.run(scan(scanner))
+    query = TemporalTimeQuery(
+        collectionId=ITEM_KEY[0],
+        itemId=ITEM_KEY[1],
+        variable=TEMPERATURE,
+        month="2000-02",
+    )
+    inspect_observation = Mock(return_value=True)
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as connection:
+        connection.execute(
+            "CREATE UNIQUE INDEX observation_time ON coverage(variable, valid_time)"
+        )
+        connection.execute(
+            """
+            INSERT INTO publications (variable, valid_time, status)
+            SELECT variable, valid_time, 'ready' FROM coverage
+            WHERE variable = ? AND strftime('%Y-%m', valid_time, 'unixepoch') = '2000-02'
+            """,
+            (TEMPERATURE,),
+        )
+        connection.create_function("inspect_observation", 1, inspect_observation)
+        # Count candidate rows directly so the test also works on slower machines.
+        connection.execute("""
+            CREATE TEMP VIEW observations AS
+            SELECT variable, valid_time FROM main.observations
+            WHERE inspect_observation(valid_time)
+            """)
+        monkeypatch.setattr(sqlite3, "connect", Mock(return_value=connection))
+        choices = MountedRasterResolver(era5_archive.parent).get_time_choices(
+            writer.write_session.items[ITEM_KEY], query
+        )
+
+    assert choices.months == ("2000-01", "2000-05")
+    assert choices.month == "2000-02"
+    assert choices.times == ()
+    assert inspect_observation.call_count < len(may_hours)
 
 
 def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
