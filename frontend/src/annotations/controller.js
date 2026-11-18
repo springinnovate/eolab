@@ -75,6 +75,7 @@ export class AnnotationController {
         this.pendingSave = false;
         this.panel = panel;
         this.status = document.querySelector("#annotation-save-status");
+        this.storageStatus = document.querySelector("#annotation-storage-status");
         this.undoButton = document.querySelector("#undo-annotation-delete");
         this.retryButton = document.querySelector("#retry-annotation-save");
         this.drawButton = document.querySelector("#draw-private-polygon");
@@ -128,8 +129,8 @@ export class AnnotationController {
 
     /**
      * Restore saved polygons without opening their editor or moving focus.
-     * Failed loads leave stored data untouched and retain the error in the polygon
-     * editor without showing polygon controls over an unrelated map workflow.
+     * Load errors appear beside the disabled drawing controls and in the polygon editor.
+     * Opening an unsupported document leaves its stored drawings intact.
      * Recovered filters are identified on their layers until the user applies a filter or reloads.
      * Creating drawing layers and importing files remain disabled until loading succeeds.
      * Linked sources refresh clean views; pending local edits retain their original revision.
@@ -148,6 +149,7 @@ export class AnnotationController {
                 if (!shared.has(layer.id)) this.attachLayer(layer);
             }
             this.loaded = true;
+            this.storageStatus.hidden = true;
             this.drawButton.disabled = false;
             this.importButton.disabled = false;
             this.dirty = this.model.layers.some(layer => layer.drawingSource?.pending);
@@ -155,6 +157,8 @@ export class AnnotationController {
             this.retryButton.hidden = !this.status.textContent;
         } catch (error) {
             this.status.textContent = `Cannot open saved polygons: ${error.message}`;
+            this.storageStatus.textContent = this.status.textContent;
+            this.storageStatus.hidden = false;
         }
     }
 
