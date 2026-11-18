@@ -148,8 +148,9 @@ test("one exact value has its own editor, validation and swatch alongside the gr
     assert.deepEqual(events, ["override", "override", "commit"]);
     assert.equal(view.getPaletteName(), "viridis");
     view.renderLegend(view.readStyle());
-    assert.equal(doc.querySelector("#raster-override-legend-label").textContent, "Value -9999.5 · 35% opacity");
-    assert.equal(doc.querySelector("#raster-override-legend-color").style.opacity, "0.35");
+    const [entry] = doc.querySelector("#raster-override-legend").children;
+    assert.equal(entry.children[1].textContent, "Value -9999.5 · 35% opacity");
+    assert.equal(entry.children[0].children[0].style.opacity, "0.35");
     value.value = "";
     assert.throws(() => validateRasterStyle(view.readStyle()), error => {
         view.renderStyleError(error);
@@ -161,6 +162,43 @@ test("one exact value has its own editor, validation and swatch alongside the gr
     view.setEnabled(false);
     assert.equal(toggle.disabled, true);
     assert.equal(color.disabled, true);
+    view.unbind();
+});
+
+test("open-ended color ranges use ordered swatches alongside the gradient", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterAppearanceControlsView(doc);
+    view.setStyle(DEFAULT_RASTER_STYLE, "viridis");
+    view.bind({onValueOverrideInput() {}, onStyleChange() {}});
+    const add = doc.querySelector("#add-raster-color-range");
+    const rows = doc.querySelector("#raster-color-ranges");
+    add.dispatchEvent(new Event("click"));
+    const [lowFrom, lowThrough, lowColor] = rows.children[0].querySelectorAll("input");
+    assert.equal(doc.activeElement, lowFrom);
+    assert.throws(() => validateRasterStyle(view.readStyle()), error => {
+        view.renderStyleError(error);
+        return lowThrough.getAttribute("aria-invalid") === "true" && /lower or upper/.test(error.message);
+    });
+    lowThrough.value = "1";
+    lowColor.value = "#004466";
+    add.dispatchEvent(new Event("click"));
+    const [highFrom] = rows.children[1].querySelectorAll("input");
+    highFrom.value = "100";
+    const style = validateRasterStyle(view.readStyle());
+    assert.deepEqual(style.rangeOverrides, [
+        {minimum: null, maximum: 1, color: "#004466", opacity: 1},
+        {minimum: 100, maximum: null, color: "#ff00ff", opacity: 1},
+    ]);
+    view.setStyle(style, "viridis");
+    assert.deepEqual(view.readStyle(), style);
+    const legend = doc.querySelector("#raster-override-legend");
+    assert.deepEqual(legend.children.map(row => row.children[1].textContent),
+        ["Value ≤ 1 · 100% opacity", "Value ≥ 100 · 100% opacity"]);
+    view.setEnabled(false);
+    assert.ok(add.disabled && rows.children.every(row => row.disabled));
+    view.setStyle(DEFAULT_RASTER_STYLE, "viridis");
+    assert.equal(legend.hidden, true);
+    assert.equal(rows.children.length, 0);
     view.unbind();
 });
 

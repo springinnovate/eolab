@@ -45,11 +45,13 @@ const STYLE = Object.freeze({
 
 test("coordinated ramps override alpha without mutating ordinary styles", () => {
   const ordinary = { ...STYLE, minimumOpacity: 0, midpointOpacity: 0.25, maximumOpacity: 0.5,
-    valueOverride: {value: 0, color: "#123456", opacity: 0} };
+    valueOverride: {value: 0, color: "#123456", opacity: 0},
+    rangeOverrides: [{minimum: 100, maximum: null, color: "#ff00ff", opacity: 1}] };
   const { xStyle, yStyle } = getBivariateAxisStyles("orangeBlue", ordinary, ordinary);
   for (const style of [xStyle, yStyle]) {
     assert.deepEqual([style.minimumOpacity, style.midpointOpacity, style.maximumOpacity], [1, 1, 1]);
     assert.equal(Object.hasOwn(style, "valueOverride"), false);
+    assert.equal(Object.hasOwn(style, "rangeOverrides"), false);
   }
   assert.deepEqual([ordinary.minimumOpacity, ordinary.midpointOpacity, ordinary.maximumOpacity], [0, 0.25, 0.5]);
 });

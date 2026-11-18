@@ -13,7 +13,7 @@ public final class CategoricalRasterFunctionFactory implements FunctionFactory {
     /**
      * Lists the raster styling functions accepted in server-generated SLD.
      *
-     * @return the categorical classifier and the single-value mask signatures
+     * @return the categorical classifier and the continuous raster mask signatures
      */
     @Override
     public List<FunctionName> getFunctionNames() {

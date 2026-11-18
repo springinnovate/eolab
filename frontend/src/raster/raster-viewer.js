@@ -2340,10 +2340,9 @@ export function initializeRasterViewer(
                     kind: "gradient",
                     gradient: definition.gradient,
                     description: definition.description,
-                    ...(presentationStyle.valueOverride ? { entries: [{
-                        label: definition.overrideLabel,
-                        symbol: rasterFillLegendSymbol(presentationStyle.valueOverride),
-                    }] } : {}),
+                    ...(definition.overrides ? { entries: definition.overrides.map(entry => ({
+                        label: entry.label, symbol: rasterFillLegendSymbol(entry),
+                    })) } : {}),
                     label: opacityLocked
                         ? `${record.entry.key === bivariateMode.xKey ? "X" : "Y"} color contribution; combines with the other raster on the map.`
                         : "Raster values",

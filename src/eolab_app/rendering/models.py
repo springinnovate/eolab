@@ -36,7 +36,7 @@ class CompositeMapLayerRequest(BaseModel):
     style_environment: str | None = Field(
         default=None,
         alias="styleEnvironment",
-        max_length=384,
+        max_length=2048,
         strict=True,
     )
     style_definition: dict[str, Any] | None = Field(
