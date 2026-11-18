@@ -1543,20 +1543,38 @@ test("duplicate views share a raster preview while maximum runs exactly and retr
 });
 
 test("reloading an exact box calculation restores the chosen threshold, units and pending jobs", async () => {
+    const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 1, unit: "m"}, {value: 20, unit: "%"}]})});
+    h.controller.addFormula("percent");
+    h.controller.editFormula(2, {threshold: 4.5});
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    await h.open();
+    h.view.actions.onExactStatistics(); await h.tick();
+    const originals = [...h.server.values()];
+    h.close();
+    const restored = fixture({}, h.data);
+    for (const job of originals) restored.server.set(job.jobId, job);
+    await restored.controller.start();
+    await restored.finish(); await restored.finish();
+    assert.deepEqual(restored.view.state.rows.slice(0, 2).map(row => [row.statisticLabel, row.unit]),
+        [["Exact mean", "m"], ["Exact percent above 4.5", "%"]]);
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    restored.close();
+});
+
+test("reload keeps hidden, duplicate, empty and outside rasters beside native results", async () => {
     const layers = [source("2"), {...source("3"), visible: false}, source("1"), {...source("3"), key: "copy", label: "Second view"}, source("empty"), source("outside")];
     const reads = [];
     const previews = {readBoxPreview: async (layer, box) => {
         reads.push([layer.key, box.center.longitude]);
         if (layer.key === "outside") throw Object.assign(new Error("Box outside raster"), {code: "sampling_box_outside_raster"});
-        if (layer.key === "empty") return {method: "exact", values: [{value: null, unit: "cm"}, {value: null, unit: "%"}]};
+        if (layer.key === "empty") return {method: "exact", values: [{value: null, unit: "cm"}]};
         const exact = ["3", "copy"].includes(layer.key);
-        return {method: exact ? "exact" : "estimated", values: [{value: exact ? 11 : 1, unit: exact ? "cm" : "m"}, {value: 20, unit: "%"}]};
+        return {method: exact ? "exact" : "estimated", values: [{value: exact ? 11 : 1, unit: exact ? "cm" : "m"}]};
     }};
     const h = fixture(previews);
+    h.grid.storedUnit = "m";
     h.controller.updateAvailableRasters(layers);
     h.controller.selectRaster("3", true);
-    h.controller.addFormula("percent");
-    h.controller.editFormula(2, {threshold: 4.5});
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     await h.open();
     h.view.actions.onExactStatistics(); await h.tick();
@@ -1570,11 +1588,11 @@ test("reloading an exact box calculation restores the chosen threshold, units an
     restored.controller.updateAvailableRasters(layers);
     await recovery;
     await restored.finish(); await restored.finish();
-    assert.deepEqual(restored.view.state.rows.slice(0, 2).map(row => [row.statisticLabel, row.unit]),
-        [["Exact mean", "m"], ["Exact percent above 4.5", "%"]]);
     assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
     const means = csvParse(restored.controller.exportCsv()).filter(row => row.formula === "mean(a)");
     assert.deepEqual(means.map(row => row.raster), layers.map(layer => layer.label));
+    assert.deepEqual(means.filter(row => ["1", "2"].includes(row.item_id)).map(row => [row.value, row.unit]),
+        [["-123.4567890123456789", "m"], ["-123.4567890123456789", "m"]]);
     assert.deepEqual(means.filter(row => row.item_id === "3").map(row => [row.value, row.unit, row.method, row.job_id]),
         [["11", "cm", "exact", ""], ["11", "cm", "exact", ""]]);
     assert.deepEqual(means.slice(-2).map(row => [row.status, row.value, row.error]),

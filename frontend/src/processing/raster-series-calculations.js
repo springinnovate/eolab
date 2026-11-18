@@ -447,10 +447,10 @@ export class RasterSeriesCalculations {
             for (const [client, request] of additions) {
                 if (version !== this.version) return;
                 const presentation = {key: request.key, names: jobFormulas.map(formula => formula.label)};
-                if (this.boxSelectionId) presentation.boxSelectionId = this.boxSelectionId;
                 const previewFormulas = this.formulas.filter(formula => formula.preview).map(({id, label, preview, expression}) =>
                     ({id, label, preview, unit: request.previewUnits?.get(expression)}));
                 if (previewFormulas.length) Object.assign(presentation, {previewFormulas, exactBox: this.exactBox});
+                if (this.boxSelectionId) presentation.boxSelectionId = this.boxSelectionId;
                 client.submit(request.calculationInputs, {automatic: false, presentation});
             }
             this.dispatching = false;
