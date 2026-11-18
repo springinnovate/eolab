@@ -6090,7 +6090,14 @@ test("independent temporal views preserve explicit saved selections and reset ra
 test("timeline selections reuse the row, consume only admitted prepared times and browse actual month boundaries", async () => {
     const jan = ["2020-01-02T00:00:00Z", "2020-01-24T00:00:00Z", "2020-01-24T02:00:00Z"];
     const may = ["2020-05-06T03:00:00Z"], publications = [];
+    const firstRange = createDeferred();
     const f = temporalFixture({
+        loadStatistics: async (item, area) => {
+            await firstRange.promise;
+            const suggestedRange = may.includes(item.source.time) ? {minimum: 235, midpoint: 280, maximum: 318} :
+                {minimum: 230, midpoint: 277, maximum: 310};
+            return {...createLayerStatistics(item, area), suggestedRange};
+        },
         loadTimes: async (_item, _variable, month = "2020-01") => ({
             month, months: ["2020-01", "2020-05"], times: [...(month === "2020-01" ? jan : may)],
         }),
@@ -6110,10 +6117,15 @@ test("timeline selections reuse the row, consume only admitted prepared times an
         assert.deepEqual(publications, jan.slice(0, 2));
         assert.equal(f.mapLayers.snapshots()[0].timeline.time, f.temporalViews[0].state.time);
         assert.equal(f.viewer.exportTemporal(row).temporalSource.time, jan[1]);
+        firstRange.resolve();
+        await flushPromises();
+        assert.deepEqual(f.mapLayers.snapshots()[0].legend.labels, [230, 277, 310],
+            "starting playback before statistics arrive must admit the first measured temperature range");
         const obsolete = await f.viewer.prepareTemporalFrame(key, jan[2], signal);
         await f.viewer.selectTemporalMonth(key, "2020-05", "first");
         obsolete.show();
         assert.equal(f.temporalViews[0].state.time, may[0]);
+        assert.deepEqual(f.mapLayers.snapshots()[0].legend.labels, [230, 277, 310], "later dates retain the established range");
         await f.viewer.selectTemporalMonth(key, "2020-01", "last");
         assert.equal(f.temporalViews[0].state.time, jan[2]);
         await f.viewer.selectTemporalMonth(key, "2020-01", "firstOfLastDay");

@@ -4808,12 +4808,10 @@ export function initializeRasterViewer(
      * @param {Object} record Retained temporal view.
      * @param {string} time Timestamp supplied by its admitted-time control.
      * @param {Object|null} [publication] Ready publication of the same time, when prepared for playback.
-     * @param {boolean} [keepRange] Keep the displayed color scale while moving along the timeline.
      * @return {Promise<void>} Completion after publication or a row-level failure.
      */
-    async function changeTemporalTime(record, time, publication = null, keepRange = false) {
+    async function changeTemporalTime(record, time, publication = null) {
         const temporal = record.state.temporal;
-        if (keepRange) temporal.preserveRange = true;
         temporal.request?.abort();
         const request = temporal.request = new AbortController();
         temporal.loading = publication === null;
@@ -4830,7 +4828,7 @@ export function initializeRasterViewer(
      */
     async function selectTemporalTime(key, time) {
         const record = mapLayers.getRecord(key);
-        if (record?.state.temporal?.times.includes(time)) await changeTemporalTime(record, time, null, true);
+        if (record?.state.temporal?.times.includes(time)) await changeTemporalTime(record, time);
     }
 
     /** Jump to a populated month, choosing its first or last observation for continued playback.
@@ -4842,10 +4840,7 @@ export function initializeRasterViewer(
     async function selectTemporalMonth(key, month, edge) {
         const record = mapLayers.getRecord(key);
         const temporal = record?.state.temporal;
-        if (temporal?.months.includes(month)) {
-            temporal.preserveRange = true;
-            await loadTemporalChoices(record, temporal.selection, month, edge);
-        }
+        if (temporal?.months.includes(month)) await loadTemporalChoices(record, temporal.selection, month, edge);
     }
 
     /** Authorize a future observation and capture its style without changing the current layer or analysis.
@@ -4868,7 +4863,7 @@ export function initializeRasterViewer(
         return {
             descriptor: rasterMapLayerAdapter.renderDescriptor({...record, publication}),
             /** Apply this publication through the ordinary observation selection. @return {void} */
-            show() { if (current()) void changeTemporalTime(record, time, publication, true); },
+            show() { if (current()) void changeTemporalTime(record, time, publication); },
         };
     }
 
