@@ -363,6 +363,12 @@ def test_catalog_and_private_sources_use_the_same_native_analysis(
         actual = await statistics.get(request, "owner")
         assert actual == expected and actual.valid_sample_count == 16
         assert await statistics.get(request, "owner") is actual
+        window_request = RasterStatisticsSourceRequest(source=PRIVATE, histogramRange=[5, 7])
+        private_window = await statistics.get(window_request, "owner")
+        assert private_window == await statistics.get(
+            CatalogRasterStatisticsRequest(**CATALOG, histogramRange=[5, 7])
+        )
+        assert private_window.window_histogram.counts == [1, *([0] * 31), 1, *([0] * 30), 1]
         categorized = await statistics.get(
             RasterStatisticsSourceRequest(source=PRIVATE, categoryValues=[0, 5, 15]),
             "owner",
@@ -384,6 +390,8 @@ def test_catalog_and_private_sources_use_the_same_native_analysis(
         authority.ready = False
         with pytest.raises(SourceFileError):
             await statistics.get(request, "owner")
+        with pytest.raises(SourceFileError):
+            await statistics.get(window_request, "owner")
         authority.ready = True
         with pytest.raises(SourceFileError) as error:
             await statistics.get(request, "foreign")

@@ -575,7 +575,8 @@ def _count_histogram_bins(
 class ContinuousRasterStatistics(RasterStatistics):
     """Keep the bounded continuous sample in the statistics cache for histogram zoom."""
 
-    _sorted_values: NDArray[numpy.float64] = PrivateAttr()
+    # Immutable bytes compare by value across native reader processes.
+    _sorted_float64_bytes: bytes = PrivateAttr()
 
     def with_histogram_window(self, limits: tuple[float, float]) -> RasterStatistics:
         """Return statistics with an additional histogram over the inclusive limits.
@@ -592,9 +593,8 @@ class ContinuousRasterStatistics(RasterStatistics):
         edges = build_raster_histogram_edges(*limits, RASTER_STATISTICS_BIN_COUNT)
         if (edges[0], edges[-1]) != limits:
             raise ValueError("Choose a wider histogram range to fit 64 distinct bins.")
-        return self.model_copy(update={
-            "window_histogram": _count_histogram_bins(self._sorted_values, edges)
-        })
+        sorted_values = numpy.frombuffer(self._sorted_float64_bytes, dtype=numpy.float64)
+        return self.model_copy(update={"window_histogram": _count_histogram_bins(sorted_values, edges)})
 
 
 def summarize_raster_sample(
@@ -691,5 +691,5 @@ def summarize_raster_sample(
         suggestedRange=suggested_range,
     )
     if isinstance(result, ContinuousRasterStatistics):
-        result._sorted_values = sample_values
+        result._sorted_float64_bytes = sample_values.tobytes()
     return result
