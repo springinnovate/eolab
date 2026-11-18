@@ -1543,20 +1543,63 @@ test("duplicate views share a raster preview while maximum runs exactly and retr
 });
 
 test("reloading an exact box calculation restores the chosen threshold, units and pending jobs", async () => {
-    const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 1, unit: "m"}, {value: 20, unit: "%"}]})});
+    const layers = [source("2"), {...source("3"), visible: false}, source("1"), {...source("3"), key: "copy", label: "Second view"}, source("empty"), source("outside")];
+    const reads = [];
+    const previews = {readBoxPreview: async (layer, box) => {
+        reads.push([layer.key, box.center.longitude]);
+        if (layer.key === "outside") throw Object.assign(new Error("Box outside raster"), {code: "sampling_box_outside_raster"});
+        if (layer.key === "empty") return {method: "exact", values: [{value: null, unit: "cm"}, {value: null, unit: "%"}]};
+        const exact = ["3", "copy"].includes(layer.key);
+        return {method: exact ? "exact" : "estimated", values: [{value: exact ? 11 : 1, unit: exact ? "cm" : "m"}, {value: 20, unit: "%"}]};
+    }};
+    const h = fixture(previews);
+    h.controller.updateAvailableRasters(layers);
+    h.controller.selectRaster("3", true);
     h.controller.addFormula("percent");
     h.controller.editFormula(2, {threshold: 4.5});
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     await h.open();
     h.view.actions.onExactStatistics(); await h.tick();
     const originals = [...h.server.values()];
+    assert.equal(originals.length, 2);
     h.close();
-    const restored = fixture({}, h.data);
+    reads.length = 0;
+    const restored = fixture(previews, h.data);
     for (const job of originals) restored.server.set(job.jobId, job);
-    await restored.controller.start();
+    const recovery = restored.controller.start();
+    restored.controller.updateAvailableRasters(layers);
+    await recovery;
     await restored.finish(); await restored.finish();
     assert.deepEqual(restored.view.state.rows.slice(0, 2).map(row => [row.statisticLabel, row.unit]),
         [["Exact mean", "m"], ["Exact percent above 4.5", "%"]]);
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    const means = csvParse(restored.controller.exportCsv()).filter(row => row.formula === "mean(a)");
+    assert.deepEqual(means.map(row => row.raster), layers.map(layer => layer.label));
+    assert.deepEqual(means.filter(row => row.item_id === "3").map(row => [row.value, row.unit, row.method, row.job_id]),
+        [["11", "cm", "exact", ""], ["11", "cm", "exact", ""]]);
+    assert.deepEqual(means.slice(-2).map(row => [row.status, row.value, row.error]),
+        [["no_valid_data", "", ""], ["error", "", "Box outside raster"]]);
+    assert.deepEqual(reads, [["3", -93], ["empty", -93], ["outside", -93]]);
+    restored.close();
+});
+
+test("reload keeps an exact preview and its previously completed custom statistic", async () => {
+    const previews = {readBoxPreview: async layer => ({method: layer.key === "1" ? "exact" : "estimated", values: [{value: 11, unit: "cm"}]})};
+    const h = fixture(previews);
+    h.controller.addFormula("max");
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 10}});
+    await h.open();
+    const firstMax = await h.finish("ready", false, "1");
+    await h.finish("ready", false, "2");
+    h.view.actions.onExactStatistics(); await h.tick();
+    assert.equal(h.server.size, 3);
+    h.close();
+    const restored = fixture(previews, h.data);
+    for (const [id, job] of h.server) restored.server.set(id, job);
+    await restored.controller.start(); await restored.finish();
+    const rows = csvParse(restored.controller.exportCsv()).filter(row => row.item_id === "1");
+    assert.deepEqual(rows.map(row => [row.formula, row.value, row.job_id]),
+        [["mean(a)", "11", ""], ["max(a)", "-123.4567890123456789", firstMax]]);
     assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
     restored.close();
 });

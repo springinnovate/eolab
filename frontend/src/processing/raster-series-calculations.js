@@ -41,6 +41,7 @@ export class RasterSeriesCalculations {
         this.previewAbort = null;
         this.pendingPreviews = new Set();
         this.exactBox = false;
+        this.boxSelectionId = null;
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -87,7 +88,9 @@ export class RasterSeriesCalculations {
             return !saved.cancelRequested && !saved.context.automatic;
         });
         if (retained.length) {
-            const first = retained[0][1].snapshot.unfinishedCalculation;
+            const records = retained.map(([, client]) => client.snapshot.unfinishedCalculation);
+            // A finished custom statistic can have an earlier job alongside its exact preview.
+            const first = records.find(record => record.context.presentation.boxSelectionId) ?? records[0];
             const intent = first.calculation;
             this.formulas = intent.calculations.map((formula, index) => ({id: Number(formula.label.slice(5)),
                 label: first.context.presentation.names[index], expression: formula.expression}));
@@ -98,9 +101,10 @@ export class RasterSeriesCalculations {
             }
             this.formulas.sort((left, right) => left.id - right.id);
             this.exactBox = first.context.presentation.exactBox === true;
-            this.sources = retained.filter(([, client]) => client.snapshot.unfinishedCalculation.calculation.kind !== "temporal")
-                .map(([, client]) => {
-                    const saved = client.snapshot.unfinishedCalculation;
+            this.boxSelectionId = first.context.presentation.boxSelectionId ?? null;
+            const selection = this.boxSelectionId && this.requests.session.readBoxSelection(this.boxSelectionId);
+            this.sources = selection || records.filter(saved => saved.calculation.kind !== "temporal")
+                .map(saved => {
                     return {key: saved.context.presentation.key, label: saved.calculation.source.label, source: saved.calculation.source};
                 });
             this.area = intent.area;
@@ -119,7 +123,8 @@ export class RasterSeriesCalculations {
                 this.pending.set(index, {key: saved.context.presentation.key, calculationInputs: saved.calculation, previewUnits,
                     submitted: true, phase: "recovering", message: "Recovering calculation…"});
             }
-            this.requestBoxPreviews();
+            if (selection) this.requestBoxPreviews(this.formulas.filter(formula => formula.preview), selection.filter(view => view.reread));
+            else this.requestBoxPreviews();
             this.updateSeriesProgress();
         }
         for (const [, client] of clients) if (!retained.some(([, current]) => current === client)) client.stop();
@@ -225,13 +230,14 @@ export class RasterSeriesCalculations {
      * Keep completed values separately for the faded previous plot. Cancel pending
      * work so each replacement is validated by its submission endpoint.
      * @param {boolean} debounce Whether changed formulas must wait for editing to pause.
+     * @param {Set<string>} [keepJobs] Completed custom statistics still used alongside retained exact previews.
      * @return {void}
      */
-    resetResultsForChangedInputs(debounce) {
+    resetResultsForChangedInputs(debounce, keepJobs) {
         if (this.results.size) this.previousResults = new Map(this.results);
         if (this.temporalResult) this.previousTemporalResult = this.temporalResult;
         this.temporalResult = null;
-        this.cancelRemainingRasters();
+        this.cancelRemainingRasters(false, keepJobs);
         this.results = new Map();
         this.complete = false;
         if (this.active) this.scheduleRemainingCalculations(debounce || this.temporalMode);
@@ -243,9 +249,10 @@ export class RasterSeriesCalculations {
      * Processing to cancel all of this series' submitted jobs. Completed results
      * remain available; executors retain jobs still needing cancellation recovery.
      * @param {boolean} [pause=false] User cancellation waits for another input edit before restarting.
+     * @param {Set<string>} [keepJobs] Completed jobs whose tab records are still part of an exact comparison.
      * @return {void} Cancellation is requested here and acknowledged asynchronously.
      */
-    cancelRemainingRasters(pause = false) {
+    cancelRemainingRasters(pause = false, keepJobs) {
         this.hasCapturedInputs = false;
         this.paused = pause;
         this.version++;
@@ -259,7 +266,14 @@ export class RasterSeriesCalculations {
         this.temporalWork = null;
         this.progress.clear();
         this.busy = false;
-        for (const client of this.clients.values()) client.stop();
+        if (this.boxSelectionId) {
+            this.requests.session.clearBoxSelection();
+            this.boxSelectionId = null;
+        }
+        for (const client of this.clients.values()) {
+            if (!client.snapshot.unfinishedCalculation && keepJobs?.has(client.snapshot.completedJob?.jobId)) continue;
+            client.stop();
+        }
         this.message = "Calculation cancelled. Change inputs to start again.";
         this.onChange();
     }
@@ -296,7 +310,7 @@ export class RasterSeriesCalculations {
         const completePreviews = [...this.results].filter(([, result]) =>
             result.boxPreview?.method === "exact" || result.boxPreview?.outside);
         this.exactBox = true;
-        this.resetResultsForChangedInputs(false);
+        this.resetResultsForChangedInputs(false, new Set(completePreviews.flatMap(([, result]) => result.job ? [result.job.jobId] : [])));
         this.results = new Map(completePreviews);
         this.onChange();
     }
@@ -304,12 +318,13 @@ export class RasterSeriesCalculations {
     /** Request all selected preview statistics once per original raster, including duplicate map views.
      * Every read for these inputs shares a cancellation signal. Exact jobs run independently.
      * @param {Object[]} [formulas=this.previewFormulas] Captured previewable formulas in request order.
+     * @param {Object[]} [selected=this.sources] Selected map views that need an interactive read.
      * @return {void}
      */
-    requestBoxPreviews(formulas = this.previewFormulas) {
+    requestBoxPreviews(formulas = this.previewFormulas, selected = this.sources) {
         if (!formulas.length) return;
         const groups = new Map();
-        for (const source of this.sources) {
+        for (const source of selected) {
             const identity = rasterSourceKey(source);
             if (this.results.get(source.key)?.boxPreview || this.pendingPreviews.has(identity)) continue;
             if (!groups.has(identity)) groups.set(identity, []);
@@ -334,6 +349,9 @@ export class RasterSeriesCalculations {
         let boxPreview;
         try {
             const response = await this.readBoxPreview(sources[0], area.samplingBox, formulas.map(f => f.preview), signal);
+            if (this.exactBox && response.method === "estimated") {
+                throw new Error("This raster now provides an estimate. Retry failed rasters to calculate it exactly.");
+            }
             boxPreview = {method: response.method, rows: new Map(formulas.map((f, i) => [f.expression, response.values[i]]))};
         } catch (error) {
             boxPreview = {method: "unavailable", rows: new Map(), error: error.message,
@@ -392,6 +410,14 @@ export class RasterSeriesCalculations {
             const formulas = jobFormulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
             const firstCalculationInputs = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area,
                 calculations: formulas, pixelPoint: this.pixelPoint });
+            if (this.exactBox && !this.boxSelectionId) {
+                const previewKeys = new Set([...this.results].filter(([, result]) => result.boxPreview &&
+                    (result.job || jobFormulas.every(formula => formula.preview))).map(([key]) => key));
+                if (previewKeys.size && previewKeys.size < this.sources.length) {
+                    this.boxSelectionId = this.requests.session.saveBoxSelection(this.sources.map(source =>
+                        ({key: source.key, source: this.getRasterReference(source), reread: previewKeys.has(source.key)})));
+                }
+            }
             // Record all identities before submission can synchronously notify listeners.
             const additions = [];
             for (const source of this.sources) {
@@ -412,6 +438,7 @@ export class RasterSeriesCalculations {
             for (const [client, request] of additions) {
                 if (version !== this.version) return;
                 const presentation = {key: request.key, names: jobFormulas.map(formula => formula.label)};
+                if (this.boxSelectionId) presentation.boxSelectionId = this.boxSelectionId;
                 const previewFormulas = this.formulas.filter(formula => formula.preview).map(({id, label, preview, expression}) =>
                     ({id, label, preview, unit: request.previewUnits?.get(expression)}));
                 if (previewFormulas.length) Object.assign(presentation, {previewFormulas, exactBox: this.exactBox});
