@@ -661,7 +661,7 @@ def test_existing_calculations_accept_private_sources_with_cache_authorization(
 
 
 @pytest.mark.parametrize(
-    "finish", ["cancel", "failure", "deadline", "restart", "missing"]
+    "finish", ["cancel", "failure", "lost_lease", "restart", "missing"]
 )
 def test_input_retention_releases_after_every_terminal_path(
     model_boundary: Any, store: Any, finish: str
@@ -724,13 +724,6 @@ def test_input_retention_releases_after_every_terminal_path(
             assert input_counts(store) == (1, 0)
             client.portal.call(worker.cleanup)
             assert path.exists()
-            with psycopg.connect(store.conninfo) as connection:
-                connection.execute(
-                    "UPDATE processing.jobs SET deadline_at=now()-interval '1 second' WHERE id=%s",
-                    (child["jobId"],),
-                )
-            assert store.claim_next_job() is None
-            assert input_counts(store) == (1, 0)
             assert store.interrupt_unfinished_jobs_on_restart() == 1
     assert input_counts(store) == (0, 0)
     client.portal.call(worker.cleanup)

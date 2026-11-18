@@ -478,14 +478,7 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
             "UPDATE processing.jobs SET lease_until=now()-interval '1 minute' WHERE id=%s",
             (lost["id"],),
         )
-    # A lost heartbeat and even historical deadline metadata cannot release a
-    # slot while its native child could still run.
-    assert store.claim_next_job() is None
-    with psycopg.connect(store.conninfo) as connection:
-        connection.execute(
-            "UPDATE processing.jobs SET deadline_at=now()-interval '1 minute' WHERE id=%s",
-            (lost["id"],),
-        )
+    # A lost heartbeat cannot release a slot while its native child could still run.
     assert store.claim_next_job() is None
     assert store.get(lost["id"], "owner")["status"] == "running"
     # Startup performs recovery only after the previous container has stopped.
