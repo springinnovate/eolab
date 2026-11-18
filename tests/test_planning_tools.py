@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -30,7 +31,7 @@ from eolab_app.planning.service import PlanningToolService
 from eolab_app.planning.store import PlanningToolStore
 from eolab_app.routes.planning_tools import create_planning_tools_router
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.vector.filters import CatalogVectorFilterRequest
+from eolab_app.vector.filters import CatalogVectorFilterRequest, validate_filter
 from eolab_app.vector.parcel_models import ParcelIdRequest, ParcelIdValidationResponse
 from test_outline_jobs import outline_case
 
@@ -182,14 +183,20 @@ class MemoryPlanningStore(PlanningToolStore):
 
 
 async def authorize_layer(request: CatalogVectorFilterRequest) -> CatalogSelection:
-    """Return an authoritative fixture source while preserving ordinary filter state.
+    """Check the live filter against the fixture layer's original columns.
 
     Args:
         request: Layer identity, live predicate and ordered calculations.
 
     Returns:
         Accepted original asset/layer descriptor.
+
+    Raises:
+        VectorConflictError: A filter rule cannot apply to the fixture layer.
     """
+    validate_filter(
+        request.filter, {"area": "float", "name": "str", "parcel_id": "str"}
+    )
     return CatalogSelection(
         **request.model_dump(by_alias=True), assetKey="data", layerName="parcels"
     )
@@ -217,11 +224,17 @@ async def validate_ids(request: ParcelIdRequest) -> ParcelIdValidationResponse:
     )
 
 
-def make_app(store: PlanningToolStore) -> FastAPI:
+def make_app(
+    store: PlanningToolStore,
+    validate_parcel_ids: Callable[
+        [ParcelIdRequest], Awaitable[ParcelIdValidationResponse]
+    ] = validate_ids,
+) -> FastAPI:
     """Compose the actual Planning service/router around an isolated store.
 
     Args:
         store: Memory or real PostgreSQL store.
+        validate_parcel_ids: Whole-layer validation to use when saving tools.
 
     Returns:
         FastAPI app using independent source-validation fixtures.
@@ -229,7 +242,7 @@ def make_app(store: PlanningToolStore) -> FastAPI:
     app = FastAPI()
     app.include_router(
         create_planning_tools_router(
-            PlanningToolService(store, authorize_layer, validate_ids)
+            PlanningToolService(store, authorize_layer, validate_parcel_ids)
         )
     )
     return app
@@ -294,9 +307,10 @@ def test_document_rejects_unapproved_layers_and_role_state(invalid: str) -> None
 
 
 def test_http_author_isolation_revisions_and_private_headers() -> None:
-    """Keep two browsers independent and reject stale writes through actual routes."""
+    """Save authorized edits at the expected revision and reuse validated parcel IDs."""
     store = MemoryPlanningStore()
-    app = make_app(store)
+    scan = AsyncMock(wraps=validate_ids)
+    app = make_app(store, scan)
     with (
         TestClient(app, base_url="https://testserver", headers=HEADERS) as author,
         TestClient(app, base_url="https://testserver", headers=HEADERS) as other,
@@ -325,6 +339,28 @@ def test_http_author_isolation_revisions_and_private_headers() -> None:
         assert changed.json()["revision"] == 2
         assert author.put(location, json=replacement).status_code == 409
         assert author.get(location).json() == changed.json()
+
+        replacement["expectedRevision"] = 2
+        replacement["layers"][1]["definition"]["filter"]["rules"][0]["value"] = 20
+        filtered = author.put(location, json=replacement)
+        assert filtered.status_code == 200, filtered.text
+        assert filtered.json()["layers"] == replacement["layers"]
+        invalid_filter = deepcopy(replacement)
+        invalid_filter["expectedRevision"] = 3
+        parcel_rules = invalid_filter["layers"][1]["definition"]["filter"]["rules"]
+        parcel_rules[0]["field"] = "missing_area"
+        rejected_filter = author.put(location, json=invalid_filter)
+        assert rejected_filter.status_code == 422
+        assert "missing_area" in rejected_filter.json()["detail"]
+        assert author.get(location).json() == filtered.json()
+        scan.assert_awaited_once()
+
+        scan.side_effect = VectorConflictError("Parcel IDs must be unique")
+        invalid = {**replacement, "expectedRevision": 3, "parcelIdField": "land_use"}
+        rejected = author.put(location, json=invalid)
+        assert rejected.status_code == 422
+        assert "unique" in rejected.json()["detail"]
+        assert author.get(location).json() == filtered.json()
 
 
 def test_header_origin_size_and_contract_errors_are_private() -> None:

@@ -1,6 +1,7 @@
 """Validate Planning role sources before persisting an author's tool definition."""
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -17,6 +18,10 @@ from eolab_app.planning.store import PlanningToolStore
 from eolab_app.vector.errors import VectorFeatureError, VectorUpstreamError
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.parcel_models import ParcelIdRequest, ParcelIdValidationResponse
+
+# Catalog collection, Item, Asset, native layer and original ID field.
+_CatalogParcelField = tuple[str, str, str, str, str]
+_MAX_VALIDATED_TOOL_REVISIONS = 256
 
 
 class PlanningToolService:
@@ -47,12 +52,24 @@ class PlanningToolService:
         self._authorize_layer = authorize_layer
         self._validate_parcel_ids = validate_parcel_ids
         self._read_drawing = read_drawing
+        self._validated_parcel_fields: OrderedDict[
+            tuple[UUID, int], _CatalogParcelField
+        ] = OrderedDict()
 
-    async def _validate_sources(self, document: PlanningToolDocument) -> None:
-        """Authorize both stored roles and validate the original parcel ID column.
+    async def _validate_sources(
+        self,
+        document: PlanningToolDocument,
+        previous_field: _CatalogParcelField | None = None,
+    ) -> _CatalogParcelField | None:
+        """Authorize every live role and check uniqueness for newly chosen Catalog IDs.
 
         Args:
             document: Structurally valid portable tool definition.
+            previous_field: Catalog field validated for the preceding tool revision
+                in this service instance, if still retained.
+
+        Returns:
+            The authorized Catalog parcel field, or None for a linked drawing.
 
         Raises:
             PlanningError: A source, filter, polygon schema or parcel ID is unavailable.
@@ -72,8 +89,17 @@ class PlanningToolService:
                     layer.to_selection_request()
                 )
             if document.parcelLayerId not in selections:
-                return
+                return None
             parcels = selections[document.parcelLayerId]
+            field = (
+                parcels.collection_id,
+                parcels.item_id,
+                parcels.assetKey,
+                parcels.layerName,
+                document.parcelIdField,
+            )
+            if field == previous_field:
+                return field
             validation = await self._validate_parcel_ids(
                 ParcelIdRequest(
                     collectionId=parcels.collection_id,
@@ -89,12 +115,28 @@ class PlanningToolService:
                     422,
                     "The parcel source changed during validation. Reload the layer and try again.",
                 )
+            return field
         except DrawingError as error:
             raise PlanningError(error.status, str(error)) from error
         except VectorUpstreamError as error:
             raise PlanningError(503, str(error)) from error
         except (VectorFeatureError, SelectionUnavailableError) as error:
             raise PlanningError(422, str(error)) from error
+
+    def _remember_parcel_field(
+        self, tool: PlanningTool, field: _CatalogParcelField | None
+    ) -> None:
+        """Retain a Catalog uniqueness check for the tool revision that actually saved.
+
+        Args:
+            tool: Tool returned by the successful database write.
+            field: Validated Catalog field, or None for a mutable drawing.
+        """
+        self._validated_parcel_fields.pop((tool.id, tool.revision - 1), None)
+        if field is not None:
+            self._validated_parcel_fields[tool.id, tool.revision] = field
+            if len(self._validated_parcel_fields) > _MAX_VALIDATED_TOOL_REVISIONS:
+                self._validated_parcel_fields.popitem(last=False)
 
     async def create_tool(
         self, owner: str, document: PlanningToolDocument
@@ -112,8 +154,10 @@ class PlanningToolService:
             PlanningError: Source validation or storage failed.
             asyncio.CancelledError: The request abandoned validation.
         """
-        await self._validate_sources(document)
-        return await asyncio.to_thread(self.store.create_tool, owner, document)
+        field = await self._validate_sources(document)
+        tool = await asyncio.to_thread(self.store.create_tool, owner, document)
+        self._remember_parcel_field(tool, field)
+        return tool
 
     async def update_tool(
         self, owner: str, identifier: UUID, request: UpdatePlanningTool
@@ -136,11 +180,16 @@ class PlanningToolService:
             self.store.require_revision, owner, identifier, request.expectedRevision
         )
         document = request.to_document()
-        await self._validate_sources(document)
-        return await asyncio.to_thread(
+        previous_field = self._validated_parcel_fields.get(
+            (identifier, request.expectedRevision)
+        )
+        field = await self._validate_sources(document, previous_field)
+        tool = await asyncio.to_thread(
             self.store.update_tool,
             owner,
             identifier,
             request.expectedRevision,
             document,
         )
+        self._remember_parcel_field(tool, field)
+        return tool
