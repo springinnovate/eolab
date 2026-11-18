@@ -52,6 +52,7 @@ import {
 } from "./catalog-result-presentation.js";
 import { createCatalogResultView } from "./catalog-result-view.js";
 import { EomapLayoutController } from "./eomap-layout-controller.js";
+import { bindPanelFadeSettings } from "./panel-fade-settings.js";
 import { MapInspectionController } from "./map-inspection-controller.js";
 import {
     applyCatalogSystemState,
@@ -2604,6 +2605,8 @@ async function startApplication() {
     }
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
+    bindPanelFadeSettings(document.querySelector("#app"),
+        new SavedMapViewLocalStorage(undefined, "eolab.panel-fading.v1"));
     if (!isSharedViewer) initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     layoutController = new EomapLayoutController({
