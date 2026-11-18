@@ -182,6 +182,8 @@ Read .env.example, docker-compose.yml, and docker-compose.local.yml. Give me the
 <details>
 <summary>Upgrade an existing site</summary>
 
+Saved maps and map links with the former separate polygon note switch must be recreated. Before upgrading, record the shared layer invitations and map settings you need. After upgrading, reopen those shared layers, choose the **Show label** setting, and save a new map or link. The original polygons and their notes belong to the shared layers. The protected `nhi-site-condition-mapper` map can keep its URL and the existing label display through the [operator migration](src/eolab_app/saved_maps/migrate.py).
+
 Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app` and `processing-worker` containers before starting replacements. Run one `processing-worker` container per site. Give separate deployments their own volume names.
 
 </details>

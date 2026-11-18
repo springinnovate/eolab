@@ -189,13 +189,12 @@ class MapAnnotationReference(MapDocumentPart):
 
 
 class MapAnnotationAppearance(MapDocumentPart):
-    """Viewer-local appearance; contributor colors remain owned by the live layer."""
+    """Define outlines, opacity and visibility of the whole contributor/title/note label."""
 
     outline: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
     weight: Annotated[float, Field(ge=0, le=10)]
     fillOpacity: Annotated[float, Field(ge=0, le=1)]
     labels: bool
-    notes: bool
 
 
 class MapAnnotationLayer(MapDocumentPart):

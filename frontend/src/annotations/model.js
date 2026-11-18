@@ -27,9 +27,8 @@ export const MAX_ANNOTATION_NOTE_LENGTH = 10000;
 export const DEFAULT_ANNOTATION_STYLE = Object.freeze({ color: "#1686b0", outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true });
 
 /**
- * Validate appearance, combining legacy name/note switches into one label switch.
- * Either old switch being on keeps the combined label visible; both off keeps it hidden.
- * @param {AnnotationStyle & {notes?:boolean}} style Fill, outline, width, fill opacity and text visibility.
+ * Validate a polygon layer's colors, outlines and combined label visibility.
+ * @param {AnnotationStyle} style Fill, outline, width, fill opacity and label visibility.
  * @return {AnnotationStyle} Independent validated appearance.
  * @throws {Error} If any appearance setting is invalid.
  */
@@ -37,8 +36,8 @@ export function validateAnnotationStyle(style) {
     if (!style || !/^#[\da-f]{6}$/i.test(style.color) || !/^#[\da-f]{6}$/i.test(style.outline) ||
         !Number.isFinite(style.weight) || style.weight < 0 || style.weight > 10 ||
         !Number.isFinite(style.fillOpacity) || style.fillOpacity < 0 || style.fillOpacity > 1 ||
-        typeof style.labels !== "boolean" || (style.notes !== undefined && typeof style.notes !== "boolean")) throw new Error("Layer style is invalid.");
-    return { color: style.color, outline: style.outline, weight: style.weight, fillOpacity: style.fillOpacity, labels: style.labels || style.notes === true };
+        typeof style.labels !== "boolean") throw new Error("Layer style is invalid.");
+    return { color: style.color, outline: style.outline, weight: style.weight, fillOpacity: style.fillOpacity, labels: style.labels };
 }
 
 /**

@@ -238,12 +238,12 @@ function validateAnnotationReference(candidate) {
     }
     const appearance = candidate.appearance;
     requirePlainObject(appearance, "Layer appearance");
-    requireExactKeys(appearance, ["outline", "weight", "fillOpacity", "labels", "notes"], "Layer appearance");
+    requireExactKeys(appearance, ["outline", "weight", "fillOpacity", "labels"], "Layer appearance");
     if (typeof candidate.visible !== "boolean" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 1 ||
         typeof appearance.outline !== "string" || !/^#[0-9a-f]{6}$/i.test(appearance.outline) ||
         !Number.isFinite(appearance.weight) || appearance.weight < 0 || appearance.weight > 10 ||
         !Number.isFinite(appearance.fillOpacity) || appearance.fillOpacity < 0 || appearance.fillOpacity > 1 ||
-        typeof appearance.labels !== "boolean" || typeof appearance.notes !== "boolean") {
+        typeof appearance.labels !== "boolean") {
         throw new SavedMapViewValidationError("Shared layer appearance is invalid.");
     }
     return Object.freeze(structuredClone(candidate));

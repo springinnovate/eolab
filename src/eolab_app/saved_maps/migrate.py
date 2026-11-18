@@ -1,8 +1,9 @@
-"""Preview or apply a one-map sourceRevision migration using PG connection settings.
+"""Preview or apply the saved-map upgrade for a single map using PG settings.
 
 Run with the new application image during a coordinated upgrade. Back up the
 database first and stop old app writers before applying. The default is preview;
 normal application startup and saved-map requests never invoke this command.
+Only nhi-site-condition-mapper can convert its retired shared polygon label switches.
 """
 
 import argparse

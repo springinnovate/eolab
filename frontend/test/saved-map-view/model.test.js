@@ -73,6 +73,13 @@ test("version two accepts only portable annotation references and version one st
     candidate.layers[0].sharedAnnotation[field] = "must not be exported";
     assert.throws(() => parseSavedMapView(JSON.stringify(candidate)), /unsupported fields/);
   }
+  for (const notes of [false, true]) {
+    const candidate = structuredClone(fixture);
+    candidate.schemaVersion = 5;
+    candidate.basemap = "none";
+    candidate.layers[0].appearance.notes = notes;
+    assert.throws(() => parseSavedMapView(JSON.stringify(candidate)), /unsupported fields/);
+  }
   fixture.layers.push(structuredClone(fixture.layers[0]));
   assert.throws(() => parseSavedMapView(JSON.stringify(fixture)), /repeat/);
 });
