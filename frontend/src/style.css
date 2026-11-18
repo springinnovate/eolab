@@ -2770,7 +2770,8 @@ div.chart-tooltip {
     left: var(--map-controls-left, 0px);
     right: var(--inspection-space);
   }
-  #map > #raster-first-sample-hint {
+  #map > #raster-first-sample-hint,
+  #map > .temporal-scrubber {
     left: calc((100% + var(--map-controls-left, 0px) - var(--inspection-space)) / 2);
     max-width: var(--map-controls-max-width);
   }
