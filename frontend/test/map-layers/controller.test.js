@@ -1215,7 +1215,7 @@ test("legend inclusion changes presentation without changing visibility or reque
 
 test("opacity updates preserve rows and send rendering, owner persistence and composed consumers the current value", async () => {
     const doc = new SummaryControlDocument(), view = new MapLayerStackView(doc);
-    const calls = [], plans = [], saved = [], ownerSaves = [];
+    const calls = [], plans = [], saved = [], ownerSaves = [], timelineLayers = [];
     let controller;
     const source = await readFile(new URL("../../src/main.js", import.meta.url), "utf8");
     const start = source.indexOf("onLayersChange:", source.indexOf("const mapLayerController = new MapLayerController"));
@@ -1223,7 +1223,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     const observer = new Function("mapLegend", "layerStyleEditor", "mapFeatureHover", "savedMapViewController",
         "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
         "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
-        "temporalDatasets", "planning", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
+        "temporalDatasets", "planning", "timeline", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
         { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
         { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
         () => calls.push(["catalog"]), { observeLayerOrder: () => calls.push(["annotations-order"]) },
@@ -1233,6 +1233,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
         { refresh: () => calls.push(["summary"]) }, { refreshMapLayers: () => calls.push(["models"]) },
         { setClickResult() {}, closeHistogram() { calls.push(["histogram-close"]); } }, () => [],
         { refreshMapLayers: () => calls.push(["planning"]) },
+        { setLayers: layers => timelineLayers.push(layers) },
     );
     const map = createMap();
     controller = new MapLayerController({ leafletMap: map, view, onLayersChange: observer,
@@ -1242,12 +1243,13 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     for (const id of ["bottom", "top"]) await controller.show(catalogItem(id), adapter);
     const key = getCatalogItemKey(catalogItem("top"));
     const rows = [...view.list.children];
-    calls.length = saved.length = plans.length = 0;
+    calls.length = saved.length = plans.length = timelineLayers.length = 0;
     for (const opacity of [0.4, 0, 0.75]) controller.setOpacity(key, opacity);
     assert.deepEqual([...view.list.children], rows, "controller uses the opacity-only view path");
     assert.deepEqual(calls.map(([name]) => name), Array(3).fill(["legend", "planning", "style", "hover"]).flat());
     assert.deepEqual(calls.filter(([name]) => name === "legend").map(([, layers]) => layers[0].opacity), [0.4, 0, 0.75]);
     assert.deepEqual(saved.map(layers => layers[0].opacity), [0.4, 0, 0.75], "autosave captures each latest value");
+    assert.deepEqual(timelineLayers.map(layers => layers[0].opacity), [0.4, 0, 0.75], "the timeline follows drawing visibility");
     assert.deepEqual(ownerSaves, [[key, 0.4], [key, 0], [key, 0.75]], "annotation-style persistence hooks still run");
     assert.deepEqual(plans.map(layers => layers.find(layer => layer.layerName === "eolab:top")?.opacity), [0.4, undefined, 0.75]);
     assert.equal(controller.getLeafletLayer(key).opacity, 0.75);

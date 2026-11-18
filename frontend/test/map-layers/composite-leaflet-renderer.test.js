@@ -28,7 +28,7 @@ function evented() {
  * @return {Object} Renderer, map, statuses, and tile factory.
  */
 function fixture(create = null) {
-    const statuses = [], grids = [], calls = [];
+    const statuses = [], displayed = [], grids = [], calls = [];
     const map = Object.assign(evented(), {
         attached: new Set(), zoom: 1,
         bounds: { min: { x: 0, y: 0 }, max: { x: 512, y: 256 } },
@@ -38,8 +38,10 @@ function fixture(create = null) {
     });
     const renderer = new CompositeLeafletRenderer({
         leaflet: { tileLayer: { wms(url, options) {
+            const container = {style: {}};
             const layer = Object.assign(evented(), {
                 url, options,
+                getContainer() { return container; },
                 getTileSize() { return { x: 256, y: 256 }; },
                 addTo() { map.attached.add(this); },
             });
@@ -51,10 +53,10 @@ function fixture(create = null) {
             calls.push({ layers, signal });
             return create ? create(layers, signal) : { wmsUrl: "/authorized-plan/wms" };
         } },
-        onStatus: status => statuses.push(status),
+        onStatus: (status, names) => { statuses.push(status); displayed.push(names); },
     });
     return {
-        renderer, map, grids, calls, statuses,
+        renderer, map, grids, calls, statuses, displayed,
         status: () => statuses.at(-1),
         tile(x = 0, z = 1) {
             const assignments = [];
@@ -80,6 +82,40 @@ test("delayed tiles remain loading; transparent PNG counts as successfully loade
     assert.equal(layer.options.maxZoom, 22, "composite tiles cover the full map zoom range");
     f.renderer.update([{ layerName: "first", opacity: 0.5 }]);
     assert.equal(f.calls.length, 1);
+    f.renderer.destroy();
+});
+
+test("a prepared map is hidden until its exact styled stack is selected and pausing releases unused tiles", async () => {
+    const f = fixture(), first = [{layerName: "January", opacity: 1}];
+    const second = [{layerName: "May", opacity: 0.4}], controller = new AbortController();
+    f.renderer.update(first);
+    await flush();
+    const t = f.tile();
+    f.grids[0].emit("tileload", {tile: t});
+    await flush();
+    assert.deepEqual(f.displayed.at(-1), ["January"]);
+    const preparing = f.renderer.prepare(second, controller.signal);
+    await Promise.resolve();
+    const staged = f.grids[1], secondTile = f.tile();
+    assert.equal(staged.getContainer().style.visibility, "hidden");
+    staged.emit("tileload", {tile: secondTile});
+    await preparing;
+    assert.deepEqual(f.displayed.at(-1), ["January"]);
+    f.renderer.update(second);
+    controller.abort();
+    await flush();
+    assert.equal(f.calls.length, 2, "the selected grid needs no second map plan");
+    assert.deepEqual([...f.map.attached], [staged]);
+    assert.equal(staged.getContainer().style.visibility, "");
+    assert.deepEqual(f.displayed.at(-1), ["May"]);
+
+    const unused = new AbortController();
+    await f.renderer.prepare([{layerName: "June", opacity: 1}], unused.signal);
+    f.renderer.update([{layerName: "June", opacity: 0.5}]);
+    await flush();
+    assert.notEqual(f.grids.at(-1), f.grids[2], "an old opacity cannot be drawn from the buffer");
+    unused.abort();
+    assert.equal(f.map.attached.has(f.grids[2]), false);
     f.renderer.destroy();
 });
 

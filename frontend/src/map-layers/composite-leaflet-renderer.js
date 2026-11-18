@@ -12,7 +12,7 @@ export class CompositeLeafletRenderer {
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Leaflet map.
      * @param {{create:(layers:Object[],signal:AbortSignal)=>Promise<Object>}} configuration.client Plan client.
-     * @param {(status:MapTileStatus)=>void} [configuration.onStatus] Current-view status observer.
+     * @param {(status:MapTileStatus,displayed:string[])=>void} [configuration.onStatus] Current viewport status and layer names whose tiles are fully displayed.
      */
     constructor({ leaflet, leafletMap, client, onStatus = () => {} }) {
         this.leaflet = leaflet;
@@ -24,6 +24,7 @@ export class CompositeLeafletRenderer {
         this.generation = 0;
         this.abortController = null;
         this.grid = null;
+        this.prepared = new Map();
         this.planFailed = false;
         this.destroyed = false;
     }
@@ -43,6 +44,14 @@ export class CompositeLeafletRenderer {
         this.signature = signature;
         this.layers = layers;
         if (layers.length === 0) return;
+        const staged = this.prepared.get(signature);
+        if (staged) {
+            staged.detach();
+            this.grid = staged.grid;
+            this.grid.layer.getContainer().style.visibility = "";
+            this.grid.recovery.refresh();
+            return;
+        }
         const generation = this.generation;
         const abortController = new AbortController();
         this.abortController = abortController;
@@ -51,7 +60,9 @@ export class CompositeLeafletRenderer {
             (plan) => {
                 if (generation !== this.generation || this.destroyed) return;
                 this.abortController = null;
-                this.#present(plan);
+                this.grid = this.#createGrid(plan);
+                this.grid.layer.addTo(this.leafletMap);
+                this.grid.recovery.refresh();
             },
             (error) => {
                 if (generation !== this.generation || this.destroyed) return;
@@ -61,6 +72,44 @@ export class CompositeLeafletRenderer {
                     ? error.message : "Map contents could not be prepared.");
             },
         );
+    }
+
+    /**
+     * Load an upcoming stack in a hidden ordinary tile grid. An exact matching update adopts it.
+     * The caller owns its lifetime, including release of unused grids on pause or a new selection.
+     * @param {Object[]} layers Complete ordered, styled render descriptors including opacity.
+     * @param {AbortSignal} signal Lifetime of this speculative view.
+     * @return {Promise<void>} Settles when visible tiles load, fail, or the caller drops the view.
+     * @throws {Error} If the ordinary map plan cannot be created.
+     */
+    async prepare(layers, signal) {
+        const signature = JSON.stringify(layers);
+        const plan = await this.client.create(layers, signal);
+        if (signal.aborted || this.destroyed) return;
+        this.prepared.get(signature)?.release();
+        await new Promise(resolve => {
+            const grid = this.#createGrid(plan, status => {
+                if (status.phase === "complete") resolve();
+                if (status.phase === "incomplete") release();
+            });
+            /** Stop tracking this prepared stack once shown or released. @return {void} */
+            const detach = () => {
+                signal.removeEventListener("abort", release);
+                this.prepared.delete(signature);
+                resolve();
+            };
+            /** Remove unused tiles and cancel their retries. @return {void} */
+            const release = () => {
+                detach();
+                grid.recovery.destroy();
+                this.leafletMap.removeLayer(grid.layer);
+            };
+            this.prepared.set(signature, {grid, detach, release});
+            signal.addEventListener("abort", release, {once: true});
+            grid.layer.addTo(this.leafletMap);
+            grid.layer.getContainer().style.visibility = "hidden";
+            grid.recovery.refresh();
+        });
     }
 
     /**
@@ -98,25 +147,29 @@ export class CompositeLeafletRenderer {
     /** Remove tiles and detach the map observer permanently. @return {void} */
     destroy() {
         if (this.destroyed) return;
+        for (const staged of this.prepared.values()) staged.release();
         this.clear();
         this.destroyed = true;
     }
 
     /**
-     * Attach the current plan through map zoom 22 and observe Leaflet tile events.
+     * Create the ordinary WMS tile grid for either a visible or an upcoming map.
      * @param {{wmsUrl:string}} plan Authorized WMS plan.
-     * @return {void}
+     * @param {(status:MapTileStatus)=>void} [onPrepared] Tile progress before attachment as the displayed stack.
+     * @return {{layer:Object,recovery:TileRecovery}} Grid and its visible-tile observer.
      */
-    #present(plan) {
+    #createGrid(plan, onPrepared) {
         const layer = this.leaflet.tileLayer.wms(plan.wmsUrl, {
             layers: "composite", styles: "", format: "image/png",
             transparent: true, version: "1.1.1", noWrap: true,
             maxZoom: 22,
         });
-        const recovery = new TileRecovery(this.leafletMap, layer, this.onStatus);
-        this.grid = { layer, recovery };
-        layer.addTo(this.leafletMap);
-        recovery.refresh();
+        const recovery = new TileRecovery(this.leafletMap, layer, status => {
+            if (this.grid?.layer === layer) {
+                this.onStatus(status, status.phase === "complete" ? this.layers.map(item => item.layerName) : []);
+            } else onPrepared?.(status);
+        });
+        return {layer, recovery};
     }
 
     /**
@@ -126,6 +179,6 @@ export class CompositeLeafletRenderer {
      * @return {void}
      */
     #emitStatus(phase, message) {
-        this.onStatus({ phase, total: 0, loaded: 0, failed: 0, message });
+        this.onStatus({ phase, total: 0, loaded: 0, failed: 0, message }, []);
     }
 }

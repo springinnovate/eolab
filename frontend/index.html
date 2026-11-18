@@ -20,6 +20,28 @@
         <p id="raster-first-sample-hint" role="status" hidden>
           <span class="sample-click-verb">Click</span><span class="sample-tap-verb">Tap</span> a spot on the raster to see a histogram for that area.
         </p>
+        <section id="temporal-scrubber" class="temporal-scrubber" data-map-panel aria-label="Map timeline" hidden>
+          <div class="timeline-settings">
+            <label>Layer <select data-timeline="layer"></select></label>
+            <label>Month <select data-timeline="month"></select></label>
+            <label>Step <select data-timeline="stride">
+              <option value="observation">Every observation</option>
+              <option value="day">First observation each day</option>
+            </select></label>
+          </div>
+          <div class="timeline-transport">
+            <button type="button" data-timeline="back" aria-label="Previous observation" title="Previous observation">◀</button>
+            <button type="button" data-timeline="play">Play</button>
+            <button type="button" data-timeline="forward" aria-label="Next observation" title="Next observation">▶</button>
+            <input type="range" data-timeline="time" aria-label="Observation time in UTC" list="timeline-ticks">
+            <datalist id="timeline-ticks"></datalist>
+          </div>
+          <div class="timeline-caption">
+            <output data-timeline="display" aria-live="off"></output>
+            <span data-timeline="gap"></span>
+          </div>
+          <p data-timeline="status" role="status" hidden></p>
+        </section>
       </div>
       <section
         class="control-panel"

@@ -144,6 +144,20 @@ function canRetryRasterStatistics(error) {
 }
 
 /**
+ * @typedef {Object} TemporalMapTimeline
+ * @property {string} name Dataset title or custom layer name.
+ * @property {string} variableLabel Human-readable name of the selected variable.
+ * @property {string} variable Catalog variable identifier.
+ * @property {string} time Selected UTC observation, including an unavailable saved selection.
+ * @property {string} month Browsed UTC month.
+ * @property {string[]} months Ordered populated months from the Catalog.
+ * @property {string[]} times Actual UTC observations in the browsed month.
+ * @property {boolean} loading Whether the date list or publication is pending.
+ * @property {string|null} error Selection or publication failure.
+ * @property {string|null} layerName Authorized publication for the selected time, once available.
+ */
+
+/**
  * @typedef {Object} RasterViewer
  * @property {() => void} clear Remove all retained raster interactions.
  * @property {() => void} reset Clear the raster and restore default styling.
@@ -178,6 +192,9 @@ function canRetryRasterStatistics(error) {
  * @property {(area:Object|null)=>void} setSamplingActivity Mark the matching committed box or rectangle
  * while a calculation uses it, without changing the selected geometry.
  * @property {(item:Object,selection?:Object,presentation?:Object)=>Promise<Object|null>} showTemporal Retain an independent temporal view.
+ * @property {(key:string,time:string)=>Promise<void>} selectTemporalTime Show an admitted observation in the named view.
+ * @property {(key:string,month:string,edge:"first"|"last"|"firstOfLastDay")=>Promise<void>} selectTemporalMonth Browse to an observation at either end of a populated month.
+ * @property {(key:string,time:string,signal:AbortSignal)=>Promise<{descriptor:Object,show:()=>void}|null>} prepareTemporalFrame Prepare the selected view's styled observation for playback without changing its source.
  * @property {()=>Promise<void>} refreshTemporalLayers Reload retained temporal availability after server refresh.
  * @property {(item:Object)=>string|null} temporalLayerKey Topmost retained view of this Catalog dataset.
  * @property {(item:Object)=>{key:string,label:string,count:number}|null} temporalRemovalTarget Topmost matching temporal view and matching count.
@@ -2292,7 +2309,7 @@ export function initializeRasterViewer(
          * Saves shared analysis state first when this record is active.
          *
          * @param {Object} record Retained raster entry and interaction state.
-         * @return {{datasetKind:"raster",sourceOrigin:"upload"|"runArtifact"|"catalog",canInfo:boolean,opacityLocked:boolean,effectiveOpacity:number,
+         * @return {{datasetKind:"raster",sourceOrigin:"upload"|"runArtifact"|"catalog",canInfo:boolean,timeline?:TemporalMapTimeline|null,opacityLocked:boolean,effectiveOpacity:number,
          * roleBadge:({label:"X"|"Y",description:string}|null),
          * legend:import("../map-layers/layer-stack-view.js").LayerLegend}}
          * Opacity in [0, 1], an optional paired-axis badge, and either a
@@ -2306,7 +2323,15 @@ export function initializeRasterViewer(
             const metadata = {source, bounds: record.state.item.bbox,
                 sourceOrigin: source.kind === "uploadedRaster" ? "upload" : source.kind === "runArtifact" ? "runArtifact" : "catalog",
                 canInfo: record.entry.item !== null || Boolean(record.state.temporal) || Boolean(record.state.lifecycle?.info),
-                ...(record.state.temporal ? {controls: record.state.temporal.controls.element} : {}),
+                ...(record.state.temporal ? {controls: record.state.temporal.controls.element,
+                    timeline: (!bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
+                        name: record.entry.customName ?? record.state.temporal.item.properties.title ?? record.state.temporal.item.id,
+                        variableLabel: record.state.temporal.item.properties["cube:variables"][source.variable]?.description ?? source.variable,
+                        variable: source.variable, time: source.time, months: record.state.temporal.months,
+                        month: record.state.temporal.month, times: record.state.temporal.times,
+                        loading: record.state.temporal.loading, error: record.state.temporal.error,
+                        layerName: record.publication?.layerName ?? null,
+                    } : null} : {}),
                 group: record.state.item.group,
                 capabilities: record.state.item.capabilities ?? {pixels: true, statistics: true, calculations: true, modelInput: true}};
             let presentationStyle = record.state.rasterStyle;
@@ -4654,9 +4679,10 @@ export function initializeRasterViewer(
      * @param {Object} record Retained temporal raster.
      * @param {{variable:string,time:string}} selection Replacement observation.
      * @param {boolean} available Whether numerical readers may use the selection.
+     * @param {Object|null} [publication] Already authorized publication for this exact observation.
      * @return {void}
      */
-    function selectTemporalObservation(record, selection, available) {
+    function selectTemporalObservation(record, selection, available, publication = null) {
         const session = record.state, temporal = session.temporal;
         cancelHistogramStyleUpdate(session.key);
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
@@ -4684,8 +4710,8 @@ export function initializeRasterViewer(
             selectedRasterBounds: oldAnalysis.selectedRasterBounds,
             selectedRasterCenter: oldAnalysis.selectedRasterCenter,
             selectedRasterWindowSizeKm: oldAnalysis.selectedRasterWindowSizeKm};
-        session.publishedRaster = {bbox: session.item.bbox};
-        record.publication = null;
+        session.publishedRaster = publication ?? {bbox: session.item.bbox};
+        record.publication = publication;
         record.error = null;
         mapLayers.replaceLayer(record.entry.key);
         visibleHistogramSignature = null;
@@ -4735,10 +4761,10 @@ export function initializeRasterViewer(
      * @param {Object} record Temporal view.
      * @param {{variable:string,time:string}} selection Requested observation.
      * @param {string|undefined} month Month to browse, or the first admitted month.
-     * @param {boolean} chooseFirst Choose the first returned time for an explicit variable/month change.
+     * @param {"requested"|"first"|"last"|"firstOfLastDay"} edge Which admitted observation to select after loading the month.
      * @return {Promise<void>} Completion after choices and any publication.
      */
-    async function loadTemporalChoices(record, selection, month, chooseFirst) {
+    async function loadTemporalChoices(record, selection, month, edge) {
         const temporal = record.state.temporal;
         temporal.request?.abort();
         const request = temporal.request = new AbortController();
@@ -4754,7 +4780,13 @@ export function initializeRasterViewer(
             temporal.months = choices.months;
             temporal.month = choices.month;
             temporal.times = choices.times;
-            const time = chooseFirst ? choices.times[0] : selection.time;
+            let time = selection.time;
+            if (edge === "first") time = choices.times[0];
+            if (edge === "last") time = choices.times.at(-1);
+            if (edge === "firstOfLastDay") {
+                const day = choices.times.at(-1)?.slice(0, 10);
+                time = choices.times.find(label => label.startsWith(day));
+            }
             if (!time || !choices.times.includes(time)) {
                 temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
                 return;
@@ -4775,16 +4807,69 @@ export function initializeRasterViewer(
     /** Select an actual timestamp from the row without reloading its month.
      * @param {Object} record Retained temporal view.
      * @param {string} time Timestamp supplied by its admitted-time control.
+     * @param {Object|null} [publication] Ready publication of the same time, when prepared for playback.
+     * @param {boolean} [keepRange] Keep the displayed color scale while moving along the timeline.
      * @return {Promise<void>} Completion after publication or a row-level failure.
      */
-    async function changeTemporalTime(record, time) {
+    async function changeTemporalTime(record, time, publication = null, keepRange = false) {
         const temporal = record.state.temporal;
+        if (keepRange) temporal.preserveRange = true;
         temporal.request?.abort();
         const request = temporal.request = new AbortController();
-        temporal.loading = true;
+        temporal.loading = publication === null;
         temporal.error = null;
-        selectTemporalObservation(record, {...temporal.selection, time}, true);
-        await publishTemporalObservation(record, request);
+        selectTemporalObservation(record, {...temporal.selection, time}, true, publication);
+        if (publication === null) await publishTemporalObservation(record, request);
+        else if (bivariateMode.contains(record.entry.key)) applyBivariatePresentation();
+    }
+
+    /** Show an available UTC timestamp through the same selection path as Map contents.
+     * @param {string} key Retained temporal view key.
+     * @param {string} time Timestamp in the view's current month.
+     * @return {Promise<void>} Completion after publication or cancellation.
+     */
+    async function selectTemporalTime(key, time) {
+        const record = mapLayers.getRecord(key);
+        if (record?.state.temporal?.times.includes(time)) await changeTemporalTime(record, time, null, true);
+    }
+
+    /** Jump to a populated month, choosing its first or last observation for continued playback.
+     * @param {string} key Retained temporal view key.
+     * @param {string} month Available UTC calendar month.
+     * @param {"first"|"last"|"firstOfLastDay"} edge Observation to choose.
+     * @return {Promise<void>} Completion after month lookup and display publication.
+     */
+    async function selectTemporalMonth(key, month, edge) {
+        const record = mapLayers.getRecord(key);
+        const temporal = record?.state.temporal;
+        if (temporal?.months.includes(month)) {
+            temporal.preserveRange = true;
+            await loadTemporalChoices(record, temporal.selection, month, edge);
+        }
+    }
+
+    /** Authorize a future observation and capture its style without changing the current layer or analysis.
+     * @param {string} key Retained temporal view key.
+     * @param {string} time Admitted UTC timestamp.
+     * @param {AbortSignal} signal Playback request lifetime.
+     * @return {Promise<{descriptor:Object,show:()=>void}|null>} Rendering descriptor and selection action, or null after a change of month, refresh or removal.
+     * @throws {Error} If publication fails.
+     */
+    async function prepareTemporalFrame(key, time, signal) {
+        const record = mapLayers.getRecord(key);
+        const temporal = record?.state.temporal;
+        const times = temporal?.times;
+        if (!times?.includes(time)) return null;
+        const selection = {variable: temporal.selection.variable, time};
+        const publication = await publishRaster(temporalRaster(temporal.item, selection, true), undefined, signal);
+        /** @return {boolean} Whether the original view and admitted month still own this frame. */
+        const current = () => !signal.aborted && mapLayers.getRecord(key) === record && temporal.times === times;
+        if (!current()) return null;
+        return {
+            descriptor: rasterMapLayerAdapter.renderDescriptor({...record, publication}),
+            /** Apply this publication through the ordinary observation selection. @return {void} */
+            show() { if (current()) void changeTemporalTime(record, time, publication, true); },
+        };
     }
 
     /** Retain one independently styled view of a temporal Catalog dataset.
@@ -4803,15 +4888,15 @@ export function initializeRasterViewer(
             preserveRange: Boolean(presentation.appearance)};
         let record;
         temporal.controls = temporalControlsFactory({
-            onVariableChange: variable => loadTemporalChoices(record, {...temporal.selection, variable}, undefined, true),
-            onMonthChange: month => loadTemporalChoices(record, temporal.selection, month, true),
+            onVariableChange: variable => loadTemporalChoices(record, {...temporal.selection, variable}, undefined, "first"),
+            onMonthChange: month => loadTemporalChoices(record, temporal.selection, month, "first"),
             onTimeChange: time => changeTemporalTime(record, time),
-            onRetry: () => loadTemporalChoices(record, temporal.selection, temporal.selection.time.slice(0, 7), false),
+            onRetry: () => loadTemporalChoices(record, temporal.selection, temporal.selection.time.slice(0, 7), "requested"),
         });
         const raster = temporalRaster(item, initial, false);
         record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`, canAddView: true,
             label: raster.label, sourceName: raster.label, isCustom: false, raster, temporal, ...presentation}, rasterMapLayerAdapter);
-        await loadTemporalChoices(record, initial, selection ? initial.time.slice(0, 7) : undefined, selection === null);
+        await loadTemporalChoices(record, initial, selection ? initial.time.slice(0, 7) : undefined, selection ? "requested" : "first");
         if (presentation.isCurrent?.() === false) {
             if (mapLayers.getRecord(record.entry.key) === record) mapLayers.removeKey(record.entry.key);
             return null;
@@ -4835,7 +4920,7 @@ export function initializeRasterViewer(
                 const item = await getTemporalItem({collection: temporal.item.collection, id: temporal.item.id});
                 if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
                 temporal.item = item;
-                await loadTemporalChoices(record, temporal.selection, temporal.selection.time.slice(0, 7), false);
+                await loadTemporalChoices(record, temporal.selection, temporal.selection.time.slice(0, 7), "requested");
             } catch (error) {
                 if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
                 temporal.loading = false;
@@ -5135,6 +5220,9 @@ export function initializeRasterViewer(
         show,
         showSource,
         showTemporal,
+        selectTemporalTime,
+        selectTemporalMonth,
+        prepareTemporalFrame,
         refreshTemporalLayers,
         temporalLayerKey,
         temporalRemovalTarget,

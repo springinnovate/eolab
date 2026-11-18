@@ -105,6 +105,46 @@ select:hover:not(:disabled) {
   font-family: inherit;
 }
 
+.temporal-scrubber {
+  position: absolute;
+  z-index: 801;
+  inset: auto auto 22px 50%;
+  transform: translateX(-50%);
+  width: min(40rem, calc(100% - 16px));
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: var(--elevation-control);
+  color: var(--text-1);
+  font: var(--font-size-ui)/1.35 var(--font-sans);
+}
+.temporal-scrubber[hidden], .temporal-scrubber [hidden] { display: none; }
+.timeline-settings, .timeline-transport, .timeline-caption { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.timeline-settings label { display: grid; min-width: 0; gap: 1px; font-size: 0.75rem; color: var(--text-2); }
+.timeline-settings label:first-child { flex: 1; }
+.timeline-settings label:last-child { flex: 0 1 11rem; }
+.temporal-scrubber select, .timeline-transport button {
+  min-width: 0; min-height: 28px; border: 1px solid var(--border-1); border-radius: var(--radius);
+  background: var(--surface-2); color: var(--text-1); font: inherit;
+}
+.timeline-transport button { padding: 2px 8px; cursor: pointer; }
+.timeline-transport [data-timeline="play"] { min-width: 4.1em; background: var(--brand); color: var(--surface-2); }
+.timeline-transport button:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.timeline-transport input { flex: 1; min-width: 0; margin: 0 3px; accent-color: var(--brand); }
+.temporal-scrubber :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.timeline-caption { justify-content: space-between; flex-wrap: wrap; column-gap: 8px; row-gap: 0; font-variant-numeric: tabular-nums; }
+.timeline-caption output { font-weight: 650; }
+.timeline-caption span, .temporal-scrubber p { margin: 0; color: var(--text-2); font-size: 0.75rem; }
+#map:has(> .temporal-scrubber:not([hidden])) .leaflet-bottom.leaflet-left { bottom: var(--timeline-height); }
+#map:has(> .temporal-scrubber:not([hidden])) .leaflet-bottom .eolab-basemap-control { margin-bottom: var(--timeline-height); }
+#map:has(> .temporal-scrubber:not([hidden])) > #raster-first-sample-hint { bottom: calc(var(--timeline-height) + 24px); }
+@media (pointer: coarse) {
+  .temporal-scrubber select, .timeline-transport button, .timeline-transport input { min-height: 44px; }
+}
+
 #raster-first-sample-hint {
   margin: 0;
   padding: 0 8px 8px;
