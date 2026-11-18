@@ -394,6 +394,38 @@ def test_only_one_concurrent_assignment_saves_at_a_revision(
     )
 
 
+def test_participant_can_create_and_save_while_another_scenario_save_is_open(
+    store: PlanningToolStore,
+) -> None:
+    """Commit a second participant's choice while the first save is uncommitted.
+
+    Args:
+        store: Empty real PostgreSQL Planning store.
+    """
+    tool, first = create_tool_and_scenario(store)
+    with store.transaction() as first_transaction:
+        # Keep the first save open while the other participant uses a new connection.
+        with patch.object(
+            store, "transaction", return_value=nullcontext(first_transaction)
+        ):
+            store.set_assignment(
+                "participant",
+                first.id,
+                assignment_request(first, "parcel-1", tool.interventions[0].id),
+            )
+        second = store.create_scenario(
+            "neighbor",
+            tool.id,
+            CreateScenario(name="Neighbor's plan", expectedToolRevision=tool.revision),
+        )
+        choice = assignment_request(second, "parcel-1", tool.interventions[1].id)
+        saved = store.set_assignment("neighbor", second.id, choice)
+        page = store.read_assignments("neighbor", second.id, saved.revision, 0, 1)
+        assert [(row.parcelId, row.interventionId) for row in page.assignments] == [
+            (choice.parcelId, choice.interventionId)
+        ]
+
+
 def test_first_scenario_serializes_with_meaning_changing_tool_update(
     store: PlanningToolStore,
 ) -> None:

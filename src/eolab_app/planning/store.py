@@ -36,7 +36,9 @@ class PlanningToolStore:
 
     Tools are readable through opaque links but writable only by their author.
     Scenarios and assignments are readable and writable only by their browser
-    owner. Tool locks precede scenario locks to serialize definition changes.
+    owner. Scenario writes share a lock on the tool definition and lock the
+    scenario they edit exclusively. Updating the definition requires an
+    exclusive tool lock.
     """
 
     def __init__(self, conninfo: str = "") -> None:
@@ -370,7 +372,7 @@ class PlanningToolStore:
         """
         with self.transaction() as cursor:
             cursor.execute(
-                "SELECT * FROM planning.tools WHERE id=%s FOR UPDATE", (tool_id,)
+                "SELECT * FROM planning.tools WHERE id=%s FOR SHARE", (tool_id,)
             )
             row = cursor.fetchone()
             if row is None:
@@ -496,7 +498,10 @@ class PlanningToolStore:
         expected_revision: int,
         expected_tool_revision: int,
     ) -> PlanningTool:
-        """Lock a tool before its owned scenario and recheck both write preconditions.
+        """Hold the tool definition stable and lock the owned scenario for editing.
+
+        Take the shared tool lock first, then recheck both revisions after
+        acquiring the scenario's exclusive lock.
 
         Args:
             cursor: Current short Planning transaction.
@@ -519,7 +524,7 @@ class PlanningToolStore:
         if reference is None:
             raise PlanningError(404, "Scenario not found.")
         cursor.execute(
-            "SELECT * FROM planning.tools WHERE id=%s FOR UPDATE",
+            "SELECT * FROM planning.tools WHERE id=%s FOR SHARE",
             (reference["tool_id"],),
         )
         tool = self._read_tool(cursor.fetchone())
