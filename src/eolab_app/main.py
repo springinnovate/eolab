@@ -164,6 +164,7 @@ from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.parcel_jobs import ParcelJobs
 from eolab_jobs.client import JobsClient
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
+from eolab_app.routes.spatial_filters import create_spatial_filter_router
 from eolab_app.vector.styling import VectorStyleService
 from eolab_app.vector.uploaded_sources import UploadedVectorSourceResolver
 from eolab_app.vector.artifact_sources import ArtifactVectorSourceResolver
@@ -276,6 +277,7 @@ def create_app(
         parcel_executor=ParcelJobs(vector_jobs),
         uploads=vector_uploads,
         artifact_files=lambda: source_files,
+        read_drawing=lambda owner, reference: read_polygon_area_input(processing_store.get_input, owner, reference),
     )
     processing_limits = load_processing_limits()
     processing_events = PostgresJobEvents()
@@ -410,13 +412,11 @@ def create_app(
             HTTPException: If ownership, expiry or file availability rejects access.
         """
         try:
-            upload_ids = {
-                identifier
-                for name in layer_names
-                if (identifier := published_vectors.get_upload_id(name)) is not None
-            }
+            vector_inputs = [published_vectors.private_inputs(name) for name in layer_names]
+            upload_ids = {identifier for inputs in vector_inputs for identifier in inputs.uploads}
+            drawings = {drawing for inputs in vector_inputs for drawing in inputs.drawings}
             has_raster_uploads = any(uploaded_raster_source(name) for name in layer_names)
-            private = bool(upload_ids) or has_raster_uploads
+            private = bool(upload_ids or drawings) or has_raster_uploads
             upload_owner = None
             if upload_ids or has_raster_uploads:
                 upload_owner = get_browser_owner_hash(
@@ -439,17 +439,19 @@ def create_app(
                     )
                     or private
                 )
-            if any(
-                published_vectors.get_artifact_reference(name) for name in layer_names
-            ):
+            if drawings or any(inputs.artifacts for inputs in vector_inputs):
                 owner = get_processing_session_owner_hash(
                     request, Response(), processing_session_ttl
                 )
+                for drawing in drawings:
+                    await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256)
                 private = (
                     await vector_publication.authorize_artifact_layers(layer_names, owner)
                     or private
                 )
             return private
+        except ProcessingError as error:
+            raise HTTPException(error.status, str(error), headers={"Cache-Control": "private, no-store"}) from error
         except (SourceFileError, VectorUploadError, UploadError) as error:
             raise HTTPException(
                 error.status, str(error), headers={"Cache-Control": "private, no-store"}
@@ -487,7 +489,7 @@ def create_app(
                     raster_publication.use_layers(layer_names)
                 )
                 if any(
-                    published_vectors.get_artifact_reference(name) for name in layer_names
+                    published_vectors.private_inputs(name).artifacts for name in layer_names
                 ):
                     owner = get_processing_session_owner_hash(
                         request, Response(), processing_session_ttl
@@ -827,6 +829,10 @@ def create_app(
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
+    application.include_router(create_spatial_filter_router(
+        vector_selection_reader, published_vectors,
+        lambda request, response: get_processing_session_owner_hash(request, response, processing_session_ttl),
+    ))
     application.include_router(
         create_vector_sampling_router(
             vector_selection_reader,
@@ -938,8 +944,7 @@ def create_app(
                 temporary_raster_source(name) is not None
                 or uploaded_raster_source(name) is not None
                 or is_temporal_raster_layer(name)
-                or published_vectors.get_upload_id(name) is not None
-                or published_vectors.get_artifact_reference(name) is not None
+                or bool(published_vectors.private_inputs(name).uploads or published_vectors.private_inputs(name).artifacts or published_vectors.private_inputs(name).drawings)
             ),
         )
     )

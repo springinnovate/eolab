@@ -142,6 +142,15 @@ export function validateVectorSelection(value) {
         typeof input.enabled !== "boolean" || !["all", "any"].includes(input.match) ||
         !Array.isArray(input.rules) || input.rules.length > 12) throw new TypeError("Invalid vector selection filter");
     const rules = input.rules.map(rule => {
+        if (rule?.operator === "intersects") {
+            if (Object.keys(rule).sort().join() !== "layerId,operator,source" ||
+                !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(rule.layerId)) throw new TypeError("Invalid polygon layer condition.");
+            let source;
+            if (rule.source?.kind === "drawing" && Object.keys(rule.source).sort().join() === "kind,polygonArea") {
+                source = Object.freeze({kind: "drawing", polygonArea: rule.source.polygonArea === null ? null : validatePolygonAreaReference(rule.source.polygonArea)});
+            } else source = validateVectorSelection(rule.source);
+            return Object.freeze({operator: "intersects", layerId: rule.layerId, source});
+        }
         if (!rule || Object.keys(rule).sort().join() !== "field,operator,value" ||
             typeof rule.field !== "string" || !rule.field || rule.field.length > 256 || /[\u0000-\u001f]/.test(rule.field) ||
             !["eq", "ne", "gt", "ge", "lt", "le", "contains", "missing", "present"].includes(rule.operator) ||

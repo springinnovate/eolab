@@ -7,6 +7,7 @@ import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
 import { getFeatureInfoViewport } from "./vector/feature-info-viewport.js";
 import { annotationSummaryPolygons } from "./annotations/summary-area.js";
+import { applySpatialFilter, SpatialFilterViews, viewFilter, waitingForPolygonLayer } from "./vector/spatial-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 /**
  * Browser entry point and application composition root for EOLab.
@@ -869,6 +870,7 @@ async function initializeCatalog(
     let vectorFeatureInspector = null;
     let mapFeatureHover = null;
     let vectorFilterControls = null;
+    let refreshSpatialFilters = null;
     let vectorFieldCalculator = null;
     let vectorSampling = null;
     let summarySampling = null;
@@ -1330,16 +1332,64 @@ async function initializeCatalog(
         });
         void uploadsDialog.refreshUsage();
     }
+    /** List every retained polygon view with an identity independent of its name and visibility.
+     * @return {Object[]} Current source, filter, committed polygons and known whole-layer count.
+     */
+    function spatialPolygonLayers() {
+        return getSamplingPolygonTargets().map(layer => {
+            const record = mapLayerController.getRecord(layer.key);
+            const id = record.entry.filterViewId ??= (layer.key.startsWith("local:annotation:")
+                ? layer.key.slice("local:annotation:".length) : crypto.randomUUID());
+            const count = record.adapter.describeFilter?.(record).count;
+            const total = layer.polygons?.length;
+            const description = count?.complete ? `${count.matched.toLocaleString()} of ${count.total.toLocaleString()} features`
+                : total !== undefined ? `${annotationSummaryPolygons(layer.polygons, layer.filter).length} of ${total} polygons` : "";
+            return {...layer, id, count: description};
+        });
+    }
+    const spatialViews = new SpatialFilterViews({layers: spatialPolygonLayers, drawingGeometry: annotationSummaryPolygons,
+        upload: polygons => processingApi.uploadPolygonArea(polygons), discard: id => processingApi.discardPolygonArea(id)});
+    const drawingFilterAttempts = new Map();
+    /** Apply field and spatial conditions to committed drawings without disturbing the editing draft.
+     * @param {string} key Drawing view to filter.
+     * @param {Object} candidate Rule builder state.
+     * @return {Promise<Object|null>} Applied rules, or null after replacement or removal.
+     * @throws {Error} If the polygon source cannot be read.
+     */
+    async function applyDrawingFilter(key, candidate) {
+        const attempt = Symbol();
+        drawingFilterAttempts.set(key, attempt);
+        const target = spatialPolygonLayers().find(view => view.key === key);
+        if (!target) return null;
+        const captured = await spatialViews.bind(key, candidate);
+        if (captured.enabled && captured.rules.some(rule => rule.operator === "intersects")) {
+            const original = await spatialViews.drawing(target, EMPTY_VECTOR_FILTER);
+            for (const rule of captured.rules.filter(rule => rule.operator === "intersects")) {
+                const positions = await applySpatialFilter("drawings", {target: original, source: rule.source});
+                rule.matchingIds = positions.map(index => target.polygons[index].id);
+            }
+        }
+        if (drawingFilterAttempts.get(key) !== attempt || !annotations.filterTarget(key)) return null;
+        annotations.filterTarget(key).apply(captured);
+        return captured;
+    }
     let modelFilterControls = null;
     /** @type {symbol} Distinguish explicit statistics-area edits from passive map-filter updates. */
     const statisticsAreaFilterIntent = Symbol("statistics-area-filter");
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
+        getPolygonLayers: key => spatialPolygonLayers().filter(layer => layer.key !== key),
+        drawPolygon: () => new Promise(resolve => annotations.drawPrivatePolygon(key =>
+            resolve(key ? spatialPolygonLayers().find(layer => layer.key === key)?.id ?? null : null))),
         onZoom: ([west, south, east, north]) => leafletMap.fitBounds(
             L.latLngBounds([[south, west], [north, east]]).pad(0.15), {padding: [24, 24], maxZoom: 14}),
         getTarget: (key) => {
             const annotation = annotations?.filterTarget(key);
-            if (annotation) return annotation;
+            if (annotation) return {...annotation, apply: candidate => {
+                const record = mapLayerController.getRecord(key);
+                if (record) delete record.entry.requestedSpatialFilter;
+                return applyDrawingFilter(key, candidate);
+            }};
             const record = mapLayerController.getRecord(key);
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
             return {
@@ -1347,6 +1397,7 @@ async function initializeCatalog(
                 fields: record.adapter.describeSource(record).fields,
                 source: record.adapter.describeSource(record).source,
                 ...record.adapter.describeFilter(record),
+                ...(record.entry.requestedSpatialFilter ? {filter: record.entry.requestedSpatialFilter} : {}),
                 /** Commit the map view's filter while retaining any captured statistics polygons.
                  * @param {Object} candidate Complete field conditions.
                  * @param {unknown} context Opaque caller context; statistics-area edits commit their own explicit intent.
@@ -1355,7 +1406,11 @@ async function initializeCatalog(
                  */
                 apply: async (candidate, context) => {
                     const release = context === statisticsAreaFilterIntent ? null : rasterSeries.preserveCapturedVectorArea();
-                    try { return await record.adapter.applyFilterState(record, candidate); }
+                    try {
+                        const filter = candidate.rules.some(rule => rule.operator === "intersects") ? await spatialViews.bind(key, candidate) : candidate;
+                        delete record.entry.requestedSpatialFilter;
+                        return await record.adapter.applyFilterState(record, filter);
+                    }
                     finally { release?.(); }
                 },
                 cancelPending: () => record.adapter.cancelPendingFilter(record),
@@ -1481,8 +1536,9 @@ async function initializeCatalog(
             const target = {key: request.key, label: request.source.label, source: request.source,
                 fields: request.source.fields ?? [], filter: request.filter};
             modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
+                getPolygonLayers: key => spatialPolygonLayers().filter(layer => layer.key !== key),
                 getTarget: key => key === target.key && request.isCurrent() ? target : null});
-            modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
+            modelFilterControls.open(request.key, {filter: request.filter, apply: async candidate => request.apply(await spatialViews.bind(request.key, candidate)), complete: request.complete, cancel: request.cancel,
                 applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
                 help: "Change the filter for this map item and every tool input using it. Create a copy to use a different filter.",
             });
@@ -1513,6 +1569,33 @@ async function initializeCatalog(
         if (models.state.selectedRun === id) models.requestRunDeletion();
     };
     leafletMap.on("moveend resize", () => models.refreshMapArea());
+    refreshSpatialFilters = () => {
+        const targets = mapLayerController.retainedRecords.flatMap(record => {
+            const key = record.entry.key;
+            const drawing = annotations?.filterTarget(key);
+            if (!drawing && record.adapter !== vectorMapLayerAdapter) return [];
+            const filter = record.entry.requestedSpatialFilter ?? drawing?.filter ?? record.adapter.exportFilterState(record);
+            return [{key, filter, update: async (requested, current) => {
+                try {
+                    const captured = await spatialViews.bind(key, requested);
+                    if (!current() || !mapLayerController.getRecord(key)) return;
+                    if (!drawing && JSON.stringify(record.adapter.exportFilterState(record)) === JSON.stringify(captured)) return;
+                    delete record.entry.spatialFilterError;
+                    if (drawing) await applyDrawingFilter(key, captured);
+                    else await record.adapter.applyFilterState(record, captured);
+                    if (current()) delete record.entry.requestedSpatialFilter;
+                } catch (error) {
+                    if (!current() || !mapLayerController.getRecord(key)) return;
+                    record.entry.requestedSpatialFilter = viewFilter(requested);
+                    record.entry.spatialFilterError = error.message;
+                    const empty = waitingForPolygonLayer(requested);
+                    if (drawing) drawing.apply(empty);
+                    else await record.adapter.applyFilterState(record, empty).catch(() => record.state?.layer?.remove());
+                }
+            }}];
+        });
+        spatialViews.follow(targets);
+    };
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(document, {
             polygonAreaHelp: "For calculations, choose this layer in Raster statistics. For clips, choose a sampling box or a Catalog or uploaded polygon layer.",
@@ -1947,7 +2030,7 @@ async function initializeCatalog(
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
             onRenameContributor: id => annotationSessions.editContributorName(id),
             requestEditing: id => annotationSessions.requestDrawing(id),
-            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
+            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); refreshSpatialFilters?.(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
             onFilter: key => vectorFilterControls.open(key),
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {

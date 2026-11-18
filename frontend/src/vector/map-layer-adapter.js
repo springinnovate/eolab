@@ -10,6 +10,7 @@ import {
     calculateVectorFields,
 } from "./api.js";
 import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterStatus } from "./filter.js";
+import { applySpatialFilter } from "./spatial-filter.js";
 import { createVectorWmsLayer, vectorMapBounds } from "./leaflet.js";
 import {
     defaultVectorNumericField,
@@ -551,6 +552,7 @@ export function createVectorMapLayerAdapter({
         describeFilter(record) {
             return {
                 filter: structuredClone(record.state.filter),
+                ...(record.state.filterCount ? {count: {...record.state.filterCount}} : {}),
                 status: vectorFilterStatus(record.state),
             };
         },
@@ -656,7 +658,9 @@ export function createVectorMapLayerAdapter({
             record.state.filterApplyAbort = controller;
             let result;
             try {
-                result = await filter(record.state.source, normalized, controller.signal);
+                result = normalized.enabled && normalized.rules.some(rule => rule.operator === "intersects")
+                    ? await applySpatialFilter("map", {layerName: record.publication.layerName, selection: {...this.describeSource(record).selection, filter: normalized}}, controller.signal)
+                    : await filter(record.state.source, normalized, controller.signal);
             } catch (error) {
                 if (record.state.disposed || generation !== record.state.filterGeneration) return null;
                 throw error;
@@ -666,7 +670,7 @@ export function createVectorMapLayerAdapter({
             if (record.state.disposed || generation !== record.state.filterGeneration) return null;
             record.publication = { ...record.publication, layerName: result.layerName };
             record.state.layer?.setParams({ layers: result.layerName });
-            const accepted = commitFilterState(record, normalized, null);
+            const accepted = commitFilterState(record, normalized, result.count ?? null);
             if (record.state.disposed || record.state.filter !== accepted) return null;
             if (record.state.filterCounting) refreshFilterCount(record);
             return accepted;
@@ -688,7 +692,9 @@ export function createVectorMapLayerAdapter({
             record.state.filterRenderAbort = controller;
             let result;
             try {
-                result = await filter(record.state.source, accepted, controller.signal);
+                result = accepted.enabled && accepted.rules.some(rule => rule.operator === "intersects")
+                    ? await applySpatialFilter("map", {layerName: record.publication.layerName, selection: {...this.describeSource(record).selection, filter: accepted}}, controller.signal)
+                    : await filter(record.state.source, accepted, controller.signal);
             } catch (error) {
                 if (record.state.disposed || record.state.filter !== accepted) return null;
                 throw error;
@@ -849,7 +855,7 @@ export function createVectorMapLayerAdapter({
                 canCalculateFields: true,
                 error: record.state.fieldRenderingError,
                 filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
-                filterStatus: vectorFilterStatus(record.state),
+                filterStatus: record.entry.spatialFilterError ?? vectorFilterStatus(record.state),
                 legend: vectorStyleLegend(record.state.style),
             };
         },

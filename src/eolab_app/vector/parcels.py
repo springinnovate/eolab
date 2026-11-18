@@ -389,7 +389,7 @@ def read_parcel_rows(
             (
                 id_field,
                 *fields,
-                *(rule.field for rule in resolved.selection.filter.rules),
+                *resolved.selection.filter.fields,
             )
         )
     )
@@ -407,7 +407,7 @@ def read_parcel_rows(
             GeometryValidationError: A selected feature has an invalid ID.
         """
         nonlocal matched
-        if not matches_filter(resolved.selection.filter, properties):
+        if not resolved.matches_feature(feature.id, properties):
             return
         parcel_id = _encode_parcel_id(properties[id_field], id_type)
         matched += 1

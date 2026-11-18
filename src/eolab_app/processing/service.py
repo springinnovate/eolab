@@ -40,6 +40,7 @@ from eolab_app.polygon_areas import (
     PolygonSummaryInput,
     read_polygon_area_input,
 )
+from eolab_app.feature_predicate import DrawingSelection, VectorFilter, referenced_layers
 from eolab_app.processing.ports import (
     JobArtifactStore,
     JobStore,
@@ -944,8 +945,9 @@ class ProcessingService:
         if not any(
             isinstance(source, UploadedRasterReference) for source in raster_sources
         ) and not any(
-            isinstance(selection, UploadedSelection)
+            isinstance(source, UploadedSelection)
             for selection in selections.values()
+            for source in (selection, *referenced_layers(selection.filter))
         ):
             prepared = await self._capture_vector_result_inputs(
                 owner, prepared, selections
@@ -987,7 +989,14 @@ class ProcessingService:
         """
         files = list(prepared.input_files)
         captured = {(file.run_id, file.artifact_id) for file in files}
-        for selection in selections.values():
+        drawings = {}
+        sources = [source for selection in selections.values() for source in (selection, *referenced_layers(selection.filter))]
+        for selection in sources:
+            if isinstance(selection, DrawingSelection) and selection.polygonArea:
+                drawing = selection.polygonArea
+                if drawing.id not in drawings:
+                    polygons = await read_polygon_area_input(self.jobs.get_input, owner, drawing)
+                    drawings[drawing.id] = polygons.model_dump(mode="json")
             if not isinstance(selection, ArtifactVectorSelection):
                 continue
             identity = (selection.jobId, selection.artifactId)
@@ -1008,6 +1017,8 @@ class ProcessingService:
                 )
             files.append(file)
             captured.add(identity)
+        if drawings:
+            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings}, work_key=None)
         return (
             replace(prepared, input_files=tuple(files), work_key=None)
             if len(files) != len(prepared.input_files)
@@ -1074,9 +1085,10 @@ class ProcessingService:
                     except ProcessingError as error:
                         prepared = error
                 uploaded = [
-                    selection
+                    source
                     for selection in inputs.values()
-                    if isinstance(selection, UploadedSelection)
+                    for source in (selection, *referenced_layers(selection.filter))
+                    if isinstance(source, UploadedSelection)
                 ]
                 raster_uploads = [
                     source
@@ -1113,7 +1125,7 @@ class ProcessingService:
                                 )
                         for selection in uploaded:
                             resolved = await self.areas.resolve_for_sampling(
-                                selection, upload_owner
+                                selection.model_copy(update={"filter": VectorFilter()}) if selection.filter.intersections else selection, upload_owner
                             )
                             upload_id = str(selection.uploadId)
                             if upload_id not in retained:

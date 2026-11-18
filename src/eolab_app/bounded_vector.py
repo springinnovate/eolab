@@ -269,10 +269,7 @@ def polygon_records(
                     tuple(
                         dict.fromkeys(
                             [
-                                *(
-                                    rule.field
-                                    for rule in resolved.selection.filter.rules
-                                ),
+                                *resolved.selection.filter.fields,
                                 *property_names,
                             ]
                         )
@@ -314,7 +311,7 @@ def polygon_records(
                             resolved.calculated_fields, properties
                         )
                     )
-                    if not matches_filter(resolved.selection.filter, properties):
+                    if not (resolved.matches_feature(feature.id, properties) if resolved.intersections else matches_filter(resolved.selection.filter, properties)):
                         continue
                     if candidates is not dataset:
                         feature = dataset.get(feature.id)
@@ -418,6 +415,7 @@ def count_selected_features(
     cancellation_requested: RasterReadCancellationCheck | None = None,
     *,
     limits: VectorReadLimits | None = VectorReadLimits(),
+    require_match: bool = True,
 ) -> dict[str, int]:
     """Count matching features without reading or validating polygon geometry.
 
@@ -432,6 +430,7 @@ def count_selected_features(
             or between records.
         limits: Time and actual candidate-feature budgets, or None for supervised
             work. A native count does not consume the candidate-feature budget.
+        require_match: Reject an empty analysis area. Map filters may return zero.
 
     Returns:
         Exact matched and whole-layer feature counts.
@@ -445,7 +444,7 @@ def count_selected_features(
     deadline = monotonic() + limits.seconds if limits else None
     fields = required_source_fields(
         resolved.calculated_fields,
-        tuple(dict.fromkeys(rule.field for rule in resolved.selection.filter.rules)),
+        resolved.selection.filter.fields,
     )
     matched = 0
     with _source_collection(
@@ -485,8 +484,8 @@ def count_selected_features(
                 properties.update(
                     evaluate_calculated_fields(resolved.calculated_fields, properties)
                 )
-                matched += int(matches_filter(resolved.selection.filter, properties))
-    if not matched:
+                matched += int(resolved.matches_feature(feature.id, properties) if resolved.intersections else matches_filter(resolved.selection.filter, properties))
+    if not matched and require_match:
         raise GeometryValidationError("No matching polygon features; change the filter")
     return {"matched": matched, "total": total}
 

@@ -3,7 +3,7 @@
 import math
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, Mapping
 
 import fiona
 from fiona.model import to_dict
@@ -64,6 +64,7 @@ def read_selected_extent(
                 limits,
                 deadline,
                 resolved.calculated_fields,
+                resolved.intersections,
             )
 
 
@@ -119,6 +120,7 @@ def _read_dataset_extent(
     limits: VectorReadLimits,
     deadline: float,
     calculated_fields: tuple[CompiledCalculatedField, ...] = (),
+    intersections: Mapping[str, frozenset[int]] | None = None,
 ) -> dict[str, Any]:
     """Measure filtered feature envelopes from an already authorized open dataset.
 
@@ -129,6 +131,7 @@ def _read_dataset_extent(
         limits: Ordinary interactive source-reading budgets.
         deadline: Monotonic deadline established before opening the original file.
         calculated_fields: Programs already validated against the original schema.
+        intersections: Native target feature IDs for each authorized spatial condition.
 
     Returns:
         Matching count and transformed bounds without source geometry.
@@ -163,7 +166,8 @@ def _read_dataset_extent(
             )
         properties = dict(feature.properties)
         properties.update(evaluate_calculated_fields(calculated_fields, properties))
-        if not matches_filter(candidate, properties):
+        membership = {key: int(feature.id) in ids for key, ids in intersections.items()} if intersections else None
+        if not matches_filter(candidate, properties, membership):
             continue
         matched += 1
         if feature.geometry is None:

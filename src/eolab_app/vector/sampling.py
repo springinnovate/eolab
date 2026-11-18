@@ -7,11 +7,13 @@ an unavailable outline does not prevent numeric analysis of the selection.
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Protocol
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
+from eolab_app.feature_predicate import DrawingSelection, PolygonAreaReference, VectorSourceOwners
+from eolab_app.polygon_areas import PolygonSummaryInput, SummaryPolygon
 
 from eolab_app.catalog_selection import (
     CatalogSelection,
@@ -40,6 +42,7 @@ from eolab_app.vector.parcel_models import (
 )
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
+from eolab_app.vector.spatial_read import SpatialReads
 from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.source_files import (
     LeasedSourceFiles,
@@ -56,6 +59,7 @@ class VectorSelectionExecutor(Protocol):
         selection: VectorSelection,
         upload_owner: str | None = None,
         read_lease: str | None = None,
+        spatial_read: str | None = None,
     ) -> dict[str, Any]:
         """Read original features through Jobs and wait for native exit on cancellation.
 
@@ -63,6 +67,7 @@ class VectorSelectionExecutor(Protocol):
             selection: Original source, predicate and view fields.
             upload_owner: Private upload owner or None.
             read_lease: Held result-file capability or None for Catalog/uploads.
+            spatial_read: Short-lived access to original IDs from authorized intersecting views.
 
         Returns:
             Operation-owned measurements or display geometry.
@@ -148,6 +153,7 @@ class VectorSamplingService:
         parcel_executor: VectorParcelExecutor | None = None,
         uploads: VectorUploadStore | None = None,
         artifact_files: Callable[[], LeasedSourceFiles] | None = None,
+        read_drawing: Callable[[str, PolygonAreaReference], Awaitable[PolygonSummaryInput]] | None = None,
     ) -> None:
         """Connect vector source resolution with feature-count, extent and outline jobs.
 
@@ -167,6 +173,7 @@ class VectorSamplingService:
             uploads: Original browser-owned GeoPackages and their admission metadata.
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
+            read_drawing: Load committed drawing polygons under their Processing session.
         """
         self.catalog = catalog
         self.resolver = resolver
@@ -176,6 +183,8 @@ class VectorSamplingService:
         self._extent_executor = extent_executor
         self._parcel_executor = parcel_executor
         self._artifact_files = artifact_files
+        self._read_drawing = read_drawing
+        self.spatial_reads = SpatialReads()
 
     async def validate_parcel_ids(
         self, request: ParcelIdRequest
@@ -274,7 +283,7 @@ class VectorSamplingService:
 
     @asynccontextmanager
     async def open_selection(
-        self, selection: VectorSelection, source_owner: str | None = None
+        self, selection: VectorSelection, source_owner: str | VectorSourceOwners | None = None
     ) -> AsyncIterator[ResolvedCatalogSelection]:
         """Retain a private result until the caller finishes reading its original features.
 
@@ -290,8 +299,66 @@ class VectorSamplingService:
             SourceFileError: If a result's ownership, expiry or lease changes.
             asyncio.CancelledError: After the native metadata read finishes.
         """
+        if selection.filter.intersections:
+            from eolab_app.feature_intersection import bind_intersections
+
+            async with AsyncExitStack() as stack:
+                async def read_layer(source: VectorSelection | DrawingSelection) -> ResolvedCatalogSelection | tuple[SummaryPolygon, ...]:
+                    """Open a polygon view for the duration of this read, including its own active conditions."""
+                    if isinstance(source, DrawingSelection):
+                        return await self.drawing_polygons(source, source_owner)
+                    return await stack.enter_async_context(self.open_selection(source, source_owner))
+
+                async with self._open_original(selection, source_owner) as original:
+                    yield await bind_intersections(original, read_layer)
+            return
+        async with self._open_original(selection, source_owner) as original:
+            yield original
+
+    async def drawing_polygons(
+        self, selection: DrawingSelection, owners: str | VectorSourceOwners | None,
+    ) -> tuple[SummaryPolygon, ...]:
+        """Read the coordinates saved for a filtered drawing.
+
+        Args:
+            selection: A private drawing reference or a view with zero matching polygons.
+            owners: The browser credentials established for the current read.
+
+        Returns:
+            Authorized WGS84 polygons in their original drawing order.
+
+        Raises:
+            SelectionUnavailableError: If the browser has no access to the drawing.
+        """
+        if selection.polygonArea is None:
+            return ()
+        owner = owners.processing if isinstance(owners, VectorSourceOwners) else None
+        if self._read_drawing is None or owner is None:
+            raise SelectionUnavailableError("This drawing is unavailable to this browser.")
+        return (await self._read_drawing(owner, selection.polygonArea)).polygons
+
+    @asynccontextmanager
+    async def _open_original(
+        self, selection: VectorSelection, owners: str | VectorSourceOwners | None,
+    ) -> AsyncIterator[ResolvedCatalogSelection]:
+        """Hold the original vector file while its feature predicate is prepared and read.
+
+        Args:
+            selection: Catalog, upload or run-result identity with its predicate.
+            owners: The appropriate owner for a single source, or both browser credentials.
+
+        Yields:
+            Its authorized original dataset before spatial membership is evaluated.
+
+        Raises:
+            SelectionUnavailableError: If identity, schema or private ownership is invalid.
+        """
+        source_owner = owners.for_source(selection) if isinstance(owners, VectorSourceOwners) else owners
         if not isinstance(selection, ArtifactVectorSelection):
-            yield await self.resolve_for_sampling(selection, source_owner)
+            resolved = await resolve_selection(self.catalog, self.resolver, selection, self._uploads, source_owner)
+            if resolved.selection != selection:
+                raise SelectionUnavailableError("The selected vector identity changed; select it again.")
+            yield resolved
             return
         from eolab_app.bounded_vector import resolve_vector_file_selection
 
@@ -332,6 +399,17 @@ class VectorSamplingService:
             SelectionUnavailableError: If private source access is not configured.
             SourceFileError: If result authorization or lease renewal fails.
         """
+        if selection.filter.intersections:
+            async with self.open_selection(selection, source_owner) as resolved, AsyncExitStack() as access:
+                owner = source_owner.for_source(selection) if isinstance(source_owner, VectorSourceOwners) else source_owner
+                lease = None
+                if isinstance(selection, ArtifactVectorSelection):
+                    source = await access.enter_async_context(self._artifact_files().open(owner, selection.jobId, selection.artifactId))
+                    lease = source.lease_id
+                with self.spatial_reads.hold(resolved.intersections) as token:
+                    return await executor(selection, owner if isinstance(selection, UploadedSelection) else None, lease, token)
+        if isinstance(source_owner, VectorSourceOwners):
+            source_owner = source_owner.for_source(selection)
         if not isinstance(selection, ArtifactVectorSelection):
             return await executor(selection, source_owner)
         if self._artifact_files is None or source_owner is None:
@@ -344,7 +422,7 @@ class VectorSamplingService:
             return await executor(selection, None, source.lease_id)
 
     async def resolve_for_sampling(
-        self, selection: VectorSelection, source_owner: str | None = None
+        self, selection: VectorSelection, source_owner: str | VectorSourceOwners | None = None
     ) -> ResolvedCatalogSelection:
         """Authorize a feature selection against its source identity and filter.
 
@@ -363,7 +441,7 @@ class VectorSamplingService:
             VectorUploadError: If the upload is unavailable to this browser.
         """
         try:
-            if isinstance(selection, ArtifactVectorSelection):
+            if isinstance(selection, ArtifactVectorSelection) or selection.filter.intersections or isinstance(source_owner, VectorSourceOwners):
                 async with self.open_selection(selection, source_owner) as resolved:
                     return resolved
             resolved = await resolve_selection(
@@ -438,7 +516,8 @@ class VectorSamplingService:
             await self.resolve_for_sampling(request, source_owner)
             if isinstance(request, ArtifactVectorSelection)
             else await resolve_selection(
-                self.catalog, self.resolver, request, self._uploads, source_owner
+                self.catalog, self.resolver, request, self._uploads,
+                source_owner.uploads if isinstance(source_owner, VectorSourceOwners) else source_owner,
             )
         )
         if self._selection_executor is None:
@@ -489,7 +568,8 @@ class VectorSamplingService:
             await self.resolve_for_sampling(request, source_owner)
             if isinstance(request, ArtifactVectorSelection)
             else await resolve_selection(
-                self.catalog, self.resolver, request, self._uploads, source_owner
+                self.catalog, self.resolver, request, self._uploads,
+                source_owner.uploads if isinstance(source_owner, VectorSourceOwners) else source_owner,
             )
         )
         if self._extent_executor is None:

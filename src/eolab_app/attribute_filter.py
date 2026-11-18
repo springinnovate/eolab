@@ -2,80 +2,18 @@
 
 from collections.abc import Mapping
 from datetime import date
-from math import isfinite
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StrictBool,
-    StrictFloat,
-    StrictInt,
-    StrictStr,
-    field_validator,
+from eolab_app.feature_predicate import (
+    MAX_FILTER_RULES as MAX_FILTER_RULES, IntersectsLayer, VectorFilter as VectorFilter,
+    VectorFilterRule as VectorFilterRule,
 )
 
-MAX_FILTER_RULES = 12
 _COMPARISONS = {"eq", "ne", "gt", "ge", "lt", "le"}
 
 
 class AttributeFilterError(ValueError):
     """A typed predicate is incompatible with authoritative source fields."""
-
-
-class VectorFilterRule(BaseModel):
-    """A field comparison with a fixed operator and a scalar value."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    field: StrictStr = Field(min_length=1, max_length=256)
-    operator: Literal[
-        "eq", "ne", "gt", "ge", "lt", "le", "contains", "missing", "present"
-    ]
-    value: StrictBool | StrictInt | StrictFloat | StrictStr | None = None
-
-    @field_validator("field", "value")
-    @classmethod
-    def bounded_literal(cls, value: Any) -> Any:
-        """Reject long or control-containing text and numbers unsafe for the browser.
-
-        Args:
-            value: Submitted property name or literal.
-
-        Returns:
-            Unchanged safe scalar.
-
-        Raises:
-            ValueError: If text exceeds 256 characters or contains control characters,
-                or a number is nonfinite or exceeds the browser's safe numeric range.
-        """
-        if isinstance(value, str) and (
-            len(value) > 256 or any(ord(c) < 32 for c in value)
-        ):
-            raise ValueError(
-                "Text must be at most 256 characters without control characters"
-            )
-        if type(value) in {int, float} and (
-            not isfinite(value) or abs(value) > 2**53 - 1
-        ):
-            raise ValueError(
-                "Numbers must be finite and within the browser's safe numeric range"
-            )
-        return value
-
-
-class VectorFilter(BaseModel):
-    """An enabled or disabled set of field comparisons combined with all or any."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    enabled: StrictBool = True
-    match: Literal["all", "any"] = "all"
-    rules: tuple[VectorFilterRule, ...] = Field(default=(), max_length=MAX_FILTER_RULES)
-
-    @property
-    def active(self) -> bool:
-        """Return whether this state restricts the layer."""
-        return self.enabled and bool(self.rules)
 
 
 def filter_field_kind(field_type: str) -> str | None:
@@ -120,6 +58,8 @@ def validate_filter(candidate: VectorFilter, fields: Mapping[str, str]) -> Vecto
         AttributeFilterError: If a field, operator, or literal is incompatible.
     """
     for rule in candidate.rules:
+        if isinstance(rule, IntersectsLayer):
+            continue
         if rule.field not in fields:
             raise AttributeFilterError(
                 f"Filter field {rule.field!r} is not in this layer"
@@ -150,21 +90,34 @@ def validate_filter(candidate: VectorFilter, fields: Mapping[str, str]) -> Vecto
     return candidate
 
 
-def matches_filter(candidate: VectorFilter, properties: Mapping[str, Any]) -> bool:
+def matches_filter(
+    candidate: VectorFilter, properties: Mapping[str, Any],
+    spatial_matches: Mapping[str, bool] | None = None,
+) -> bool:
     """Evaluate the same null-explicit predicate used by catalog consumers.
 
     Args:
         candidate: Catalog-validated filter.
         properties: Geometry-free properties from the exact source.
+        spatial_matches: Intersection result for this feature by polygon view ID.
 
     Returns:
         Whether this feature belongs to the selection.
+
+    Raises:
+        AttributeFilterError: If a spatial rule has no authorized result.
     """
     if not candidate.active:
         return True
-    matches = [
-        _matches_rule(rule, properties.get(rule.field)) for rule in candidate.rules
-    ]
+    matches = []
+    for rule in candidate.rules:
+        if isinstance(rule, IntersectsLayer):
+            key = str(rule.layerId)
+            if spatial_matches is None or key not in spatial_matches:
+                raise AttributeFilterError("The polygon layer is unavailable. Choose it again.")
+            matches.append(spatial_matches[key])
+        else:
+            matches.append(_matches_rule(rule, properties.get(rule.field)))
     return all(matches) if candidate.match == "all" else any(matches)
 
 
@@ -230,7 +183,8 @@ def ogr_predicate(
     clauses = []
     for rule in candidate.rules:
         if (
-            rule.field in calculated_names
+            isinstance(rule, IntersectsLayer)
+            or rule.field in calculated_names
             or rule.operator == "contains"
             or isinstance(rule.value, str)
         ):

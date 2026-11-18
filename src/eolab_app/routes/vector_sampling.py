@@ -27,6 +27,7 @@ from eolab_app.vector.parcel_models import (
     ParcelRowsResponse,
 )
 from eolab_app.source_files import SourceFileError
+from eolab_app.feature_predicate import DrawingSelection, UploadedSelection, VectorSourceOwners, referenced_layers
 
 
 def create_vector_sampling_router(
@@ -116,6 +117,15 @@ def create_vector_sampling_router(
         Raises:
             HTTPException: If private result access is unavailable or unauthorized.
         """
+        if payload.filter.intersections:
+            sources = (payload, *referenced_layers(payload.filter))
+            upload = get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads") if any(isinstance(source, UploadedVectorFilterRequest) for source in sources) else None
+            processing = None
+            if any(isinstance(source, (ArtifactVectorSelection, DrawingSelection)) for source in sources):
+                if read_artifact_owner is None:
+                    raise HTTPException(404, "This polygon layer is unavailable.")
+                processing = read_artifact_owner(request, response)
+            return VectorSourceOwners(upload, processing)
         if isinstance(payload, ArtifactVectorSelection):
             if read_artifact_owner is None:
                 raise HTTPException(404, "This vector result is unavailable.")
@@ -125,6 +135,24 @@ def create_vector_sampling_router(
                 request, response, mutation_header="X-EOLab-Uploads"
             )
         return None
+
+    @router.get("/spatial-read", include_in_schema=False)
+    async def spatial_read(request: Request) -> dict[str, frozenset[int]]:
+        """Give a running native worker access to its request's authorized feature IDs.
+
+        Args:
+            request: Internal request presenting a temporary bearer credential.
+
+        Returns:
+            Matched original feature IDs per polygon view.
+
+        Raises:
+            HTTPException: If the submitting read ended or the credential is unknown.
+        """
+        membership = service.spatial_reads.get(request.headers.get("Authorization", "").removeprefix("Bearer "))
+        if membership is None:
+            raise HTTPException(404, "The spatial read is unavailable.")
+        return dict(membership)
 
     @router.post("/areas")
     async def select_area(

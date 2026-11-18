@@ -5,7 +5,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from eolab_app.catalog_selection import ArtifactVectorSelection, UploadedSelection
+from eolab_app.catalog_selection import ArtifactVectorSelection, CatalogSelection, UploadedSelection
+from eolab_app.feature_predicate import DrawingSelection, referenced_layers
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.vector_uploads import VectorUploadError
@@ -80,11 +81,13 @@ def create_raster_analysis_router(
             HTTPException: If private source access or same-origin checks fail.
         """
         response.headers["Cache-Control"] = "private, no-store"
+        references = tuple(references) + tuple(layer for source in references if isinstance(source, (CatalogSelection, UploadedSelection, ArtifactVectorSelection))
+                                                for layer in referenced_layers(source.filter))
         context = {}
         if any(
             isinstance(
                 reference,
-                (RunArtifactReference, PolygonAreaReference, ArtifactVectorSelection),
+                (RunArtifactReference, PolygonAreaReference, ArtifactVectorSelection, DrawingSelection),
             )
             for reference in references
         ):

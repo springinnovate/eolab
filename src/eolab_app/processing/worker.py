@@ -158,7 +158,7 @@ class ProcessingWorker:
 
         if areas is not None:
             areas = RetainedVectorSelectionReader(
-                areas, self.uploads, row["input_uploads"], retained_file
+                areas, self.uploads, row["input_uploads"], retained_file, row.get("spatial_filter_drawings")
             )
 
         async def report_progress(progress: dict[str, Any]) -> None:
@@ -528,6 +528,9 @@ class ProcessingWorker:
         row = await asyncio.to_thread(self.jobs.claim_next_job)
         if row is None:
             return False
+        if "_spatialFilterDrawings" in row["spec"]:
+            spec = dict(row["spec"])
+            row = {**row, "spatial_filter_drawings": spec.pop("_spatialFilterDrawings"), "spec": spec}
         identifier, attempt = row["id"], row["attempt_id"]
         task = asyncio.create_task(self._execute(row))
         finished = False

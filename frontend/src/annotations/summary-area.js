@@ -10,7 +10,19 @@ export const ANNOTATION_FIELDS = Object.freeze([{ name: "name", type: "str" }, {
  * @throws {TypeError} If the filter cannot be represented by the vector rule contract.
  */
 export function annotationFilterRules(filter) {
-    return normalizeVectorFilter(filter, ANNOTATION_FIELDS);
+    const rules = filter.rules.map(rule => {
+        if (rule.operator !== "intersects") return rule;
+        const {matchingIds, ...condition} = rule;
+        return condition;
+    });
+    const validated = normalizeVectorFilter({...filter, rules}, ANNOTATION_FIELDS);
+    for (const [index, rule] of validated.rules.entries()) {
+        const ids = filter.rules[index].matchingIds;
+        if (rule.operator === "intersects" && Array.isArray(ids) && ids.every(id => typeof id === "string")) {
+            rule.matchingIds = [...ids];
+        }
+    }
+    return validated;
 }
 
 /** Match polygon attributes using the existing vector field/operator contract.
@@ -21,7 +33,8 @@ export function annotationFilterRules(filter) {
 export function filterAnnotationPolygons(polygons, filter) {
     if (!filter.enabled || !filter.rules.length) return polygons;
     return polygons.filter(polygon => {
-        const matches = filter.rules.map(({ field, operator, value }) => {
+        const matches = filter.rules.map(({ field, operator, value, matchingIds }) => {
+            if (operator === "intersects") return matchingIds?.includes(polygon.id) ?? false;
             const actual = polygon[field];
             if (operator === "missing") return actual == null;
             if (operator === "present") return actual != null;

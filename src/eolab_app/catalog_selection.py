@@ -1,80 +1,18 @@
 """Identify filtered vector features and authorize reads of their source files."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from contextlib import AbstractAsyncContextManager
-from typing import Literal, Protocol
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Mapping, Protocol
 
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
-from eolab_app.attribute_filter import VectorFilter
-from eolab_app.calculated_fields import CalculatedField, CompiledCalculatedField
-
-class CatalogSelection(CatalogVectorRequest):
-    """A catalog vector layer and attribute filter identifying features for analysis.
-
-    Asset and layer names are checked against the authoritative Catalog on every
-    resolution. Source files are immutable after admission. Ordered calculated_fields
-    travel with the view and filter; readers evaluate them from original attributes.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-    filter: VectorFilter
-    assetKey: str = Field(min_length=1, max_length=256)
-    layerName: str = Field(min_length=1, max_length=256)
-    calculated_fields: tuple[CalculatedField, ...] = Field(
-        default=(), alias="calculatedFields", exclude_if=lambda value: not value
-    )
-
-
-class UploadedVectorFilterRequest(BaseModel):
-    """Identify an upload, its view-owned calculated fields and feature predicate."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-    uploadId: UUID
-    filter: VectorFilter
-    calculated_fields: tuple[CalculatedField, ...] = Field(
-        default=(), alias="calculatedFields", exclude_if=lambda value: not value
-    )
-
-
-class UploadedSelection(UploadedVectorFilterRequest):
-    """Identify selected features in one browser-owned immutable GeoPackage.
-
-    The server checks ownership separately from this public descriptor. The layer
-    name must match the sole layer recorded when the upload was admitted.
-    """
-
-    layerName: str
-
-
-class ArtifactVectorSelection(BaseModel):
-    """Select original features from a private immutable Processing result.
-
-    Attributes:
-        kind: The literal string "runArtifact" identifies its source lifetime.
-        jobId: Opaque owning run ID, authorized by the Processing source boundary.
-        artifactId: Opaque published file ID within the run.
-        layerName: Original native GeoPackage layer, checked when the file opens.
-        filter: Accepted attribute predicate, including calculated attributes.
-        calculated_fields: Ordered view-owned definitions captured with the predicate.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-    kind: Literal["runArtifact"]
-    jobId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    artifactId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    layerName: str = Field(min_length=1, max_length=256)
-    filter: VectorFilter
-    calculated_fields: tuple[CalculatedField, ...] = Field(
-        default=(), alias="calculatedFields", exclude_if=lambda value: not value
-    )
-
-
-VectorSelection = CatalogSelection | UploadedSelection | ArtifactVectorSelection
-"""Path-free source identity and attribute filter for vector analysis."""
+from eolab_app.calculated_fields import CompiledCalculatedField
+from eolab_app.attribute_filter import matches_filter
+from eolab_app.feature_predicate import (
+    ArtifactVectorSelection as ArtifactVectorSelection, CatalogSelection as CatalogSelection,
+    UploadedSelection as UploadedSelection, UploadedVectorFilterRequest as UploadedVectorFilterRequest,
+    VectorSelection as VectorSelection, VectorSourceOwners,
+)
 
 
 class SelectionUnavailableError(ValueError):
@@ -100,6 +38,8 @@ class ResolvedCatalogSelection:
         driver: Allowed Fiona driver.
         where: Server-compiled conservative OGR predicate.
         calculated_fields: Programs validated against the original source schema.
+        intersections: Original target IDs that meet each authorized spatial condition.
+            Bound only for this read, never serialized with the source descriptor.
     """
 
     selection: VectorSelection
@@ -107,13 +47,30 @@ class ResolvedCatalogSelection:
     driver: str
     where: str | None
     calculated_fields: tuple[CompiledCalculatedField, ...] = ()
+    intersections: dict[str, frozenset[int]] = field(default_factory=dict)
+
+    def matches_feature(self, feature_id: str, properties: Mapping[str, Any]) -> bool:
+        """Test one original feature against the captured field and spatial conditions.
+
+        Args:
+            feature_id: Native Fiona feature ID from this dataset.
+            properties: Original attributes with this view's calculated fields.
+
+        Returns:
+            Whether the entire original feature belongs to this selection.
+
+        Raises:
+            AttributeFilterError: If a required polygon source has not been bound.
+        """
+        matches = {key: int(feature_id) in ids for key, ids in self.intersections.items()}
+        return matches_filter(self.selection.filter, properties, matches)
 
 
 class CatalogSelectionReader(Protocol):
     """Authorize vector selections without rendering dependencies."""
 
     def open_selection(
-        self, selection: VectorSelection, source_owner: str | None = None
+        self, selection: VectorSelection, source_owner: str | VectorSourceOwners | None = None
     ) -> AbstractAsyncContextManager[ResolvedCatalogSelection]:
         """Keep an authorized selection's original file available for its complete read.
 
@@ -146,7 +103,7 @@ class CatalogSelectionReader(Protocol):
         ...
 
     async def resolve_for_sampling(
-        self, selection: VectorSelection, source_owner: str | None = None
+        self, selection: VectorSelection, source_owner: str | VectorSourceOwners | None = None
     ) -> ResolvedCatalogSelection:
         """Find and authorize the source file and filter for a vector selection.
 

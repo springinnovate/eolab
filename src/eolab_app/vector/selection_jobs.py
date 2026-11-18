@@ -26,6 +26,7 @@ class SelectionJobs:
         selection: VectorSelection,
         upload_owner: str | None = None,
         read_lease: str | None = None,
+        spatial_read: str | None = None,
     ) -> dict[str, Any]:
         """Queue an attribute read and return exact feature counts when it finishes.
 
@@ -33,6 +34,7 @@ class SelectionJobs:
             selection: Catalog or upload source and filter, with no private path.
             upload_owner: Server-derived browser identity, kept inside Jobs.
             read_lease: Result-file capability held until native work stops.
+            spatial_read: Temporary credential for authorized intersection matches.
 
         Returns:
             Matching and total feature counts.
@@ -49,6 +51,7 @@ class SelectionJobs:
                         "selection": selection.model_dump(mode="json", by_alias=True),
                         "uploadOwner": upload_owner,
                         **({"readLease": read_lease} if read_lease is not None else {}),
+                        **({"spatialRead": spatial_read} if spatial_read is not None else {}),
                     },
                     "priority": 0,
                     "executionTimeoutSeconds": 15,
@@ -56,7 +59,7 @@ class SelectionJobs:
                 },
                 timeout_seconds=60,
                 delete_on_completion=True,
-                require_terminal_cleanup=read_lease is not None,
+                require_terminal_cleanup=read_lease is not None or spatial_read is not None,
             )
             measured = SelectionMeasurementResult.model_validate(result.value)
         except JobFailed as error:
