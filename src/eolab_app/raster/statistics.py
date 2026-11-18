@@ -8,6 +8,7 @@ import numpy
 from numpy.typing import NDArray
 from pydantic import PrivateAttr
 import rasterio
+from rasterio.enums import Resampling
 from rasterio.warp import transform
 from rasterio.windows import Window, transform as window_transform
 
@@ -323,7 +324,7 @@ def selected_raster_area_for_polygon_input(
 
 # A denser window than the histogram grid retains detail in sparse rasters.
 BOX_PREVIEW_MAX_OVERVIEW_DIMENSION = 2048
-BOX_PREVIEW_ALGORITHM = "box-statistics-native-or-nearest-v1"
+BOX_PREVIEW_ALGORITHM = "box-statistics-native-or-nearest-v2"
 
 
 def _summarize_box_pixels(
@@ -377,8 +378,9 @@ def read_sampling_box_preview(
 ) -> RasterBoxPreview:
     """Calculate all requested box statistics from one native or overview window.
 
-    A nearest-neighbor pyramid samples one original value per regularly spaced
-    cell. Zeros participate and NoData and nonfinite representatives are omitted.
+    A nearest-neighbor overview samples one original value per regularly spaced
+    cell. The finest suitable nearest-neighbor level supplies the sample.
+    Zeros participate and NoData and nonfinite representatives are omitted.
     Means of averaged cells with unknown valid counts, or of mode/min/max
     overviews, cannot estimate these statistics on the same basis.
 
@@ -411,13 +413,12 @@ def read_sampling_box_preview(
         if native is not None:
             sample = read_exact_source_window(dataset, native, cancellation_requested)
         else:
-            method = dataset.tags(ns="IMAGE_STRUCTURE").get("OVERVIEW_RESAMPLING")
-            if method is None:
-                method = dataset.tags(ns="rio_overview").get("resampling", "")
-            sample = None if method.lower() != "nearest" else read_bounded_overview(
+            sample = read_bounded_overview(
                 dataset, window, 1, 1, cancellation_requested,
                 maximum_dimension=BOX_PREVIEW_MAX_OVERVIEW_DIMENSION,
-                prefer_finest=True, maximum_decoded_bytes=EXACT_SOURCE_MAX_DECODED_BYTES,
+                prefer_finest=True,
+                required_resampling=Resampling.nearest,
+                maximum_decoded_bytes=EXACT_SOURCE_MAX_DECODED_BYTES,
             )
             if sample is None:
                 return _summarize_box_pixels(numpy.empty(0, dtype=numpy.float64), statistics, "unavailable", unit)
