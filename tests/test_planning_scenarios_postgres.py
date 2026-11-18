@@ -2,7 +2,9 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from threading import Barrier
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -209,6 +211,51 @@ def test_assignment_pages_preserve_typed_long_ids_and_changes(
         )
     assert invalid_choice.value.status == 422
     assert store.get_scenario("participant", scenario.id) == cleared
+
+
+def test_saving_one_parcel_reads_only_matching_assignments(
+    store: PlanningToolStore,
+) -> None:
+    """Change an existing parcel and add a distinct one without scanning the scenario.
+
+    Args:
+        store: Empty real PostgreSQL Planning store.
+    """
+    tool, scenario = create_tool_and_scenario(store)
+    with store.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO planning.scenario_assignments "
+            "(scenario_id, parcel_id_type, parcel_id_value, intervention_id) "
+            "SELECT %s, 'string', 'parcel-' || n, %s FROM generate_series(100845, 104940) AS n",
+            (scenario.id, tool.interventions[0].id),
+        )
+        cursor.execute("ANALYZE planning.scenario_assignments")
+
+    # One transaction lets PostgreSQL count just the rows read by these two saves.
+    with (
+        store.transaction() as cursor,
+        patch.object(store, "transaction", return_value=nullcontext(cursor)),
+    ):
+        # These different text IDs have the same PostgreSQL hashtext value.
+        for parcel in ("parcel-100845", "parcel-135297"):
+            scenario = store.set_assignment(
+                "participant",
+                scenario.id,
+                assignment_request(scenario, parcel, tool.interventions[1].id),
+            )
+        cursor.execute(
+            "SELECT seq_tup_read + idx_tup_fetch AS rows_read "
+            "FROM pg_stat_xact_user_tables WHERE relid='planning.scenario_assignments'::regclass"
+        )
+        rows_read = cursor.fetchone()["rows_read"]
+        assert 0 < rows_read <= 4
+
+    last_page = store.read_assignments(
+        "participant", scenario.id, scenario.revision, 4096, 1
+    )
+    assert [choice.parcelId.value for choice in last_page.assignments] == [
+        "parcel-135297"
+    ]
 
 
 @pytest.mark.parametrize("change", ["source", "id_field", "remove", "rename"])
