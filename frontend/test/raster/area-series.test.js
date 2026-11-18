@@ -85,6 +85,23 @@ function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
     return {api,calculationRequests,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,advance,finish,open,close};
 }
 
+/** Check the completed-raster count in the same status element as the open panel.
+ * @param {Object} h Area-series harness with the latest controller presentation.
+ * @return {(completed:number)=>void} Draw the current state and check the displayed count.
+ */
+function assertRasterProgress(h) {
+    const document = new FakeRasterControlDocument();
+    document.defaultView.ResizeObserver = class { observe() {} };
+    document.createElement("label").append(document.querySelector("#raster-series-order"));
+    const view = new RasterSeriesView(document);
+    view.bind(h.view.actions);
+    return completed => {
+        view.draw(h.view.state);
+        assert.equal(view.status.hidden, false);
+        assert.ok(view.status.textContent.startsWith(`${completed} of 2 rasters complete.`), view.status.textContent);
+    };
+}
+
 /** Bind production stack entry points to the real controller/execution boundary.
  * @param {Object} h Raster stack harness.
  * @param {Object|null} [area=null] Area already published through composition.
@@ -420,6 +437,54 @@ test("a waiting Sum plot shows raster stack progress until its first result arri
         plots.renderPlots(h.view.state);
         assert.equal(h.view.state.busy, false);
         assert.equal(sum.chart.querySelectorAll(".series-chart-point").length, 2);
+    } finally { h.close(); }
+});
+
+test("native results wait for each sampling-box preview before its raster counts as complete", async () => {
+    const previews = new Map();
+    const h = fixture({readBoxPreview(source) {
+        const reply = deferred();
+        previews.set(source.key, reply);
+        return reply.promise;
+    }});
+    const assertProgress = assertRasterProgress(h);
+    try {
+        h.controller.addFormula("min");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+        await h.open();
+        await h.finish(); await h.finish();
+        assert.deepEqual(h.view.state.rows.map(row => row.state), ["waiting", "value", "waiting", "value"]);
+        assertProgress(0);
+        previews.get("2").resolve({method: "exact", values: [{value: null, unit: "m"}]}); await flush();
+        assert.equal(h.view.state.rows[2].state, "no_valid_data");
+        assertProgress(1);
+        previews.get("1").resolve({method: "estimated", values: [{value: 0, unit: "m"}]}); await flush();
+        assert.equal(h.view.state.rows[0].value, 0);
+        assertProgress(2);
+    } finally { h.close(); }
+});
+
+test("a finished preview stays partial through native recovery and cancellation", async () => {
+    const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 0, unit: "m"}]})});
+    const assertProgress = assertRasterProgress(h);
+    const submit = h.api.submitCalculation;
+    let lost = true;
+    h.api.submitCalculation = async input => {
+        const job = await submit(input);
+        if (lost) { lost = false; throw Error("Connection lost"); }
+        return job;
+    };
+    try {
+        h.controller.addFormula("max");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+        await h.open(); await h.finish("ready", false, "2");
+        assert.equal(h.area.needsRecovery, true);
+        assertProgress(1);
+        await h.area.retryInterruptedCalculations();
+        assertProgress(1);
+        h.view.actions.onCancel(); await h.finish("cancelled");
+        assertProgress(1);
+        assert.equal(h.view.state.rows[0].value, 0);
     } finally { h.close(); }
 });
 
@@ -1449,6 +1514,7 @@ test("sampling-box statistics use one read per raster, cancel together and run e
         reads.push({source, box, statistics, signal, reply});
         return reply.promise;
     }});
+    const assertProgress = assertRasterProgress(h);
     const selection = longitude => ({kind: "samplingBox", samplingBox: {center: {longitude, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("stdev");
     h.controller.addFormula("percent");
@@ -1464,7 +1530,9 @@ test("sampling-box statistics use one read per raster, cancel together and run e
     reads[2].reply.resolve({method: "estimated", values}); await flush();
     assert.equal(h.view.state.rows[0].statisticLabel, "Estimated mean");
     assert.equal(h.view.state.rows[0].value, 0);
+    assertProgress(1);
     reads[3].reply.resolve({method: "exact", values: [{value: 18, unit: "USD"}, ...values.slice(1)]}); await flush();
+    assertProgress(2);
     const names = ["mean", "standard deviation", "percent above 10", "percent above -2.5"];
     assert.deepEqual(h.view.state.rows.map(row => row.statisticLabel), ["Estimated", "Exact"].flatMap(method => names.map(name => method + " " + name)));
     assert.ok(h.view.state.area.canCalculateExactStatistics);
@@ -1522,20 +1590,26 @@ test("duplicate views share a raster preview while maximum runs exactly and retr
         reads.push(statistics);
         return {method: "estimated", values: [{value: 7, unit: "m"}]};
     }});
+    const assertProgress = assertRasterProgress(h);
     h.controller.updateAvailableRasters([source("1"), {...source("1"), key: "copy", label: "Second view"}]);
     h.controller.addFormula("max");
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     await h.open();
     assert.deepEqual(reads, [["mean"]]);
+    assertProgress(0);
     assert.deepEqual(h.view.state.rows.map(row => row.state), ["value", "waiting", "value", "waiting"]);
     for (const [, intent] of h.requests.filter(([kind]) => kind === "submit")) {
         assert.deepEqual(intent.calculations, [{label: "stat-2", expression: "max(a)"}]);
     }
     await h.finish("failed");
+    assertProgress(1);
     await h.finish();
+    assertProgress(2);
     h.view.actions.onRetry(); await flush();
+    assertProgress(1);
     assert.equal(reads.length, 1);
     await h.finish();
+    assertProgress(2);
     assert.deepEqual(h.view.state.rows.map(row => [row.state, row.method]), [
         ["value", "estimated"], ["value", null], ["value", "estimated"], ["value", null],
     ]);

@@ -748,6 +748,7 @@ export class RasterSeriesController {
         });
         const statistics = this.formulas.map(formula => ({ ...formula, ...this.statisticDisplay.get(formula.id), rows: rowsFor(area.results, formula) }));
         const rows = sources.flatMap((source, index) => statistics.map(statistic => statistic.rows[index]));
+        const completedRasters = sources.filter((_, index) => statistics.every(statistic => statistic.rows[index].state !== "waiting")).length;
         const showingPrevious = !!(area.busy && !rows.some(row => row.state === "value") && area.previousResults);
         for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
@@ -760,7 +761,7 @@ export class RasterSeriesController {
             sources: this.sourceChoices(),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType, direction: this.direction,
-            message: area.results.size + " of " + sources.length + " rasters complete. " + area.message +
+            message: completedRasters + " of " + sources.length + " rasters complete. " + area.message +
                 (this.hasPendingInputs ? " Results use the previous inputs." : "") +
                 (this.pendingVectorAreaMessage ? " " + this.pendingVectorAreaMessage : ""),
             canDownload: area.results.size > 0 && !area.busy,
