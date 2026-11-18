@@ -74,6 +74,7 @@ export class SpatialFilterViews {
             if (!layer) throw new Error("The polygon layer is unavailable. Choose another layer.");
             const current = await this.bind(layer.key, layer.filter, path, views);
             const source = layer.selection ? {...layer.selection, filter: current} : await this.drawing(layer, layer.filter);
+            if (!layer.selection && current.enabled && current.rules.some(condition => condition.operator === "intersects")) source.filter = current;
             rules.push({operator: "intersects", layerId: layer.id, source});
         }
         return {...filter, rules};

@@ -137,7 +137,20 @@ export function validateVectorSelection(value) {
         typeof value.itemId !== "string" || value.itemId.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(value.itemId) ||
         typeof value.assetKey !== "string" || !value.assetKey || value.assetKey.length > 256 || value.layerName.length > 256)
         throw new TypeError("Invalid vector selection identity");
-    const input = value.filter;
+    const filter = validateSelectionFilter(value.filter);
+    const identity = artifact ? {kind: "runArtifact", jobId: value.jobId, artifactId: value.artifactId, layerName: value.layerName}
+        : uploaded ? {uploadId: value.uploadId, layerName: value.layerName}
+            : {collectionId: value.collectionId, itemId: value.itemId, assetKey: value.assetKey, layerName: value.layerName};
+    return Object.freeze({...identity, filter,
+        ...(Object.hasOwn(value, "calculatedFields") ? {calculatedFields: validateCalculatedFields(value.calculatedFields)} : {})});
+}
+
+/** Validate a captured filter, including the original layers used by a filtered drawing.
+ * @param {Object} input Filter received with a selected vector or drawing.
+ * @return {Readonly<Object>} Immutable field and spatial conditions.
+ * @throws {TypeError} If a condition or referenced source is invalid.
+ */
+function validateSelectionFilter(input) {
     if (!input || Object.keys(input).sort().join() !== "enabled,match,rules" ||
         typeof input.enabled !== "boolean" || !["all", "any"].includes(input.match) ||
         !Array.isArray(input.rules) || input.rules.length > 12) throw new TypeError("Invalid vector selection filter");
@@ -146,8 +159,9 @@ export function validateVectorSelection(value) {
             if (Object.keys(rule).sort().join() !== "layerId,operator,source" ||
                 !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(rule.layerId)) throw new TypeError("Invalid polygon layer condition.");
             let source;
-            if (rule.source?.kind === "drawing" && Object.keys(rule.source).sort().join() === "kind,polygonArea") {
-                source = Object.freeze({kind: "drawing", polygonArea: rule.source.polygonArea === null ? null : validatePolygonAreaReference(rule.source.polygonArea)});
+            if (rule.source?.kind === "drawing" && ["kind,polygonArea", "filter,kind,polygonArea"].includes(Object.keys(rule.source).sort().join())) {
+                source = Object.freeze({kind: "drawing", polygonArea: rule.source.polygonArea === null ? null : validatePolygonAreaReference(rule.source.polygonArea),
+                    ...(Object.hasOwn(rule.source, "filter") ? {filter: validateSelectionFilter(rule.source.filter)} : {})});
             } else source = validateVectorSelection(rule.source);
             return Object.freeze({operator: "intersects", layerId: rule.layerId, source});
         }
@@ -159,12 +173,7 @@ export function validateVectorSelection(value) {
               typeof rule.value === "string" && rule.value.length <= 256 && !/[\u0000-\u001f]/.test(rule.value))) throw new TypeError("Invalid vector selection rule");
         return Object.freeze({ field: rule.field, operator: rule.operator, value: rule.value });
     });
-    const filter = Object.freeze({ enabled: input.enabled, match: input.match, rules: Object.freeze(rules) });
-    const identity = artifact ? {kind: "runArtifact", jobId: value.jobId, artifactId: value.artifactId, layerName: value.layerName}
-        : uploaded ? {uploadId: value.uploadId, layerName: value.layerName}
-            : {collectionId: value.collectionId, itemId: value.itemId, assetKey: value.assetKey, layerName: value.layerName};
-    return Object.freeze({...identity, filter,
-        ...(Object.hasOwn(value, "calculatedFields") ? {calculatedFields: validateCalculatedFields(value.calculatedFields)} : {})});
+    return Object.freeze({enabled: input.enabled, match: input.match, rules: Object.freeze(rules)});
 }
 
 /** Compare the source, layer, definitions and filter of original-source vector selections.

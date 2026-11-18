@@ -96,10 +96,9 @@ def create_spatial_filter_router(
 
         async def apply() -> list[int]:
             """Compare the committed target drawing against the selected original polygons."""
-            target = await reader.drawing_polygons(body.target, credentials)
             async with AsyncExitStack() as stack:
-                source = (await reader.drawing_polygons(body.source, credentials) if isinstance(body.source, DrawingSelection)
-                          else await stack.enter_async_context(reader.open_selection(body.source, credentials)))
+                target = await stack.enter_async_context(reader.open_polygon_view(body.target, credentials))
+                source = await stack.enter_async_context(reader.open_polygon_view(body.source, credentials))
                 return list(await reader.compare_layers(target, source))
         try:
             return await run_until_http_disconnect(request, apply())

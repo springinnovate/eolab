@@ -164,6 +164,14 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         assert registry.private_inputs(result.json()["layerName"]).uploads == {UUID(identifier)}
         assert owner.get("/api/vector-sampling/spatial-comparison", headers={"Authorization": f"Bearer {completed[-1]}"}).status_code == 404
         assert other.post(url, json=request, headers=HEADERS).status_code == 404
+        nested = {"operator": "intersects", "layerId": str(UUID(int=3)), "source": {
+            "kind": "drawing", "polygonArea": None, "filter": {"rules": [condition]}}}
+        drawn = {**request, "selection": {**target, "filter": {"rules": [nested]}}}
+        drawn_view = owner.post(url, json=drawn, headers=HEADERS)
+        assert drawn_view.status_code == 200, drawn_view.text
+        assert drawn_view.json()["count"]["matched"] == 0
+        assert registry.private_inputs(drawn_view.json()["layerName"]).uploads == {UUID(identifier)}
+        assert other.post(url, json=drawn, headers=HEADERS).status_code == 404
         source["filter"]["rules"][0]["value"] = 9
         empty = owner.post(url, json=request, headers=HEADERS)
         assert empty.status_code == 200, empty.text

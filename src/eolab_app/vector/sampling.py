@@ -326,9 +326,7 @@ class VectorSamplingService:
             async with AsyncExitStack() as stack:
                 async def read_layer(source: VectorSelection | DrawingSelection) -> ResolvedCatalogSelection | tuple[SummaryPolygon, ...]:
                     """Open a polygon view for the duration of this read, including its own active conditions."""
-                    if isinstance(source, DrawingSelection):
-                        return await self.drawing_polygons(source, source_owner)
-                    return await stack.enter_async_context(self.open_selection(source, source_owner))
+                    return await stack.enter_async_context(self.open_polygon_view(source, source_owner))
 
                 async with self._open_original(selection, source_owner) as original:
                     yield await bind_intersections(original, read_layer, compare=self.compare_layers)
@@ -336,27 +334,37 @@ class VectorSamplingService:
         async with self._open_original(selection, source_owner) as original:
             yield original
 
-    async def drawing_polygons(
-        self, selection: DrawingSelection, owners: str | VectorSourceOwners | None,
-    ) -> tuple[SummaryPolygon, ...]:
-        """Read the coordinates saved for a filtered drawing.
+    @asynccontextmanager
+    async def open_polygon_view(
+        self, selection: VectorSelection | DrawingSelection, owners: str | VectorSourceOwners | None,
+    ) -> AsyncIterator[ResolvedCatalogSelection | tuple[SummaryPolygon, ...]]:
+        """Keep a polygon view and every source of its selected features authorized during a read.
 
         Args:
-            selection: A private drawing reference or a view with zero matching polygons.
+            selection: Filtered original vector, committed drawings, or an empty drawing view.
             owners: The browser credentials established for the current read.
 
-        Returns:
-            Authorized WGS84 polygons in their original drawing order.
+        Yields:
+            The authorized original file, or WGS84 drawings in their original order.
 
         Raises:
             SelectionUnavailableError: If the browser has no access to the drawing.
         """
-        if selection.polygonArea is None:
-            return ()
-        owner = owners.processing if isinstance(owners, VectorSourceOwners) else None
-        if self._read_drawing is None or owner is None:
-            raise SelectionUnavailableError("This drawing is unavailable to this browser.")
-        return (await self._read_drawing(owner, selection.polygonArea)).polygons
+        if not isinstance(selection, DrawingSelection):
+            async with self.open_selection(selection, owners) as original:
+                yield original
+            return
+        async with AsyncExitStack() as access:
+            if selection.filter is not None:
+                for rule in selection.filter.intersections:
+                    await access.enter_async_context(self.open_polygon_view(rule.source, owners))
+            if selection.polygonArea is None:
+                yield ()
+            else:
+                owner = owners.processing if isinstance(owners, VectorSourceOwners) else None
+                if self._read_drawing is None or owner is None:
+                    raise SelectionUnavailableError("This drawing is unavailable to this browser.")
+                yield (await self._read_drawing(owner, selection.polygonArea)).polygons
 
     async def compare_layers(
         self, target: IntersectionLayer, polygons: IntersectionLayer,
@@ -373,6 +381,8 @@ class VectorSamplingService:
         Raises:
             VectorConflictError: If the native comparison is unavailable or exceeds the interactive read limits.
         """
+        if target == () or polygons == ():
+            return ()
         if self._comparison_executor is None:
             raise VectorConflictError("The polygon intersection reader is unavailable.")
         for layer in (target, polygons):

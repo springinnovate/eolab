@@ -22,11 +22,12 @@ class PolygonAreaReference(BaseModel):
 
 
 class DrawingSelection(BaseModel):
-    """A committed drawing view. An empty filtered view has no polygon area."""
+    """The selected device-drawn polygons and any source filter needed to read them."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["drawing"]
     polygonArea: PolygonAreaReference | None
+    filter: "VectorFilter | None" = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class VectorFilterRule(BaseModel):
@@ -229,6 +230,6 @@ def referenced_layers(predicate: VectorFilter) -> tuple[VectorSelection | Drawin
     for rule in predicate.rules:
         if isinstance(rule, IntersectsLayer):
             layers.append(rule.source)
-            if not isinstance(rule.source, DrawingSelection):
+            if rule.source.filter is not None:
                 layers.extend(referenced_layers(rule.source.filter))
     return tuple(layers)
