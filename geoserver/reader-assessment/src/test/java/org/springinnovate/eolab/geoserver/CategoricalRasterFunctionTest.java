@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.awt.image.BandedSampleModel;
 import java.awt.image.DataBuffer;
@@ -53,7 +52,6 @@ import org.geotools.util.factory.Hints;
 import org.geotools.xml.styling.SLDParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Regression coverage through the SLD SPI, native classifier, and raster read override. */
@@ -120,48 +118,6 @@ class CategoricalRasterFunctionTest {
         assertSame(original, output.getSources().get(0));
         assertEquals(41, original.getRenderedImage().getData().getSampleDouble(13, 0, 0));
         output.dispose(true);
-    }
-
-    /** Compare source samples, adjacent doubles, masked values and the ordinary native gradient pixel for pixel. */
-    @ParameterizedTest
-    @ValueSource(doubles = {-9999.5, 0, 0.5, 1, 2, -32768})
-    void exactOverrideChangesOnlyMatchingValidCells(double target) {
-        var ff = CommonFactoryFinder.getFilterFactory();
-        var sf = CommonFactoryFinder.getStyleFactory();
-        var colorMap = sf.createColorMap();
-        String[] stops = {"0:#104080:0.4", "1:#e0c070:1", "2:#681030:0.8"};
-        for (String stop : stops) {
-            String[] parts = stop.split(":");
-            var entry = sf.createColorMapEntry();
-            entry.setQuantity(ff.literal(Double.parseDouble(parts[0])));
-            entry.setColor(ff.literal(parts[1]));
-            entry.setOpacity(ff.literal(Double.parseDouble(parts[2])));
-            colorMap.addColorMapEntry(entry);
-        }
-        var symbolizer = sf.createRasterSymbolizer();
-        symbolizer.setColorMap(colorMap);
-        double[] values = {-32768, -9999.5, -1, -0d, 0, Math.nextUp(0d), 0.49,
-                Math.nextDown(.5), .5, Math.nextUp(.5), .8, 1, 1.5, 2, 20};
-        var original = source(DataBuffer.TYPE_DOUBLE, -32768d, values);
-        var helper = new RasterSymbolizerHelper(original, new Hints());
-        helper.visit(symbolizer);
-        var ordinary = helper.execute();
-        for (double alpha : new double[]{0, 0.5, 1}) {
-            var transform = ff.function("eolabRasterValueOverride", ff.literal(stops[0]), ff.literal(stops[1]),
-                    ff.literal(stops[2]), ff.literal(target + ":#e57149:" + alpha));
-            var output = (GridCoverage2D) transform.evaluate(original);
-            for (int x = 0; x < values.length; x++) {
-                int expected = values[x] == -32768 ? 0 : values[x] == target
-                        ? (int) Math.round(255 * alpha) << 24 | 0xe57149
-                        : argb(ordinary.getRenderedImage(), x);
-                int actual = argb(output.getRenderedImage(), x);
-                assertEquals(expected >>> 24, actual >>> 24, "alpha at " + values[x]);
-                if ((expected >>> 24) != 0) assertEquals(expected, actual, "color at " + values[x]);
-            }
-            output.dispose(false);
-        }
-        ordinary.dispose(false);
-        original.dispose(true);
     }
 
     /** A declared finite source NoData overrides even an explicitly colored category. */
@@ -287,32 +243,18 @@ class CategoricalRasterFunctionTest {
         }
     }
 
-    /**
-     * Render a real GeoTIFF through the request-local source selection and final symbolizer.
-     * @param override use a continuous ramp with a half-opaque exact value and whole-layer opacity
-     * @param size output grid edge, either native resolution or a zoomed-out view
-     * @throws Exception if the fixture cannot be opened or styled
-     */
-    @ParameterizedTest
-    @CsvSource({"false,16", "true,16", "true,256"})
-    void rendersThroughNativeTransformationReadPipeline(boolean override, int size) throws Exception {
+    /** The real renderer supplies geometry and invokes the overview override before classification. */
+    @Test
+    void rendersThroughNativeTransformationReadPipeline() throws Exception {
         var location = getClass().getResource("/categorical-averaged-overview.tif");
         assertNotNull(location);
         var reader = new GeoTiffReader(new File(location.toURI()));
         var content = new MapContent();
-        var canvas = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        var canvas = new java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB);
         var graphics = canvas.createGraphics();
         try {
             var featureStyle = fixture();
-            if (override) {
-                var ff = CommonFactoryFinder.getFilterFactory();
-                featureStyle.setTransformation(ff.function("eolabRasterValueOverride",
-                        ff.literal("0:#101010:1"), ff.literal("1:#0000ff:1"), ff.literal("2:#00ff00:1"),
-                        ff.literal("0:#ff0000:0.5")));
-                ((RasterSymbolizer) featureStyle.rules().get(0).symbolizers().get(0)).setOpacity(ff.literal(0.5));
-            } else {
-                featureStyle.setTransformation(function("0:#ff0000:1;2:#00ff00:1", "#808080", "1"));
-            }
+            featureStyle.setTransformation(function("0:#ff0000:1;2:#00ff00:1", "#808080", "1"));
             var style = CommonFactoryFinder.getStyleFactory().createStyle();
             style.featureTypeStyles().add(featureStyle);
             content.addLayer(new GridReaderLayer(reader, style));
@@ -320,19 +262,13 @@ class CategoricalRasterFunctionTest {
             renderer.setMapContent(content);
             renderer.setJava2DHints(new java.awt.RenderingHints(
                     org.eclipse.imagen.ImageN.KEY_INTERPOLATION, new InterpolationNearest()));
-            renderer.paint(graphics, new java.awt.Rectangle(0, 0, size, size),
+            renderer.paint(graphics, new java.awt.Rectangle(0, 0, 16, 16),
                     new ReferencedEnvelope(reader.getOriginalEnvelope()));
-            for (int y = 0; y < size; y++) {
-                for (int x = 0; x < size; x++) {
+            for (int y = 0; y < 16; y++) {
+                for (int x = 0; x < 16; x++) {
                     int color = canvas.getRGB(x, y);
-                    if (override && size == 256) {
-                        assertEquals((x + y) % 2 == 0 ? 0x40ff0000 : 0x8000ff00, color);
-                    } else {
-                        int red = override ? 0x40ff0000 : 0xffff0000;
-                        int green = override ? 0x8000ff00 : 0xff00ff00;
-                        assertTrue(color == red || color == green,
-                                "Unexpected rendered color at " + x + "," + y + ": " + Integer.toHexString(color));
-                    }
+                    org.junit.jupiter.api.Assertions.assertTrue(color == 0xffff0000 || color == 0xff00ff00,
+                            "Unexpected rendered color at " + x + "," + y + ": " + Integer.toHexString(color));
                 }
             }
         } finally {

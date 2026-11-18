@@ -54,13 +54,12 @@ class _TestAuthorization:
         return 0
 
     def composite_interpolation(
-        self, style_definition: Mapping[str, object] | None, style_environment: str | None = None
+        self, style_definition: Mapping[str, object] | None
     ) -> str | None:
         """Return no override for this generic style fixture.
 
         Args:
             style_definition: Unused validated fixture appearance.
-            style_environment: Unused alternate style environment.
 
         Returns:
             None to preserve service defaults.

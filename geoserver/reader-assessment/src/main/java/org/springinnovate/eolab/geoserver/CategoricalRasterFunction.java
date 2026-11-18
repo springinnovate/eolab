@@ -1,17 +1,38 @@
 package org.springinnovate.eolab.geoserver;
 
 import static org.geotools.filter.capability.FunctionNameImpl.parameter;
+
 import java.awt.Color;
+import java.awt.image.RenderedImage;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import org.eclipse.imagen.InterpolationNearest;
+import org.eclipse.imagen.PlanarImage;
 import org.eclipse.imagen.media.classifier.LinearColorMap;
 import org.eclipse.imagen.media.classifier.LinearColorMapElement;
 import org.eclipse.imagen.media.range.RangeFactory;
+import org.geotools.api.coverage.grid.GridCoverage;
+import org.geotools.api.coverage.grid.GridCoverageReader;
+import org.geotools.api.coverage.grid.GridGeometry;
+import org.geotools.api.data.Query;
 import org.geotools.api.filter.capability.FunctionName;
 import org.geotools.api.filter.expression.Expression;
+import org.geotools.api.filter.expression.Literal;
+import org.geotools.api.parameter.GeneralParameterValue;
+import org.geotools.api.parameter.ParameterDescriptor;
+import org.geotools.api.parameter.ParameterValue;
 import org.geotools.coverage.grid.GridCoverage2D;
+import org.geotools.coverage.grid.GridCoverageFactory;
+import org.geotools.coverage.grid.io.AbstractGridFormat;
+import org.geotools.coverage.grid.io.DecimationPolicy;
+import org.geotools.coverage.grid.io.OverviewPolicy;
+import org.geotools.coverage.util.CoverageUtilities;
+import org.geotools.filter.FunctionExpressionImpl;
 import org.geotools.filter.capability.FunctionNameImpl;
+import org.geotools.filter.function.RenderingTransformation;
+import org.geotools.image.ImageWorker;
 
 /**
  * Colors raster pixels by exact category value, preserving NoData transparency.
@@ -21,14 +42,18 @@ import org.geotools.filter.capability.FunctionNameImpl;
  * request timeouts, tile caching, and disposal of the returned coverage graph.
  * Classification remains lazy and retains the input as a coverage source.
  */
-public final class CategoricalRasterFunction extends ExactValueRasterFunction {
+public final class CategoricalRasterFunction extends FunctionExpressionImpl
+        implements RenderingTransformation {
     /** Fixed literal-only signature discoverable by GeoTools' function service registry. */
     public static final FunctionName NAME = new FunctionNameImpl("eolabCategoricalRaster",
             GridCoverage2D.class, parameter("categories", String.class),
             parameter("unmappedColor", String.class), parameter("unmappedOpacity", String.class));
     static final int MAXIMUM_CATEGORIES = 256;
     static final int MAXIMUM_TABLE_CHARACTERS = 32768;
+    static final int MAXIMUM_RENDER_EDGE = 4096;
+    static final long MAXIMUM_RENDER_PIXELS = 16_777_216L;
     private static final double MAXIMUM_EXACT_VALUE = 9007199254740991d;
+    private static final Color TRANSPARENT = new Color(0, 0, 0, 0);
 
     private final List<Category> categories;
     private final Color unmappedColor;
@@ -44,7 +69,11 @@ public final class CategoricalRasterFunction extends ExactValueRasterFunction {
      *     or exceed their limits
      */
     public CategoricalRasterFunction(List<Expression> arguments) {
-        super(NAME, arguments, "categorical");
+        super(NAME);
+        if (arguments.size() != 3 || arguments.stream().anyMatch(value -> !(value instanceof Literal))) {
+            throw new IllegalArgumentException("Categorical raster rendering requires three literals");
+        }
+        setParameters(List.copyOf(arguments));
         String table = arguments.get(0).evaluate(null, String.class);
         if (table == null || table.isEmpty() || table.length() > MAXIMUM_TABLE_CHARACTERS) {
             throw new IllegalArgumentException("Categorical raster table exceeds its bound");
@@ -76,6 +105,100 @@ public final class CategoricalRasterFunction extends ExactValueRasterFunction {
     }
 
     /**
+     * Returns a lazily classified coverage without disposing its borrowed input.
+     *
+     * @param input authorized coverage supplied by the native rendering pipeline
+     * @return exact colors with original source NoData and ROI masking applied
+     * @throws IllegalArgumentException if the input is not a GridCoverage2D or its image
+     *     dimensions exceed the rendering limits
+     * @throws CancellationException if the renderer has cancelled this thread
+     */
+    @Override
+    public Object evaluate(Object input) {
+        requireActiveRender();
+        if (!(input instanceof GridCoverage2D source)) {
+            throw new IllegalArgumentException("Categorical rendering requires a raster coverage");
+        }
+        RenderedImage image = source.getRenderedImage();
+        requireRenderDimensions(image.getWidth(), image.getHeight());
+        var worker = new ImageWorker(image);
+        if (image.getSampleModel().getNumBands() != 1) {
+            worker.retainBands(new int[] {0});
+        }
+        worker.setROI(CoverageUtilities.getROIProperty(source));
+        var noData = CoverageUtilities.getNoDataProperty(source);
+        worker.setNoData(noData == null ? null : noData.getAsRange());
+        var colorMap = buildColorMap();
+        worker.classify(colorMap, null);
+        // Output samples are palette indices; source NoData values no longer describe them.
+        worker.setNoData(RangeFactory.create(colorMap.getDefaultValue(), colorMap.getDefaultValue()));
+        PlanarImage classified = worker.getRenderedOperation();
+        try {
+            return new GridCoverageFactory().create("categorical", classified,
+                    source.getGridGeometry(), null, new GridCoverage[] {source}, null);
+        } catch (RuntimeException error) {
+            classified.dispose();
+            throw error;
+        }
+    }
+
+    /**
+     * Returns an independent query while retaining the renderer's source selection.
+     *
+     * @param query authorized source query supplied by the rendering pipeline
+     * @param target requested output grid, unused because category coloring does not change selection
+     * @return an independent copy of the original query
+     */
+    @Override
+    public Query invertQuery(Query query, GridGeometry target) {
+        return new Query(query);
+    }
+
+    /**
+     * Preserves the requested sampling grid and rejects oversized work before reading.
+     *
+     * @param query current renderer query
+     * @param target requested output grid, including the renderer's bounded read buffer
+     * @return the unchanged requested grid; never the whole source geometry
+     * @throws IllegalArgumentException if the geometry is missing, nonplanar, or oversized
+     * @throws CancellationException if the renderer has cancelled this thread
+     */
+    @Override
+    public GridGeometry invertGridGeometry(Query query, GridGeometry target) {
+        requireActiveRender();
+        if (target == null || target.getGridRange().getDimension() != 2) {
+            throw new IllegalArgumentException("Categorical rendering requires a two-dimensional grid");
+        }
+        requireRenderDimensions(target.getGridRange().getSpan(0), target.getGridRange().getSpan(1));
+        return target;
+    }
+
+    /**
+     * Clones per-read parameters and selects source samples without averaged overviews.
+     *
+     * @param reader current GeoServer-owned reader, never retained by this function
+     * @param parameters existing request-local read parameters
+     * @return independent parameters with overview bypass and nearest interpolation
+     * @throws CancellationException if the renderer has cancelled this thread
+     */
+    @Override
+    public GeneralParameterValue[] customizeReadParams(GridCoverageReader reader,
+            GeneralParameterValue... parameters) {
+        requireActiveRender();
+        var result = new ArrayList<GeneralParameterValue>();
+        if (parameters != null) {
+            for (GeneralParameterValue value : parameters) {
+                result.add(value.clone());
+            }
+        }
+        // GeoTools injects the geometry validated by invertGridGeometry after this hook returns.
+        replaceReadParameter(result, AbstractGridFormat.OVERVIEW_POLICY, OverviewPolicy.IGNORE);
+        replaceReadParameter(result, AbstractGridFormat.DECIMATION_POLICY, DecimationPolicy.ALLOW);
+        replaceReadParameter(result, AbstractGridFormat.INTERPOLATION, new InterpolationNearest());
+        return result.toArray(GeneralParameterValue[]::new);
+    }
+
+    /**
      * Builds exact point classes and open finite fallback ranges with a transparent mask default.
      *
      * <p>The classifier uses its default for NoData and excluded ROI samples. Giving valid
@@ -85,8 +208,7 @@ public final class CategoricalRasterFunction extends ExactValueRasterFunction {
      *
      * @return a native classifier with at most 513 finite entries and 258 palette colors
      */
-    @Override
-    LinearColorMap buildColorMap() {
+    private LinearColorMap buildColorMap() {
         var elements = new ArrayList<LinearColorMapElement>(categories.size() * 2 + 1);
         double lowerBound = -Double.MAX_VALUE;
         boolean includeLowerBound = true;
@@ -105,5 +227,82 @@ public final class CategoricalRasterFunction extends ExactValueRasterFunction {
                 RangeFactory.create(lowerBound, false, Double.MAX_VALUE, true, false), 0));
         return new LinearColorMap("categorical", elements.toArray(LinearColorMapElement[]::new),
                 new LinearColorMapElement[0], TRANSPARENT);
+    }
+
+    /**
+     * Replaces only a request-local named parameter, preserving unrelated reader options.
+     *
+     * @param <T> native parameter value type
+     * @param parameters independent request-local parameter list
+     * @param descriptor name and type of the parameter to replace
+     * @param value replacement parameter value
+     */
+    private static <T> void replaceReadParameter(List<GeneralParameterValue> parameters,
+            ParameterDescriptor<T> descriptor, T value) {
+        parameters.removeIf(parameter -> parameter.getDescriptor().getName().equals(descriptor.getName()));
+        ParameterValue<T> replacement = descriptor.createValue();
+        replacement.setValue(value);
+        parameters.add(replacement);
+    }
+
+    /**
+     * Rejects image shapes that would exceed the categorical render's output allocation bound.
+     *
+     * <p>This bounds the returned grid, not bytes decoded from compressed source blocks.
+     * GeoServer request timeouts, concurrency, and the tile cache govern native reader work.
+     *
+     * @param width output pixel width
+     * @param height output pixel height
+     * @throws IllegalArgumentException if either edge or total pixel count exceeds its bound
+     */
+    private static void requireRenderDimensions(int width, int height) {
+        if (width < 1 || height < 1 || width > MAXIMUM_RENDER_EDGE || height > MAXIMUM_RENDER_EDGE
+                || (long) width * height > MAXIMUM_RENDER_PIXELS) {
+            throw new IllegalArgumentException("Categorical raster read exceeds its bounded render grid");
+        }
+    }
+
+    /**
+     * Honors cancellation before native reader or classifier work is scheduled.
+     *
+     * @throws CancellationException if the current rendering thread was interrupted
+     */
+    private static void requireActiveRender() {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("Categorical raster rendering was cancelled");
+        }
+    }
+
+    /**
+     * Decodes one finite opacity, rejecting nonnumeric or out-of-range native inputs.
+     *
+     * @param value server-generated scalar literal
+     * @return finite opacity between zero and one
+     * @throws IllegalArgumentException if the value is missing, nonnumeric, nonfinite, or outside the range
+     */
+    private static double parseOpacity(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("Raster category opacity is required");
+        }
+        double opacity = Double.parseDouble(value);
+        if (!Double.isFinite(opacity) || opacity < 0 || opacity > 1) {
+            throw new IllegalArgumentException("Raster category opacity must be between zero and one");
+        }
+        return opacity;
+    }
+
+    /**
+     * Decodes only six-digit RGB hex colors and a separately validated opacity.
+     *
+     * @param value server-generated RGB hex literal
+     * @param opacity validated finite pixel opacity
+     * @return native ARGB color with nearest eight-bit alpha
+     * @throws IllegalArgumentException if the color is not a six-digit RGB hex literal
+     */
+    private static Color parseColor(String value, double opacity) {
+        if (value == null || !value.matches("#[0-9a-fA-F]{6}")) {
+            throw new IllegalArgumentException("Raster category colors must be six-digit hex colors");
+        }
+        return new Color((int) Math.round(opacity * 255) << 24 | Integer.parseInt(value.substring(1), 16), true);
     }
 }

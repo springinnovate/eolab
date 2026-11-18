@@ -107,23 +107,25 @@ def test_deployed_raster_sld_consumes_opacity_with_opaque_legacy_defaults() -> N
     assert document.findtext(".//{http://www.opengis.net/sld}Opacity") == "1.0"
 
 
-def test_exact_raster_rule_uses_the_same_classifier_for_tiles_and_composites() -> None:
-    """Apply the exact match before the ordinary ramp and multiply layer opacity separately."""
+def test_exact_raster_rule_uses_the_same_color_maps_for_tiles_and_composites() -> None:
+    """Use the native gradient, exact-value mask and replacement without changing sampling."""
     owner = PublishedRasterAuthorization()
-    env = "min:0;med:1;max:2;cmin:#104080;cmed:#e0c070;cmax:#681030;amin:0.4;amed:1;amax:0.8;vexact:-9999.5;cexact:#e57149;aexact:0.5"
+    env = ("min:0;med:1;max:2;cmin:#101010;cmed:#0000ff;cmax:#00ff00;amin:0.4;amed:1;amax:0.8"
+           ";vexact:-9999.5;cexact:#ff0000;aexact:0.5")
     query = {"layers": "eolab:depth", "styles": "dynamic-raster", "env": env, "tiled": "true"}
     owner.validate_parameters("getmap", query)
     direct = dict(owner.prepare_query("getmap", list(query.items())))
     assert "env" not in direct and "tiled" not in direct
-    assert direct["interpolations"] == owner.composite_interpolation(None, env) == "nearest neighbor"
-    composite = owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 0.4)
-    for document, layer_opacity in ((direct["sld_body"], "1"), (composite, "0.4")):
-        root = ElementTree.fromstring(document)
-        function = root.find(".//{http://www.opengis.net/ogc}Function")
-        assert function.attrib["name"] == "eolabRasterValueOverride"
-        assert [node.text for node in function] == [
-            "0.0:#104080:0.4", "1.0:#e0c070:1.0", "2.0:#681030:0.8", "-9999.5:#e57149:0.5"
-        ]
-        assert root.findtext(".//{http://www.opengis.net/sld}Opacity") == layer_opacity
+    assert "interpolations" not in direct
+    assert owner.composite_interpolation(None) is None
+    assert direct["sld_body"] == owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 1).decode()
+    composite = owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 0.5)
+    fixture = Path(__file__).parents[1] / "geoserver/reader-assessment/src/test/resources/raster-value-override.sld"
+    assert ElementTree.canonicalize(fixture.read_text(), strip_text=True, rewrite_prefixes=True) == (
+        ElementTree.canonicalize(composite, strip_text=True, rewrite_prefixes=True)
+    )
+    hidden = owner.build_composite_sld("eolab:depth", "dynamic-raster", env.replace("aexact:0.5", "aexact:0"), None, 1)
+    passes = ElementTree.fromstring(hidden).findall(".//{*}ColorMap")
+    assert [entry.get("type") for entry in passes] == ["ramp"]
     with pytest.raises(PublishedLayerRequestError, match="requires GetMap"):
         owner.validate_parameters("getfeatureinfo", query)

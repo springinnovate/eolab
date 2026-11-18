@@ -245,7 +245,7 @@ class CompositeMapRenderingService:
         )
         return (
             document,
-            authorization.composite_interpolation(layer.style_definition, layer.style_environment),
+            authorization.composite_interpolation(layer.style_definition),
             authorization.composite_buffer(layer.style_definition),
         )
 

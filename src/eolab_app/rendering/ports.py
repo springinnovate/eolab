@@ -93,13 +93,12 @@ class PublishedLayerAuthorization(Protocol):
         ...
 
     def composite_interpolation(
-        self, style_definition: Mapping[str, object] | None, style_environment: str | None = None
+        self, style_definition: Mapping[str, object] | None
     ) -> str | None:
         """Return a trusted resampling override for an authorized appearance.
 
         Args:
             style_definition: Definition already checked by build_composite_sld.
-            style_environment: Alternative validated named-style environment.
 
         Returns:
             A GeoServer interpolation name, or None to preserve service default.

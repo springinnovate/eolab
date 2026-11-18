@@ -175,11 +175,11 @@ class PublishedRasterAuthorization:
             query: Globally bounded and feature-validated public query entries.
 
         Returns:
-            Server-owned upstream query entries with workspace-qualified
-            default ramps or an inline exact-value style.
+            A named gradient or an inline raster style. Categorical rendering
+            uses nearest-neighbor sampling. Continuous rendering uses the WMS default.
 
         Raises:
-            PublishedLayerRequestError: If the categorical definition is invalid.
+            PublishedLayerRequestError: If the raster style is invalid.
         """
         normalized = {name.lower(): value for name, value in query}
         definition = normalized.get("raster_style")
@@ -205,27 +205,22 @@ class PublishedRasterAuthorization:
             for name, value in query
             if name.lower() not in {"env", "raster_style", "styles", "tiled", "tilesorigin"}
         ]
-        return forwarded + [
-            ("styles", ""),
-            ("sld_body", document.decode("utf-8")),
-            ("interpolations", "nearest neighbor"),
-        ]
+        if definition is not None:
+            forwarded.append(("interpolations", "nearest neighbor"))
+        return forwarded + [("styles", ""), ("sld_body", document.decode("utf-8"))]
 
     def composite_interpolation(
-        self, style_definition: Mapping[str, object] | None, style_environment: str | None = None
+        self, style_definition: Mapping[str, object] | None
     ) -> str | None:
         """Describe resampling for an already authorized composite appearance.
 
         Args:
             style_definition: Categorical definition, or None for a ramp.
-            style_environment: Validated ramp settings, including any exact-value rule.
 
         Returns:
-            Nearest-neighbor resampling for exact-value rules and categories.
+            Nearest-neighbor override for categories, otherwise service default.
         """
-        if style_definition is not None or (style_environment and "vexact:" in style_environment):
-            return "nearest neighbor"
-        return None
+        return "nearest neighbor" if style_definition is not None else None
 
     def prepare_feature_info(self, content: bytes, query: Mapping[str, str]) -> bytes:
         """Preserve native raster feature information without vector attributes.
