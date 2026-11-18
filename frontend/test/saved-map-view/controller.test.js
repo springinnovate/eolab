@@ -1572,8 +1572,8 @@ test("reset and one-step undo reuse complete validated restore documents", async
     },
   };
   const view = createView();
-  const oldMap = JSON.stringify({...emptySavedMap(1, 2, 3), schemaVersion: 3});
-  const storage = createStorage(oldMap);
+  const savedMap = emptySavedMap(1, 2, 3);
+  const storage = createStorage();
   const timers = createTimers();
   const controller = createController({
     view,
@@ -1596,12 +1596,16 @@ test("reset and one-step undo reuse complete validated restore documents", async
     clearTimer: timers.clearTimer.bind(timers),
   });
 
-  controller.scheduleRemember();
-  await controller.restoreStartupView("");
-  assert.match(view.error.message, /Reset view/);
-  controller.scheduleRemember();
-  assert.equal(timers.scheduled.size, 0);
-  assert.equal(storage.serialized, oldMap);
+  for (const incompatible of [{...savedMap, schemaVersion: 3}, {...savedMap, layers: [{obsoleteSettings: true}]}]) {
+    const original = JSON.stringify(incompatible);
+    storage.serialized = original;
+    controller.scheduleRemember();
+    await controller.restoreStartupView("");
+    assert.match(view.error.message, /Reset view/);
+    controller.scheduleRemember();
+    assert.equal(timers.scheduled.size, 0);
+    assert.equal(storage.serialized, original);
+  }
   await controller.resetView();
 
   assert.deepEqual(currentViewport, initialViewport);

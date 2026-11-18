@@ -23,8 +23,8 @@ export class SavedMapViewValidationError extends Error {
     }
 }
 
-/** A map written in a format this viewer cannot open. */
-export class UnsupportedSavedMapVersion extends SavedMapViewValidationError {}
+/** A recognizable EOLab document whose saved settings this viewer cannot open. */
+export class IncompatibleSavedMap extends SavedMapViewValidationError {}
 
 /**
  * Build and validate one canonical portable map document.
@@ -65,7 +65,14 @@ export function parseSavedMapView(serialized) {
             "The saved map content is not valid JSON."
         );
     }
-    return validateSavedMapView(candidate);
+    try {
+        return validateSavedMapView(candidate);
+    } catch (error) {
+        if (candidate?.format === SAVED_MAP_VIEW_FORMAT && error instanceof SavedMapViewValidationError) {
+            throw new IncompatibleSavedMap(error.message);
+        }
+        throw error;
+    }
 }
 
 /**
@@ -100,7 +107,7 @@ function validateSavedMapView(candidate) {
         throw new SavedMapViewValidationError("The saved map is missing a valid document version.");
     }
     if (candidate.schemaVersion !== SAVED_MAP_VIEW_SCHEMA_VERSION) {
-        throw new UnsupportedSavedMapVersion(
+        throw new SavedMapViewValidationError(
             `This map uses an unsupported format. Open a map saved in version ${SAVED_MAP_VIEW_SCHEMA_VERSION}.`
         );
     }

@@ -10,7 +10,7 @@ import {
     MAX_SAVED_MAP_VIEW_BYTES,
     parseSavedMapView,
     serializeSavedMapView,
-    UnsupportedSavedMapVersion,
+    IncompatibleSavedMap,
 } from "./model.js";
 
 const RESTORE_CONCURRENCY = 4;
@@ -379,10 +379,10 @@ export class SavedMapViewController {
         try {
             savedMapView = parseSavedMapView(serialized);
         } catch (error) {
-            if (error instanceof UnsupportedSavedMapVersion) {
+            if (error instanceof IncompatibleSavedMap) {
                 this.#cancelScheduledRemember();
                 this.keepUnsupportedMap = true;
-                this.view.showError(new Error("Your remembered map uses an unsupported format. Choose Reset view to replace the copy in this browser."), "open");
+                this.view.showError(new Error("Your remembered map has settings this site cannot open. Choose Reset view to replace the copy in this browser."), "open");
                 return;
             }
             this.storage.clear();
