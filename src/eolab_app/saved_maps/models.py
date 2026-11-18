@@ -226,18 +226,15 @@ class SavedMapView(MapDocumentPart):
 
     Catalog items, uploads, observations and drawings may appear more than once; each
     entry preserves its place in the layer order and its own appearance.
-    Version three includes a basemap provider, private uploads and temporal views.
-    Version four includes calculated fields and private vector run-result views.
-    Version five includes reusable drawing sources with independent view settings.
-    Older maps without mapLegend open with the legend visible and expanded.
+    Omitting mapLegend leaves the legend visible and expanded.
     """
 
     format: Literal["eolab-map-view"]
-    schemaVersion: Annotated[int, Field(ge=1, le=5)]
+    schemaVersion: Literal[5]
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
-    basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"] | None = None
+    basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"]
     mapLegend: MapLegendAppearance | None = None
     layers: Annotated[
         list[
@@ -276,46 +273,22 @@ class SavedMapView(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_map_layers_and_size(self) -> Self:
-        """Reject inconsistent versions, repeated shared layers and oversized maps.
+        """Reject duplicate shared layers, null legend preferences and oversized maps.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If fields do not match the schema version, a shared layer
-                repeats, or the document exceeds the size limit.
+            ValueError: If a shared layer repeats, explicit legend settings are null,
+                or the document exceeds the size limit.
         """
-        if self.schemaVersion >= 3:
-            if self.basemap is None:
-                raise ValueError("Saved-map version three requires a basemap provider.")
-        elif "basemap" in self.model_fields_set:
-            raise ValueError("Basemap selection requires saved-map version three.")
         if "mapLegend" in self.model_fields_set and self.mapLegend is None:
             raise ValueError("Map legend preferences must be an object when supplied.")
-        shared_layer_ids = []
-        for layer in self.layers:
-            if isinstance(layer, MapDrawingLayer) and self.schemaVersion < 5:
-                raise ValueError("Saved drawings require saved-map version five.")
-            if (
-                isinstance(layer, MapVectorArtifactLayer)
-                or isinstance(layer, MapStyledLayer)
-                and "calculatedFields" in layer.model_fields_set
-            ) and self.schemaVersion < 4:
-                raise ValueError(
-                    "Calculated fields and run results require saved-map version four."
-                )
-            if isinstance(layer, MapTemporalLayer):
-                if self.schemaVersion < 3:
-                    raise ValueError("Temporal layers require saved-map version three.")
-            elif isinstance(layer, MapAnnotationLayer):
-                if self.schemaVersion == 1:
-                    raise ValueError(
-                        "Shared annotations require saved-map version two."
-                    )
-                shared_layer_ids.append(layer.sharedAnnotation.id)
-            elif isinstance(layer, MapUploadLayer):
-                if self.schemaVersion < 3:
-                    raise ValueError("Uploaded layers require saved-map version three.")
+        shared_layer_ids = [
+            layer.sharedAnnotation.id
+            for layer in self.layers
+            if isinstance(layer, MapAnnotationLayer)
+        ]
         if len(set(shared_layer_ids)) != len(shared_layer_ids):
             raise ValueError("A saved map cannot contain duplicate shared layers.")
         if (

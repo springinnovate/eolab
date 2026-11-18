@@ -30,9 +30,9 @@ RUN npm ci
 
 COPY frontend/ ./
 # Shared with backend validation tests; needed when CI tests this build stage.
-COPY tests/fixtures/saved-map-v1.json /build/tests/fixtures/saved-map-v1.json
-COPY tests/fixtures/saved-map-v2.json /build/tests/fixtures/saved-map-v2.json
-COPY tests/fixtures/saved-map-v3-categorical.json /build/tests/fixtures/saved-map-v3-categorical.json
+COPY tests/fixtures/saved-map-catalog.json /build/tests/fixtures/saved-map-catalog.json
+COPY tests/fixtures/saved-map-shared.json /build/tests/fixtures/saved-map-shared.json
+COPY tests/fixtures/saved-map-categorical.json /build/tests/fixtures/saved-map-categorical.json
 COPY tests/fixtures/saved-map-v5.json /build/tests/fixtures/saved-map-v5.json
 COPY tests/fixtures/drawing-admission.json /build/tests/fixtures/drawing-admission.json
 COPY tests/fixtures/sampling-box-geodesics.json /build/tests/fixtures/sampling-box-geodesics.json

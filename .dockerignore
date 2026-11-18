@@ -18,9 +18,9 @@ tests
 tests/*
 !tests/fixtures/
 tests/fixtures/*
-!tests/fixtures/saved-map-v1.json
-!tests/fixtures/saved-map-v2.json
-!tests/fixtures/saved-map-v3-categorical.json
+!tests/fixtures/saved-map-catalog.json
+!tests/fixtures/saved-map-shared.json
+!tests/fixtures/saved-map-categorical.json
 !tests/fixtures/saved-map-v5.json
 !tests/fixtures/drawing-admission.json
 !tests/fixtures/sampling-box-geodesics.json

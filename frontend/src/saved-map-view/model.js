@@ -23,6 +23,9 @@ export class SavedMapViewValidationError extends Error {
     }
 }
 
+/** A map written in a format this viewer cannot open. */
+export class UnsupportedSavedMapVersion extends SavedMapViewValidationError {}
+
 /**
  * Build and validate one canonical portable map document.
  *
@@ -33,7 +36,7 @@ export function createSavedMapView(candidate) {
     return validateSavedMapView({
         format: SAVED_MAP_VIEW_FORMAT,
         schemaVersion: SAVED_MAP_VIEW_SCHEMA_VERSION,
-        ...(!candidate.schemaVersion || candidate.schemaVersion >= 3 ? { basemap: "detailed" } : {}),
+        basemap: "detailed",
         ...candidate,
     });
 }
@@ -90,23 +93,23 @@ export function serializeSavedMapView(savedMapView) {
  */
 function validateSavedMapView(candidate) {
     requirePlainObject(candidate, "Saved map");
-    if (![1, 2, 3, 4, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
-        throw new SavedMapViewValidationError(
-            `Saved map schema ${String(candidate.schemaVersion)} is not supported.`
+    if (candidate.format !== SAVED_MAP_VIEW_FORMAT) {
+        throw new SavedMapViewValidationError("This content is not an EOLab saved map.");
+    }
+    if (!Number.isInteger(candidate.schemaVersion)) {
+        throw new SavedMapViewValidationError("The saved map is missing a valid document version.");
+    }
+    if (candidate.schemaVersion !== SAVED_MAP_VIEW_SCHEMA_VERSION) {
+        throw new UnsupportedSavedMapVersion(
+            `This map uses an unsupported format. Open a map saved in version ${SAVED_MAP_VIEW_SCHEMA_VERSION}.`
         );
     }
     requireExactKeys(
         candidate,
-        ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers",
-            ...(candidate.schemaVersion >= 3 ? ["basemap"] : []),
+        ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers", "basemap",
             ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : [])],
         "Saved map"
     );
-    if (candidate.format !== SAVED_MAP_VIEW_FORMAT) {
-        throw new SavedMapViewValidationError(
-            "This content is not an EOLab saved map."
-        );
-    }
     requirePlainObject(candidate.viewer, "Viewer");
     requireExactKeys(candidate.viewer, ["version", "origin"], "Viewer");
     const version = requireBoundedString(
@@ -117,7 +120,7 @@ function validateSavedMapView(candidate) {
     const origin = validateOrigin(candidate.viewer.origin);
     const createdAt = validateTimestamp(candidate.createdAt);
     const viewport = validateViewport(candidate.viewport);
-    if (candidate.schemaVersion >= 3 && !["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
+    if (!["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
         throw new SavedMapViewValidationError("Saved basemap provider is invalid.");
     }
     if (!Array.isArray(candidate.layers)) {
@@ -144,21 +147,10 @@ function validateSavedMapView(candidate) {
             throw new SavedMapViewValidationError("Custom layer presentation must be boolean.");
         }
         if (Object.hasOwn(layer, "drawingLayerId")) {
-            if (candidate.schemaVersion < 5) throw new SavedMapViewValidationError("Saved drawings require saved-map version five.");
             return validateDrawingReference(layer);
         }
         if (layer?.sharedAnnotation !== undefined) {
-            if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
-        }
-        if (Object.hasOwn(layer, "temporalSource") && candidate.schemaVersion < 3) {
-            throw new SavedMapViewValidationError("Temporal layers require saved-map version three.");
-        }
-        if (Object.hasOwn(layer, "uploadId") && candidate.schemaVersion < 3) {
-            throw new SavedMapViewValidationError("Uploaded layers require saved-map version three.");
-        }
-        if ((Object.hasOwn(layer, "runArtifact") || Object.hasOwn(layer, "calculatedFields")) && candidate.schemaVersion < 4) {
-            throw new SavedMapViewValidationError("Calculated fields and run results require saved-map version four.");
         }
         return validateLayer(layer);
     });
@@ -179,7 +171,7 @@ function validateSavedMapView(candidate) {
         viewer: Object.freeze({ version, origin }),
         createdAt,
         viewport,
-        ...(candidate.schemaVersion >= 3 ? { basemap: candidate.basemap } : {}),
+        basemap: candidate.basemap,
         layers: Object.freeze(layers),
         ...(candidate.mapLegend ? { mapLegend: Object.freeze({ ...candidate.mapLegend }) } : {}),
     });

@@ -10,6 +10,7 @@ import {
     MAX_SAVED_MAP_VIEW_BYTES,
     parseSavedMapView,
     serializeSavedMapView,
+    UnsupportedSavedMapVersion,
 } from "./model.js";
 
 const RESTORE_CONCURRENCY = 4;
@@ -149,6 +150,7 @@ export class SavedMapViewController {
         this.rememberGeneration = 0;
         this.rememberTimer = null;
         this.rememberPending = false;
+        this.keepUnsupportedMap = false;
         this.undoView = null;
         this.destroyed = false;
         this.initialView = initialViewport === null
@@ -376,7 +378,13 @@ export class SavedMapViewController {
         let savedMapView;
         try {
             savedMapView = parseSavedMapView(serialized);
-        } catch {
+        } catch (error) {
+            if (error instanceof UnsupportedSavedMapVersion) {
+                this.#cancelScheduledRemember();
+                this.keepUnsupportedMap = true;
+                this.view.showError(new Error("Your remembered map uses an unsupported format. Choose Reset view to replace the copy in this browser."), "open");
+                return;
+            }
             this.storage.clear();
             return;
         }
@@ -487,6 +495,7 @@ export class SavedMapViewController {
             );
             if (report === null) return;
             this.undoView = previousView;
+            this.keepUnsupportedMap = false;
             this.storage?.write(serializeSavedMapView(this.initialView));
             this.view.showUndoReset();
             this.rememberPending = true;
@@ -919,7 +928,7 @@ export class SavedMapViewController {
      * @return {void}
      */
     #queueRemember() {
-        if (this.storage === null || this.destroyed) return;
+        if (this.storage === null || this.destroyed || this.keepUnsupportedMap) return;
         this.rememberGeneration += 1;
         const generation = this.rememberGeneration;
         if (this.rememberTimer !== null) {

@@ -9,7 +9,7 @@ import { normalizeRasterAppearanceState } from "../../src/raster/appearance-stat
  */
 function appearance() {
     return JSON.parse(readFileSync(new URL(
-        "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
+        "../../../tests/fixtures/saved-map-categorical.json", import.meta.url
     ), "utf8")).layers[0].style;
 }
 

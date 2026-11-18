@@ -184,6 +184,15 @@ Read .env.example, docker-compose.yml, and docker-compose.local.yml. Give me the
 
 Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app` and `processing-worker` containers before starting replacements. Run one `processing-worker` container per site. Give separate deployments their own volume names.
 
+Saved maps now require document version 5. Before upgrading, list published maps that will need attention with this read-only PostgreSQL query. Their owners can republish them in the current format.
+
+```sql
+SELECT slug, view->>'schemaVersion' AS version FROM saved_maps.maps
+WHERE deleted_at IS NULL AND view->'schemaVersion' IS DISTINCT FROM '5'::jsonb ORDER BY slug;
+```
+
+For the Core Areas map `nhi-site-condition-mapper`, run `python -m eolab_app.saved_maps.migrate --slug nhi-site-condition-mapper` in the new app image during the maintenance window. Review the proposed changes and rerun with `--apply --expected-revision` followed by the reported revision. Open the same map URL and check its shared polygons before resuming edits. The [operator command](src/eolab_app/saved_maps/migrate.py) keeps the link and polygon ownership intact.
+
 </details>
 
 ### Prepare data for the Catalog
