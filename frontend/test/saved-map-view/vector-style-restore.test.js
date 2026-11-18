@@ -4,8 +4,8 @@ import test from "node:test";
 import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
 import { decodeSavedMapViewFragment, encodeSavedMapViewFragment } from "../../src/saved-map-view/fragment-codec.js";
 import { createSavedMapView, MAX_SAVED_MAP_VIEW_BYTES, parseSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
-import { parseCategoricalVectorCsv } from "../../src/vector/categorical-csv.js";
 import { createVectorMapLayerAdapter } from "../../src/vector/map-layer-adapter.js";
+import { parseCategoricalVectorCsv } from "../../src/vector/categorical-csv.js";
 
 const ORIGIN = "https://viewer.example";
 const VIEWPORT = { center: { latitude: 0, longitude: 0 }, zoom: 3 };
@@ -215,7 +215,20 @@ test("CSV category opacity survives export, paste and reopening, and incomplete 
   await f.adapter.applySavedState(target, copied);
   const saved = {catalogItem: {collection: CATALOG_ITEM.collection, id: CATALOG_ITEM.id},
     visible: true, opacity: 1, style: f.adapter.exportSavedState(target)};
-  await f.controller.openSharedFragment(await savedFragment([saved]));
+  let publishedLayer = saved;
+  const namedMap = new SavedMapViewController({
+    view: f.view, namedMapSlug: "category-opacity", restoreSharedMap: true,
+    viewerOrigin: ORIGIN, viewerVersion: "test",
+    publicationApi: { get: async () => ({ title: "Category opacity", subtitle: "",
+      view: createSavedMapView({ viewer: { origin: ORIGIN, version: "test" },
+        createdAt: "2026-11-16T12:00:00Z", viewport: VIEWPORT, layers: [publishedLayer] }) }) },
+    viewport: { snapshot: () => VIEWPORT, restore() {} },
+    mapLayers: { retainedRecords: f.records, setLegendIncluded() {},
+      commitStaged: staged => f.records.push(...staged.map(({record}) => record)) },
+    catalogItems: { get: async () => CATALOG_ITEM },
+    catalogVisualization: { prepare: async item => item, stage: f.stage, clear: () => { f.records.length = 0; } },
+  });
+  await namedMap.restoreStartupView();
   assert.deepEqual(f.view.result, {loaded: 1, total: 1, details: []});
   const rendered = JSON.parse(f.records[0].state.layer.wmsParams.vector_style);
   assert.deepEqual(rendered.categorical.rules.map(({label, opacity}) => [label, opacity]), [["Hidden", 0], ["Visible", 1]]);
@@ -225,10 +238,11 @@ test("CSV category opacity survives export, paste and reopening, and incomplete 
     delete incomplete.style.definition.categorical.rules[0][omitted];
     assert.match(f.adapter.checkSavedStateCompatibility(target, incomplete.style), /missing or unsupported fields/);
     await assert.rejects(f.adapter.applySavedState(target, incomplete.style), /missing or unsupported fields/);
-    await f.controller.openSharedFragment(await savedFragment([incomplete]));
+    publishedLayer = incomplete;
+    await namedMap.restoreStartupView();
     assert.match(f.view.result.details[0], /saved style was not applied/);
     assert.equal(f.records[0].state.style.categorical, null);
-    const [strict] = await f.controller.restoreLayers([incomplete], () => true);
+    const [strict] = await namedMap.restoreLayers([incomplete], () => true);
     assert.equal(strict.key, null);
     assert.match(strict.error, /missing or unsupported fields/);
   }
