@@ -1514,7 +1514,6 @@ test("sampling-box statistics use one read per raster, cancel together and run e
         reads.push({source, box, statistics, signal, reply});
         return reply.promise;
     }});
-    const assertProgress = assertRasterProgress(h);
     const selection = longitude => ({kind: "samplingBox", samplingBox: {center: {longitude, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("stdev");
     h.controller.addFormula("percent");
@@ -1530,6 +1529,7 @@ test("sampling-box statistics use one read per raster, cancel together and run e
     reads[2].reply.resolve({method: "estimated", values}); await flush();
     assert.equal(h.view.state.rows[0].statisticLabel, "Estimated mean");
     assert.equal(h.view.state.rows[0].value, 0);
+    const assertProgress = assertRasterProgress(h);
     assertProgress(1);
     reads[3].reply.resolve({method: "exact", values: [{value: 18, unit: "USD"}, ...values.slice(1)]}); await flush();
     assertProgress(2);
