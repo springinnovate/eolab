@@ -32,9 +32,10 @@ const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{re
  * @param {Object} [overrides={}] API fault injection.
  * @param {Map} [data=new Map()] Saved recovery record.
  * @param {(choice:string)=>void} [onAreaChoice] Composed response to a user's area choice.
+ * @param {Object|null} [initialArea] Map selection available before opening the panel.
  * @return {Object} Controllers, captured requests and explicit clock/job completion.
  */
-function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
+function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}, initialArea = box(0)) {
     const requests=[],plans=new Map(),server=new Map(),timers=new Map();let serial=0,time=0;
     const clock={setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,delay,at:time+delay});return id;},clearTimeout(id){timers.delete(id);}};
     const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326"};
@@ -67,7 +68,7 @@ function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
     const area=new RasterSeriesCalculations({requests:calculationRequests,clock,readBoxPreview: overrides.readBoxPreview});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
     const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){},onAreaChoice});
-    controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(box(0),"First box");
+    controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(initialArea,"First box");
     const tick=async(delay=0)=>{for(const[id,t]of [...timers])if(t.delay===delay){timers.delete(id);t.fn();}await flush();};
     /** Advance the browser clock and execute only callbacks whose deadlines passed.
      * @param {number} milliseconds Elapsed time. @return {Promise<void>} Settled lifecycle callbacks.
@@ -101,6 +102,19 @@ function stackOpeners(h, area = null) {
     }, { showRasterSeries: () => h.controller.updateSamplingForPanelVisibility(true) }, h.controller, area);
     return callbacks;
 }
+
+test("opening with no map selection calculates whole rasters, while an explicit empty box waits for a map click", async () => {
+    for (const explicitBox of [false, true]) {
+        const h = fixture({}, new Map(), () => {}, null);
+        try {
+            if (explicitBox) h.view.actions.onArea("selection");
+            await h.open();
+            const submissions = h.requests.filter(([kind]) => kind === "submit").map(([, request]) => request);
+            if (explicitBox) assert.equal(submissions.length, 0);
+            else assert.deepEqual(submissions.map(request => request.area), [{kind: "wholeRaster"}, {kind: "wholeRaster"}]);
+        } finally { h.close(); }
+    }
+});
 
 test("normal stack openers preserve a deliberate whole-raster choice through background area changes", async () => {
     for (const id of ["open-raster-series", "open-raster-series-dock"]) {
@@ -762,11 +776,12 @@ test("mixed raster failures retain their own explanations instead of a shared fo
     assert.match(h.view.state.rows.find(row=>row.key==="2").errorMessage,/Source is unavailable/);h.close();
 });
 
-test("closing and reopening a completed area plot preserves its result and completion message",async()=>{
+test("reopening a completed area plot keeps its values without repeating a success message",async()=>{
     const h=fixture();await h.open();await h.finish();await h.finish();
     const count=h.requests.length;
     h.controller.updateSamplingForPanelVisibility(false);h.controller.updateSamplingForPanelVisibility(true);await h.tick();
-    assert.match(h.view.state.message,/Raster series complete/);
+    assert.equal(h.view.state.message, "");
+    assert.equal(h.view.state.rows.filter(row => row.state === "value").length, 2);
     assert.equal(h.requests.length,count);h.close();
 });
 
@@ -1083,7 +1098,7 @@ function samplingComposition(h, drawings = []) {
     composed = new Function("document", "VectorFilterControls", "VectorSamplingController", "VectorSamplingView",
         "createVectorSamplingArea", "VectorSelectionOverlay", "leafletMap", "L", "mapInspection", "mapLayerController",
         "vectorMapLayerAdapter", "annotations", "processingApi", "rasterSeries", "updateRasterSeriesArea",
-        "rasterVisualization", "models", "EMPTY_VECTOR_FILTER", "annotationSummaryPolygons", "rasterClips", `
+        "rasterVisualization", "models", "EMPTY_VECTOR_FILTER", "annotationSummaryPolygons", "rasterClips", "resultLocator", `
         let vectorFilterControls, vectorSampling, summarySampling, modelArea, modelAreaDescription;
         ${editor} ${workflows}
         return {vectorFilterControls, vectorSampling, summarySampling, ${mapHandoff}};`)(document, VectorFilterControls,
@@ -1101,7 +1116,7 @@ function samplingComposition(h, drawings = []) {
             if (area?.selection) updateArea({kind: "catalogSelection", catalogSelection: area.selection}, area.label);
         }},
         {refreshMapArea() {}}, EMPTY_VECTOR_FILTER, annotationSummaryPolygons,
-        {setSelection: area => clipAreas.push(area)});
+        {setSelection: area => clipAreas.push(area)}, {setPolygon() {}});
     h.controller.onAreaChoice = choice => {
         if (choice === "vector") void composed.summarySampling.use();
         else composed.summarySampling.invalidate("");

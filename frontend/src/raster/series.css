@@ -1,5 +1,50 @@
-#raster-series h2 { margin: 0; font-size: 1.05rem; }
-#raster-series { scroll-padding-block-start: calc(44px + 1rem); }
+#raster-series h2 { margin: 0; font-size: 0.88rem; }
+.raster-series-bar, .raster-series-picker-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.4rem; }
+.raster-series-bar { padding: 0.35rem 0 0.55rem; }
+.raster-series-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border-1); border-radius: 6px; }
+.raster-series-switch button, .raster-series-context button, .raster-series-picker button, .raster-series-run-controls button {
+  border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.raster-series-switch button { padding: 0.15rem 0.6rem; font-size: 0.78rem; }
+.raster-series-switch button[aria-pressed="true"] { background: var(--surface-2); color: var(--text-1); font-weight: 650; }
+.raster-series-field {
+  --text-1: #f3f8ed; --text-2: #c0d6cd; --text-3: #91aaa5; --border-1: #45615d; --border-2: #48615d;
+  --surface-1: #213b39; --surface-2: #19312e; --brand: #a6edd1;
+  color: var(--text-1); background: radial-gradient(ellipse at 100% 0, #284c46, transparent 78%), #102c2b;
+  border-radius: 7px; padding: clamp(0.7rem, 3%, 1.15rem); min-width: 0; overflow-wrap: anywhere;
+}
+#raster-series-measure { margin: 0; color: var(--text-1); font-size: 1.5rem; font-weight: 650; line-height: 1.15; letter-spacing: -0.035em; }
+.raster-series-context { display: flex; align-items: center; flex-wrap: wrap; gap: 0 0.4rem; margin-top: 0.15rem; color: var(--text-2); font-size: 0.78rem; }
+.raster-series-context button { max-width: 100%; text-align: left; padding: 0.2rem 0; overflow-wrap: anywhere; }
+.raster-series-context button::after { content: "⌄"; padding-left: 0.25em; }
+.raster-series-context button:is(:hover,[aria-expanded="true"]) { text-decoration: underline; text-underline-offset: 3px; }
+.raster-series-field :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.raster-series-picker { color: #172e29; background: #f2f7f3; padding: 0.55rem 0.7rem; border-radius: 5px; margin: 0.25rem 0; font-size: 0.8rem; }
+.raster-series-picker :focus-visible { outline-color: #246455; }
+.raster-series-picker button { padding: 0.25rem 0.45rem; }
+.raster-series-picker button[aria-pressed="true"] { background: #d3e8dc; font-weight: 650; }
+#raster-series-area-picker:not([hidden]) { display: flex; gap: 0.15rem 0.3rem; flex-wrap: wrap; }
+#raster-series-reading:not([hidden]) { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.7rem; }
+.raster-series-readout { flex: 1 1 8rem; min-width: 0; }
+.raster-series-readout p { margin: 0; font-variant-numeric: tabular-nums; line-height: 1.1; }
+#raster-series-precision { display: flex; align-items: center; flex-wrap: wrap; gap: 0.45rem; }
+#raster-series-precision button { border: 0; background: transparent; color: var(--brand); font: inherit; font-size: 0.78rem; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+#raster-series-number { font-size: clamp(1.9rem, 3.2vw, 3rem); font-weight: 640; letter-spacing: -0.045em; }
+#raster-series-reading.is-message #raster-series-number { font-size: 1rem; letter-spacing: normal; }
+#raster-series-unit { font-size: 1rem; color: var(--text-2); }
+#raster-series-method, #raster-series-observation, #raster-series-empty { display: block; color: var(--text-2); font-size: 0.76rem; }
+#raster-series-locator { flex: 0 1 9rem; min-width: 0; max-width: 47%; margin: 0; }
+#raster-series-locator-map { height: 5.9rem; border-radius: 4px; background: #58726b; isolation: isolate; }
+#raster-series-locator-map .leaflet-control-attribution { font-size: 8px; line-height: 1.2; white-space: normal; }
+#raster-series-locator-caption { margin-top: 0.2rem; font-size: 0.68rem; text-align: center; color: var(--text-2); }
+#raster-series-measure-choice { font-size: 0.8rem; }
+.raster-series-run-controls button { color: var(--brand); font-size: 0.78rem; text-decoration: underline; text-underline-offset: 3px; }
+.raster-series-refine { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.8rem; }
+.raster-series-refine > details { border: 0; }
+.raster-series-refine > details[open] { flex-basis: 100%; }
+.raster-series-refine > button { margin-left: auto; font-size: 0.78rem; }
+.raster-series-field .raster-series-statistics-chart { border: 0; background: transparent; }
+#raster-series [hidden] { display: none; }
 #raster-series-status, #raster-series-chart-note {
   font-size: 0.78rem;
   overflow-wrap: anywhere;
@@ -8,11 +53,6 @@
 .raster-series-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; margin: 0.4rem 0; }
 .raster-series-controls label { display: grid; gap: 0.25rem; font-size: 0.75rem; }
 .raster-series-controls label[hidden] { display: none; }
-#raster-series-data-inputs { margin-bottom: 0.5rem; }
-#raster-series-toggle-inputs { position: sticky; top: 0; z-index: 2; display: block; width: 100%; padding: 0.35rem 0.5rem; text-align: left; font-size: 0.78rem; background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius); }
-#raster-series-toggle-inputs[aria-expanded="true"] { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-#raster-series-inputs { margin-bottom: 0.4rem; border: 1px solid var(--border-1); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); padding: 0.35rem 0.5rem; }
-#raster-series-inputs[hidden] { display: none; }
 #raster-series-temporal-title { margin: 0.4rem 0; font-weight: 600; }
 #raster-series-temporal { font-size: 0.78rem; }
 #raster-series-temporal label:not([hidden]) { display: grid; gap: 0.25rem; min-width: 0; }
@@ -22,7 +62,6 @@
 .raster-series-run-controls .raster-series-actions { margin: 0; }
 #raster-series-add-plot { display: block; margin-left: auto; font-size: 0.78rem; }
 .raster-series-statistics-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.35rem; }
-.raster-series-statistics-header h3 { font-size: 0.85rem; margin: 0.3rem 0; }
 .raster-series-statistics-header label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.75rem; }
 .raster-series-statistics-header select { max-width: 100%; min-width: 0; font-size: inherit; }
 .raster-series-settings { border-top: 1px solid var(--border-1); padding: 0.4rem 0; }
@@ -46,6 +85,7 @@
 #raster-series table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
 #raster-series th, #raster-series td { padding: 0.4rem; border-bottom: 1px solid var(--border-1); text-align: left; overflow-wrap: anywhere; }
 #raster-series td { font-variant-numeric: tabular-nums; }
+#raster-series-values:not(.has-status) :is(th, td):last-child { display: none; }
 #raster-series-value-caption { text-align: left; overflow-wrap: anywhere; padding: 0.4rem; }
 #raster-series-value-caption:empty { display: none; }
 .raster-series-single-result #raster-series-values th:first-child, .raster-series-single-result #raster-series-values td:first-child { display: none; }
@@ -130,6 +170,4 @@
 
 #raster-series-area-controls[hidden] { display: none; }
 #raster-series-area-summary { overflow-wrap: anywhere; }
-.raster-series-sample-area { font-size: 0.75rem; gap: 0.25rem; }
-.raster-series-sample-area button { min-width: 0; max-width: 100%; text-align: left; text-decoration: underline; text-underline-offset: 0.15em; }
 #raster-series-vector-area { margin: 0 0 4px 22px; border: 0; padding: 0; font-size: 0.72rem; }

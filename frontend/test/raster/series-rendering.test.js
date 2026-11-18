@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { RasterSeriesView } from "../../src/raster/series-view.js";
+import { RasterResultLocator } from "../../src/raster/series-locator.js";
 import { RasterSeriesPlotsView } from "../../src/raster/series-plots-view.js";
 
 /** Create a real view with a manually advanced browser frame clock.
@@ -56,19 +57,21 @@ function controlsFixture() {
     return { ...h, plots, state, draw };
 }
 
-test("raster statistics places visible inputs before execution and results", async () => {
+test("raster and area pickers sit above the result, with statistics and plot options below", async () => {
     const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
     const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
-    const positions = ["raster-series-data-inputs", 'id="raster-series-statistics"',
-        "raster-series-status", 'id="raster-series-plots"', "Values &amp; download", "raster-series-data-settings", "Formula reference"]
+    const positions = ['id="raster-series-result-button"', 'id="raster-series-source-button"', 'id="raster-series-open-area"',
+        'id="raster-series-data-inputs"', 'id="raster-series-area-picker"', 'id="raster-series-reading"', 'id="raster-series-plots"',
+        'id="raster-series-values"', 'id="raster-series-statistics"', 'id="raster-series-data-settings"']
         .map(name => panel.indexOf(name));
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
-    assert.match(panel, /<button id="raster-series-toggle-inputs" type="button" aria-expanded="true" aria-controls="raster-series-inputs">Inputs · Hide<\/button>/);
-    assert.ok(!panel.includes("raster-series-input-summary"));
+    assert.match(panel, /id="raster-series-source-button"[^>]+aria-expanded="false"/);
+    assert.match(panel, /id="raster-series-open-area"[^>]+aria-expanded="false"/);
+    assert.match(panel, />Choose statistics<\/summary>/);
     assert.ok(!panel.includes('id="raster-series-calculate"'));
     assert.ok(!panel.includes('id="raster-series-edit-area"'));
     assert.ok(!panel.includes('id="raster-series-area-controls"'), "editable areas live only in the floating tool");
-    assert.match(panel, />Axis and plot options<\/summary>/);
+    assert.match(panel, />Plot options<\/summary>/);
     assert.ok(!panel.includes("raster-series-source-mode"));
     assert.ok(!panel.includes("raster-series-temporal-dataset"));
     for (const id of ["temporal-variable", "period", "sources",
@@ -199,14 +202,20 @@ test("retry is available only for failed work, not ordinary pending inputs", () 
     assert.equal(calculate.hidden, true, "running work is controlled by Cancel");
 });
 
-test("one raster opens the existing values table for every statistic instead of drawing a chart", () => {
+test("one raster leads with its statistic and Values retains full precision for every formula", () => {
     const h = controlsFixture();
     h.state.rows = [{label:"Raster A",statisticLabel:"Pixel value",state:"value",value:3,rawValue:"3"},
         {label:"Raster A",statisticLabel:"Mean",state:"value",value:2.5,rawValue:"2.5000000000000001",unit:"K"}];
+    h.state.statistics[0].rows = [h.state.rows[1]];
     h.draw();
+    assert.equal(h.view.reading.hidden, false);
+    assert.equal(h.document.querySelector("#raster-series-number").textContent, "2.5");
+    assert.equal(h.document.querySelector("#raster-series-unit").textContent, "K");
+    assert.equal(h.view.values.hidden, true);
+    h.view.valuesButton.dispatchEvent(new Event("click"));
     assert.equal(h.plots.length,0);
     assert.equal(h.view.chartToolbar.hidden,true,"a scalar result needs no chart geometry controls");
-    assert.equal(h.view.values.open,true);
+    assert.equal(h.view.values.hidden,false);
     assert.equal(h.view.root.classList.contains("raster-series-single-result"),true);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
         ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5000000000000001 K","Value"]]);
@@ -218,33 +227,65 @@ test("result presentation counts requested positions, including waiting, failed 
     const rows = h.state.statistics[0].rows;
     h.state.rows = rows;
     h.draw();
-    assert.equal(h.view.values.open, true, "one pending position already uses the table");
+    assert.equal(h.view.values.hidden, true, "one pending position starts in Result");
     assert.equal(h.view.results.hidden, true, "setup and progress replace the empty result card");
     assert.equal(h.view.plots.hidden, true);
     assert.equal(h.view.addPlot.hidden, true);
     for (const [state, status] of [["error", "Unavailable"], ["no_valid_data", "No valid data"]]) {
         rows[0].state = state; h.draw();
-        assert.equal(h.view.table.children[0].children[3].textContent, status);
+        assert.equal(h.document.querySelector("#raster-series-number").textContent, status);
         assert.equal(h.view.results.hidden, false, "completed nonnumeric outcomes remain inspectable");
         assert.equal(h.view.plots.hidden, true);
         assert.equal(h.plots.length, 0);
     }
     rows.push({...rows[0], label: "Raster B", state: "value", value: 4, rawValue: "4"});
     h.draw();
-    assert.equal(h.view.values.open, false);
+    assert.equal(h.view.values.hidden, true);
     assert.equal(h.plots.length, 1, "one successful value among several positions remains a graph");
     assert.equal(h.plots[0], h.state);
     assert.equal(h.view.plots.hidden, false);
     assert.equal(h.view.addPlot.hidden, false);
-    h.view.values.open = true; h.view.values.dispatchEvent(new Event("toggle"));
+    h.view.valuesButton.dispatchEvent(new Event("click"));
     assert.equal(h.view.table.children.length, 2);
     assert.equal(h.view.valueCaption.textContent, "");
     assert.equal(h.view.root.classList.contains("raster-series-single-result"), false);
-    h.view.values.open = false; h.view.values.dispatchEvent(new Event("toggle"));
+    h.view.resultButton.dispatchEvent(new Event("click"));
     rows.length = 0; h.draw();
-    assert.equal(h.view.values.open, false, "zero positions do not masquerade as a scalar");
+    assert.equal(h.view.values.hidden, true, "zero positions do not masquerade as a scalar");
     assert.equal(h.view.results.hidden, true);
     assert.equal(h.view.plots.hidden, true, "the retained old plot does not show for empty input");
+});
+
+test("the single result locator uses the source extent and only outlines the matching polygon selection", () => {
+    const h = controlsFixture(), rectangles = [], drawn = [];
+    const map = {attributionControl: {setPrefix() {}}, invalidateSize() {}, fitBounds() {}};
+    const layer = {addTo() { return this; }, remove() {}, getBounds() { return {isValid: () => true}; }};
+    const leaflet = {map: () => map, tileLayer: () => layer,
+        rectangle(corners) { rectangles.push(corners); return layer; },
+        geoJSON(geometry) { drawn.push(geometry); return layer; }};
+    const locator = new RasterResultLocator(h.document, leaflet, {url: "", attribution: ""});
+    const frame = h.document.createElement("div");
+    frame.append(locator.figure);
+    h.view.locator = locator;
+    h.state.area.area = {kind: "wholeRaster"};
+    h.state.resultBounds = [170, -15, 0, -170, 15, 100];
+    Object.assign(h.state.rows[0], {state: "value", value: 8, rawValue: "8"});
+    h.draw();
+    assert.deepEqual(rectangles, [[[-15, 170], [15, 190]]], "3-D extent across the dateline");
+    const reference = {id: "a", sha256: "b"};
+    h.state.area.area = {kind: "polygonArea", polygonArea: reference};
+    h.draw();
+    assert.equal(locator.figure.hidden, true);
+    assert.equal(h.document.querySelector("#raster-series-number").textContent, "8");
+    const geometry = {type: "GeometryCollection", geometries: []};
+    locator.setPolygon({polygonArea: {id: "different", sha256: "c"}}, geometry);
+    assert.equal(locator.figure.hidden, true);
+    locator.setPolygon({polygonArea: reference}, geometry);
+    assert.deepEqual(drawn, [geometry]);
+    assert.equal(locator.caption.textContent, "Selected polygons");
+    h.view.valuesButton.dispatchEvent(new Event("click"));
+    assert.equal(locator.figure.hidden, true);
+    assert.equal(h.view.table.children[0].children[2].textContent, "8");
 });
 
 test("previous numerical results remain visible while their replacements are pending", () => {
@@ -298,7 +339,7 @@ test("pending raster comparisons keep plot setup available without an empty char
     assert.equal(h.plots.at(-1).statistics[0].plotId, 2);
 });
 
-test("one temporal observation uses values; several timestamps in the same dataset use plots", () => {
+test("one temporal observation shows its timestamp and scalar; several observations use the plot", () => {
     const h = controlsFixture();
     h.view.renderTemporalControls = () => {};
     h.state.sources = [];
@@ -306,19 +347,23 @@ test("one temporal observation uses values; several timestamps in the same datas
         periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-01-01T02:00"};
     const rows = h.state.statistics[0].rows;
     rows.length = 0; h.draw();
-    assert.equal(h.view.values.open, false, "pending temporal results have an unknown observation count");
+    assert.equal(h.view.values.hidden, true, "pending temporal results have an unknown observation count");
     const row = {label: "2000-01-01 00:00 UTC", statisticLabel: "Mean", state: "value",
         value: 280.5, rawValue: "280.5", unit: "K"};
     rows.push(row); h.state.rows = rows; h.draw();
-    assert.equal(h.view.values.open, true);
+    assert.equal(h.view.resultButton.textContent, "Result");
+    assert.equal(h.document.querySelector("#raster-series-number").textContent, "280.5");
+    assert.equal(h.document.querySelector("#raster-series-observation").textContent, row.label);
+    h.view.valuesButton.dispatchEvent(new Event("click"));
+    assert.equal(h.view.values.hidden, false);
     assert.equal(h.view.valueCaption.textContent, row.label);
     assert.deepEqual(h.view.table.children[0].children.map(cell => cell.textContent),
         [row.label, "Mean", "280.5 K", "Value"]);
     rows.push({...row, label: "2000-01-01 01:00 UTC", state: "no_valid_data", value: null, rawValue: null});
     h.draw();
-    assert.equal(h.view.values.open, false);
+    assert.equal(h.view.values.hidden, true);
     assert.equal(h.plots.at(-1), h.state);
-    h.view.values.open = true; h.view.values.dispatchEvent(new Event("toggle"));
+    h.view.valuesButton.dispatchEvent(new Event("click"));
     assert.equal(h.view.table.children.length, 2);
 });
 
@@ -329,22 +374,22 @@ test("closed values create no table rows and opening shows the latest results", 
     h.state.rows = rows; h.state.statistics[0].rows = rows;
     h.state.canDownload = true;
     h.draw();
-    assert.equal(h.view.values.open, false);
+    assert.equal(h.view.values.hidden, true);
     assert.equal(h.view.table.children.length, 0);
     assert.equal(h.view.download.disabled, false, "downloads do not depend on opening the table");
     rows.at(-1).rawValue = "999.125"; rows.at(-1).value = 999.125;
     h.draw();
     assert.equal(h.view.table.children.length, 0, "closed updates leave all values in the owner snapshot");
-    h.view.values.open = true; h.view.values.dispatchEvent(new Event("toggle"));
+    h.view.valuesButton.dispatchEvent(new Event("click"));
     assert.equal(h.view.table.children.length, rows.length);
     assert.deepEqual(h.view.table.children.at(-1).children.map(cell => cell.textContent),
         ["Observation 999", "Mean", "999.125 K", "Value"]);
     const firstRow = h.view.table.children[0];
-    h.view.values.dispatchEvent(new Event("toggle"));
+    h.view.valuesButton.dispatchEvent(new Event("click"));
     assert.equal(h.view.table.children[0], firstRow, "unchanged opening events retain table nodes");
     h.state.active = false; h.view.render(h.state);
     rows.at(-1).rawValue = "1000";
-    h.view.values.dispatchEvent(new Event("toggle"));
+    h.view.valuesButton.dispatchEvent(new Event("click"));
     assert.equal(h.view.table.children[0], firstRow, "a queued disclosure event does not draw after closing the panel");
 });
 
@@ -381,22 +426,22 @@ test("the first temporal calculation opens a prominent plot progress area with m
     h.state.statistics[0].rows = [row]; h.state.rows = [row]; h.draw();
     assert.equal(h.view.plotProgress.hidden, true);
     assert.equal(h.view.results.hidden, false);
-    assert.equal(h.view.values.open, true, "one returned observation uses the existing scalar presentation");
+    assert.equal(h.view.reading.hidden, false, "one returned observation displays the scalar");
 });
 
 test("progress preserves the values disclosure and focus; changing result count restores the presentation", () => {
     const h = controlsFixture(); h.draw();
     const row = h.state.statistics[0].rows[0];
-    h.view.values.open = false;
+    h.view.resultButton.dispatchEvent(new Event("click"));
     h.view.download.focus();
     h.state.message = "Calculating"; h.draw();
-    assert.equal(h.view.values.open, false, "do not reopen a disclosure the user closed");
+    assert.equal(h.view.values.hidden, true, "do not reopen a disclosure the user closed");
     assert.equal(h.document.activeElement, h.view.download);
     h.state.statistics[0].rows.push({...row, label: "Raster B"}); h.draw();
-    h.view.values.open = true; h.draw();
-    assert.equal(h.view.values.open, true, "multi-result table also retains the user's choice");
+    h.view.valuesButton.dispatchEvent(new Event("click")); h.draw();
+    assert.equal(h.view.values.hidden, false, "multi-result table also retains the user's choice");
     h.state.statistics[0].rows.pop(); h.draw();
-    assert.equal(h.view.values.open, true);
+    assert.equal(h.view.values.hidden, true);
     assert.equal(h.plots.length, 0, "pending and single-result updates never create an empty plot");
     h.state.showingPrevious = true; h.draw();
     assert.equal(h.view.chartNote.hidden, true, "the current-values table does not claim to show previous-area plots");
@@ -466,7 +511,6 @@ test("graph context identifies its rasters, variable, period and area independen
     assert.equal(h.view.plotHeading.hidden, false);
     assert.equal(title.textContent, "Raster A");
     assert.equal(context.textContent, "Whole raster");
-    h.document.querySelector("#raster-series-inputs").hidden = true;
     h.state.sources.push({key: "b", label: "Raster B", selected: true});
     h.state.area.areaChoice = "vector"; h.state.area.areaLabel = "Selected county polygons";
     h.draw();
@@ -502,21 +546,18 @@ test("temporal controls reuse the period editor and preserve focused input while
     };
     h.view.bind(actions);
     h.view.plotsView = {renderPlots() {}};
-    const inputBody = h.document.querySelector("#raster-series-inputs");
-    const inputToggle = h.document.querySelector("#raster-series-toggle-inputs");
-    inputToggle.focus(); h.view.root.scrollTop = 300;
-    inputToggle.dispatchEvent(new Event("click"));
-    assert.equal(inputBody.hidden, true);
-    assert.equal(inputToggle.getAttribute("aria-expanded"), "false");
-    assert.equal(inputToggle.textContent, "Inputs · Show");
-    assert.equal(h.view.root.scrollTop, 0, "collapsing reveals the graph rather than leaving the panel scrolled below it");
-    h.draw();
-    assert.equal(inputBody.hidden, true, "result updates preserve the user's disclosure choice");
-    assert.equal(h.document.activeElement, inputToggle);
+    const inputBody = h.document.querySelector("#raster-series-data-inputs");
+    const inputToggle = h.document.querySelector("#raster-series-source-button");
+    inputBody.hidden = true;
+    inputToggle.focus();
     inputToggle.dispatchEvent(new Event("click"));
     assert.equal(inputBody.hidden, false);
     assert.equal(inputToggle.getAttribute("aria-expanded"), "true");
-    assert.equal(inputToggle.textContent, "Inputs · Hide");
+    h.draw();
+    assert.equal(inputBody.hidden, false, "updates preserve an open source picker");
+    h.document.querySelector("#raster-series-sources-done").dispatchEvent(new Event("click"));
+    assert.equal(h.document.activeElement, inputToggle);
+    assert.equal(inputToggle.getAttribute("aria-expanded"), "false");
     h.state.busy = false;
     h.state.area.area = {kind: "wholeRaster"};
     h.state.temporal = {datasets: [{key: "observations", label: "Weather observations"}], datasetKey: "observations",

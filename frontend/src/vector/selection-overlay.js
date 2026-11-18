@@ -9,7 +9,7 @@ export class VectorSelectionOverlay {
     /**
      * Request a bounded outline without delaying numeric selection activation.
      * @param {Object} area Validated selection response.
-     * @return {Promise<void>} Presentation completion; failures leave no outline.
+     * @return {Promise<Object|undefined>} Displayed GeoJSON for other map previews, or undefined if unavailable or superseded.
      */
     async load(area) {
         this.clear();
@@ -27,6 +27,7 @@ export class VectorSelectionOverlay {
             this.layer = this.leaflet.geoJSON(value.geometry, {
                 style: { color: "#f59e0b", weight: 2, fillOpacity: 0.05 }, interactive: false,
             }).addTo(this.map);
+            return value.geometry;
         } catch { /* Optional outline failure never changes the analysis selection. */ }
     }
 
