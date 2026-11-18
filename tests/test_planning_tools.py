@@ -31,7 +31,7 @@ from eolab_app.planning.service import PlanningToolService
 from eolab_app.planning.store import PlanningToolStore
 from eolab_app.routes.planning_tools import create_planning_tools_router
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.vector.filters import CatalogVectorFilterRequest
+from eolab_app.vector.filters import CatalogVectorFilterRequest, validate_filter
 from eolab_app.vector.parcel_models import ParcelIdRequest, ParcelIdValidationResponse
 from test_outline_jobs import outline_case
 
@@ -183,14 +183,20 @@ class MemoryPlanningStore(PlanningToolStore):
 
 
 async def authorize_layer(request: CatalogVectorFilterRequest) -> CatalogSelection:
-    """Return an authoritative fixture source while preserving ordinary filter state.
+    """Check the live filter against the fixture layer's original columns.
 
     Args:
         request: Layer identity, live predicate and ordered calculations.
 
     Returns:
         Accepted original asset/layer descriptor.
+
+    Raises:
+        VectorConflictError: A filter rule cannot apply to the fixture layer.
     """
+    validate_filter(
+        request.filter, {"area": "float", "name": "str", "parcel_id": "str"}
+    )
     return CatalogSelection(
         **request.model_dump(by_alias=True), assetKey="data", layerName="parcels"
     )
@@ -339,6 +345,14 @@ def test_http_author_isolation_revisions_and_private_headers() -> None:
         filtered = author.put(location, json=replacement)
         assert filtered.status_code == 200, filtered.text
         assert filtered.json()["layers"] == replacement["layers"]
+        invalid_filter = deepcopy(replacement)
+        invalid_filter["expectedRevision"] = 3
+        parcel_rules = invalid_filter["layers"][1]["definition"]["filter"]["rules"]
+        parcel_rules[0]["field"] = "missing_area"
+        rejected_filter = author.put(location, json=invalid_filter)
+        assert rejected_filter.status_code == 422
+        assert "missing_area" in rejected_filter.json()["detail"]
+        assert author.get(location).json() == filtered.json()
         scan.assert_awaited_once()
 
         scan.side_effect = VectorConflictError("Parcel IDs must be unique")
