@@ -303,6 +303,21 @@ export function createVectorMapLayerAdapter({
         });
     }
 
+    /** Register the current target's field or spatial filter for map rendering.
+     * @param {Object} record Retained or staged vector view.
+     * @param {Object} candidate Validated rule builder state.
+     * @param {AbortSignal} [signal] Cancellation of this publication.
+     * @return {Promise<Object>} Filtered publication and available whole-layer counts.
+     * @throws {Error} If the original layers cannot be authorized or read.
+     */
+    function prepareMapFilter(record, candidate, signal) {
+        if (candidate.enabled && candidate.rules.some(rule => rule.operator === "intersects")) {
+            const selection = record.adapter.describeSource(record).selection;
+            return applySpatialFilter("map", {layerName: record.publication.layerName, selection: {...selection, filter: candidate}}, signal);
+        }
+        return filter(record.state.source, candidate, signal);
+    }
+
     return Object.freeze({
         /**
          * Prepare initial colors with labels off before a new WMS layer is attached.
@@ -468,7 +483,7 @@ export function createVectorMapLayerAdapter({
             record.state.filterCount = null;
             record.state.fieldRenderingReady = false;
             record.state.fieldRenderingError = null;
-            refreshFilterCount(record);
+            if (!record.state.filter.enabled || !record.state.filter.rules.some(rule => rule.operator === "intersects")) refreshFilterCount(record);
             onFilterChange(record);
             return this.refreshCalculatedFieldRendering(record, source, signal);
         },
@@ -481,7 +496,7 @@ export function createVectorMapLayerAdapter({
         async refreshCalculatedFieldRendering(record, source, signal) {
             const generation = ++record.state.fieldRenderingGeneration;
             try {
-                const filtered = await filter(source, record.state.filter, signal);
+                const filtered = await prepareMapFilter(record, record.state.filter, signal);
                 signal?.throwIfAborted();
                 if (record.state.disposed || record.state.source !== source || record.state.fieldRenderingGeneration !== generation) return null;
                 const styled = await style(source, record.state.style);
@@ -493,6 +508,10 @@ export function createVectorMapLayerAdapter({
                 record.state.layer?.setParams({layers: filtered.layerName, styles: styled.styleName,
                     vector_style: JSON.stringify(styled.style), vector_calculated_fields: JSON.stringify(source.calculatedFields)});
                 record.state.fieldRenderingReady = true;
+                if (filtered.count) {
+                    record.state.filterCount = filtered.count;
+                    record.state.filterCounting = false;
+                }
                 record.state.fieldRenderingError = null;
                 return null;
             } catch {
@@ -527,7 +546,7 @@ export function createVectorMapLayerAdapter({
          * @param {Object} record Retained vector view.
          * @return {boolean} False while display authorization is pending or failed.
          */
-        renderingAvailable(record) { return record.state.fieldRenderingReady; },
+        renderingAvailable(record) { return record.state.fieldRenderingReady && !record.state.spatialFilterUnavailable; },
         /** Reconstruct saved fields before restoring any dependent style or filter.
          * @param {Object} record Staged or retained vector view.
          * @param {ReadonlyArray<import("../calculated-fields.js").CalculatedField>} definitions Saved ordered field definitions.
@@ -552,8 +571,7 @@ export function createVectorMapLayerAdapter({
         describeFilter(record) {
             return {
                 filter: structuredClone(record.state.filter),
-                ...(record.state.filterCount ? {count: {...record.state.filterCount}} : {}),
-                status: vectorFilterStatus(record.state),
+                status: record.spatialFilterError ?? vectorFilterStatus(record.state),
             };
         },
         /**
@@ -643,6 +661,16 @@ export function createVectorMapLayerAdapter({
             record.state.filterApplyAbort?.abort();
             record.state.filterApplyAbort = null;
         },
+        /** Withhold a map layer whose required polygon condition cannot be applied.
+         * @param {Object} record Target with an unavailable polygon source.
+         * @param {Object} empty Effective empty filter while the chosen polygon layer is unavailable.
+         * @return {void}
+         */
+        hideUnavailableFilter(record, empty) {
+            this.cancelPendingFilter(record);
+            record.state.spatialFilterUnavailable = true;
+            commitFilterState(record, empty, null);
+        },
         /**
          * Validate and apply map-filter edits, then request their feature counts.
          * @param {Object} record Retained vector record.
@@ -658,9 +686,7 @@ export function createVectorMapLayerAdapter({
             record.state.filterApplyAbort = controller;
             let result;
             try {
-                result = normalized.enabled && normalized.rules.some(rule => rule.operator === "intersects")
-                    ? await applySpatialFilter("map", {layerName: record.publication.layerName, selection: {...this.describeSource(record).selection, filter: normalized}}, controller.signal)
-                    : await filter(record.state.source, normalized, controller.signal);
+                result = await prepareMapFilter(record, normalized, controller.signal);
             } catch (error) {
                 if (record.state.disposed || generation !== record.state.filterGeneration) return null;
                 throw error;
@@ -668,6 +694,7 @@ export function createVectorMapLayerAdapter({
                 if (record.state.filterApplyAbort === controller) record.state.filterApplyAbort = null;
             }
             if (record.state.disposed || generation !== record.state.filterGeneration) return null;
+            record.state.spatialFilterUnavailable = false;
             record.publication = { ...record.publication, layerName: result.layerName };
             record.state.layer?.setParams({ layers: result.layerName });
             const accepted = commitFilterState(record, normalized, result.count ?? null);
@@ -692,9 +719,7 @@ export function createVectorMapLayerAdapter({
             record.state.filterRenderAbort = controller;
             let result;
             try {
-                result = accepted.enabled && accepted.rules.some(rule => rule.operator === "intersects")
-                    ? await applySpatialFilter("map", {layerName: record.publication.layerName, selection: {...this.describeSource(record).selection, filter: accepted}}, controller.signal)
-                    : await filter(record.state.source, accepted, controller.signal);
+                result = await prepareMapFilter(record, accepted, controller.signal);
             } catch (error) {
                 if (record.state.disposed || record.state.filter !== accepted) return null;
                 throw error;
@@ -703,6 +728,7 @@ export function createVectorMapLayerAdapter({
             }
             if (record.state.disposed || record.state.filter !== accepted) return null;
             record.publication = { ...record.publication, layerName: result.layerName };
+            record.state.spatialFilterUnavailable = false;
             record.state.layer?.setParams({ layers: result.layerName });
             onFilterChange(record);
             return record.state.disposed || record.state.filter !== accepted ? null : accepted;
@@ -855,7 +881,7 @@ export function createVectorMapLayerAdapter({
                 canCalculateFields: true,
                 error: record.state.fieldRenderingError,
                 filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
-                filterStatus: record.entry.spatialFilterError ?? vectorFilterStatus(record.state),
+                filterStatus: record.spatialFilterError ?? vectorFilterStatus(record.state),
                 legend: vectorStyleLegend(record.state.style),
             };
         },

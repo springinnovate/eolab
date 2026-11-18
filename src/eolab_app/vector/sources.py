@@ -366,6 +366,11 @@ class PrivateVectorInputs:
     artifacts: frozenset[tuple[str, str]]
     drawings: frozenset[PolygonAreaReference]
 
+    @property
+    def private(self) -> bool:
+        """Return whether serving this layer requires a browser ownership check."""
+        return bool(self.uploads or self.artifacts or self.drawings)
+
 
 class PublishedVectorRegistry:
     """Authorize exact immutable vector sources for the public WMS proxy."""

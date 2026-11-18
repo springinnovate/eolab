@@ -1,6 +1,5 @@
 """Find whole target features that intersect the selected original polygons."""
 
-import asyncio
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -14,11 +13,11 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import VectorReadLimits, _source_collection, polygon_features
+from eolab_app.bounded_vector import VectorReadLimits, _limit_memory, _source_collection
+from eolab_app.execution.bounded_process import ProcessDeadlineError, ProcessResultWriter, run_bounded_process
 from eolab_app.calculated_fields import evaluate_calculated_fields
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.polygon_areas import SummaryPolygon
-from eolab_app.source_files import finish_source_task
 from eolab_app.feature_predicate import DrawingSelection, VectorFilter, VectorSelection
 
 IntersectionLayer = ResolvedCatalogSelection | tuple[SummaryPolygon, ...]
@@ -29,6 +28,7 @@ async def bind_intersections(
     target: ResolvedCatalogSelection,
     read_layer: Callable[[VectorSelection | DrawingSelection], Awaitable[IntersectionLayer]],
     *, limits: VectorReadLimits | None = VectorReadLimits(),
+    compare: Callable[[IntersectionLayer, IntersectionLayer], Awaitable[tuple[int, ...]]] | None = None,
 ) -> ResolvedCatalogSelection:
     """Evaluate spatial conditions against original files while their owners hold access.
 
@@ -37,6 +37,7 @@ async def bind_intersections(
         read_layer: Open an authorized reference with its own current filter bound.
             The caller keeps the files available until this function returns.
         limits: Interactive reading budgets or None for a retained Processing job.
+        compare: Caller-owned scheduler for native comparisons, or an independently supervised process.
 
     Returns:
         The original target with membership for each spatial clause. Field comparisons
@@ -54,12 +55,56 @@ async def bind_intersections(
     memberships = {}
     for rule in conditions:
         polygons = await read_layer(rule.source)
-        read = asyncio.create_task(asyncio.to_thread(intersecting_feature_ids, original, polygons, limits=limits))
-        try:
-            memberships[str(rule.layerId)] = frozenset(await asyncio.shield(read))
-        finally:
-            await finish_source_task(read)
+        ids = await compare(original, polygons) if compare else await read_intersection(original, polygons, limits=limits)
+        memberships[str(rule.layerId)] = frozenset(ids)
     return replace(target, intersections=memberships)
+
+
+async def read_intersection(
+    target: IntersectionLayer, polygons: IntersectionLayer, *, limits: VectorReadLimits | None = VectorReadLimits(),
+) -> tuple[int, ...]:
+    """Compare originals in a cancellable native worker and wait for it to exit.
+
+    Args:
+        target: Authorized original features or committed target drawings.
+        polygons: Authorized reference polygons with their applied filter.
+        limits: Interactive budgets, or None for an unlimited Processing calculation.
+
+    Returns:
+        Matching original feature IDs.
+
+    Raises:
+        GeometryValidationError: If geometry, native memory or the elapsed-time budget prevents a result.
+        asyncio.CancelledError: After a cancelled worker has stopped using its files.
+    """
+    try:
+        ids, error = await run_bounded_process(_compare_originals, (target, polygons, limits), limits.seconds if limits else None)
+    except ProcessDeadlineError as error:
+        raise GeometryValidationError("The spatial comparison could not finish within the map read budget.") from error
+    if error:
+        raise GeometryValidationError(error)
+    return ids
+
+
+def _compare_originals(writer: ProcessResultWriter, target: IntersectionLayer, polygons: IntersectionLayer,
+                       limits: VectorReadLimits | None) -> None:
+    """Return matching IDs or a readable source error through the supervised native worker's pipe.
+
+    Args:
+        writer: Parent process waiting for one result.
+        target: Authorized target source.
+        polygons: Authorized polygon view.
+        limits: Interactive budgets, or None for unlimited Processing work.
+    """
+    from eolab_app.catalog_selection import SelectionUnavailableError
+    try:
+        with _limit_memory(limits.memory_bytes if limits else None):
+            ids = intersecting_feature_ids(target, polygons, limits=limits)
+        writer.put((ids, None))
+    except (GeometryValidationError, SelectionUnavailableError) as error:
+        writer.put(((), str(error)))
+    except MemoryError:
+        writer.put(((), "The spatial comparison ran out of memory."))
 
 
 def intersecting_feature_ids(
@@ -88,11 +133,13 @@ def intersecting_feature_ids(
     """
     deadline = monotonic() + limits.seconds if limits else None
     try:
-        if isinstance(polygons, ResolvedCatalogSelection):
-            with polygon_features(polygons, limits=limits) as features:
-                index = STRtree([shape(feature) for feature in features])
-        else:
-            index = STRtree([shape(polygon.model_dump()) for polygon in polygons])
+        with _target_features(polygons, limits, deadline) as features:
+            selected = []
+            for _, polygon in features:
+                if polygon.geom_type not in {"Polygon", "MultiPolygon"} or not polygon.is_valid:
+                    raise GeometryValidationError("Choose a layer with valid polygon geometry.")
+                selected.append(polygon)
+        index = STRtree(selected)
         if not len(index):
             return ()
         with _target_features(target, limits, deadline) as features:
@@ -129,6 +176,8 @@ def _target_features(
         if not dataset.crs:
             raise GeometryValidationError("The target layer has no coordinate reference system.")
 
+        needs_projection = dataset.crs.to_epsg() != 4326
+
         def records() -> Iterator[tuple[int, BaseGeometry]]:
             """Yield nonempty original features after applying the target view's predicate."""
             options = {"where": layer.where} if layer.where else {}
@@ -146,7 +195,7 @@ def _target_features(
                     continue
                 if limits and get_num_coordinates(geometry) > limits.coordinates_per_feature:
                     raise GeometryValidationError("A target feature exceeds the interactive coordinate limit.")
-                if not dataset.crs.is_geographic or dataset.crs.to_epsg() != 4326:
+                if needs_projection:
                     geometry = shape(transform_geom(dataset.crs, "EPSG:4326", feature.geometry, antimeridian_cutting=False))
                 yield int(feature.id), geometry
 

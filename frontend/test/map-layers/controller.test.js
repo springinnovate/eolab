@@ -1223,7 +1223,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     const observer = new Function("mapLegend", "layerStyleEditor", "mapFeatureHover", "savedMapViewController",
         "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
         "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
-        "temporalDatasets", "planning", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
+        "temporalDatasets", "planning", "refreshSpatialFilters", `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
         { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
         { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
         () => calls.push(["catalog"]), { observeLayerOrder: () => calls.push(["annotations-order"]) },

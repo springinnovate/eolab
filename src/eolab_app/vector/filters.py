@@ -106,7 +106,7 @@ def filter_ecql(
             if spatial_ranges is None:
                 raise VectorConflictError("The polygon filter is unavailable. Reapply it.")
             ranges = spatial_ranges[str(rule.layerId)]
-            expressions.append(f"(eolabFeatureInRanges(id(), '{ranges}') = true)")
+            expressions.append(f"(eolabFeatureInRanges('{ranges}') = true)")
             continue
         field = '"' + rule.field.replace('"', '""') + '"'
         if rule.field in calculated:
@@ -178,9 +178,7 @@ def filter_ogc(
         if isinstance(rule, IntersectsLayer):
             if spatial_ranges is None:
                 raise VectorConflictError("The polygon filter is unavailable. Reapply it.")
-            identifier = _node("Function")
-            identifier.set("name", "id")
-            test = _node("Function", identifier, _node("Literal", text=spatial_ranges[str(rule.layerId)]))
+            test = _node("Function", _node("Literal", text=spatial_ranges[str(rule.layerId)]))
             test.set("name", "eolabFeatureInRanges")
             expressions.append(_node("PropertyIsEqualTo", test, _node("Literal", text="true")))
             continue

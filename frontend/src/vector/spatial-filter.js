@@ -1,24 +1,7 @@
 /** Bind spatial conditions to the selected map view and its currently applied filter. */
 import { EMPTY_VECTOR_FILTER } from "./filter.js";
+import { viewFilter, waitingForPolygonLayer } from "../layer-filter.js";
 
-/** Keep the user's choices when saving or comparing views without retaining private read references.
- * @param {Object} filter Accepted filter or editor draft.
- * @return {Object} Field conditions and stable polygon-view IDs.
- */
-export function viewFilter(filter) {
-    return {...filter, rules: filter.rules.map(rule => rule.operator === "intersects"
-        ? {operator: "intersects", layerId: rule.layerId} : rule)};
-}
-
-/** Show an empty view until all its saved polygon sources can be read.
- * @param {Object} filter Saved filter containing at least one spatial clause.
- * @return {Object} An empty selection, or the unrestricted view when filtering is disabled.
- */
-export function waitingForPolygonLayer(filter) {
-    const rule = filter.rules.find(condition => condition.operator === "intersects");
-    return {enabled: filter.enabled, match: "all", rules: [{operator: "intersects", layerId: rule.layerId,
-        source: {kind: "drawing", polygonArea: null}}]};
-}
 
 /** Send an authorized original-source intersection request.
  * @param {"map"|"drawings"} operation Map filter or committed drawing membership.
@@ -61,9 +44,9 @@ export class SpatialFilterViews {
         const key = JSON.stringify([layer.key, filter === EMPTY_VECTOR_FILTER]);
         const signature = JSON.stringify(polygons);
         let entry = this.drawings.get(key);
-        if (entry?.signature !== signature) {
+        if (entry?.signature !== signature || Date.now() >= entry.renewAt) {
             const previous = entry;
-            entry = {signature, pending: this.upload(polygons)};
+            entry = {signature, pending: this.upload(polygons), renewAt: Date.now() + 23 * 60 * 60 * 1000};
             this.drawings.set(key, entry);
             try { await entry.pending; }
             catch (error) { if (this.drawings.get(key) === entry) this.drawings.delete(key); throw error; }
@@ -76,18 +59,20 @@ export class SpatialFilterViews {
      * @param {string} key Target map-layer key.
      * @param {Object} filter Logical editor rules, including chosen polygon-view IDs.
      * @param {Set<string>} [ancestors] View keys on the current chain.
+     * @param {Object[]} [views] Polygon views captured for this edit.
      * @return {Promise<Object>} Portable predicate with immutable original-source descriptors.
      * @throws {Error} If a chosen view disappeared or creates a circular filter.
      */
-    async bind(key, filter, ancestors = new Set()) {
+    async bind(key, filter, ancestors = new Set(), views = this.layers()) {
+        if (!filter.enabled) return waitingForPolygonLayer(filter);
         if (ancestors.has(key)) throw new Error("Choose a polygon layer whose filter does not refer back to this layer.");
         const path = new Set(ancestors).add(key);
         const rules = [];
         for (const rule of filter.rules) {
             if (rule.operator !== "intersects") { rules.push(rule); continue; }
-            const layer = this.layers().find(view => view.id === rule.layerId);
+            const layer = views.find(view => view.id === rule.layerId);
             if (!layer) throw new Error("The polygon layer is unavailable. Choose another layer.");
-            const current = await this.bind(layer.key, layer.filter, path);
+            const current = await this.bind(layer.key, layer.filter, path, views);
             const source = layer.selection ? {...layer.selection, filter: current} : await this.drawing(layer, layer.filter);
             rules.push({operator: "intersects", layerId: layer.id, source});
         }
@@ -104,11 +89,12 @@ export class SpatialFilterViews {
         for (const key of this.followed.keys()) if (!keys.has(key)) this.followed.delete(key);
         if (!active.length) return;
         const layers = this.layers();
-        const inputs = (filter, path) => viewFilter(filter).rules.map(rule => {
+        const inputs = (filter, path) => !filter.enabled ? [] : viewFilter(filter).rules.map(rule => {
             if (rule.operator !== "intersects") return rule;
             const layer = layers.find(view => view.id === rule.layerId);
             if (!layer || path.has(layer.key)) return [rule.layerId, null];
-            return [rule.layerId, layer.selection, layer.polygons, layer.filter.enabled, layer.filter.match,
+            const drawingMatches = layer.polygons && layer.filter.rules.map(condition => condition.matchingIds);
+            return [rule.layerId, layer.selection, layer.polygons, drawingMatches, layer.filter.enabled, layer.filter.match,
                 inputs(layer.filter, new Set(path).add(layer.key))];
         });
         for (const target of active) {

@@ -508,12 +508,14 @@ def test_second_vector_input_rejection_releases_unused_retention(
 
 
 @pytest.mark.parametrize(
-    "operation", ["clip", "summary", "model-clip", "model-summary"]
+    ("operation", "private_boundary"),
+    [("clip", False), ("summary", False), ("model-clip", False), ("model-summary", False), ("clip", True)],
 )
 def test_accepted_upload_survives_deletion_and_worker_restart(
     upload_boundary: UploadBoundary,
     store: PostgresJobStore,
     operation: str,
+    private_boundary: bool,
 ) -> None:
     """Retain exact filtered polygons for accepted work without granting new access.
 
@@ -521,9 +523,15 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
         upload_boundary: Actual upload, HTTP and native Processing components.
         store: Disposable durable job database.
         operation: Public submission contract exercised with the same polygons.
+        private_boundary: Use the filtered upload as a boundary on a public catalog target.
     """
     owner, worker, service, uploads, selection = upload_boundary
-    endpoint, body = processing_request(owner, selection, operation)
+    target = selection
+    if private_boundary:
+        item = owner.app.state.vector_item
+        target = {"collectionId": item["collection"], "itemId": item["id"], "assetKey": "data", "layerName": "areas",
+                  "filter": {"rules": [{"operator": "intersects", "layerId": str(uuid4()), "source": selection}]}}
+    endpoint, body = processing_request(owner, target, operation)
     with TestClient(owner.app, base_url="https://testserver") as other:
         denied = other.post(endpoint, json=body, headers=HEADERS)
         assert denied.status_code == 404, denied.text

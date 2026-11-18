@@ -159,7 +159,7 @@ from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.vector.outline_jobs import OutlineJobs
-from eolab_app.vector.selection_jobs import SelectionJobs
+from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.parcel_jobs import ParcelJobs
 from eolab_jobs.client import JobsClient
@@ -273,6 +273,7 @@ def create_app(
         vector_source_resolver,
         OutlineJobs(vector_jobs),
         selection_executor=SelectionJobs(vector_jobs),
+        comparison_executor=lambda token: compare_selection_job(vector_jobs, token),
         extent_executor=ExtentJobs(vector_jobs),
         parcel_executor=ParcelJobs(vector_jobs),
         uploads=vector_uploads,
@@ -444,7 +445,7 @@ def create_app(
                     request, Response(), processing_session_ttl
                 )
                 for drawing in drawings:
-                    await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256)
+                    await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256, include_geometry=False)
                 private = (
                     await vector_publication.authorize_artifact_layers(layer_names, owner)
                     or private
@@ -944,7 +945,7 @@ def create_app(
                 temporary_raster_source(name) is not None
                 or uploaded_raster_source(name) is not None
                 or is_temporal_raster_layer(name)
-                or bool(published_vectors.private_inputs(name).uploads or published_vectors.private_inputs(name).artifacts or published_vectors.private_inputs(name).drawings)
+                or published_vectors.private_inputs(name).private
             ),
         )
     )

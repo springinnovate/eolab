@@ -5306,6 +5306,7 @@ summary:hover > .raster-disclosure-chevron {
 #vector-filter-panel { padding: 16px; }
 #vector-filter-title { overflow-wrap: anywhere; font-weight: 600; }
 .vector-filter-options, .vector-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 12px; }
+.vector-filter-condition-choices:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px; }
 .vector-filter-options label { display: flex; align-items: center; gap: 6px; }
 .vector-filter-rule { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr); gap: 8px; padding: 10px; margin-block: 8px; border: 1px solid var(--border-1); border-radius: 8px; }
 .vector-filter-rule select, .vector-filter-rule input { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 8px; font: inherit; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }

@@ -1,9 +1,9 @@
 """Describe filtered vector features and the original polygon sources used by spatial conditions."""
 
+from dataclasses import dataclass
 from math import isfinite
 from typing import Annotated, Any, Literal
 from uuid import UUID
-from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
 
@@ -85,6 +85,26 @@ class VectorFilter(BaseModel):
     enabled: StrictBool = True
     match: Literal["all", "any"] = "all"
     rules: tuple[VectorFilterRule | IntersectsLayer, ...] = Field(default=(), max_length=MAX_FILTER_RULES)
+
+    @field_validator("rules")
+    @classmethod
+    def check_view_sources(cls, rules: tuple[VectorFilterRule | IntersectsLayer, ...]) -> tuple[VectorFilterRule | IntersectsLayer, ...]:
+        """Require repeated conditions on a view to identify the same selected polygons.
+
+        Args:
+            rules: Conditions submitted for this target.
+
+        Returns:
+            The unchanged conditions.
+
+        Raises:
+            ValueError: If two conditions assign different sources to one view ID.
+        """
+        sources = {}
+        for rule in rules:
+            if isinstance(rule, IntersectsLayer) and sources.setdefault(rule.layerId, rule.source) != rule.source:
+                raise ValueError("A polygon view must have the same source and filter in every condition.")
+        return rules
 
     @property
     def active(self) -> bool:

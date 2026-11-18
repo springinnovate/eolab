@@ -8,7 +8,7 @@ import sys
 from typing import Any
 from uuid import uuid4
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 import httpx2
 import pytest
@@ -331,9 +331,9 @@ def test_parcel_disconnect_cancels_its_admitted_job(
                 if route == "validate-id"
                 else ParcelRowsRequest(**values, filter=selection.filter)
             )
-            task = asyncio.create_task(
-                endpoint(payload, Request({"type": "http"}, receive))
-            )
+            http_request = Request({"type": "http"}, receive)
+            call = endpoint(payload, http_request, Response()) if route == "rows" else endpoint(payload, http_request)
+            task = asyncio.create_task(call)
             await asyncio.wait_for(admitted.wait(), 5)
             disconnected.set()
             release.set()

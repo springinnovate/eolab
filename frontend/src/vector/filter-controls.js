@@ -73,7 +73,7 @@ export class VectorFilterControls {
             this.add.setAttribute("aria-controls", this.conditionChoices.id);
             this.add.setAttribute("aria-expanded", "false");
             this.add.parentElement?.insertBefore(this.conditionChoices, this.add.nextSibling);
-            for (const [label, spatial] of [["Field value", false], ["Intersects layer…", true]]) {
+            for (const [label, spatial] of [["Field value", false], ["Intersects layer", true]]) {
                 const button = documentContext.createElement("button");
                 button.type = "button"; button.className = "secondary-button"; button.textContent = label;
                 this.#listen(button, "click", () => this.#addCondition(spatial));
@@ -174,7 +174,10 @@ export class VectorFilterControls {
         if (this.fieldSignature !== JSON.stringify(target.fields)) this.#renderRules();
         if (this.getPolygonLayers && this.draft.rules.some(rule => rule.operator === "intersects")) {
             const choices = this.getPolygonLayers(this.key);
-            if (this.polygonSignature !== JSON.stringify(choices)) this.#refreshPolygonChoices(choices);
+            if (this.polygonSignature !== JSON.stringify(choices)) {
+                this.#refreshPolygonChoices(choices);
+                this.#validate();
+            }
         }
         this.zoomButton.hidden = !this.onZoom || !!this.host || !!this.action || !target.source;
         if (this.zoomRequest && !this.#isZoomCurrent(this.zoomRequest)) {
@@ -315,7 +318,7 @@ export class VectorFilterControls {
             const candidate = normalizeVectorFilter({...this.draft, rules: this.draft.rules.map(rule =>
                 rule.operator === "intersects" ? {operator: rule.operator, layerId: rule.layerId} : rule)}, target.fields);
             for (const rule of candidate.rules) {
-                if (rule.operator === "intersects" && !this.getPolygonLayers?.(this.key).some(layer => layer.id === rule.layerId)) {
+                if (candidate.enabled && rule.operator === "intersects" && !this.getPolygonLayers?.(this.key).some(layer => layer.id === rule.layerId)) {
                     throw new TypeError("The polygon layer is unavailable. Choose another layer.");
                 }
             }
@@ -468,57 +471,57 @@ export class VectorFilterControls {
                 });
                 label.append(polygon); row.append(label);
             } else {
-            const field = select("field", fields.map(({ name }) => ({ value: name, label: name })), rule.field);
-            const type = fields.find(({ name }) => name === rule.field)?.type;
-            const operator = select("comparison", vectorFilterOperators(type), rule.operator);
-            field.addEventListener("change", () => {
-                rule.field = field.value;
-                const options = vectorFilterOperators(fields.find(({ name }) => name === rule.field)?.type);
-                rule.operator = options[0].value; rule.value = "";
-                this.#renderRules(); this.#changed();
-                this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
-            });
-            operator.addEventListener("change", () => {
-                rule.operator = operator.value;
-                rule.value = ["missing", "present"].includes(rule.operator) ? null : "";
-                this.#renderRules(); this.#changed();
-                this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
-            });
-            row.append(field, operator);
-            if (!["missing", "present"].includes(rule.operator)) {
-                const kind = vectorFilterFieldKind(type);
-                const input = kind === "boolean" ? select("value", [
-                    { value: "", label: "Choose value" }, { value: "true", label: "True" }, { value: "false", label: "False" },
-                ], String(rule.value)) : this.document.createElement("input");
-                if (kind !== "boolean") {
-                    input.type = kind === "number" ? "number" : kind === "date" ? "date" : "text";
-                    input.step = "any"; input.maxLength = 256; input.value = rule.value ?? "";
-                    input.placeholder = kind === "number" ? "Enter number" : "Enter value";
-                    input.setAttribute("aria-label", `Condition ${index + 1} value`);
-                }
-                input.addEventListener(kind === "boolean" ? "change" : "input", () => {
-                    rule.value = kind === "number" ? (input.value.trim() === "" ? "" : Number(input.value)) :
-                        kind === "boolean" ? (input.value === "" ? "" : input.value === "true") : input.value;
-                    this.#changed();
+                const field = select("field", fields.map(({ name }) => ({ value: name, label: name })), rule.field);
+                const type = fields.find(({ name }) => name === rule.field)?.type;
+                const operator = select("comparison", vectorFilterOperators(type), rule.operator);
+                field.addEventListener("change", () => {
+                    rule.field = field.value;
+                    const options = vectorFilterOperators(fields.find(({ name }) => name === rule.field)?.type);
+                    rule.operator = options[0].value; rule.value = "";
+                    this.#renderRules(); this.#changed();
+                    this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
                 });
-                row.append(input);
-                if (kind === "string" && source) {
-                    const picker = new VectorFilterValuePicker({documentContext: this.document, input,
-                        field: rule.field, condition: index + 1, setTimer: this.setTimer, clearTimer: this.clearTimer,
-                        isCurrent: () => !this.destroyed && this.key === key && this.getTarget(key) !== null,
-                        loadValues: (query, signal) => this.loadValues(source, query, signal),
-                        acceptsValue: value => {
-                            try {
-                                normalizeVectorFilter({enabled: true, match: "all", rules: [{...rule, value}]}, fields);
-                                return true;
-                            } catch { return false; }
-                        },
-                        selectValue: value => { rule.value = value; input.value = value; this.#changed(); },
+                operator.addEventListener("change", () => {
+                    rule.operator = operator.value;
+                    rule.value = ["missing", "present"].includes(rule.operator) ? null : "";
+                    this.#renderRules(); this.#changed();
+                    this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
+                });
+                row.append(field, operator);
+                if (!["missing", "present"].includes(rule.operator)) {
+                    const kind = vectorFilterFieldKind(type);
+                    const input = kind === "boolean" ? select("value", [
+                        { value: "", label: "Choose value" }, { value: "true", label: "True" }, { value: "false", label: "False" },
+                    ], String(rule.value)) : this.document.createElement("input");
+                    if (kind !== "boolean") {
+                        input.type = kind === "number" ? "number" : kind === "date" ? "date" : "text";
+                        input.step = "any"; input.maxLength = 256; input.value = rule.value ?? "";
+                        input.placeholder = kind === "number" ? "Enter number" : "Enter value";
+                        input.setAttribute("aria-label", `Condition ${index + 1} value`);
+                    }
+                    input.addEventListener(kind === "boolean" ? "change" : "input", () => {
+                        rule.value = kind === "number" ? (input.value.trim() === "" ? "" : Number(input.value)) :
+                            kind === "boolean" ? (input.value === "" ? "" : input.value === "true") : input.value;
+                        this.#changed();
                     });
-                    input.addEventListener("input", () => picker.close());
-                    this.valuePickers.push(picker); row.append(picker.root);
+                    row.append(input);
+                    if (kind === "string" && source) {
+                        const picker = new VectorFilterValuePicker({documentContext: this.document, input,
+                            field: rule.field, condition: index + 1, setTimer: this.setTimer, clearTimer: this.clearTimer,
+                            isCurrent: () => !this.destroyed && this.key === key && this.getTarget(key) !== null,
+                            loadValues: (query, signal) => this.loadValues(source, query, signal),
+                            acceptsValue: value => {
+                                try {
+                                    normalizeVectorFilter({enabled: true, match: "all", rules: [{...rule, value}]}, fields);
+                                    return true;
+                                } catch { return false; }
+                            },
+                            selectValue: value => { rule.value = value; input.value = value; this.#changed(); },
+                        });
+                        input.addEventListener("input", () => picker.close());
+                        this.valuePickers.push(picker); row.append(picker.root);
+                    }
                 }
-            }
             }
             const remove = this.document.createElement("button"); remove.type = "button"; remove.className = "secondary-button";
             remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove condition ${index + 1}`);

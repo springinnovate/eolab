@@ -77,13 +77,14 @@ def create_vector_sampling_router(
 
     @router.post("/parcels/rows", response_model=ParcelRowsResponse)
     async def parcel_rows(
-        payload: ParcelRowsRequest, request: Request
+        payload: ParcelRowsRequest, request: Request, response: Response
     ) -> ParcelRowsResponse:
         """Return original parcel IDs and display attributes after exact filtering.
 
         Args:
             payload: Catalog source, ordinary filter, original fields and page bounds.
             request: HTTP disconnect observer for the supervised native read.
+            response: Renews private ownership cookies when the filter uses private sources.
 
         Returns:
             One complete page, including empty success, with source and next offset.
@@ -93,17 +94,17 @@ def create_vector_sampling_router(
             VectorFeatureError: Safe source, field or Jobs error translated by the route.
         """
         try:
-            return await run_until_http_disconnect(
-                request, service.read_parcel_rows(payload)
-            )
+            read = (service.read_parcel_rows(payload, read_source_owner(payload, request, response))
+                    if payload.filter.intersections else service.read_parcel_rows(payload))
+            return await run_until_http_disconnect(request, read)
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Parcel reading cancelled") from error
         except SelectionUnavailableError as error:
             raise HTTPException(409, error.detail) from error
 
     def read_source_owner(
-        payload: object, request: Request, response: Response
-    ) -> str | None:
+        payload: CatalogVectorFilterRequest | VectorSelection | UploadedVectorFilterRequest, request: Request, response: Response
+    ) -> str | VectorSourceOwners | None:
         """Read the private identity required by an upload or immutable run result.
 
         Args:
@@ -136,6 +137,30 @@ def create_vector_sampling_router(
             )
         return None
 
+    @router.api_route("/spatial-comparison", methods=["GET", "PUT"], include_in_schema=False)
+    async def spatial_comparison(request: Request) -> Response:
+        """Exchange original source descriptors and matching IDs with one authorized worker.
+
+        Args:
+            request: Internal GET for the input pair or PUT of matching original IDs.
+
+        Returns:
+            The original-source read descriptors or acknowledgment of the comparison result.
+
+        Raises:
+            HTTPException: If the read has ended or the credential is unknown.
+        """
+        from fastapi.responses import JSONResponse
+        from pydantic import TypeAdapter
+        scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+        comparison = service.spatial_reads.get_comparison(token) if scheme.lower() == "bearer" else None
+        if comparison is None:
+            raise HTTPException(404, "This polygon comparison is unavailable.")
+        if request.method == "GET":
+            return JSONResponse(comparison.layers)
+        comparison.matches = TypeAdapter(tuple[int, ...]).validate_json(await request.body())
+        return Response(status_code=204)
+
     @router.get("/spatial-read", include_in_schema=False)
     async def spatial_read(request: Request) -> dict[str, frozenset[int]]:
         """Give a running native worker access to its request's authorized feature IDs.
@@ -149,7 +174,8 @@ def create_vector_sampling_router(
         Raises:
             HTTPException: If the submitting read ended or the credential is unknown.
         """
-        membership = service.spatial_reads.get(request.headers.get("Authorization", "").removeprefix("Bearer "))
+        scheme, _, credential = request.headers.get("Authorization", "").partition(" ")
+        membership = service.spatial_reads.get(credential) if scheme.lower() == "bearer" else None
         if membership is None:
             raise HTTPException(404, "The spatial read is unavailable.")
         return dict(membership)

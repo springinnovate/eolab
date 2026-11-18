@@ -40,6 +40,8 @@ class ResolvedCatalogSelection:
         calculated_fields: Programs validated against the original source schema.
         intersections: Original target IDs that meet each authorized spatial condition.
             Bound only for this read, never serialized with the source descriptor.
+        upload_owner: Server-only ownership credential for a worker reading an authorized upload.
+        read_lease: Server-only lease held while a worker reads a private result file.
     """
 
     selection: VectorSelection
@@ -48,8 +50,10 @@ class ResolvedCatalogSelection:
     where: str | None
     calculated_fields: tuple[CompiledCalculatedField, ...] = ()
     intersections: dict[str, frozenset[int]] = field(default_factory=dict)
+    upload_owner: str | None = field(default=None, repr=False, compare=False)
+    read_lease: str | None = field(default=None, repr=False, compare=False)
 
-    def matches_feature(self, feature_id: str, properties: Mapping[str, Any]) -> bool:
+    def matches_feature(self, feature_id: str | int, properties: Mapping[str, Any]) -> bool:
         """Test one original feature against the captured field and spatial conditions.
 
         Args:
@@ -99,6 +103,23 @@ class CatalogSelectionReader(Protocol):
 
         Raises:
             SelectionUnavailableError: If the source cannot be resolved or inspected.
+        """
+        ...
+
+    async def resolve_original_selection(
+        self, selection: CatalogSelection | UploadedSelection, source_owner: str | None = None,
+    ) -> ResolvedCatalogSelection:
+        """Authorize the original file and fields before a job opens its retained polygon sources.
+
+        Args:
+            selection: Original vector identity, calculated fields and predicate.
+            source_owner: Browser upload identity, when required at admission.
+
+        Returns:
+            Validated source metadata with spatial conditions awaiting their separate reads.
+
+        Raises:
+            SelectionUnavailableError: If the source or its fields changed.
         """
         ...
 

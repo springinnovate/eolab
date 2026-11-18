@@ -337,11 +337,15 @@ class ProcessingWorker:
         prepared = await operation.prepare(context, calculation, authorized)
         if model is not None:
             prepared = record_model_preparation(row, model, prepared, self.limits)
-        row.update(
-            await asyncio.to_thread(
-                self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
-            )
+        if drawings := row.get("spatial_filter_drawings"):
+            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings})
+        saved = await asyncio.to_thread(
+            self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
         )
+        if drawings:
+            saved["spec"] = dict(saved["spec"])
+            del saved["spec"]["_spatialFilterDrawings"]
+        row.update(saved)
         return authorized, checksum
 
     async def _execute(self, row: dict[str, Any]) -> Artifact:

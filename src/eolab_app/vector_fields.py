@@ -26,6 +26,7 @@ def visit_vector_fields(
     open_options: tuple[str, ...] = (),
     calculated_fields: tuple[CompiledCalculatedField, ...] = (),
     where: str | None = None,
+    accept_feature: Callable[[int, Mapping[str, Any]], bool] | None = None,
 ) -> bool:
     """Visit selected scalar properties without retaining features or geometry.
 
@@ -41,6 +42,7 @@ def visit_vector_fields(
             Requested calculated fields are evaluated from original columns per row.
         where: Optional source-owner-compiled native candidate predicate. Callers
             retain responsibility for exact post-filtering of returned attributes.
+        accept_feature: Optional predicate using the native feature ID and selected attributes.
 
     Returns:
         Whether the source was exhausted without cancellation. Limited reads
@@ -90,7 +92,7 @@ def visit_vector_fields(
             batch_size = 4096 if feature_limit is None else min(4096, feature_limit + 1)
             options = [
                 f"MAX_FEATURES_IN_BATCH={batch_size}",
-                f"INCLUDE_FID={'NO' if native_fields else 'YES'}",
+                f"INCLUDE_FID={'YES' if accept_feature or not native_fields else 'NO'}",
             ]
             visited = 0
             with layer.GetArrowStreamAsNumPy(options) as stream:
@@ -114,7 +116,9 @@ def visit_vector_fields(
                         properties.update(
                             evaluate_calculated_fields(calculated_fields, properties)
                         )
-                        visit({field: properties[field] for field in fields})
+                        values = {field: properties[field] for field in fields}
+                        if accept_feature is None or accept_feature(int(batch[layer.GetFIDColumn() or "OGC_FID"][index]), values):
+                            visit(values)
                         visited += 1
                     del batch, columns
             return False

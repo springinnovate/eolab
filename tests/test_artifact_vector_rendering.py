@@ -256,7 +256,7 @@ def result_boundary(
             200, content=b"tile", headers={"Content-Type": "image/png"}
         )
 
-    def jobs(request: httpx2.Request) -> httpx2.Response:
+    async def jobs(request: httpx2.Request) -> httpx2.Response:
         """Serve the real Jobs client while requiring an active original-file lease.
 
         Args:
@@ -271,10 +271,19 @@ def result_boundary(
         assert request.headers["authorization"] == f"Bearer {JOBS_TOKEN}"
         if request.url.path == "/api/jobs":
             payload = json.loads(request.content)
-            assert payload["inputs"] == {
-                "selection": {**PRIVATE, "filter": FILTER},
-                "readLease": next(iter(authority.leases)),
-            }
+            if payload["operation"] == "vector.intersection.v1":
+                headers = {"Authorization": f"Bearer {payload['inputs']['spatialRead']}"}
+                async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app), base_url="http://app:8000") as client:
+                    path = "/api/vector-sampling/spatial-comparison"
+                    target, boundary = (await client.get(path, headers=headers)).json()
+                    assert target["readLease"] in authority.leases and boundary["uploadOwner"]
+                    assert (await client.put(path, headers=headers, json=[1])).status_code == 204
+                authority.jobs_outcome = "comparison"
+            else:
+                assert payload["inputs"] == {
+                    "selection": {**PRIVATE, "filter": FILTER},
+                    "readLease": next(iter(authority.leases)),
+                }
         if authority.jobs_outcome == "full":
             return httpx2.Response(
                 503,
@@ -288,6 +297,8 @@ def result_boundary(
         if request.method == "DELETE":
             return httpx2.Response(204)
         if request.url.path.endswith("/result"):
+            if authority.jobs_outcome == "comparison":
+                return httpx2.Response(200, json={"jobId": authority.jobs_id, "value": {"error": None}})
             extent = (
                 {"matched": 0, "bbox": None}
                 if authority.jobs_outcome == "empty"
@@ -610,19 +621,36 @@ def test_disconnected_result_extent_keeps_lease_until_jobs_stops(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("private_boundary", [False, True])
 def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
-    result_boundary: tuple[Any, ...],
+    result_boundary: tuple[Any, ...], private_boundary: bool,
 ) -> None:
     """Keep ordinary rendered and cached results private until their source expires.
 
     Args:
         result_boundary: Real application services and ownership fixture.
+        private_boundary: Give both browsers the target result, but only its owner the uploaded polygon boundary.
     """
     owner, other, authority, _, _, forwarded = result_boundary
     published = owner.post(BASE + "/layers", headers=HEADERS).json()
     filtered = owner.post(
         BASE + "/filters", json={"filter": FILTER}, headers=HEADERS
     ).json()
+    headers = {**HEADERS, "X-EOLab-Uploads": "1"}
+    if private_boundary:
+        upload = owner.post("/api/vector-uploads", params={"name": "Boundary"}, headers=headers, content=authority.path.read_bytes())
+        assert upload.status_code == 201, upload.text
+        mask = {"uploadId": upload.json()["id"], "layerName": "features", "filter": FILTER}
+        rule = {"operator": "intersects", "layerId": str(uuid4()), "source": mask}
+        result = owner.post("/api/vector-filters/map", headers=headers, json={"layerName": published["layerName"],
+                            "selection": {**PRIVATE, "layerName": "features", "filter": {"rules": [rule]}}})
+        assert result.status_code == 200, result.text
+        assert result.json()["count"]["matched"] == 1
+        filtered = result.json()
+        second_token = "d" * 64
+        authority.owners.add(hashlib.sha256(second_token.encode()).hexdigest())
+        other.cookies.set(COOKIE, second_token)
+        assert other.post(BASE + "/layers", headers=headers).status_code == 200
     params = {
         "service": "WMS",
         "version": "1.3.0",
@@ -640,7 +668,7 @@ def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
         transport = (
             {"params": params}
             if method == "GET"
-            else {"data": params, "headers": HEADERS}
+            else {"data": params, "headers": headers}
         )
         response = owner.request(method, "/geoserver/eolab/wms", **transport)
         assert response.status_code == 200, response.text
@@ -661,7 +689,7 @@ def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
                 }
             ]
         },
-        headers=HEADERS,
+        headers=headers,
     )
     assert plan.status_code == 200, plan.text
     tile = (
@@ -696,6 +724,10 @@ def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
     assert owner.get(tile).status_code == 409
     assert owner.get("/geoserver/eolab/wms", params=params).status_code == 409
     assert not authority.leases
+    if private_boundary:
+        authority.ready = True
+        assert owner.delete(f"/api/vector-uploads/{mask['uploadId']}", headers=headers).status_code == 204
+        assert owner.get(tile).status_code == 404
 
 
 def test_result_cleanup_waits_for_active_reads_and_removes_restart_publications(

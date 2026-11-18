@@ -1,7 +1,5 @@
 """Translate selected native records into compact GeoServer feature-ID intervals."""
 
-from itertools import groupby
-from pathlib import Path
 import struct
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection, SelectionUnavailableError
@@ -48,11 +46,14 @@ def display_feature_ranges(layer: ResolvedCatalogSelection) -> dict[str, str]:
             except KeyError as error:
                 raise SelectionUnavailableError("A selected Shapefile record has no display ID.") from error
         ranges = []
-        for _, adjacent in groupby(enumerate(sorted(ids)), lambda pair: pair[1] - pair[0]):
-            run = (value for _, value in adjacent)
-            first = last = next(run)
-            for last in run:
-                pass
+        first = last = None
+        for value in sorted(ids):
+            if last is None or value != last + 1:
+                if first is not None:
+                    ranges.append(str(first) if first == last else f"{first}:{last}")
+                first = value
+            last = value
+        if first is not None:
             ranges.append(str(first) if first == last else f"{first}:{last}")
         encoded[key] = ",".join(ranges)
     return encoded

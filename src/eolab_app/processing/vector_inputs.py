@@ -106,6 +106,8 @@ class RetainedVectorSelectionReader:
                 cannot be read.
         """
         original = await self._resolve_original(selection)
+        if not selection.filter.intersections:
+            return original
         return await bind_intersections(original, self._read_polygon_view, limits=None)
 
     async def _read_polygon_view(
@@ -145,11 +147,7 @@ class RetainedVectorSelectionReader:
         if isinstance(selection, CatalogSelection):
             if not selection.filter.intersections:
                 return await self.catalog.resolve_for_sampling(selection)
-            from dataclasses import replace
-            from eolab_app.attribute_filter import VectorFilter, ogr_predicate
-            original = await self.catalog.resolve_for_sampling(selection.model_copy(update={"filter": VectorFilter()}))
-            return replace(original, selection=selection, where=ogr_predicate(selection.filter, frozenset(
-                field.definition.name for field in original.calculated_fields)))
+            return await self.catalog.resolve_original_selection(selection)
         if isinstance(selection, ArtifactVectorSelection):
             if self.retained_file is None:
                 raise SelectionUnavailableError(

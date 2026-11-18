@@ -4,11 +4,13 @@ import static org.geotools.filter.capability.FunctionNameImpl.parameter;
 
 import java.util.Arrays;
 import java.util.List;
+import org.geotools.api.feature.simple.SimpleFeature;
 import org.geotools.api.feature.type.Name;
 import org.geotools.api.filter.capability.FunctionName;
 import org.geotools.api.filter.expression.Expression;
 import org.geotools.api.filter.expression.Function;
 import org.geotools.api.filter.expression.Literal;
+import org.geotools.api.filter.expression.VolatileFunction;
 import org.geotools.filter.FunctionExpressionImpl;
 import org.geotools.filter.FunctionFactory;
 import org.geotools.filter.capability.FunctionNameImpl;
@@ -16,7 +18,7 @@ import org.geotools.filter.capability.FunctionNameImpl;
 /** Tests GeoServer feature identifiers against the original records selected by a map filter. */
 public final class FeatureRangesFunctionFactory implements FunctionFactory {
     private static final FunctionName NAME = new FunctionNameImpl("eolabFeatureInRanges", Boolean.class,
-            parameter("featureId", String.class), parameter("ranges", String.class));
+            parameter("ranges", String.class));
 
     /** @return the feature-membership function available to ECQL and SLD */
     @Override public List<FunctionName> getFunctionNames() { return List.of(NAME); }
@@ -33,17 +35,17 @@ public final class FeatureRangesFunctionFactory implements FunctionFactory {
     }
 
     /** Parses ordered inclusive ID intervals once per style or map predicate. */
-    private static final class Membership extends FunctionExpressionImpl {
+    private static final class Membership extends FunctionExpressionImpl implements VolatileFunction {
         private final long[] starts;
         private final long[] ends;
 
-        /** @param arguments feature ID expression and a literal of comma-separated start:end pairs */
+        /** @param arguments one literal of comma-separated inclusive ID ranges */
         Membership(List<Expression> arguments) {
             super(NAME);
-            if (arguments.size() != 2 || !(arguments.get(1) instanceof Literal)) {
-                throw new IllegalArgumentException("Expected a feature ID and literal ID ranges");
+            if (arguments.size() != 1 || !(arguments.get(0) instanceof Literal)) {
+                throw new IllegalArgumentException("Expected literal feature ID ranges");
             }
-            String value = arguments.get(1).evaluate(null, String.class);
+            String value = arguments.get(0).evaluate(null, String.class);
             String[] ranges = value.isEmpty() ? new String[0] : value.split(",");
             starts = new long[ranges.length];
             ends = new long[ranges.length];
@@ -55,10 +57,13 @@ public final class FeatureRangesFunctionFactory implements FunctionFactory {
             setParameters(List.copyOf(arguments));
         }
 
-        /** @param feature original GeoServer feature @return whether its native ID is in an accepted interval */
+        /**
+         * @param feature original GeoServer feature
+         * @return whether its native ID is in an accepted interval
+         */
         @Override public Object evaluate(Object feature) {
-            String fid = getParameters().get(0).evaluate(feature, String.class);
-            if (fid == null) return false;
+            if (!(feature instanceof SimpleFeature original)) return false;
+            String fid = original.getID();
             try {
                 long id = Long.parseLong(fid.substring(fid.lastIndexOf('.') + 1));
                 int position = Arrays.binarySearch(starts, id);

@@ -40,7 +40,7 @@ from eolab_app.polygon_areas import (
     PolygonSummaryInput,
     read_polygon_area_input,
 )
-from eolab_app.feature_predicate import DrawingSelection, VectorFilter, referenced_layers
+from eolab_app.feature_predicate import DrawingSelection, referenced_layers
 from eolab_app.processing.ports import (
     JobArtifactStore,
     JobStore,
@@ -1124,9 +1124,8 @@ class ProcessingService:
                                     self.upload_storage.retain_source, path
                                 )
                         for selection in uploaded:
-                            resolved = await self.areas.resolve_for_sampling(
-                                selection.model_copy(update={"filter": VectorFilter()}) if selection.filter.intersections else selection, upload_owner
-                            )
+                            resolve = self.areas.resolve_original_selection if selection.filter.intersections else self.areas.resolve_for_sampling
+                            resolved = await resolve(selection, upload_owner)
                             upload_id = str(selection.uploadId)
                             if upload_id not in retained:
                                 retained[upload_id] = await asyncio.to_thread(

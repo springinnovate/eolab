@@ -237,24 +237,26 @@ class PostgresJobStore:
             )
             return identifier
 
-    def get_input(self, owner: str, identifier: str, checksum: str) -> dict[str, Any]:
+    def get_input(self, owner: str, identifier: str, checksum: str, *, include_geometry: bool = True) -> dict[str, Any]:
         """Read an unexpired input belonging to the current Processing session.
 
         Args:
             owner: Current browser-session hash.
             identifier: Opaque input ID returned by save_input.
             checksum: Expected immutable content identity.
+            include_geometry: Read the saved polygons. Tile requests only need the access check.
 
         Returns:
-            Stored JSON to validate at the operation boundary.
+            Stored JSON to validate at the operation boundary, or an empty object after an access-only check.
 
         Raises:
             ProcessingError: If the reference is expired, changed or belongs to someone else.
         """
         with self._transaction() as cursor:
             cursor.execute(
-                "SELECT payload FROM processing.inputs WHERE id=%s AND owner=%s AND sha256=%s AND expires_at>now()",
-                (identifier, owner, checksum),
+                "SELECT CASE WHEN %s THEN payload ELSE '{}'::jsonb END AS payload "
+                "FROM processing.inputs WHERE id=%s AND owner=%s AND sha256=%s AND expires_at>now()",
+                (include_geometry, identifier, owner, checksum),
             )
             row = cursor.fetchone()
         if row is None:

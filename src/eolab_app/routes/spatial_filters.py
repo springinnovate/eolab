@@ -17,7 +17,6 @@ from eolab_app.routes.http_disconnect import HttpClientDisconnectedError, run_un
 from eolab_app.routes.vector_http import PrivateVectorRoute
 from eolab_app.source_files import finish_source_task
 from eolab_app.vector.display_feature_ids import display_feature_ranges
-from eolab_app.feature_intersection import intersecting_feature_ids
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import PublishedVectorRegistry
 from eolab_app.feature_predicate import DrawingSelection, VectorSourceOwners
@@ -101,11 +100,7 @@ def create_spatial_filter_router(
             async with AsyncExitStack() as stack:
                 source = (await reader.drawing_polygons(body.source, credentials) if isinstance(body.source, DrawingSelection)
                           else await stack.enter_async_context(reader.open_selection(body.source, credentials)))
-                read = asyncio.create_task(asyncio.to_thread(intersecting_feature_ids, target, source))
-                try:
-                    return list(await asyncio.shield(read))
-                finally:
-                    await finish_source_task(read)
+                return list(await reader.compare_layers(target, source))
         try:
             return await run_until_http_disconnect(request, apply())
         except HttpClientDisconnectedError as error:

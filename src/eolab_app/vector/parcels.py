@@ -200,6 +200,7 @@ def _visit_parcel_attributes(
             receive,
             calculated_fields=resolved.calculated_fields if filtered else (),
             where=resolved.where if filtered else original_where,
+            **({"accept_feature": resolved.matches_feature} if filtered and resolved.intersections else {}),
         )
     except (RuntimeError, OSError, UnicodeDecodeError) as error:
         raise SelectionUnavailableError(
@@ -407,7 +408,7 @@ def read_parcel_rows(
             GeometryValidationError: A selected feature has an invalid ID.
         """
         nonlocal matched
-        if not resolved.matches_feature(feature.id, properties):
+        if not resolved.intersections and not matches_filter(resolved.selection.filter, properties):
             return
         parcel_id = _encode_parcel_id(properties[id_field], id_type)
         matched += 1

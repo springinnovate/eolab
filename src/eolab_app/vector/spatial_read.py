@@ -1,13 +1,25 @@
 """Transfer per-request feature membership to a native Jobs reader without copying geometries."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from collections.abc import Iterator, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from secrets import token_hex
+from typing import Any, TYPE_CHECKING
 
 import httpx2
 from pydantic import TypeAdapter
 from eolab_app.catalog_selection import ResolvedCatalogSelection, SelectionUnavailableError
+
+if TYPE_CHECKING:
+    from eolab_app.feature_intersection import IntersectionLayer
+
+
+@dataclass
+class SpatialComparison:
+    """A single Jobs worker's authorized original inputs and returned whole-feature IDs."""
+
+    layers: list[dict[str, Any]]
+    matches: tuple[int, ...] | None = None
 
 
 class SpatialReads:
@@ -16,6 +28,49 @@ class SpatialReads:
     def __init__(self) -> None:
         """Start with no outstanding native reads."""
         self._reads: dict[str, dict[str, frozenset[int]]] = {}
+        self._comparisons: dict[str, SpatialComparison] = {}
+
+    @contextmanager
+    def comparison(self, target: "IntersectionLayer", polygons: "IntersectionLayer") -> Iterator[tuple[str, SpatialComparison]]:
+        """Make a pair of original sources available for one authenticated native job.
+
+        Args:
+            target: Authorized vector or committed drawings to filter.
+            polygons: Authorized polygon view with its current filter already bound.
+
+        Yields:
+            A short-lived token and the result slot for this comparison. Only device
+            drawings carry coordinates. File sources carry ordinary Jobs read credentials.
+        """
+        with ExitStack() as stack:
+            layers = []
+            for layer in (target, polygons):
+                if isinstance(layer, ResolvedCatalogSelection):
+                    grant = {"selection": layer.selection.model_dump(mode="json", by_alias=True),
+                             "uploadOwner": layer.upload_owner, "readLease": layer.read_lease}
+                    if layer.intersections:
+                        grant["spatialRead"] = stack.enter_context(self.hold(layer.intersections))
+                    layers.append(grant)
+                else:
+                    layers.append({"polygons": [polygon.model_dump(mode="json") for polygon in layer]})
+            token = token_hex(32)
+            comparison = SpatialComparison(layers)
+            self._comparisons[token] = comparison
+            try:
+                yield token, comparison
+            finally:
+                self._comparisons.pop(token)
+
+    def get_comparison(self, token: str) -> SpatialComparison | None:
+        """Return the active comparison identified by a worker's private bearer token.
+
+        Args:
+            token: Credential from the submitted job.
+
+        Returns:
+            Its source pair and result slot, or None after cancellation or completion.
+        """
+        return self._comparisons.get(token)
 
     @contextmanager
     def hold(self, memberships: dict[str, frozenset[int]]) -> Iterator[str]:

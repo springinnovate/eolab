@@ -146,16 +146,17 @@ class JobStore(Protocol):
         """
         ...
 
-    def get_input(self, owner: str, identifier: str, checksum: str) -> dict[str, Any]:
+    def get_input(self, owner: str, identifier: str, checksum: str, *, include_geometry: bool = True) -> dict[str, Any]:
         """Read an owned, unexpired input with the expected identity.
 
         Args:
             owner: Browser-session hash.
             identifier: Opaque retained input identifier.
             checksum: Expected content identity.
+            include_geometry: Return coordinates when needed by the reader.
 
         Returns:
-            JSON input for operation validation.
+            JSON input for operation validation, or an empty object after an access-only check.
 
         Raises:
             ProcessingError: If the input is unavailable to this owner.
