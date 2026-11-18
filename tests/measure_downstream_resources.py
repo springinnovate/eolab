@@ -116,7 +116,6 @@ async def measure(
             "executionSecondsIncludingProcessStartup": time.monotonic() - start,
             "observedPeakResidentBytes": rss,
             "observedPeakScratchBytes": disk,
-            "reservedScratchBytes": plan.reservedBytes,
             "nativeDescendants": descendants,
             "sum": artifact.rows[0]["value"],
             "descendantNames": sorted(descendant_names),

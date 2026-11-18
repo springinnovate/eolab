@@ -514,9 +514,7 @@ def test_file_ids_cannot_cross_runs_and_finish_records_actual_bytes(
     identifier = store.submit(
         "fixture-owner",
         uuid4().hex,
-        PreparedJobPlan(
-            {}, {}, artifact.manifest.total_bytes - 1, operation="fixture.files.v1"
-        ),
+        PreparedJobPlan({}, {}, operation="fixture.files.v1"),
         uuid4().hex,
     )["id"]
     claimed = store.claim_next_job()
@@ -529,8 +527,10 @@ def test_file_ids_cannot_cross_runs_and_finish_records_actual_bytes(
     assert completed["reserved_bytes"] == artifact.manifest.total_bytes
     assert not store.finish(identifier, claimed["attempt_id"], artifact)
     identifier = store.submit(
-        "fixture-owner", uuid4().hex,
-        PreparedJobPlan({}, {}, 0, operation="fixture.files.v1"), uuid4().hex,
+        "fixture-owner",
+        uuid4().hex,
+        PreparedJobPlan({}, {}, operation="fixture.files.v1"),
+        uuid4().hex,
     )["id"]
     claimed = store.claim_next_job()
     assert claimed["id"] == identifier

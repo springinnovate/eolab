@@ -1,21 +1,18 @@
-"""Serialize raster job plans and calculate the storage the job store must reserve."""
+"""Serialize raster inputs and display metadata for the job store."""
 
-from eolab_app.processing.aggregate_models import AggregateSpec, RasterAggregateLimits
+from eolab_app.processing.aggregate_models import AggregateSpec
 from eolab_app.processing.clip_models import ClipSpec
 from eolab_app.processing.models import PreparedJobPlan
 
 
-def prepare_aggregate_job(
-    spec: AggregateSpec, limits: RasterAggregateLimits
-) -> PreparedJobPlan:
+def prepare_aggregate_job(spec: AggregateSpec) -> PreparedJobPlan:
     """Serialize a prepared raster calculation for the job store.
 
     Args:
         spec: Calculation inputs, formulas, selected area and native grid.
-        limits: Shared job and numerical settings; storage estimates are not required.
 
     Returns:
-        Path-free worker inputs and browser summary with no disk reservation.
+        Path-free execution inputs and the display summary for this job.
     """
     data = spec.model_dump(mode="json", by_alias=True)
     return PreparedJobPlan(
@@ -32,7 +29,6 @@ def prepare_aggregate_job(
                 ),
             },
         },
-        reserved_bytes=0,
         operation=spec.operation,
     )
 
@@ -44,7 +40,7 @@ def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
         spec: Exact raster or observation identity, selected area and output grid.
 
     Returns:
-        Path-free worker inputs and browser summary with no disk reservation.
+        Path-free execution inputs and the display summary for this job.
     """
     data = spec.model_dump(mode="json", by_alias=True)
     return PreparedJobPlan(
@@ -62,6 +58,5 @@ def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
                 ),
             },
         },
-        reserved_bytes=0,
         operation=spec.operation,
     )
