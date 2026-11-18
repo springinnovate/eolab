@@ -30,6 +30,7 @@ function fixture(configureDocument = () => {}) {
     doc.querySelector("#raster-clips-panel").hidden = true;
     doc.querySelector("#models-panel").hidden = true;
     doc.querySelector("#planning-panel").hidden = true;
+    doc.querySelector("#settings-panel").hidden = true;
     doc.querySelector("#annotations-panel").hidden = true;
     doc.querySelector("#raster-series").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
@@ -156,6 +157,31 @@ test("the tool chooser survives passive panel opening and its restore command ex
     h.mapToolsButton.click();
     h.controller.destroy();
     assert.equal(h.toolActionsCalls.length, count + 1, "destroy detaches popover state listeners");
+});
+
+test("Settings opens from Tools, restores the prior tool on close, and returns keyboard focus", () => {
+    const h = fixture();
+    h.controller.showStyle("Land cover");
+    const panel = h.doc.querySelector("#settings-panel");
+    const open = h.doc.querySelector("#open-settings");
+    const close = h.doc.querySelector("#close-settings");
+    open.dispatchEvent(new Event("click"));
+    assert.equal(h.toolName.textContent, "Settings");
+    assert.equal(panel.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.doc.activeElement, panel);
+    close.dispatchEvent(new Event("click"));
+    assert.equal(panel.hidden, true);
+    assert.equal(h.controller.activeTool, "style");
+    assert.equal(h.doc.activeElement, h.mapToolsButton);
+    open.dispatchEvent(new Event("click"));
+    const escape = Object.assign(new Event("keydown", {cancelable: true}), {key: "Escape"});
+    h.doc.dispatchEvent(escape);
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(panel.hidden, true);
+    assert.equal(h.doc.activeElement, h.mapToolsButton);
+    h.controller.destroy();
+    open.dispatchEvent(new Event("click"));
+    assert.equal(panel.hidden, true);
 });
 
 test("statistics menu action remains enabled in every panel state", () => {

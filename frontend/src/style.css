@@ -2731,13 +2731,20 @@ div.chart-tooltip {
 }
 
 /* One activity state drives the visual surfaces, including native top-layer popovers. */
-#app[data-panels-active="false"] {
-  --panel-opacity: 0.4;
-  --panel-fade: opacity 1000ms ease-in-out 750ms;
+#app {
+  --panel-enter-delay: 50ms;
+  --panel-fade-in: 150ms;
+  --panel-exit-delay: 750ms;
+  --panel-fade-out: 1000ms;
+  --panel-idle-opacity: 40%;
 }
-#app[data-panels-active="true"] {
+#app[data-panels-active="false"]:not([data-panel-fade-disabled]) {
+  --panel-opacity: var(--panel-idle-opacity);
+  --panel-fade: opacity var(--panel-fade-out) ease-in-out var(--panel-exit-delay);
+}
+#app[data-panels-active="true"]:not([data-panel-fade-disabled]) {
   --panel-opacity: 1;
-  --panel-fade: opacity 150ms ease-out 50ms;
+  --panel-fade: opacity var(--panel-fade-in) ease-out var(--panel-enter-delay);
 }
 #app :where([data-map-panel], [popover]:popover-open, .leaflet-control:not(.leaflet-control-attribution),
             .map-feature-hover-card, #map > #raster-first-sample-hint) {
@@ -4384,6 +4391,7 @@ article.raster-histogram-summary {
 #annotations-panel,
 #models-panel,
 #planning-panel,
+#settings-panel,
 #raster-clips-panel,
 #layer-style-editor,
 #vector-filter-panel,
@@ -4416,6 +4424,7 @@ article.raster-histogram-summary {
 #annotations-panel[hidden],
 #models-panel[hidden],
 #planning-panel[hidden],
+#settings-panel[hidden],
 #raster-clips-panel[hidden],
 #layer-style-editor[hidden],
 #vector-filter-panel[hidden],
@@ -4430,6 +4439,7 @@ article.raster-histogram-summary {
 #annotations-panel:not([data-map-inspection-active="true"]),
 #models-panel:not([data-map-inspection-active="true"]),
 #planning-panel:not([data-map-inspection-active="true"]),
+#settings-panel:not([data-map-inspection-active="true"]),
 #raster-clips-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),
 #vector-filter-panel:not([data-map-inspection-active="true"]),
@@ -4437,6 +4447,26 @@ article.raster-histogram-summary {
 #vector-time-series:not([data-map-inspection-active="true"]),
 #vector-feature-profile:not([data-map-inspection-active="true"]) {
   display: none;
+}
+
+.panel-fade-toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+#settings-panel > p { margin: 4px 0 12px; color: var(--text-2); font-size: var(--font-size-support); }
+#panel-fade-options { min-width: 0; margin: 0 0 14px; padding: 0; border: 0; }
+.panel-fade-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6rem 1.5rem;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-2);
+}
+.panel-fade-setting > label { grid-column: 1 / -1; }
+.panel-fade-setting > input { width: 100%; min-width: 0; margin: 0; }
+.panel-fade-setting > input[type="number"] { padding: 3px 5px; font-variant-numeric: tabular-nums; }
+.panel-fade-setting > span { color: var(--text-2); font-size: var(--font-size-support); }
+.panel-fade-setting > input[aria-invalid="true"] { outline: 2px solid var(--status-danger); }
+@media (pointer: coarse) {
+  .panel-fade-toggle, .panel-fade-setting > input, #restore-panel-fade-defaults { min-height: 44px; }
 }
 
 #vector-feature-inspector {

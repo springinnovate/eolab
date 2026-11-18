@@ -32,6 +32,7 @@ function startup(sharedViewer, status = 200) {
         initializeRenderingDiagnostics: () => {},
         initializeMap: () => ({}),
         EomapLayoutController: class { showWorkspace() {} },
+        bindPanelFadeSettings: () => calls.push({panelSettings: true}),
         SavedMapViewLocalStorage: class {},
         MapInspectionController: class {},
         initializeCatalog: async configuration => {
@@ -59,7 +60,7 @@ for (const sharedViewer of [false, true]) {
         assert.equal(calls.length, 1);
         release();
         await running;
-        assert.deepEqual(calls[1], {features: {appTitle: "Test"}});
+        assert.deepEqual(calls.slice(1), [{panelSettings: true}, {features: {appTitle: "Test"}}]);
     });
 
     test(`failed identity bootstrap keeps feature controls uninitialized (shared=${sharedViewer})`, async () => {
