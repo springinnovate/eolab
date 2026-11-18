@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from eolab_app.raster.categorical_sld import build_categorical_raster_sld
+from eolab_app.raster.composite_sld import build_raster_composite_sld
 from eolab_app.raster.styles import (
     parse_categorical_raster_style,
     parse_categorical_raster_style_json,
@@ -19,6 +20,7 @@ _STYLE_ENVIRONMENT_KEYS = frozenset(
 )
 _STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 _STYLE_OPACITY_KEYS = frozenset({"amin", "amed", "amax"})
+_EXACT_VALUE_KEYS = frozenset({"vexact", "cexact", "aexact"})
 _STYLE_ENVIRONMENT_ERROR = (
     "env must define ordered finite min, med, and max values plus cmin, "
     "cmed, and cmax six-digit hex colors, optionally followed by amin, "
@@ -39,7 +41,7 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
         PublishedLayerRequestError: If the dynamic raster style is malformed.
     """
     fields = environment.split(";")
-    if len(environment) > 384 or len(fields) not in (6, 9):
+    if len(environment) > 384 or len(fields) not in (6, 9, 12):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     assignments = {}
     for field in fields:
@@ -47,11 +49,26 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
         if separator == "" or name in assignments:
             raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
         assignments[name] = value
-    if assignments.keys() not in (
+    if assignments.keys() - _EXACT_VALUE_KEYS not in (
         _STYLE_ENVIRONMENT_KEYS,
         _STYLE_ENVIRONMENT_KEYS | _STYLE_OPACITY_KEYS,
     ):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
+    exact_keys = assignments.keys() & _EXACT_VALUE_KEYS
+    if exact_keys:
+        try:
+            valid_override = (
+                exact_keys == _EXACT_VALUE_KEYS
+                and math.isfinite(float(assignments["vexact"]))
+                and _STYLE_COLOR_PATTERN.fullmatch(assignments["cexact"])
+                and 0 <= float(assignments["aexact"]) <= 1
+            )
+        except ValueError:
+            valid_override = False
+        if not valid_override:
+            raise PublishedLayerRequestError(
+                "Single-value styling requires a finite value, hex color and opacity from 0 through 1"
+            )
     try:
         thresholds = tuple(
             float(assignments[name]) for name in ("min", "med", "max")
@@ -83,7 +100,7 @@ def validate_raster_style_environment(environment: str) -> None:
     Raises:
         PublishedLayerRequestError: If the value does not contain exactly the
             six threshold/color assignments, with either all three bounded
-            opacity assignments or none (legacy fully opaque rendering).
+            opacity assignments or none, and an optional complete exact-value rule.
     """
     parse_raster_style_environment(environment)
 
@@ -144,7 +161,9 @@ class PublishedRasterAuthorization:
         if "vector_style" in query or "vector_calculated_fields" in query:
             raise PublishedLayerRequestError("vector_style is not supported for raster layers")
         if "env" in query:
-            validate_raster_style_environment(query["env"])
+            assignments = parse_raster_style_environment(query["env"])
+            if "vexact" in assignments and operation != "getmap":
+                raise PublishedLayerRequestError("Single-value raster styling requires GetMap")
 
     def prepare_query(
         self, operation: str, query: list[tuple[str, str]],
@@ -156,15 +175,22 @@ class PublishedRasterAuthorization:
             query: Globally bounded and feature-validated public query entries.
 
         Returns:
-            Server-owned upstream query entries with workspace-qualified
-            continuous styles or an inline categorical style.
+            A named gradient or an inline raster style. Categorical rendering
+            uses nearest-neighbor sampling. Continuous rendering uses the WMS default.
 
         Raises:
-            PublishedLayerRequestError: If the categorical definition is invalid.
+            PublishedLayerRequestError: If the raster style is invalid.
         """
         normalized = {name.lower(): value for name, value in query}
         definition = normalized.get("raster_style")
-        if definition is None:
+        environment = normalized.get("env", "")
+        if definition is not None:
+            style = parse_categorical_raster_style_json(definition)
+            document = build_categorical_raster_sld(normalized["layers"], style, 1)
+        elif "vexact:" in environment:
+            assignments = parse_raster_style_environment(environment)
+            document = build_raster_composite_sld(normalized["layers"], assignments, 1)
+        else:
             # Global WMS and GeoWebCache identify workspace styles by their full name.
             return [
                 (
@@ -174,18 +200,14 @@ class PublishedRasterAuthorization:
                 )
                 for name, value in query
             ]
-        style = parse_categorical_raster_style_json(definition)
-        document = build_categorical_raster_sld(normalized["layers"], style, 1)
         forwarded = [
             (name, value)
             for name, value in query
-            if name.lower() not in {"raster_style", "styles", "tiled", "tilesorigin"}
+            if name.lower() not in {"env", "raster_style", "styles", "tiled", "tilesorigin"}
         ]
-        return forwarded + [
-            ("styles", ""),
-            ("sld_body", document.decode("utf-8")),
-            ("interpolations", "nearest neighbor"),
-        ]
+        if definition is not None:
+            forwarded.append(("interpolations", "nearest neighbor"))
+        return forwarded + [("styles", ""), ("sld_body", document.decode("utf-8"))]
 
     def composite_interpolation(
         self, style_definition: Mapping[str, object] | None
@@ -250,6 +272,4 @@ class PublishedRasterAuthorization:
             style = parse_categorical_raster_style(style_definition)
             return build_categorical_raster_sld(layer_name, style, opacity)
         assignments = parse_raster_style_environment(style_environment)
-        from eolab_app.raster.composite_sld import build_raster_composite_sld
-
         return build_raster_composite_sld(layer_name, assignments, opacity)

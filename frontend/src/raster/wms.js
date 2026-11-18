@@ -13,12 +13,13 @@ import { normalizeCategoricalRasterStyle } from "./categorical-style.js";
  *
  * @param {import("./style.js").RasterStyle} style Numeric thresholds and
  * six-digit hex colors.
- * @return {string} Canonical nine-assignment WMS environment value.
+ * @return {string} Gradient assignments, followed by the exact value, color
+ * and opacity only when the layer has a single-value override.
  * @throws {Error} If thresholds or colors violate the style contract.
  */
 export function buildRasterStyleEnvironment(style) {
     validateRasterStyle(style);
-    return [
+    const fields = [
         `min:${style.minimum}`,
         `med:${style.midpoint}`,
         `max:${style.maximum}`,
@@ -28,7 +29,12 @@ export function buildRasterStyleEnvironment(style) {
         `amin:${style.minimumOpacity ?? 1}`,
         `amed:${style.midpointOpacity ?? 1}`,
         `amax:${style.maximumOpacity ?? 1}`
-    ].join(";");
+    ];
+    if (style.valueOverride) {
+        const { value, color, opacity } = style.valueOverride;
+        fields.push(`vexact:${value}`, `cexact:${color.toLowerCase()}`, `aexact:${opacity}`);
+    }
+    return fields.join(";");
 }
 
 /**

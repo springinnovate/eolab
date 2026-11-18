@@ -334,15 +334,15 @@ export function getBivariateDensityWeight(binCount, maximumCount) {
  * Derive the X and Y WMS ramps from one palette definition.
  *
  * @param {string} paletteName Registered palette identity.
- * @param {Object} xStyle X raster's retained numeric range.
- * @param {Object} yStyle Y raster's retained numeric range.
- * @return {{xStyle:Object,yStyle:Object}} Coordinated axis styles.
+ * @param {import("./style.js").RasterStyle} xStyle X raster's retained numeric range.
+ * @param {import("./style.js").RasterStyle} yStyle Y raster's retained numeric range.
+ * @return {{xStyle:import("./style.js").RasterStyle,yStyle:import("./style.js").RasterStyle}} Axis ramps using only the paired palette.
  */
 export function getBivariateAxisStyles(paletteName, xStyle, yStyle) {
     const color = createBivariateColormap(requirePalette(paletteName));
     return {
         xStyle: {
-            ...xStyle,
+            minimum: xStyle.minimum, midpoint: xStyle.midpoint, maximum: xStyle.maximum,
             minimumColor: color(0, 0),
             midpointColor: color(0.5, 0),
             maximumColor: color(1, 0),
@@ -351,7 +351,7 @@ export function getBivariateAxisStyles(paletteName, xStyle, yStyle) {
             maximumOpacity: 1,
         },
         yStyle: {
-            ...yStyle,
+            minimum: yStyle.minimum, midpoint: yStyle.midpoint, maximum: yStyle.maximum,
             minimumColor: color(0, 0),
             midpointColor: color(0, 0.5),
             maximumColor: color(0, 1),

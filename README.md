@@ -34,7 +34,7 @@ In **Map contents**, show, hide, rename, or reorder layers. The first layer draw
 <details>
 <summary>Color scales, category names, and vector labels</summary>
 
-Use a color range for continuous measurements such as rainfall, named colors for land-cover classes, or symbols and labels for vector features. A percentile stretch makes differences visible when a few extreme values dominate the range. You can import category names and colors from CSV. [See the style editor.](docs/images/eolab-dynamic-styling.jpg)
+Use a color range for continuous measurements such as rainfall, named colors for land-cover classes, or symbols and labels for vector features. A percentile stretch makes differences visible when a few extreme values dominate the range. Turn on **Style one value separately** to give a value its own color and opacity. For example, set a flood depth of `0` to 0% opacity to show the map underneath. You can import category names and colors from CSV. [See the style editor.](docs/images/eolab-dynamic-styling.jpg)
 
 </details>
 

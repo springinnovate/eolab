@@ -23,6 +23,8 @@ import {
  * @property {number} [minimumOpacity=1] Minimum-stop opacity, zero through one.
  * @property {number} [midpointOpacity=1] Midpoint-stop opacity, zero through one.
  * @property {number} [maximumOpacity=1] Maximum-stop opacity, zero through one.
+ * @property {{value:number,color:string,opacity:number}} [valueOverride] Color
+ * and opacity for one exact finite sample. Omit to use the ramp for every value.
  */
 
 /** Default three-stop raster style shown before statistics are available. */
@@ -135,6 +137,18 @@ export function validateRasterStyle(style) {
             "Color opacity must be a number from 0 to 100 percent.",
             "opacities"
         );
+    }
+    if (Object.hasOwn(style, "valueOverride")) {
+        const override = style.valueOverride;
+        if (!Number.isFinite(override?.value)) {
+            throw rasterStyleContractError("Enter a finite pixel value.", "overrideValue");
+        }
+        if (typeof override.color !== "string" || !RASTER_COLOR_PATTERN.test(override.color)) {
+            throw rasterStyleContractError("Choose a six-digit hex color for the pixel value.", "overrideColor");
+        }
+        if (!Number.isFinite(override.opacity) || override.opacity < 0 || override.opacity > 1) {
+            throw rasterStyleContractError("Enter a pixel opacity from 0 to 100 percent.", "overrideOpacity");
+        }
     }
     return style;
 }
@@ -310,8 +324,8 @@ export function applyRasterColorPalette(style, paletteName) {
  * Build the visible and accessible legend from a validated raster style.
  *
  * @param {RasterStyle} style Committed raster style.
- * @return {{midpointPosition: number, gradient: string, description: string}}
- * Legend position, CSS gradient, and text alternative.
+ * @return {{midpointPosition:number,gradient:string,description:string,overrideLabel?:string}}
+ * Gradient and text alternative, with a separate key when one value has its own appearance.
  */
 export function buildRasterLegend(style) {
     const midpointPosition =
@@ -333,8 +347,12 @@ export function buildRasterLegend(style) {
             .toString(16).padStart(2, "0");
         return `${color}${alpha} ${position * 100}%`;
     }).join(", ") : null;
+    const override = style.valueOverride;
+    const overrideLabel = override && `Value ${override.value} · ${override.opacity === 0
+        ? "Transparent" : `${Number((override.opacity * 100).toPrecision(12))}% opacity`}`;
     return {
         midpointPosition,
+        ...(override ? { overrideLabel } : {}),
         gradient: alphaGradient === null
             ? `linear-gradient(90deg, ${style.minimumColor} 0%, ` +
                 `${style.midpointColor} ${midpointPosition}%, ${style.maximumColor} 100%)`
@@ -346,7 +364,8 @@ export function buildRasterLegend(style) {
             (transparent ? " Color opacity (minimum, midpoint, maximum): " +
                 ["minimum", "midpoint", "maximum"].map(
                     (stop) => `${Math.round((style[`${stop}Opacity`] ?? 1) * 100)}%`
-                ).join(", ") + "." : "")
+                ).join(", ") + "." : "") +
+            (override ? ` ${overrideLabel} (${override.color}).` : "")
     };
 }
 

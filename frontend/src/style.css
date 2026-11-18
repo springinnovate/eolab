@@ -1161,6 +1161,7 @@ h5 {
   padding: 0;
   list-style: none;
 }
+.map-layer-legend-list[hidden] { display: none; }
 .map-layer-legend-list li {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
@@ -1286,6 +1287,11 @@ h5 {
 }
 
 .raster-style-stops label { min-width: 0; }
+.raster-value-override { display: grid; gap: 8px; }
+.raster-value-toggle { display: flex; align-items: center; gap: 8px; }
+.raster-value-toggle input { margin: 0; }
+.raster-value-override .raster-style-stops[hidden] { display: none; }
+.raster-value-override .raster-style-stops > p { grid-column: 1 / -1; }
 .raster-style-stops input[type="number"] { width: 100%; }
 
 .raster-style-stops input[type="color"] {
@@ -4910,11 +4916,13 @@ summary:hover > .raster-disclosure-chevron {
   color: var(--text-2);
   font-size: 0.72rem;
 }
-.raster-style-exact-controls {
+.raster-style-exact-controls,
+.raster-value-override {
   border-top: 1px solid var(--border-2);
   padding-top: 10px;
 }
-.raster-style-exact-controls > summary {
+.raster-style-exact-controls > summary,
+.raster-value-toggle {
   cursor: pointer;
   color: var(--text-1);
   font-size: 0.78rem;

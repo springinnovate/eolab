@@ -82,6 +82,8 @@ def test_raster_style_accepts_three_bounded_opacities(alpha: str) -> None:
     ";amin:0;amed:0.5;amax:1.01", ";amin:;amed:0.5;amax:1",
     ";amin:0;amed:0.5;amax:blue", ";amin:0;amed:0.5;amax:1;opacity:0.5",
     ";amin:0;amed:0.5;amax:" + "0" * 384,
+    ";vexact:0;cexact:#123456", ";vexact:NaN;cexact:#123456;aexact:0",
+    ";vexact:-9999;cexact:red;aexact:0", ";vexact:0;cexact:#123456;aexact:1.01",
 ])
 def test_raster_style_rejects_incomplete_or_unsafe_opacities(suffix: str) -> None:
     """Reject invalid alpha without widening the other authorized substitutions.
@@ -103,3 +105,27 @@ def test_deployed_raster_sld_consumes_opacity_with_opaque_legacy_defaults() -> N
         "${env('amin',1.0)}", "${env('amed',1.0)}", "${env('amax',1.0)}"
     ]
     assert document.findtext(".//{http://www.opengis.net/sld}Opacity") == "1.0"
+
+
+def test_exact_raster_rule_uses_the_same_color_maps_for_tiles_and_composites() -> None:
+    """Use the native gradient, exact-value mask and replacement without changing sampling."""
+    owner = PublishedRasterAuthorization()
+    env = ("min:0;med:1;max:2;cmin:#101010;cmed:#0000ff;cmax:#00ff00;amin:0.4;amed:1;amax:0.8"
+           ";vexact:-9999.5;cexact:#ff0000;aexact:0.5")
+    query = {"layers": "eolab:depth", "styles": "dynamic-raster", "env": env, "tiled": "true"}
+    owner.validate_parameters("getmap", query)
+    direct = dict(owner.prepare_query("getmap", list(query.items())))
+    assert "env" not in direct and "tiled" not in direct
+    assert "interpolations" not in direct
+    assert owner.composite_interpolation(None) is None
+    assert direct["sld_body"] == owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 1).decode()
+    composite = owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 0.5)
+    fixture = Path(__file__).parents[1] / "geoserver/reader-assessment/src/test/resources/raster-value-override.sld"
+    assert ElementTree.canonicalize(fixture.read_text(), strip_text=True, rewrite_prefixes=True) == (
+        ElementTree.canonicalize(composite, strip_text=True, rewrite_prefixes=True)
+    )
+    hidden = owner.build_composite_sld("eolab:depth", "dynamic-raster", env.replace("aexact:0.5", "aexact:0"), None, 1)
+    passes = ElementTree.fromstring(hidden).findall(".//{*}ColorMap")
+    assert [entry.get("type") for entry in passes] == ["ramp"]
+    with pytest.raises(PublishedLayerRequestError, match="requires GetMap"):
+        owner.validate_parameters("getfeatureinfo", query)

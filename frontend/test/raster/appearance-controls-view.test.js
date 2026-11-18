@@ -123,6 +123,47 @@ test("appearance adapter requires its semantic subgroup root", () => {
     );
 });
 
+test("one exact value has its own editor, validation and swatch alongside the gradient", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterAppearanceControlsView(doc);
+    const events = [];
+    view.bind({ onValueOverrideInput: () => events.push("override"), onStyleChange: () => events.push("commit") });
+    const gradient = { ...DEFAULT_RASTER_STYLE, minimumOpacity: 0.49999 };
+    view.setStyle(gradient, "viridis");
+    const toggle = doc.querySelector("#raster-value-override-enabled");
+    const fields = doc.querySelector("#raster-value-override-fields");
+    const value = doc.querySelector("#raster-override-value");
+    assert.equal(fields.hidden, true);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("input"));
+    assert.equal(fields.hidden, false);
+    value.value = "-9999.5";
+    doc.querySelector("#raster-override-opacity").value = "35";
+    const color = doc.querySelector("#raster-override-color");
+    color.value = "#226699";
+    color.dispatchEvent(new Event("input"));
+    color.dispatchEvent(new Event("change"));
+    const override = { value: -9999.5, opacity: 0.35, color: "#226699" };
+    assert.deepEqual(view.readStyle(), { ...gradient, valueOverride: override });
+    assert.deepEqual(events, ["override", "override", "commit"]);
+    assert.equal(view.getPaletteName(), "viridis");
+    view.renderLegend(view.readStyle());
+    assert.equal(doc.querySelector("#raster-override-legend-label").textContent, "Value -9999.5 · 35% opacity");
+    assert.equal(doc.querySelector("#raster-override-legend-color").style.opacity, "0.35");
+    value.value = "";
+    assert.throws(() => validateRasterStyle(view.readStyle()), error => {
+        view.renderStyleError(error);
+        return value.getAttribute("aria-invalid") === "true" && doc.querySelector("#raster-override-error").textContent !== "";
+    });
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("input"));
+    assert.deepEqual(view.readStyle(), gradient);
+    view.setEnabled(false);
+    assert.equal(toggle.disabled, true);
+    assert.equal(color.disabled, true);
+    view.unbind();
+});
+
 test("opacity controls convert percent, validate blanks, and share the edit lifecycle", () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterAppearanceControlsView(doc);
@@ -130,7 +171,7 @@ test("opacity controls convert percent, validate blanks, and share the edit life
     view.bind({ onStyleInput: value => events.push(value), onStyleChange: () => events.push("commit") });
     view.setStyle({ ...DEFAULT_RASTER_STYLE, minimumOpacity: 0, midpointOpacity: 0.35 }, "viridis");
     const input = doc.querySelector("#raster-midpoint-opacity");
-    assert.equal(input.value, 35);
+    assert.equal(input.value, "35");
     assert.equal(view.readStyle().minimumOpacity, 0);
     assert.equal(view.readStyle().midpointOpacity, 0.35);
     input.value = "75";
@@ -139,6 +180,8 @@ test("opacity controls convert percent, validate blanks, and share the edit life
     assert.deepEqual(events, [false, "commit"]);
     assert.equal(view.getPaletteName(), "viridis", "opacity does not change the RGB palette");
     assert.equal(view.readStyle().midpointOpacity, 0.75);
+    input.value = "7.5e-3";
+    assert.equal(view.readStyle().midpointOpacity, 0.000075);
     input.value = "";
     let error;
     try { validateRasterStyle(view.readStyle()); } catch (caught) { error = caught; }
@@ -146,7 +189,7 @@ test("opacity controls convert percent, validate blanks, and share the edit life
     assert.equal(input.getAttribute("aria-invalid"), "true");
     assert.equal(doc.querySelector("#raster-midpoint").getAttribute("aria-invalid"), null);
     view.setStyle(DEFAULT_RASTER_STYLE, "blue-yellow-red");
-    assert.equal(input.value, 100);
+    assert.equal(input.value, "100");
     assert.equal(input.getAttribute("aria-invalid"), null);
     view.setEnabled(false);
     assert.equal(input.disabled, true);
