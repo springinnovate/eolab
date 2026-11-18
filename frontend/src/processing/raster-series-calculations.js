@@ -349,8 +349,8 @@ export class RasterSeriesCalculations {
         let boxPreview;
         try {
             const response = await this.readBoxPreview(sources[0], area.samplingBox, formulas.map(f => f.preview), signal);
-            if (this.exactBox && response.method === "estimated") {
-                throw new Error("This raster now provides an estimate. Retry failed rasters to calculate it exactly.");
+            if (this.exactBox && response.method !== "exact") {
+                throw new Error("The exact result could not be read. Choose Retry failed rasters to try again.");
             }
             boxPreview = {method: response.method, rows: new Map(formulas.map((f, i) => [f.expression, response.values[i]]))};
         } catch (error) {
@@ -366,8 +366,9 @@ export class RasterSeriesCalculations {
     }
 
     /** Calculate a temporal interval or submit all unfinished ordinary rasters.
-     * An explicit retry replaces failed rows. Active requests
-     * continue unchanged; uncertain submissions require Recover first.
+     * An explicit retry replaces failed rows, including exact results originally
+     * read through the sampling-box preview. Active requests continue, and
+     * uncertain submissions require Recover first.
      * @param {boolean} [retryFailures=true] Retry failed rows when explicitly requested.
      * @return {void} Request dispatch, not calculation completion.
      */
@@ -388,9 +389,13 @@ export class RasterSeriesCalculations {
         }
         const version = this.version;
         this.hasCapturedInputs = true;
+        const failedExactPreviewKeys = new Set();
         if (retryFailures) {
             for (const [key, result] of this.results) {
-                if (result.boxPreview?.error && !result.boxPreview.outside) delete result.boxPreview;
+                if (result.boxPreview?.error && !result.boxPreview.outside) {
+                    if (this.exactBox) failedExactPreviewKeys.add(key);
+                    delete result.boxPreview;
+                }
                 if (result.error) {
                     if (result.boxPreview) delete result.error;
                     else this.results.delete(key);
@@ -401,7 +406,10 @@ export class RasterSeriesCalculations {
         try {
             const previews = this.previewFormulas;
             const jobFormulas = this.formulas.filter(formula => !previews.includes(formula));
-            this.requestBoxPreviews(previews);
+            if (failedExactPreviewKeys.size) {
+                this.requestBoxPreviews(this.formulas.filter(formula => formula.preview),
+                    this.sources.filter(source => failedExactPreviewKeys.has(source.key)));
+            } else this.requestBoxPreviews(previews);
             if (!jobFormulas.length) {
                 this.dispatching = false;
                 this.updateSeriesProgress();
@@ -423,7 +431,8 @@ export class RasterSeriesCalculations {
             for (const source of this.sources) {
                 const result = this.results.get(source.key);
                 if (result?.job || result?.error || [...this.pending.values()].some(request => request.key === source.key)) continue;
-                if (this.exactBox && result?.boxPreview && jobFormulas.every(formula => formula.preview)) continue;
+                if (this.exactBox && jobFormulas.every(formula => formula.preview) &&
+                    (result?.boxPreview || this.pendingPreviews.has(rasterSourceKey(source)))) continue;
                 const index = this.sources.map(source => source.key).sort().indexOf(source.key);
                 const client = this.getOrCreateRasterExecutor(index);
                 const sampleRows = this.exactBox && this.previousResults?.get(source.key)?.boxPreview?.rows;

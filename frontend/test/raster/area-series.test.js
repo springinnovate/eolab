@@ -1603,3 +1603,39 @@ test("reload keeps an exact preview and its previously completed custom statisti
     assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
     restored.close();
 });
+
+for (const withMaximum of [false, true]) for (const failure of ["error", "estimated", "unavailable"]) {
+    test(`retry a recovered exact peer after ${failure}, ${withMaximum ? "retaining its maximum" : "without a native job"}`, async () => {
+        const exact = {method: "exact", values: [{value: 7, unit: "cm"}]};
+        const estimate = {method: "estimated", values: [{value: 20, unit: "cm"}]};
+        const h = fixture({readBoxPreview: async layer => layer.key === "1" ? exact : estimate});
+        if (withMaximum) h.controller.addFormula("max");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: 8, latitude: 14}, sideLengthKm: 75}});
+        await h.open();
+        const maximumJob = withMaximum ? await h.finish("ready", false, "1") : null;
+        if (withMaximum) await h.finish("ready", false, "2");
+        h.view.actions.onExactStatistics(); await h.tick(); h.close();
+
+        const retry = deferred(), reads = [];
+        const restored = fixture({readBoxPreview: async (layer, box) => {
+            reads.push([layer.key, box.center.longitude]);
+            if (reads.length > 1) return retry.promise;
+            if (failure === "error") throw new Error("Source read failed.");
+            return failure === "estimated" ? estimate : {method: "unavailable", values: [{value: null, unit: "cm"}]};
+        }}, h.data);
+        for (const [id, job] of h.server) restored.server.set(id, job);
+        try {
+            await restored.controller.start(); await restored.open(); await restored.finish();
+            assert.equal(restored.view.state.area.hasErrors, true);
+            restored.view.actions.onRetry(); await flush();
+            assert.deepEqual(reads, [["1", 8], ["1", 8]]);
+            assert.equal(restored.view.state.busy, true);
+            retry.resolve(exact); await flush();
+            assert.equal(restored.view.state.area.hasErrors, false);
+            const rows = csvParse(restored.controller.exportCsv()).filter(row => row.item_id === "1");
+            assert.deepEqual([rows[0].value, rows[0].unit, rows[0].method, rows[0].job_id], ["7", "cm", "exact", ""]);
+            if (withMaximum) assert.deepEqual([rows[1].value, rows[1].job_id], ["-123.4567890123456789", maximumJob]);
+            assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+        } finally { restored.close(); }
+    });
+}
