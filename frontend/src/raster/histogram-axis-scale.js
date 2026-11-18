@@ -60,7 +60,7 @@ function calculateBarHeightPercentile(sortedHeights, percentile) {
  * bins crossing zero: their within-bin positive counts are unknown.
  *
  * @param {{edges:number[],counts:number[],total:number,frequency?:boolean,
- * nice?:boolean}} distribution Validated histogram or marginal; frequency axes
+ * nice?:boolean,rebin?:boolean}} distribution Validated histogram or marginal; a rebinned value axis can request new counts at explicit positive log limits. Frequency axes
  * use percentages of total and ignore empty bars when calculating percentiles.
  * @param {HistogramAxisOptions} [options=defaultHistogramAxisOptions()] Display settings.
  * @return {{minimum:number,maximum:number,scale:string,offset:number,
@@ -85,14 +85,14 @@ export function createHistogramAxis(distribution, options = defaultHistogramAxis
         maximum = Math.min(100, [1, 2, 5, 10].find(factor => factor * power >= maximum) * power);
     }
     let omitted = 0;
-    if (log && !frequency) {
+    if (log && !frequency && !(distribution.rebin && options.bounds === "values")) {
         const first = edges.slice(0, -1).findIndex(edge => edge > 0);
         if (first < 0 || !counts.some((count, index) => index >= first && count > 0)) {
             throw new RangeError("Log needs a populated bin with positive edges. Use Linear.");
         }
         minimum = edges[first];
         omitted = counts.slice(0, first).reduce((sum, count) => sum + count, 0);
-    } else if (log) {
+    } else if (log && frequency) {
         minimum = positiveHeights[0] / 10;
     }
     if (options.bounds !== "auto") {
@@ -132,9 +132,10 @@ export function createHistogramAxis(distribution, options = defaultHistogramAxis
         ? positiveHeights.some(height => height < minimum || height > maximum)
         : edges[0] < minimum || edges.at(-1) > maximum;
     const notice = [
-        log ? frequency ? "Log: zero-height bars are not drawn." :
+        log && !distribution.rebin ? frequency ? "Log: zero-height bars are not drawn." :
             `Log omits bins with nonpositive edges (${omitted.toLocaleString()} sampled pixels); crossing-zero bins are omitted whole.` : "",
-        clipped ? "Display is clipped to these limits; original counts and percentages are unchanged." : "",
+        clipped ? (distribution.rebin ? "Bins are counted within these limits." :
+            "Display is clipped to these limits; original counts and percentages are unchanged.") : "",
     ].filter(Boolean).join(" ");
     const offset = !log && Math.max(Math.abs(minimum), Math.abs(maximum)) / (maximum - minimum) > 1e5 ? minimum : 0;
     return { minimum, maximum, scale: options.scale, offset, position, valueAt, interval, notice };

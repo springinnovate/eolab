@@ -97,7 +97,7 @@ test("every bin fits inside labeled axes across container widths", () => {
     const {chart, documentContext} = createChart();
     chart.clientWidth = width;
     renderRasterHistogramChart(chart, RASTER_STATISTICS, DEFAULT_RASTER_STYLE, documentContext);
-    assert.equal(chart.attributes.get("viewBox"), `0 0 ${width} 190`);
+    assert.equal(chart.attributes.get("viewBox"), `0 0 ${width} 163`);
     assert.equal(chart.attributes.get("preserveAspectRatio"), "none");
     assert.equal(chart.attributes.get("role"), "group");
     const bars = chart.children.filter(child => child.classList.contains("raster-histogram-bar"));
@@ -105,13 +105,13 @@ test("every bin fits inside labeled axes across container widths", () => {
     assert.equal(Number(bars[0].attributes.get("height")), 125 / 8000 * 100 / 2 * 116);
     for (const bar of bars) {
       const x = Number(bar.attributes.get("x")), y = Number(bar.attributes.get("y"));
-      assert.ok(x >= 48 && x + Number(bar.attributes.get("width")) <= width - 12);
+      assert.ok(x >= 36 && x + Number(bar.attributes.get("width")) <= width - 6);
       assert.ok(y >= 28 && Math.abs(y + Number(bar.attributes.get("height")) - 144) < 1e-8);
     }
     const axes = chart.querySelector(".chart-axes");
     const labels = axes.querySelectorAll("text").map(child => child.textContent);
     assert.match(chart.getAttribute("aria-label"), /Vertical axis: percentage of valid sampled pixels/);
-    assert.ok(labels.includes("Raster value"));
+    assert.ok(!labels.includes("Raster value"));
     assert.deepEqual(axes.querySelector(".series-chart-y-axis").querySelectorAll("text").map(tick => tick.textContent), ["0", "1", "2"]);
     assert.ok(labels.includes("-10") && labels.includes("30"));
     bars.at(-1).dispatchEvent(new Event("pointermove"));
@@ -130,12 +130,12 @@ test("constant and non-uniform bins retain correct positions and finite heights"
   renderRasterHistogramChart(chart, data, DEFAULT_RASTER_STYLE, documentContext);
   let bars = chart.children.filter(child => child.classList.contains("raster-histogram-bar"));
   assert.equal(Number(bars[32].attributes.get("height")), 116);
-  assert.equal(Number(bars[32].attributes.get("x")), 48 + (391 - 60) / 2);
+  assert.equal(Number(bars[32].attributes.get("x")), 36 + (391 - 42) / 2);
   assert.equal(bars.filter(bar => Number(bar.attributes.get("height")) > 0).length, 1);
   data.histogram.edges = Array.from({length:65}, (_, i) => (i / 64) ** 2);
   renderRasterHistogramChart(chart, data, DEFAULT_RASTER_STYLE, documentContext);
   bars = chart.children.filter(child => child.classList.contains("raster-histogram-bar"));
-  assert.equal(Number(bars[32].attributes.get("x")), 48 + (391 - 60) / 4);
+  assert.equal(Number(bars[32].attributes.get("x")), 36 + (391 - 42) / 4);
   assert.ok(bars.every(bar => [...bar.attributes.values()].every(value => !/NaN|Infinity/.test(value))));
 });
 
@@ -164,7 +164,7 @@ test("candidate style thresholds are colored, labeled, and clamped to the plot",
   const ticks = group.children.map(marker => marker.children[1]);
   const labels = group.children.map(marker => marker.children[3]);
   assert.deepEqual(guides.map(line => line.style.stroke), markers.map(marker => marker.color));
-  assert.deepEqual(guides.map(line => Number(line.attributes.get("x1"))), [48, 213.5, 379]);
+  assert.deepEqual(guides.map(line => Number(line.attributes.get("x1"))), [36, 210.5, 385]);
   assert.ok(ticks.every(tick => tick.getAttribute("y1") === "24" && tick.getAttribute("y2") === "28"));
   assert.ok(labels.every(label => Number(label.getAttribute("y")) < 28));
   assert.deepEqual(labels.map(label => label.textContent), ["L", "M", "U"]);
@@ -220,17 +220,17 @@ test("resizing redraws the plot and stale observers cannot revive cleared charts
   const focusedBin = chart.children.find(child => child.getAttribute("data-bin-index") === "3");
   focusedBin.focus();
   instances[0].resize(280);
-  assert.equal(chart.attributes.get("viewBox"), "0 0 280 190");
+  assert.equal(chart.attributes.get("viewBox"), "0 0 280 163");
   assert.equal(documentContext.activeElement.getAttribute("data-bin-index"), "3");
   assert.notEqual(documentContext.activeElement, focusedBin, "redraw restores the same bin in the new SVG nodes");
   instances[0].resize(600);
-  assert.equal(chart.attributes.get("viewBox"), "0 0 600 190");
+  assert.equal(chart.attributes.get("viewBox"), "0 0 600 163");
   instances[0].resize(0);
-  assert.equal(chart.attributes.get("viewBox"), "0 0 600 190");
+  assert.equal(chart.attributes.get("viewBox"), "0 0 600 163");
   renderRasterHistogramChart(chart, RASTER_STATISTICS, DEFAULT_RASTER_STYLE, documentContext);
   assert.equal(instances[0].disconnected, true);
   instances[0].resize(999);
-  assert.equal(chart.attributes.get("viewBox"), "0 0 640 190");
+  assert.equal(chart.attributes.get("viewBox"), "0 0 640 163");
   clearRasterHistogramChart(chart);
   assert.equal(instances[1].disconnected, true);
   instances[1].resize(391);
@@ -266,12 +266,12 @@ test("log and clipped 1D axes preserve bin identity, hover counts and style mark
   assert.equal(bars.length, 2, "The crossing-zero bin is omitted whole");
   assert.equal(Number(bars[0].attributes.get("height")), 116);
   assert.ok(bars[0].classNames.includes("histogram-axis-clipped"));
-  assert.equal(Number(bars[1].attributes.get("x")), 338);
+  assert.equal(Number(bars[1].attributes.get("x")), 335);
   bars[0].dispatchEvent(new Event("pointermove"));
   const tooltip = chart.children.find(child => child.classNames.includes("chart-tooltip"));
   assert.equal(tooltip.children[1].textContent, "1–10");
   assert.match(tooltip.children[2].textContent, /5 pixels · 50.00%/);
   const markers = chart.children.find(child => child.classNames.includes("raster-histogram-thresholds"));
-  assert.equal(Number(markers.children[0].children[0].attributes.get("x1")), 338);
+  assert.equal(Number(markers.children[0].children[0].attributes.get("x1")), 335);
   assert.deepEqual(statistics, original);
 });

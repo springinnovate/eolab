@@ -26,6 +26,7 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * @property {() => void} onResetStyle Restores the initial raster style.
  * @property {(key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings)=>void}
  * onHistogramPercentiles Updates percentile inspection and optional rescaling for one view.
+ * @property {import("./histogram-controls-view.js").RasterHistogramHandlers["onLoadHistogramRange"]} onLoadHistogramRange Recount the displayed raster and area.
  * @property {() => void} onOpenHistogram Opens the full raster-analysis view.
  * @property {() => void} onRetryStatistics Retries raster statistics.
  * @property {(key: string) => void} onSelectHistogram Activates one retained

@@ -281,7 +281,7 @@ def read_raster_categorical_statistics(
     selected_valid_sample_mask = valid_sample_mask & (sample_areas_hectares > 0)
     sample = numpy.ma.array(values, mask=~selected_valid_sample_mask)
     statistics = summarize_raster_sample(
-        sample, source_window, sampling_area, sampling_method
+        sample, source_window, sampling_area, sampling_method, retain_histogram_sample=False
     )
     valid_area_hectares = float(sample_areas_hectares[selected_valid_sample_mask].sum())
     category_areas_hectares = [

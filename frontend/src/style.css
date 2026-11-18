@@ -1632,7 +1632,7 @@ h5 {
   border-radius: 2px;
   background: var(--surface-2);
 }
-.raster-histogram-chart { height: 190px; }
+.raster-histogram-chart .series-chart-x-axis text { font-size: 10px; transform: translateY(-3px); }
 
 .raster-histogram[aria-busy="true"] .raster-histogram-chart {
   opacity: 0.58;
@@ -5364,7 +5364,7 @@ summary:hover > .raster-disclosure-chevron {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  padding-inline-start: 48px;
+  padding-inline-start: 0;
   color: var(--text-2);
   font-size: var(--font-size-ui);
 }
@@ -5409,6 +5409,92 @@ summary:hover > .raster-disclosure-chevron {
   width: 100%;
   min-width: 0;
   padding: 4px;
+}
+.histogram-sample-count, .histogram-bin-width, .histogram-overview-ticks {
+  color: var(--text-3);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+.histogram-bin-width { margin-inline-start: auto; }
+.histogram-navigator { min-width: 0; padding-block: 3px; }
+.histogram-overview {
+  position: relative;
+  height: 24px;
+  margin-inline: 6px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  touch-action: none;
+}
+.histogram-overview svg { display: block; width: 100%; height: 100%; fill: var(--text-3); }
+.histogram-grip {
+  position: absolute;
+  inset-block: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  touch-action: none;
+}
+.histogram-grip-pan {
+  container: histogram-window / inline-size;
+  z-index: 2;
+  left: var(--window-left);
+  right: var(--window-right);
+  border: 1px solid var(--brand);
+  background: color-mix(in srgb, var(--brand) 17%, transparent);
+  cursor: grab;
+}
+.histogram-grip-pan:active { cursor: grabbing; }
+.histogram-grip-minimum, .histogram-grip-maximum {
+  z-index: 1;
+  width: 12px;
+  cursor: ew-resize;
+}
+.histogram-grip-minimum { left: var(--window-left); transform: translateX(-80%); }
+.histogram-grip-maximum { right: var(--window-right); transform: translateX(80%); }
+.histogram-grip-minimum::after, .histogram-grip-maximum::after {
+  content: "";
+  position: absolute;
+  inset-block: 2px;
+  width: 5px;
+  border: 1px solid var(--surface-2);
+  border-radius: 2px;
+  background: var(--brand);
+}
+.histogram-grip-minimum::after { right: 0; }
+.histogram-grip-maximum::after { left: 0; }
+.histogram-pan-tab {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 15px;
+  height: 9px;
+  border: 1px solid var(--brand);
+  border-radius: 2px;
+  background: repeating-linear-gradient(90deg, var(--surface-2) 0 3px, var(--brand) 3px 4px);
+}
+.histogram-overview[data-full="true"] .histogram-pan-tab { display: none; }
+@container histogram-window (max-width: 32px) {
+  .histogram-pan-tab { top: auto; bottom: -3px; transform: translateX(-50%); }
+}
+.histogram-overview-ticks { display: flex; justify-content: space-between; gap: 3px; font-size: 10px; }
+.histogram-overview-ticks span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.histogram-range-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 5px; }
+.histogram-range-fields label { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+.histogram-range-fields input { text-align: right; font-variant-numeric: tabular-nums; }
+.histogram-range-fields .secondary-button { margin: 0; padding: 4px 6px; white-space: nowrap; }
+.histogram-range-status { margin: 2px 0; font-size: 0.72rem; color: var(--text-2); }
+.histogram-range-status:empty { display: none; }
+.histogram-range-fields input[aria-invalid="true"] { border-color: var(--status-danger); }
+@media (pointer: coarse) {
+  .histogram-navigator { padding-top: 12px; }
+  .histogram-overview { margin-inline: 12px; }
+  .histogram-overview-ticks { padding-block-start: 10px; }
+  .histogram-grip::before { content: ""; position: absolute; inset: -11px 0; }
+  .histogram-grip-minimum, .histogram-grip-maximum { width: 24px; }
 }
 .histogram-axis-status, .histogram-axis-help {
   flex-basis: 100%;

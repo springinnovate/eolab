@@ -2,6 +2,19 @@
 
 import { createHistogramAxis } from "./histogram-axis-scale.js";
 
+/** Format a histogram limit or bin width for a compact panel.
+ * @param {number} value Finite raster value or interval width.
+ * @param {number} precision Maximum number of significant digits to display.
+ * @return {string} Grouped decimal label, or scientific notation for extreme magnitudes.
+ */
+export function formatHistogramMagnitude(value, precision) {
+    const magnitude = Math.abs(value);
+    return value.toLocaleString("en-US", {
+        maximumSignificantDigits: precision,
+        notation: magnitude >= 1e9 || (magnitude > 0 && magnitude < 1e-4) ? "scientific" : "standard",
+    });
+}
+
 /**
  * Format a tick with enough precision for its spacing, without scientific
  * notation for ordinary values or floating-point tails around zero.

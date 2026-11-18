@@ -16,7 +16,6 @@ import { appendHistogramThresholdMarkers } from "./histogram-threshold-markers.j
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const HISTOGRAM_CHART_WIDTH = 640;
-const HISTOGRAM_CHART_HEIGHT = 190;
 const HISTOGRAM_PLOT_HEIGHT = 116;
 const chartObservers = new WeakMap();
 
@@ -107,9 +106,19 @@ function drawRasterHistogramChart(
     const focusedBin = focusedElement?.getAttribute("data-bin-index");
     const focusedMarker = focusedElement?.getAttribute("data-threshold-id");
     const { counts, edges } = statistics.histogram;
-    const plot = { left: 48, top: 28, width: width - 60, height: HISTOGRAM_PLOT_HEIGHT, bottom: 28 + HISTOGRAM_PLOT_HEIGHT };
+    const plot = {left: 36, top: 28, width: width - 42, height: HISTOGRAM_PLOT_HEIGHT, bottom: 28 + HISTOGRAM_PLOT_HEIGHT};
     const scales = histogramScales(statistics, plot.width, axes);
-    chart.setAttribute("viewBox", `0 0 ${width} ${HISTOGRAM_CHART_HEIGHT}`);
+    const yTicks = [0, 0.5, 1];
+    const yLabels = yTicks.map(fraction => formatHistogramTick(scales.yAxis.valueAt(fraction),
+        scales.yAxis.scale === "log" ? scales.yAxis.valueAt(fraction) / 10 : (scales.yAxis.maximum - scales.yAxis.minimum) / 2));
+    const caption = [
+        valueLabel === "Raster value" ? "" : valueLabel.replace(/^Raster value \((.*)\)$/, "$1"),
+        scales.offset ? `offset ${scales.offset >= 0 ? "+" : ""}${scales.offset}` : "",
+        scales.xAxis.scale === "log" ? "log" : "",
+    ].filter(Boolean).join(" · ");
+    const height = plot.bottom + (caption ? 33 : 19);
+    chart.style.height = `${height}px`;
+    chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
     chart.setAttribute("preserveAspectRatio", "none");
     chart.setAttribute("role", "group");
     chart.setAttribute("tabindex", "-1");
@@ -138,16 +147,18 @@ function drawRasterHistogramChart(
         `X scale: ${scales.xAxis.scale}; Y scale: ${scales.yAxis.scale}. ` +
         markerDescription;
     chart.replaceChildren(title);
-    const yTicks = [0, 0.5, 1];
-    drawChartAxes(documentContext, chart, plot,
+    const axisGroup = drawChartAxes(documentContext, chart, plot,
         {scale: scaleLinear([0, 1], [plot.left, plot.left + plot.width]), values: scales.ticks.map(tick => tick.fraction),
             format: fraction => scales.ticks.find(tick => tick.fraction === fraction).label, edgeLabels: true},
         {scale: scaleLinear([0, 1], [plot.bottom, plot.top]), values: yTicks,
-            format: fraction => formatHistogramTick(scales.yAxis.valueAt(fraction), scales.yAxis.scale === "log" ?
-                scales.yAxis.valueAt(fraction) / 10 : (scales.yAxis.maximum - scales.yAxis.minimum) / 2)}, [
-            {text: (scales.offset === 0 ? valueLabel : `${valueLabel} (offset ${scales.offset >= 0 ? "+" : ""}${scales.offset})`) +
-                (scales.xAxis.scale === "log" ? " · log" : ""), x: plot.left + plot.width / 2, y: plot.bottom + 38},
-        ]);
+            format: fraction => yLabels[yTicks.indexOf(fraction)]},
+        caption ? [{text: caption, x: plot.left + plot.width / 2, y: plot.bottom + 29}] : []);
+    for (const tick of axisGroup.querySelector(".series-chart-y-axis").querySelectorAll("text")) {
+        if (tick.textContent.length > 4) {
+            tick.setAttribute("textLength", String(plot.left - 10));
+            tick.setAttribute("lengthAdjust", "spacingAndGlyphs");
+        }
+    }
     for (const [binIndex, count] of counts.entries()) {
         const samplePercent = count / statistics.validSampleCount * 100;
         const interval = scales.xAxis.interval(edges[binIndex], edges[binIndex + 1]);
@@ -171,7 +182,7 @@ function drawRasterHistogramChart(
         );
         bar.setAttribute("width", String(barWidth * 0.9));
         bar.setAttribute("height", String(barHeight));
-        const binMidpoint = (edges[binIndex] + edges[binIndex + 1]) / 2;
+        const binMidpoint = edges[binIndex] / 2 + edges[binIndex + 1] / 2;
         bar.style.fill = getRasterStyleColor(style, binMidpoint);
         const binDescription =
             `Bin midpoint ${formatRasterPixelValue(binMidpoint)}; ` +

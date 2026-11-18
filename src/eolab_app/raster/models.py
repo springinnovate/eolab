@@ -170,7 +170,7 @@ BoxStatistic = Literal["mean", "stdev"] | PercentAbove
 
 
 class RasterStatisticsArea(BaseModel):
-    """Choose one sampling area and optional category codes for raster statistics.
+    """Choose a sampling area and request a distribution, value window, or box preview.
 
     Attributes:
         selected_bounds: Optional canonical WGS 84 rectangle; absence selects
@@ -185,6 +185,8 @@ class RasterStatisticsArea(BaseModel):
             {"percentAbove": 10} for a percentage.
         category_values: Optional distinct numeric classification codes. Labels,
             colors and opacity remain outside the analysis contract.
+        histogram_range: Optional inclusive value limits for an additional
+            64-bin distribution of the same continuous sample.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -206,18 +208,22 @@ class RasterStatisticsArea(BaseModel):
     category_values: tuple[CategoryCode, ...] | None = Field(
         default=None, alias="categoryValues", min_length=1, max_length=256
     )
+    histogram_range: tuple[FiniteFloat, FiniteFloat] | None = Field(
+        default=None, alias="histogramRange"
+    )
 
     @model_validator(mode="after")
     def require_strict_sampling_area_union(
         self,
     ) -> "RasterStatisticsArea":
-        """Require at most one explicit sampling area and distinct category codes.
+        """Require one compatible measurement and at most one explicit sampling area.
 
         Returns:
             Validated request with one optional explicit sampling area.
 
         Raises:
-            ValueError: If sampling areas or category codes conflict.
+            ValueError: If areas or measurements conflict, category codes repeat,
+                or histogram limits are reversed or equal.
         """
         if (
             sum(
@@ -239,6 +245,11 @@ class RasterStatisticsArea(BaseModel):
                 raise ValueError("A preview requires samplingBox and previewStatistics without categoryValues")
         elif self.preview_statistics is not None:
             raise ValueError("previewStatistics requires a preview request")
+        if self.histogram_range is not None:
+            if self.measure != "distribution" or self.category_values is not None:
+                raise ValueError("histogramRange requires a continuous distribution")
+            if self.histogram_range[0] >= self.histogram_range[1]:
+                raise ValueError("Histogram minimum must be below maximum")
         if self.category_values is not None and len(set(self.category_values)) != len(
             self.category_values
         ):
@@ -651,6 +662,8 @@ class RasterStatistics(BaseModel):
         sample_maximum: Maximum valid sampled value.
         percentiles: Fixed percentiles of valid sampled values.
         histogram: Fixed 64-bin distribution of valid sampled values.
+        window_histogram: Counts of valid values within the requested limits.
+            Percentages use valid_sample_count for both distributions.
         suggested_range: Strict range suggested for downstream color controls.
         categorical_distribution: Optional bounded numeric category-area estimate.
     """
@@ -684,6 +697,9 @@ class RasterStatistics(BaseModel):
     sample_maximum: FiniteFloat = Field(alias="sampleMaximum")
     percentiles: RasterPercentiles
     histogram: RasterHistogram
+    window_histogram: RasterHistogram | None = Field(
+        default=None, alias="windowHistogram", exclude_if=_exclude_none_from_response
+    )
     suggested_range: RasterValueRange = Field(alias="suggestedRange")
     categorical_distribution: RasterCategoricalDistribution | None = Field(
         default=None,

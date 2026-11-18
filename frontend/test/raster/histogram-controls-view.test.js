@@ -4,7 +4,7 @@ import test from "node:test";
 import {
     RasterHistogramControlsView,
 } from "../../src/raster/histogram-controls-view.js";
-import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { DEFAULT_RASTER_STYLE, getRasterStyleColor } from "../../src/raster/style.js";
 import { RASTER_STATISTICS } from "../../test-support/raster/fixtures.js";
 import { createFakeResizeObservers } from "../../test-support/raster/fakes.js";
 import {
@@ -166,7 +166,7 @@ test("pending and failed summaries do not present cached charts as the current s
         assert.equal(row.children[1].hidden, state === "ready");
         if (state === "ready") {
             const chart = row.children.find(child => child.classList.contains("raster-histogram-chart"));
-            assert.equal(chart.getAttribute("viewBox"), "0 0 640 190");
+            assert.equal(chart.getAttribute("viewBox"), "0 0 640 177");
             assert.match(chart.getAttribute("aria-label"), /Horizontal axis: Raster value \(%\)/);
         }
     }
@@ -319,7 +319,7 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     assert.equal(
         documentContext.querySelector("#raster-histogram-detail-layer")
             .textContent,
-        "second-raster.tif"
+        "Histogram – second-raster.tif"
     );
     assert.equal(documentContext.querySelector("#raster-histogram-detail-layer").title,
         "second-raster.tif");
@@ -343,7 +343,7 @@ test("axis edits redraw only the local chart and persist through a new sample", 
     view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
     const original = structuredClone(RASTER_STATISTICS);
     const header = doc.querySelector("#raster-histogram-bar-height");
-    const log = header.children[0].querySelectorAll("button")[1];
+    const log = header.querySelectorAll("button")[1];
     view.setStatisticsBusy(true);
     assert.equal(log.disabled, true);
     view.setStatisticsBusy(false);
@@ -364,6 +364,107 @@ test("axis edits redraw only the local chart and persist through a new sample", 
     assert.equal(header.children.length, 0);
     assert.equal(log.disabled, true);
     view.unbind();
+});
+
+test("range inputs and the axis editor debounce, repaint counted bins, and reject stale windows", async t => {
+    t.mock.timers.enable({apis: ["setTimeout"]});
+    const doc = new FakeRasterControlDocument(), view = new RasterHistogramControlsView(doc);
+    const requests = [];
+    view.bind({onLoadHistogramRange: (sample, range, signal) => new Promise(resolve => {
+        requests.push({sample, range, signal, resolve});
+    })});
+    view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
+    const editor = view.detailAxisControls, nav = editor.navigator;
+    const [min, max] = nav.inputs;
+    min.value = "2";
+    min.dispatchEvent(new Event("input"));
+    max.value = "5";
+    max.dispatchEvent(new Event("input"));
+    t.mock.timers.tick(199);
+    assert.equal(requests.length, 0);
+    t.mock.timers.tick(1);
+    assert.deepEqual(requests[0].range, [2, 5]);
+    assert.equal(requests[0].sample, RASTER_STATISTICS);
+    const fields = editor.rows.get("x").fields;
+    assert.equal(fields.bounds.input.value, "values");
+    fields.maximum.input.value = "6";
+    fields.maximum.input.dispatchEvent(new Event("input"));
+    assert.equal(requests[0].signal.aborted, true);
+    assert.equal(max.value, "6");
+    t.mock.timers.tick(200);
+    const bins = {edges: Array.from({length: 65}, (_, i) => 2 + i / 16), counts: Array(64).fill(0)};
+    bins.counts[32] = 2;
+    requests[1].resolve(bins);
+    await Promise.resolve();
+    requests[0].resolve({edges: [2, 5], counts: [200]});
+    await Promise.resolve();
+    const bars = view.histogramChart.children.filter(node => node.classList.contains("raster-histogram-bar"));
+    assert.equal(bars.length, 64);
+    assert.match(bars[32].getAttribute("aria-label"), /0.03% of the valid sample \(2 pixels\)/);
+    assert.equal(bars[32].style.fill, getRasterStyleColor(DEFAULT_RASTER_STYLE, 4 + 1 / 32));
+    assert.equal(editor.binWidth.textContent, "64 bins · width 0.0625");
+    assert.equal(editor.axes.y.maximum, 0.05);
+    const key = new Event("keydown", {cancelable: true});
+    Object.defineProperty(key, "key", {value: "End"});
+    nav.grips.get("pan").dispatchEvent(key);
+    t.mock.timers.tick(200);
+    assert.deepEqual(requests[2].range, [26, 30]);
+    requests[2].resolve({edges: bins.edges.map(edge => edge + 24), counts: Array(64).fill(0)});
+    await Promise.resolve();
+    assert.match(nav.status.textContent, /No sampled pixels/);
+    nav.reset.dispatchEvent(new Event("click"));
+    assert.deepEqual(nav.inputs.map(input => input.value), ["-10", "30"]);
+    assert.equal(editor.binWidth.textContent, "64 bins · width 0.625");
+    assert.equal(fields.bounds.input.value, "auto");
+    min.value = "3";
+    min.dispatchEvent(new Event("input"));
+    t.mock.timers.tick(200);
+    view.clearHistogram();
+    assert.equal(requests.at(-1).signal.aborted, true);
+    requests.at(-1).resolve(bins);
+    await Promise.resolve();
+    assert.equal(view.histogramChart.children.length, 0);
+    view.unbind();
+});
+
+test("overview labels fit compact panels and keep close full-range endpoints distinguishable", () => {
+    const view = new RasterHistogramControlsView(new FakeRasterControlDocument());
+    for (const [low, high, labels] of [
+        [-0.0015827168247178197, 0.009182731493204832, ["-0.00158272", "0.00380001", "0.00918273"]],
+        [1e20, 2e20, ["1E20", "1.5E20", "2E20"]],
+        [1.35468391234701, 1.35468391234912, ["1.35468391234701", "1.35468391234912"]],
+    ]) {
+        const edges = Array.from({length: 65}, (_, i) => low + (high - low) * i / 64);
+        view.renderHistogram({...RASTER_STATISTICS, histogram: {edges, counts: RASTER_STATISTICS.histogram.counts}}, DEFAULT_RASTER_STYLE);
+        const ticks = view.detailAxisControls.navigator.root.children[1].children;
+        assert.deepEqual(ticks.map(tick => tick.textContent), labels);
+        assert.equal(Number(ticks[0].title.replaceAll(",", "")), low);
+    }
+    view.unbind();
+});
+
+test("replacing a card's source discards its pending recount even with identical full bins", async t => {
+    t.mock.timers.enable({apis: ["setTimeout"]});
+    const view = new RasterHistogramControlsView(new FakeRasterControlDocument());
+    const requests = [];
+    view.bind({onLoadHistogramRange: (sample, range, signal) => new Promise(resolve =>
+        requests.push({sample, signal, resolve}))});
+    const summary = {key: "layer", sourceKey: "first-observation", label: "Flow", automatic: true,
+        state: "ready", counts: RASTER_STATISTICS.histogram.counts, statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE};
+    view.renderLayerHistograms([summary], "layer");
+    const first = view.summaryCards.get("layer");
+    first.axisControls.setValueWindow([0, 1]);
+    t.mock.timers.tick(200);
+    const replacement = structuredClone({...summary, sourceKey: "next-observation"});
+    view.renderLayerHistograms([replacement], "layer");
+    assert.equal(requests[0].signal.aborted, true);
+    requests[0].resolve({edges: [0, 1], counts: [99]});
+    await Promise.resolve();
+    assert.equal(first.chart.children.length, 0);
+    t.mock.timers.tick(200);
+    assert.equal(requests[1].sample, replacement.statistics);
+    view.unbind();
+    assert.equal(requests[1].signal.aborted, true);
 });
 
 test("a card's bar-height buttons reveal rare bins and stay in sync with its axis editor", () => {
