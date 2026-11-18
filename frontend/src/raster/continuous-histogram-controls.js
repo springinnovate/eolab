@@ -1,6 +1,7 @@
 /** Local axes and debounced sample recounts for a single continuous raster chart. */
 import { HistogramAxisControls } from "./histogram-axis-controls.js";
 import { createHistogramAxis } from "./histogram-axis-scale.js";
+import { formatHistogramMagnitude } from "./histogram-axes.js";
 import { HistogramRangeNavigator } from "./histogram-range-navigator.js";
 
 /** @typedef {{edges:number[],counts:number[]}} HistogramBins */
@@ -43,9 +44,7 @@ export class ContinuousHistogramControls extends HistogramAxisControls {
     redraw() {
         const {edges, counts} = this.bins;
         const width = (edges.at(-1) - edges[0]) / counts.length;
-        this.binWidth.textContent = `${counts.length} bins · width ${new Intl.NumberFormat("en-US", {
-            maximumSignificantDigits: 8, notation: width < 1e-5 ? "scientific" : "standard",
-        }).format(width)}`;
+        this.binWidth.textContent = `${counts.length} bins · width ${formatHistogramMagnitude(width, 8)}`;
         this.draw(this.bins, {x: this.displayedX, y: this.axes.y});
     }
 

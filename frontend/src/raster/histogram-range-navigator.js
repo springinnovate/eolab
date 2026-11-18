@@ -1,4 +1,5 @@
 /** Full-sample overview, draggable value window, and its numeric inputs. */
+import { formatHistogramMagnitude } from "./histogram-axes.js";
 
 /** Format a raster limit for compact, editable display without dropping precision.
  * @param {number} value Finite raster value.
@@ -80,9 +81,14 @@ export class HistogramRangeNavigator {
         }
         const ticks = doc.createElement("div");
         ticks.className = "histogram-overview-ticks";
-        for (const value of [this.low, this.low / 2 + this.high / 2, this.high]) {
+        const limits = [this.low, this.low / 2 + this.high / 2, this.high];
+        const labels = limits.map(value => formatHistogramMagnitude(value, 6));
+        const distinct = new Set(labels).size === limits.length;
+        for (const [index, value] of limits.entries()) {
+            if (!distinct && index === 1) continue;
             const tick = doc.createElement("span");
-            tick.textContent = formatLimit(value);
+            tick.textContent = distinct ? labels[index] : String(value);
+            tick.title = formatLimit(value);
             ticks.append(tick);
         }
         const fields = doc.createElement("div");

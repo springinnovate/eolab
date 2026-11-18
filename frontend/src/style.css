@@ -5481,6 +5481,7 @@ summary:hover > .raster-disclosure-chevron {
   .histogram-pan-tab { top: auto; bottom: -3px; transform: translateX(-50%); }
 }
 .histogram-overview-ticks { display: flex; justify-content: space-between; gap: 3px; font-size: 10px; }
+.histogram-overview-ticks span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .histogram-range-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 5px; }
 .histogram-range-fields label { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
 .histogram-range-fields input { text-align: right; font-variant-numeric: tabular-nums; }

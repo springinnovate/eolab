@@ -427,6 +427,22 @@ test("range inputs and the axis editor debounce, repaint counted bins, and rejec
     view.unbind();
 });
 
+test("overview labels fit compact panels and keep close full-range endpoints distinguishable", () => {
+    const view = new RasterHistogramControlsView(new FakeRasterControlDocument());
+    for (const [low, high, labels] of [
+        [-0.0015827168247178197, 0.009182731493204832, ["-0.00158272", "0.00380001", "0.00918273"]],
+        [1e20, 2e20, ["1E20", "1.5E20", "2E20"]],
+        [1.35468391234701, 1.35468391234912, ["1.35468391234701", "1.35468391234912"]],
+    ]) {
+        const edges = Array.from({length: 65}, (_, i) => low + (high - low) * i / 64);
+        view.renderHistogram({...RASTER_STATISTICS, histogram: {edges, counts: RASTER_STATISTICS.histogram.counts}}, DEFAULT_RASTER_STYLE);
+        const ticks = view.detailAxisControls.navigator.root.children[1].children;
+        assert.deepEqual(ticks.map(tick => tick.textContent), labels);
+        assert.equal(Number(ticks[0].title.replaceAll(",", "")), low);
+    }
+    view.unbind();
+});
+
 test("replacing a card's source discards its pending recount even with identical full bins", async t => {
     t.mock.timers.enable({apis: ["setTimeout"]});
     const view = new RasterHistogramControlsView(new FakeRasterControlDocument());
