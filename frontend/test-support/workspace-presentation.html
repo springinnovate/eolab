@@ -164,6 +164,8 @@
       const storage = new SavedMapViewLocalStorage(sessionStorage, "eolab.test.panel-fading");
       const defaults = "50,150,750,1000,40";
       storage.clear();
+      // The production stylesheet can express the same default in seconds.
+      app.style.setProperty("--panel-fade-in", "0.15s");
       let unbind = bindPanelFadeSettings(app, storage);
       /** Enter a value with the same input and change events as a completed edit.
        * @param {HTMLInputElement} input Slider or exact number to change.

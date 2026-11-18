@@ -43,8 +43,10 @@ export function bindPanelFadeSettings(app, storage) {
         const slider = row.querySelector('input[type="range"]');
         const property = `--${number.id}`;
         const cssDefault = defaults.getPropertyValue(property).trim();
-        const defaultValue = parseFloat(cssDefault);
         const unit = cssDefault.endsWith("%") ? "%" : "ms";
+        const cssValue = Number.parseFloat(cssDefault);
+        const defaultValue = unit === "ms" && !cssDefault.endsWith("ms")
+            ? Math.round(cssValue * 1000) : cssValue;
         const sliderMax = Number(slider.max);
         if (unit === "ms") number.max = String(2_147_483_647);
 
