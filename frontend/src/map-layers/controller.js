@@ -193,20 +193,9 @@ export class MapLayerController {
         if (this.destroyed || this.records.has(source.key)) {
             throw new Error("Local layer cannot be added to this stack.");
         }
-        const { entry } = this.stack.addLocal(source.key, source.label, this.recordIntent());
-        entry.isCustom = source.isCustom ?? true;
-        const record = { entry, adapter, publication: source.publication ?? null, state: null, error: null,
-            canAddView: source.canAddView === true };
+        const record = this.#createLocalRecord(source, adapter, this.stack, this.recordIntent());
+        const { entry } = record;
         try {
-            if (source.sourceName !== undefined) {
-                entry.sourceName = source.sourceName;
-                entry.customName = normalizeCustomLayerName(source.customName ?? null);
-                entry.label = entry.customName ?? entry.sourceName;
-            }
-            if (source.group) entry.group = source.group;
-            this.stack.setVisible(entry.key, source.visible ?? true);
-            this.stack.setOpacity(entry.key, source.opacity ?? 1);
-            record.state = adapter.createState({ entry, source, publication: record.publication });
             this.records.set(entry.key, record);
             this.leafletLayers.add(entry.key, this.#createLayer(record), entry);
             this.#applyLeafletOrder();
@@ -218,6 +207,55 @@ export class MapLayerController {
         }
         this.render();
         return record;
+    }
+
+    /** Prepare a local layer for the ordinary staged commit without exposing its map card or controls.
+     * @param {Parameters<MapLayerController["addLocal"]>[0]} source Owner's local identity and presentation.
+     * @param {Object} adapter Owner's rendering and lifecycle methods; added runs only at commit.
+     * @return {{key:string,record:Object,layer:Object}} Detached view for commitStaged or restoreStagedLayer.
+     * @throws {Error} If the identity is retained, the controller closed, or construction fails.
+     */
+    stageLocal(source, adapter) {
+        if (this.destroyed || this.records.has(source.key)) {
+            throw new Error("Local layer cannot be added to this stack.");
+        }
+        const record = this.#createLocalRecord(source, adapter, new MapLayerStack(), 1);
+        try {
+            return {key: record.entry.key, record, layer: this.#createLayer(record)};
+        } catch (error) {
+            adapter.discardStaged?.(record);
+            throw error;
+        }
+    }
+
+    /** Construct local presentation and owner state using the same rules for immediate and staged additions.
+     * @param {Parameters<MapLayerController["addLocal"]>[0]} source Local identity and presentation.
+     * @param {Object} adapter Owner's state constructor.
+     * @param {MapLayerStack} stack Retained or detached stack that validates presentation.
+     * @param {number} retentionOrder Add-intent order in that stack.
+     * @return {Object} Record with validated presentation and owner state.
+     * @throws {Error} If presentation or owner-state construction fails; removes the incomplete entry.
+     */
+    #createLocalRecord(source, adapter, stack, retentionOrder) {
+        const {entry} = stack.addLocal(source.key, source.label, retentionOrder);
+        const record = {entry, adapter, publication: source.publication ?? null, state: null, error: null,
+            canAddView: source.canAddView === true};
+        try {
+            entry.isCustom = source.isCustom ?? true;
+            if (source.sourceName !== undefined) {
+                entry.sourceName = source.sourceName;
+                entry.customName = normalizeCustomLayerName(source.customName ?? null);
+                entry.label = entry.customName ?? entry.sourceName;
+            }
+            if (source.group) entry.group = source.group;
+            stack.setVisible(entry.key, source.visible ?? true);
+            stack.setOpacity(entry.key, source.opacity ?? 1);
+            record.state = adapter.createState({entry, source, publication: record.publication});
+            return record;
+        } catch (error) {
+            stack.remove(entry.key);
+            throw error;
+        }
     }
 
     /**
@@ -363,7 +401,7 @@ export class MapLayerController {
             ) {
                 throw new TypeError("Staged map layer is invalid.");
             }
-            if (keys.has(key)) {
+            if (keys.has(key) || this.records.has(key)) {
                 throw new Error(`Staged map layer is duplicated: ${key}`);
             }
             keys.add(key);
@@ -384,6 +422,8 @@ export class MapLayerController {
                 this.stack.setVisible(key, presentation.visible);
                 entry.customName = presentation.customName ?? null;
                 entry.isCustom = presentation.isCustom;
+                if (presentation.sourceName !== undefined) entry.sourceName = presentation.sourceName;
+                if (presentation.group) entry.group = presentation.group;
                 record.entry = entry;
                 this.records.set(key, record);
                 this.leafletLayers.add(key, layer, {
@@ -966,7 +1006,7 @@ export class MapLayerController {
     }
 
     /**
-     * Attach one fully prepared Catalog layer at its previous position, without opening an editor or moving the map.
+     * Attach one fully prepared layer at its requested position, without opening an editor or moving the map.
      * @param {{key:string,record:Object,layer:Object}} staged Detached layer with its restored style and filter.
      * @param {number} index Previous top-first position; clamped to the current stack.
      * @return {void}
@@ -984,6 +1024,8 @@ export class MapLayerController {
             this.stack.setOpacity(key, presentation.opacity);
             entry.customName = presentation.customName ?? null;
             entry.isCustom = presentation.isCustom;
+            if (presentation.sourceName !== undefined) entry.sourceName = presentation.sourceName;
+            if (presentation.group) entry.group = presentation.group;
             record.entry = entry;
             this.records.set(key, record);
             this.leafletLayers.add(key, layer, { visible: false, opacity: entry.opacity });

@@ -3,6 +3,34 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
+test("version five shares drawing view definitions with the server without copying source data", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v5.json", import.meta.url), "utf8"));
+  assert.deepEqual(parseSavedMapView(JSON.stringify(fixture)), fixture);
+  assert.deepEqual(parseSavedMapView(serializeSavedMapView(createSavedMapView(fixture))), fixture);
+  assert.equal(fixture.layers[1].drawingLayerId, fixture.layers[2].drawingLayerId);
+  for (const mutate of [
+    value => { value.schemaVersion = 4; },
+    value => { value.layers[1].drawingLayerId = "../drawing"; },
+    value => { value.layers[1].isCustom = false; },
+    value => { value.layers[1].customName = " "; },
+    value => { value.layers[1].legendIncluded = "false"; },
+    value => { value.layers[1].appearance.color = "red"; },
+    value => { value.layers[1].appearance.weight = 11; },
+    value => { value.layers[1].appearance.labels = "true"; },
+    value => { value.layers[1].filter = []; },
+    value => { value.layers[1].filter = {excess: "x".repeat(8192)}; },
+    ...["features", "geometry", "credential", "revision", "canEdit", "browserHash", "catalogItem", "uploadId"]
+      .map(field => value => { value.layers[1][field] = "not part of a portable drawing"; }),
+  ]) {
+    const invalid = structuredClone(fixture); mutate(invalid);
+    assert.throws(() => parseSavedMapView(JSON.stringify(invalid)));
+  }
+  const renamed = structuredClone(fixture); renamed.layers[1].customName = "  Priority drawing  ";
+  assert.equal(createSavedMapView(renamed).layers[1].customName, "Priority drawing");
+  renamed.layers[1].customName = null;
+  assert.equal(createSavedMapView(renamed).layers[1].customName, null);
+});
+
 test("version four round-trips calculated vectors and raster uploads without values or credentials", () => {
   const fields = [{version: 1, name: "Density", expression: "'Population' / 'Area km2'", numericText: false}];
   const presentation = {isCustom: true, visible: true, opacity: 1, calculatedFields: fields,
@@ -159,7 +187,7 @@ test("saved map model round trips the versioned bounded contract", () => {
 
   assert.deepEqual(parsed, saved);
   assert.equal(parsed.format, "eolab-map-view");
-  assert.equal(parsed.schemaVersion, 4);
+  assert.equal(parsed.schemaVersion, 5);
   assert.equal(Object.isFrozen(parsed.layers), true);
 });
 
@@ -181,8 +209,8 @@ test("saved map model preserves more than two visible layers", () => {
 test("saved map model rejects incompatible and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
-    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 5 })),
-    /schema 5 is not supported/,
+    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 6 })),
+    /schema 6 is not supported/,
   );
 
   const extended = savedMapCandidate();

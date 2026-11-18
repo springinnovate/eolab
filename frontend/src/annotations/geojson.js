@@ -1,5 +1,5 @@
 /** Convert annotation layers to and from ordinary GeoJSON files. */
-import { polygonValidationMessage } from "./geometry.js";
+import { counterclockwisePolygonRing, polygonValidationMessage } from "./geometry.js";
 import { MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER, MAX_ANNOTATION_DOCUMENT_BYTES,
     MAX_ANNOTATION_NAME_LENGTH, MAX_ANNOTATION_NOTE_LENGTH } from "./model.js";
 
@@ -152,14 +152,9 @@ function importPolygonVertices(geometry, context) {
 export function exportAnnotationGeoJSON(layer, includeContributors = false) {
     return { type: "FeatureCollection", name: layer.name, ...(includeContributors ? { eolabAnnotations: 1 } : {}), features: layer.polygons.map(polygon => {
         const ring = polygon.vertices.map(point => [...point]);
-        const signedArea = ring.reduce((sum, point, index) => {
-            const next = ring[(index + 1) % ring.length];
-            return sum + point[0] * next[1] - next[0] * point[1];
-        }, 0);
         ring.push([...ring[0]]);
-        if (signedArea < 0) ring.reverse();
         return { type: "Feature", id: polygon.id, properties: { name: polygon.name, note: polygon.note,
             ...(includeContributors && polygon.contributorColor ? { contributor: polygon.contributor, contributorColor: polygon.contributorColor } : {}) },
-            geometry: { type: "Polygon", coordinates: [ring] } };
+            geometry: { type: "Polygon", coordinates: [counterclockwisePolygonRing(ring)] } };
     }) };
 }

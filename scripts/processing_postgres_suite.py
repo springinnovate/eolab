@@ -28,6 +28,8 @@ SUITES = (
     "test_planning_tools_postgres.py",
     "test_planning_scenarios_postgres.py",
     "test_planning_scenarios_http_postgres.py",
+    "test_drawings_postgres.py",
+    "test_planning_drawings_postgres.py",
     "test_processing_calculations.py",
     "test_processing_unified_calculations.py",
     "test_processing_shared_jobs.py",

@@ -4,10 +4,16 @@ from datetime import datetime
 from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from eolab_app.attribute_filter import VectorFilter
-from eolab_app.map_layer_documents import MapLayer, Title
+from eolab_app.map_layer_documents import MapDrawingLayer, MapLayer, Title
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.parcel_models import ParcelField
 
@@ -22,18 +28,18 @@ class PlanningDocumentPart(BaseModel):
 
 
 class PlanningLayer(PlanningDocumentPart):
-    """Bind a durable UUID to one ordinary custom Catalog vector-layer document.
+    """Bind a durable UUID to an ordinary Catalog or drawn polygon view.
 
     The UUID identifies this stored definition, never a browser map row. The
     definition retains ordinary appearance, filters and calculated fields.
     """
 
     id: UUID
-    definition: MapLayer
+    definition: MapLayer | MapDrawingLayer
 
     @model_validator(mode="after")
-    def validate_custom_catalog_vector(self) -> Self:
-        """Require a custom mounted-vector view and a valid ordinary filter shape.
+    def validate_custom_polygon_view(self) -> Self:
+        """Require a custom polygon view and validate its source-specific filter.
 
         Returns:
             This layer; its source owner checks polygon/schema eligibility later.
@@ -41,10 +47,26 @@ class PlanningLayer(PlanningDocumentPart):
         Raises:
             ValueError: The view is not custom/vector or its source/filter is invalid.
         """
+        if isinstance(self.definition, MapDrawingLayer):
+            return self
         if not self.definition.isCustom or self.definition.style.kind != "vector":
             raise ValueError("Choose a custom Catalog polygon layer for Planning")
         self.to_selection_request()
         return self
+
+    def source_identity(self) -> tuple[str, ...]:
+        """Identify the original source independently of its map view and filter.
+
+        Returns:
+            Source kind plus its opaque drawing ID or Catalog collection/item IDs.
+        """
+        if isinstance(self.definition, MapDrawingLayer):
+            return ("drawing", str(self.definition.drawingLayerId))
+        return (
+            "catalog",
+            self.definition.catalogItem.collection,
+            self.definition.catalogItem.id,
+        )
 
     def to_selection_request(self) -> CatalogVectorFilterRequest:
         """Return Catalog identity and this view's live filter for authorization.
@@ -53,8 +75,10 @@ class PlanningLayer(PlanningDocumentPart):
             Path-free vector request retaining ordered calculated-field definitions.
 
         Raises:
-            ValueError: The portable source or filter is incompatible.
+            ValueError: This is a drawing view or its Catalog filter is incompatible.
         """
+        if isinstance(self.definition, MapDrawingLayer):
+            raise ValueError("Drawn layers use their drawing source reference")
         return CatalogVectorFilterRequest(
             collectionId=self.definition.catalogItem.collection,
             itemId=self.definition.catalogItem.id,
@@ -109,6 +133,12 @@ class PlanningToolDocument(PlanningDocumentPart):
             raise ValueError(
                 "Every Planning layer must be bound to the AOI or parcel role"
             )
+        parcels = next(layer for layer in self.layers if layer.id == self.parcelLayerId)
+        if (
+            isinstance(parcels.definition, MapDrawingLayer)
+            and self.parcelIdField != "id"
+        ):
+            raise ValueError("Drawn parcels use their built-in polygon IDs")
         choice_ids = [choice.id for choice in self.interventions]
         labels = [choice.label.casefold() for choice in self.interventions]
         if len(set(choice_ids)) != len(choice_ids) or len(set(labels)) != len(labels):

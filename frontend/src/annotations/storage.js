@@ -1,7 +1,7 @@
 /** Device-local annotation persistence with protection against stale tab writes. */
 import { readAnnotationLayers, MAX_ANNOTATION_DOCUMENT_BYTES } from "./model.js";
 
-/** Own a versioned IndexedDB document; no annotations are sent to a server. */
+/** Own device persistence for drawings and their optional linked-source save state. */
 export class AnnotationStorage {
     /**
      * Set the browser database provider without opening a connection yet.

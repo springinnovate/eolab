@@ -1,5 +1,18 @@
 /** Geometry checks for editable, single-ring annotation polygons. */
 
+/** Return a closed exterior ring in counterclockwise order while keeping its starting coordinate.
+ * @param {number[][]} ring Validated closed polygon ring in longitude/latitude.
+ * @return {number[][]} Original ring when already counterclockwise, otherwise a reversed array; coordinates are not mutated or copied.
+ */
+export function counterclockwisePolygonRing(ring) {
+    let signedArea = 0;
+    for (let index = 0; index < ring.length - 1; index++) {
+        const point = ring[index], next = ring[index + 1];
+        signedArea = signedArea + point[0] * next[1] - next[0] * point[1];
+    }
+    return signedArea < 0 ? [...ring].reverse() : ring;
+}
+
 /**
  * Explain why a draft cannot be saved as a simple polygon.
  * @param {number[][]} vertices Unclosed [longitude, latitude] coordinates.

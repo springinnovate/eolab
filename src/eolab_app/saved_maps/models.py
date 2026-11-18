@@ -1,4 +1,4 @@
-"""Validate named maps and their catalog, private-upload and shared-layer references."""
+"""Validate named maps and their Catalog, drawing, private and shared references."""
 
 from datetime import datetime, timezone
 from typing import Annotated, Literal, Self
@@ -15,6 +15,7 @@ from pydantic import (
 from eolab_app.map_layer_documents import (
     CatalogIdentity,
     MapDocumentPart,
+    MapDrawingLayer,
     MapLayer,
     MapRasterStyle,
     MapStyledLayer,
@@ -223,15 +224,16 @@ class MapLegendAppearance(MapDocumentPart):
 class SavedMapView(MapDocumentPart):
     """Portable map JSON with optional legend visibility and collapse preferences.
 
-    Catalog items, uploads and observations may appear more than once; each
+    Catalog items, uploads, observations and drawings may appear more than once; each
     entry preserves its place in the layer order and its own appearance.
     Version three includes a basemap provider, private uploads and temporal views.
     Version four includes calculated fields and private vector run-result views.
+    Version five includes reusable drawing sources with independent view settings.
     Older maps without mapLegend open with the legend visible and expanded.
     """
 
     format: Literal["eolab-map-view"]
-    schemaVersion: Annotated[int, Field(ge=1, le=4)]
+    schemaVersion: Annotated[int, Field(ge=1, le=5)]
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
@@ -244,6 +246,7 @@ class SavedMapView(MapDocumentPart):
             | MapVectorArtifactLayer
             | MapAnnotationLayer
             | MapTemporalLayer
+            | MapDrawingLayer
         ],
         Field(max_length=50),
     ]
@@ -291,6 +294,8 @@ class SavedMapView(MapDocumentPart):
             raise ValueError("Map legend preferences must be an object when supplied.")
         shared_layer_ids = []
         for layer in self.layers:
+            if isinstance(layer, MapDrawingLayer) and self.schemaVersion < 5:
+                raise ValueError("Saved drawings require saved-map version five.")
             if (
                 isinstance(layer, MapVectorArtifactLayer)
                 or isinstance(layer, MapStyledLayer)

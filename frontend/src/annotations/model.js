@@ -7,7 +7,8 @@ import { EMPTY_VECTOR_FILTER } from "../vector/filter.js";
  * @typedef {{color:string,outline:string,weight:number,fillOpacity:number,labels:boolean}} AnnotationStyle
  * @typedef {{id:string,name:string,note:string,vertices:number[][],contributor?:string,contributorColor?:string}} AnnotationPolygon
  * Annotation positions are zero-based indices in the complete top-first map-layer stack.
- * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:Object,polygons:AnnotationPolygon[]}} AnnotationLayer
+ * @typedef {{id:string,revision:number,canEdit:boolean,pending:boolean,sourceName:string}} DrawingSourceBinding
+ * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:Object,polygons:AnnotationPolygon[],drawingSource?:DrawingSourceBinding}} AnnotationLayer
  * @typedef {{version:1,layers:AnnotationLayer[]}} AnnotationDocument
  * @typedef {{layerId:string,polygon:AnnotationPolygon,isNew:boolean,outlineClosed:boolean}} PolygonDraft
  */
@@ -67,8 +68,16 @@ export function readAnnotationLayers(document, onFilterCleared = () => {}) {
         if (typeof layer.visible !== "boolean" || !Number.isFinite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 ||
             !Array.isArray(layer.polygons) || layer.polygons.length > MAX_POLYGONS_PER_LAYER) throw new Error("Saved polygon layer is invalid.");
         layer.style = validateAnnotationStyle(layer.style);
+        if (layer.drawingSource !== undefined) {
+            const source = layer.drawingSource;
+            if (!source || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.id)
+                || !Number.isSafeInteger(source.revision) || source.revision < 1
+                || typeof source.canEdit !== "boolean" || typeof source.pending !== "boolean") throw new Error("Saved drawing reference is invalid.");
+            requireText(source.sourceName, MAX_ANNOTATION_NAME_LENGTH, false);
+        }
+        const polygonIdentifiers = new Set([layer.id]);
         for (const polygon of layer.polygons) {
-            requireIdentifier(polygon.id, identifiers);
+            requireIdentifier(polygon.id, polygonIdentifiers);
             requireText(polygon.name, MAX_ANNOTATION_NAME_LENGTH, false);
             requireText(polygon.note, MAX_ANNOTATION_NOTE_LENGTH, true);
             if (polygon.contributor !== undefined) requireText(polygon.contributor, MAX_ANNOTATION_NAME_LENGTH, true);
