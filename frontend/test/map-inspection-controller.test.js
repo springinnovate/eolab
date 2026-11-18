@@ -469,12 +469,20 @@ test("compact Features navigation preserves progress, errors and unread results 
 
 test("map-click summaries retain the chosen panel and expose unseen peer results", () => {
     const h = fixture();
+    const activity = [];
+    h.controller.subscribeClickResultActivity(active => activity.push(active));
     h.controller.showHistogram();
     h.map.focus();
     h.controller.beginMapClick({lat: 22, lng: 78});
     h.controller.showHistogram(null, {activate: false});
     h.controller.showFeatureInspector({activate: false});
     h.controller.setClickResult("histogram", {state: "loading"});
+    h.controller.keepVisibleClickResultReadable();
+    h.controller.setClickResult("histogram", {state: "ready"});
+    h.controller.beginMapClick({lat: 23, lng: 79});
+    h.controller.setClickResult("histogram", {state: "loading"});
+    h.controller.keepVisibleClickResultReadable();
+    assert.deepEqual(activity, [false, true], "consecutive samples keep the same result readable");
     h.controller.setClickResult("feature", {state: "ready", message: "3 features returned"});
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(h.doc.activeElement, h.map);
@@ -484,15 +492,31 @@ test("map-click summaries retain the chosen panel and expose unseen peer results
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.doc.querySelector("#map-inspection-tab-feature").getAttribute("data-unread"), "false");
     h.controller.setClickResult("histogram", {state: "ready"});
+    assert.deepEqual(activity, [false, true, false], "a late histogram cannot activate the Features tab");
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.histogramTab.getAttribute("data-unread"), "true");
     h.controller.beginMapClick({lat: 24, lng: 80});
     h.controller.showHistogram(null, {activate: false});
     h.controller.showFeatureInspector({activate: false});
+    h.controller.setClickResult("feature", {state: "loading", message: "Inspecting features"});
+    h.controller.keepVisibleClickResultReadable();
+    const replay = [];
+    const unsubscribe = h.controller.subscribeClickResultActivity(active => replay.push(active));
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.controller.beginMapClick({lat: 24, lng: 80});
+    h.controller.keepVisibleClickResultReadable();
+    h.controller.setClickResult("feature", {state: "ready", message: "One feature"});
+    h.expandButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(replay, [true, false], "minimizing releases the result until the next explicit sample");
+    unsubscribe();
+    h.controller.beginMapClick({lat: 24, lng: 80});
+    h.controller.keepVisibleClickResultReadable();
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.histogramTab.getAttribute("data-unread"), "false");
     assert.match(h.doc.querySelector("#map-inspection-context").textContent, /24\.0000, 80\.0000/);
     h.controller.destroy();
+    assert.deepEqual(activity, [false, true, false, true, false, true, false]);
+    assert.deepEqual(replay, [true, false]);
 });
 
 test("raster buttons stay stable beside point results and other retained tools", () => {

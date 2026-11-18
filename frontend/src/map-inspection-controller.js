@@ -6,6 +6,11 @@
 
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
+    /** @type {boolean} Whether the user is reading a result of an explicit map click. */
+    #readingClickResult = false;
+    /** @type {Set<(active:boolean)=>void>} Subscribers to the visible result's reading state. */
+    #clickResultActivityListeners = new Set();
+
     /**
      * Bind the collapsible Map tools panel, its tool chooser, and retained results.
      *
@@ -435,6 +440,36 @@ export class MapInspectionController {
             entry.unread = false;
         }
         this.#renderDock();
+    }
+
+    /**
+     * Keep the visible click result readable after a user samples the map. Call once the
+     * click's synchronous tool selections have settled, before asynchronous results arrive.
+     * Closing, minimizing or switching away ends the reading session.
+     * @return {void}
+     */
+    keepVisibleClickResultReadable() {
+        this.#setClickResultActivity(!this.minimized && this.clickResults.some(entry => entry.name === this.activeTool));
+    }
+
+    /** Subscribe to reading a foreground map-click result, including the current state.
+     * @param {(active:boolean)=>void} listener Receives true while the result should stay readable.
+     * @return {()=>void} Stop receiving reading-state changes.
+     */
+    subscribeClickResultActivity(listener) {
+        this.#clickResultActivityListeners.add(listener);
+        listener(this.#readingClickResult);
+        return () => this.#clickResultActivityListeners.delete(listener);
+    }
+
+    /** Notify presentation listeners when a map-click reading session starts or ends.
+     * @param {boolean} active Whether the current result is still being read.
+     * @return {void}
+     */
+    #setClickResultActivity(active) {
+        if (active === this.#readingClickResult) return;
+        this.#readingClickResult = active;
+        for (const listener of this.#clickResultActivityListeners) listener(active);
     }
 
     /** Present an owning analysis stream's current, already stale-checked status.
@@ -873,6 +908,7 @@ export class MapInspectionController {
             ? this.mapToolsButton : null;
         this.tabStrip.render(tool?.tab ?? null, previous ? this.#tool(previous).tab : null, contexts, this.minimized, loneToolTitle);
         if (active !== this.reportedActiveTool) {
+            this.#setClickResultActivity(false);
             this.#clearToolAttention();
             this.reportedActiveTool = active;
             for (const listener of this.activityListeners) listener(active);
@@ -947,6 +983,7 @@ export class MapInspectionController {
         this.#synchronize();
         this.tabStrip.destroy();
         this.activityListeners.clear();
+        this.#clickResultActivityListeners.clear();
     }
 }
 

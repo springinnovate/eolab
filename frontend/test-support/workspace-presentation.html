@@ -109,6 +109,19 @@
       }
     }
 
+    /** Finish the workspace's opacity transition and check what the user sees.
+     * @param {Element} panel Workspace surface.
+     * @param {string} opacity Expected CSS opacity after the configured delay and fade.
+     * @returns {void}
+     * @throws {Error} If the rendered opacity differs.
+     */
+    function checkPanelOpacity(panel, opacity) {
+      for (const animation of panel.getAnimations()) {
+        if (animation.transitionProperty === "opacity") animation.finish();
+      }
+      check(getComputedStyle(panel).opacity === opacity, `Expected ${panel.id || panel.className} opacity ${opacity}`);
+    }
+
     /** Verify shared panel opacity, a cancelled exit and the map beneath the desktop sidebar.
      * @param {HTMLElement} map Live Leaflet map container.
      * @param {HTMLElement} legend Leaflet's interactive legend.
@@ -125,12 +138,7 @@
        * @returns {void}
        */
       function checkOpacity(opacity) {
-        for (const panel of panels) {
-          for (const animation of panel.getAnimations()) {
-            if (animation.transitionProperty === "opacity") animation.finish();
-          }
-          check(getComputedStyle(panel).opacity === opacity, `Expected ${panel.id || panel.className} opacity ${opacity}`);
-        }
+        for (const panel of panels) checkPanelOpacity(panel, opacity);
       }
       map.dispatchEvent(new PointerEvent("pointermove", pointer));
       checkOpacity("0.4");
@@ -248,6 +256,39 @@
       const featureError = "The selected feature could not be read.";
       dock.setClickResult("feature", { state: "error", message: featureError });
       check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
+    }
+
+    /** Inspect two map points, change tools during loading and check the dock's rendered opacity.
+     * @param {MapInspectionController} dock Mounted map inspection panel.
+     * @returns {void}
+     * @throws {Error} If another panel stays opaque or a late result revives dismissed activity.
+     */
+    function checkMapClickFade(dock) {
+      const panel = document.querySelector("#map-inspection");
+      const sidebar = document.querySelector("#control-panel");
+      const map = document.querySelector("#map");
+      const pointer = {bubbles: true, pointerType: "mouse", pointerId: 7};
+      dock.showHistogram();
+      map.dispatchEvent(new PointerEvent("pointermove", pointer));
+      for (const lat of [22, 24]) {
+        dock.beginMapClick({lat, lng: 80});
+        dock.setClickResult("histogram", {state: "loading"});
+        dock.keepVisibleClickResultReadable();
+        checkPanelOpacity(panel, "1");
+        checkPanelOpacity(sidebar, "0.4");
+        map.dispatchEvent(new PointerEvent("pointerdown", {...pointer, buttons: 1}));
+        map.dispatchEvent(new PointerEvent("pointermove", {...pointer, buttons: 1}));
+        map.dispatchEvent(new PointerEvent("pointerup", pointer));
+        dock.setClickResult("histogram", {state: "ready"});
+        checkPanelOpacity(panel, "1");
+      }
+      dock.beginMapClick({lat: 25, lng: 80});
+      dock.setClickResult("histogram", {state: "loading"});
+      dock.keepVisibleClickResultReadable();
+      dock.showFeatureInspector();
+      dock.setClickResult("histogram", {state: "ready"});
+      checkPanelOpacity(panel, "0.4");
+      check(dock.activeTool === "feature", "A completed histogram changed the foreground tool");
     }
 
     /** Check the crowded tab row, context menu, shared typography and retained selection.
@@ -487,11 +528,14 @@
       const inspection = new MapInspectionController({
         onLayoutChange: state => layout.setInspectionLayout(state),
       });
+      layout.registerPanelActivitySource(document.querySelector("#map-inspection"),
+        listener => inspection.subscribeClickResultActivity(listener));
       await checkPanelDisclosures(inspection);
       checkLegendControls(inspection);
       checkFadeSettings();
       await checkOpenMapViews(inspection);
       checkHistogramResultNavigation(inspection);
+      checkMapClickFade(inspection);
       inspection.destroy();
       layout.destroy();
     }

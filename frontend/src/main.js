@@ -1927,6 +1927,7 @@ async function initializeCatalog(
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);
             annotations?.inspectAt(event.latlng);
+            mapInspection.keepVisibleClickResultReadable();
         } finally {
             selectingMapClick = false;
         }
@@ -2626,6 +2627,8 @@ async function startApplication() {
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
+    layoutController.registerPanelActivitySource(document.querySelector("#map-inspection"),
+        listener => mapInspection.subscribeClickResultActivity(listener));
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,
