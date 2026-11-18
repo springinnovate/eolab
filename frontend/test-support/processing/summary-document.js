@@ -14,6 +14,7 @@ export class SummaryControlDocument extends FakeRasterControlDocument {
             {ResizeObserver: createFakeResizeObservers().ResizeObserver});
         this.controlIds = new Set([...markup.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]));
         this.queries = new Set();
+        if (this.controlIds.has("models-tabs")) this.mountTabList(markup, "models-tabs");
     }
 
     /**

@@ -55,6 +55,12 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     t.after(() => h.controller.destroy());
     await h.controller.open();
     assert.equal(view.navigation.setup.disabled, true);
+    const nextPage = new Event("keydown", {cancelable: true});
+    Object.defineProperty(nextPage, "key", {value: "ArrowRight"});
+    view.navigation.library.dispatchEvent(nextPage);
+    assert.equal(h.controller.state.page, "runs", "the next available tab skips disabled Setup");
+    assert.equal(doc.activeElement, view.navigation.runs);
+    view.navigation.library.dispatchEvent(new Event("click"));
     view.elements["library-items"].children[0].dispatchEvent(new Event("click"));
     const draft = h.controller.state.draft, setup = view.setup;
     assert.equal(view.elements["setup-heading"].textContent, model.title);
@@ -69,7 +75,7 @@ test("Models navigation retains an unfinished setup and focuses actual model and
         assert.equal(h.controller.state.page, page);
         assert.equal(h.tabContext.label, { library: "Choose a tool", setup: model.title, runs: "Runs" }[page]);
         assert.equal(doc.activeElement, view.navigation[page], "navigation keeps its native button focus");
-        for (const [name, button] of Object.entries(view.navigation)) assert.equal(button.getAttribute("aria-pressed"), String(name === page));
+        for (const [name, button] of Object.entries(view.navigation)) assert.equal(button.getAttribute("aria-selected"), String(name === page));
         assert.equal(view.navigation.setup.disabled, false);
         assert.equal(h.controller.state.draft, draft);
         assert.equal(view.setup, setup);
@@ -81,8 +87,9 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     view.runCards.get(saved.jobId).button.dispatchEvent(new Event("click"));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.controller.state.page, "run");
-    assert.equal(view.navigation.runs.getAttribute("aria-pressed"), "true");
-    assert.equal(view.navigation.setup.getAttribute("aria-pressed"), "false");
+    assert.equal(view.elements.page.getAttribute("aria-labelledby"), view.navigation.runs.id);
+    assert.equal(view.navigation.runs.getAttribute("aria-selected"), "true");
+    assert.equal(view.navigation.setup.getAttribute("aria-selected"), "false");
     assert.equal(doc.activeElement, view.run.title);
     assert.equal(view.run.title.textContent, saved.label);
     assert.equal(h.tabContext.label, saved.label);
@@ -806,7 +813,7 @@ test("inline deletion returns focus on Keep or Escape and keeps a failed confirm
     assert.equal(h.controller.state.page, "runs"); assert.deepEqual(h.controller.state.runs, []);
     assert.equal(doc.activeElement, view.navigation.runs);
     assert.equal(view.navigation.runs.disabled, false);
-    assert.equal(view.navigation.runs.getAttribute("aria-pressed"), "true");
+    assert.equal(view.navigation.runs.getAttribute("aria-selected"), "true");
     assert.equal(view.elements.run.hidden, true);
 });
 
@@ -830,7 +837,7 @@ test("expired focused Undo notices return to visible list navigation", async t =
         assert.equal(h.controller.state.page, page);
         assert.equal(doc.activeElement, view.navigation[page]);
         assert.equal(view.navigation[page].disabled, false);
-        assert.equal(view.navigation[page].getAttribute("aria-pressed"), "true");
+        assert.equal(view.navigation[page].getAttribute("aria-selected"), "true");
         h.controller.render();
         assert.equal(doc.activeElement, view.navigation[page], "subsequent rendering retains visible focus");
     }

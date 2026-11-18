@@ -44,17 +44,8 @@ function fixture(configureDocument = () => {}) {
     toolbar.getBoundingClientRect = () => ({ height: toolbar.hidden ? 0 : 44 });
     const toolActions = doc.querySelector("#workspace-tool-actions");
     const mapToolsButton = doc.querySelector("#map-tool-chooser");
-    const tabList = doc.querySelector("#map-inspection-tabs");
     const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-    for (const [, id, caption] of markup.matchAll(/<button id="([^"]+)" class="map-inspection-tab"[^>]*>([^<]+)<\/button>/g)) {
-        const button = doc.querySelector(`#${id}`);
-        button.id = id;
-        button.textContent = caption;
-        button.scrollWidth = 110;
-        button.click = () => { if (!button.disabled) button.dispatchEvent(new Event("click")); };
-        tabList.append(button);
-    }
-    tabList.getBoundingClientRect = () => ({ width: 1600, height: 44 });
+    doc.mountTabList(markup, "map-inspection-tabs");
     const toolActionsCalls = [];
     let actionsOpen = false;
     /** Model native state events and focus return; dismissal itself is browser-tested.

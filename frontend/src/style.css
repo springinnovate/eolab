@@ -4090,7 +4090,7 @@ article.raster-histogram-summary {
 }
 
 #workspace-tool-actions,
-#map-inspection-tab-menu {
+.tool-tab-menu {
   position: fixed;
   inset: 0 auto auto 0;
   margin: 0;
@@ -4107,7 +4107,7 @@ article.raster-histogram-summary {
 }
 
 #workspace-tool-actions:not(:popover-open),
-#map-inspection-tab-menu:not(:popover-open) { display: none; }
+.tool-tab-menu:not(:popover-open) { display: none; }
 .workspace-tool-actions-group { display: grid; }
 .workspace-tool-actions-group + .workspace-tool-actions-group {
   margin-top: 4px;
@@ -4236,7 +4236,7 @@ article.raster-histogram-summary {
 .map-inspection-raster-feedback { margin: 0; color: var(--text-2); font-size: var(--font-size-support); overflow-wrap: anywhere; }
 .map-inspection-raster-feedback[hidden] { display: none; }
 .map-inspection-dock-header > p:not([hidden]) { padding: 4px 12px; }
-.map-inspection-tab-bar {
+.tool-tab-bar {
   display: flex;
   align-items: stretch;
   min-width: 0;
@@ -4244,15 +4244,15 @@ article.raster-histogram-summary {
   box-shadow: inset 0 -1px var(--border-1);
   font-size: var(--font-size-ui);
 }
-.map-inspection-tabs {
+.tool-tab-list {
   position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
   overflow: clip;
 }
-.map-inspection-tab,
-#map-inspection-all-tabs {
+.tool-tab,
+.tool-tab-index {
   flex: 0 0 auto;
   min-height: 32px;
   padding: 4px 9px;
@@ -4264,27 +4264,27 @@ article.raster-histogram-summary {
   white-space: nowrap;
   cursor: pointer;
 }
-.map-inspection-tab { position: relative; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.map-inspection-tab[data-overflow="true"] { position: absolute; inset-inline-start: 0; visibility: hidden; }
-.map-inspection-tab:disabled { opacity: var(--disabled-opacity); cursor: default; }
-.map-inspection-tab:not(:disabled, [aria-selected="true"]):hover,
-#map-inspection-all-tabs:hover {
+.tool-tab { position: relative; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tool-tab[data-overflow="true"] { position: absolute; inset-inline-start: 0; visibility: hidden; }
+.tool-tab:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.tool-tab:not(:disabled, [aria-selected="true"]):hover,
+.tool-tab-index:hover {
   background: var(--surface-hover);
   color: var(--brand-hover);
 }
-.map-inspection-tab[aria-selected="true"] {
+.tool-tab[aria-selected="true"] {
   background: var(--surface-1);
   color: var(--text-1);
   box-shadow: inset 0 3px var(--brand), inset 1px 0 var(--border-1), inset -1px 0 var(--border-1);
 }
-.map-inspection-tab-bar button:focus-visible { outline-offset: -3px; }
-#map-inspection-all-tabs { position: relative; border-inline-start: 1px solid var(--border-1); }
-#map-inspection-all-tabs[data-unread="true"]::after {
+.tool-tab-bar button:focus-visible { outline-offset: -3px; }
+.tool-tab-index { position: relative; border-inline-start: 1px solid var(--border-1); }
+.tool-tab-index[data-unread="true"]::after {
   content: ""; position: absolute; inset-block-start: 3px; inset-inline-end: 5px;
   width: 6px; height: 6px; border-radius: 50%; background: var(--brand);
 }
-#map-inspection-tab-menu { font-size: var(--font-size-ui); }
-#map-inspection-tab-menu button {
+.tool-tab-menu { font-size: var(--font-size-ui); }
+.tool-tab-menu button {
   position: relative;
   display: grid;
   width: 100%;
@@ -4298,23 +4298,23 @@ article.raster-histogram-summary {
   overflow-wrap: anywhere;
   cursor: pointer;
 }
-#map-inspection-tab-menu button:is(:hover, :focus-visible):not(:disabled) { background: var(--surface-hover); }
-#map-inspection-tab-menu button:disabled { opacity: var(--disabled-opacity); cursor: default; }
-#map-inspection-tab-menu button[aria-checked="true"]::after {
+.tool-tab-menu button:is(:hover, :focus-visible):not(:disabled) { background: var(--surface-hover); }
+.tool-tab-menu button:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.tool-tab-menu button[aria-checked="true"]::after {
   content: "✓" / ""; position: absolute; inset: 6px 8px auto auto; color: var(--brand-press);
 }
-#map-inspection-tab-menu small { color: var(--text-2); font-size: var(--font-size-support); }
+.tool-tab-menu small { color: var(--text-2); font-size: var(--font-size-support); }
 .analysis-result-close { display: none; align-self: center; flex: none; }
 #map-inspection[data-active-tool="histogram"] #close-map-histogram,
 #map-inspection[data-active-tool="raster-series"] #close-raster-series,
 #map-inspection[data-active-tool="feature"] #close-vector-inspector { display: inline-flex; }
 
-.map-inspection-tab[hidden],
-#map-inspection-all-tabs[hidden],
-#map-inspection-tab-menu [hidden] { display: none; }
+.tool-tab[hidden],
+.tool-tab-index[hidden],
+.tool-tab-menu [hidden] { display: none; }
 @media (pointer: coarse) {
-  .map-inspection-tab, #map-inspection-all-tabs, #map-inspection-tab-menu button,
-  .map-inspection-tab-bar .analysis-result-close { min-height: 44px; min-width: 44px; }
+  .tool-tab, .tool-tab-index, .tool-tab-menu button,
+  .tool-tab-bar .analysis-result-close { min-height: 44px; min-width: 44px; }
 }
 
 .map-inspection-panels {
@@ -4325,11 +4325,11 @@ article.raster-histogram-summary {
   overflow: hidden;
 }
 
-.map-inspection-tab[data-unread="true"]::after {
+.tool-tab[data-unread="true"]::after {
   content: ""; position: absolute; inset: 3px 3px auto auto;
   width: 6px; height: 6px; border-radius: 50%; background: var(--brand);
 }
-.map-inspection-tab[data-loading="true"]::after {
+.tool-tab[data-loading="true"]::after {
   content: "";
   position: absolute; inset: 2px 2px auto auto;
   width: 9px; height: 9px;
@@ -4342,7 +4342,7 @@ article.raster-histogram-summary {
 [data-inspection-loading="true"] #vector-feature-result { opacity: 0.35; }
 @keyframes map-inspection-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .map-inspection-tab[data-loading="true"]::after { animation: none; }
+  .tool-tab[data-loading="true"]::after { animation: none; }
 }
 
 .map-inspection-panels[hidden] {

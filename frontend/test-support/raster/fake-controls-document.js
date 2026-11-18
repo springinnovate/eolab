@@ -216,6 +216,27 @@ export class FakeRasterControlDocument extends EventTarget {
     }
 
     /**
+     * Attach the native tab buttons declared in one row of the supplied markup.
+     * The initial test width fits every label. Layout scenarios can override it.
+     * @param {string} markup Application HTML containing the tablist.
+     * @param {string} listId ID of the tablist whose buttons to mount.
+     * @return {void}
+     */
+    mountTabList(markup, listId) {
+        const list = this.querySelector(`#${listId}`);
+        const contents = markup.split(`id="${listId}"`)[1].split("</div>")[0];
+        for (const [, id, caption] of contents.matchAll(/<button id="([^"]+)"[^>]*>([^<]+)<\/button>/g)) {
+            const tab = this.querySelector(`#${id}`);
+            tab.id = id;
+            tab.textContent = caption;
+            tab.scrollWidth = 110;
+            tab.click = () => { if (!tab.disabled) tab.dispatchEvent(new Event("click")); };
+            list.append(tab);
+        }
+        list.getBoundingClientRect = () => ({ width: 1600, height: 44 });
+    }
+
+    /**
      * Resolve or create one fake element for a raster selector.
      *
      * @param {string} selector CSS selector.

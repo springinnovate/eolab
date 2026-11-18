@@ -17,9 +17,12 @@ const MAP_LAYER_MODULES = [
 
 test("dock context stays display-only and does not import tool implementations", async () => {
     const source = await readFile(new URL("../../src/map-inspection-controller.js", import.meta.url), "utf8");
-    assert.deepEqual([...source.matchAll(/(?:import|export)\s.*from\s+["']([^"']+)["']/g)], []);
+    const strip = await readFile(new URL("../../src/tool-tab-strip.js", import.meta.url), "utf8");
+    const imports = /\b(?:from\s+|import\s*\(?\s*)["']([^"']+)["']/g;
+    assert.deepEqual(Array.from(source.matchAll(imports), match => match[1]), ["./tool-tab-strip.js"]);
+    assert.deepEqual([...strip.matchAll(imports)], [], "shared tab presentation cannot pull in a tool indirectly");
     for (const ownedStateControl of ["#calculations-area", "#raster-clips-source", "#raster-series-area", "#annotation-panel-layer"]) {
-        assert.equal(source.includes(`querySelector("${ownedStateControl}")`), false,
+        assert.equal((source + strip).includes(`querySelector("${ownedStateControl}")`), false,
             `dock receives context through composition rather than reading ${ownedStateControl}`);
     }
 });

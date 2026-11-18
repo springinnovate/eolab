@@ -221,7 +221,7 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
     assert.match(inspection.source, /aria-labelledby="map-tool-name"/);
-    assert.match(inspection.source, /id="map-inspection-tab-menu" popover="auto" role="menu" aria-label="All tabs"/);
+    assert.match(requireElementRange("map-inspection-tab-menu").source, /popover="auto" role="menu" aria-label="All tabs"/);
     assert.match(inspection.source, /id="open-raster-series-dock"[\s\S]*?aria-controls="raster-series"/);
     assert.doesNotMatch(inspection.source, /popovertarget="workspace-tool-actions"/);
     assert.match(
@@ -265,7 +265,7 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
     assert.match(
         STYLESHEET,
-        /\.map-inspection-tab\s*\{[^}]*text-overflow:\s*ellipsis/s
+        /\.tool-tab\s*\{[^}]*text-overflow:\s*ellipsis/s
     );
     assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#models-panel,\s*#planning-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
@@ -552,7 +552,16 @@ test("supporting analysis controls preserve native buttons, clear names and disc
         assert.ok(requireElementRange(id).source.endsWith(`>${label}</button>`), `${id} names its destination`);
     }
     assert.match(requireElementRange("models-heading").source, /class="visually-hidden" tabindex="-1">Data tools<\/h2>$/);
-    assert.match(requireElementRange("models-panel").source, /<nav class="models-navigation" aria-label="Data tools">/);
+    const mapTabs = requireElementRange("map-inspection-tabs");
+    const dataTabs = requireElementRange("models-tabs");
+    assert.ok(mapTabs.end < dataTabs.start);
+    assert.match(dataTabs.source, /role="tablist" aria-label="Data tools pages"/);
+    for (const page of ["library", "setup", "runs"]) {
+        const tab = requireElementRange(`models-nav-${page}`);
+        assert.ok(tab.start > dataTabs.start && tab.end < dataTabs.end);
+        assert.match(tab.source, /role="tab" aria-controls="models-page"/);
+    }
+    assert.match(requireElementRange("models-page").source, /role="tabpanel" aria-labelledby="models-nav-library"/);
     const chooser = requireElementRange("map-tool-chooser").source;
     assert.match(chooser, /^<button\b[^>]*\btype="button"/);
     assert.match(chooser, /aria-controls="workspace-tool-actions"/);

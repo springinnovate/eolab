@@ -50,7 +50,8 @@ test("hover shares presentation through composition without annotation/vector si
 });
 
 test("map-tool docking remains a presentation-only peer coordinator", () => {
-  assert.doesNotMatch(MAP_INSPECTION_SOURCE, /^import\s/m);
+  const strip = readFileSync(new URL("../../src/tool-tab-strip.js", import.meta.url), "utf8");
+  assert.doesNotMatch(strip, /^import\s/m);
   for (const forbiddenSubsystemKnowledge of [
     "Catalog",
     "GeoServer",
@@ -61,7 +62,7 @@ test("map-tool docking remains a presentation-only peer coordinator", () => {
     "VectorTimeSeriesController",
   ]) {
     assert.equal(
-      MAP_INSPECTION_SOURCE.includes(forbiddenSubsystemKnowledge),
+      (MAP_INSPECTION_SOURCE + strip).includes(forbiddenSubsystemKnowledge),
       false,
     );
   }

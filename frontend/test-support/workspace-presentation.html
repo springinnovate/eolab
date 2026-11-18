@@ -15,6 +15,11 @@
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
     import { MapInspectionController } from "../src/map-inspection-controller.js";
     import { MapLayerStackView } from "../src/map-layers/layer-stack-view.js";
+    import { ModelsController } from "../src/models/controller.js";
+    import { ModelsView } from "../src/models/view.js";
+    import { ProcessingJobs } from "../src/processing/jobs.js";
+    import { model, raster, area } from "./models/fixtures.js";
+    import "../src/models/style.css";
 
     /** Fail this scenario when a user-visible condition is false.
      * @param {boolean} condition Expected outcome.
@@ -138,7 +143,7 @@
       dock.setToolContext("models", { source: "Ecosystem Condition", scope: "" });
       dock.showModels();
       await settleLayout();
-      const tabs = [...document.querySelectorAll(".map-inspection-tab:not([hidden])")];
+      const tabs = [...document.querySelectorAll("#map-inspection-tabs [role=tab]:not([hidden])")];
       const visible = tabs.filter(tab => tab.checkVisibility({ visibilityProperty: true }));
       check(new Set(visible.map(tab => tab.getBoundingClientRect().top)).size === 1,
         "Open right-panel views occupy more than one row");
@@ -182,6 +187,70 @@
       dock.hideAnnotations();
       dock.hidePlanning();
       dock.hideFilter();
+    }
+
+    /** Exercise Data tools below the map views, including a crowded row and a retained draft.
+     * @param {MapInspectionController} dock Mounted map panel.
+     * @returns {Promise<void>} Resolves after checking navigation and returning to the map view.
+     * @throws {Error} If the two rows overlap, share selection, or lose access to a page.
+     */
+    async function checkDataToolTabs(dock) {
+      const api = { discoverModels: async () => [model], listModelRuns: async () => ({ jobs: [], nextCursor: null }) };
+      const jobs = new ProcessingJobs(api);
+      const models = new ModelsController({
+        api, jobs, view: new ModelsView(document), getContext: () => ({ rasters: [raster], area }),
+        onOpen: () => dock.showModels(), onClose: () => dock.hideModels(), closeVectorFilter() {},
+      });
+      const unsubscribe = dock.subscribeActiveTool(tool => models.setActive(tool === "models"));
+      const row = document.querySelector("#models-tabs").parentElement;
+      try {
+        document.querySelector("#open-models").click();
+        await settleLayout();
+        const upper = document.querySelector("#map-inspection-tab-bar");
+        const mapTab = document.querySelector("#map-inspection-tab-models");
+        const library = document.querySelector("#models-nav-library");
+        const setup = document.querySelector("#models-nav-setup");
+        const runs = document.querySelector("#models-nav-runs");
+        check(Math.abs(upper.getBoundingClientRect().bottom - row.getBoundingClientRect().top) <= 1,
+          "Data tools must start immediately below the map tabs");
+        check(isReachable(library) && setup.disabled && isReachable(runs),
+          "The library or Runs is unreachable, or Setup is enabled before choosing a tool");
+        check(getComputedStyle(mapTab).boxShadow === getComputedStyle(library).boxShadow,
+          "The active map view and data page use different selection markers");
+        document.querySelector("#models-library-items button").click();
+        const name = document.querySelector("#models-setup input");
+        name.value = "Watershed draft";
+        name.dispatchEvent(new Event("input", { bubbles: true }));
+        row.style.inlineSize = "205px";
+        await settleLayout();
+        const index = document.querySelector("#models-all-tabs");
+        check(isReachable(index) && isReachable(setup), "Data tools overflow hid the active Setup tab or its menu");
+        index.click();
+        await settleLayout();
+        const menu = document.querySelector("#models-tab-menu");
+        const choices = [...menu.querySelectorAll('[role="menuitemradio"]')];
+        check(choices.map(choice => choice.querySelector("span").textContent).join(",") === "Choose a tool,Setup,Runs",
+          "The page menu includes the wrong destinations");
+        check(menu.querySelector('[aria-checked="true"] small').textContent === model.title,
+          "The selected Setup entry lost its tool name");
+        choices.at(-1).click();
+        check(runs === document.activeElement && runs.getAttribute("aria-selected") === "true" &&
+          isReachable(runs) && mapTab.getAttribute("aria-selected") === "true",
+          "Opening Runs from overflow lost focus or changed the active map view");
+        row.style.removeProperty("inline-size");
+        await settleLayout();
+        document.querySelector("#map-click-histogram").click();
+        check(!isReachable(row), "Data tools navigation remains visible on another map view");
+        mapTab.click();
+        setup.click();
+        check(isReachable(name) && name.value === "Watershed draft", "Returning to Setup lost the edited run name");
+      } finally {
+        row.style.removeProperty("inline-size");
+        dock.hideModels();
+        unsubscribe();
+        models.destroy();
+        jobs.destroy();
+      }
     }
 
     /** Check that both panel tabs free map space, retain context, and stay reachable.
@@ -365,6 +434,7 @@
       await checkPanelDisclosures(inspection);
       checkLegendControls(inspection);
       await checkOpenMapViews(inspection);
+      await checkDataToolTabs(inspection);
       checkHistogramResultNavigation(inspection);
       inspection.destroy();
       layout.destroy();
