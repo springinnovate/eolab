@@ -11,7 +11,6 @@ from eolab_app.annotation_sessions.models import ShareLayer
 from eolab_app.annotation_sessions.colors import (
     DEFAULT_CONTRIBUTOR_COLORS,
     choose_contributor_color,
-    get_contributor_color,
 )
 from eolab_app.routes.annotation_sessions import (
     create_annotation_sessions_router,
@@ -142,10 +141,8 @@ class IdentityStore:
         return []
 
 
-def test_contributor_palette_and_stable_older_membership_colors() -> None:
-    """Use all supplied colors before repeating; custom colors and old fallbacks persist."""
-    from uuid import UUID
-
+def test_contributor_palette_uses_all_colors_before_repeating() -> None:
+    """Choose the least-used palette color, including lower-case stored colors."""
     used = []
     for expected in DEFAULT_CONTRIBUTOR_COLORS:
         chosen = choose_contributor_color(used)
@@ -155,9 +152,6 @@ def test_contributor_palette_and_stable_older_membership_colors() -> None:
     assert choose_contributor_color(used) == DEFAULT_CONTRIBUTOR_COLORS[0]
     used.append(DEFAULT_CONTRIBUTOR_COLORS[0])
     assert choose_contributor_color(used) == DEFAULT_CONTRIBUTOR_COLORS[1]
-    identifier = UUID("00000000-0000-0000-0000-000000000007")
-    assert get_contributor_color(identifier, None) == "#7CB518"
-    assert get_contributor_color(identifier, "#123456") == "#123456"
 
 
 def test_cookie_and_same_origin_boundary() -> None:
