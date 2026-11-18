@@ -24,6 +24,7 @@ function fixture() {
     doc.querySelector('#raster-clips-panel').hidden = true;
     doc.querySelector('#models-panel').hidden = true;
     doc.querySelector('#planning-panel').hidden = true;
+    doc.querySelector('#settings-panel').hidden = true;
     doc.querySelector('#annotations-panel').hidden = true;
     doc.querySelector('#raster-series').hidden = true;
     const surface = doc.querySelector('#map-inspection');

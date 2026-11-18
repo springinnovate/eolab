@@ -2,7 +2,7 @@
  * EOMap workspace-sidebar presentation controller.
  *
  * This component owns only independent workspace disclosures, the
- * operational-status disclosure, whole-sidebar visibility, accessible focus
+ * operational-status disclosure, whole-sidebar visibility, shared panel opacity, accessible focus
  * behavior, layout classes, and delayed map-size invalidation. It has no
  * knowledge of Catalog Items, map layers, rasters, rendering, APIs, or source
  * data.
@@ -63,6 +63,91 @@ function requireLayoutElement(documentContext, selector) {
 }
 
 /**
+ * Keep the workspace panels readable while any panel has hover, keyboard input or a drag.
+ * The stylesheet applies the entrance and exit delays to a single shared activity state.
+ * @param {Document} doc Map viewer document, including native menus and modal editors.
+ * @param {Element} app Workspace root whose data-panels-active attribute drives the fade.
+ * @return {() => void} Detach all input listeners and restore the default panel presentation.
+ */
+function bindPanelActivity(doc, app) {
+    const listeners = new AbortController();
+    const options = {capture: true, signal: listeners.signal};
+    /** @type {Set<number>} Hover-capable pointers currently over a panel. */
+    const hovered = new Set();
+    /** @type {Map<number, boolean>} Whether each held pointer started on a panel. */
+    const pressed = new Map();
+    let keyboard = true;
+    let focused = false;
+    let draggingPanel = false;
+
+    /** @param {EventTarget|null} target Input target. @return {boolean} Whether it belongs to panel UI. */
+    function inPanel(target) {
+        return Boolean(target?.closest?.("[data-map-panel], [popover], .leaflet-control:not(.leaflet-control-attribution), dialog[open]"));
+    }
+    /** Apply the combined activity, keeping each held pointer with the surface where it started. @return {void} */
+    function update() {
+        const active = focused || draggingPanel || [...pressed.values()].includes(true) ||
+            [...hovered].some(id => !pressed.has(id));
+        if (app.getAttribute("data-panels-active") !== String(active)) {
+            app.setAttribute("data-panels-active", String(active));
+        }
+    }
+    /** @param {PointerEvent} event Pointer crossing, pressing or releasing a surface. @return {void} */
+    function trackPointer(event) {
+        const {type, pointerId} = event;
+        if (type === "pointermove" && !keyboard && (!pressed.has(pointerId) || event.buttons)) return;
+        let target = event.target;
+        if (type === "pointerdown" || type === "pointermove") {
+            keyboard = false;
+            focused = false;
+        }
+        if (type === "pointerdown") pressed.set(pointerId, inPanel(target));
+        if (type === "pointerout") target = event.relatedTarget;
+        if (type === "pointerup" || type === "pointercancel") {
+            pressed.delete(pointerId);
+            target = type === "pointerup" ? doc.elementFromPoint(event.clientX, event.clientY) : null;
+        } else if (type === "pointermove" && !event.buttons) {
+            pressed.delete(pointerId);
+        }
+        if (event.pointerType !== "touch" && inPanel(target)) hovered.add(pointerId);
+        else hovered.delete(pointerId);
+        update();
+    }
+    for (const type of ["pointerover", "pointerout", "pointerdown", "pointerup", "pointercancel", "pointermove"]) {
+        doc.addEventListener(type, trackPointer, options);
+    }
+    doc.addEventListener("keydown", event => {
+        keyboard = true;
+        focused = inPanel(event.target);
+        update();
+    }, options);
+    for (const type of ["focusin", "focusout"]) {
+        doc.addEventListener(type, event => {
+            focused = keyboard && inPanel(type === "focusin" ? event.target : event.relatedTarget);
+            update();
+        }, options);
+    }
+    for (const type of ["dragstart", "dragend"]) {
+        doc.addEventListener(type, event => {
+            draggingPanel = type === "dragstart" && inPanel(event.target);
+            update();
+        }, options);
+    }
+    doc.defaultView.addEventListener("blur", () => {
+        hovered.clear();
+        pressed.clear();
+        focused = false;
+        draggingPanel = false;
+        update();
+    }, {signal: listeners.signal});
+    update();
+    return () => {
+        listeners.abort();
+        app.removeAttribute("data-panels-active");
+    };
+}
+
+/**
  * @typedef {Object} EomapLayoutDependencies
  * @property {() => void} invalidateMapSize Notifies the map after transitions.
  * @property {Document} [documentContext=globalThis.document] Layout document.
@@ -76,6 +161,9 @@ function requireLayoutElement(documentContext, selector) {
 
 /** Own the EOMap workspace-sidebar disclosure presentation. */
 export class EomapLayoutController {
+    /** @type {Map<() => void, Element|null>} Each subscription holds its panel while active. */
+    #panelActivitySources = new Map();
+
     /**
      * Resolve and bind the static EOMap layout controls.
      *
@@ -177,6 +265,7 @@ export class EomapLayoutController {
         );
         this.workspaceSizeObserver.observe(this.controlPanelElement);
         this.#measureWorkspaceHeight();
+        this.stopPanelActivity = bindPanelActivity(documentContext, this.appElement);
     }
 
     /**
@@ -311,7 +400,38 @@ export class EomapLayoutController {
     }
 
     /**
-     * Detach every DOM listener and the shell-size observer.
+     * Keep a panel opaque while any registered interaction is using it.
+     * Direct panel input still reveals the whole workspace using the configured timings.
+     * @param {Element} panel Workspace surface whose opacity is controlled by the stylesheet.
+     * @param {(publish:(active:boolean)=>void)=>()=>void} subscribe Publish current activity
+     * immediately and on changes. Return a function that stops publication.
+     * @return {()=>void} Disconnect this source and release its contribution to the panel.
+     */
+    registerPanelActivitySource(panel, subscribe) {
+        const sources = this.#panelActivitySources;
+        /** Apply this source's state alongside any others that hold the same panel.
+         * @param {boolean} active Whether this interaction needs the panel to stay readable.
+         * @return {void}
+         */
+        function publish(active) {
+            if (!sources.has(disconnect)) return;
+            sources.set(disconnect, active ? panel : null);
+            panel.classList.toggle("is-panel-active", [...sources.values()].includes(panel));
+        }
+        /** Release this binding and ignore subsequent deliveries from its source. @return {void} */
+        function disconnect() {
+            if (!sources.has(disconnect)) return;
+            publish(false);
+            sources.delete(disconnect);
+            unsubscribe();
+        }
+        sources.set(disconnect, null);
+        const unsubscribe = subscribe(publish);
+        return disconnect;
+    }
+
+    /**
+     * Release panel activity subscriptions, DOM listeners and the shell-size observer.
      *
      * Already scheduled invalidations still complete, matching browser timer
      * behavior; subsequent layout-control events no longer change state.
@@ -319,6 +439,8 @@ export class EomapLayoutController {
      * @return {void}
      */
     destroy() {
+        for (const disconnect of this.#panelActivitySources.keys()) disconnect();
+        this.stopPanelActivity();
         this.workspaceSizeObserver.disconnect();
         this.operationalToggle.removeEventListener(
             "click",
