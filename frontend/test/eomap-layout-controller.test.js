@@ -273,6 +273,41 @@ function createLayoutFixture() {
     };
 }
 
+test("panel activity sources release independently and disconnect with the layout", () => {
+    const fixture = createLayoutFixture();
+    const layout = new EomapLayoutController({
+        documentContext: fixture.document, schedule: fixture.schedule, invalidateMapSize() {},
+    });
+    const listeners = [];
+    let disconnections = 0;
+    /** Replay an active source and retain its listener to test late delivery after teardown.
+     * @param {(active:boolean)=>void} listener Workspace activity listener.
+     * @return {()=>void} Record disconnection.
+     */
+    function subscribe(listener) {
+        listeners.push(listener);
+        listener(true);
+        return () => { disconnections++; };
+    }
+    const first = layout.registerPanelActivitySource(fixture.panel, subscribe);
+    layout.registerPanelActivitySource(fixture.panel, subscribe);
+    layout.registerPanelActivitySource(fixture.openPanel, subscribe);
+    assert.equal(fixture.panel.classList.contains("is-panel-active"), true);
+    assert.equal(fixture.openPanel.classList.contains("is-panel-active"), true);
+    first();
+    first();
+    assert.equal(fixture.panel.classList.contains("is-panel-active"), true);
+    listeners[1](false);
+    listeners[0](true);
+    assert.equal(fixture.panel.classList.contains("is-panel-active"), false);
+    assert.equal(fixture.openPanel.classList.contains("is-panel-active"), true);
+    assert.equal(fixture.app.getAttribute("data-panels-active"), "false");
+    layout.destroy();
+    listeners[2](true);
+    assert.equal(disconnections, 3);
+    assert.equal(fixture.openPanel.classList.contains("is-panel-active"), false);
+});
+
 test("shell size measurement follows card reflow without changing panel choices or focus", () => {
     const fixture = createLayoutFixture();
     const layout = new EomapLayoutController({

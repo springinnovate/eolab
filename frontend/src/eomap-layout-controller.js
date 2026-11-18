@@ -161,6 +161,9 @@ function bindPanelActivity(doc, app) {
 
 /** Own the EOMap workspace-sidebar disclosure presentation. */
 export class EomapLayoutController {
+    /** @type {Map<() => void, Element|null>} Each subscription holds its panel while active. */
+    #panelActivitySources = new Map();
+
     /**
      * Resolve and bind the static EOMap layout controls.
      *
@@ -397,7 +400,38 @@ export class EomapLayoutController {
     }
 
     /**
-     * Detach every DOM listener and the shell-size observer.
+     * Keep a panel opaque while any registered interaction is using it.
+     * Direct panel input still reveals the whole workspace using the configured timings.
+     * @param {Element} panel Workspace surface whose opacity is controlled by the stylesheet.
+     * @param {(publish:(active:boolean)=>void)=>()=>void} subscribe Publish current activity
+     * immediately and on changes. Return a function that stops publication.
+     * @return {()=>void} Disconnect this source and release its contribution to the panel.
+     */
+    registerPanelActivitySource(panel, subscribe) {
+        const sources = this.#panelActivitySources;
+        /** Apply this source's state alongside any others that hold the same panel.
+         * @param {boolean} active Whether this interaction needs the panel to stay readable.
+         * @return {void}
+         */
+        function publish(active) {
+            if (!sources.has(disconnect)) return;
+            sources.set(disconnect, active ? panel : null);
+            panel.classList.toggle("is-panel-active", [...sources.values()].includes(panel));
+        }
+        /** Release this binding and ignore subsequent deliveries from its source. @return {void} */
+        function disconnect() {
+            if (!sources.has(disconnect)) return;
+            publish(false);
+            sources.delete(disconnect);
+            unsubscribe();
+        }
+        sources.set(disconnect, null);
+        const unsubscribe = subscribe(publish);
+        return disconnect;
+    }
+
+    /**
+     * Release panel activity subscriptions, DOM listeners and the shell-size observer.
      *
      * Already scheduled invalidations still complete, matching browser timer
      * behavior; subsequent layout-control events no longer change state.
@@ -405,6 +439,7 @@ export class EomapLayoutController {
      * @return {void}
      */
     destroy() {
+        for (const disconnect of this.#panelActivitySources.keys()) disconnect();
         this.stopPanelActivity();
         this.workspaceSizeObserver.disconnect();
         this.operationalToggle.removeEventListener(

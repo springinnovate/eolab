@@ -2742,7 +2742,8 @@ div.chart-tooltip {
   --panel-opacity: var(--panel-idle-opacity);
   --panel-fade: opacity var(--panel-fade-out) ease-in-out var(--panel-exit-delay);
 }
-#app[data-panels-active="true"]:not([data-panel-fade-disabled]) {
+#app[data-panels-active="true"]:not([data-panel-fade-disabled]),
+#app:not([data-panel-fade-disabled]) .is-panel-active {
   --panel-opacity: 1;
   --panel-fade: opacity var(--panel-fade-in) ease-out var(--panel-enter-delay);
 }
