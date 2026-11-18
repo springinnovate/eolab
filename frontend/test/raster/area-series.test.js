@@ -37,7 +37,7 @@ const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{re
 function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
     const requests=[],plans=new Map(),server=new Map(),timers=new Map();let serial=0,time=0;
     const clock={setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,delay,at:time+delay});return id;},clearTimeout(id){timers.delete(id);}};
-    const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326"};
+    const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326",storedUnit:null};
     const api={
         validateCalculation:async formulas=>{requests.push(["validate",formulas]);return {valid:true};},
         planCalculation:async intent=>{const planId=String(++serial).padStart(32,"0");requests.push(["plan",intent]);plans.set(planId,intent);return {planId,grid,expiresAt:"2099-01-01T00:00:00Z"};},
@@ -1449,6 +1449,7 @@ test("sampling-box statistics use one read per raster, cancel together and run e
         reads.push({source, box, statistics, signal, reply});
         return reply.promise;
     }});
+    h.grid.storedUnit = "USD";
     const selection = longitude => ({kind: "samplingBox", samplingBox: {center: {longitude, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("stdev");
     h.controller.addFormula("percent");
@@ -1483,8 +1484,49 @@ test("sampling-box statistics use one read per raster, cancel together and run e
     h.close();
 });
 
+test("exact statistics show each band unit in the values table and CSV when previews are incomplete", async () => {
+    const units = new Map([["estimated", "m"], ["pending", "K"], ["failed", "mg/kg"], ["unitless", null]]);
+    const pending = deferred();
+    const h = fixture({readBoxPreview: async source => {
+        if (source.key === "failed") throw new Error("Preview unavailable");
+        if (source.key !== "estimated") return pending.promise;
+        return {method: "estimated", values: [{value: 1, unit: "m"}, {value: 2, unit: "m"}, {value: 30, unit: "%"}]};
+    }});
+    const c = samplingComposition(h);
+    try {
+        h.controller.updateAvailableRasters([...units.keys()].map(source));
+        h.controller.addFormula("stdev");
+        h.controller.addFormula("percent");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+        await h.open();
+        const exact = c.document.querySelector("#raster-series-exact-statistics");
+        assert.equal(exact.hidden, false);
+        exact.dispatchEvent(new Event("click")); await h.tick();
+        for (const job of h.server.values()) {
+            job.grid = {...job.grid, storedUnit: units.get(job.sources.a.itemId)};
+            await h.finish("ready", false, job.sources.a.itemId);
+        }
+        c.presentation.values.open = true;
+        c.presentation.values.dispatchEvent(new Event("toggle"));
+        c.presentation.download.dispatchEvent(new Event("click"));
+        const expected = [...units].flatMap(([id, unit]) => [
+            ["Raster " + id, "Exact mean", "-123.4567890123456789", unit ?? ""],
+            ["Raster " + id, "Exact standard deviation", "22", unit ?? ""],
+            ["Raster " + id, "Exact percent above 10", "22", "%"],
+        ]);
+        assert.deepEqual({
+            table: c.presentation.table.children.map(row => row.children.slice(0, 3).map(cell => cell.textContent)),
+            csv: csvParse(h.view.csv).map(row => [row.raster, row.statistic, row.value, row.unit]),
+        }, {
+            table: expected.map(([raster, statistic, value, unit]) => [raster, statistic, unit ? value + " " + unit : value]),
+            csv: expected,
+        });
+    } finally { c.close(); h.close(); }
+});
+
 test("a custom mean remains exact alongside an unavailable built-in estimate", async () => {
     const h = fixture({readBoxPreview: async () => ({method: "unavailable", values: [{value: null, unit: null}]})});
+    h.grid.storedUnit = "K";
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("custom");
     h.controller.editFormula(2, {label: "My exact formula", expression: "mean(a)"});
@@ -1495,6 +1537,7 @@ test("a custom mean remains exact alongside an unavailable built-in estimate", a
     await h.finish(); await h.finish();
     assert.deepEqual(h.view.state.rows.slice(0, 2).map(row => [row.state, row.method]),
         [["error", "unavailable"], ["value", null]]);
+    assert.equal(h.view.state.rows[1].unit, "");
     assert.ok(h.view.state.area.canCalculateExactStatistics);
     h.close();
 });
@@ -1544,6 +1587,7 @@ test("duplicate views share a raster preview while maximum runs exactly and retr
 
 test("reloading an exact box calculation restores the chosen threshold, units and pending jobs", async () => {
     const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 1, unit: "m"}, {value: 20, unit: "%"}]})});
+    h.grid.storedUnit = "m";
     h.controller.addFormula("percent");
     h.controller.editFormula(2, {threshold: 4.5});
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
