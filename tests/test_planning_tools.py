@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -217,11 +218,17 @@ async def validate_ids(request: ParcelIdRequest) -> ParcelIdValidationResponse:
     )
 
 
-def make_app(store: PlanningToolStore) -> FastAPI:
+def make_app(
+    store: PlanningToolStore,
+    validate_parcel_ids: Callable[
+        [ParcelIdRequest], Awaitable[ParcelIdValidationResponse]
+    ] = validate_ids,
+) -> FastAPI:
     """Compose the actual Planning service/router around an isolated store.
 
     Args:
         store: Memory or real PostgreSQL store.
+        validate_parcel_ids: Whole-layer validation to use when saving tools.
 
     Returns:
         FastAPI app using independent source-validation fixtures.
@@ -229,7 +236,7 @@ def make_app(store: PlanningToolStore) -> FastAPI:
     app = FastAPI()
     app.include_router(
         create_planning_tools_router(
-            PlanningToolService(store, authorize_layer, validate_ids)
+            PlanningToolService(store, authorize_layer, validate_parcel_ids)
         )
     )
     return app
@@ -294,9 +301,10 @@ def test_document_rejects_unapproved_layers_and_role_state(invalid: str) -> None
 
 
 def test_http_author_isolation_revisions_and_private_headers() -> None:
-    """Keep two browsers independent and reject stale writes through actual routes."""
+    """Save authorized edits at the expected revision and reuse validated parcel IDs."""
     store = MemoryPlanningStore()
-    app = make_app(store)
+    scan = AsyncMock(wraps=validate_ids)
+    app = make_app(store, scan)
     with (
         TestClient(app, base_url="https://testserver", headers=HEADERS) as author,
         TestClient(app, base_url="https://testserver", headers=HEADERS) as other,
@@ -325,6 +333,20 @@ def test_http_author_isolation_revisions_and_private_headers() -> None:
         assert changed.json()["revision"] == 2
         assert author.put(location, json=replacement).status_code == 409
         assert author.get(location).json() == changed.json()
+
+        replacement["expectedRevision"] = 2
+        replacement["layers"][1]["definition"]["filter"]["rules"][0]["value"] = 20
+        filtered = author.put(location, json=replacement)
+        assert filtered.status_code == 200, filtered.text
+        assert filtered.json()["layers"] == replacement["layers"]
+        scan.assert_awaited_once()
+
+        scan.side_effect = VectorConflictError("Parcel IDs must be unique")
+        invalid = {**replacement, "expectedRevision": 3, "parcelIdField": "land_use"}
+        rejected = author.put(location, json=invalid)
+        assert rejected.status_code == 422
+        assert "unique" in rejected.json()["detail"]
+        assert author.get(location).json() == filtered.json()
 
 
 def test_header_origin_size_and_contract_errors_are_private() -> None:
