@@ -17,33 +17,36 @@ import org.geotools.coverage.util.CoverageUtilities;
 import org.geotools.filter.FunctionExpressionImpl;
 import org.geotools.filter.capability.FunctionNameImpl;
 
-/** Masks one numeric sample in the gradient so a normal exact-value symbolizer can supply its own alpha. */
+/** Excludes source NoData from a raster drawing pass and optionally one numeric value from its gradient. */
 public final class MaskRasterValueFunction extends FunctionExpressionImpl {
-    /** Server-generated SLD supplies one exact finite value. GeoServer selects the raster and read grid. */
+    /** GeoServer selects the read grid. Only the gradient pass supplies an additional value to mask. */
     static final FunctionName NAME = new FunctionNameImpl("eolabMaskRasterValue", GridCoverage2D.class,
-            parameter("value", Double.class));
-    private final double value;
+            parameter("value", Double.class, 0, 1));
+    private final Double excludedValue;
 
     /**
-     * Read the value to mask once when GeoTools parses the style.
-     * @param arguments the single numeric literal supplied by the authorized SLD
-     * @throws IllegalArgumentException if a finite literal was not supplied
+     * Read the optional value to mask once when GeoTools parses the style.
+     * @param arguments empty for the replacement pass or a single numeric literal for the gradient
+     * @throws IllegalArgumentException if the supplied argument is not one finite literal
      */
     MaskRasterValueFunction(List<Expression> arguments) {
         super(NAME);
-        if (arguments.size() != 1 || !(arguments.get(0) instanceof Literal literal)) {
-            throw new IllegalArgumentException("A raster mask requires one numeric literal");
+        if (arguments.isEmpty()) {
+            excludedValue = null;
+        } else {
+            if (arguments.size() != 1 || !(arguments.get(0) instanceof Literal literal)) {
+                throw new IllegalArgumentException("A raster mask accepts one optional numeric literal");
+            }
+            excludedValue = literal.evaluate(null, Double.class);
+            if (excludedValue == null || !Double.isFinite(excludedValue)) {
+                throw new IllegalArgumentException("The raster mask value must be finite");
+            }
         }
-        Double target = literal.evaluate(null, Double.class);
-        if (target == null || !Double.isFinite(target)) {
-            throw new IllegalArgumentException("The raster mask value must be finite");
-        }
-        value = target;
         setParameters(List.copyOf(arguments));
     }
 
     /**
-     * Exclude matches and the existing source NoData from this gradient pass.
+     * Mask declared NoData on both passes and the selected value on the gradient pass.
      * @param input the coverage already sampled by the ordinary GeoServer renderer
      * @return a lazily mapped coverage on the input grid, retaining its source and ROI
      * @throws IllegalArgumentException if the function receives a non-raster input
@@ -53,9 +56,14 @@ public final class MaskRasterValueFunction extends FunctionExpressionImpl {
         if (!(input instanceof GridCoverage2D source)) {
             throw new IllegalArgumentException("A raster coverage is required");
         }
-        var table = new RangeLookupTable.Builder<Double, Double>();
-        table.add(RangeFactory.create(value, value), Double.NaN);
         var noData = CoverageUtilities.getNoDataProperty(source);
+        if (excludedValue == null && noData == null) {
+            return source;
+        }
+        var table = new RangeLookupTable.Builder<Double, Double>();
+        if (excludedValue != null) {
+            table.add(RangeFactory.create(excludedValue, excludedValue), Double.NaN);
+        }
         if (noData != null) {
             table.add(noData.getAsRange(), Double.NaN);
         }

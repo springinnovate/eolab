@@ -8,6 +8,20 @@ _SLD = "{http://www.opengis.net/sld}"
 _OGC = "{http://www.opengis.net/ogc}"
 
 
+def _mask_raster_samples(feature_style: ElementTree.Element, value: str | None = None) -> None:
+    """Exclude declared NoData and an optional exact value before coloring a raster pass.
+
+    Args:
+        feature_style: Raster drawing pass that receives the input mask.
+        value: Additional sample to hide in the gradient. Omit for the replacement color.
+    """
+    transformation = ElementTree.Element(_SLD + "Transformation")
+    feature_style.insert(0, transformation)
+    mask = ElementTree.SubElement(transformation, _OGC + "Function", name="eolabMaskRasterValue")
+    if value is not None:
+        ElementTree.SubElement(mask, _OGC + "Literal").text = value
+
+
 def _append_color_map(
     user_style: ElementTree.Element,
     map_type: str,
@@ -66,12 +80,10 @@ def build_raster_composite_sld(
     gradient = _append_color_map(user_style, "ramp", opacity, stops)
     if "vexact" in assignments:
         quantity = str(float(assignments["vexact"]))
-        transformation = ElementTree.Element(_SLD + "Transformation")
-        gradient.insert(0, transformation)
-        mask = ElementTree.SubElement(transformation, _OGC + "Function", name="eolabMaskRasterValue")
-        ElementTree.SubElement(mask, _OGC + "Literal").text = quantity
+        _mask_raster_samples(gradient, quantity)
         alpha = float(assignments["aexact"])
         if alpha > 0:
             replacement = {"quantity": quantity, "color": assignments["cexact"], "opacity": str(alpha)}
-            _append_color_map(user_style, "values", opacity, [replacement])
+            exact = _append_color_map(user_style, "values", opacity, [replacement])
+            _mask_raster_samples(exact)
     return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)

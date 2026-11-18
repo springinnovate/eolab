@@ -3,12 +3,15 @@ package org.springinnovate.eolab.geoserver;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.awt.Rectangle;
 import java.awt.image.BandedSampleModel;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBuffer;
 import java.io.File;
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashMap;
 import org.eclipse.imagen.ROIShape;
 import org.eclipse.imagen.TiledImage;
@@ -20,6 +23,7 @@ import org.geotools.coverage.grid.GridCoverageFactory;
 import org.geotools.coverage.util.CoverageUtilities;
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.gce.geotiff.GeoTiffReader;
+import org.geotools.gce.geotiff.GeoTiffWriter;
 import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.geotools.map.GridCoverageLayer;
 import org.geotools.map.GridReaderLayer;
@@ -29,6 +33,7 @@ import org.geotools.referencing.crs.DefaultGeographicCRS;
 import org.geotools.renderer.lite.StreamingRenderer;
 import org.geotools.xml.styling.SLDParser;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -63,6 +68,11 @@ class RasterValueOverrideStyleTest {
 
     /** Paint complete layers bottom-first on a transparent map, disposing their readers afterward. */
     private static BufferedImage render(int width, int height, Layer... layers) {
+        return render(layers[0].getBounds(), width, height, layers);
+    }
+
+    /** Paint a map at a selected extent and screen resolution to exercise native sampling. */
+    private static BufferedImage render(ReferencedEnvelope bounds, int width, int height, Layer... layers) {
         var map = new MapContent();
         var image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         var graphics = image.createGraphics();
@@ -70,7 +80,7 @@ class RasterValueOverrideStyleTest {
             for (var layer : layers) map.addLayer(layer);
             var renderer = new StreamingRenderer();
             renderer.setMapContent(map);
-            renderer.paint(graphics, new Rectangle(0, 0, width, height), layers[0].getBounds());
+            renderer.paint(graphics, new Rectangle(0, 0, width, height), bounds);
             return image;
         } finally {
             graphics.dispose();
@@ -139,6 +149,35 @@ class RasterValueOverrideStyleTest {
                 assertEquals(expected, styled.getRGB(x, y));
             }
         }
+    }
+
+    /** Changing the override opacity cannot paint an unsigned GeoTIFF's declared NoData in a cropped tile. */
+    @Test
+    void croppedUnsignedNoDataStaysTransparent(@TempDir Path directory) throws Exception {
+        var image = new BufferedImage(128, 128, BufferedImage.TYPE_USHORT_GRAY);
+        for (int y = 0; y < 128; y++) {
+            for (int x = 0; x < 128; x++) {
+                image.getRaster().setSample(x, y, 0, (x + y) % 31 == 0 ? 65535 : 1);
+            }
+        }
+        var bounds = new ReferencedEnvelope(-1, 1, -1, 1, DefaultGeographicCRS.WGS84);
+        var properties = new HashMap<String, Object>();
+        CoverageUtilities.setNoDataProperty(properties, 65535d);
+        var source = new GridCoverageFactory().create("unsigned", image, bounds, null, null, properties);
+        var file = directory.resolve("unsigned.tif").toFile();
+        var writer = new GeoTiffWriter(file);
+        try {
+            writer.write(source, null);
+        } finally {
+            writer.dispose();
+        }
+        var crop = new ReferencedEnvelope(-.87, -.06, -.93, -.3387, DefaultGeographicCRS.WGS84);
+        var hidden = render(crop, 127, 124, new GridReaderLayer(new GeoTiffReader(file), style(65535d, 0)));
+        var colored = render(crop, 127, 124, new GridReaderLayer(new GeoTiffReader(file), style(65535d, 1)));
+        int[] expected = hidden.getRGB(0, 0, 127, 124, null, 0, 127);
+        assertTrue(Arrays.stream(expected).anyMatch(pixel -> pixel == 0));
+        assertTrue(Arrays.stream(expected).anyMatch(pixel -> pixel == 0x800000ff));
+        assertArrayEquals(expected, colored.getRGB(0, 0, 127, 124, null, 0, 127));
     }
 
     /** Transparent matches reveal an independently rendered layer below them in a combined map. */

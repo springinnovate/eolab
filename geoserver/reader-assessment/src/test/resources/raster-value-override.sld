@@ -18,6 +18,7 @@
         </Rule>
       </FeatureTypeStyle>
       <FeatureTypeStyle>
+        <Transformation><ogc:Function name="eolabMaskRasterValue"/></Transformation>
         <Rule>
           <RasterSymbolizer>
             <Opacity>0.5</Opacity>
