@@ -613,6 +613,12 @@ def test_worker_restart_preserves_completed_result_during_status_read(
             ),
         )
         connection.execute("GRANT SELECT ON processing.subscribed_jobs TO PUBLIC")
+        connection.execute(
+            "ALTER INDEX processing.subscribers_owner RENAME TO subscriber_owner_lookup"
+        )
+        connection.execute(
+            "ALTER INDEX processing.habitat_preparation_selections_selection RENAME TO habitat_selection_lookup"
+        )
     try:
         with psycopg.connect(store.conninfo) as reader:
             result = reader.execute(
@@ -631,6 +637,12 @@ def test_worker_restart_preserves_completed_result_during_status_read(
         with psycopg.connect(store.conninfo) as connection:
             connection.execute(
                 "REVOKE SELECT ON processing.subscribed_jobs FROM PUBLIC"
+            )
+            connection.execute(
+                "ALTER INDEX processing.subscriber_owner_lookup RENAME TO subscribers_owner"
+            )
+            connection.execute(
+                "ALTER INDEX processing.habitat_selection_lookup RENAME TO habitat_preparation_selections_selection"
             )
     store.interrupt_unfinished_jobs_on_restart()
     asyncio.run(worker.cleanup())

@@ -819,9 +819,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.setattr(composition, "serve_processing", consume)
     if incompatible:
         with psycopg.connect(store.conninfo, autocommit=True) as db:
-            db.execute(
-                "ALTER INDEX processing.habitat_preparation_selections_selection RENAME TO unexpected_index"
-            )
+            db.execute("DROP INDEX processing.habitat_preparation_selections_selection")
             try:
 
                 async def unexpected_retry(delay: float) -> None:
@@ -837,7 +835,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
                 monkeypatch.setattr(asyncio, "sleep", unexpected_retry)
                 with pytest.raises(
                     UnsupportedProcessingSchemaError,
-                    match="habitat_preparation_selections_selection",
+                    match="Habitat selection hash index",
                 ):
                     asyncio.run(composition.run_processing_worker())
                 assert not composed_workers and resets == 0
@@ -847,7 +845,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
                 ).fetchone() == ("queued",)
             finally:
                 db.execute(
-                    "ALTER INDEX processing.unexpected_index RENAME TO habitat_preparation_selections_selection"
+                    "CREATE INDEX habitat_preparation_selections_selection ON processing.habitat_preparation_selections USING hash (selection)"
                 )
         return
     asyncio.run(composition.run_processing_worker())

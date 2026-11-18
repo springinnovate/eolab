@@ -172,17 +172,26 @@ class PostgresJobStore:
             if cursor.fetchone()["namespace"] is None:
                 cursor.execute(resources.joinpath("schema.sql").read_text())
                 return
-            cursor.execute(resources.joinpath("schema_check.sql").read_text())
-            mismatch = cursor.fetchone()
+            try:
+                cursor.execute(
+                    "SELECT version FROM processing.schema_version ORDER BY version"
+                )
+                versions = [row["version"] for row in cursor.fetchall()]
+                cursor.execute(resources.joinpath("schema_check.sql").read_text())
+                cursor.nextset()  # The first SELECT binds the stored fields without reading rows.
+                mismatch = cursor.fetchone()
+            except (
+                psycopg.errors.UndefinedTable,
+                psycopg.errors.UndefinedColumn,
+            ) as error:
+                raise UnsupportedProcessingSchemaError(
+                    f"The installed Processing schema is unsupported. {error.diag.message_primary}."
+                ) from error
             if mismatch is not None:
                 raise UnsupportedProcessingSchemaError(
                     "The installed Processing schema is unsupported. "
-                    f"Check processing.{mismatch['incompatible_object']} before starting this worker."
+                    f"Check {mismatch['problem']} before starting this worker."
                 )
-            cursor.execute(
-                "SELECT version FROM processing.schema_version ORDER BY version"
-            )
-            versions = [row["version"] for row in cursor.fetchall()]
             if versions not in ([22], list(range(1, 23))):
                 raise UnsupportedProcessingSchemaError(
                     "The installed Processing schema has an unsupported version history. "
