@@ -181,9 +181,9 @@ class SavedMapStore:
         """Preview or remove obsolete sourceRevision fields from one published map.
 
         Call explicitly during an upgrade, after backup and stopping old app
-        writers. This is not run at startup or by the HTTP API. Only Catalog
-        layer fields are removed. The protected Site Condition map also receives
-        the current version marker after its full settings pass validation.
+        writers. This command updates only the selected map after its complete
+        settings pass validation. The protected Site Condition map keeps its
+        URL and its shared polygon references.
         Shared polygon storage is never accessed. A changed map advances its
         revision once, invalidating old administrator drafts. Compatible maps
         are no-ops, including a retry with the previously applied revision.
