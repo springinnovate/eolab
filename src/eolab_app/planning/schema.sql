@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS planning.scenario_assignments (
     parcel_id_value text NOT NULL,
     intervention_id uuid NOT NULL
 );
--- Original string IDs have no length limit. Index only the scenario/page key;
--- the scenario row lock serializes exact type/value lookup and insertion.
 CREATE INDEX IF NOT EXISTS planning_scenario_assignments_page ON planning.scenario_assignments (scenario_id, id);
+-- A fixed-width hash fits the index even for long parcel IDs. The lookup compares the full value too.
+CREATE INDEX IF NOT EXISTS planning_scenario_assignments_parcel
+    ON planning.scenario_assignments (scenario_id, parcel_id_type, hashtext(parcel_id_value));

@@ -72,7 +72,7 @@ class PlanningToolStore:
             ) from error
 
     def initialize_schema(self) -> None:
-        """Install Planning tables idempotently without changing existing records.
+        """Install Planning tables and indexes, including indexes on existing records.
 
         Raises:
             PlanningError: Schema installation could not complete.
@@ -81,6 +81,8 @@ class PlanningToolStore:
             cursor.execute(
                 "SELECT pg_advisory_xact_lock(%s)", (PLANNING_SCHEMA_LOCK_ID,)
             )
+            # Building an index on populated tables can take longer than a single edit.
+            cursor.execute("SET LOCAL statement_timeout = 0")
             cursor.execute(
                 files("eolab_app.planning").joinpath("schema.sql").read_text()
             )
@@ -572,8 +574,8 @@ class PlanningToolStore:
 
         The caller checks the source's assignment rules before this transaction.
         This permits clearing a deleted drawing polygon's stored choice.
-        Exact type/value matching preserves arbitrary-length string IDs without
-        an indexed copy or digest. Locking the scenario serializes insertions.
+        The index narrows candidates by scenario, parcel type and hash. Exact
+        value comparison distinguishes collisions. The scenario lock serializes insertions.
 
         Args:
             owner: Participant browser's server-derived identity.
@@ -602,8 +604,13 @@ class PlanningToolStore:
                 )
             cursor.execute(
                 "SELECT id FROM planning.scenario_assignments "
-                "WHERE scenario_id=%s AND parcel_id_type=%s AND parcel_id_value=%s",
-                (identifier, request.parcelId.type, request.parcelId.value),
+                "WHERE scenario_id=%(scenario)s AND parcel_id_type=%(type)s "
+                "AND hashtext(parcel_id_value)=hashtext(%(value)s) AND parcel_id_value=%(value)s",
+                {
+                    "scenario": identifier,
+                    "type": request.parcelId.type,
+                    "value": request.parcelId.value,
+                },
             )
             existing = cursor.fetchone()
             if request.interventionId is None:
