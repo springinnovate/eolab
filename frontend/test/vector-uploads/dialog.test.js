@@ -450,12 +450,25 @@ test("shared usage names the configured service and blocks new files at 100 slot
     assert.equal(dialog.file.disabled, true);
     assert.equal(dialog.submit.disabled, true);
     assert.equal(dialog.quotaHelp.hidden, false);
-    assert.match(dialog.quotaHelp.textContent, /All 100 file slots are used/);
+    assert.match(dialog.quotaHelp.textContent, /reached the upload limit/);
     assert.equal(dialog.rows[0].remove.disabled, false);
     assert.equal(dialog.cancel.disabled, false);
     const notice = dialog.dialog.children.find(child => child.textContent.startsWith("Other users"));
     assert.equal(notice.textContent, "Other users cannot access your uploads. Resilience stores and processes them on its servers. Files are deleted after 7 days, or when you delete them. Files in use are kept until the calculation stops.");
     assert.match(dialog.fileHelp.textContent, /100 MiB per file/);
+});
+
+test("a lower configured allowance keeps existing uploads available to delete", async () => {
+    const uploads = [{id: "areas", name: "Areas"}, {id: "mask", name: "Mask", kind: "raster"}];
+    const {dialog} = createDialog();
+    dialog.list = async () => storageSummary(uploads, {max_files: 1, max_bytes: 200 * 1024 * 1024});
+    await dialog.open();
+    assert.equal(dialog.trigger.textContent, "Your uploads · 2 of 1");
+    assert.match(dialog.usage.textContent, /of 200 MiB/);
+    assert.equal(dialog.file.disabled, true);
+    assert.equal(dialog.submit.disabled, true);
+    assert.equal(dialog.quotaHelp.hidden, false);
+    assert.deepEqual(dialog.rows.map(row => row.remove.disabled), [false, false]);
 });
 
 test("removing a map layer preserves its file slot and focuses its new Add action", async () => {

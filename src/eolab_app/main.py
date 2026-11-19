@@ -267,6 +267,7 @@ def create_app(
         app_global_configuration.upload_max_bytes,
         app_global_configuration.upload_owner_max_bytes,
         app_global_configuration.upload_global_max_bytes,
+        owner_max_files=app_global_configuration.upload_owner_max_files,
     )
     vector_uploads = VectorUploadStore(
         app_global_configuration.vector_upload_data_path,

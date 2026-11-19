@@ -210,7 +210,7 @@ def test_polygons_and_rasters_share_slots_and_deletion_frees_one(
             content=polygon,
         )
         assert rejected.status_code == 409, rejected.text
-        assert "100 uploaded files" in rejected.json()["detail"]
+        assert "upload limit (100)" in rejected.json()["detail"]
         summary = client.get("/api/uploads").json()
         assert summary["used_files"] == summary["max_files"] == 100
         removed = client.delete(
