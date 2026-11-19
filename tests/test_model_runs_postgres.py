@@ -678,6 +678,84 @@ def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     return job
 
 
+def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
+    model_boundary: Any, boundary: Any
+) -> None:
+    """Run, publish and download a known mask through ordinary Processing endpoints.
+
+    Args:
+        model_boundary: Real model HTTP routes, worker and publication service.
+        boundary: Catalog raster with elevations increasing east and south, plus
+            the vector selection API.
+    """
+    pytest.importorskip("ecoshard.geoprocessing.routing")
+    vector_client, _, dem_path, _, _ = boundary
+    client, worker, service = model_boundary
+    with rasterio.open(dem_path) as dem:
+        x, y = dem.xy(50, 40)
+        radius = abs(dem.transform.a) / 4
+        crs = dem.crs.to_string()
+    path = dem_path.with_name("flow-site.gpkg")
+    write_geopackage_layer(
+        path,
+        "site",
+        crs=crs,
+        geometry=rectangle(x - radius, y - radius, x + radius, y + radius),
+    )
+    selection = register_selection(vector_client, path)
+    body = model_request(
+        client,
+        "polygon-flow-area",
+        inputs={"dem": SOURCE, "polygon": {"selection": selection, "fields": {}}},
+        parameters={"upstream": True, "downstream": False},
+    )
+    empty = client.post(
+        "/api/processing/model-runs",
+        json={**body, "parameters": {"upstream": False, "downstream": False}},
+        headers=HEADERS,
+    )
+    assert empty.status_code == 422
+    assert empty.json()["detail"] == {
+        "code": "invalid_flow_direction",
+        "message": "Choose at least one flow direction.",
+    }
+    invalid = client.post(
+        "/api/processing/model-runs",
+        json={**body, "parameters": {"upstream": "false", "downstream": True}},
+        headers=HEADERS,
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_model_inputs"
+    run = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    assert ready["result"]["label"] == "Raster mask"
+    assert ready["result"]["validPixels"] == 10_000
+    output = client.get(base + "/artifacts").json()["files"][0]
+    assert (output["name"], output["mediaType"], output["role"]) == (
+        "mask",
+        "image/tiff",
+        "result",
+    )
+    download = client.get(output["url"])
+    assert download.status_code == 200
+    with rasterio.MemoryFile(download.content) as memory, memory.open() as mask:
+        expected = numpy.zeros((100, 100), dtype="uint8")
+        expected[51:, 40] = 1
+        numpy.testing.assert_array_equal(mask.read(1), expected)
+        assert mask.nodata == 255
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    rendered_source = client.portal.call(
+        service.resolve_model_artifact, owner, identifier, output["artifactId"]
+    )
+    assert rendered_source.path.read_bytes() == download.content
+    client.cookies.clear()
+    assert client.get(output["url"]).status_code == 404
+
+
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_renaming_preserves_execution_and_changes_only_display_names(
     model_boundary: Any,
