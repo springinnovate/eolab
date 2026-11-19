@@ -5053,6 +5053,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .vector-style-mode,
+.vector-style-attribute,
 .vector-category-options label,
 .vector-graduated-options label {
   display: grid;
@@ -5063,6 +5064,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .vector-style-mode select,
+.vector-style-attribute select,
 .vector-category-options select,
 .vector-category-options input,
 .vector-graduated-options select,
@@ -5095,7 +5097,7 @@ summary:hover > .raster-disclosure-chevron {
 
 .vector-category-options {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.45fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 8px;
 }
@@ -5108,8 +5110,48 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .vector-category-options .secondary-button {
-  grid-column: 1 / -1;
   padding: 6px 9px;
+}
+
+.vector-graduated-options label:first-child {
+  grid-column: 1 / -1;
+}
+
+.vector-no-value-style {
+  display: grid;
+  gap: 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-custom-layer);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand) 6%, var(--surface-2));
+}
+
+.vector-no-value-heading,
+.vector-no-value-inputs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.vector-no-value-heading h4 {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+#vector-no-value-count {
+  color: var(--text-3);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.vector-no-value-inputs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  font-size: 0.72rem;
 }
 
 .vector-category-status {
@@ -5192,10 +5234,6 @@ summary:hover > .raster-disclosure-chevron {
   border-color: var(--status-danger);
 }
 
-.vector-graduated-row:has(input[type="checkbox"]) {
-  grid-template-columns: auto 36px minmax(0, 1fr) auto;
-}
-
 .vector-graduated-swatch {
   display: block;
   width: 36px;
@@ -5204,13 +5242,18 @@ summary:hover > .raster-disclosure-chevron {
   border-radius: var(--radius);
 }
 
-.vector-category-row input[type="color"] {
+.vector-category-row input[type="color"],
+.vector-no-value-inputs input[type="color"] {
   width: 36px;
   height: 28px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   background: var(--surface-2);
   padding: 1px;
+}
+
+.vector-no-value-inputs input[type="color"]:disabled {
+  opacity: 0.5;
 }
 
 .vector-category-name {

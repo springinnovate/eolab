@@ -1436,11 +1436,27 @@
           </label>
           <fieldset id="vector-category-fields" class="vector-category-controls" hidden>
             <legend>Categories</legend>
+            <label class="vector-style-attribute" for="vector-category-field">
+              <span>Attribute field</span>
+              <select id="vector-category-field"></select>
+            </label>
+            <div id="vector-category-no-value-slot" hidden>
+              <div id="vector-no-value-style" class="vector-no-value-style"
+                role="group" aria-labelledby="vector-no-value-heading">
+                <div class="vector-no-value-heading">
+                  <h4 id="vector-no-value-heading">No value</h4>
+                  <span id="vector-no-value-count" role="status"></span>
+                </div>
+                <div class="vector-no-value-inputs">
+                  <label for="vector-no-value-separate">
+                    <input id="vector-no-value-separate" type="checkbox" />
+                    <span>Style separately</span>
+                  </label>
+                  <input id="vector-no-value-color" type="color" aria-label="No value color" disabled />
+                </div>
+              </div>
+            </div>
             <div class="vector-category-options">
-              <label for="vector-category-field">
-                <span>Attribute field</span>
-                <select id="vector-category-field"></select>
-              </label>
               <label for="vector-category-limit">
                 <span>Values to style</span>
                 <input id="vector-category-limit" type="number"
@@ -1472,11 +1488,12 @@
           </fieldset>
           <fieldset id="vector-graduated-fields" class="vector-graduated-controls" hidden>
             <legend>Numeric ranges</legend>
+            <label class="vector-style-attribute" for="vector-graduated-field">
+              <span>Attribute field</span>
+              <select id="vector-graduated-field"></select>
+            </label>
+            <div id="vector-graduated-no-value-slot" hidden></div>
             <div class="vector-graduated-options">
-              <label for="vector-graduated-field">
-                <span>Color by</span>
-                <select id="vector-graduated-field"></select>
-              </label>
               <label for="vector-graduated-method">
                 <span>Method</span>
                 <select id="vector-graduated-method">

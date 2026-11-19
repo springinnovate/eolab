@@ -36,6 +36,8 @@ The panels fade together so you can see the map beneath them. Hover over a panel
 <details>
 <summary>Color scales, category names, and vector labels</summary>
 
+For a vector layer, choose **Categories** or **Numeric ranges** and select an attribute. Under **No value**, turn on **Style separately** to pick a color for features with a missing value. That color has its own legend entry, even when the entire field is missing. A value of `0` uses its category or range color.
+
 Use a color range for continuous measurements such as rainfall, named colors for land-cover classes, or symbols and labels for vector features. A percentile stretch makes differences visible when a few extreme values dominate the range. Turn on **Style one value separately** to give a value its own color and opacity. For example, set a flood depth of `0` to 0% opacity to show the map underneath. Use **Add color range** to style a range including its endpoints. Enter only **Through** to style everything at or below `1`, or only **From** to color everything at or above `100` magenta. The exact value takes priority, followed by the first matching range. Other values use the gradient. You can import category names and colors from CSV. [See the style editor.](docs/images/eolab-dynamic-styling.jpg)
 
 </details>
