@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Iterator
+from copy import deepcopy
 from dataclasses import replace
 import hashlib
 from pathlib import Path
@@ -550,7 +551,7 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
         rule = {"operator": "intersects", "layerId": str(uuid4()), "source": {
             "kind": "drawing", "polygonArea": reference.model_dump(mode="json")}}
         target = {**selection, "filter": {**selection["filter"], "rules": [*selection["filter"]["rules"], rule]}}
-    endpoint, body = processing_request(owner, target, operation)
+    endpoint, body = processing_request(owner, deepcopy(target), operation)
     with TestClient(owner.app, base_url="https://testserver") as other:
         denied = other.post(endpoint, json=body, headers=HEADERS)
         assert denied.status_code == 404, denied.text
@@ -578,10 +579,8 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
     if boundary == "drawing":
         reference = reference.model_copy(update={"revision": revision})
         rule["source"]["polygonArea"] = reference.model_dump(mode="json")
-        _, body = processing_request(owner, target, operation)
-    rejected = owner.post(
-        endpoint, json={**body, "requestId": uuid4().hex}, headers=HEADERS
-    )
+    _, new_request = processing_request(owner, target, operation)
+    rejected = owner.post(endpoint, json=new_request, headers=HEADERS)
     assert rejected.status_code == 404, rejected.text
     owner.portal.call(service.reconcile_upload_inputs)
     assert retained.is_file()
@@ -616,9 +615,8 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
     assert not store.active_input_uploads()
     owner.portal.call(service.reconcile_upload_inputs)
     assert not retained.exists()
-    assert (
-        owner.post(endpoint, json=body, headers=HEADERS).json()["jobId"] == job["jobId"]
-    )
+    replay = owner.post(endpoint, json=body, headers=HEADERS)
+    assert replay.json().get("jobId") == job["jobId"], replay.text
 
 
 def test_batch_keeps_accepted_upload_and_rejects_foreign_neighbor(
