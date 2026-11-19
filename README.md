@@ -116,6 +116,18 @@ In **Data tools**, choose **Raster clip**, select a raster, and set the area to 
 
 ### Run environmental models
 
+**Upstream and downstream area** traces flow around selected polygons. Choose
+a polygon layer and an elevation raster with square cells. Turn on **Upstream**
+to find cells that drain into the polygons, **Downstream** to follow paths
+leaving them, or both to combine the areas. The calculation fills depressions
+and traces flow within the DEM. Valid DEM cells with centres inside the
+selected polygons start the trace and are excluded from the result.
+
+Choose **Run tool**. In the completed run, **Show on map** displays the mask
+and **Download** saves it as a GeoTIFF. The mask keeps the DEM grid. A value
+of 1 marks traced cells and 0 marks other valid cells. Missing elevation
+remains NoData.
+
 **Downstream ecosystem beneficiaries** maps where water flows from a selected area. Overlay population data to estimate how many people are in the downstream footprint of a proposed restoration site.
 
 ![A teal downstream footprint near Tawau, Sabah, beside the completed run reporting a population total of 30,799.](docs/images/eolab-model-downstream-beneficiaries.jpg)

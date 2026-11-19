@@ -244,6 +244,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
     }
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
+        if (parameter.type === "boolean" && typeof value !== "boolean") throw new Error("Choose a value for " + parameter.label + ".");
         if (parameter.type === "choice" && !parameter.choices.some(choice => choice.value === value))
             throw new Error(`Choose an available option for ${parameter.label}.`);
         if (parameter.type === "summary_expression" && (typeof value !== "string" || !value.trim())) throw new Error("Enter a summary formula.");

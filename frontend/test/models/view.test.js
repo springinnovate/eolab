@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ModelsView } from "../../src/models/view.js";
 import { describeModelProgress } from "../../src/processing/presentation.js";
-import { createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
+import { captureModelSubmission, createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
@@ -19,6 +19,32 @@ function fixture() {
         runs: [], selectedRun: null, pending: null, error: "", yaml: null};
     view.render(state); return {doc, view, state, actions};
 }
+
+test("checkbox model parameters submit independent boolean values", () => {
+    const h = fixture();
+    const recipe = {...model, inputs: {raster: {type: "raster", label: "Elevation raster (DEM)"}},
+        parameters: {upstream: {type: "boolean", label: "Upstream", default: true},
+            downstream: {type: "boolean", label: "Downstream", default: true}}};
+    h.state.draft = createModelDraft(recipe, {rasters: [raster]}, "flow-directions");
+    h.view.render(h.state);
+    const {upstream, downstream} = h.view.setup.parameters;
+    assert.equal(upstream.type, "checkbox");
+    assert.equal(downstream.type, "checkbox");
+    assert.equal(upstream.parentNode.htmlFor, upstream.id);
+    assert.equal(upstream.parentNode.textContent, "Upstream");
+    assert.equal(upstream.checked, true);
+    assert.equal(downstream.checked, true);
+
+    downstream.checked = false;
+    downstream.dispatchEvent(new Event("change"));
+    const [action, edit] = h.actions.at(-1);
+    assert.equal(action, "Edit");
+    Object.assign(h.state.draft, edit);
+    h.view.render(h.state);
+    assert.equal(downstream.checked, false);
+    assert.deepEqual(captureModelSubmission(h.state.draft, "f".repeat(32), 0).parameters,
+        {upstream: true, downstream: false});
+});
 
 test("setup and saved runs share a collapsed recipe disclosure with their existing YAML actions", () => {
     const h = fixture();

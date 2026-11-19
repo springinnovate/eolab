@@ -227,7 +227,7 @@ export class ModelsView {
     }
 
     /** Construct editable inputs and recipe parameters, retaining their DOM identities.
-     * Choice parameters use the recipe's option labels and preserve their string values.
+     * Choice parameters preserve string values and checkboxes preserve boolean values.
      * Registered setup integrations own any specialized input controls and readiness.
      * @param {Object} draft New draft with validated recipe settings and current parameter values.
      * @return {void}
@@ -268,6 +268,18 @@ export class ModelsView {
         if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
+            if (parameter.type === "boolean") {
+                const input = this.element("input");
+                input.type = "checkbox";
+                input.addEventListener("change", () => this.handlers.onEdit({parameters: {
+                    ...this.state.draft.parameters, [name]: input.checked,
+                }}));
+                parameters[name] = input;
+                const field = this.field("models-parameter-" + name, parameter.label, input);
+                field.classList.add("models-boolean");
+                fields.append(field);
+                continue;
+            }
             const choice = parameter.type === "choice";
             const input = this.element(choice ? "select" : parameter.type === "summary_expression" ? "textarea" : "input");
             if (choice) { input.required = true; this.options(input, parameter.choices, draft.parameters[name]); }
@@ -465,7 +477,10 @@ export class ModelsView {
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
             else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
         }
-        for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
+        for (const [name, input] of Object.entries(setupControls.parameters)) {
+            if (input.type === "checkbox") input.checked = draft.parameters[name];
+            else if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
+        }
         const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
         setupControls.run.disabled = state.submitting || Boolean(state.pending) || !inputsReady || !supported;
         setupControls.run.textContent = state.submitting ? "Starting run…" : runLabel;
@@ -657,7 +672,8 @@ export class ModelsView {
             }
             for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) {
                 const value = invocation.parameters[name];
-                const description = parameter.type === "choice" ? parameter.choices.find(choice => choice.value === value).label
+                const description = parameter.type === "boolean" ? (value ? "On" : "Off")
+                    : parameter.type === "choice" ? parameter.choices.find(choice => choice.value === value).label
                     : value === null ? "Not set" : `${value}${parameter.unit ? ` ${parameter.unit}` : ""}`;
                 list.append(this.element("dt", parameter.label), this.element("dd", description));
             }
