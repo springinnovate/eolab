@@ -1507,6 +1507,15 @@ class ProcessingService:
             prepared = await self.capture_input_file(
                 owner, operation.source(request), prepared
             )
+            row = await self._submit_job(
+                owner,
+                request.requestId,
+                prepared,
+                request_hash,
+                operation.vector_selections(request),
+                upload_owner,
+                (operation.source(request),),
+            )
         except ProcessingError:
             existing = await asyncio.to_thread(
                 self.jobs.find_request, owner, request.requestId
@@ -1521,15 +1530,6 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
-        row = await self._submit_job(
-            owner,
-            request.requestId,
-            prepared,
-            request_hash,
-            operation.vector_selections(request),
-            upload_owner,
-            (operation.source(request),),
-        )
         require_operation(row, operation.id)
         return serialize_processing_job(row)
 
