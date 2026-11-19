@@ -606,6 +606,9 @@ h5 {
   pointer-events: auto;
 }
 
+.summary-text-button { padding: 4px; border: 0; background: transparent; color: var(--brand); cursor: pointer; font: inherit; }
+@media (pointer: coarse) { .summary-text-button { min-height: 44px; min-width: 44px; } }
+
 .secondary-button.is-danger {
   border-color: var(--status-danger);
   color: var(--status-danger);
@@ -4625,7 +4628,7 @@ article.raster-histogram-summary {
 .vector-feature-result-heading .secondary-button { flex: 0 0 auto; }
 .vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; }
 .vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
-.vector-feature-profile-navigation { margin: 0 0 12px; }
+.vector-feature-profile-navigation { grid-template-columns: auto 1fr auto; }
 .vector-feature-attributes {
   display: grid;
   grid-template-columns: minmax(90px, 0.4fr) minmax(0, 1fr);
@@ -4638,47 +4641,40 @@ article.raster-histogram-summary {
 .vector-feature-attributes dt { color: var(--text-2); font-size: 0.72rem; font-weight: 650; }
 .vector-feature-attributes dd { font-size: 0.78rem; }
 
-.vector-time-series-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 10px;
-  background: var(--surface-1);
+.vector-time-series-header, .vector-plot-heading, .vector-plot-picker-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
 }
-.vector-time-series-header h2 { margin: 0; font-size: 1rem; }
-.vector-series-heading { min-width: 0; }
-.vector-series-heading h2,
-.vector-series-context {
-  overflow-wrap: anywhere;
-}
-.vector-series-context {
-  margin: 3px 0 0;
-  color: var(--text-2);
-  font-size: 0.72rem;
-}
+.vector-time-series-header { margin-bottom: 7px; border-bottom: 1px solid var(--border-1); }
+.vector-plot-modes, .vector-plot-context, .vector-plot-switch { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.vector-plot-modes .summary-text-button { min-height: 28px; padding: 2px 8px; }
+.vector-plot-modes [aria-pressed="true"] { color: var(--text-1); box-shadow: inset 0 -2px var(--brand); }
+.vector-plot-heading h2 { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 1.03rem; }
+.vector-plot-context { margin: 2px 0 5px; font-size: var(--font-size-support); }
+.vector-plot-context button { overflow-wrap: anywhere; text-align: left; }
+.vector-plot-context button::after { content: " ▾"; }
+.vector-plot-picker { display: grid; gap: 5px; margin: 0 0 6px; padding: 8px; border: 1px solid var(--border-1); border-radius: var(--radius-small); background: var(--surface-2); font-size: var(--font-size-ui); }
+.vector-plot-picker[hidden], .vector-plot-results[hidden], .vector-plot-figure[hidden] { display: none; }
+.vector-plot-picker :is(select,input[type="search"]) { width: 100%; min-width: 0; }
+.vector-series-context { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
 .vector-series-context[hidden] { display: none; }
-.vector-time-series-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
-  align-items: end;
-  gap: 10px;
-}
-.vector-time-series-controls label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: 0.72rem;
-  font-weight: 650;
-}
-.vector-time-series-controls select { min-width: 0; max-width: 100%; }
-.vector-time-series-status { margin: 12px 0 4px; color: var(--text-2); font-size: 0.75rem; }
-.vector-time-series-chart { display: block; width: 100%; height: auto; min-height: 250px; }
+.vector-plot-results { min-width: 0; }
+.vector-plot-figure { background: var(--surface-2); border: 1px solid var(--border-1); border-radius: var(--radius-small); }
+.vector-plot-figure h3 { margin: 6px 9px 0; font-size: var(--font-size-ui); overflow-wrap: anywhere; }
+#vector-time-series-extra-charts .vector-plot-figure { margin-top: 6px; }
+.vector-time-series-chart { display: block; width: 100%; height: auto; }
+.vector-plot-value { fill: var(--text-1); font: 600 11px var(--font-sans); pointer-events: none; paint-order: stroke; stroke: var(--surface-2); stroke-width: 2px; }
 .vector-time-series-chart[hidden] { display: none; }
+.vector-time-series-status, .vector-plot-missing { margin: 5px 0; color: var(--text-2); font-size: var(--font-size-ui); }
+.vector-plot-missing { padding: 0 8px; }
+.vector-time-series-status:empty { margin: 0; }
+.vector-plot-footer { display: flex; align-items: flex-start; flex-wrap: wrap; justify-content: space-between; gap: 4px; margin-top: 5px; }
+.vector-plot-options { flex: 1; min-width: 0; font-size: var(--font-size-ui); }
+.vector-plot-options summary { cursor: pointer; color: var(--text-2); padding: 3px 0; }
+.vector-plot-options[open] { flex-basis: 100%; }
+.vector-plot-options-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,105px),1fr)); gap: 6px; }
+.vector-plot-options-grid label { display: grid; min-width: 0; gap: 3px; }
+.vector-plot-options-grid select { min-width: 0; max-width: 100%; }
+.vector-plot-zoom[hidden] { display: none; }
 .series-chart-x-axis, .series-chart-y-axis { color: var(--text-2); }
 .series-chart-y-axis .tick line { stroke: var(--border-1); }
 .series-chart-line { fill: none; stroke: var(--series-color, var(--brand)); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
@@ -4707,30 +4703,11 @@ article.raster-histogram-summary {
 .vector-time-series-selection span { color: var(--text-2); overflow-wrap: anywhere; }
 .vector-time-series-selection button { flex: 0 0 auto; }
 .vector-time-series-table { margin-top: 10px; font-size: 0.74rem; }
-.vector-time-series-table summary { cursor: pointer; font-weight: 650; }
 .vector-time-series-table-scroll { margin-top: 8px; overflow-x: auto; }
 .vector-time-series-table table { width: 100%; border-collapse: collapse; }
 .vector-time-series-table th,
 .vector-time-series-table td { padding: 6px; border-bottom: 1px solid var(--border-1); text-align: left; overflow-wrap: anywhere; }
 .vector-time-series-table th { color: var(--text-2); }
-.vector-feature-profile-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: end;
-  gap: 10px;
-}
-.vector-feature-profile-controls label,
-.vector-feature-profile-fields > label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: 0.72rem;
-  font-weight: 650;
-}
-.vector-feature-profile-controls select,
-.vector-feature-profile-fields input { min-width: 0; max-width: 100%; }
-.vector-feature-profile-fields { display: grid; gap: 8px; margin-top: 12px; }
 .vector-feature-profile-field-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .vector-feature-profile-field-list {
   display: grid;
@@ -4751,14 +4728,12 @@ article.raster-histogram-summary {
 .vector-feature-profile-field:last-child { border-bottom: 0; }
 .vector-feature-profile-field[hidden] { display: none; }
 .vector-feature-profile-field span { overflow-wrap: anywhere; }
-.vector-feature-profile-field output { color: var(--text-2); font-variant-numeric: tabular-nums; }
-.vector-feature-profile-chart-title { margin: 14px 0 0; text-align: center; font-size: 0.92rem; }
-.vector-feature-profile-chart-title[hidden] { display: none; }
-
-@container map-inspection (max-width: 470px) {
-  .vector-time-series-controls { grid-template-columns: minmax(0, 1fr); }
-  .vector-feature-profile-controls { grid-template-columns: minmax(0, 1fr); }
-}
+.vector-feature-profile-field > :last-child { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.vector-time-series-table small { display: block; color: var(--text-2); font-weight: normal; }
+.vector-time-series-table td { font-variant-numeric: tabular-nums; }
+.vector-time-series-table tr[aria-current="true"], .vector-time-series-table tr:has([aria-pressed="true"]) { background: var(--surface-selected); }
+.vector-time-series-table button[aria-pressed="true"] { text-decoration: underline; }
+.vector-time-series-table .summary-text-button { padding: 0; text-align: inherit; }
 
 .map-histogram-toolbar {
   position: sticky;
@@ -5550,14 +5525,14 @@ summary:hover > .raster-disclosure-chevron {
   font-size: var(--font-size-ui);
 }
 
-:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker) > .secondary-button {
+:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker, .vector-plot-switch) > .secondary-button {
   margin: 0;
   min-height: 24px;
   padding: 2px 7px;
   font-size: inherit;
 }
 
-:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker) > .secondary-button[aria-pressed="true"] {
+:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker, .vector-plot-switch) > .secondary-button[aria-pressed="true"] {
   background: var(--brand-hover);
   color: var(--surface-2);
 }

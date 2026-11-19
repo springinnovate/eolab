@@ -15,9 +15,9 @@ const HIGHLIGHT_STYLE = Object.freeze({
     fillOpacity: 0.35,
 });
 const TIME_SERIES_AVAILABLE_HELP =
-    "Plot one numeric field across all features found at this location.";
+    "Compare numeric fields across the features at this location.";
 const TIME_SERIES_UNAVAILABLE_HELP =
-    "Select at least two features at this location to plot one field across them.";
+    "Click a location with at least two features to compare their fields.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
 
 /**
@@ -776,11 +776,7 @@ export class VectorFeatureInspectorController {
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;
         this.next.disabled = !navigation.canNext;
-        this.featureProfileButton.disabled = Object.values(
-            observation.properties
-        ).filter((value) =>
-            typeof value === "number" && Number.isFinite(value)
-        ).length < 2;
+        this.featureProfileButton.disabled = !Object.values(observation.properties).some(Number.isFinite);
         this.onCurrentObservationChange(observation, navigation);
         this.attributes.replaceChildren();
         const entries = vectorFeatureAttributes(feature, target.primaryGeometry);

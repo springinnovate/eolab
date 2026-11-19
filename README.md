@@ -69,7 +69,7 @@ For a calculation you want to follow in **Runs**, use **Data tools → Raster su
 
 ### Plot attributes and summarize polygons
 
-The **Feature inspector** has two ways to compare measurements. **Plot fields from this feature** graphs several numeric attributes of one feature. **Plot one field across features** compares the same attribute across the features under your click. Choose an X-axis field, sort the values, and view the result as a line or scatter plot. Selecting a point identifies its source layer.
+In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Each comparison field has its own scale and shares the same X axis. Switch between **Plot** and **Values** to read exact measurements, including missing values. Click another place to update the open plot, or select a measurement and choose **Zoom to feature**. **Plot options** contains the chart style, order, and axis or title field.
 
 ![One feature selected on a South American map with 25 fields plotted in a line chart.](docs/images/eolab-series-one-feature.jpg)
 

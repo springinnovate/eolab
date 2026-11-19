@@ -1,0 +1,241 @@
+/** Presentation shared by the two plots of inspected vector features. */
+import { formatSeriesNumber } from "../charts/series-chart.js";
+
+const FIELD_ORDER = new Intl.Collator("en", {numeric: true, sensitivity: "base"});
+
+/** Bind the result switch and in-place pickers for one vector plot. */
+export class VectorPlotPanel {
+    /**
+     * @param {Document} documentContext Document containing this panel.
+     * @param {string} prefix ID of the owning feature plot.
+     * @param {()=>void} redraw Redraw at the new plot width.
+     */
+    constructor(documentContext, prefix, redraw) {
+        this.abort = new AbortController();
+        const listen = { signal: this.abort.signal };
+        const element = suffix => documentContext.querySelector("#" + prefix + "-" + suffix);
+        this.plot = element("plots");
+        this.values = element("values");
+        this.plotButton = element("plot-button");
+        this.valuesButton = element("values-button");
+        this.fieldButton = element("fields-button");
+        this.featureButton = element("features-button");
+        this.fieldSearch = element("field-search");
+        this.pickers = [
+            {button: this.featureButton, body: element("features-picker"), done: element("features-done")},
+            {button: this.fieldButton, body: element("fields-picker"), done: element("fields-done")},
+        ];
+        this.activePicker = null;
+        for (const picker of this.pickers) {
+            picker.button.addEventListener("click", () => {
+                const opening = this.activePicker !== picker;
+                this.closePicker(false);
+                if (opening) {
+                    this.activePicker = picker;
+                    picker.body.hidden = false;
+                    picker.button.setAttribute("aria-expanded", "true");
+                    if (picker.button === this.fieldButton) this.fieldSearch.focus();
+                }
+            }, listen);
+            picker.done.addEventListener("click", () => this.closePicker(), listen);
+        }
+        this.plotButton.addEventListener("click", () => this.showValues(false), listen);
+        this.valuesButton.addEventListener("click", () => this.showValues(true), listen);
+        this.showValues(false);
+        this.width = 0;
+        const view = documentContext.defaultView;
+        if (view?.ResizeObserver) {
+            let frame = null;
+            const observer = new view.ResizeObserver(([entry]) => {
+                const width = Math.round(entry.contentRect.width);
+                if (width <= 0 || width === this.width) return;
+                this.width = width;
+                // A redraw also changes the observed plot's height. Let the current layout finish first.
+                if (frame !== null) return;
+                frame = view.requestAnimationFrame(() => {
+                    frame = null;
+                    redraw();
+                });
+            });
+            observer.observe(this.plot);
+            this.abort.signal.addEventListener("abort", () => {
+                observer.disconnect();
+                if (frame !== null) view.cancelAnimationFrame(frame);
+            }, {once: true});
+        }
+    }
+
+    /**
+     * Switch the result in place while keeping the chosen fields and feature.
+     * @param {boolean} values Show the exact readings in place of the chart.
+     * @return {void}
+     */
+    showValues(values) {
+        this.plot.hidden = values;
+        this.values.hidden = !values;
+        this.plotButton.setAttribute("aria-pressed", String(!values));
+        this.valuesButton.setAttribute("aria-pressed", String(values));
+    }
+
+    /**
+     * Close the open context picker and optionally return focus to its button.
+     * @param {boolean} [focus=true] Restore keyboard focus when dismissing the picker.
+     * @return {boolean} Whether a picker was open.
+     */
+    closePicker(focus = true) {
+        const picker = this.activePicker;
+        if (!picker) return false;
+        picker.body.hidden = true;
+        picker.button.setAttribute("aria-expanded", "false");
+        if (focus) picker.button.focus();
+        this.activePicker = null;
+        return true;
+    }
+
+    /** Release panel controls and size observation. @return {void} */
+    destroy() {
+        this.abort.abort();
+    }
+}
+
+/** Keep searchable numeric field checkboxes stable while feature data changes. */
+export class VectorPlotFields {
+    /**
+     * @param {Document} doc Owning document.
+     * @param {string} prefix ID prefix for this field chooser.
+     * @param {(names:string[])=>void} change Replace the plot's selected fields.
+     */
+    constructor(doc, prefix, change) {
+        this.doc = doc;
+        this.list = doc.querySelector("#" + prefix + "-field-list");
+        this.empty = doc.querySelector("#" + prefix + "-field-empty");
+        this.search = doc.querySelector("#" + prefix + "-field-search");
+        this.match = doc.querySelector("#" + prefix + "-select-matching");
+        this.clear = doc.querySelector("#" + prefix + "-clear-fields");
+        this.change = change;
+        this.rows = new Map();
+        this.selected = [];
+        this.available = new Map();
+        this.abort = new AbortController();
+        const listen = { signal: this.abort.signal };
+        this.search.addEventListener("input", () => this.filter(), listen);
+        this.match.addEventListener("click", () => change([...this.available.keys()].filter(name => this.matches(name))), listen);
+        this.clear.addEventListener("click", () => change([]), listen);
+    }
+
+    /**
+     * Match a field against the current case-insensitive search.
+     * @param {string} name Source attribute name.
+     * @return {boolean} Whether the search includes it.
+     */
+    matches(name) {
+        return name.toLocaleLowerCase().includes(this.search.value.trim().toLocaleLowerCase());
+    }
+
+    /** Show matching controls without moving focus. @return {void} */
+    filter() {
+        let visible = 0;
+        for (const [name, row] of this.rows) {
+            row.hidden = !this.matches(name);
+            if (!row.hidden) visible++;
+        }
+        this.empty.hidden = this.search.value.trim() === "" || visible > 0;
+    }
+
+    /**
+     * Reconcile available and previously selected fields without replacing focused checkboxes.
+     * @param {Map<string,string>} available Ordered field names and value or coverage text.
+     * @param {string[]} selected Current choices, including fields absent from this feature.
+     * @return {void}
+     */
+    update(available, selected) {
+        this.available = available;
+        this.selected = selected;
+        const names = new Set([...available.keys(), ...selected]);
+        let nextFocus = null;
+        for (const [name, row] of this.rows) {
+            if (names.has(name)) continue;
+            if (row.contains(this.doc.activeElement)) {
+                const siblings = [...this.list.children];
+                const index = siblings.indexOf(row);
+                const next = [...siblings.slice(index + 1), ...siblings.slice(0, index).reverse()]
+                    .find(item => !item.hidden && names.has(item.children[0].value));
+                nextFocus = next?.children[0] ?? this.search;
+            }
+            row.remove();
+            this.rows.delete(name);
+        }
+        const sorted = [...names].sort(FIELD_ORDER.compare);
+        const checked = new Set(selected);
+        for (const [index, name] of sorted.entries()) {
+            if (!this.rows.has(name)) {
+                const row = this.doc.createElement("label");
+                row.classList.add("vector-feature-profile-field");
+                const box = this.doc.createElement("input");
+                box.type = "checkbox";
+                box.value = name;
+                box.addEventListener("change", () => this.change(box.checked
+                    ? [...new Set([...this.selected, name])] : this.selected.filter(item => item !== name)));
+                const text = this.doc.createElement("span");
+                text.textContent = name;
+                row.append(box, text, this.doc.createElement("span"));
+                this.rows.set(name, row);
+            }
+            const row = this.rows.get(name);
+            row.children[0].checked = checked.has(name);
+            row.children[2].textContent = available.get(name) ?? "No value";
+            if (this.list.children[index] !== row) this.list.insertBefore(row, this.list.children[index] ?? null);
+        }
+        this.filter();
+        nextFocus?.focus();
+    }
+
+    /** Release chooser listeners. @return {void} */
+    destroy() { this.abort.abort(); }
+}
+
+/**
+ * Label one observation even when the same feature ID occurs in different layers.
+ * @param {import("./inspection-observation.js").VectorInspectionObservation} observation Inspected feature.
+ * @param {number} index Position in the inspector's bounded sample.
+ * @return {string} Layer and feature identity for the chooser.
+ */
+export function vectorFeatureLabel(observation, index) {
+    return observation.layerLabel + " · " + (observation.featureId ?? "Feature " + (index + 1));
+}
+
+
+/**
+ * Label the peak of a profile or the readings in a small bar comparison.
+ * Labels use the actual painted bar centers, including distinct features at the same X.
+ * @param {SVGElement} chart Rendered comparison or profile SVG.
+ * @param {{circle:SVGElement,point:{yValue:number}}[]} marks Selectable plotted observations.
+ * @param {"line"|"scatter"|"bar"} shape Chart style.
+ * @return {void}
+ */
+export function labelVectorPlotValues(chart, marks, shape) {
+    if (!marks.length) return;
+    const peak = marks.reduce((best, entry) => entry.point.yValue > best.point.yValue ? entry : best);
+    const candidates = shape === "bar" && marks.length <= 6
+        ? [peak, ...marks.filter(entry => entry !== peak)] : [peak];
+    const placed = [];
+    const width = Number(chart.getAttribute("viewBox").split(" ")[2]);
+    for (const {circle, point} of candidates) {
+        const text = formatSeriesNumber(point.yValue);
+        const half = text.length * 3.6;
+        const center = shape === "bar" ? Number(circle.getAttribute("x")) + Number(circle.getAttribute("width")) / 2
+            : Number(circle.getAttribute("cx"));
+        const x = Math.max(half + 2, Math.min(width - half - 2, center));
+        const y = Math.max(12, Number(circle.getAttribute("cy")) - 7);
+        if (placed.some(label => Math.abs(label.x - x) < label.half + half + 3 && Math.abs(label.y - y) < 14)) continue;
+        const label = chart.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("class", "vector-plot-value");
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("aria-hidden", "true");
+        label.setAttribute("x", String(x));
+        label.setAttribute("y", String(y));
+        label.textContent = text;
+        chart.append(label);
+        placed.push({x,y,half});
+    }
+}

@@ -84,6 +84,7 @@ function ordinalTickIndexes(count, maximum = 7) {
  * @param {number} [configuration.pointSize=9] Marker diameter in screen pixels.
  * @param {number|null} [configuration.xTickCount=null] Maximum X tick labels; null adapts to chart width.
  * @param {number} [configuration.yTickCount=5] Desired Y tick count, rounded by the numeric scale.
+ * @param {boolean} [configuration.fitXAxisLabels=false] Fit the bottom margin to the displayed X ticks and title in a compact plot.
  * @param {number|null} [configuration.axisFontSize=null] Tick font size in screen pixels; axis titles are one pixel larger. Null keeps the caller's CSS.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
  * @param {string} configuration.yAxisLabel Vertical-axis title.
@@ -114,6 +115,7 @@ export function renderOrdinalSeriesChart({
     xTickCount = null,
     yTickCount = 5,
     axisFontSize = null,
+    fitXAxisLabels = false,
     xAxisLabel,
     yAxisLabel,
     yAxisLabelPosition = "left",
@@ -181,12 +183,17 @@ export function renderOrdinalSeriesChart({
         top: yAxisLabelPosition === "top" ? Math.max(CHART_MARGIN.top, (axisFontSize ?? 11) + 17) : CHART_MARGIN.top,
         left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
         bottom: CHART_MARGIN.bottom + fontGrowth * 5};
-    if (axisFontSize !== null) {
-        // Leave room for rotated monospaced ticks, then the horizontal axis title.
-        const captionHeight = Math.ceil(tickLength * axisFontSize * 0.62 * Math.sin(35 * Math.PI / 180) + axisFontSize * 2.5 + 17);
-        const extraHeight = Math.max(0, captionHeight - margin.bottom);
-        margin.bottom += extraHeight;
-        height += extraHeight;
+    if (fitXAxisLabels || axisFontSize !== null) {
+        // Reserve space for the rotated tick labels and horizontal axis title.
+        const fontSize = axisFontSize ?? 11;
+        const captionHeight = Math.ceil(tickLength * fontSize * 0.62 * Math.sin(35 * Math.PI / 180) + fontSize * 2.5 + 17);
+        if (fitXAxisLabels) {
+            margin.bottom = captionHeight;
+        } else {
+            const extraHeight = Math.max(0, captionHeight - margin.bottom);
+            margin.bottom += extraHeight;
+            height += extraHeight;
+        }
     }
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;

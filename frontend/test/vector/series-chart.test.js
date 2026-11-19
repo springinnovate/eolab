@@ -42,6 +42,27 @@ test("ordinal observations span the chart even when labels repeat", () => {
   assert.deepEqual(positions, [72, 364, 656]);
 });
 
+test("compact plots reserve axis space for the displayed tick labels", () => {
+  const axisPositions = [];
+  for (const [label, fitXAxisLabels] of [["01", false], ["01", true], ["Long observation label", true]]) {
+    const documentContext = new FakeRasterControlDocument();
+    const chart = documentContext.querySelector("#vector-time-series-chart");
+    const points = [{xLabel: label, yValue: 12}, {xLabel: "02", yValue: 28}];
+    const rendered = renderOrdinalSeriesChart({
+      documentContext, chart, points, fitXAxisLabels, width: 320, height: 218,
+      chartType: "scatter", xAxisLabel: "Observation", yAxisLabel: "Value",
+      ariaLabel: "Observations", pointAccessibleLabel: point => point.xLabel,
+      pointTooltip: point => point.xLabel,
+    });
+    assert.deepEqual(rendered.yDomain, [12, 28]);
+    const axis = chart.querySelector(".series-chart-x-axis");
+    axisPositions.push(Number(axis.getAttribute("transform").match(/translate\(0 ([-\d.]+)\)/)[1]));
+  }
+  const [standard, shortLabels, longLabels] = axisPositions;
+  assert.ok(shortLabels > standard, "short ticks leave more space for data in the dock");
+  assert.ok(shortLabels > longLabels, "long ticks have room below the plotting area");
+});
+
 test("equal numeric observations share a safe centered coordinate", () => {
   const positions = renderedXCoordinates([
     { xValue: 7, xLabel: "7", yValue: 1 },

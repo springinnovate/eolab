@@ -91,11 +91,11 @@ test("inspection composition delivers distinct observations to both chart consum
   assert.equal(series.observations[0], observations[0]);
   assert.equal(series.observations[1], observations[1]);
   assert.deepEqual(documentContext.querySelector("#vector-feature-profile-table-body")
-    .children.map(row => row.children.map(cell => cell.textContent)),
+    .children.map(row => [row.children[0].children[0].textContent, ...row.children.slice(1).map(cell => cell.textContent)]),
     [["R1999", "1999", "9"], ["R2000", "2000", "10"]]);
   assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
-    .children.map(row => row.children.map(cell => cell.textContent)),
-    [["Habitat", "habitat.1", "Habitat", "1"], ["Habitat", "habitat.9", "Habitat", "9"]]);
+    .children.map(row => [row.children[0].textContent, row.children[0].children[0].textContent, row.children[1].children[0].textContent]),
+    [["Habitat", "Habitat · habitat.1", "1"], ["Habitat", "Habitat · habitat.9", "9"]]);
   assert.deepEqual(status.feature, {state: "ready", message: "2 features returned across 1 layer · Ready"});
   assert.deepEqual(status.count, {count: 2, loading: false});
   documentContext.querySelector("#zoom-vector-feature-profile-feature").dispatchEvent(new Event("click"));
@@ -116,7 +116,7 @@ test("a new inspection replaces the prior chart and communicates partial results
 
   inspector.onSampleChange({state: "ready", message: "Partial results", observations: [observation(9)], failedLayers: 1});
   assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
-    .children.map(row => [row.children[1].textContent, row.children[3].textContent]), [["habitat.9", "9"]]);
+    .children.map(row => [row.children[0].children[0].textContent, row.children[1].children[0].textContent]), [["Habitat · habitat.9", "9"]]);
   assert.deepEqual(status.feature, {state: "error", message: "1 feature returned across 1 layer · 1 layer unavailable"});
   assert.deepEqual(status.count, {count: 1, loading: false});
 

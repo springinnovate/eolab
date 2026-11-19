@@ -420,6 +420,7 @@ test("context validates its presentation boundary and vector identities clear wi
     h.controller.setVectorTimeSeriesIdentity({ label: "Temperature", title: "Climate zones · Temperature" });
     assert.equal(h.doc.querySelector("#map-inspection-context").textContent,
         "Climate zones · Temperature · Across sampled vector features");
+    assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true, "the vector panel already identifies the plotted features");
     assert.equal(h.doc.activeElement, h.map);
     h.controller.setVectorTimeSeriesIdentity(null);
     assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);
@@ -1013,7 +1014,7 @@ test("vector time series is an independent retained map-side panel", () => {
     assert.equal(h.doc.activeElement, h.map);
     assert.deepEqual(h.calls, ["show", "hide"]);
     h.controller.setVectorTimeSeriesIdentity(null);
-    assert.equal(h.timeSeriesTab.textContent, "Field across features");
+    assert.equal(h.timeSeriesTab.textContent, "Compare features");
 });
 
 test("feature details collapse without closing retained series state", () => {

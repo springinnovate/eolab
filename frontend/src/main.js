@@ -1965,6 +1965,10 @@ async function initializeCatalog(
             });
     }
     const vectorTimeSeries = new VectorTimeSeriesController({
+        onOpenFeature: index => {
+            if (index !== null) vectorFeatureInspector.showResult(index);
+            openFeaturePlot();
+        },
         onVisibilityChange: (visible, moveFocus) => {
             if (visible) mapInspection.showVectorTimeSeries();
             else mapInspection.hideVectorTimeSeries(moveFocus);
@@ -1974,6 +1978,8 @@ async function initializeCatalog(
         onFeatureZoom: zoomInspectedVectorFeature,
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({
+        onCompareFeatures: openFeatureComparison,
+        onSelectFeature: index => vectorFeatureInspector.showResult(index),
         onVisibilityChange: (visible, moveFocus) => {
             if (visible) mapInspection.showVectorFeatureProfile();
             else mapInspection.hideVectorFeatureProfile(moveFocus);
@@ -1984,6 +1990,16 @@ async function initializeCatalog(
             vectorFeatureInspector?.navigateResult(direction),
         onFeatureZoom: zoomInspectedVectorFeature,
     });
+    /** Show the inspector's current feature and keep following its navigation. @return {void} */
+    function openFeaturePlot() {
+        vectorTimeSeries.close();
+        vectorFeatureProfile.open();
+    }
+    /** Show the returned features together using the current comparison choices. @return {void} */
+    function openFeatureComparison() {
+        vectorFeatureProfile.close();
+        vectorTimeSeries.open();
+    }
     /**
      * Supply the same top-first published vector targets to click and hover queries.
      * @return {import("./vector/feature-info.js").VectorFeatureInspectionTarget[]} Visible targets.
@@ -2026,6 +2042,7 @@ async function initializeCatalog(
         },
         onSampleChange: (sample) => {
             vectorTimeSeries.setSample(sample);
+            vectorFeatureProfile.setFeatureChoices(sample.observations);
             const returned = sample.observations.length;
             const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
             const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
@@ -2048,14 +2065,8 @@ async function initializeCatalog(
         },
         onCurrentObservationChange: (observation, navigation) =>
             vectorFeatureProfile.setCurrentObservation(observation, navigation),
-        onFeatureProfileRequested: () => {
-            vectorTimeSeries.close();
-            vectorFeatureProfile.open();
-        },
-        onTimeSeriesRequested: () => {
-            vectorFeatureProfile.close();
-            vectorTimeSeries.open();
-        },
+        onFeatureProfileRequested: openFeaturePlot,
+        onTimeSeriesRequested: openFeatureComparison,
         onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),
         onFilterRequested: (sourceId) => vectorFilterControls.open(sourceId),
         onFeatureZoomRequested: zoomInspectedVectorFeature,

@@ -121,13 +121,13 @@ export class MapInspectionController {
             },
             {
                 name: "time-series",
-                label: "Field across features",
+                label: "Compare features",
                 panel: this.vectorTimeSeries,
                 tab: documentContext.querySelector("#map-inspection-tab-time-series"),
             },
             {
                 name: "feature-profile",
-                label: "Fields from feature",
+                label: "One feature",
                 panel: this.vectorFeatureProfile,
                 tab: documentContext.querySelector("#map-inspection-tab-feature-profile"),
             },
@@ -881,8 +881,7 @@ export class MapInspectionController {
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
-        this.dockContext.hidden = !this.dockContext.textContent ||
-            !["raster-clips", "time-series", "feature-profile"].includes(this.activeTool);
+        this.dockContext.hidden = !this.dockContext.textContent || this.activeTool !== "raster-clips";
         const expandWasFocused = this.document.activeElement === this.expandButton;
         this.toolbar.hidden = this.minimized;
         this.expandButton.hidden = !this.minimized;
