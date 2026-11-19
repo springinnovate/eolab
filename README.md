@@ -108,7 +108,11 @@ In **Data tools**, choose **Raster clip**, select a raster, and set the area to 
 
 ### Run environmental models
 
-**Downstream ecosystem beneficiaries** estimates what lies downstream of selected sites. Start with polygons or a raster mask, then choose a raster to summarize. For a restoration project, use population counts and **Sum** to estimate how many people live within the modeled downstream area. The results include the downstream footprint, the values inside it, and summary statistics. The buffer radius and optional distance limit control how far the analysis extends. [See the downstream setup.](docs/images/eolab-model-downstream-beneficiaries.jpg)
+**Downstream ecosystem beneficiaries** maps where water flows from a selected area. Overlay population data to estimate how many people are in the downstream footprint of a proposed restoration site.
+
+![A teal downstream footprint near Tawau, Sabah, beside the completed run reporting a population total of 30,799.](docs/images/eolab-model-downstream-beneficiaries.jpg)
+
+*Sabah, Malaysia. In this example, EOLab mapped the area downstream of a selected corridor and estimated that about 30,800 people were within it using LandScan 2023 population data.*
 
 **Ecosystem Condition** learns how environmental conditions relate to observed habitat at reference sites. It maps how closely the rest of the analysis area matches those expectations. **Reference similarity** ranges from 0 to 1, with higher values indicating a closer match. Download the 500 m map and diagnostics to examine places where observations depart from expectations. [See the model inputs.](docs/images/eolab-model-habitat-condition.jpg)
 
@@ -188,7 +192,9 @@ Read .env.example, docker-compose.yml, and docker-compose.local.yml. Give me the
 <details>
 <summary>Upgrade an existing site</summary>
 
-Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app` and `processing-worker` containers before starting replacements. Run one `processing-worker` container per site. Give separate deployments their own volume names.
+Before upgrading, ask your site operator to [check which published maps need attention](scripts/saved-map-upgrade/). Some older maps and links need to be recreated. Keep the map settings and shared-layer invitations you will need to republish. Shared drawings and their notes stay in their layers. The [Site Condition migration](src/eolab_app/saved_maps/migrate.py) preserves that map's URL and shared drawings. Preview the migration, apply it using the reviewed revision, then reopen the same URL and check the shared drawings.
+
+Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app` and `processing-worker` containers before starting replacements. Run one worker per site and use separate volumes for each deployment.
 
 </details>
 

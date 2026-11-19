@@ -100,7 +100,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
 
     request = map_request()
     request["view"] = json.loads(
-        (Path(__file__).parent / "fixtures/saved-map-v2.json").read_text()
+        (Path(__file__).parent / "fixtures/saved-map-shared.json").read_text()
     )
     request["view"]["viewer"]["origin"] = "http://testserver"
     original = store.create_saved_map(CreateSavedMap.model_validate(request))
@@ -122,7 +122,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
         "subtitle": "Updated subtitle",
         "revision": 1,
     }
-    changes["view"].update(schemaVersion=3, basemap="none")
+    changes["view"]["basemap"] = "none"
     changes["view"]["viewport"]["zoom"] = 7
     # An in-memory draft has no effect on the public record.
     assert client.get(BASE + "/amazon-priorities").json() == loaded
@@ -382,7 +382,8 @@ def test_invalid_stored_map_is_not_returned(store: SavedMapStore) -> None:
         cursor.execute("UPDATE saved_maps.maps SET view='{}'::jsonb")
     with pytest.raises(SavedMapError) as captured:
         store.get_saved_map("amazon-priorities")
-    assert captured.value.status == 503
+    assert captured.value.status == 422
+    assert "updated map" in str(captured.value)
 
 
 def migration_record(store: SavedMapStore, slug: str) -> dict[str, Any]:
@@ -401,7 +402,7 @@ def migration_record(store: SavedMapStore, slug: str) -> dict[str, Any]:
 
 
 def insert_legacy_map(
-    store: SavedMapStore, slug: str = "site-condition"
+    store: SavedMapStore, slug: str = "nhi-site-condition-mapper"
 ) -> dict[str, Any]:
     """Store a pre-upgrade map with two obsolete Catalog fingerprint fields.
 
@@ -414,12 +415,13 @@ def insert_legacy_map(
     """
     request = map_request(slug)
     request["subtitle"] = "Workshop map"
-    request["view"].update(schemaVersion=3, basemap="none")
+    request["view"]["basemap"] = "none"
     shared = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-shared.json").read_text()
     )["layers"][0]
     request["view"]["layers"].insert(0, shared)
     store.create_saved_map(CreateSavedMap.model_validate(request))
+    request["view"]["schemaVersion"] = 3
     for index, layer in enumerate(request["view"]["layers"][1:]):
         layer["sourceRevision"] = None if index == 0 else "sha256:" + "a" * 64
     with store.transaction() as cursor:
@@ -474,7 +476,9 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
     app = FastAPI()
     app.include_router(create_saved_maps_router(store))
     with TestClient(app) as client:
-        assert client.get(BASE + "/" + before["slug"]).status_code == 503
+        rejected = client.get(BASE + "/" + before["slug"])
+        assert rejected.status_code == 422
+        assert "updated map" in rejected.json()["detail"]
         result = store.migrate_source_revisions(
             before["slug"], apply=True, expected_revision=4
         )
@@ -484,6 +488,7 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
         assert response.json()["view"]["layers"][0]["sharedAnnotation"] == invitation
     expected = deepcopy(before)
     expected["revision"] = 5
+    expected["view"]["schemaVersion"] = 5
     for layer in expected["view"]["layers"][1:]:
         del layer["sourceRevision"]
     assert migration_record(store, before["slug"]) == expected
@@ -492,6 +497,11 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
     )
     assert (retry.changed_layers, retry.revision, retry.applied) == (0, 5, False)
     assert migration_record(store, before["slug"]) == expected
+    with pytest.raises(SavedMapError) as unsupported:
+        store.migrate_source_revisions(
+            unrelated["slug"], apply=True, expected_revision=4
+        )
+    assert unsupported.value.status == 422
     assert migration_record(store, unrelated["slug"]) == unrelated
     assert annotations.get_session_snapshot(session, "migration-owner") == snapshot
     assert annotations.export_session_geojson(session, "migration-owner") == polygons
@@ -603,6 +613,7 @@ def test_source_revision_migration_cli_and_deleted_maps(
         "revision": 4,
         "changed_layers": 2,
         "applied": False,
+        "upgrades_format": True,
     }
     assert migration_record(store, before["slug"]) == before
     with pytest.raises(SystemExit) as missing_revision:

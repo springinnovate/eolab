@@ -29,12 +29,14 @@ class SourceRevisionMigration:
         revision: Current map revision after this operation.
         changed_layers: Number of Catalog layers whose sourceRevision was removed.
         applied: Whether the database was updated; false for previews and no-ops.
+        upgrades_format: Whether the protected Site Condition map needs its version marker updated.
     """
 
     slug: str
     revision: int
     changed_layers: int
     applied: bool
+    upgrades_format: bool
 
 
 class SavedMapStore:
@@ -150,7 +152,13 @@ class SavedMapStore:
             row = cursor.fetchone()
             if row is None:
                 raise SavedMapError(404, "Saved map not found.")
-            return SavedMap.model_validate(row)
+            try:
+                return SavedMap.model_validate(row)
+            except ValidationError as error:
+                raise SavedMapError(
+                    422,
+                    "This saved map has settings this site cannot open. Ask the map owner for an updated map.",
+                ) from error
 
     def list_published_maps(self) -> list[dict[str, Any]]:
         """List active and deleted maps for administration without loading documents.
@@ -173,8 +181,9 @@ class SavedMapStore:
         """Preview or remove obsolete sourceRevision fields from one published map.
 
         Call explicitly during an upgrade, after backup and stopping old app
-        writers. This is not run at startup or by the HTTP API. Only Catalog
-        layer fields are removed; all other JSON and map metadata stay intact.
+        writers. This command updates only the selected map after its complete
+        settings pass validation. The protected Site Condition map keeps its
+        URL and its shared polygon references.
         Shared polygon storage is never accessed. A changed map advances its
         revision once, invalidating old administrator drafts. Compatible maps
         are no-ops, including a retry with the previously applied revision.
@@ -206,6 +215,14 @@ class SavedMapStore:
             if row is None:
                 raise SavedMapError(404, "Saved map not found.")
             candidate = deepcopy(row)
+            if not isinstance(candidate["view"], dict):
+                raise SavedMapError(422, "The stored map must be a JSON object.")
+            upgrades_format = (
+                slug == "nhi-site-condition-mapper"
+                and candidate["view"].get("schemaVersion") == 3
+            )
+            if upgrades_format:
+                candidate["view"]["schemaVersion"] = 5
             changed_layers = 0
             # Persisted legacy JSON cannot satisfy the current contract until
             # these fields are removed. Validate the entire result below.
@@ -227,7 +244,7 @@ class SavedMapStore:
                     "This map has other incompatible fields after removing sourceRevision. "
                     "No changes were made; inspect the saved document before upgrading.",
                 ) from error
-            applied = apply and changed_layers > 0
+            applied = apply and (changed_layers > 0 or upgrades_format)
             if applied:
                 if expected_revision != row["revision"]:
                     raise SavedMapError(
@@ -241,7 +258,7 @@ class SavedMapStore:
                 )
                 row["revision"] = cursor.fetchone()["revision"]
             return SourceRevisionMigration(
-                slug, row["revision"], changed_layers, applied
+                slug, row["revision"], changed_layers, applied, upgrades_format
             )
 
     def set_map_deleted(self, slug: str, *, deleted: bool) -> None:

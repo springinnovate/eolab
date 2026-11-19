@@ -1,6 +1,7 @@
 {
   "format": "eolab-map-view",
-  "schemaVersion": 2,
+  "schemaVersion": 5,
+  "basemap": "detailed",
   "viewer": {"version": "0.6.0", "origin": "https://testserver"},
   "createdAt": "2026-09-23T12:00:00.000Z",
   "viewport": {"center": {"latitude": 0, "longitude": 0}, "zoom": 4},
