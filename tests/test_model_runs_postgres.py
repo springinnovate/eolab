@@ -705,9 +705,12 @@ def test_raster_calculator_publishes_an_owned_geotiff(model_boundary: Any) -> No
         assert output.crs.to_epsg() == 4326
         assert output.transform == rasterio.transform.from_origin(0.1, 9.9, 0.01, 0.01)
         numpy.testing.assert_array_equal(output.read(1), numpy.full((80, 80), 2.0))
-    saved = client.get(base + "/invocation").json()["invocation"]
-    assert saved["inputs"] == body["inputs"]
-    provenance = client.get(result["provenanceUrl"]).json()
+    invocation = client.get(base + "/invocation")
+    assert invocation.status_code == 200, invocation.text
+    assert invocation.json()["inputs"] == body["inputs"]
+    provenance_download = client.get(result["provenanceUrl"])
+    assert provenance_download.status_code == 200, provenance_download.text
+    provenance = provenance_download.json()
     assert provenance["grid"]["transform"] == result["grid"]["transform"]
     assert (
         provenance["inputs"]["calculation"]["expression"]
