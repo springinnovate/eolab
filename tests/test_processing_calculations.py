@@ -539,6 +539,64 @@ def test_operation_mismatch_and_language_rejected_before_admission(
     )
 
 
+@pytest.mark.parametrize("operation", ["", "obsolete.operation.v1"])
+def test_job_operation_survives_discarded_spec_and_rejects_untyped_handles(
+    boundary: Any, store: Any, operation: str
+) -> None:
+    """Keep typed job status after input cleanup and reject unsupported stored types.
+
+    Args:
+        boundary: Real Processing HTTP endpoints and a session-owned job.
+        store: Disposable database in which the execution specification is discarded.
+        operation: Historical blank discriminator or an unsupported stored operation.
+    """
+    client, worker, *_ = boundary
+    clip = clip_inputs(client)
+    key = uuid4().hex
+    job = submitted(client, clip, key)
+    assert asyncio.run(worker.run_once())
+    identifier = job["jobId"]
+    path = f"/api/processing/jobs/{identifier}"
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET spec=NULL WHERE id="
+            "(SELECT job_id FROM processing.job_subscribers WHERE id=%s)",
+            (identifier,),
+        )
+    typed = client.get(path)
+    assert typed.status_code == 200
+    assert typed.json()["operation"] == "raster.clip.v1"
+    assert typed.json()["grid"] is None
+    result_url = typed.json()["result"]["url"]
+    assert client.get(result_url).status_code == 200
+    other = submitted(client, clip)["jobId"]
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET operation=%s WHERE id="
+            "(SELECT job_id FROM processing.job_subscribers WHERE id=%s)",
+            (operation, identifier),
+        )
+    response = client.get(path)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "unsupported_job_operation"
+    assert client.get(result_url).status_code == 409
+    statuses = client.post(
+        "/api/processing/jobs/status",
+        json={"jobIds": [identifier, other]},
+        headers=HEADERS,
+    ).json()
+    assert [job["jobId"] for job in statuses["jobs"]] == [other]
+    assert statuses["unavailableJobIds"] == [identifier]
+    assert (
+        client.post(
+            "/api/processing/raster-clips",
+            json={**clip, "requestId": key},
+            headers=HEADERS,
+        ).status_code
+        == 409
+    )
+
+
 @pytest.mark.parametrize("area_expression", [False, True])
 def test_catalog_selection_calculates(
     boundary: Any, tmp_path: Path, area_expression: bool

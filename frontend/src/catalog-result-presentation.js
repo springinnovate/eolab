@@ -50,8 +50,7 @@ function formatReadablePathSegment(segment) {
  *
  * Curated metadata supplies display text, including titles resembling paths.
  * Otherwise only scanner-supported filename endings identify paths. Native
- * vector metadata supplies the layer and source asset; legacy container titles
- * remain a fallback for Items without that metadata.
+ * vector metadata identifies a container's source asset and named layer.
  *
  * @param {Object} item STAC Item with optional title, curated metadata, native
  * vector source binding, legacy layer metadata, and source asset titles.
@@ -59,28 +58,24 @@ function formatReadablePathSegment(segment) {
  * Identity with a recognized sourcePath for filename extraction, or null for
  * descriptive text; fullTitle preserves the Item title (falling back to its id
  * or "Untitled dataset"). The layerName comes from the native source binding,
- * legacy metadata or an uncurated container title, or is null when absent.
+ * explicit layer metadata, or is null when absent.
  */
 function getCatalogSourceIdentity(item) {
     const curatedTitle = optionalLabel(item.properties?.["eolab:metadata"]?.title);
     const itemTitle = curatedTitle ?? optionalLabel(item.properties?.title);
     const itemIdentifier = optionalLabel(item.id) ?? "Untitled dataset";
     const fullTitle = itemTitle ?? itemIdentifier;
-    const titleParts = fullTitle.split(" — ");
-    const titlePath = titleParts.slice(0, -1).join(" — ");
-    const hasContainerLayer = curatedTitle === null && titleParts.length > 1
-        && /\.(?:gdb|gpkg)$/i.test(titlePath);
     const vectorSource = item.properties?.["eolab:vector_source"];
-    const layerName = optionalLabel(vectorSource?.layer_name)
+    const nativeLayerName = optionalLabel(vectorSource?.layer_name);
+    const layerName = nativeLayerName
         ?? optionalLabel(item.properties?.["eolab:layer_name"])
-        ?? optionalLabel(item.properties?.["eolab:geopackage_layer"])
-        ?? optionalLabel(hasContainerLayer ? titleParts.at(-1) : null);
+        ?? optionalLabel(item.properties?.["eolab:geopackage_layer"]);
 
     if (curatedTitle !== null) {
         return { sourcePath: null, fullTitle, layerName };
     }
 
-    let sourcePath = hasContainerLayer ? titlePath : fullTitle;
+    let sourcePath = fullTitle;
     if (layerName !== null) {
         const pathSegments = sourcePath.replaceAll("\\", "/").split("/");
         if (
@@ -91,8 +86,9 @@ function getCatalogSourceIdentity(item) {
             sourcePath = pathSegments.slice(0, -1).join("/");
         }
         const assetTitle = optionalLabel(item.assets?.[vectorSource?.asset_key]?.title);
-        if (CATALOG_FILE_PATH.test(sourcePath) && assetTitle !== null
-            && CATALOG_FILE_PATH.test(assetTitle)) {
+        const namedContainerTitle = nativeLayerName !== null && /\.(?:gpkg|gdb) — /i.test(fullTitle);
+        if (assetTitle !== null && CATALOG_FILE_PATH.test(assetTitle)
+            && (CATALOG_FILE_PATH.test(sourcePath) || namedContainerTitle)) {
             sourcePath = assetTitle;
         }
     }

@@ -385,6 +385,7 @@ def test_upload_burst_waits_in_order_with_bounded_capacity(tmp_path: Path) -> No
         async with storage.stage(f"{index:064x}", "vector", chunks()) as pending:
             record = UploadRecord(
                 id=uuid4(),
+                kind="vector",
                 name=str(index),
                 size_bytes=pending.size_bytes,
                 created_at=datetime.now(timezone.utc),
@@ -569,6 +570,7 @@ def test_byte_budgets_reject_and_remove_incoming_files(
                 pending,
                 UploadRecord(
                     id=uuid4(),
+                    kind="vector",
                     name="Too much metadata",
                     size_bytes=5,
                     created_at=datetime.now(timezone.utc),
@@ -649,22 +651,37 @@ def test_deleted_original_remains_charged_until_all_jobs_stop(
     assert restarted.summary(owner).used_bytes == 0
 
 
+@pytest.mark.parametrize("kind", ["vector", "raster"])
 def test_expiry_withdraws_access_before_sweep_and_preserves_original_date(
     tmp_path: Path,
+    kind: UploadKind,
 ) -> None:
     """Trust existing admission records and expire without opening their datasets.
 
     Args:
-        tmp_path: Disposable volume with an existing untyped GeoPackage record.
+        tmp_path: Disposable upload volume.
+        kind: Published kind to remove from an otherwise intact record.
     """
     storage = UploadStorage(tmp_path)
     owner = "a" * 64
-    record = asyncio.run(admit(storage, owner))
-    _, source = storage.get_upload_source(owner, record.id, "vector")
+    record = asyncio.run(admit(storage, owner, kind))
+    _, source = storage.get_upload_source(owner, record.id, kind)
     token = storage.retain_source(source)
     metadata_path = source.parent / "metadata.json"
     existing = json.loads(metadata_path.read_text())
     existing.pop("kind")
+    metadata_path.write_text(json.dumps(existing))
+    storage.initialize()
+    assert storage.summary(owner).uploads == []
+    assert storage.summary(owner).used_files == 1
+    for requested in ("vector", "raster"):
+        assert not storage.is_available(record.id, requested)
+        with pytest.raises(UploadError) as unavailable:
+            storage.get_upload_source(owner, record.id, requested)
+        assert unavailable.value.status == 404
+    peer = asyncio.run(admit(storage, owner, "raster"))
+    assert storage.summary(owner).uploads == [peer]
+    storage.delete(owner, peer.id)
     existing["created_at"] = (
         datetime.now(timezone.utc) - timedelta(days=8)
     ).isoformat()

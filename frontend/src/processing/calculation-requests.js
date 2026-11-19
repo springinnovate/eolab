@@ -13,6 +13,7 @@ export class CalculationRequests {
      */
     constructor(dependencies) {
         this.dependencies = dependencies;
+        this.session = dependencies.storage;
         this.clients = new Map();
         this.activeAreas = new Map();
     }

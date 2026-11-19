@@ -172,7 +172,6 @@ def build_habitat_submission(
         operation=queued.operation,
         specification=queued.model_dump(mode="json", by_alias=True),
         summary={},
-        reserved_bytes=0,
     )
 
 
@@ -265,7 +264,6 @@ async def prepare_habitat(
         operation=prepared.operation,
         specification=prepared.model_dump(mode="json", by_alias=True),
         summary={},
-        reserved_bytes=0,
     )
 
 

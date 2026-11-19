@@ -107,16 +107,16 @@ def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
 
     Args:
         store: Isolated lifecycle port; SQL fencing is tested with PostgreSQL.
-        row: Mutable job that will receive prepared inputs and disk reservation.
+        row: Mutable job that will receive the prepared inputs.
     """
 
     def save(identifier: str, attempt: str, prepared: Any) -> dict[str, Any]:
-        """Return the fields a successful storage reservation publishes.
+        """Return the inputs and metadata that the worker saves after preparation.
 
         Args:
             identifier: Claimed job ID.
             attempt: Current attempt ID.
-            prepared: Validated specification, summary and disk reservation.
+            prepared: Validated specification and display metadata.
 
         Returns:
             Updated job row for execution.
@@ -125,7 +125,6 @@ def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
             **row,
             "spec": prepared.specification,
             "summary": prepared.summary,
-            "reserved_bytes": prepared.reserved_bytes,
             "retained_metadata": prepared.retained_metadata,
         }
 

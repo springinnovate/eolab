@@ -204,7 +204,7 @@ class PostgresJobStore:
         Call once at worker startup, after stopping the previous worker and its
         native processes. Queued, running and cancelling jobs become interrupted;
         completed results and cached values are unchanged. Keep attempt files and
-        reservations until the worker's normal cleanup removes them. Existing
+        recorded file sizes until normal cleanup removes the files. Existing
         job notifications tell browsers to read the interrupted status.
 
         Returns:
@@ -213,6 +213,7 @@ class PostgresJobStore:
         Raises:
             ProcessingError: If PostgreSQL cannot update the jobs.
         """
+
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,"
@@ -631,7 +632,6 @@ class PostgresJobStore:
                             job_id,
                             self.limits.result_ttl_seconds,
                             Jsonb(expected.specification),
-                            expected.reserved_bytes,
                             Jsonb(expected.summary),
                             expected.operation,
                             expected.work_key,
@@ -673,7 +673,7 @@ class PostgresJobStore:
                 if new_jobs:
                     cursor.executemany(
                         "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds,result_ttl_seconds,input_uploads) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,0,%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:
@@ -711,7 +711,6 @@ class PostgresJobStore:
 
         Returns:
             Updated running job without reserving disk or returning it to the queue.
-            Historical reservation fields remain readable but are not admission limits.
 
         Raises:
             ProcessingError: If ownership was lost, cancellation won or storage failed.
@@ -728,7 +727,7 @@ class PostgresJobStore:
                 )
             cursor.execute(
                 "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),"
-                "reserved_bytes=0,progress=%s,updated_at=clock_timestamp() "
+                "progress=%s,updated_at=clock_timestamp() "
                 "WHERE id=%s RETURNING *",
                 (
                     Jsonb(prepared.specification),
@@ -1156,7 +1155,6 @@ class PostgresJobStore:
                 return None
             cursor.execute(
                 "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',"
-                "reserved_bytes=0,"
                 "started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
                 (
                     uuid4().hex,
@@ -1179,7 +1177,7 @@ class PostgresJobStore:
             progress: Bounded, owner-defined progress fields.
 
         Returns:
-            False after cancellation, lost lease, or deadline expiration.
+            False after cancellation or loss of the attempt or its lease.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -1212,8 +1210,7 @@ class PostgresJobStore:
             identifier: Running job.
             attempt: Execution fencing token.
             artifact: Atomically published immutable result, or None on failure.
-                Manifest-backed results replace the working reservation with their
-                exact retained byte count, including every file and the inventory.
+                Manifest-backed results record the retained bytes of every file and the inventory.
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
                 input hash. Stored only if this attempt becomes ready.
@@ -1222,8 +1219,7 @@ class PostgresJobStore:
             True only if the still-current attempt reached the requested state.
 
         Raises:
-            ProcessingError: If retained files exceed the admitted reservation or
-                durable storage is unavailable.
+            ProcessingError: If durable storage is unavailable.
             ValidationError: If the supplied manifest violates its storage contract.
         """
         with self._transaction(acquire_lock=True) as cursor:
@@ -1466,8 +1462,8 @@ class PostgresJobStore:
         cleanup acknowledgements do not prune.
 
         Returns:
-            At most 100 rows with no active transfer or dependent job; budgets remain reserved
-            until the worker confirms filesystem cleanup.
+            At most 100 jobs whose files have no active transfer or dependent job.
+            Their byte counts are cleared after the worker removes the files.
 
         Raises:
             ProcessingError: If the database cannot update expiration or read jobs.

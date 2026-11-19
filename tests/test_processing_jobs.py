@@ -497,13 +497,13 @@ def test_job_store_admits_operation_data_without_raster_fields(
     prepared = PreparedJobPlan(
         specification={"operation": "test.summary.v1", "fields": ["year"]},
         summary={"operation": "test.summary.v1", "label": "Year summary"},
-        reserved_bytes=4096,
+        operation="test.summary.v1",
     )
     submitted_job = store.submit(
         "owner", "summary-request", prepared, "fixture-input-hash"
     )
     assert submitted_job["spec"] == prepared.summary
-    assert submitted_job["reserved_bytes"] == 4096
+    assert submitted_job["reserved_bytes"] == 0
     assert store.get(submitted_job["id"], "owner")["spec"] == prepared.summary
     assert store.list_owned("owner")[0]["spec"] == prepared.summary
     assert (
@@ -750,7 +750,9 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     pending = store.submit(
         "owner",
         "before-restart",
-        PreparedJobPlan({"operation": "test.v1"}, {"label": "Test"}, 4096),
+        PreparedJobPlan(
+            {"operation": "test.v1"}, {"label": "Test"}, operation="test.v1"
+        ),
         "a" * 64,
     )
 
@@ -928,7 +930,9 @@ def test_worker_restart_interrupts_unfinished_jobs(
         store: Disposable real PostgreSQL adapter.
         status: Unfinished state retained from the stopped worker.
     """
-    prepared = PreparedJobPlan({"operation": "test.v1"}, {"label": "Test"}, 4096)
+    prepared = PreparedJobPlan(
+        {"operation": "test.v1"}, {"label": "Test"}, operation="test.v1"
+    )
     completed = store.submit("owner", "completed-request", prepared, "a" * 64)
     claimed = store.claim_next_job()
     assert claimed["id"] == completed["id"]
@@ -957,9 +961,7 @@ def test_worker_restart_interrupts_unfinished_jobs(
         store.find_request("other-owner", "unfinished-request")["status"]
         == expected_status
     )
-    # Claimed jobs no longer reserve bytes, but still retain files for cleanup.
-    # Queued historical plans can carry estimates until their first claim.
-    assert interrupted["reserved_bytes"] == (4096 if status == "queued" else 0)
+    assert interrupted["reserved_bytes"] == 0
     assert pending["id"] in {row["id"] for row in store.cleanup_candidates()}
     if status != "queued":
         assert not store.heartbeat(pending["id"], pending["attempt_id"], {})

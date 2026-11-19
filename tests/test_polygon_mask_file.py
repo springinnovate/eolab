@@ -16,12 +16,10 @@ from shapely.geometry import Polygon, box, mapping
 from shapely.ops import transform as transform_geometry
 
 import eolab_app.processing.raster_mask as masks
-from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
+from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.job_preparation import prepare_aggregate_job
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.raster.read_cancellation import RasterReadCancelled
-from raster_aggregate_support import make_spec
 from raster_fixture_support import write_source
 
 
@@ -160,9 +158,6 @@ def test_polygon_mask_writes_without_disk_estimates(
     monkeypatch.setattr(shutil, "disk_usage", forbidden)
     source = write_source(tmp_path / "source.tif", np.ones((8, 8), dtype="uint8"))
     with rasterio.open(source) as dataset:
-        area = AggregateArea(kind="bounds", bounds=tuple(dataset.bounds))
-        plan = make_spec(source, ["sum(a)"], area)
-        assert prepare_aggregate_job(plan, RasterAggregateLimits()).reserved_bytes == 0
         with masks.temporary_polygon_mask(
             dataset,
             Window(0, 0, 8, 8),

@@ -1058,7 +1058,7 @@ def test_retained_parent_does_not_block_child_preparation(
     )
     claimed = store.claim_next_job()
     prepared = PreparedJobPlan(
-        claimed["spec"], claimed["summary"], 2**40, operation=claimed["operation"]
+        claimed["spec"], claimed["summary"], operation=claimed["operation"]
     )
     saved = store.save_prepared_job(child["jobId"], claimed["attempt_id"], prepared)
     assert saved["status"] == "running" and saved["reserved_bytes"] == 0

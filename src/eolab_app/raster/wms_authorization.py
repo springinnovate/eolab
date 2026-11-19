@@ -15,16 +15,16 @@ from eolab_app.rendering.errors import PublishedLayerRequestError
 from eolab_app.calculated_fields import CalculatedField
 
 RASTER_WMS_STYLE_NAME = "dynamic-raster"
-_STYLE_ENVIRONMENT_KEYS = frozenset(
-    {"min", "med", "max", "cmin", "cmed", "cmax"}
+_STYLE_OPACITY_KEYS = ("amin", "amed", "amax")
+_GRADIENT_KEYS = frozenset(
+    ("min", "med", "max", "cmin", "cmed", "cmax", *_STYLE_OPACITY_KEYS)
 )
 _STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-_STYLE_OPACITY_KEYS = frozenset({"amin", "amed", "amax"})
 _EXACT_VALUE_KEYS = frozenset({"vexact", "cexact", "aexact"})
 _STYLE_ENVIRONMENT_ERROR = (
-    "env must define ordered finite min, med, and max values plus cmin, "
-    "cmed, and cmax six-digit hex colors, optionally followed by amin, "
-    "amed, and amax finite opacities from 0 through 1"
+    "env requires ordered finite min, med, and max values, six-digit hex "
+    "colors for cmin, cmed, and cmax, and opacities from 0 through 1 "
+    "for amin, amed, and amax"
 )
 
 
@@ -32,7 +32,8 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
     """Parse validated substitutions consumed by the dynamic raster SLD.
 
     Args:
-        environment: Untrusted WMS ``env`` query value.
+        environment: Three thresholds, three colors and three opacities, with
+            an optional value, color and opacity for a single-value override.
 
     Returns:
         Exact validated assignment names and serialized values.
@@ -40,19 +41,15 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
     Raises:
         PublishedLayerRequestError: If the dynamic raster style is malformed.
     """
-    fields = environment.split(";")
-    if len(environment) > 384 or len(fields) not in (6, 9, 12):
+    if len(environment) > 384:
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     assignments = {}
-    for field in fields:
+    for field in environment.split(";"):
         name, separator, value = field.partition(":")
         if separator == "" or name in assignments:
             raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
         assignments[name] = value
-    if assignments.keys() - _EXACT_VALUE_KEYS not in (
-        _STYLE_ENVIRONMENT_KEYS,
-        _STYLE_ENVIRONMENT_KEYS | _STYLE_OPACITY_KEYS,
-    ):
+    if assignments.keys() - _EXACT_VALUE_KEYS != _GRADIENT_KEYS:
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     exact_keys = assignments.keys() & _EXACT_VALUE_KEYS
     if exact_keys:
@@ -74,7 +71,7 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
             float(assignments[name]) for name in ("min", "med", "max")
         )
         opacities = tuple(
-            float(assignments.get(name, "1")) for name in _STYLE_OPACITY_KEYS
+            float(assignments[name]) for name in _STYLE_OPACITY_KEYS
         )
     except ValueError as error:
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR) from error
@@ -99,8 +96,8 @@ def validate_raster_style_environment(environment: str) -> None:
 
     Raises:
         PublishedLayerRequestError: If the value does not contain exactly the
-            six threshold/color assignments, with either all three bounded
-            opacity assignments or none, and an optional complete exact-value rule.
+            three thresholds, three colors and three bounded opacities, with
+            an optional complete exact-value rule.
     """
     parse_raster_style_environment(environment)
 

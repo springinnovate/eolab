@@ -323,7 +323,7 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
                     "layerName": "eolab:continuous",
                     "styleName": "dynamic-raster",
                     "styleEnvironment": (
-                        "min:10;med:20;max:30;cmin:#ff0000;cmed:#00ff00;cmax:#0000ff"
+                        "min:10;med:20;max:30;cmin:#ff0000;cmed:#00ff00;cmax:#0000ff;amin:1;amed:1;amax:1"
                     ),
                     "opacity": 0.25,
                 },
@@ -336,7 +336,7 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
                 {
                     "layerName": "eolab:continuous",
                     "styleName": "dynamic-raster",
-                    "styleEnvironment": "min:0;med:5;max:10;cmin:#000000;cmed:#888888;cmax:#ffffff",
+                    "styleEnvironment": "min:0;med:5;max:10;cmin:#000000;cmed:#888888;cmax:#ffffff;amin:1;amed:1;amax:1",
                     "opacity": 0.75,
                 },
             ]

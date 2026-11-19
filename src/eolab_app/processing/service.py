@@ -107,6 +107,38 @@ HABITAT_PREPARATION_OPERATIONS = (
 )
 """Individual and bulk jobs visible through Habitat administration."""
 
+RASTER_JOB_OPERATIONS = ("raster.clip.v1", "raster.aggregate.v1")
+"""Operations shown in the browser's recent raster job list."""
+
+PUBLIC_JOB_OPERATIONS = (
+    *RASTER_JOB_OPERATIONS,
+    MODEL_OPERATION,
+    *HABITAT_PREPARATION_OPERATIONS,
+)
+"""Stored job operations with public status and result contracts."""
+
+
+def get_stored_job_operation(row: dict[str, Any]) -> str:
+    """Return the stored operation that identifies an owned job's public contract.
+
+    Args:
+        row: Job record returned by the ownership check, even after input cleanup.
+
+    Returns:
+        The versioned operation used to select status fields and result links.
+
+    Raises:
+        ProcessingError: If the stored operation is missing or unsupported.
+    """
+    operation = row.get("operation")
+    if operation not in PUBLIC_JOB_OPERATIONS:
+        raise ProcessingError(
+            "unsupported_job_operation",
+            "This job has a missing or unsupported processing operation.",
+            409,
+        )
+    return operation
+
 
 def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
     """Describe an authorized individual or bulk preparation and its retained report.
@@ -180,14 +212,9 @@ def require_operation(row: dict[str, Any], operation: str | tuple[str, ...]) -> 
         operation: One supported operation or the endpoint's allowed operations.
 
     Raises:
-        ProcessingError: When the supplied job belongs to a different operation.
+        ProcessingError: If the stored operation is unsupported or does not match.
     """
-
-    actual = (
-        row.get("operation")
-        or (row.get("spec") or {}).get("operation")
-        or "raster.clip.v1"
-    )
+    actual = get_stored_job_operation(row)
     if actual not in ((operation,) if isinstance(operation, str) else operation):
         raise ProcessingError(
             "operation_mismatch",
@@ -204,10 +231,14 @@ def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Public lifecycle, grid, source, and result links without storage metadata.
+
+    Raises:
+        ProcessingError: If the stored operation is missing or unsupported.
     """
-    if row.get("operation") == MODEL_OPERATION:
+    operation = get_stored_job_operation(row)
+    if operation == MODEL_OPERATION:
         return serialize_model_job(row)
-    if row.get("operation") in HABITAT_PREPARATION_OPERATIONS:
+    if operation in HABITAT_PREPARATION_OPERATIONS:
         return serialize_habitat_input_preparation(row)
     identifier = row["id"]
     spec = row.get("spec") or {}
@@ -228,7 +259,6 @@ def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
     if status == "ready" and row["expires_at"] <= datetime.now(timezone.utc):
         status = "expired"
     ready = status == "ready"
-    operation = row.get("operation") or spec.get("operation") or "raster.clip.v1"
     calculation = operation == "raster.aggregate.v1"
     return {
         "jobId": identifier,
@@ -1741,7 +1771,7 @@ class ProcessingService:
             At most 50 public job summaries, newest first.
         """
         rows = await asyncio.to_thread(
-            self.jobs.list_owned, owner, ("raster.clip.v1", "raster.aggregate.v1")
+            self.jobs.list_owned, owner, RASTER_JOB_OPERATIONS
         )
         return [serialize_processing_job(row) for row in rows]
 
@@ -1756,10 +1786,14 @@ class ProcessingService:
 
         Returns:
             Public jobs and unavailable IDs, each in request order with duplicates
-            removed. Foreign and nonexistent IDs are indistinguishable.
+            removed. Foreign, nonexistent and unsupported jobs are unavailable.
         """
         rows = await asyncio.to_thread(self.jobs.read_owned_jobs, owner, identifiers)
-        by_id = {row["id"]: row for row in rows}
+        by_id = {
+            row["id"]: row
+            for row in rows
+            if row.get("operation") in PUBLIC_JOB_OPERATIONS
+        }
         requested = list(dict.fromkeys(identifiers))
         return {
             "jobs": [
@@ -1871,12 +1905,13 @@ class ProcessingService:
             also carries small replacement bytes using this caller's formula labels.
 
         Raises:
-            ProcessingError: If unavailable, expired, or transfer capacity is full.
+            ProcessingError: If the job is unavailable, unsupported or expired, or transfer capacity is full.
         """
         row, lease = await asyncio.to_thread(
             self.jobs.acquire_transfer, identifier, owner
         )
         try:
+            operation = get_stored_job_operation(row)
             artifact = row["artifact"]
             path = await asyncio.to_thread(
                 self.artifacts.result_path,
@@ -1898,7 +1933,7 @@ class ProcessingService:
                 )
                 media_type = artifact["media_type"]
             content = None
-            if row.get("presentation") and row["operation"] != MODEL_OPERATION:
+            if row.get("presentation") and operation != MODEL_OPERATION:
                 rows = present_calculation_rows(artifact["rows"], row["presentation"])
                 content = statistics_csv(rows)
                 if provenance:
@@ -1916,7 +1951,7 @@ class ProcessingService:
                     content = json.dumps(document, allow_nan=False).encode("utf-8")
                 size = len(content)
                 sha256 = hashlib.sha256(content).hexdigest()
-            if row["operation"] == MODEL_OPERATION:
+            if operation == MODEL_OPERATION:
                 output_name = (
                     "provenance" if provenance else row["summary"]["output"]["name"]
                 )

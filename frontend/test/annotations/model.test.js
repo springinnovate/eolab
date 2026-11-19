@@ -193,12 +193,16 @@ test("stored contributor names must be bounded text before label rendering", () 
 });
 
 
-test("saved positions accept older documents and reject invalid stack indices", () => {
+test("saved drawings require their positions in the full Map contents stack", () => {
     const annotations = model();
     annotations.createLayer(); annotations.createLayer();
     const saved = annotations.document();
-    saved.layers.forEach(layer => { delete layer.position; });
-    assert.deepEqual(readAnnotationLayers(saved).map(layer => layer.position), [0, 1]);
+    saved.layers[0].position = 7;
+    saved.layers[1].position = 2;
+    assert.deepEqual(readAnnotationLayers(saved).map(layer => layer.position), [7, 2]);
+    delete saved.layers[1].position;
+    assert.throws(() => readAnnotationLayers(saved), /position/);
+    saved.layers[1].position = 2;
     for (const position of [-1, 1.5, "2", null, Number.MAX_SAFE_INTEGER + 1]) {
         saved.layers[0].position = position;
         assert.throws(() => readAnnotationLayers(saved), /position/);
