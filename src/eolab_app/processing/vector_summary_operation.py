@@ -68,7 +68,6 @@ def build_vector_summary_submission(
             mode="json", by_alias=True
         ),
         summary={},
-        reserved_bytes=0,
     )
 
 
@@ -91,7 +90,6 @@ async def prepare_vector_summary(
             mode="json", by_alias=True
         ),
         summary={},
-        reserved_bytes=0,
     )
 
 

@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS processing.jobs (
     summary jsonb NOT NULL DEFAULT '{}'::jsonb,
     attempt_id text,
     lease_until timestamptz,
-    deadline_at timestamptz,
     progress jsonb NOT NULL DEFAULT '{}'::jsonb,
     artifact jsonb,
     error jsonb
@@ -95,8 +94,6 @@ INSERT INTO processing.schema_version VALUES (10) ON CONFLICT DO NOTHING;
 
 -- A computation owns execution and files; subscribers own public handles.
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS work_key text;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS execution_memory_bytes bigint NOT NULL DEFAULT 0;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS required_disk_bytes bigint NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_work ON processing.jobs(work_key)
     WHERE work_key IS NOT NULL AND status IN ('queued','running');
 CREATE TABLE IF NOT EXISTS processing.job_subscribers (
@@ -175,7 +172,7 @@ SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        CASE WHEN s.status='cancelling' AND j.status<>'cancelling' THEN 'cancelled'
             ELSE coalesce(s.status,j.status) END AS status,
        j.operation,CASE WHEN j.spec IS NULL THEN NULL ELSE j.summary END AS spec,
-       j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,
+       j.reserved_bytes,j.attempt_id,j.lease_until,j.progress,
        CASE WHEN s.status IS NULL THEN j.artifact END AS artifact,
        CASE WHEN s.status IS NULL THEN j.error END AS error,
        j.summary,j.metadata_expires_at,s.deletion_id,s.deletion_undo_until,
@@ -227,7 +224,7 @@ FOR EACH ROW EXECUTE FUNCTION processing.notify_execution_capacity();
 INSERT INTO processing.schema_version VALUES (12) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (13) ON CONFLICT DO NOTHING;
 
--- Resource accounting need not visit cleaned history with no disk reservation.
+-- Only jobs with retained files need byte accounting.
 CREATE INDEX IF NOT EXISTS jobs_reserved_bytes ON processing.jobs(reserved_bytes)
     WHERE reserved_bytes>0;
 CREATE INDEX IF NOT EXISTS jobs_pending_cleanup ON processing.jobs(updated_at)
@@ -242,7 +239,7 @@ INSERT INTO processing.schema_version VALUES (16) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (17) ON CONFLICT DO NOTHING;
 
 -- Accepted inputs outlive ordinary parent expiry and deletion until the child
--- stops. Parent reservations account for their bytes exactly once, even when
+-- stops. The parent records the published byte count once, even when
 -- several children retain the same files. These are not download leases.
 CREATE TABLE IF NOT EXISTS processing.input_files (
     job_id text NOT NULL REFERENCES processing.jobs(id) ON DELETE CASCADE,

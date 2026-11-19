@@ -135,7 +135,6 @@ def build_series_submission(
             "statistic": request.statistic,
             "grid": None,
         },
-        reserved_bytes=0,
         operation=queued.operation,
     )
 
@@ -192,7 +191,6 @@ async def prepare_temporal_series(
             "grid": spec.grid.model_dump(mode="json"),
             "area": spec.area.model_dump(mode="json"),
         },
-        reserved_bytes=0,
         operation=spec.operation,
     )
 

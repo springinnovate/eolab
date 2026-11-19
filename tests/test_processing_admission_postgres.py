@@ -34,9 +34,7 @@ def make_plan(
     Returns:
         Plan ID and the immutable data admitted by its application owner.
     """
-    plan = PreparedJobPlan(
-        {"input": payload}, {"label": "test"}, 1024, operation="test.v1"
-    )
+    plan = PreparedJobPlan({"input": payload}, {"label": "test"}, operation="test.v1")
     return payload, plan
 
 
@@ -250,7 +248,7 @@ def test_failed_subscriber_insert_rolls_back_the_entire_submission(
         store: Disposable PostgreSQL with the real subscriber size constraint.
         batch: Include a valid neighbor in the transaction that must roll back.
     """
-    plan = PreparedJobPlan({}, {}, 0, operation="test.v1", work_key="atomic")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="atomic")
     oversized = replace(plan, presentation={"label": "x" * 32769})
     with pytest.raises(ProcessingError) as failed:
         if batch:
@@ -285,7 +283,7 @@ def test_admission_returns_after_commit_and_lock_release(
         store: Disposable PostgreSQL store.
     """
     accepted = store.submit(
-        "owner", "committed", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+        "owner", "committed", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
     )
     with psycopg.connect(store.conninfo) as connection:
         assert connection.execute(
@@ -306,7 +304,7 @@ def test_retry_precedes_stopping_work_and_capacity_decisions(
     Args:
         store: Disposable PostgreSQL store with one expired-lease worker.
     """
-    plan = PreparedJobPlan({}, {}, 0, operation="test.v1", work_key="retry-work")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="retry-work")
     original = store.submit("owner", "retry", plan, "hash")
     assert store.claim_next_job()["id"] == original["job_id"]
     with psycopg.connect(store.conninfo) as connection:
@@ -532,11 +530,11 @@ def test_retained_files_do_not_block_new_preparation(store: PostgresJobStore) ->
     admit(store, "first", make_plan(store, "first"))
     finish(store, store.claim_next_job())
     pending = store.submit(
-        "second", "new", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+        "second", "new", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
     )
     claimed = store.claim_next_job()
     assert claimed["id"] == pending["job_id"]
-    prepared = PreparedJobPlan({"input": "prepared"}, {}, 2**40, operation="test.v1")
+    prepared = PreparedJobPlan({"input": "prepared"}, {}, operation="test.v1")
     saved = store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
     assert saved["status"] == "running" and saved["reserved_bytes"] == 0
     assert saved["attempt_id"] == claimed["attempt_id"]
@@ -550,7 +548,7 @@ def test_identical_work_with_a_lost_lease_can_retry_after_attempt_stops(
     Args:
         store: Disposable PostgreSQL retaining the old worker's execution slot.
     """
-    plan = PreparedJobPlan({}, {}, 0, operation="test.v1", work_key="same-work")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="same-work")
     first = store.submit("first", "one", plan, "hash")
     claimed = store.claim_next_job()
     with psycopg.connect(store.conninfo) as connection:
@@ -611,7 +609,7 @@ def test_shared_cancelled_and_deleted_handles_retain_history_capacity(
     Args:
         store: Disposable PostgreSQL with independent handle and queue limits.
     """
-    plan = PreparedJobPlan({}, {}, 0, operation="test.v1", work_key="shared-history")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="shared-history")
     cancelled = store.submit("returning", "old", plan, "hash")
     deleted = store.submit("departed", "old", plan, "hash")
     keeper = store.submit("keeper", "live", plan, "hash")
@@ -648,7 +646,7 @@ def test_owner_waiting_budget_ignores_nonqueued_persisted_history(
     )
     history = [
         store.submit(
-            "owner", status, PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+            "owner", status, PreparedJobPlan({}, {}, operation="test.v1"), "hash"
         )
         for status in statuses
     ]
@@ -660,13 +658,13 @@ def test_owner_waiting_budget_ignores_nonqueued_persisted_history(
             )
     assert (
         store.submit(
-            "owner", "waiting", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+            "owner", "waiting", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
         )["status"]
         == "queued"
     )
     assert (
         store.submit(
-            "owner", "extra", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+            "owner", "extra", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
         )["status"]
         == "queued"
     )
@@ -685,10 +683,10 @@ def test_zero_disk_active_attempt_still_occupies_execution_capacity(
     """
     store.limits = replace(store.limits, worker_count=1)
     first = store.submit(
-        "first", "one", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+        "first", "one", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
     )
     waiting = store.submit(
-        "second", "two", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash"
+        "second", "two", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
     )
     claimed = store.claim_next_job()
     assert claimed["id"] == first["job_id"] and claimed["reserved_bytes"] == 0
@@ -716,7 +714,7 @@ def test_retained_terminal_files_do_not_reserve_capacity(
         status: Terminal state whose files have not yet been removed.
     """
     retained = store.submit(
-        "retained", "old", PreparedJobPlan({}, {}, 80, operation="test.v1"), "hash"
+        "retained", "old", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
     )
     old = store.claim_next_job()
     assert store.finish(old["id"], old["attempt_id"], Artifact(80, "0" * 64, "old.csv"))
@@ -725,14 +723,13 @@ def test_retained_terminal_files_do_not_reserve_capacity(
             "UPDATE processing.jobs SET status=%s WHERE id=%s",
             (status, retained["job_id"]),
         )
-    store.submit("next", "new", PreparedJobPlan({}, {}, 0, operation="test.v1"), "hash")
+    store.submit("next", "new", PreparedJobPlan({}, {}, operation="test.v1"), "hash")
     current = store.claim_next_job()
-    for reservation in (20, 2**40):
-        saved = store.save_prepared_job(
-            current["id"],
-            current["attempt_id"],
-            PreparedJobPlan({"prepared": True}, {}, reservation, operation="test.v1"),
-        )
-        assert saved["status"] == "running" and saved["reserved_bytes"] == 0
-        assert saved["attempt_id"] == current["attempt_id"]
+    saved = store.save_prepared_job(
+        current["id"],
+        current["attempt_id"],
+        PreparedJobPlan({"prepared": True}, {}, operation="test.v1"),
+    )
+    assert saved["status"] == "running" and saved["reserved_bytes"] == 0
+    assert saved["attempt_id"] == current["attempt_id"]
     assert store.get(retained["id"], "retained")["reserved_bytes"] == 80
