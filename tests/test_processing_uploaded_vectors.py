@@ -8,6 +8,7 @@ import hashlib
 from pathlib import Path
 from threading import Event
 from typing import Any, TypeAlias
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import fiona
@@ -512,6 +513,21 @@ def test_second_vector_input_rejection_releases_unused_retention(
     assert all(not path.exists() for path in retained)
 
 
+def catalog_filtered_by(owner: TestClient, boundary: dict[str, Any]) -> dict[str, Any]:
+    """Select the fixture's public polygon layer using one private boundary.
+
+    Args:
+        owner: Browser with the mounted catalog item.
+        boundary: Polygon source used in the intersection condition.
+
+    Returns:
+        A complete catalog selection for a Processing request.
+    """
+    item = owner.app.state.vector_item
+    return {"collectionId": item["collection"], "itemId": item["id"], "assetKey": "data", "layerName": "areas",
+            "filter": {"rules": [{"operator": "intersects", "layerId": str(uuid4()), "source": boundary}]}}
+
+
 @pytest.mark.parametrize(
     ("operation", "boundary"),
     [("clip", None), ("summary", None), ("model-clip", None), ("model-summary", None), ("clip", "upload"), ("clip", "drawing")],
@@ -533,16 +549,15 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
     owner, worker, service, uploads, selection = upload_boundary
     target = selection
     if boundary == "upload":
-        item = owner.app.state.vector_item
-        target = {"collectionId": item["collection"], "itemId": item["id"], "assetKey": "data", "layerName": "areas",
-                  "filter": {"rules": [{"operator": "intersects", "layerId": str(uuid4()), "source": selection}]}}
+        target = catalog_filtered_by(owner, selection)
     elif boundary == "drawing":
         reference = SavedDrawingReference(drawingLayerId=uuid4(), revision=1, featureIds=["boundary"])
         revision = 1
 
         async def read_drawing(owner_hash: str, requested: SavedDrawingReference) -> tuple[SummaryPolygon, ...]:
             """Supply the selected boundary only while its requested revision is current."""
-            assert owner_hash and requested == reference
+            assert owner_hash and requested.drawingLayerId == reference.drawingLayerId
+            assert requested.featureIds == reference.featureIds
             if requested.revision != revision:
                 raise ProcessingError("drawing_changed", "The drawing changed.", 409)
             return (SummaryPolygon(coordinates=(((0, -1), (1, -1), (1, 1), (0, 1), (0, -1)),)),)
@@ -577,8 +592,7 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
         owner.post(endpoint, json=body, headers=HEADERS).json()["jobId"] == job["jobId"]
     )
     if boundary == "drawing":
-        reference = reference.model_copy(update={"revision": revision})
-        rule["source"]["polygonArea"] = reference.model_dump(mode="json")
+        rule["source"]["polygonArea"] = reference.model_copy(update={"revision": revision}).model_dump(mode="json")
     _, new_request = processing_request(owner, target, operation)
     rejected = owner.post(endpoint, json=new_request, headers=HEADERS)
     assert rejected.status_code == 404, rejected.text
@@ -619,19 +633,45 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
     assert replay.json().get("jobId") == job["jobId"], replay.text
 
 
+def test_clip_retry_recovers_the_accepted_job_after_a_drawing_changes(upload_boundary: UploadBoundary) -> None:
+    """Reuse the original clip request after its drawing changes, and reject a new one.
+
+    Args:
+        upload_boundary: Processing HTTP endpoint and mounted public polygon layer.
+    """
+    owner, _, service, _, _ = upload_boundary
+    drawing = SavedDrawingReference(drawingLayerId=uuid4(), revision=1, featureIds=["boundary"])
+    read = AsyncMock(return_value=(SummaryPolygon(coordinates=(((0, 0), (1, 0), (1, 1), (0, 0)),)),))
+    service.read_filter_drawing = read
+    target = catalog_filtered_by(owner, {"kind": "drawing", "polygonArea": drawing.model_dump(mode="json")})
+    endpoint, request = processing_request(owner, target, "clip")
+    accepted = owner.post(endpoint, json=request, headers=HEADERS)
+    assert accepted.status_code == 202, accepted.text
+    read.side_effect = ProcessingError("drawing_changed", "The drawing changed.", 409)
+    retry = owner.post(endpoint, json=request, headers=HEADERS)
+    assert retry.json().get("jobId") == accepted.json()["jobId"], retry.text
+    fresh = owner.post(endpoint, json={**request, "requestId": uuid4().hex}, headers=HEADERS)
+    assert fresh.status_code == 409, fresh.text
+
+
+@pytest.mark.parametrize("use_boundary", [False, True], ids=["uploaded-target", "uploaded-boundary"])
 def test_batch_keeps_accepted_upload_and_rejects_foreign_neighbor(
     upload_boundary: UploadBoundary,
     store: PostgresJobStore,
+    use_boundary: bool,
 ) -> None:
     """Authorize each batch item without preventing valid neighbors from running.
 
     Args:
         upload_boundary: Actual private upload and Processing components.
         store: Disposable job database containing the accepted batch.
+        use_boundary: Filter a public target against the private upload.
     """
     owner, worker, service, uploads, selection = upload_boundary
-    endpoint, body = processing_request(owner, selection, "summary")
-    missing = {**selection, "uploadId": str(uuid4())}
+    valid, missing = selection, {**selection, "uploadId": str(uuid4())}
+    if use_boundary:
+        valid, missing = catalog_filtered_by(owner, valid), catalog_filtered_by(owner, missing)
+    endpoint, body = processing_request(owner, valid, "summary")
     response = owner.post(
         endpoint + "/batch",
         headers=HEADERS,
