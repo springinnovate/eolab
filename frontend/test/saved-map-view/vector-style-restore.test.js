@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
-import { decodeSavedMapViewFragment, encodeSavedMapViewFragment } from "../../src/saved-map-view/fragment-codec.js";
-import { createSavedMapView, MAX_SAVED_MAP_VIEW_BYTES, parseSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
+import { createSavedMapView } from "../../src/saved-map-view/model.js";
+import { createNamedMapFixture } from "../../test-support/named-map.js";
 import { createVectorMapLayerAdapter } from "../../src/vector/map-layer-adapter.js";
 import { parseCategoricalVectorCsv } from "../../src/vector/categorical-csv.js";
 
@@ -53,6 +53,7 @@ function featureColor(style, value) {
  * @return {Object} Controllers, staged records and observable external-boundary calls.
  */
 function createVectorRestoreFixture(automaticBoundary) {
+  const publication = createNamedMapFixture();
   const records = [], classifications = [], styleCalls = [], filterCalls = [];
   const adapter = createVectorMapLayerAdapter({
     leaflet: { tileLayer: { wms: (_url, parameters) => ({
@@ -93,14 +94,14 @@ function createVectorRestoreFixture(automaticBoundary) {
     return { record, layer };
   }
   const view = {
-    result: null, fragment: null, bind: () => {}, setBusy: () => {}, showLoading: () => {},
-    setUnavailableLayerCount: () => {}, hideUndoReset: () => {}, showCopied: () => {},
+    result: null, bind: () => {}, setBusy: () => {}, showLoading: () => {},
+    setUnavailableLayerCount: () => {}, hideUndoReset: () => {}, showPublishedMapEditor: () => {},
+    setPublishedMapSaving: () => {}, showPublishedMapEditStatus: () => {},
     showError: error => { throw error; },
     showResults: result => { view.result = result; },
-    copyLink: async fragment => { view.fragment = fragment; return { copied: true }; },
   };
   const controller = new SavedMapViewController({
-    view, viewerOrigin: ORIGIN, viewerVersion: "test",
+    ...publication.editor, view, viewerOrigin: ORIGIN, viewerVersion: "test",
     viewport: { snapshot: () => VIEWPORT, restore: () => {} },
     mapLayers: { retainedRecords: records,
       commitStaged: staged => { records.push(...staged.map(value => value.record)); },
@@ -114,19 +115,20 @@ function createVectorRestoreFixture(automaticBoundary) {
     exportTemporal: () => null, restoreTemporal: async () => { assert.fail("Unexpected temporal source"); },
     exportUpload: () => null, restoreUpload: async () => { assert.fail("Unexpected private upload"); },
   });
-  return { controller, adapter, stage, records, view, classifications, styleCalls, filterCalls };
-}
-
-/**
- * Round-trip exported vector views through the portable document and compressed map link.
- * @param {Object[]} layers Exported layer settings with Catalog identity.
- * @return {Promise<string>} Encoded share fragment consumed by the real controller.
- */
-async function savedFragment(layers) {
-  return encodeSavedMapViewFragment(serializeSavedMapView(createSavedMapView({
-    viewer: { origin: ORIGIN, version: "test" }, createdAt: "2026-11-16T12:00:00Z",
-    viewport: VIEWPORT, layers,
-  })), { maximumInputBytes: MAX_SAVED_MAP_VIEW_BYTES });
+  /**
+   * Open the named map after its author publishes these layer settings.
+   * @param {Object[]} layers Ordered portable layer definitions.
+   * @return {Promise<void>} Completion after the real controller restores the map.
+   */
+  async function openLayers(layers) {
+    publication.record.view = createSavedMapView({
+      viewer: { origin: ORIGIN, version: "test" }, createdAt: "2026-11-16T12:00:00Z",
+      viewport: VIEWPORT, layers,
+    });
+    await controller.restoreStartupView();
+  }
+  return { openLayers, save: () => publication.saveEdits(controller), adapter, stage, records, view,
+    classifications, styleCalls, filterCalls };
 }
 
 for (const { boundary, automatic, value, color } of [
@@ -143,7 +145,7 @@ for (const { boundary, automatic, value, color } of [
       filter: { enabled: true, match: "all", rules: [{ field: "score", operator: "gt", value: boundary - 10 }] },
     };
     assert.equal(featureColor(saved.style.definition, value), color);
-    await f.controller.openSharedFragment(await savedFragment([saved]));
+    await f.openLayers([saved]);
     assert.deepEqual(f.view.result, { loaded: 1, total: 1, details: [] });
     const restored = f.records[0];
     const rendered = JSON.parse(restored.state.layer.wmsParams.vector_style);
@@ -154,8 +156,7 @@ for (const { boundary, automatic, value, color } of [
     assert.equal(restored.entry.opacity, 0.6);
     assert.equal(restored.entry.customName, saved.customName);
     assert.deepEqual(f.classifications.map(call => call.classCount), [5, 5], "only initial publication classifies");
-    await f.controller.copyMapLink();
-    const resaved = parseSavedMapView(await decodeSavedMapViewFragment(f.view.fragment, { maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES }));
+    const resaved = await f.save();
     assert.deepEqual(resaved.layers, [saved]);
 
     const targetItem = { ...CATALOG_ITEM, id: "other-measurements" };
@@ -178,13 +179,12 @@ test("independent custom views of the same Catalog source retain different saved
     customName: `Threshold ${boundary}`, style: { kind: "vector", definition: graduatedStyle(boundary) },
     filter: { enabled: false, match: "all", rules: [] }, calculatedFields: [],
   }));
-  await f.controller.openSharedFragment(await savedFragment(layers));
+  await f.openLayers(layers);
   assert.deepEqual(f.view.result, { loaded: 2, total: 2, details: [] });
   assert.notEqual(f.records[0].entry.key, f.records[1].entry.key);
   assert.deepEqual(f.records.map(record => featureColor(JSON.parse(record.state.layer.wmsParams.vector_style), 60)),
     ["#440154", "#fde725"]);
-  await f.controller.copyMapLink();
-  assert.deepEqual(parseSavedMapView(await decodeSavedMapViewFragment(f.view.fragment, { maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES })).layers, layers);
+  assert.deepEqual((await f.save()).layers, layers);
 });
 
 test("saved vector restoration still validates geometry, fields and unsupported style data", async () => {
@@ -194,10 +194,10 @@ test("saved vector restoration still validates geometry, fields and unsupported 
     { ...graduatedStyle(80), unsupported: true },
   ]) {
     const f = createVectorRestoreFixture(50);
-    await f.controller.openSharedFragment(await savedFragment([{
+    await f.openLayers([{
       catalogItem: { collection: CATALOG_ITEM.collection, id: CATALOG_ITEM.id },
       visible: true, opacity: 1, style: { kind: "vector", definition },
-    }]));
+    }]);
     assert.equal(f.view.result.loaded, 1);
     assert.match(f.view.result.details[0], /saved style was not applied/);
     assert.equal(f.records[0].state.style.graduated.rules[0].maximum, 50);
@@ -255,11 +255,10 @@ test("saved uniform vector appearance replaces automatic numeric colors exactly"
     style: { kind: "vector", definition: { ...BASE_STYLE, fillColor: "#00aa33", strokeWidth: 3 } },
     filter: { enabled: false, match: "all", rules: [] }, calculatedFields: [],
   };
-  await f.controller.openSharedFragment(await savedFragment([saved]));
+  await f.openLayers([saved]);
   assert.deepEqual(f.view.result, { loaded: 1, total: 1, details: [] });
   assert.deepEqual(JSON.parse(f.records[0].state.layer.wmsParams.vector_style), saved.style.definition);
-  await f.controller.copyMapLink();
-  assert.deepEqual(parseSavedMapView(await decodeSavedMapViewFragment(f.view.fragment, { maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES })).layers, [saved]);
+  assert.deepEqual((await f.save()).layers, [saved]);
 });
 
 test("saved calculated fields are installed before restoring their exact style and filter", async t => {
@@ -278,12 +277,11 @@ test("saved calculated fields are installed before restoring their exact style a
     style: { kind: "vector", definition: graduatedStyle(80, "Scaled") },
     filter: { enabled: true, match: "all", rules: [{ field: "Scaled", operator: "gt", value: 40 }] },
   };
-  await f.controller.openSharedFragment(await savedFragment([saved]));
+  await f.openLayers([saved]);
   assert.deepEqual(f.view.result, { loaded: 1, total: 1, details: [] });
   assert.deepEqual(f.styleCalls.at(-1).source.calculatedFields, calculatedFields);
   assert.deepEqual(f.filterCalls.at(-1).source.calculatedFields, calculatedFields);
   assert.deepEqual(JSON.parse(f.records[0].state.layer.wmsParams.vector_style), saved.style.definition);
   assert.deepEqual(JSON.parse(f.records[0].state.layer.wmsParams.vector_calculated_fields), calculatedFields);
-  await f.controller.copyMapLink();
-  assert.deepEqual(parseSavedMapView(await decodeSavedMapViewFragment(f.view.fragment, { maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES })).layers, [saved]);
+  assert.deepEqual((await f.save()).layers, [saved]);
 });

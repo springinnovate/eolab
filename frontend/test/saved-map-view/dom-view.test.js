@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  createSavedMapViewUrl,
-  SavedMapViewDomView,
-} from "../../src/saved-map-view/dom-view.js";
-
-test("re-shared links keep simplified viewer mode", () => {
-  const url = new URL(createSavedMapViewUrl("https://viewer.example/?viewer=shared#view=old", "#view=new"));
-  assert.equal(url.searchParams.get("viewer"), "shared");
-  assert.equal(url.hash, "#view=new");
-});
+import { SavedMapViewDomView } from "../../src/saved-map-view/dom-view.js";
 
 /** Build the minimal semantic DOM required by the shared-map view. */
 function viewFixture() {
@@ -149,23 +140,6 @@ test("publication dialog suggests editable names, keeps errors inline and expose
   view.location.href = "https://viewer.example/maps/my-map?viewer=shared#private";
   assert.deepEqual(await view.copyNamedMapLink("my-map"), { copied: false, url: "https://viewer.example/maps/my-map" });
   view.unbind();
-});
-
-test("saved map URL keeps the viewer location and replaces its fragment", () => {
-  assert.equal(
-    createSavedMapViewUrl(
-      "https://viewer.example/map?preview=1#old-anchor",
-      "#view=abc_123",
-    ),
-    "https://viewer.example/map?preview=1#view=abc_123",
-  );
-});
-
-test("saved map URL requires the owned fragment prefix", () => {
-  assert.throws(
-    () => createSavedMapViewUrl("https://viewer.example/", "#other=value"),
-    /complete saved-map fragment/,
-  );
 });
 
 test("successful shared maps dismiss loading without a final click", () => {

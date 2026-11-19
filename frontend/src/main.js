@@ -1976,9 +1976,9 @@ async function initializeCatalog(
             vectorSampling.refresh();
             summarySampling.refresh();
         });
-        const restoringMap = savedMapViewController.restoreStartupView(globalThis.location.hash);
+        const restoringMap = savedMapViewController.restoreStartupView();
         void Promise.all([annotationsReady, restoringMap]).then(() => {
-            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash,
+            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null,
                 mapOrderedLayerIds: [...annotationSessions.bookmarkedLayerIds(),
                     ...annotations.drawingLayers().filter(layer => layer.drawingLayerId).map(layer => layer.localLayerId)] });
             void annotationSessions.refresh();

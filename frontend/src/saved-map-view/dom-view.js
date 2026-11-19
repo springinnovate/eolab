@@ -302,17 +302,6 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Copy a fragment on the current viewer URL when Clipboard API access works.
-     *
-     * @param {string} fragment Validated complete `#view=` fragment.
-     * @return {Promise<{copied:boolean,url:string}>} Copy result and share URL.
-     */
-    async copyLink(fragment) {
-        const url = createSavedMapViewUrl(this.location.href, fragment);
-        return this.copyUrl(url);
-    }
-
-    /**
      * Copy the original named map, excluding private presentation changes and fragments.
      * @param {string} slug Named map's URL name.
      * @return {Promise<{copied:boolean,url:string}>} Copy result and canonical URL.
@@ -524,22 +513,6 @@ export class SavedMapViewDomView {
         this.dialog.removeEventListener("cancel", this.blockCancel);
         if (blocked) this.dialog.addEventListener("cancel", this.blockCancel);
     }
-}
-
-/**
- * Place a validated saved-map fragment on the current viewer URL.
- *
- * @param {string} currentHref Current complete viewer URL.
- * @param {string} fragment Complete validated fragment including `#`.
- * @return {string} Complete share URL.
- */
-export function createSavedMapViewUrl(currentHref, fragment) {
-    if (typeof fragment !== "string" || !fragment.startsWith("#view=")) {
-        throw new TypeError("A complete saved-map fragment is required.");
-    }
-    const url = new URL(currentHref);
-    url.hash = fragment.slice(1);
-    return url.href;
 }
 
 /**
