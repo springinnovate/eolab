@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
+from rasterio.crs import CRS
 from rasterio.transform import from_bounds, from_origin
 from rasterio.warp import transform_bounds
 
@@ -148,6 +149,37 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     assert provenance["inputs"]["calculation"]["expression"] == "max(0, b - a)"
     assert str(a) not in json.dumps(provenance)
     assert not list(tmp_path.glob("aligned-*"))
+
+
+def test_custom_grid_accepts_equivalent_crs_in_published_tiff(tmp_path: Path) -> None:
+    """Publish a NAD83 grid after GDAL normalizes its stored CRS definition."""
+    source = write_source(
+        tmp_path / "source.tif",
+        np.ones((10, 10), dtype="uint8"),
+        transform=from_origin(-124, 46, 0.1, 0.1),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(
+                kind="custom", crs="EPSG:4269", pixelSize=(0.25, 0.25)
+            ),
+        ),
+        selectedBounds=Wgs84Bounds(west=-124, south=45, east=-123, north=46),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == 16
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert output.crs == CRS.from_epsg(4269)
+        assert output.transform == from_origin(-124, 46, 0.25, 0.25)
+        np.testing.assert_array_equal(output.read(1), np.ones((4, 4)))
 
 
 @pytest.mark.parametrize(

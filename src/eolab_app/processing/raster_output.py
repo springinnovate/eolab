@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.crs import CRS
 from rasterio.shutil import copy as copy_raster
 
 from eolab_app.processing.artifact_manifest import ProducedFile
@@ -58,8 +59,7 @@ def write_float64_cog(
             or result.height != grid.height
             or result.count != 1
             or result.dtypes != ("float64",)
-            or result.crs is None
-            or result.crs.to_wkt() != grid.crs
+            or result.crs != CRS.from_wkt(grid.crs)
             or tuple(result.transform)[:6] != grid.transform
             or result.nodata is None
             or not math.isnan(result.nodata)
