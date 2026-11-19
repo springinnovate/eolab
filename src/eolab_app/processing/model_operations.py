@@ -820,11 +820,7 @@ OPERATIONS = MappingProxyType(
                 bind=raster.bind_clip,
                 source=raster.get_clip_source,
                 polygon_inputs=lambda request: {},
-                vector_selections=lambda request: (
-                    {"area": request.catalogSelection}
-                    if request.catalogSelection is not None
-                    else {}
-                ),
+                vector_selections=raster.get_clip_vector_selections,
                 queue=lambda request, polygons: raster.build_clip_submission(
                     request, None
                 ),

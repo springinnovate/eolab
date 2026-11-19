@@ -51,6 +51,7 @@ function acrossFeatures(rows) {
   const controller = new VectorTimeSeriesController({ documentContext,
     onVisibilityChange() {}, onPresentationChange() {},
     onFeatureZoom: focus => { zooms.push(focus); return true; },
+    onNavigateSelection() {},
   });
   controller.setSample({ state: "ready", observations, message: "" });
   for (const [id, value] of [["x", "visit"], ["chart-type", "bar"]]) {

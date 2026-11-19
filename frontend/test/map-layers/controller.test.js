@@ -136,6 +136,40 @@ test("Catalog removal targets follow live names and topmost source matches, incl
     } finally { controller.destroy(); }
 });
 
+test("a saved local source replaces the duplicate at its existing key, order and presentation", async () => {
+    const map = createMap(), view = createView();
+    const controller = new MapLayerController({leafletMap: map, view});
+    const adapter = createAdapter("Vector");
+    const describe = adapter.renderDescriptor;
+    adapter.renderDescriptor = record => describe({
+        ...record, entry: {...record.entry, item: record.entry.item ?? record.publication},
+    });
+    const item = catalogItem("watersheds");
+    const key = getCatalogItemKey(item), copyKey = "local:view:duplicate";
+    await controller.show(item, adapter);
+    const copy = await controller.stage(item, adapter, {key: copyKey, isCustom: true, customName: "Project area", opacity: 0.42});
+    controller.restoreStagedLayer(copy, 1);
+    controller.setLegendIncluded(copyKey, false);
+    const before = controller.getRecord(copyKey);
+    const original = controller.getRecord(key);
+    const staged = controller.stageLocal({
+        key: copyKey, label: "Saved watershed", sourceName: "Saved watershed",
+        publication: {id: "saved-copy"}, canAddView: true, isDuplicate: true,
+    }, adapter, before);
+    assert.equal(controller.getRecord(copyKey), before, "preparation keeps the old source current");
+    assert.equal(controller.replaceStagedLayer(before, staged), true);
+    assert.deepEqual(view.layers.map(layer => layer.key), [key, copyKey]);
+    assert.equal(controller.getRecord(key), original);
+    assert.equal(controller.findLayerKey(item), key, "Catalog membership follows the surviving Catalog view");
+    assert.equal(controller.getRecord(copyKey).publication.id, "saved-copy");
+    assert.equal(controller.getLeafletLayer(copyKey).opacity, 0.42);
+    assert.equal(view.layers[1].label, "Project area");
+    assert.equal(view.layers[1].legendIncluded, false);
+    assert.equal(controller.getRecord(copyKey).isDuplicate, true);
+    assert.equal(controller.replaceStagedLayer(before, staged), false);
+    controller.destroy();
+});
+
 /** Create a Catalog Item with the identity required by the layer boundary. */
 function catalogItem(id) {
     return { collection: "observations", id };
@@ -1216,6 +1250,7 @@ test("legend inclusion changes presentation without changing visibility or reque
 test("opacity updates preserve rows and send rendering, owner persistence and composed consumers the current value", async () => {
     const doc = new SummaryControlDocument(), view = new MapLayerStackView(doc);
     const calls = [], plans = [], saved = [], ownerSaves = [], timelineLayers = [];
+    const edit = {key: null, close() { calls.push(["geometry-close"]); this.key = null; }};
     let controller;
     const source = await readFile(new URL("../../src/main.js", import.meta.url), "utf8");
     const start = source.indexOf("onLayersChange:", source.indexOf("const mapLayerController = new MapLayerController"));
@@ -1223,7 +1258,8 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     const observer = new Function("mapLegend", "layerStyleEditor", "mapFeatureHover", "savedMapViewController",
         "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
         "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
-        "temporalDatasets", "planning", "timeline", "refreshSpatialFilters", "mapInteractionTools", "rasterClips",
+        "temporalDatasets", "planning", "timeline", "refreshSpatialFilters", "mapInteractionTools", "rasterClips", "polygonGeometryEditor",
+        "polygonGroups", "getPolygonTargets",
         `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
         { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
         { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
@@ -1236,7 +1272,8 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
         { refreshMapLayers: () => calls.push(["planning"]) },
         { setLayers: layers => timelineLayers.push(layers) },
         () => calls.push(["spatial-filters"]), { refresh: () => calls.push(["map-tools"]) },
-        { syncLayerDownloads: () => calls.push(["downloads"]) },
+        { syncLayerDownloads: () => calls.push(["downloads"]) }, edit,
+        { updateLayers: () => calls.push(["polygon-groups"]) }, () => [],
     );
     const map = createMap();
     controller = new MapLayerController({ leafletMap: map, view, onLayersChange: observer,
@@ -1258,8 +1295,12 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     assert.equal(controller.getLeafletLayer(key).opacity, 0.75);
     calls.length = 0;
     controller.setVisible(key, false);
-    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models", "planning", "downloads", "spatial-filters", "map-tools"]) {
+    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "polygon-groups", "models", "planning", "downloads", "spatial-filters", "map-tools"]) {
         assert.ok(calls.some(([called]) => called === name), `${name} still receives general layer changes`);
     }
+    edit.key = key;
+    controller.removeKey(key);
+    assert.equal(edit.key, null);
+    assert.equal(calls.filter(([name]) => name === "geometry-close").length, 1);
     controller.destroy();
 });

@@ -1,5 +1,5 @@
 /** Draw ordered numeric observations for vector and raster series with D3. */
-import { extent, line as seriesLine, scaleLinear, scaleLog } from "d3";
+import { extent, line as seriesLine, max, scaleLinear, scaleLog, schemeTableau10, stack, stackOffsetDiverging } from "d3";
 import { bindChartInspection, createSvgElement, drawChartAxes } from "./chart-presentation.js";
 
 const CHART_WIDTH = 680;
@@ -56,6 +56,21 @@ function ordinalTickIndexes(count, maximum = 7) {
         { length: maximum },
         (_, index) => Math.round(index * (count - 1) / (maximum - 1))
     ))];
+}
+
+/**
+ * Activate a chart mark by pointer, Enter, or Space.
+ * @param {SVGElement} mark Selectable data mark.
+ * @param {()=>void} select Publish the mark's selection.
+ * @return {void}
+ */
+function bindSeriesPointSelection(mark, select) {
+    mark.addEventListener("click", select);
+    mark.addEventListener("keydown", event => {
+        if (!["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        select();
+    });
 }
 
 /**
@@ -305,14 +320,7 @@ export function renderOrdinalSeriesChart({
                 "data-point-index": index,
                 "aria-label": pointAccessibleLabel(point, item, index),
             });
-            if (selectable) {
-                circle.addEventListener("click", () => onPointSelect(point));
-                circle.addEventListener("keydown", (event) => {
-                    if (!["Enter", " "].includes(event.key)) return;
-                    event.preventDefault();
-                    onPointSelect(point);
-                });
-            }
+            if (selectable) bindSeriesPointSelection(circle, () => onPointSelect(point));
             if (onInspect) bindChartInspection(circle, { series: item, point, index }, onInspect, inspectionState);
             else circle.append(createSvgElement(
                 documentContext,
@@ -327,4 +335,136 @@ export function renderOrdinalSeriesChart({
     chart.append(...pointGroups);
     chart.removeAttribute("hidden");
     return { pointElements, xDomain: horizontal.domain(), yDomain: y.domain() };
+}
+
+/**
+ * Draw horizontal stacks of numeric readings with one row per observation.
+ * Positive and negative readings extend from zero in opposite directions.
+ * Missing readings paint no segment, while an all-zero row is labeled zero.
+ * Mark labels and selection callbacks use the caller's original readings.
+ *
+ * @template {{yValue:number|null}} Point
+ * @param {Object} configuration Stacked chart inputs.
+ * @param {Document} configuration.documentContext Owning document.
+ * @param {SVGSVGElement} configuration.chart Empty target SVG.
+ * @param {HTMLUListElement} configuration.legend Field legend to replace and display.
+ * @param {{id:string,label:string,points:Point[]}[]} configuration.series
+ * Nonempty field series with unique IDs and one finite or missing reading per row.
+ * @param {string[]} configuration.rowLabels Observation labels aligned to every series.
+ * @param {string} configuration.valueAxisLabel Horizontal numeric axis title.
+ * @param {string} configuration.ariaLabel Accessible chart description.
+ * @param {(point:Point,field:string)=>string} configuration.describePoint Exact segment label and tooltip.
+ * @param {(point:Point,field:string)=>void} configuration.onPointSelect Segment activation callback.
+ * @param {number} [configuration.width=680] Measured chart width in screen pixels.
+ * @return {{pointElements:{circle:SVGElement,point:Point}[]}} Selectable marks and their original readings.
+ */
+export function renderStackedSeriesChart({
+    documentContext, chart, legend, series, rowLabels, valueAxisLabel, ariaLabel,
+    describePoint, onPointSelect, width = CHART_WIDTH,
+}) {
+    const rowIndexes = rowLabels.map((_, index) => index);
+    const largest = max(series, item => max(item.points, point => Math.abs(point.yValue ?? 0)));
+    const exponent = Math.floor(Math.log10(largest || 1));
+    const axisExponent = exponent >= 6 || exponent <= -4 ? Math.max(-308, exponent) : 0;
+    const divisor = 10 ** axisExponent;
+    const stacks = stack()
+        .keys(series.map((_, index) => index))
+        .value((row, field) => (series[field].points[row].yValue ?? 0) / divisor)
+        .offset(stackOffsetDiverging)(rowIndexes);
+    let minimum = 0;
+    let maximum = 0;
+    for (const parts of stacks) {
+        for (const [start, end] of parts) {
+            minimum = Math.min(minimum, start);
+            maximum = Math.max(maximum, end);
+        }
+    }
+
+    const chartWidth = Math.max(200, width);
+    const labelLimit = Math.max(6, Math.min(26, Math.floor((chartWidth * 0.38 - 12) / 9)));
+    const tickLabels = rowLabels.map(label => formatTickLabel(label, labelLimit));
+    const left = tickLabels.reduce((space, label) => Math.max(space, 9 * label.length + 12), 44);
+    const plot = {left, top: 8, width: chartWidth - left - 14, height: rowLabels.length * 30};
+    const height = plot.top + plot.height + 36;
+    const horizontal = scaleLinear([minimum, minimum === maximum ? 1 : maximum], [left, left + plot.width]);
+    const vertical = scaleLinear([-0.5, rowLabels.length - 0.5], [plot.top, plot.top + plot.height]);
+    const zero = horizontal(0);
+    chart.setAttribute("viewBox", `0 0 ${chartWidth} ${height}`);
+    chart.setAttribute("aria-label", ariaLabel);
+    const axes = drawChartAxes(documentContext, chart, plot, {
+        scale: horizontal,
+        values: horizontal.ticks(Math.max(2, Math.floor(plot.width / 74))),
+        format: formatSeriesNumber,
+        edgeLabels: true,
+    }, {
+        scale: vertical, values: rowIndexes, format: index => tickLabels[index],
+    }, [{
+        text: axisExponent ? `${valueAxisLabel} (×10^${axisExponent})` : valueAxisLabel,
+        x: left + plot.width / 2, y: height - 4,
+    }], 11);
+    [...axes.querySelectorAll(".series-chart-y-axis .tick")].forEach((tick, index) => {
+        if (rowLabels[index] !== tickLabels[index]) {
+            tick.append(createSvgElement(documentContext, "title", {}, rowLabels[index]));
+        }
+    });
+    if (minimum < 0) {
+        chart.append(createSvgElement(documentContext, "line", {
+            class: "series-chart-zero", "aria-hidden": "true",
+            x1: zero, x2: zero, y1: plot.top, y2: plot.top + plot.height,
+        }));
+    }
+
+    const colors = new Map(series.map(item => item.id).toSorted().map((id, index) => [
+        id, schemeTableau10[index] ?? `hsl(${index * 137.508 % 360} 57% 46%)`,
+    ]));
+    legend.replaceChildren();
+    for (const item of series) {
+        const key = documentContext.createElement("li");
+        key.textContent = item.label;
+        key.setAttribute("style", `--series-color: ${colors.get(item.id)}`);
+        legend.append(key);
+    }
+    legend.hidden = false;
+
+    const pointElements = [];
+    for (const row of rowIndexes) {
+        let hasReading = false;
+        let hasNonzeroReading = false;
+        const center = vertical(row);
+        for (const parts of stacks) {
+            const item = series[parts.key];
+            const point = item.points[row];
+            if (point.yValue === null) continue;
+            hasReading = true;
+            if (point.yValue === 0) continue;
+            hasNonzeroReading = true;
+            const [start, end] = parts[row];
+            const x = horizontal(start);
+            const segmentWidth = horizontal(end) - x;
+            if (segmentWidth <= 0) continue;
+            const description = describePoint(point, item.id);
+            const mark = createSvgElement(documentContext, "rect", {
+                class: "series-chart-point series-chart-bar",
+                x, y: center - 10, width: segmentWidth, height: 20,
+                tabindex: 0, role: "button", "aria-pressed": "false", "aria-label": description,
+                "data-point-index": row,
+                "data-series-id": item.id,
+                style: `--series-color: ${colors.get(item.id)}`,
+            });
+            bindSeriesPointSelection(mark, () => onPointSelect(point, item.id));
+            mark.append(createSvgElement(documentContext, "title", {}, description));
+            chart.append(mark);
+            pointElements.push({circle: mark, point});
+        }
+        if (!hasNonzeroReading) {
+            const rightOfZero = left + plot.width - zero >= 55;
+            chart.append(createSvgElement(documentContext, "text", {
+                class: "series-chart-empty-stack",
+                x: zero + (rightOfZero ? 6 : -6), y: center, dy: "0.35em",
+                "text-anchor": rightOfZero ? "start" : "end",
+            }, hasReading ? "0" : "No values"));
+        }
+    }
+    chart.removeAttribute("hidden");
+    return {pointElements};
 }

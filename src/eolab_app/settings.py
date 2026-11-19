@@ -166,7 +166,7 @@ class Settings:
         basemap_attribution: Browser basemap attribution.
         carto_basemap_api_key: Optional browser-visible CARTO basemap key.
             Blank disables the CARTO option; use a domain-restricted basemap key.
-        maptiler_api_key: Optional browser-visible MapTiler map key.
+        maptiler_api_key: Optional browser-visible key for MapTiler tiles and place search.
             Blank disables satellite imagery; restrict the key to viewer domains.
         initial_latitude: Initial map-center latitude.
         initial_longitude: Initial map-center longitude.
@@ -182,6 +182,8 @@ class Settings:
         vector_upload_max_bytes: Optional stricter maximum bytes per GeoPackage;
             shared upload limits apply even when this value is None.
         upload_max_bytes: Maximum original bytes per new upload across formats.
+        upload_owner_max_files: Maximum number of files one browser may store
+            across upload formats, including pending and retained originals.
         upload_owner_max_bytes: Maximum stored upload bytes for one browser owner.
         upload_global_max_bytes: Maximum stored upload bytes for the application.
         raster_upload_max_decoded_bytes: Maximum uncompressed Byte mask size at upload.
@@ -229,6 +231,7 @@ class Settings:
     vector_upload_data_path: Path = Path("/vector-uploads").absolute()
     vector_upload_max_bytes: int | None = None
     upload_max_bytes: int = 100 * 1024**2
+    upload_owner_max_files: int = 100
     upload_owner_max_bytes: int = 500 * 1024**2
     upload_global_max_bytes: int = 10 * 1024**3
     raster_upload_max_decoded_bytes: int = 256 * 1024**2
@@ -308,6 +311,7 @@ class Settings:
             raise ValueError("VECTOR_UPLOAD_MAX_BYTES must be greater than zero")
         for name, value in (
             ("UPLOAD_MAX_BYTES", self.upload_max_bytes),
+            ("UPLOAD_OWNER_MAX_FILES", self.upload_owner_max_files),
             ("UPLOAD_OWNER_MAX_BYTES", self.upload_owner_max_bytes),
             ("UPLOAD_GLOBAL_MAX_BYTES", self.upload_global_max_bytes),
             ("RASTER_UPLOAD_MAX_DECODED_BYTES", self.raster_upload_max_decoded_bytes),
@@ -426,7 +430,9 @@ class Settings:
             basemap URL and attribution strings, and numeric initial-view
             latitude, longitude, and zoom values. When configured, basemap.carto
             and basemap.maptiler contain tile URLs with browser-visible keys,
-            attribution, and native zoom limits. Internal service URLs are not exposed.
+            attribution, and native zoom limits. The optional placeSearch entry
+            provides the browser-visible MapTiler key for forward geocoding.
+            Internal service URLs are not exposed.
         """
         basemap: dict[str, object] = {
             "url": self.basemap_url,
@@ -462,7 +468,7 @@ class Settings:
                 ),
                 "maxNativeZoom": 22,
             }
-        return {
+        configuration: dict[str, object] = {
             "appTitle": self.app_title,
             "appSubtitle": self.app_subtitle,
             "appVersion": self.app_version,
@@ -477,6 +483,9 @@ class Settings:
                 "zoom": self.initial_zoom,
             },
         }
+        if self.maptiler_api_key:
+            configuration["placeSearch"] = {"apiKey": self.maptiler_api_key}
+        return configuration
 
     def scan_display_paths(self) -> tuple[str, ...]:
         """Build user-facing locations for the configured scan directories.
@@ -531,6 +540,15 @@ def load_settings(
         raise ValueError("SCAN_PATHS_WITHIN_MOUNT must be a JSON array of paths")
 
     raw_upload_max_bytes = os.environ.get("VECTOR_UPLOAD_MAX_BYTES", "").strip()
+    try:
+        upload_owner_max_files = int(
+            os.environ.get(
+                "UPLOAD_OWNER_MAX_FILES", str(Settings.upload_owner_max_files)
+            )
+        )
+    except ValueError as error:
+        raise ValueError("UPLOAD_OWNER_MAX_FILES must be a positive integer") from error
+
     return Settings(
         saved_map_capacity=int(os.environ.get("SAVED_MAP_CAPACITY", "1000")),
         shared_layer_capacity=int(os.environ.get("SHARED_LAYER_CAPACITY", "10000")),
@@ -621,6 +639,7 @@ def load_settings(
             int(raw_upload_max_bytes) if raw_upload_max_bytes else None
         ),
         upload_max_bytes=int(os.environ.get("UPLOAD_MAX_BYTES", str(100 * 1024**2))),
+        upload_owner_max_files=upload_owner_max_files,
         upload_owner_max_bytes=int(os.environ.get("UPLOAD_OWNER_MAX_BYTES", str(500 * 1024**2))),
         upload_global_max_bytes=int(os.environ.get("UPLOAD_GLOBAL_MAX_BYTES", str(10 * 1024**3))),
         raster_upload_max_decoded_bytes=int(

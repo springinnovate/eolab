@@ -95,4 +95,13 @@ test("default numeric colors consume API-validated constants with and without nu
         assert.equal(styled.graduated.missingColor, nullCount > 0 ? "#d1d5db" : null);
         assert.equal(styled.label, null);
     }
+    const allNullSummary = await classifyVectorNumbers(
+        { collection: "vectors", id: "measurements" },
+        "score", "percentile-interval", 5,
+        async () => new Response(JSON.stringify({
+            ...summary, actualClassCount: 0, classes: [], observedMinimum: null,
+            observedMaximum: null, numericValueCount: 0, nullCount: 10,
+        })),
+    );
+    assert.deepEqual(deriveDefaultVectorStyle(initial, allNullSummary), deriveDefaultVectorStyle(initial));
 });

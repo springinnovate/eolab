@@ -66,12 +66,15 @@ import {
     createSingleWorldMap,
     observeMapViewportSize,
     getCatalogItemMapBounds,
+    getSingleWorldMapBounds,
     formatSingleWorldPosition
 } from "./map.js";
+import { addMapPlaceSearch } from "./map-place-search.js";
 import { addMapCoordinateGuide } from "./map-coordinate-guide.js";
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
 import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
+import { MapPolygonGroups } from "./map-layers/polygon-groups.js";
 import { OnMapLegend } from "./map-layers/on-map-legend.js";
 import { LeafletLayerSet } from "./map-layers/leaflet-layer-set.js";
 import { CompositeMapPlanClient } from "./map-layers/composite-api.js";
@@ -115,6 +118,8 @@ import { VectorFilterControls } from "./vector/filter-controls.js";
 import { VectorFieldCalculator } from "./vector/field-calculator.js";
 import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
+import { PolygonGeometryEditor } from "./vector/geometry-editor.js";
+import "./vector/geometry-editor.css";
 import { UploadsDialog } from "./uploads/dialog.js";
 import { getUpload, getRasterUpload } from "./uploads/api.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
@@ -186,6 +191,7 @@ let basemapControl = null;
  * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {string[]} scanDisplayPaths User-facing directories scanned recursively.
  * @property {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} basemap Background tile settings; optional providers are present only when configured.
+ * @property {{apiKey:string}} [placeSearch] Browser-visible MapTiler credentials for submitted place searches.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
 
@@ -877,9 +883,12 @@ async function initializeCatalog(
     let mapInteractionTools = null;
     let vectorFilterControls = null;
     let refreshSpatialFilters = null;
+    let polygonGeometryEditor = null;
+    let drawingEditing = false;
     let vectorFieldCalculator = null;
     let vectorSampling = null;
     let summarySampling = null;
+    let polygonGroups = null;
     let selectingMapClick = false;
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
@@ -948,6 +957,9 @@ async function initializeCatalog(
             rasterClips?.syncLayerDownloads(calculationLayers);
             refreshCatalogMapAction();
             mapInteractionTools?.refresh();
+            if (polygonGeometryEditor?.key && !layers.some(layer => layer.key === polygonGeometryEditor.key)) {
+                polygonGeometryEditor.close();
+            }
             annotations?.observeLayerOrder(layers);
             refreshSpatialFilters?.();
             rasterSeries?.updateAvailableRasters(calculationLayers, temporalDatasets(layers));
@@ -959,6 +971,7 @@ async function initializeCatalog(
             vectorFieldCalculator?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
+            polygonGroups?.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
             models?.refreshMapLayers();
             if (!layers.some((layer) =>
                 layer.capabilities?.statistics && layer.visible
@@ -1171,12 +1184,82 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => rasterVisualization.setFirstSampleHintEnabled(tool === null));
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
-        onFilterChange: () => mapLayerController.render(),
+        onFilterChange: record => {
+            if (mapLayerController.getRecord(record.entry.key) === record) mapLayerController.render();
+        },
         leaflet: L,
         leafletMap,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    /**
+     * Give edit gestures to the current layer editor and restore the chosen tool on exit.
+     * @param {boolean} editing Whether a drawing or a vector draft has the map.
+     * @return {void}
+     */
+    function setLayerEditingMode(editing) {
+        mapFeatureHover?.setEnabled(!editing);
+        mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
+        document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
+        rasterVisualization.setPointerInspectionEnabled(!editing);
+        mapInteractionTools?.setEditing(editing);
+        onLayoutChange();
+    }
+    polygonGeometryEditor = new PolygonGeometryEditor({leaflet: L, map: leafletMap,
+        onEditingChange: (editing, key) => {
+            document.querySelector("main").classList.toggle("is-editing-vector-geometry", editing);
+            setLayerEditingMode(editing);
+            if (!editing && mapLayerController.getRecord(key)) mapLayerController.render({key, action: "edit-geometry"});
+        },
+    });
+    /**
+     * Prepare and install the admitted copy at the original view key.
+     * @param {Object} previous Retained vector that started the edit.
+     * @param {import("./uploads/api.js").VectorUpload} upload Newly admitted private source.
+     * @param {AbortSignal} signal Cancellation when the editor or retained view closes.
+     * @return {Promise<void>} Completion when the existing row shows the saved copy.
+     * @throws {Error} If the source cannot be shown or the retained view has changed.
+     * @throws {DOMException} If the editor closes before attachment.
+     */
+    async function showEditedVector(previous, upload, signal) {
+        const key = previous.entry.key;
+        const source = {...upload, kind: "upload"};
+        const publication = await vectorMapLayerAdapter.publish(source);
+        signal.throwIfAborted();
+        if (mapLayerController.getRecord(key) !== previous) throw new Error("The saved file is in Your uploads.");
+        const {label, visible, opacity, customName} = previous.entry;
+        const staged = mapLayerController.stageLocal({
+            key, label, visible, opacity, customName, sourceName: upload.name, upload: source,
+            publication, isCustom: true, isDuplicate: true, canAddView: true,
+        }, vectorMapLayerAdapter, previous);
+        try {
+            await vectorMapLayerAdapter.prepareGeometryReplacement(staged.record, previous, signal);
+            if (!mapLayerController.replaceStagedLayer(previous, staged)) throw new Error("The saved file is in Your uploads.");
+        } finally {
+            if (mapLayerController.getRecord(key) !== staged.record) vectorMapLayerAdapter.discardStaged(staged.record);
+        }
+        mapLayerStackView.announceStatus(`Saved changes to ${label}.`);
+    }
+    mapLayerController.onEditGeometry = key => {
+        const record = mapLayerController.getRecord(key);
+        if (record?.adapter !== vectorMapLayerAdapter || !vectorMapLayerAdapter.canEditGeometry(record)) return;
+        if (drawingEditing || polygonGeometryEditor.key) {
+            mapLayerStackView.setStatus("Finish or cancel the current polygon edit first.");
+            return;
+        }
+        if (!record.entry.visible) {
+            mapLayerStackView.setStatus("Show the layer on the map before editing its geometry.");
+            return;
+        }
+        const {selection} = vectorMapLayerAdapter.describeSource(record);
+        const filter = vectorMapLayerAdapter.exportFilterState(record);
+        polygonGeometryEditor.open({
+            key, label: record.entry.label, source: {...selection, filter},
+            isCurrent: () => mapLayerController.getRecord(key) === record &&
+                JSON.stringify(vectorMapLayerAdapter.exportFilterState(record)) === JSON.stringify(filter),
+            showSavedCopy: (upload, signal) => showEditedVector(record, upload, signal),
+        });
+    };
     vectorFieldCalculator = new VectorFieldCalculator({document, getTarget: key => {
         const record = mapLayerController.getRecord(key);
         if (!record || record.adapter !== vectorMapLayerAdapter || !record.entry.isCustom) return null;
@@ -1334,6 +1417,7 @@ async function initializeCatalog(
         const record = mapLayerController.addLocal({
             key, label: upload.name, sourceName: upload.name, customName: layer.customName,
             upload, publication, visible: false, opacity: layer.opacity, canAddView: true, isCustom: layer.isCustom ?? true,
+            isDuplicate: layer.isDuplicate,
         }, vectorMapLayerAdapter);
         /** Check that asynchronous restoration still owns this map layer. @return {boolean} */
         const stillRetained = () => isCurrent() && mapLayerController.getRecord(key) === record;
@@ -1576,7 +1660,7 @@ async function initializeCatalog(
         /** Supply original-source choices and current map areas independently of rendering.
          * @param {Object} [options] Additional input choices requested by model setup.
          * @param {boolean} [options.includeDrawnPolygons=false] Include detached, filtered snapshots of committed polygon layers.
-         * @return {Object} Independent raster, temporal dataset, vector, polygon layer, selected area and visible map bounds.
+         * @return {Object} Original raster and vector choices, polygon groups, drawings, area and map bounds.
          */
         getContext: ({includeDrawnPolygons = false} = {}) => {
             const viewport = leafletMap.getBounds();
@@ -1588,6 +1672,7 @@ async function initializeCatalog(
                 vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, sourceOrigin: target.sourceOrigin, filter: target.filter, fields: target.fields,
                     scalarFields: target.scalarFields, numericFields: target.numericFields,
                     selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
+                polygonGroups: polygonGroups?.snapshot() ?? [],
                 drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({
                     key: target.key, label: target.label, total: target.polygons.length,
                     polygons: annotationSummaryPolygons(target.polygons, target.filter),
@@ -1638,6 +1723,13 @@ async function initializeCatalog(
         onViewLabel: label => mapInspection.setToolContext("models", { source: label, scope: "" }),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
     });
+    if (!isSharedViewer && editableMapSlug === null) {
+        polygonGroups = new MapPolygonGroups(document.querySelector("#map-polygon-groups"), {
+            storage: new SavedMapViewLocalStorage(undefined, "eolab.polygon-groups.v1"),
+            onChange: () => models.refreshMapLayers(),
+        });
+        polygonGroups.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
+    }
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
     models.start();
     mapLayerController.onGroupAction = async id => {
@@ -1848,6 +1940,7 @@ async function initializeCatalog(
             if (!record.adapter.describeSource(record).source.uploadId) return null;
             return {
                 uploadId: record.adapter.describeSource(record).source.uploadId,
+                ...(record.isDuplicate ? {isDuplicate: true} : {}),
                 visible: record.entry.visible, opacity: record.entry.opacity,
                 customName: record.entry.customName ?? [...record.entry.label].slice(0, 160).join(""),
                 style: record.adapter.exportSavedState(record),
@@ -1975,7 +2068,18 @@ async function initializeCatalog(
         },
         onPresentationChange: (identity) =>
             mapInspection.setVectorTimeSeriesIdentity(identity),
-        onFeatureZoom: zoomInspectedVectorFeature,
+        /**
+         * Highlight the original inspection result and fit its geographic bounds.
+         * @param {import("./vector/inspection-observation.js").VectorInspectionObservation["focus"]} focus
+         * Map focus from the inspected feature.
+         * @param {number} index Position in the inspector sample used by the plot.
+         * @return {boolean} Whether the map could fit the feature.
+         */
+        onFeatureZoom: (focus, index) => {
+            vectorFeatureInspector.showResult(index);
+            return zoomInspectedVectorFeature(focus);
+        },
+        onNavigateSelection: direction => vectorFeatureInspector.navigateSelection(direction),
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({
         onCompareFeatures: openFeatureComparison,
@@ -2055,6 +2159,7 @@ async function initializeCatalog(
             mapInspection.setClickResult("feature", {
                 state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
                 message,
+                ...(sample.position ? { position: sample.position } : {}),
             });
             if (sample.state === "loading" || sample.state === "ready") {
                 mapInspection.setFeatureResultCount(
@@ -2063,6 +2168,7 @@ async function initializeCatalog(
                 );
             }
         },
+        onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
         onCurrentObservationChange: (observation, navigation) =>
             vectorFeatureProfile.setCurrentObservation(observation, navigation),
         onFeatureProfileRequested: openFeaturePlot,
@@ -2127,17 +2233,19 @@ async function initializeCatalog(
             onShare: id => annotationSessions.shareLayer(id),
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
             onRenameContributor: id => annotationSessions.editContributorName(id),
-            requestEditing: id => annotationSessions.requestDrawing(id),
+            requestEditing: id => {
+                if (polygonGeometryEditor.key) {
+                    mapLayerStackView.setStatus("Finish or cancel the current polygon edit first.");
+                    return false;
+                }
+                return annotationSessions.requestDrawing(id);
+            },
             onCommittedChange: () => { annotationSessions?.committedLayersChanged(); refreshSpatialFilters?.(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
             onFilter: key => vectorFilterControls.open(key),
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
-                mapFeatureHover?.setEnabled(!editing);
-                mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
-                document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
-                rasterVisualization.setPointerInspectionEnabled(!editing);
-                mapInteractionTools?.setEditing(editing);
-                onLayoutChange();
+                drawingEditing = editing;
+                setLayerEditingMode(editing);
             },
         });
         annotationSessions = new AnnotationSessionsController({
@@ -2827,6 +2935,16 @@ async function startApplication() {
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
+    if (appGlobalConfiguration.placeSearch) {
+        addMapPlaceSearch(L, leafletMap, {
+            panel: document.querySelector("#map-place-search"),
+            toggleButton: document.querySelector("#toggle-place-search"),
+            apiKey: appGlobalConfiguration.placeSearch.apiKey,
+            storage: new SavedMapViewLocalStorage(undefined, "eolab.place-search-visibility.v1"),
+            toMapBounds: getSingleWorldMapBounds,
+            onRestoreRequested: () => mapInspection.showToolActions(),
+        });
+    }
     layoutController.registerPanelActivitySource(document.querySelector("#map-inspection"),
         listener => mapInspection.subscribeClickResultActivity(listener));
     const refreshCatalog = await initializeCatalog(

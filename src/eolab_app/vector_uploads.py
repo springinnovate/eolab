@@ -26,6 +26,7 @@ from eolab_app.upload_storage import (
     UploadError,
     UploadRecord,
     UploadStorage,
+    UploadWriter,
     finish_upload_disk_operation,
     read_stored_upload,
 )
@@ -148,14 +149,21 @@ class VectorUploadStore:
             raise VectorUploadError(error.status, str(error)) from error
 
     async def create(
-        self, owner: str, name: str, chunks: AsyncIterable[bytes]
+        self,
+        owner: str,
+        name: str,
+        chunks: AsyncIterable[bytes] | UploadWriter,
+        *,
+        identifier: UUID | None = None,
     ) -> VectorUpload:
-        """Stream and admit one private GeoPackage, then publish it atomically.
+        """Admit one private GeoPackage from a stream or writer and publish it atomically.
 
         Args:
             owner: Hash produced by the browser identity boundary.
             name: Display name validated by the upload HTTP boundary.
-            chunks: Incoming body chunks; no complete in-memory file is required.
+            chunks: Incoming body chunks or a writer for a new file within the
+                upload budget. The complete file is never buffered.
+            identifier: Optional server-assigned ID for a retriable admission.
 
         Returns:
             Published metadata describing the unchanged uploaded file.
@@ -176,7 +184,7 @@ class VectorUploadStore:
                 metadata, inventory = inspected
                 upload = VectorUpload(
                     **metadata.model_dump(),
-                    id=uuid4(),
+                    id=identifier if identifier is not None else uuid4(),
                     name=name,
                     size_bytes=pending.size_bytes,
                     created_at=datetime.now(timezone.utc),

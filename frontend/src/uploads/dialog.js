@@ -97,6 +97,7 @@ export class UploadsDialog {
         this.fileHelp.id = "upload-polygons-file-help";
         this.fileHelp.textContent = "Polygon GeoPackage (.gpkg), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored.";
         this.quotaHelp = document.createElement("p");
+        this.quotaHelp.textContent = "You've reached the upload limit. Delete an uploaded file to make room. Files still used by calculations keep their slots until those calculations stop.";
         this.quotaHelp.hidden = true;
         const nameLabel = document.createElement("label");
         nameLabel.textContent = "Layer name";
@@ -232,7 +233,6 @@ export class UploadsDialog {
             ...(pendingFiles ? [`${pendingFiles} file${pendingFiles === 1 ? " is" : "s are"} being uploaded or removed and still ${pendingFiles === 1 ? "uses a slot" : "use slots"}.`] : []),
         ].join(" ");
         this.fileHelp.textContent = `Polygon GeoPackage (.gpkg), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored. Up to ${formatUploadBytes(summary.max_file_bytes)} per file.`;
-        this.quotaHelp.textContent = `All ${summary.max_files} file slots are used. Delete an uploaded file to make room. Files still used by calculations keep their slots until those calculations stop.`;
     }
 
     /** Render stored uploads with separate map and file actions. @return {void} */

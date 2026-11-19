@@ -432,22 +432,43 @@ test("reopening saved upload identifiers uses the current browser's credentials 
     }
 });
 
-test("shared usage names the configured service and blocks new files at five slots", async () => {
-    const uploads = Array.from({length: 4}, (_, index) => ({id: String(index), name: `File ${index}`}));
+test("shared usage names the configured service and blocks new files at 100 slots", async () => {
+    const uploads = Array.from({length: 99}, (_, index) => ({id: String(index), name: `File ${index}`}));
     const {dialog} = createDialog({appTitle: "Resilience"});
-    dialog.list = async () => storageSummary(uploads, {used_files: 5, retained_files: 1});
+    dialog.list = async () => storageSummary(uploads, {max_files: 100});
     await dialog.open();
-    assert.equal(dialog.trigger.textContent, "Your uploads · 5 of 5");
-    assert.match(dialog.usage.textContent, /5 of 5 files used/);
+    assert.equal(dialog.trigger.textContent, "Your uploads · 99 of 100");
+    assert.equal(dialog.rows.length, 99);
+    assert.equal(dialog.file.disabled, false);
+    assert.equal(dialog.quotaHelp.hidden, true);
+
+    dialog.list = async () => storageSummary(uploads, {max_files: 100, used_files: 100, retained_files: 1});
+    await dialog.loadUploads();
+    assert.equal(dialog.trigger.textContent, "Your uploads · 100 of 100");
+    assert.match(dialog.usage.textContent, /100 of 100 files used/);
     assert.match(dialog.retention.textContent, /1 deleted or expired file is still used by calculations/);
     assert.equal(dialog.file.disabled, true);
     assert.equal(dialog.submit.disabled, true);
     assert.equal(dialog.quotaHelp.hidden, false);
+    assert.match(dialog.quotaHelp.textContent, /reached the upload limit/);
     assert.equal(dialog.rows[0].remove.disabled, false);
     assert.equal(dialog.cancel.disabled, false);
     const notice = dialog.dialog.children.find(child => child.textContent.startsWith("Other users"));
     assert.equal(notice.textContent, "Other users cannot access your uploads. Resilience stores and processes them on its servers. Files are deleted after 7 days, or when you delete them. Files in use are kept until the calculation stops.");
     assert.match(dialog.fileHelp.textContent, /100 MiB per file/);
+});
+
+test("a lower configured allowance keeps existing uploads available to delete", async () => {
+    const uploads = [{id: "areas", name: "Areas"}, {id: "mask", name: "Mask", kind: "raster"}];
+    const {dialog} = createDialog();
+    dialog.list = async () => storageSummary(uploads, {max_files: 1, max_bytes: 200 * 1024 * 1024});
+    await dialog.open();
+    assert.equal(dialog.trigger.textContent, "Your uploads · 2 of 1");
+    assert.match(dialog.usage.textContent, /of 200 MiB/);
+    assert.equal(dialog.file.disabled, true);
+    assert.equal(dialog.submit.disabled, true);
+    assert.equal(dialog.quotaHelp.hidden, false);
+    assert.deepEqual(dialog.rows.map(row => row.remove.disabled), [false, false]);
 });
 
 test("removing a map layer preserves its file slot and focuses its new Add action", async () => {

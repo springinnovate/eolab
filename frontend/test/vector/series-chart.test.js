@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
-import { renderOrdinalSeriesChart } from "../../src/charts/series-chart.js";
+import { renderOrdinalSeriesChart, renderStackedSeriesChart } from "../../src/charts/series-chart.js";
 
 /**
  * Render points through the production SVG chart contract.
@@ -91,4 +91,61 @@ test("large numeric series retain complete domains for scatter and bar charts", 
       assert.ok(Number.isFinite(barWidth) && barWidth > 0);
     }
   }
+});
+
+test("horizontal stacks show signed field lengths and distinguish zero from missing", () => {
+  const documentContext = new FakeRasterControlDocument();
+  const chart = documentContext.querySelector("#vector-time-series-chart");
+  const legend = documentContext.createElement("ul");
+  const series = [
+    ["Forest", [2.5, 1.5, 0, null]],
+    ["Grassland", [5, null, null, null]],
+    ["Wetland", [-3, -8, 0, null]],
+  ].map(([field, values]) => ({
+    id: field, label: field, points: values.map(yValue => ({yValue})),
+  }));
+  const selections = [];
+  const {pointElements} = renderStackedSeriesChart({
+    documentContext, chart, legend, series, rowLabels: ["Same", "Same", "Zero", "Unknown"],
+    valueAxisLabel: "Area (ha)", ariaLabel: "Stacked area",
+    describePoint: (point, field) => `${field}: ${point.yValue} ha`,
+    onPointSelect: (point, field) => selections.push([point.yValue, field]),
+  });
+  const [forest, grassland, wetland, nextForest, nextWetland] = pointElements.map(item => item.circle);
+  const zero = Number(chart.querySelector(".series-chart-zero").getAttribute("x1"));
+  const readX = element => Number(element.getAttribute("x"));
+  const width = element => Number(element.getAttribute("width"));
+  assert.equal(readX(forest), zero);
+  assert.equal(readX(grassland), zero + width(forest));
+  assert.ok(Math.abs(width(grassland) - 2 * width(forest)) < 1e-8);
+  assert.ok(Math.abs(readX(wetland) + width(wetland) - zero) < 1e-8);
+  assert.ok(readX(nextWetland) < readX(wetland));
+  assert.equal(forest.getAttribute("y"), grassland.getAttribute("y"));
+  assert.notEqual(forest.getAttribute("y"), nextForest.getAttribute("y"));
+  assert.equal(forest.getAttribute("style"), nextForest.getAttribute("style"));
+  assert.equal(forest.getAttribute("style"), legend.children[0].getAttribute("style"));
+  assert.deepEqual(chart.querySelectorAll(".series-chart-empty-stack").map(label => label.textContent),
+    ["0", "No values"]);
+  const enter = Object.assign(new Event("keydown", {cancelable: true}), {key: "Enter"});
+  wetland.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, true);
+  assert.deepEqual(selections, [[-3, "Wetland"]]);
+});
+
+test("very large stacked readings keep finite SVG positions and label their scale", () => {
+  const documentContext = new FakeRasterControlDocument();
+  const chart = documentContext.querySelector("#vector-time-series-chart");
+  const {pointElements} = renderStackedSeriesChart({
+    documentContext, chart, legend: documentContext.createElement("ul"),
+    series: ["First", "Second"].map(label => ({id: label, label, points: [{yValue: Number.MAX_VALUE}]})),
+    rowLabels: ["Feature"], valueAxisLabel: "Value", ariaLabel: "Large readings",
+    describePoint: point => String(point.yValue), onPointSelect: () => {},
+  });
+  assert.equal(pointElements.length, 2);
+  for (const {circle} of pointElements) {
+    assert.ok(Number.isFinite(Number(circle.getAttribute("x"))));
+    assert.ok(Number(circle.getAttribute("width")) > 0);
+    assert.equal(circle.getAttribute("aria-label"), String(Number.MAX_VALUE));
+  }
+  assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Value (×10^308)");
 });

@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, isModelSpatialInput, modelSupportsDrawnAreas } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
@@ -317,9 +317,9 @@ export class ModelsController {
         this.editDraft({});
     }
 
-    /** Choose a live map area, a source layer or a fixed area for one input.
+    /** Choose a map area, individual layer, polygon group or captured area for one input.
      * @param {string} name Input name declared by the recipe.
-     * @param {string} mode Area mode, or a `drawn:` choice containing a polygon layer key.
+     * @param {string} mode Area mode, `drawn:` layer choice or `polygonGroup:` group choice.
      * @return {void}
      */
     chooseArea(name, mode) {
@@ -328,10 +328,14 @@ export class ModelsController {
         if (input.filterEditing) this.closeVectorFilter();
         this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name); input.selecting = false;
         const drawn = mode.startsWith("drawn:");
-        input.areaMode = drawn ? "drawnPolygons" : mode;
+        const group = mode.startsWith("polygonGroup:");
+        input.areaMode = drawn ? "drawnPolygons" : group ? "polygonGroup" : mode;
         input.drawnPolygonKey = drawn ? mode.slice("drawn:".length) : "";
         input.vectorInfo = null; input.vectorKey = ""; input.selectionError = ""; this.state.error = "";
-        if (mode === "whole") input.area = {kind: "wholeRaster"};
+        if (group) {
+            input.polygonGroupId = mode.slice("polygonGroup:".length);
+            updateClipPolygonGroup(input);
+        } else if (mode === "whole") input.area = {kind: "wholeRaster"};
         else if (mode === "captured") input.area = structuredClone(input.capturedArea);
         else if (["viewport", "samplingArea", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
         else input.area = null;
@@ -501,6 +505,7 @@ export class ModelsController {
 
     /** Refresh map choices and recheck live vector inputs when their filter or formulas change.
      * Drawn layer choices read the latest committed shapes matching the layer filter.
+     * A live Raster clip group resolves its member views and their current selections.
      * Captured run areas and accepted submissions retain their original filters and formulas.
      * Removed live inputs must be added to the map again or replaced before a new run.
      * @return {void}
@@ -535,6 +540,10 @@ export class ModelsController {
             if (!isModelSpatialInput(type)) continue;
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
+            if (type === "clip_area") {
+                input.polygonGroups = context.polygonGroups ?? [];
+                if (input.areaMode === "polygonGroup") updateClipPolygonGroup(input);
+            }
             const selected = input.vectors.find(source => source.key === input.vectorKey);
             if (input.vectorKey && !selected) {
                 if (input.filterEditing) this.closeVectorFilter();

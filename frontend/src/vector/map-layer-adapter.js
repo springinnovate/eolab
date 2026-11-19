@@ -429,6 +429,44 @@ export function createVectorMapLayerAdapter({
                     : record.state.source.properties?.["table:primary_geometry"] ?? null,
             };
         },
+        /**
+         * Offer vertex editing for duplicated polygon views with a native GeoPackage source.
+         * @param {Object} record Retained vector view.
+         * @return {boolean} Whether to offer the editor. The API checks actual source geometry and access.
+         */
+        canEditGeometry(record) {
+            if (!record.entry.isCustom || record.state.style.geometryKind !== "polygon") return false;
+            const source = record.state.source;
+            if (source.kind === "upload") return record.isDuplicate === true;
+            const binding = source.properties?.["eolab:vector_source"];
+            return binding?.kind === "mounted" && binding.format === "geopackage" && Boolean(binding.layer_name);
+        },
+        /**
+         * Apply the retained view's field definitions, appearance and filter to a detached copy.
+         * @param {Object} record Detached private vector awaiting installation.
+         * @param {Object} previous Retained vector whose settings to carry forward.
+         * @param {AbortSignal} signal Cancellation when the editor closes.
+         * @return {Promise<void>} Completion after ordinary vector preparation.
+         * @throws {Error} If the settings changed during preparation or cannot be restored.
+         * @throws {DOMException} If the current edit is cancelled.
+         */
+        async prepareGeometryReplacement(record, previous, signal) {
+            const capture = () => ({
+                fields: this.exportCalculatedFields(previous),
+                appearance: this.exportSavedState(previous),
+                filter: this.exportFilterState(previous),
+            });
+            const saved = capture();
+            await this.restoreCalculatedFields(record, saved.fields, signal);
+            signal.throwIfAborted();
+            await this.restoreSavedState(record, saved.appearance);
+            signal.throwIfAborted();
+            await this.applyFilterState(record, saved.filter);
+            signal.throwIfAborted();
+            if (JSON.stringify(saved) !== JSON.stringify(capture())) {
+                throw new Error("The layer settings changed. Retry showing the saved layer.");
+            }
+        },
         /** Export this view's accepted field definitions independently of its appearance.
          * @param {Object} record Retained vector view.
          * @return {Array<import("../calculated-fields.js").CalculatedField>} Detached ordered definitions.
@@ -860,7 +898,7 @@ export function createVectorMapLayerAdapter({
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{datasetKind:"vector",sourceOrigin:"upload"|"catalog"|"runArtifact",canInfo:boolean,canFilter:boolean,
+         * @return {{datasetKind:"vector",sourceOrigin:"upload"|"catalog"|"runArtifact",canInfo:boolean,canFilter:boolean,canEditGeometry?:boolean,
          * filterActive:boolean,filterStatus:string,legend:Object}} Layer actions,
          * filter status and fixed, categorical or graduated legend.
          */
@@ -871,6 +909,7 @@ export function createVectorMapLayerAdapter({
                 canInfo: Boolean(record.state.lifecycle?.info) || !["upload", "runArtifact"].includes(record.state.source.kind),
                 canFilter: true,
                 canCalculateFields: true,
+                ...(this.canEditGeometry(record) ? {canEditGeometry: true} : {}),
                 error: record.state.fieldRenderingError,
                 filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
                 filterStatus: record.spatialFilterError ?? vectorFilterStatus(record.state),

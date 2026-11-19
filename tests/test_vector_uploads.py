@@ -532,7 +532,7 @@ def test_upload_settings_and_application_wiring(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Apply shared default budgets and an optional stricter GeoPackage limit.
+    """Expose configured shared limits and apply a stricter GeoPackage limit.
 
     Args:
         configured_environment: Required application environment.
@@ -542,6 +542,7 @@ def test_upload_settings_and_application_wiring(
     """
     from eolab_app.main import create_app
 
+    monkeypatch.delenv("UPLOAD_OWNER_MAX_FILES", raising=False)
     monkeypatch.delenv("VECTOR_UPLOAD_MAX_BYTES", raising=False)
     assert load_settings(version_file_path).vector_upload_max_bytes is None
     monkeypatch.setenv("VECTOR_UPLOAD_MAX_BYTES", "")
@@ -575,13 +576,18 @@ def test_upload_settings_and_application_wiring(
         return store
 
     monkeypatch.setattr("eolab_app.main.VectorUploadStore", capture)
-    create_app(version_file_path)
+    application = create_app(version_file_path)
     assert len(stores) == 1
     assert stores[0].root == tmp_path
     assert stores[0].max_bytes == 12345
     assert stores[0].storage.max_bytes == 100 * 1024**2
     assert stores[0].storage.owner_max_bytes == 500 * 1024**2
     assert stores[0].storage.global_max_bytes == 10 * 1024**3
+    default_summary = TestClient(application, base_url="https://testserver").get(
+        "/api/uploads"
+    )
+    assert default_summary.status_code == 200
+    assert default_summary.json()["max_files"] == 100
     monkeypatch.setenv("VECTOR_UPLOAD_MAX_BYTES", "")
     create_app(version_file_path)
     assert stores[1].max_bytes is None
@@ -589,6 +595,7 @@ def test_upload_settings_and_application_wiring(
         "UPLOAD_MAX_BYTES",
         "UPLOAD_OWNER_MAX_BYTES",
         "UPLOAD_GLOBAL_MAX_BYTES",
+        "UPLOAD_OWNER_MAX_FILES",
     ):
         for value in ("0", "-1", "1.5", "invalid", ""):
             monkeypatch.setenv(variable, value)
@@ -598,7 +605,14 @@ def test_upload_settings_and_application_wiring(
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "1000")
     monkeypatch.setenv("UPLOAD_OWNER_MAX_BYTES", "2000")
     monkeypatch.setenv("UPLOAD_GLOBAL_MAX_BYTES", "3000")
-    create_app(version_file_path)
+    monkeypatch.setenv("UPLOAD_OWNER_MAX_FILES", "2")
+    application = create_app(version_file_path)
     assert stores[2].storage.max_bytes == 1000
     assert stores[2].storage.owner_max_bytes == 2000
     assert stores[2].storage.global_max_bytes == 3000
+    configured_summary = TestClient(application, base_url="https://testserver").get(
+        "/api/uploads"
+    )
+    assert configured_summary.status_code == 200
+    assert configured_summary.json()["max_files"] == 2
+    assert configured_summary.json()["max_bytes"] == 2000

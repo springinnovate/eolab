@@ -11,6 +11,11 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict
 
 from eolab_app.bounded_vector import summary_process
+from eolab_app.catalog_selection import (
+    ResolvedCatalogSelection,
+    SelectionUnavailableError,
+    VectorSelection,
+)
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
@@ -24,6 +29,7 @@ from eolab_app.processing.aggregate_models import (
 from eolab_app.processing.clip_models import (
     ClipArea,
     ClipJobRequest,
+    ClipPolygonGroup,
     ClipSpec,
     UnpreparedClip,
     RasterClipLimits,
@@ -82,12 +88,21 @@ async def prepare_raster_execution(
         authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
-        Native raster data and plan with an ephemeral resolved vector selection.
+        Native raster data and plan with any authorized vector selections.
 
     Raises:
         ProcessingError: If the catalog selection is unavailable.
     """
-    if spec.area.kind == "catalogSelection":
+    if isinstance(spec, ClipSpec) and spec.area.polygonGroup is not None:
+        resolved_group = await resolve_clip_polygon_group(
+            context, spec.area.polygonGroup
+        )
+        spec = spec.model_copy(
+            update={
+                "area": spec.area.model_copy(update={"resolvedGroup": resolved_group})
+            }
+        )
+    elif spec.area.kind == "catalogSelection":
         if context.areas is None:
             raise ProcessingError(
                 "selection_unavailable", "Catalog selection reader is unavailable.", 409
@@ -102,6 +117,38 @@ async def prepare_raster_execution(
         else authorized.source_path
     )
     return raster_data, spec
+
+
+async def resolve_clip_polygon_group(
+    context: OperationContext, group: ClipPolygonGroup
+) -> tuple[ResolvedCatalogSelection, ...]:
+    """Open access to each original polygon source in the submitted group.
+
+    Args:
+        context: Worker capabilities for reading authorized sources.
+        group: Captured layer names, source identities and filters.
+
+    Returns:
+        Authorized sources in group order for this worker attempt.
+
+    Raises:
+        ProcessingError: If the selection reader or a member is unavailable.
+    """
+    if context.areas is None:
+        raise ProcessingError(
+            "selection_unavailable", "Vector selection reader is unavailable.", 409
+        )
+    sources = []
+    for member in group.members:
+        try:
+            sources.append(await context.areas.resolve_for_sampling(member.selection))
+        except SelectionUnavailableError as error:
+            raise ProcessingError(
+                "selection_unavailable",
+                f"Could not use {member.label}. {error.detail}",
+                409,
+            ) from error
+    return tuple(sources)
 
 
 class SummaryNumericalPolicy(BaseModel):
@@ -300,6 +347,32 @@ async def prepare_clip(
         )
     elif request.selectedBounds:
         area = ClipArea(kind="bounds", bounds=request.selectedBounds.canonical_tuple())
+    elif request.polygonGroup is not None:
+        group = request.polygonGroup
+        resolved_group = await resolve_clip_polygon_group(context, group)
+        member_bounds = []
+        for member, resolved in zip(group.members, resolved_group, strict=True):
+            success, summary = await context.run_native(
+                summary_process, (resolved, None), None, context.native
+            )
+            if not success:
+                raise ProcessingError(
+                    "selection_unavailable",
+                    f"Could not use {member.label}. {summary}",
+                    409,
+                )
+            member_bounds.append(summary["bbox"])
+        area = ClipArea(
+            kind="polygonGroup",
+            bounds=(
+                min(bounds[0] for bounds in member_bounds),
+                min(bounds[1] for bounds in member_bounds),
+                max(bounds[2] for bounds in member_bounds),
+                max(bounds[3] for bounds in member_bounds),
+            ),
+            polygonGroup=group,
+            resolvedGroup=resolved_group,
+        )
     else:
         if context.areas is None:
             raise ProcessingError(
@@ -379,10 +452,36 @@ def bind_clip(
     Raises:
         ValueError: If arguments violate the clip request contract.
     """
+    area = inputs["area"]
     return ClipJobRequest(
         requestId=request_id,
         source=inputs["raster"],
-        **bind_area_arguments(inputs["area"]),
+        **(
+            {"polygonGroup": area}
+            if area["kind"] == "polygonGroup"
+            else bind_area_arguments(area)
+        ),
+    )
+
+
+def get_clip_vector_selections(request: ClipJobRequest) -> dict[str, VectorSelection]:
+    """List the original polygon inputs for authorization and source retention.
+
+    Args:
+        request: Validated clip request from either Raster clip entry point.
+
+    Returns:
+        Captured selections keyed by area role or by position in the group.
+    """
+    if request.polygonGroup is not None:
+        return {
+            f"area_{index}": member.selection
+            for index, member in enumerate(request.polygonGroup.members)
+        }
+    return (
+        {"area": request.catalogSelection}
+        if request.catalogSelection is not None
+        else {}
     )
 
 
@@ -532,6 +631,8 @@ def build_clip_submission(request: ClipJobRequest, polygons: None) -> PreparedJo
         }
     elif inputs.selectedBounds:
         area = {"kind": "bounds", "bounds": inputs.selectedBounds.canonical_tuple()}
+    elif inputs.polygonGroup is not None:
+        area = {"kind": "polygonGroup", "bounds": None}
     else:
         area = {
             "kind": "wholeRaster" if inputs.wholeRaster else "catalogSelection",

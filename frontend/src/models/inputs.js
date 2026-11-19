@@ -103,11 +103,35 @@ export function modelAreaInput(area) {
  * @return {boolean} Whether this field accepts the area kind.
  */
 export function modelSupportsArea(type, area) {
-    const supportedAreaKinds = type === "clip_area" ? ["selectedArea", "samplingBox", "catalogSelection"] :
+    const supportedAreaKinds = type === "clip_area" ? ["selectedArea", "samplingBox", "catalogSelection", "polygonGroup"] :
         type === "explicit_area" ? ["selectedArea", "samplingBox", "catalogSelection", "polygonArea"] :
         type === "summary_area" ? ["selectedArea", "samplingBox", "catalogSelection", "wholeRaster", "polygonArea"] :
             type === "habitat_references" ? ["catalogSelection", "polygonArea"] : type === "mask_source" ? ["catalogSelection"] : [];
     return supportedAreaKinds.includes(area?.kind);
+}
+
+/** Resolve the Raster clip group against current original-source choices and filters.
+ * @param {Object} input Clip setup with its group ID, groups and available polygon views.
+ * @return {void} Updates the submitted area or an explanation of what must be fixed.
+ */
+export function updateClipPolygonGroup(input) {
+    input.area = null;
+    const group = input.polygonGroups.find(candidate => candidate.id === input.polygonGroupId);
+    if (!group) {
+        input.selectionError = "Choose a polygon group from Map contents.";
+        return;
+    }
+    const vectors = new Map(input.vectors.map(source => [source.key, source]));
+    const unavailable = group.members.filter(layer => !vectors.has(layer.key));
+    if (unavailable.length) {
+        input.selectionError = `Add these layers to Map contents or edit the group. ${unavailable.map(layer => layer.label).join(", ")}`;
+        return;
+    }
+    input.selectionError = "";
+    input.area = {kind: "polygonGroup", name: group.name, members: group.members.map(layer => {
+        const source = vectors.get(layer.key);
+        return {label: source.label, selection: source.selection};
+    })};
 }
 
 /** Find this field's drawn layer in the latest committed map snapshot.
@@ -166,6 +190,7 @@ export function createModelDraft(model, context, id, integration = getModelSetup
                 area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
                 vectorKey: "", vectorInfo: null, drawnPolygonKey: "", selecting: false, selectionError, maskRaster: null,
                 vectors: structuredClone(context.vectors ?? []),
+                ...(input.type === "clip_area" ? {polygonGroups: context.polygonGroups ?? [], polygonGroupId: ""} : {}),
             };
         }
     }

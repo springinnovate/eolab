@@ -240,7 +240,7 @@ test("checkbox selection history does not change mixed profile chart or table or
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
   assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["A2", "M", "Z1"]);
   const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
-  assert.deepEqual(chart.children.filter(element => element.getAttribute("class") === "series-chart-point")
+  assert.deepEqual(chart.querySelectorAll(".series-chart-point")
     .map(element => element.getAttribute("aria-label")), ["A2: 2", "M: 3", "Z1: 1"]);
 });
 
@@ -395,6 +395,9 @@ test("controller plots suggested fields and updates from partial search actions"
   const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
   assert.equal(chart.getAttribute("hidden"), null);
   assert.match(chart.getAttribute("aria-label"), /3 numeric fields/);
+  const chartType = h.documentContext.querySelector("#vector-feature-profile-chart-type");
+  assert.equal(chartType.value, "bar");
+  assert.equal(chart.querySelectorAll(".series-chart-bar").length, 3);
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-heading")
       .textContent,
@@ -424,12 +427,49 @@ test("controller plots suggested fields and updates from partial search actions"
   h.documentContext.querySelector("#vector-feature-profile-select-matching")
     .dispatchEvent(new Event("click"));
   assert.match(chart.getAttribute("aria-label"), /1 numeric fields/);
+  assert.equal(chart.querySelectorAll(".series-chart-bar").length, 1);
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-table-body")
       .children.length,
     1,
   );
   assert.deepEqual(h.visibility, [{ visible: true, moveFocus: false }]);
+});
+
+test("one feature stacks the checked fields and keeps their exact readings", () => {
+  const {controller, documentContext: doc} = fixture();
+  controller.setCurrentObservation(observation({
+    properties: {node_nm: "Cedar Creek", areaForest: 10.5, areaWetland: 3, areaWater: 0},
+  }));
+  controller.open();
+  const search = doc.querySelector("#vector-feature-profile-field-search");
+  search.value = "area";
+  doc.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
+  const chartType = doc.querySelector("#vector-feature-profile-chart-type");
+  chartType.value = "stacked";
+  chartType.dispatchEvent(new Event("change"));
+
+  const chart = doc.querySelector("#vector-feature-profile-chart");
+  const legend = doc.querySelector("#vector-feature-profile-legend");
+  const segments = chart.querySelectorAll(".series-chart-bar");
+  assert.match(chart.getAttribute("aria-label"), /Stacked bars for Cedar Creek/);
+  assert.deepEqual(legend.children.map(item => item.textContent), ["areaForest", "areaWater", "areaWetland"]);
+  assert.deepEqual(segments.map(item => item.getAttribute("aria-label")), ["areaForest: 10.5", "areaWetland: 3"]);
+  assert.equal(segments[0].getAttribute("y"), segments[1].getAttribute("y"));
+  segments[1].dispatchEvent(new Event("click"));
+  assert.equal(doc.querySelector("#vector-feature-profile-selection-text").textContent, "areaWetland · 3");
+  doc.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
+  assert.deepEqual(doc.querySelector("#vector-feature-profile-table-body").children.map(row => row.children[2].textContent),
+    ["10.5", "0", "3"]);
+
+  search.value = "forest";
+  doc.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
+  assert.deepEqual(legend.children.map(item => item.textContent), ["areaForest"]);
+  assert.equal(chart.querySelectorAll(".series-chart-bar").length, 1);
+  chartType.value = "bar";
+  chartType.dispatchEvent(new Event("change"));
+  assert.equal(legend.hidden, true);
+  controller.destroy();
 });
 
 test("feature navigation publishes intent and redraws the current observation", () => {
@@ -502,24 +542,27 @@ test("numeric field-name spacing is reflected on the horizontal axis", () => {
     R2001: 2,
     R2004: 3,
   } }));
-  const circles = h.documentContext.querySelector("#vector-feature-profile-chart")
-    .children.filter((element) =>
-      element.getAttribute("class") === "series-chart-point"
-    );
-  const positions = circles.map((circle) => Number(circle.getAttribute("cx")));
-  assert.ok(positions[2] - positions[1] > 2 * (positions[1] - positions[0]));
-  const chartType = h.documentContext.querySelector("#vector-feature-profile-chart-type");
-  chartType.value = "bar";
-  chartType.dispatchEvent(new Event("change"));
-  const bars = h.documentContext.querySelector("#vector-feature-profile-chart").querySelectorAll(".series-chart-bar");
+  const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
+  const bars = chart.querySelectorAll(".series-chart-bar");
+  assert.equal(bars.length, 3);
   const barPositions = bars.map(bar => Number(bar.getAttribute("cx")));
-  assert.equal(bars.length, circles.length);
   assert.ok(barPositions[2] - barPositions[1] > 2 * (barPositions[1] - barPositions[0]));
+
+  const chartType = h.documentContext.querySelector("#vector-feature-profile-chart-type");
+  chartType.value = "line";
+  chartType.dispatchEvent(new Event("change"));
+  const circles = chart.querySelectorAll(".series-chart-point");
+  assert.equal(circles.length, bars.length);
+  const positions = circles.map(circle => Number(circle.getAttribute("cx")));
+  assert.ok(positions[2] - positions[1] > 2 * (positions[1] - positions[0]));
 });
 
 test("per-source rules survive feature navigation and missing values break lines", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
+  const chartType = h.documentContext.querySelector("#vector-feature-profile-chart-type");
+  chartType.value = "line";
+  chartType.dispatchEvent(new Event("change"));
   const search = h.documentContext.querySelector(
     "#vector-feature-profile-field-search",
   );
@@ -550,6 +593,11 @@ test("per-source rules survive feature navigation and missing values break lines
     .children.find((element) => element.getAttribute("class") === "series-chart-line");
   assert.match(path.getAttribute("d"), /^M/);
   assert.doesNotMatch(path.getAttribute("d"), /L/);
+
+  h.controller.setCurrentObservation(observation({ sourceId: "catalog|other-corridors" }));
+  assert.equal(chartType.value, "bar");
+  h.controller.setCurrentObservation(observation());
+  assert.equal(chartType.value, "line");
 });
 
 test("active mode survives empty clicks, reopens, and ends on explicit close", () => {
