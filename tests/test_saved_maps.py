@@ -69,6 +69,10 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
         "visible": True,
         "opacity": 1,
         "calculatedFields": fields,
+        "fieldFormats": {
+            "Density": {"format": "number", "decimals": 1, "unit": "people/km²"},
+            "Annual cost": {"format": "currency", "currency": "USD", "decimals": 0},
+        },
         "style": {"kind": "vector", "definition": {"graduated": {"field": "Density"}}},
         "filter": {
             "enabled": True,
@@ -109,6 +113,34 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
             CreateSavedMap.model_validate(invalid)
 
 
+@pytest.mark.parametrize(
+    "formats",
+    [
+        None,
+        [],
+        {"": {"format": "number"}},
+        {"area": {"format": "number", "decimals": -1}},
+        {"area": {"format": "number", "unit": None}},
+        {"area": {"format": "number", "unit": "line\nbreak"}},
+        {"area": {"format": "number", "unit": " "}},
+        {"cost": {"format": "currency"}},
+        {"cost": {"format": "currency", "currency": "$"}},
+        {"cost": {"format": "number", "currency": "USD"}},
+        {"cost": {"format": "currency", "currency": "USD", "example": 4000}},
+    ],
+)
+def test_invalid_feature_field_formats(formats: Any) -> None:
+    """Reject malformed inspector display settings before accepting a map.
+
+    Args:
+        formats: Invalid portable field display data.
+    """
+    candidate = map_request()
+    candidate["view"]["layers"][1]["fieldFormats"] = formats
+    with pytest.raises(ValidationError, match="fieldFormats"):
+        CreateSavedMap.model_validate(candidate)
+
+
 def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> None:
     """Persist an opaque raster upload without publishing data or vector predicates."""
     candidate = map_request()
@@ -133,6 +165,10 @@ def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> N
     ):
         CreateSavedMap.model_validate(candidate)
     del layer["calculatedFields"]
+    layer["fieldFormats"] = {"cost": {"format": "currency", "currency": "USD"}}
+    with pytest.raises(ValidationError, match="Field formats require a vector layer"):
+        CreateSavedMap.model_validate(candidate)
+    del layer["fieldFormats"]
     layer["filter"] = {"field": "class", "value": 1}
     with pytest.raises(
         ValidationError, match="Raster uploads do not support vector filters"

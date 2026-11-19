@@ -4629,6 +4629,24 @@ article.raster-histogram-summary {
 .vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; }
 .vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
 .vector-feature-profile-navigation { grid-template-columns: auto 1fr auto; }
+.vector-field-display { margin-top: 12px; font-size: 0.78rem; }
+.vector-field-display summary { cursor: pointer; font-weight: 600; }
+.vector-field-display p { margin: 8px 0; }
+.vector-field-display p:empty { margin: 0; }
+.vector-field-display-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.vector-field-display-actions[hidden] { display: none; }
+.vector-field-display input { min-width: 0; max-width: 100%; }
+.vector-field-display-preview { max-height: 12rem; overflow: auto; border: 1px solid var(--border-1); }
+.vector-field-display-preview table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.vector-field-display-preview caption,
+.vector-field-display-preview th,
+.vector-field-display-preview td {
+  padding: 4px 6px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.vector-field-display-preview th,
+.vector-field-display-preview td { border-top: 1px solid var(--border-1); }
 .vector-feature-attributes {
   display: grid;
   grid-template-columns: minmax(90px, 0.4fr) minmax(0, 1fr);

@@ -2028,10 +2028,32 @@ async function initializeCatalog(
                 };
             });
     }
+    /**
+     * Provide the selected vector view's numeric fields and remember changes to their display.
+     * @param {string} key Opaque identity of the inspected map layer view.
+     * @return {import("./vector/feature-field-display.js").FeatureFieldDisplay|null} Settings for a current vector view.
+     */
+    function describeFeatureFieldDisplay(key) {
+        const record = mapLayerController.getRecord(key);
+        if (record?.adapter !== vectorMapLayerAdapter || !record.entry.visible) return null;
+        const fields = record.adapter.describeSource(record).numericFields.map(({name}) => name);
+        const numericNames = new Set(fields);
+        const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
+            .filter(([field]) => numericNames.has(field)));
+        return {fields, formats, apply: fieldFormats => {
+            if (mapLayerController.getRecord(key) !== record || !record.entry.visible) return false;
+            const currentFields = new Set(record.adapter.describeSource(record).numericFields.map(({name}) => name));
+            if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
+            record.fieldFormats = fieldFormats;
+            savedMapViewController.scheduleRemember();
+            return true;
+        }};
+    }
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
         getVisibleTargets: () => visibleVectorInspectionTargets(),
+        getFieldDisplay: describeFeatureFieldDisplay,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
             if (visible) mapInspection.showFeatureInspector({ activate: false });

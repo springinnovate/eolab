@@ -551,7 +551,7 @@ export class SavedMapViewController {
         }
     }
 
-    /** Export a retained record using its source owner's view contract and common presentation.
+    /** Export a retained record with its source reference and map-specific presentation.
      * @param {Object} record Neutral retained-layer record.
      * @return {Object|null} Portable view, or null for an unsaved local source.
      * @throws {Error} If the source owner's saved state cannot be exported.
@@ -564,6 +564,7 @@ export class SavedMapViewController {
         const filter = record.requestedSpatialFilter ?? layer.filter;
         return {...layer, isCustom: record.entry.isCustom,
             ...(record.filterViewId ? {filterViewId: record.filterViewId} : {}),
+            ...(record.fieldFormats && Object.keys(record.fieldFormats).length ? {fieldFormats: record.fieldFormats} : {}),
             ...(filter?.rules?.some(rule => rule.operator === "intersects") ? {filter: viewFilter(filter)} : {}),
             ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})};
     }
@@ -753,10 +754,11 @@ export class SavedMapViewController {
         const spatial = savedLayer.filter?.rules?.some(rule => rule.operator === "intersects");
         const layer = spatial ? {...savedLayer, filter: waitingForPolygonLayer(savedLayer.filter)} : savedLayer;
         const result = await this.#openLayer(layer, origin, isCurrent, {strictStyle});
-        if (!savedLayer.filterViewId && !spatial) return result;
+        if (!savedLayer.filterViewId && !spatial && !savedLayer.fieldFormats) return result;
         const record = result.staged?.record ?? (result.key ? this.mapLayers.getRecord(result.key) : null);
         if (record && savedLayer.filterViewId) record.filterViewId = savedLayer.filterViewId;
         if (record && spatial && savedLayer.filter.enabled) record.requestedSpatialFilter = savedLayer.filter;
+        if (record && savedLayer.fieldFormats) record.fieldFormats = savedLayer.fieldFormats;
         return result;
     }
 

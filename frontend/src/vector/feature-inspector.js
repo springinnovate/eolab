@@ -1,6 +1,8 @@
 /** One-shot feature inspection for visible published vector layers. */
 
 import { getFeatureInfoViewport } from "./feature-info-viewport.js";
+import { DEFAULT_FIELD_FORMATS } from "../feature-field-formats.js";
+import { VectorFeatureFieldDisplay } from "./feature-field-display.js";
 
 import {
     fetchVectorFeatureInfo,
@@ -118,12 +120,13 @@ function vectorBoundsContainPosition(bbox, position) {
 }
 
 /**
- * Format an arbitrary GeoJSON property as bounded display text.
+ * Format an arbitrary property for the inspector, using the layer's optional numeric display.
  *
  * @param {*} value GeoJSON property value.
+ * @param {import("../feature-field-formats.js").FeatureFieldFormat} [format] Display settings for a numeric field.
  * @return {string} Safe text capped at the presentation limit.
  */
-export function formatVectorFeatureAttribute(value) {
+export function formatVectorFeatureAttribute(value, format) {
     let text;
     if (value === null || value === undefined) {
         return "No value";
@@ -131,7 +134,22 @@ export function formatVectorFeatureAttribute(value) {
     if (typeof value === "boolean") {
         return value ? "True" : "False";
     }
-    if (typeof value === "object") {
+    if (format && Number.isFinite(value)) {
+        /** @type {Intl.NumberFormatOptions} */
+        const options = {};
+        if (format.format === "currency") {
+            options.style = "currency";
+            options.currency = format.currency;
+        }
+        if (format.decimals !== undefined) {
+            options.minimumFractionDigits = format.decimals;
+            options.maximumFractionDigits = format.decimals;
+        } else if (format.format === "number") {
+            options.maximumSignificantDigits = 21;
+        }
+        text = new Intl.NumberFormat(undefined, options).format(value);
+        if (format.unit) text += ` ${format.unit}`;
+    } else if (typeof value === "object") {
         try {
             text = JSON.stringify(value);
         } catch {
@@ -150,9 +168,10 @@ export function formatVectorFeatureAttribute(value) {
  *
  * @param {Object} feature Validated GeoJSON Feature.
  * @param {string|null} primaryGeometry Catalog-declared geometry field.
+ * @param {import("../feature-field-formats.js").FeatureFieldFormats} [formats] Numeric display settings for this view.
  * @return {{name:string,value:string}[]} Bounded display attributes.
  */
-export function vectorFeatureAttributes(feature, primaryGeometry = null) {
+export function vectorFeatureAttributes(feature, primaryGeometry = null, formats = DEFAULT_FIELD_FORMATS) {
     const geometryNames = new Set(
         [primaryGeometry, "geometry", "the_geom", "boundedBy", "bbox"]
             .filter((name) => typeof name === "string")
@@ -161,7 +180,7 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null) {
         .filter(([name]) => !geometryNames.has(name))
         .map(([name, value]) => ({
             name,
-            value: formatVectorFeatureAttribute(value),
+            value: formatVectorFeatureAttribute(value, Object.hasOwn(formats, name) ? formats[name] : undefined),
         }));
     if (typeof feature.id === "string" || typeof feature.id === "number") {
         attributes.unshift({
@@ -201,6 +220,8 @@ export class VectorFeatureInspectorController {
      * @param {(focus:Readonly<Object>)=>boolean}
      * configuration.onFeatureZoomRequested Publishes current-feature map
      * navigation intent without owning viewport movement.
+     * @param {(sourceId:string)=>import("./feature-field-display.js").FeatureFieldDisplay|null}
+     * configuration.getFieldDisplay Reads and updates the inspected view's attribute formats.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -221,12 +242,16 @@ export class VectorFeatureInspectorController {
         onStyleRequested,
         onFilterRequested = () => {},
         onFeatureZoomRequested,
+        getFieldDisplay,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
         now = () => globalThis.performance.now(),
     }) {
         if (typeof getVisibleTargets !== "function") {
             throw new TypeError("getVisibleTargets must be a function.");
+        }
+        if (typeof getFieldDisplay !== "function") {
+            throw new TypeError("getFieldDisplay must be a function.");
         }
         if (typeof onInspectionChange !== "function") {
             throw new TypeError("onInspectionChange must be a function.");
@@ -255,6 +280,7 @@ export class VectorFeatureInspectorController {
         this.leaflet = leaflet;
         this.map = leafletMap;
         this.getVisibleTargets = getVisibleTargets;
+        this.getFieldDisplay = getFieldDisplay;
         this.wmsUrl = wmsUrl;
         this.onInspectionChange = onInspectionChange;
         this.onSampleChange = onSampleChange;
@@ -291,6 +317,8 @@ export class VectorFeatureInspectorController {
         this.layerName = documentContext.querySelector("#vector-feature-layer");
         this.position = documentContext.querySelector("#vector-feature-position");
         this.attributes = documentContext.querySelector("#vector-feature-attributes");
+        this.fieldDisplay = new VectorFeatureFieldDisplay(documentContext, formatVectorFeatureAttribute,
+            () => this.#showAttributes(this.results[this.resultIndex]));
         this.previous = documentContext.querySelector("#previous-vector-feature");
         this.next = documentContext.querySelector("#next-vector-feature");
         this.results = [];
@@ -778,23 +806,7 @@ export class VectorFeatureInspectorController {
         this.next.disabled = !navigation.canNext;
         this.featureProfileButton.disabled = !Object.values(observation.properties).some(Number.isFinite);
         this.onCurrentObservationChange(observation, navigation);
-        this.attributes.replaceChildren();
-        const entries = vectorFeatureAttributes(feature, target.primaryGeometry);
-        if (entries.length === 0) {
-            const term = this.document.createElement("dt");
-            term.textContent = "Attributes";
-            const description = this.document.createElement("dd");
-            description.textContent = "No user-facing attributes were returned.";
-            this.attributes.append(term, description);
-        } else {
-            for (const entry of entries) {
-                const term = this.document.createElement("dt");
-                term.textContent = entry.name;
-                const description = this.document.createElement("dd");
-                description.textContent = entry.value;
-                this.attributes.append(term, description);
-            }
-        }
+        this.#showAttributes(this.results[this.resultIndex]);
         this.clearHighlight();
         if (typeof feature.id === "string" && feature.id.length > 0) {
             const highlightLayer = this.leaflet.tileLayer.wms(this.wmsUrl, {
@@ -813,6 +825,33 @@ export class VectorFeatureInspectorController {
                 pointToLayer: (_pointFeature, latlng) =>
                     this.leaflet.circleMarker(latlng, HIGHLIGHT_STYLE),
             }).addTo(this.map);
+        }
+    }
+
+    /**
+     * Present the selected feature's attributes using the current view's display settings.
+     * @param {{feature:Object,target:import("./feature-info.js").VectorFeatureInspectionTarget}} selected Inspected feature and layer.
+     * @return {void}
+     */
+    #showAttributes({feature, target}) {
+        const display = this.getFieldDisplay(target.sourceId);
+        this.fieldDisplay.show(display && {...display, sourceId: target.sourceId, properties: feature.properties});
+        this.attributes.replaceChildren();
+        const entries = vectorFeatureAttributes(feature, target.primaryGeometry, display?.formats);
+        if (entries.length === 0) {
+            const term = this.document.createElement("dt");
+            term.textContent = "Attributes";
+            const description = this.document.createElement("dd");
+            description.textContent = "No user-facing attributes were returned.";
+            this.attributes.append(term, description);
+        } else {
+            for (const entry of entries) {
+                const term = this.document.createElement("dt");
+                term.textContent = entry.name;
+                const description = this.document.createElement("dd");
+                description.textContent = entry.value;
+                this.attributes.append(term, description);
+            }
         }
     }
 
@@ -837,6 +876,7 @@ export class VectorFeatureInspectorController {
             "aria-label", "Style selected vector layer"
         );
         this.onCurrentObservationChange(null, null);
+        this.fieldDisplay.show(null);
         this.attributes.replaceChildren();
         this.clearHighlight();
     }
@@ -860,6 +900,7 @@ export class VectorFeatureInspectorController {
      */
     destroy() {
         this.close();
+        this.fieldDisplay.destroy();
         this.closeButton.removeEventListener("click", this.onClose);
         this.featureProfileButton.removeEventListener(
             "click",
