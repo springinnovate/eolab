@@ -15,6 +15,17 @@
  */
 
 /**
+ * Bounded observations and presentation state from one vector inspection.
+ * @typedef {Object} VectorInspectionSample
+ * @property {"loading"|"ready"|"empty"|"invalidated"} state Inspection status.
+ * @property {ReadonlyArray<VectorInspectionObservation>} observations Features in inspector order.
+ * @property {string} message User-facing inspection status.
+ * @property {number} failedLayers Inspected layers that returned an error.
+ * @property {Readonly<{lng:number,lat:number}>|null} position
+ * Map point associated with the observations, or null after invalidation.
+ */
+
+/**
  * Test whether a value is a finite WGS 84 longitude/latitude pair.
  *
  * @param {unknown} position Candidate coordinate pair.

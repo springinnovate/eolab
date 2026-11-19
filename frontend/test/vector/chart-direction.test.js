@@ -133,6 +133,7 @@ for (const chartType of ["line", "scatter", "bar"]) {
             onVisibilityChange() {},
             onPresentationChange() {},
             onFeatureZoom: (focus, index) => { zoomed.push({ focus, index }); return true; },
+            onNavigateSelection() {},
         });
         const samples = [
             observation({ depth: 8, score: -7, site: "Beta" }, "middle"),
