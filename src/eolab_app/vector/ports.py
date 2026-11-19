@@ -144,19 +144,26 @@ class VectorFieldReader(Protocol):
     """Bounded mounted-source field reader for vector styling."""
 
     def count_filter(
-        self, source: ResolvedVectorSource, candidate: VectorFilter,
-        feature_limit: int, cancel_event: Event,
+        self,
+        source: ResolvedVectorSource,
+        candidate: VectorFilter,
+        feature_limit: int,
+        cancel_event: Event,
     ) -> VectorFilterCount:
-        """Count a bounded whole-layer predicate without reading geometry.
+        """Count matching and total features in the original layer.
 
         Args:
-            source: Exact Catalog-derived source and layer.
-            candidate: Catalog-validated predicate.
-            feature_limit: Maximum features inspected.
+            source: Authorized original mounted source and layer.
+            candidate: Schema-validated attribute filter.
+            feature_limit: Maximum feature rows visited during a streamed count.
+                A native aggregate returns only counts.
             cancel_event: Cooperative cancellation signal.
 
         Returns:
             Exact counts or an explicit incomplete result.
+
+        Raises:
+            VectorFeatureError: If the source or selected field cannot be read.
         """
         ...
 

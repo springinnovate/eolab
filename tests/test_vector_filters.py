@@ -1,21 +1,27 @@
 """Exercise vector filter semantics, exact reads, authorization, and delivery."""
 
 import asyncio
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 from threading import Event
 from xml.etree import ElementTree as ET
 
+import fiona
 import httpx2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from eolab_app.catalog.geopackage import build_stac_items
 from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.routes.vectors import create_vector_feature
+from eolab_app.vector import fields as field_reader_module
+from eolab_app.vector.assessment import VectorAssessmentFinalizer
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.fields import OgrVectorFieldReader
 from eolab_app.vector.filters import (
@@ -26,6 +32,7 @@ from eolab_app.vector.models import CatalogVectorRequest, ResolvedVectorSource
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import MountedVectorResolver, PublishedVectorRegistry
 from eolab_app.vector.styles import build_vector_sld, default_vector_style
+from tests.test_vector_assessment import RecordingVectorAssessor, compatible_reader
 from tests.test_vector_categories import assessed_category_item
 from tests.test_vector_publication import StaticCatalog, RecordingPublisher
 
@@ -335,3 +342,89 @@ def test_filter_routes_validate_catalog_fields_and_return_exact_counts(tmp_path)
         assert browser.post("/api/vector-rendering/filters", json={**body, "path": "/tmp/other.gpkg"}).status_code == 422
         body["filter"]["rules"][0]["field"] = "untrusted_field"
         assert browser.post("/api/vector-rendering/filters", json=body).status_code == 409
+
+
+def test_catalog_text_filter_counts_geopackage_above_row_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Return the exact case-sensitive match count beyond a million original rows.
+
+    Args:
+        tmp_path: Isolated mount where the original GeoPackage is admitted.
+        monkeypatch: Advances the field reader's clock during an uncached query.
+    """
+    path = tmp_path / "pad-counts.gpkg"
+    with fiona.open(
+        path,
+        "w",
+        driver="GPKG",
+        layer="pad_managers",
+        crs="EPSG:4326",
+        schema={"geometry": "Point", "properties": {"Mang_Type": "str:16"}},
+        SPATIAL_INDEX="NO",
+    ) as dataset:
+        dataset.write(
+            {
+                "geometry": {"type": "Point", "coordinates": (1, 2)},
+                "properties": {"Mang_Type": "FED"},
+            }
+        )
+    with closing(sqlite3.connect(path)) as database, database:
+        database.execute("""
+            WITH RECURSIVE rows(n) AS (
+                VALUES (2) UNION ALL SELECT n + 1 FROM rows WHERE n < 1000003
+            )
+            INSERT INTO pad_managers (Mang_Type)
+            SELECT CASE n
+                WHEN 2 THEN 'fed'
+                WHEN 3 THEN 'FED '
+                WHEN 4 THEN NULL
+                WHEN 5 THEN 'FED' || char(0) || 'trailing bytes'
+                WHEN 6 THEN CAST('FED' AS BLOB)
+                WHEN 1000003 THEN 'FED'
+                ELSE 'STATE'
+            END FROM rows
+            """)
+
+    resolver = MountedVectorResolver(tmp_path)
+    item = asyncio.run(
+        VectorAssessmentFinalizer(
+            resolver, RecordingVectorAssessor(compatible_reader("point"))
+        ).finalize(build_stac_items(tmp_path, path)[0])
+    )
+    registry = PublishedVectorRegistry()
+    service = VectorPublicationService(
+        StaticCatalog(item),
+        resolver,
+        RecordingPublisher(),
+        registry,
+        field_reader=OgrVectorFieldReader(),
+    )
+    app = FastAPI()
+    app.include_router(create_vector_feature(None, service, None, registry).router)
+    source = {"collectionId": item["collection"], "itemId": item["id"]}
+    body = request_for(item, predicate(("Mang_Type", "eq", "FED"))).model_dump(
+        by_alias=True, mode="json"
+    )
+    with TestClient(app) as browser:
+        published = browser.post("/api/vector-rendering/layers", json=source)
+        assert published.status_code == 200
+        count = browser.post("/api/vector-rendering/filter-counts", json=body)
+        assert count.status_code == 200
+        assert count.json() == {"matched": 4, "total": 1_000_003, "complete": True}
+
+        body["filter"]["rules"][0]["value"] = "Absent's category"
+        with monkeypatch.context() as expired:
+            before_deadline = iter([0.0] * 10)
+            expired.setattr(
+                field_reader_module,
+                "monotonic",
+                lambda: next(before_deadline, 21.0),
+            )
+            timed_out = browser.post("/api/vector-rendering/filter-counts", json=body)
+        assert timed_out.status_code == 200
+        assert timed_out.json() == {"matched": None, "total": None, "complete": False}
+
+        retry = browser.post("/api/vector-rendering/filter-counts", json=body)
+        assert retry.status_code == 200
+        assert retry.json() == {"matched": 0, "total": 1_000_003, "complete": True}
