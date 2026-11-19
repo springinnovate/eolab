@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import time
 from typing import Any, Literal, cast
 
@@ -14,6 +15,8 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.features import bounds
+from rasterio.vrt import WarpedVRT
+from rasterio.windows import Window
 from shapely.geometry import box, mapping
 
 from eolab_app.catalog_selection import (
@@ -39,14 +42,16 @@ from eolab_app.processing.raster_calculator_models import (
 )
 from eolab_app.processing.raster_expression import evaluate_pixel_expression, walk
 from eolab_app.processing.raster_input import validate_supported_raster
+from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_operations import bind_area_arguments
 from eolab_app.processing.raster_output import write_float64_cog
 from eolab_app.processing.raster_preparation import (
     RasterGrid,
     calculate_raster_grid,
-    prepare_raster_stack,
+    open_warped_raster,
     project_preparation_box,
     read_preparation_polygons,
+    read_warped_tile,
 )
 from eolab_app.raster.bounded_window import project_polygons_to_crs
 from eolab_app.raster.models import Wgs84Bounds
@@ -365,18 +370,23 @@ def plan_calculator_grid(
 
 
 def write_calculator_tiles(
-    aligned: Mapping[str, Path], spec: RasterCalculatorSpec, directory: Path
-) -> tuple[Path, int, dict[str, dict[str, str | None]]]:
-    """Evaluate aligned input tiles and stage the raster before publication.
+    rasters: Mapping[str, WarpedVRT],
+    polygon_mask: rasterio.io.DatasetReader | None,
+    spec: RasterCalculatorSpec,
+    directory: Path,
+) -> tuple[Path, int]:
+    """Evaluate aligned GDAL windows and stage the raster before publication.
 
     Args:
-        aligned: Attempt-owned common-grid TIFFs for the referenced variables.
+        rasters: Open, lazy GDAL warps keyed by the referenced variables.
+        polygon_mask: Byte mask on the output grid, or None for the entire grid.
         spec: Prepared formula and grid.
         directory: Private attempt directory.
     Returns:
-        Staging file, valid-cell count and original band encoding by variable.
+        Staging file and valid-cell count.
     Raises:
         ProcessingError: If no cell has all inputs or valid arithmetic.
+        RasterioError: If the input tiles or output raster cannot be read or written.
         OSError: If a native tile or output cannot be read or written.
     """
     grid = spec.grid
@@ -389,49 +399,46 @@ def write_calculator_tiles(
     )
     write_progress(directory, "calculating_raster", 0, total, unit="tiles")
     last_progress = time.monotonic()
-    with ExitStack() as resources:
-        rasters = {
-            alias: resources.enter_context(rasterio.open(path))
-            for alias, path in aligned.items()
-        }
-        band_encodings = {
-            alias: {
-                "scale": str(raster.scales[0]),
-                "offset": str(raster.offsets[0]),
-                "unit": raster.units[0],
-            }
-            for alias, raster in rasters.items()
-        }
-        destination = resources.enter_context(
-            rasterio.open(
-                stage,
-                "w",
-                driver="GTiff",
-                count=1,
-                dtype="float64",
-                crs=CRS.from_wkt(grid.crs),
-                transform=Affine(*grid.transform),
-                width=grid.width,
-                height=grid.height,
-                nodata=np.nan,
-                tiled=True,
-                blockxsize=tile_side,
-                blockysize=tile_side,
-                compress="DEFLATE",
-                BIGTIFF="IF_SAFER",
-            )
-        )
+    with rasterio.open(
+        stage,
+        "w",
+        driver="GTiff",
+        count=1,
+        dtype="float64",
+        crs=CRS.from_wkt(grid.crs),
+        transform=Affine(*grid.transform),
+        width=grid.width,
+        height=grid.height,
+        nodata=np.nan,
+        tiled=True,
+        blockxsize=tile_side,
+        blockysize=tile_side,
+        compress="DEFLATE",
+        BIGTIFF="IF_SAFER",
+    ) as destination:
         for index, (_, window) in enumerate(destination.block_windows(1), 1):
-            samples = {
-                alias: band.read(1, window=window) for alias, band in rasters.items()
-            }
-            if not has_shared_cells:
-                shared = np.ones((int(window.height), int(window.width)), dtype=bool)
-                for values in samples.values():
-                    shared &= np.isfinite(values)
-                has_shared_cells = bool(shared.any())
-            result = evaluate_pixel_expression(spec.inputs.calculation.formula, samples)
-            valid_pixels += int(np.count_nonzero(np.isfinite(result)))
+            inside = (
+                None
+                if polygon_mask is None
+                else polygon_mask.read(1, window=window) != 0
+            )
+            shape = (int(window.height), int(window.width))
+            if inside is not None and not inside.any():
+                result = np.full(shape, np.nan)
+            else:
+                samples = {
+                    alias: read_warped_tile(raster, window, inside)
+                    for alias, raster in rasters.items()
+                }
+                if not has_shared_cells:
+                    shared = np.ones(shape, dtype=bool)
+                    for values in samples.values():
+                        shared &= np.isfinite(values)
+                    has_shared_cells = bool(shared.any())
+                result = evaluate_pixel_expression(
+                    spec.inputs.calculation.formula, samples
+                )
+                valid_pixels += int(np.count_nonzero(np.isfinite(result)))
             destination.write(result, 1, window=window)
             if time.monotonic() - last_progress > 0.5:
                 write_progress(
@@ -449,7 +456,7 @@ def write_calculator_tiles(
             "The formula produced no valid cells. Check operations such as division and powers.",
         )
     write_progress(directory, "calculating_raster", total, total, unit="tiles")
-    return stage, valid_pixels, band_encodings
+    return stage, valid_pixels
 
 
 def calculate_raster(
@@ -494,11 +501,37 @@ def calculate_raster(
         for layer in calculation.layers
         if layer.alias in names
     }
-    with prepare_raster_stack(
-        inputs, grid, polygons, directory, limits, all_touched=False
-    ) as aligned:
-        stage, valid_pixels, encodings = write_calculator_tiles(
-            aligned, spec, directory
+    write_progress(directory, "preparing_rasters", 0, len(inputs), unit="rasters")
+    encodings: dict[str, dict[str, str | None]] = {}
+    rasters: dict[str, WarpedVRT] = {}
+    with (
+        TemporaryDirectory(prefix="warp-", dir=directory) as temporary,
+        ExitStack() as readers,
+    ):
+        scratch = Path(temporary)
+        for index, (alias, (path, method)) in enumerate(inputs.items()):
+            source, rasters[alias] = readers.enter_context(
+                open_warped_raster(path, method, grid, scratch / f"input-{index}.vrt")
+            )
+            encodings[alias] = {
+                "scale": str(source.scales[0]),
+                "offset": str(source.offsets[0]),
+                "unit": source.units[0],
+            }
+        polygon_mask = readers.enter_context(
+            temporary_polygon_mask(
+                next(iter(rasters.values())),
+                Window(0, 0, grid.width, grid.height),
+                polygons,
+                scratch,
+                limits,
+            )
+        )
+        write_progress(
+            directory, "preparing_rasters", len(inputs), len(inputs), unit="rasters"
+        )
+        stage, valid_pixels = write_calculator_tiles(
+            rasters, polygon_mask, spec, directory
         )
     write_progress(directory, "creating_cog", 0, 1, unit="files")
     file = write_float64_cog(

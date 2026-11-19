@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 
 from affine import Affine
 import numpy as np
+from numpy.typing import NDArray
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
@@ -298,6 +299,69 @@ def _wrap_longitude_source(
     return wrapped_path
 
 
+@contextmanager
+def open_warped_raster(
+    path: Path, resampling: Resampling, grid: RasterGrid, vrt_path: Path
+) -> Iterator[tuple[rasterio.io.DatasetReader, WarpedVRT]]:
+    """Open the original metadata and a lazy, validity-aware warp on a common grid.
+
+    Args:
+        path: Authorized original single-band raster.
+        resampling: GDAL method for sampling original pixels.
+        grid: Destination grid independent of source coverage.
+        vrt_path: Private file in a caller-owned temporary directory.
+
+    Yields:
+        Original source for band metadata and aligned GDAL view for window reads.
+        The caller removes the VRT files after the readers have closed.
+
+    Raises:
+        RasterioError: If the source or warp cannot be opened.
+        OSError: If a virtual source cannot be written.
+    """
+    with rasterio.open(path) as source:
+        _write_masked_source_vrt(source, vrt_path)
+        with (
+            rasterio.open(_wrap_longitude_source(source, vrt_path)) as masked_source,
+            WarpedVRT(
+                masked_source,
+                crs=grid.crs,
+                transform=grid.transform,
+                width=grid.width,
+                height=grid.height,
+                resampling=resampling,
+                dtype="float64",
+                src_alpha=2,
+                src_nodata=np.nan,
+                nodata=np.nan,
+                UNIFIED_SRC_NODATA="NO",
+            ) as warped,
+        ):
+            yield source, warped
+
+
+def read_warped_tile(
+    raster: WarpedVRT, window: Window, inside: NDArray[np.bool_] | None
+) -> NDArray[np.float64]:
+    """Return aligned Float64 samples with NaN for invalid or excluded cells.
+
+    Args:
+        raster: Open GDAL warp produced by open_warped_raster.
+        window: Tile on the destination grid.
+        inside: Optional Boolean tile with True for included destination cells.
+
+    Returns:
+        Stored band values after resampling and applying the destination mask.
+
+    Raises:
+        RasterioError: If a native read or warp fails.
+    """
+    values = raster.read(1, window=window)
+    values[~np.isfinite(values)] = np.nan
+    if inside is not None:
+        values[~inside] = np.nan
+    return values
+
 
 @contextmanager
 def prepare_raster_stack(
@@ -355,75 +419,60 @@ def prepare_raster_stack(
         for index, (name, (path, resampling)) in enumerate(inputs.items()):
             output = scratch / f"input-{index}.tif"
             vrt_path = scratch / f"input-{index}.vrt"
-            with rasterio.open(path) as source:
-                _write_masked_source_vrt(source, vrt_path)
-                with (
-                    rasterio.open(
-                        _wrap_longitude_source(source, vrt_path)
-                    ) as masked_source,
-                    WarpedVRT(
-                        masked_source,
-                        crs=grid.crs,
-                        transform=grid.transform,
-                        width=grid.width,
-                        height=grid.height,
-                        resampling=resampling,
-                        dtype="float64",
-                        src_alpha=2,
-                        src_nodata=np.nan,
-                        nodata=np.nan,
-                        UNIFIED_SRC_NODATA="NO",
-                    ) as warped,
-                ):
-                    if index == 0:
-                        polygon_mask = resources.enter_context(
-                            temporary_polygon_mask(
-                                warped,
-                                Window(0, 0, grid.width, grid.height),
-                                polygons,
-                                scratch,
-                                limits,
-                                all_touched=all_touched,
-                            )
+            with open_warped_raster(path, resampling, grid, vrt_path) as (
+                source,
+                warped,
+            ):
+                if index == 0:
+                    polygon_mask = resources.enter_context(
+                        temporary_polygon_mask(
+                            warped,
+                            Window(0, 0, grid.width, grid.height),
+                            polygons,
+                            scratch,
+                            limits,
+                            all_touched=all_touched,
                         )
-                    with rasterio.open(
-                        output,
-                        "w",
-                        driver="GTiff",
-                        count=1,
-                        dtype="float64",
-                        crs=grid.crs,
-                        transform=grid.transform,
-                        width=grid.width,
-                        height=grid.height,
-                        nodata=np.nan,
-                        tiled=True,
-                        blockxsize=tile_side,
-                        blockysize=tile_side,
-                        compress="DEFLATE",
-                        BIGTIFF="IF_SAFER",
-                    ) as destination:
-                        destination.scales = source.scales
-                        destination.offsets = source.offsets
-                        destination.units = source.units
-                        destination.descriptions = source.descriptions
-                        for _, window in destination.block_windows(1):
-                            values = warped.read(1, window=window)
-                            values[~np.isfinite(values)] = np.nan
-                            if polygon_mask is not None:
-                                values[polygon_mask.read(1, window=window) == 0] = (
-                                    np.nan
-                                )
-                            destination.write(values, 1, window=window)
-                            completed += 1
-                            if time.monotonic() - last_progress > 0.5:
-                                write_progress(
-                                    directory,
-                                    "preparing_rasters",
-                                    completed,
-                                    total,
-                                )
-                                last_progress = time.monotonic()
+                    )
+                with rasterio.open(
+                    output,
+                    "w",
+                    driver="GTiff",
+                    count=1,
+                    dtype="float64",
+                    crs=grid.crs,
+                    transform=grid.transform,
+                    width=grid.width,
+                    height=grid.height,
+                    nodata=np.nan,
+                    tiled=True,
+                    blockxsize=tile_side,
+                    blockysize=tile_side,
+                    compress="DEFLATE",
+                    BIGTIFF="IF_SAFER",
+                ) as destination:
+                    destination.scales = source.scales
+                    destination.offsets = source.offsets
+                    destination.units = source.units
+                    destination.descriptions = source.descriptions
+                    for _, window in destination.block_windows(1):
+                        inside = (
+                            None
+                            if polygon_mask is None
+                            else polygon_mask.read(1, window=window) != 0
+                        )
+                        destination.write(
+                            read_warped_tile(warped, window, inside), 1, window=window
+                        )
+                        completed += 1
+                        if time.monotonic() - last_progress > 0.5:
+                            write_progress(
+                                directory,
+                                "preparing_rasters",
+                                completed,
+                                total,
+                            )
+                            last_progress = time.monotonic()
             outputs[name] = output
         write_progress(directory, "preparing_rasters", completed, total)
         yield outputs

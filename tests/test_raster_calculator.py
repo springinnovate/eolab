@@ -71,6 +71,7 @@ def test_calculator_rejects_names_and_operators_outside_its_grammar(
 
 def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Read different native grids and publish the actual masked output on a's lattice."""
     extent = (0.0025, 0.0025, 0.0425, 0.0425)
@@ -126,6 +127,18 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     queued = QueuedRasterCalculator(request=request, polygonArea=None)
     sources = RasterCalculatorSources({"a": a, "b": b, "c": unused}, area)
     plan = plan_calculator_grid(sources, queued)
+    raster_writes: list[str] = []
+    open_raster = rasterio.open
+
+    def record_raster_writes(
+        path: str | Path, mode: str = "r", **kwargs: object
+    ) -> rasterio.io.DatasetReader | rasterio.io.DatasetWriter:
+        """Observe data TIFFs created by the normal calculator entry point."""
+        if mode == "w" and Path(path).suffix == ".tif":
+            raster_writes.append(Path(path).name)
+        return open_raster(path, mode, **kwargs)
+
+    monkeypatch.setattr(rasterio, "open", record_raster_writes)
     result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
     assert result.valid_pixels == 11
     with rasterio.open(tmp_path / "result.tif") as output:
@@ -152,7 +165,9 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     assert "c" not in provenance["sourceBands"]
     assert provenance["inputs"]["calculation"]["expression"] == "max(0, b - a)"
     assert str(a) not in json.dumps(provenance)
-    assert not list(tmp_path.glob("aligned-*"))
+    assert sorted(raster_writes) == ["calculated.tif", "polygon-mask.tif"]
+    assert not list(tmp_path.rglob("*.vrt"))
+    assert not list(tmp_path.rglob("polygon-mask.tif"))
 
 
 def test_match_grid_preserves_native_polygon_edges(tmp_path: Path) -> None:
@@ -427,3 +442,5 @@ def test_calculator_distinguishes_missing_coverage_from_invalid_arithmetic(
         calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
     assert error.value.code == code
     assert not (tmp_path / "result.tif").exists()
+    assert not list(tmp_path.rglob("*.vrt"))
+    assert not list(tmp_path.rglob("polygon-mask.tif"))
