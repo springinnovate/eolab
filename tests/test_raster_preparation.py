@@ -13,6 +13,7 @@ from rasterio.transform import from_origin
 
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.raster_preparation import (
+    RasterGrid,
     calculate_raster_grid,
     prepare_raster_stack,
 )
@@ -20,6 +21,31 @@ from raster_fixture_support import write_source
 
 LIMITS = RasterAggregateLimits()
 PROJECTED = CRS.from_epsg(3857)
+
+
+def test_regional_wrap_preserves_non_degree_georeferencing(tmp_path: Path) -> None:
+    """Prepare a shifted region expressed in grads on its original datum."""
+    crs = CRS.from_epsg(4807)
+    values = numpy.tile(numpy.arange(9, 13, dtype="int16"), (2, 1))
+    source = write_source(
+        tmp_path / "source.tif",
+        values,
+        crs="EPSG:4807",
+        transform=from_origin(390, 54, 1, 1),
+    )
+    grid = RasterGrid(crs, from_origin(-10, 54, 1, 1), 4, 2)
+    with prepare_raster_stack(
+        {"a": (source, Resampling.nearest)},
+        grid,
+        (),
+        tmp_path,
+        LIMITS,
+        all_touched=False,
+    ) as paths:
+        with rasterio.open(paths["a"]) as result:
+            assert result.transform == grid.transform
+            assert result.crs == crs
+            numpy.testing.assert_array_equal(result.read(1), values)
 
 
 @pytest.mark.parametrize(

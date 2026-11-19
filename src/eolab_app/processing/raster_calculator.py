@@ -15,7 +15,6 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.features import bounds
-from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 from shapely.geometry import box, mapping
 
@@ -46,6 +45,7 @@ from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_operations import bind_area_arguments
 from eolab_app.processing.raster_output import write_float64_cog
 from eolab_app.processing.raster_preparation import (
+    AlignedRaster,
     RasterGrid,
     calculate_raster_grid,
     open_warped_raster,
@@ -380,7 +380,7 @@ def plan_calculator_grid(
 
 
 def write_calculator_tiles(
-    rasters: Mapping[str, WarpedVRT],
+    rasters: Mapping[str, AlignedRaster],
     polygon_mask: rasterio.io.DatasetReader | None,
     spec: RasterCalculatorSpec,
     directory: Path,
@@ -513,7 +513,7 @@ def calculate_raster(
     }
     write_progress(directory, "preparing_rasters", 0, len(inputs), unit="rasters")
     encodings: dict[str, dict[str, str | None]] = {}
-    rasters: dict[str, WarpedVRT] = {}
+    rasters: dict[str, AlignedRaster] = {}
     with (
         TemporaryDirectory(prefix="warp-", dir=directory) as temporary,
         ExitStack() as readers,

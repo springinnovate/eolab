@@ -340,6 +340,68 @@ def test_calculator_reports_a_cut_inside_the_output_projection(
             assert result.valid_pixels == 2
 
 
+@pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
+def test_regional_longitudes_keep_a_fractional_cell_size(
+    tmp_path: Path, crs: str
+) -> None:
+    """Read a shifted regional source whose pixels do not divide a full period."""
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(np.arange(100, 110, dtype="int16"), (2, 1)),
+        transform=from_origin(350, 1, 0.7, 0.5),
+    )
+    dx, top = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(0.7, 1)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(kind="custom", crs=crs, pixelSize=(dx, top / 2)),
+        ),
+        selectedBounds=Wgs84Bounds(west=-9.8, south=0, east=-7.7, north=1),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == 6
+    with rasterio.open(tmp_path / "result.tif") as output:
+        np.testing.assert_array_equal(
+            output.read(1), [[100, 101, 102], [100, 101, 102]]
+        )
+
+
+def test_regional_longitudes_do_not_pad_to_a_world_grid(tmp_path: Path) -> None:
+    """Warp a six-column raster near 180° without large virtual column offsets."""
+    west = 180 - 3e-7
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(np.arange(1, 7, dtype="uint8"), (4, 1)),
+        transform=from_origin(west, 10, 1e-7, 1e-7),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(west=west, south=10 - 4e-7, east=180, north=10),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == 12
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert output.transform == from_origin(west, 10, 1e-7, 1e-7)
+        np.testing.assert_array_equal(output.read(1), [[1, 2, 3, np.nan]] * 4)
+
+
 @pytest.mark.parametrize(
     ("east", "expected"),
     [(-2, [356, 357]), (4, [356, 357, 358, 359, 0, 1, 2, 3])],
