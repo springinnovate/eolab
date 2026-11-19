@@ -1678,3 +1678,100 @@ test("reloading an exact box calculation restores the chosen threshold, units an
     assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
     restored.close();
 });
+
+test("reload keeps hidden, duplicate, empty and outside rasters beside native results", async () => {
+    const layers = [source("2"), {...source("3"), visible: false}, source("1"), {...source("3"), key: "copy", label: "Second view"}, source("empty"), source("outside")];
+    const reads = [];
+    const previews = {readBoxPreview: async (layer, box) => {
+        reads.push([layer.key, box.center.longitude]);
+        if (layer.key === "outside") throw Object.assign(new Error("Box outside raster"), {code: "sampling_box_outside_raster"});
+        if (layer.key === "empty") return {method: "exact", values: [{value: null, unit: "cm"}]};
+        const exact = ["3", "copy"].includes(layer.key);
+        return {method: exact ? "exact" : "estimated", values: [{value: exact ? 11 : 1, unit: exact ? "cm" : "m"}]};
+    }};
+    const h = fixture(previews);
+    h.grid.storedUnit = "m";
+    h.controller.updateAvailableRasters(layers);
+    h.controller.selectRaster("3", true);
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    await h.open();
+    h.view.actions.onExactStatistics(); await h.tick();
+    const originals = [...h.server.values()];
+    assert.equal(originals.length, 2);
+    h.close();
+    reads.length = 0;
+    const restored = fixture(previews, h.data);
+    for (const job of originals) restored.server.set(job.jobId, job);
+    const recovery = restored.controller.start();
+    restored.controller.updateAvailableRasters(layers);
+    await recovery;
+    await restored.finish(); await restored.finish();
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    const means = csvParse(restored.controller.exportCsv()).filter(row => row.formula === "mean(a)");
+    assert.deepEqual(means.map(row => row.raster), layers.map(layer => layer.label));
+    assert.deepEqual(means.filter(row => ["1", "2"].includes(row.item_id)).map(row => [row.value, row.unit]),
+        [["-123.4567890123456789", "m"], ["-123.4567890123456789", "m"]]);
+    assert.deepEqual(means.filter(row => row.item_id === "3").map(row => [row.value, row.unit, row.method, row.job_id]),
+        [["11", "cm", "exact", ""], ["11", "cm", "exact", ""]]);
+    assert.deepEqual(means.slice(-2).map(row => [row.status, row.value, row.error]),
+        [["no_valid_data", "", ""], ["error", "", "Box outside raster"]]);
+    assert.deepEqual(reads, [["3", -93], ["empty", -93], ["outside", -93]]);
+    restored.close();
+});
+
+test("reload keeps an exact preview and its previously completed custom statistic", async () => {
+    const previews = {readBoxPreview: async layer => ({method: layer.key === "1" ? "exact" : "estimated", values: [{value: 11, unit: "cm"}]})};
+    const h = fixture(previews);
+    h.controller.addFormula("max");
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 10}});
+    await h.open();
+    const firstMax = await h.finish("ready", false, "1");
+    await h.finish("ready", false, "2");
+    h.view.actions.onExactStatistics(); await h.tick();
+    assert.equal(h.server.size, 3);
+    h.close();
+    const restored = fixture(previews, h.data);
+    for (const [id, job] of h.server) restored.server.set(id, job);
+    await restored.controller.start(); await restored.finish();
+    const rows = csvParse(restored.controller.exportCsv()).filter(row => row.item_id === "1");
+    assert.deepEqual(rows.map(row => [row.formula, row.value, row.job_id]),
+        [["mean(a)", "11", ""], ["max(a)", "-123.4567890123456789", firstMax]]);
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    restored.close();
+});
+
+for (const withMaximum of [false, true]) for (const failure of ["error", "estimated", "unavailable"]) {
+    test(`retry a recovered exact peer after ${failure}, ${withMaximum ? "retaining its maximum" : "without a native job"}`, async () => {
+        const exact = {method: "exact", values: [{value: 7, unit: "cm"}]};
+        const estimate = {method: "estimated", values: [{value: 20, unit: "cm"}]};
+        const h = fixture({readBoxPreview: async layer => layer.key === "1" ? exact : estimate});
+        if (withMaximum) h.controller.addFormula("max");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: 8, latitude: 14}, sideLengthKm: 75}});
+        await h.open();
+        const maximumJob = withMaximum ? await h.finish("ready", false, "1") : null;
+        if (withMaximum) await h.finish("ready", false, "2");
+        h.view.actions.onExactStatistics(); await h.tick(); h.close();
+
+        const retry = deferred(), reads = [];
+        const restored = fixture({readBoxPreview: async (layer, box) => {
+            reads.push([layer.key, box.center.longitude]);
+            if (reads.length > 1) return retry.promise;
+            if (failure === "error") throw new Error("Source read failed.");
+            return failure === "estimated" ? estimate : {method: "unavailable", values: [{value: null, unit: "cm"}]};
+        }}, h.data);
+        for (const [id, job] of h.server) restored.server.set(id, job);
+        try {
+            await restored.controller.start(); await restored.open(); await restored.finish();
+            assert.equal(restored.view.state.area.hasErrors, true);
+            restored.view.actions.onRetry(); await flush();
+            assert.deepEqual(reads, [["1", 8], ["1", 8]]);
+            assert.equal(restored.view.state.busy, true);
+            retry.resolve(exact); await flush();
+            assert.equal(restored.view.state.area.hasErrors, false);
+            const rows = csvParse(restored.controller.exportCsv()).filter(row => row.item_id === "1");
+            assert.deepEqual([rows[0].value, rows[0].unit, rows[0].method, rows[0].job_id], ["7", "cm", "exact", ""]);
+            if (withMaximum) assert.deepEqual([rows[1].value, rows[1].job_id], ["-123.4567890123456789", maximumJob]);
+            assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+        } finally { restored.close(); }
+    });
+}
