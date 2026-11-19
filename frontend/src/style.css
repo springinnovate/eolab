@@ -4067,6 +4067,41 @@ article.raster-histogram-summary {
   padding-bottom: 6px;
   pointer-events: none;
 }
+#map-interaction-tools {
+  padding: 5px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: var(--elevation-control);
+  pointer-events: auto;
+}
+.map-interaction-strip { display: flex; flex-wrap: wrap; gap: 3px; }
+.map-interaction-strip button {
+  flex: 1 0 auto;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: var(--font-size-support);
+  cursor: pointer;
+}
+.map-interaction-strip button:hover { background: var(--surface-hover); }
+.map-interaction-strip button[aria-pressed="true"] {
+  color: var(--brand-hover);
+  border-color: var(--brand);
+  background: var(--surface-selected);
+}
+#lasso-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
+#lasso-controls[hidden] { display: none; }
+#lasso-controls label { font-size: var(--font-size-support); color: var(--text-2); }
+#lasso-layer { flex: 1 1 110px; min-width: 0; max-width: 100%; }
+#map-interaction-status { margin: 6px 2px 0; color: var(--text-2); font-size: var(--font-size-support); overflow-wrap: anywhere; }
+.leaflet-container.is-lasso-active { cursor: crosshair; touch-action: none; }
+@media (pointer: coarse) {
+  .map-interaction-strip button, #lasso-layer, #clear-lasso-selection { min-height: 44px; }
+}
 #app :is(.control-panel, .map-tool-openers) {
   transition: width 220ms ease, var(--panel-fade, opacity 0s);
 }
@@ -5298,6 +5333,7 @@ summary:hover > .raster-disclosure-chevron {
 #vector-filter-panel { padding: 16px; }
 #vector-filter-title { overflow-wrap: anywhere; font-weight: 600; }
 .vector-filter-options, .vector-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 12px; }
+.vector-filter-condition-choices:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px; }
 .vector-filter-options label { display: flex; align-items: center; gap: 6px; }
 .vector-filter-rule { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr); gap: 8px; padding: 10px; margin-block: 8px; border: 1px solid var(--border-1); border-radius: 8px; }
 .vector-filter-rule select, .vector-filter-rule input { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 8px; font: inherit; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }

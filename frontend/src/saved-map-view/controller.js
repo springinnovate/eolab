@@ -1,4 +1,5 @@
 /** Save, share and restore map layers, styles and viewport settings. */
+import { viewFilter, waitingForPolygonLayer } from "../selected-area.js";
 
 import {
     createSavedMapView,
@@ -559,7 +560,11 @@ export class SavedMapViewController {
         const layer = this.exportTemporal(record) ?? (record.entry.item === null
             ? this.exportUpload(record) ?? this.exportArtifact(record) ?? this.exportDrawing(record) ?? this.exportAnnotation(record)
             : this.#exportCatalogLayer(record));
-        return layer === null ? null : {...layer, isCustom: record.entry.isCustom,
+        if (layer === null) return null;
+        const filter = record.requestedSpatialFilter ?? layer.filter;
+        return {...layer, isCustom: record.entry.isCustom,
+            ...(record.filterViewId ? {filterViewId: record.filterViewId} : {}),
+            ...(filter?.rules?.some(rule => rule.operator === "intersects") ? {filter: viewFilter(filter)} : {}),
             ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})};
     }
 
@@ -744,7 +749,25 @@ export class SavedMapViewController {
      * @param {{strictStyle?:boolean}} [options] Require exact Catalog appearance for atomic additions.
      * @return {Promise<{key?:string|null,staged:Object|null,detail:string|null}>} Detached view, attached source-owned key or failure detail.
      */
-    async #restoreLayer(layer, origin, isCurrent, {strictStyle = false} = {}) {
+    async #restoreLayer(savedLayer, origin, isCurrent, {strictStyle = false} = {}) {
+        const spatial = savedLayer.filter?.rules?.some(rule => rule.operator === "intersects");
+        const layer = spatial ? {...savedLayer, filter: waitingForPolygonLayer(savedLayer.filter)} : savedLayer;
+        const result = await this.#openLayer(layer, origin, isCurrent, {strictStyle});
+        if (!savedLayer.filterViewId && !spatial) return result;
+        const record = result.staged?.record ?? (result.key ? this.mapLayers.getRecord(result.key) : null);
+        if (record && savedLayer.filterViewId) record.filterViewId = savedLayer.filterViewId;
+        if (record && spatial && savedLayer.filter.enabled) record.requestedSpatialFilter = savedLayer.filter;
+        return result;
+    }
+
+    /** Open one source's saved presentation through its ordinary catalog, upload or drawing owner.
+     * @param {Object} layer Source and presentation ready to stage.
+     * @param {string} origin Original EOLab site.
+     * @param {()=>boolean} isCurrent Whether the caller still owns this restore.
+     * @param {{strictStyle:boolean}} options Whether a failed style prevents attachment.
+     * @return {Promise<Object>} Staged or attached view, or the owner's error.
+     */
+    async #openLayer(layer, origin, isCurrent, {strictStyle}) {
         if (layer.catalogItem) return this.#prepareLayer(layer, {strictStyle});
         let restore, label, sourceLabel;
         if (layer.drawingLayerId) {

@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from eolab_app.attribute_filter import VectorFilter, validate_filter
+from eolab_app.catalog_selection import VectorFilterRule, MAX_FILTER_RULES
 from eolab_app.calculated_fields import CalculatedField
 
 MAX_APPEARANCE_DEFINITION_BYTES = 65_536
@@ -145,6 +146,7 @@ class MapStyledLayer(MapDocumentPart):
     """
 
     customName: Title | None = None
+    filterViewId: Annotated[UUID, Field(strict=False)] | None = None
     isCustom: bool = False
     visible: bool
     legendIncluded: bool = True
@@ -201,6 +203,19 @@ class MapDrawingAppearance(MapDocumentPart):
     labels: bool
 
 
+class SavedIntersection(MapDocumentPart):
+    """Identify the polygon view to reopen when a drawing's spatial filter is restored."""
+
+    operator: Literal["intersects"]
+    layerId: Annotated[UUID, Field(strict=False)]
+
+
+class SavedDrawingFilter(VectorFilter):
+    """Keep drawing attribute conditions and view references independent of expiring reads."""
+
+    rules: tuple[VectorFilterRule | SavedIntersection, ...] = Field(default=(), max_length=MAX_FILTER_RULES)
+
+
 class MapDrawingLayer(MapDocumentPart):
     """Reference a live drawing source with view-local appearance and filters.
 
@@ -212,13 +227,14 @@ class MapDrawingLayer(MapDocumentPart):
     """
 
     drawingLayerId: Annotated[UUID, Field(strict=False)]
+    filterViewId: Annotated[UUID, Field(strict=False)] | None = None
     isCustom: Literal[True] = True
     customName: Title | None = None
     visible: bool
     legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]
     appearance: MapDrawingAppearance
-    filter: VectorFilter = Field(default_factory=VectorFilter)
+    filter: SavedDrawingFilter = Field(default_factory=SavedDrawingFilter)
 
     @model_validator(mode="after")
     def validate_drawing_filter(self) -> Self:
@@ -230,5 +246,6 @@ class MapDrawingLayer(MapDocumentPart):
         Raises:
             ValueError: A rule does not match the source's text attributes.
         """
-        validate_filter(self.filter, {"name": "str", "note": "str"})
+        attributes = tuple(rule for rule in self.filter.rules if isinstance(rule, VectorFilterRule))
+        validate_filter(VectorFilter(rules=attributes), {"name": "str", "note": "str"})
         return self

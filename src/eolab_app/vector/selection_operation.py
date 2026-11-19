@@ -1,7 +1,9 @@
 """Count matching vector features in a Job service execution process."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pydantic import (
     BaseModel,
@@ -13,10 +15,16 @@ from pydantic import (
 
 from eolab_app.catalog_selection import (
     ArtifactVectorSelection,
+    FeatureMatches,
+    ResolvedCatalogSelection,
     VectorSelection,
     SelectionUnavailableError,
 )
 from eolab_app.source_files import SourceFileError, resolve_leased_source_path
+
+if TYPE_CHECKING:
+    import httpx2
+    from eolab_app.feature_intersection import IntersectionLayer
 
 # These are internal Compose endpoints, not caller-supplied source locations.
 CATALOG_URL = "http://stac-api:8080"
@@ -24,6 +32,20 @@ SCAN_MOUNT = Path("/scan-source")
 UPLOAD_MOUNT = Path("/vector-uploads")
 PROCESSING_MOUNT = Path("/processing-data")
 SOURCE_FILES_URL = "http://app:8000/api/processing/source-files"
+
+
+class ComparisonInput(BaseModel):
+    """A one-job credential for reading the original target and its authorized polygon sources."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    spatialRead: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ComparisonResult(BaseModel):
+    """An optional readable failure after matching IDs have been returned to their owner."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    error: str | None = Field(default=None, max_length=1024)
 
 
 class SelectionMeasurementInput(BaseModel):
@@ -150,46 +172,120 @@ async def _measure_selected_features(
     # Discovery must not import native GIS libraries into the Jobs HTTP process.
     import httpx2
     from eolab_app.bounded_vector import _limit_memory, count_selected_features
-    from eolab_app.vector.catalog import StacVectorCatalog
-    from eolab_app.vector.selection_source import resolve_selection
-    from eolab_app.vector.sources import MountedVectorResolver
-    from eolab_app.vector_uploads import VectorUploadStore
-
     async with httpx2.AsyncClient(
         timeout=5, trust_env=False, follow_redirects=False
     ) as client:
-        catalog = StacVectorCatalog(client, CATALOG_URL)
-        resolver = MountedVectorResolver(SCAN_MOUNT)
-        if isinstance(inputs.selection, ArtifactVectorSelection):
-            from eolab_app.bounded_vector import resolve_vector_file_selection
-
-            try:
-                path = await resolve_leased_source_path(
-                    client,
-                    inputs.selection.jobId,
-                    inputs.selection.artifactId,
-                    inputs.readLease,
-                    PROCESSING_MOUNT,
-                    "application/geopackage+sqlite3",
-                    source_url=SOURCE_FILES_URL,
-                )
-            except SourceFileError as error:
-                raise SelectionUnavailableError(str(error)) from error
-            resolved = resolve_vector_file_selection(path, inputs.selection)
-        else:
-            resolved = await resolve_selection(
-                catalog,
-                resolver,
-                inputs.selection,
-                VectorUploadStore(UPLOAD_MOUNT, max_bytes=None),
-                inputs.uploadOwner,
-            )
-        if resolved.selection != inputs.selection:
-            raise SelectionUnavailableError(
-                "The selected vector identity changed; select it again."
-            )
+        resolved = await _open_job_selection(client, inputs)
         with _limit_memory():
             measurements = FeatureMeasurements.model_validate(
                 count_selected_features(resolved)
             )
         return SelectionMeasurementResult(measurements=measurements)
+
+
+async def _open_job_selection(client: "httpx2.AsyncClient", inputs: SelectionMeasurementInput) -> ResolvedCatalogSelection:
+    """Open a native job's authorized original and apply any bound spatial conditions.
+
+    Args:
+        client: Internal HTTP connection for catalog, result leases and spatial reads.
+        inputs: Path-free source, predicate and appropriate upload owner or result lease.
+
+    Returns:
+        Original source on the worker's mounted volume, ready to read.
+
+    Raises:
+        SelectionUnavailableError: If the selection or its retained read credentials changed.
+        VectorUploadError: If the worker cannot read the private upload.
+    """
+    from eolab_app.vector.catalog import StacVectorCatalog
+    from eolab_app.vector.selection_source import resolve_selection
+    from eolab_app.vector.sources import MountedVectorResolver
+    from eolab_app.vector_uploads import VectorUploadStore
+
+    if isinstance(inputs.selection, ArtifactVectorSelection):
+        from eolab_app.bounded_vector import resolve_vector_file_selection
+        try:
+            path = await resolve_leased_source_path(
+                client, inputs.selection.jobId, inputs.selection.artifactId, inputs.readLease,
+                PROCESSING_MOUNT, "application/geopackage+sqlite3", source_url=SOURCE_FILES_URL,
+            )
+        except SourceFileError as error:
+            raise SelectionUnavailableError(str(error)) from error
+        resolved = resolve_vector_file_selection(path, inputs.selection)
+    else:
+        resolved = await resolve_selection(
+            StacVectorCatalog(client, CATALOG_URL), MountedVectorResolver(SCAN_MOUNT), inputs.selection,
+            VectorUploadStore(UPLOAD_MOUNT, max_bytes=None), inputs.uploadOwner,
+        )
+    if resolved.selection != inputs.selection:
+        raise SelectionUnavailableError("The selected vector identity changed. Choose the layer again.")
+    return resolved
+
+
+def compare_selected_features(inputs: ComparisonInput) -> ComparisonResult:
+    """Compare original vector features inside the supervised Jobs worker.
+
+    Args:
+        inputs: Short-lived bearer credential issued for this source pair.
+
+    Returns:
+        Confirmation of delivery or a readable source error.
+    """
+    import httpx2
+    from eolab_app.bounded_geometry import GeometryValidationError
+    from eolab_app.vector.errors import VectorFeatureError
+    from eolab_app.vector_uploads import VectorUploadError
+
+    async def compare() -> None:
+        """Return original feature IDs while the submitting request holds both sources."""
+        async with httpx2.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
+            await return_intersecting_ids(client, inputs)
+
+    try:
+        asyncio.run(compare())
+    except (GeometryValidationError, SelectionUnavailableError, VectorFeatureError, VectorUploadError) as error:
+        return ComparisonResult(error=str(error))
+    except httpx2.HTTPError:
+        return ComparisonResult(error="The original layers are unavailable for this comparison.")
+    return ComparisonResult()
+
+
+async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: ComparisonInput) -> None:
+    """Read the original layers and send the complete selection and count to the waiting request.
+
+    Args:
+        client: Internal connection to the application, catalog and leased-file authority.
+        inputs: A single comparison's bearer credential.
+
+    Raises:
+        GeometryValidationError: If the native comparison exceeds its read limits or the polygon geometry is invalid.
+        SelectionUnavailableError: If either original or its credentials expired.
+        httpx2.HTTPError: If the submitting request or an upstream service is unavailable.
+    """
+    from eolab_app.bounded_vector import _limit_memory
+    from eolab_app.feature_intersection import match_features
+    from eolab_app.catalog_selection import VectorFilter
+    from eolab_app.vector.spatial_read import SPATIAL_READ_URL
+    from eolab_app.polygon_areas import SummaryPolygon
+    from shapely.geometry import shape
+
+    async def read_layer(layer: dict[str, Any]) -> "IntersectionLayer":
+        """Open a bound file source or recover the committed drawings sent for this read."""
+        if "polygons" in layer:
+            return tuple(SummaryPolygon.model_validate(polygon) for polygon in layer["polygons"])
+        matches = layer.pop("matches")
+        original = await _open_job_selection(client, SelectionMeasurementInput.model_validate(layer))
+        return replace(original, matches=FeatureMatches.model_validate(matches)) if matches is not None else original
+
+    headers = {"Authorization": f"Bearer {inputs.spatialRead}"}
+    response = await client.get(SPATIAL_READ_URL, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+    with _limit_memory():
+        target = await read_layer(data["target"])
+        boundaries = {key: await read_layer(source) for key, source in data["boundaries"].items()}
+        required_area = shape(data["requiredArea"]) if data["requiredArea"] is not None else None
+        matches = match_features(target, boundaries, VectorFilter.model_validate(data["filter"]), data["drawingProperties"],
+                                 required_area=required_area)
+    delivered = await client.put(SPATIAL_READ_URL, headers=headers, json=matches.model_dump(mode="json"))
+    delivered.raise_for_status()

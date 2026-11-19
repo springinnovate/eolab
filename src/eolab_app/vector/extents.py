@@ -64,6 +64,7 @@ def read_selected_extent(
                 limits,
                 deadline,
                 resolved.calculated_fields,
+                resolved.matches.ids if resolved.matches is not None else None,
             )
 
 
@@ -119,6 +120,7 @@ def _read_dataset_extent(
     limits: VectorReadLimits,
     deadline: float,
     calculated_fields: tuple[CompiledCalculatedField, ...] = (),
+    matched_ids: frozenset[int] | None = None,
 ) -> dict[str, Any]:
     """Measure filtered feature envelopes from an already authorized open dataset.
 
@@ -129,6 +131,7 @@ def _read_dataset_extent(
         limits: Ordinary interactive source-reading budgets.
         deadline: Monotonic deadline established before opening the original file.
         calculated_fields: Programs already validated against the original schema.
+        matched_ids: Original IDs selected by the complete spatial filter, if present.
 
     Returns:
         Matching count and transformed bounds without source geometry.
@@ -163,7 +166,7 @@ def _read_dataset_extent(
             )
         properties = dict(feature.properties)
         properties.update(evaluate_calculated_fields(calculated_fields, properties))
-        if not matches_filter(candidate, properties):
+        if not (int(feature.id) in matched_ids if matched_ids is not None else matches_filter(candidate, properties)):
             continue
         matched += 1
         if feature.geometry is None:

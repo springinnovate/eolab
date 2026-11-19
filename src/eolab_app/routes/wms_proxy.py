@@ -395,7 +395,7 @@ def create_wms_proxy_router(
                         HTTPException: If layer resources can no longer be prepared.
                     """
                     async with use_layers(layer_names, request) if use_layers else nullcontext():
-                        if any(name.lower() == "sld_body" for name, _ in query_entries):
+                        if any(name.lower() == "sld_body" or (name.lower() == "cql_filter" and len(value) > 1024) for name, value in query_entries):
                             return await geoserver_client.post(
                                 internal_wms_url,
                                 data=dict(query_entries),
@@ -425,7 +425,7 @@ def create_wms_proxy_router(
                 )
             else:
                 async with use_layers(layer_names, request) if use_layers else nullcontext():
-                    if any(name.lower() == "sld_body" for name, _ in query_entries):
+                    if any(name.lower() == "sld_body" or (name.lower() == "cql_filter" and len(value) > 1024) for name, value in query_entries):
                         geoserver_response = await geoserver_client.post(
                             internal_wms_url, data=dict(query_entries), headers=forwarded_headers,
                         )

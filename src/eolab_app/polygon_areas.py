@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from shapely.geometry import Polygon
+
 
 MAX_POLYGON_AREA_BYTES = 8 * 1024 * 1024
 MAX_POLYGON_AREA_COORDINATES = 100_000
@@ -38,6 +38,8 @@ class SummaryPolygon(BaseModel):
         Raises:
             ValueError: If the ring is open, self-crossing or has zero area.
         """
+        from shapely.geometry import Polygon
+
         ring = self.coordinates[0]
         if ring[0] != ring[-1]:
             raise ValueError("A summary polygon must end at its starting vertex.")

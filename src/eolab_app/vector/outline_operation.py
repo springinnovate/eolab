@@ -41,6 +41,7 @@ class OutlineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     selection: VectorSelection
     uploadOwner: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    spatialRead: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     readLease: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
 
     @model_validator(mode="after")
@@ -167,6 +168,8 @@ async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
                 VectorUploadStore(UPLOAD_MOUNT, max_bytes=None),
                 inputs.uploadOwner,
             )
+        from eolab_app.vector.spatial_read import load_spatial_read
+        resolved = await load_spatial_read(client, resolved, inputs.spatialRead)
         if resolved.selection != inputs.selection:
             raise SelectionUnavailableError(
                 "The selected vector identity changed; select it again."

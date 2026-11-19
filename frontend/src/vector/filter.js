@@ -46,6 +46,13 @@ export function normalizeVectorFilter(candidate, fields) {
         throw new TypeError("Use Match all or Match any with at most 12 conditions.");
     }
     const rules = candidate.rules.map((rule, index) => {
+        if (rule?.operator === "intersects") {
+            if (!["layerId,operator", "layerId,operator,source"].includes(Object.keys(rule).sort().join(",")) || typeof rule.layerId !== "string" ||
+                !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(rule.layerId)) {
+                throw new TypeError(`Condition ${index + 1}: choose a polygon layer.`);
+            }
+            return {operator: "intersects", layerId: rule.layerId, ...(rule.source ? {source: structuredClone(rule.source)} : {})};
+        }
         const field = fields.find(({ name }) => name === rule?.field);
         if (!field || Object.keys(rule).sort().join(",") !== "field,operator,value" ||
             !vectorFilterOperators(field.type).some(({ value }) => value === rule.operator)) {
@@ -71,12 +78,13 @@ export function normalizeVectorFilter(candidate, fields) {
 /**
  * Describe the currently applied rules without interpreting user expressions.
  * @param {Object} filter Validated state.
+ * @param {(id:string)=>string|undefined} [layerName] Look up the chosen polygon view's name.
  * @return {string} Readable rule summary.
  */
-export function vectorFilterSummary(filter) {
+export function vectorFilterSummary(filter, layerName = () => undefined) {
     if (!filter.rules.length) return "No conditions. All features are included.";
-    const rules = filter.rules.map(({ field, operator, value }) =>
-        `${field} ${OPERATORS[operator]}${value === null ? "" : ` ${JSON.stringify(value)}`}`);
+    const rules = filter.rules.map(rule => rule.operator === "intersects" ? `Intersects ${layerName(rule.layerId) ?? "polygon layer"}` :
+        `${rule.field} ${OPERATORS[rule.operator]}${rule.value === null ? "" : ` ${JSON.stringify(rule.value)}`}`);
     return `${filter.enabled ? "" : "Disabled: "}${rules.join(filter.match === "all" ? " AND " : " OR ")}`;
 }
 

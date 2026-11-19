@@ -7,7 +7,31 @@ import httpx2
 from eolab_jobs.client import JobFailed, JobsClient
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.vector.selection_operation import SelectionMeasurementResult
+from eolab_app.vector.selection_operation import ComparisonResult, SelectionMeasurementResult
+
+
+async def compare_selection_job(jobs: JobsClient, token: str) -> None:
+    """Queue an exact polygon comparison and hold both original inputs until native exit.
+
+    Args:
+        jobs: Authenticated application connection to the existing Jobs queue.
+        token: One-request capability for obtaining the source pair and returning its IDs.
+
+    Raises:
+        VectorConflictError: If the queue or native reader cannot complete the comparison.
+        asyncio.CancelledError: After the job has stopped using both original sources.
+    """
+    try:
+        result = await jobs.run(
+            {"operation": "vector.intersection.v1", "inputs": {"spatialRead": token}, "priority": 0,
+             "executionTimeoutSeconds": 20, "queueTimeoutSeconds": 30},
+            timeout_seconds=60, delete_on_completion=True, require_terminal_cleanup=True,
+        )
+        outcome = ComparisonResult.model_validate(result.value)
+    except (JobFailed, httpx2.HTTPError, ValueError, TimeoutError) as error:
+        raise VectorConflictError("The polygon comparison could not finish. Try again.") from error
+    if outcome.error:
+        raise VectorConflictError(outcome.error)
 
 
 class SelectionJobs:

@@ -18,7 +18,9 @@ export class VectorSelectionOverlay {
         try {
             const response = await fetch("/api/vector-sampling/outline", {
                 method: "POST", signal: this.abort.signal,
-                headers: { "Content-Type": "application/json", ...(area.selection.uploadId ? { "X-EOLab-Uploads": "1" } : {}), ...(area.selection.kind === "runArtifact" ? {"X-EOLab-Processing": "1"} : {}) },
+                headers: { "Content-Type": "application/json",
+                    ...(area.selection.uploadId || area.selection.filter.rules.some(rule => rule.operator === "intersects") ? {"X-EOLab-Uploads": "1"} : {}),
+                    ...(area.selection.kind === "runArtifact" || area.selection.filter.rules.some(rule => rule.operator === "intersects") ? {"X-EOLab-Processing": "1"} : {}) },
                 credentials: "same-origin", cache: "no-store", body: JSON.stringify(area.selection),
             });
             if (!response.ok) return;

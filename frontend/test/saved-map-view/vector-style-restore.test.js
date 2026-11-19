@@ -5,6 +5,7 @@ import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
 import { createSavedMapView } from "../../src/saved-map-view/model.js";
 import { createNamedMapFixture } from "../../test-support/named-map.js";
 import { createVectorMapLayerAdapter } from "../../src/vector/map-layer-adapter.js";
+import { SpatialFilterViews } from "../../src/vector/spatial-filter.js";
 import { parseCategoricalVectorCsv } from "../../src/vector/categorical-csv.js";
 
 const ORIGIN = "https://viewer.example";
@@ -170,6 +171,44 @@ for (const { boundary, automatic, value, color } of [
     assert.equal(featureColor(JSON.parse(restored.state.layer.wmsParams.vector_style), value), color);
   });
 }
+
+test("reopening an intersection selects the hidden duplicate and exports only its view ID", async t => {
+  const f = createVectorRestoreFixture(50);
+  const id = "00000000-0000-4000-8000-000000000042";
+  const condition = {operator: "intersects", layerId: id};
+  const predicate = {enabled: true, match: "all", rules: [condition]};
+  const east = {enabled: true, match: "all", rules: [{field: "score", operator: "gt", value: 50}]};
+  const item = {...CATALOG_ITEM, properties: {...CATALOG_ITEM.properties,
+    "eolab:vector_source": {layer_name: "measurements", asset_key: "data"}}};
+  const {record} = await f.stage(item, {key: "first", visible: true, opacity: 1});
+  const base = {catalogItem: {collection: item.collection, id: item.id}, visible: true, opacity: 1,
+    isCustom: true, calculatedFields: [], style: f.adapter.exportSavedState(record)};
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    const selection = JSON.parse(options.body).selection;
+    requests.push(selection.filter);
+    return Response.json({layerName: "eolab:filtered-view", count: {matched: 0, total: 8, complete: true}});
+  });
+  await f.openLayers([
+    {...base, customName: "Parcels", filter: predicate},
+    {...base, customName: "Zones copy", visible: false, filterViewId: id, filter: east},
+    {...base, customName: "Zones", filter: {...east, rules: []}},
+  ]);
+  assert.deepEqual(f.view.result, {loaded: 3, total: 3, details: []});
+  assert.deepEqual(requests[0].rules[0].source, {kind: "drawing", polygonArea: null});
+  const target = f.records.find(view => view.entry.customName === "Parcels");
+  const views = new SpatialFilterViews({layers: () => f.records.map(view => ({
+    key: view.entry.key, id: view.filterViewId, selection: {collectionId: item.collection, itemId: item.id,
+      assetKey: "data", layerName: "measurements"}, filter: f.adapter.exportFilterState(view),
+  }))});
+  const captured = await views.bind(target.entry.key, target.requestedSpatialFilter);
+  assert.deepEqual(captured.rules[0].source.filter, east);
+  await f.adapter.applyFilterState(target, captured);
+  delete target.requestedSpatialFilter;
+  const resaved = await f.save();
+  assert.deepEqual(resaved.layers.find(view => view.customName === "Parcels").filter, predicate);
+  assert.equal(resaved.layers.find(view => view.filterViewId === id).visible, false);
+});
 
 test("independent custom views of the same Catalog source retain different saved breaks", async () => {
   const f = createVectorRestoreFixture(50);

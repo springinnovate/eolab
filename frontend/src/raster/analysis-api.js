@@ -212,7 +212,7 @@ async function requestRasterStatistics(item, requestDocument, signal, fetchImple
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
-                ...(requestDocument.catalogSelection?.uploadId || rasterSourceReference(item).kind === "uploadedRaster" ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(requestDocument.catalogSelection?.uploadId || requestDocument.catalogSelection?.filter.rules.some(rule => rule.operator === "intersects") || rasterSourceReference(item).kind === "uploadedRaster" ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"
@@ -266,7 +266,7 @@ export async function loadRasterPairedStatistics(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
-                ...(normalizedArea.catalogSelection?.uploadId || [requestDocument.xRaster, requestDocument.yRaster].some(source => source.kind === "uploadedRaster") ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(normalizedArea.catalogSelection?.uploadId || normalizedArea.catalogSelection?.filter.rules.some(rule => rule.operator === "intersects") || [requestDocument.xRaster, requestDocument.yRaster].some(source => source.kind === "uploadedRaster") ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"

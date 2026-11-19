@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import Annotated, Literal, Self
+from uuid import UUID
 
 from pydantic import (
     AnyHttpUrl,
@@ -207,6 +208,7 @@ class MapAnnotationLayer(MapDocumentPart):
     """
 
     sharedAnnotation: MapAnnotationReference
+    filterViewId: Annotated[UUID, Field(strict=False)] | None = None
     isCustom: bool = False
     visible: bool
     legendIncluded: bool = True
@@ -273,17 +275,24 @@ class SavedMapView(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_map_layers_and_size(self) -> Self:
-        """Reject duplicate shared layers, null legend preferences and oversized maps.
+        """Validate layer identities, legend preferences and the saved-map size.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If a shared layer repeats, explicit legend settings are null,
-                or the document exceeds the size limit.
+            ValueError: If a polygon view ID or shared layer repeats, explicit legend
+                settings are null, or the document exceeds the size limit.
         """
         if "mapLegend" in self.model_fields_set and self.mapLegend is None:
             raise ValueError("Map legend preferences must be an object when supplied.")
+        view_ids = [
+            layer.filterViewId
+            for layer in self.layers
+            if not isinstance(layer, MapTemporalLayer) and layer.filterViewId is not None
+        ]
+        if len(set(view_ids)) != len(view_ids):
+            raise ValueError("Each polygon view in a saved map needs its own ID.")
         shared_layer_ids = [
             layer.sharedAnnotation.id
             for layer in self.layers

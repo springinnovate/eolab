@@ -166,9 +166,11 @@ export class AnnotationController {
      * Add a private layer and start its first polygon using the ordinary map editor.
      * Save the empty layer on this device; its unfinished polygon stays outside storage
      * until Save. Loading, editing and capacity errors use the existing editor status.
+     * @param {((key:string|null)=>void)|null} [onFinish=null] Receive the saved drawing key, or null on cancellation.
      * @return {void}
      */
-    drawPrivatePolygon() {
+    drawPrivatePolygon(onFinish = null) {
+        let started = false;
         this.perform(() => {
             if (!this.loaded) throw new Error(this.status.textContent || "Wait for saved polygons to open before drawing.");
             if (this.model.draft) throw new Error("Save or cancel the current polygon before creating another layer.");
@@ -177,7 +179,12 @@ export class AnnotationController {
             this.panel.showLayer(`local:annotation:${layer.id}`);
             void this.save();
             this.beginPolygon(layer.id);
+            if (onFinish && this.model.draft?.layerId === layer.id) {
+                this.filterDrawing = {id: layer.id, onFinish};
+                started = true;
+            }
         });
+        if (onFinish && !started) onFinish(null);
     }
 
     /** Restore your server contribution as a local editable layer after joining.
@@ -582,7 +589,8 @@ export class AnnotationController {
      * @return {Object[]} Layer identities, fields and polygon snapshots.
      */
     summaryTargets() {
-        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, this.displayLayer(layer)));
+        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(
+            `local:annotation:${layer.id}`, this.displayLayer(layer), this.shared.has(layer.id) ? null : layer.drawingSource));
     }
 
     /** Return annotation fields and callbacks for the existing filter dialog.
@@ -681,6 +689,11 @@ export class AnnotationController {
 
     /** Synchronize map editing presentation and notify composition of the mode. @return {void} */
     updateEditor() {
+        if (this.filterDrawing && this.model.draft?.layerId !== this.filterDrawing.id) {
+            const {onFinish} = this.filterDrawing;
+            this.filterDrawing = null;
+            onFinish(null);
+        }
         this.clearInspection();
         this.onEditingChange(!!this.model.draft);
         for (const [layerId, rendering] of this.layers) {
@@ -716,9 +729,11 @@ export class AnnotationController {
         if (this.model.layer(layerId).drawingSource?.canEdit === false) throw new Error("This drawing is read-only. Your unfinished changes have not been saved.");
         if (this.shared.get(layerId)?.canContribute === false) throw new Error("Join this layer before saving your polygon.");
         const polygon = this.model.savePolygon();
+        const onFinish = this.filterDrawing?.id === layerId ? this.filterDrawing.onFinish : null;
+        if (onFinish) this.filterDrawing = null;
         this.updateEditor();
         this.refreshLayer(layerId, true, polygon.id);
-        void this.save();
+        void this.save().then(() => onFinish?.(this.deviceSaveError ? null : `local:annotation:${layerId}`));
         if (drawAnother) this.beginPolygon(layerId);
     }
 

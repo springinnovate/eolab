@@ -145,8 +145,15 @@ function validateSavedMapView(candidate) {
             throw new SavedMapViewValidationError("Map legend visibility and collapse state must be boolean.");
         }
     }
+    const viewIds = new Set();
     const layers = candidate.layers.map(layer => {
         requirePlainObject(layer, "Saved layer");
+        if (Object.hasOwn(layer, "filterViewId")) {
+            if (typeof layer.filterViewId !== "string" || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(layer.filterViewId) || viewIds.has(layer.filterViewId)) {
+                throw new SavedMapViewValidationError("Each polygon filter view needs a unique ID.");
+            }
+            viewIds.add(layer.filterViewId);
+        }
         if (Object.hasOwn(layer, "legendIncluded") && typeof layer.legendIncluded !== "boolean") {
             throw new SavedMapViewValidationError("Layer legend inclusion must be boolean.");
         }
@@ -193,7 +200,7 @@ function validateSavedMapView(candidate) {
  */
 function validateDrawingReference(candidate) {
     requireExactKeys(candidate, ["drawingLayerId", "visible", "opacity", "appearance",
-        ...["isCustom", "customName", "legendIncluded", "filter"].filter(key => Object.hasOwn(candidate, key))], "Saved drawing");
+        ...["isCustom", "customName", "legendIncluded", "filter", "filterViewId"].filter(key => Object.hasOwn(candidate, key))], "Saved drawing");
     if (typeof candidate.drawingLayerId !== "string" ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(candidate.drawingLayerId)) {
         throw new SavedMapViewValidationError("Saved drawing identifier is invalid.");
@@ -227,6 +234,7 @@ function validateAnnotationReference(candidate) {
     requirePlainObject(candidate, "Shared layer");
     requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance",
         ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
+        ...(Object.hasOwn(candidate, "filterViewId") ? ["filterViewId"] : []),
         ...(Object.hasOwn(candidate, "isCustom") ? ["isCustom"] : [])], "Shared layer");
     const reference = candidate.sharedAnnotation;
     requirePlainObject(reference, "Shared layer reference");
@@ -270,6 +278,7 @@ function validateLayer(candidate) {
             ...(Object.hasOwn(candidate, "isCustom") ? ["isCustom"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : []),
+            ...(!isTemporal && Object.hasOwn(candidate, "filterViewId") ? ["filterViewId"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : [])],
         "Saved layer"
     );
@@ -347,6 +356,7 @@ function validateLayer(candidate) {
     }
     return Object.freeze({
         ...identity,
+        ...(candidate.filterViewId ? {filterViewId: candidate.filterViewId} : {}),
         ...(customName === undefined ? {} : { customName }),
         ...(Object.hasOwn(candidate, "legendIncluded") ? { legendIncluded: candidate.legendIncluded } : {}),
         ...(Object.hasOwn(candidate, "isCustom") ? { isCustom: candidate.isCustom } : {}),

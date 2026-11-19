@@ -269,10 +269,7 @@ def polygon_records(
                     tuple(
                         dict.fromkeys(
                             [
-                                *(
-                                    rule.field
-                                    for rule in resolved.selection.filter.rules
-                                ),
+                                *resolved.selection.filter.fields,
                                 *property_names,
                             ]
                         )
@@ -314,7 +311,8 @@ def polygon_records(
                             resolved.calculated_fields, properties
                         )
                     )
-                    if not matches_filter(resolved.selection.filter, properties):
+                    if not (int(feature.id) in resolved.matches.ids if resolved.matches is not None
+                            else matches_filter(resolved.selection.filter, properties)):
                         continue
                     if candidates is not dataset:
                         feature = dataset.get(feature.id)
@@ -442,10 +440,15 @@ def count_selected_features(
         SelectionUnavailableError: The native source cannot be read.
         RasterReadCancelled: The caller cancelled the selection.
     """
+    if resolved.matches is not None:
+        require_active_raster_read(cancellation_requested)
+        if not resolved.matches.ids:
+            raise GeometryValidationError("No matching polygon features; change the filter")
+        return resolved.matches.counts
     deadline = monotonic() + limits.seconds if limits else None
     fields = required_source_fields(
         resolved.calculated_fields,
-        tuple(dict.fromkeys(rule.field for rule in resolved.selection.filter.rules)),
+        resolved.selection.filter.fields,
     )
     matched = 0
     with _source_collection(

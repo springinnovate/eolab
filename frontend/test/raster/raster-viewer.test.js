@@ -3896,6 +3896,11 @@ test("first sample previews the clicked footprint without opening a histogram or
         const key = h.mapLayers.retainedRecords[0].entry.key;
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(hover(-20), undefined);
+        h.viewer.setSamplingBoxPointerEnabled(false);
+        assert.equal(h.controlsView.firstSampleHintVisible, false, "Pixel picking must not invite histogram-box placement");
+        assert.equal(hover(2), undefined);
+        h.viewer.setSamplingBoxPointerEnabled(true);
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(h.viewer.exploreAt({lng: -20, lat: 0}), false);
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         const beforeHover = reads.length;
@@ -5108,6 +5113,10 @@ test("histogram clicks use visible coverage without requesting unused pixel valu
 
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.exploreAt({ lng: 0, lat: 20 }), false);
+    assert.equal(viewer.exploreAt({ lng: 80, lat: 20 }, { histogram: false }), false);
+    await flushPromises();
+    assert.equal(histogramPresentationRequests, 0, "Pixel picker must not open a histogram");
+    assert.equal(rectangleLayers.some(layer => layer.kind === "selection"), false);
     await flushPromises();
     assert.equal(pixelRequests.length, 0);
     assert.equal(histogramPresentationRequests, 0);

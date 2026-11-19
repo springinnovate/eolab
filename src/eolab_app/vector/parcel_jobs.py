@@ -98,6 +98,7 @@ class ParcelJobs:
         fields: tuple[str, ...],
         offset: int,
         limit: int,
+        spatial_read: str | None = None,
     ) -> ParcelRowsPage:
         """Read one page in original-source order after exact filtering.
 
@@ -107,6 +108,7 @@ class ParcelJobs:
             fields: Original attributes requested as display text.
             offset: Matching rows skipped before this page.
             limit: Maximum rows in the page.
+            spatial_read: Temporary access to the authorized spatial conditions, when present.
 
         Returns:
             Lossless IDs, display properties and next offset, including empty success.
@@ -123,6 +125,7 @@ class ParcelJobs:
                 fields=fields,
                 offset=offset,
                 limit=limit,
+                spatialRead=spatial_read,
             ),
             ParcelRowsResult,
         )

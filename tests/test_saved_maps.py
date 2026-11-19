@@ -141,7 +141,7 @@ def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> N
 
 
 def test_repeated_catalog_views_round_trip() -> None:
-    """Preserve ordered views of the same raster and vector with distinct appearance."""
+    """Preserve duplicate raster and vector views while keeping polygon view IDs unique."""
     candidate = map_request()
     raster, vector = candidate["view"]["layers"]
     second_raster = deepcopy(raster)
@@ -149,6 +149,7 @@ def test_repeated_catalog_views_round_trip() -> None:
     second_raster["style"]["continuous"]["definition"]["minimumColor"] = "#FFFFFF"
     second_vector = deepcopy(vector)
     second_vector.update(customName="Brazil", visible=True, legendIncluded=False)
+    second_vector["filterViewId"] = "00000000-0000-4000-8000-000000000042"
     second_vector["style"]["definition"]["color"] = "#123456"
     second_vector["filter"] = {"field": "ISO3", "value": "BRA"}
     candidate["view"]["layers"] = [raster, second_vector, second_raster, vector]
@@ -160,6 +161,9 @@ def test_repeated_catalog_views_round_trip() -> None:
         ).model_dump(mode="json", exclude_unset=True)
         == candidate
     )
+    vector["filterViewId"] = second_vector["filterViewId"]
+    with pytest.raises(ValidationError, match="needs its own ID"):
+        CreateSavedMap.model_validate(candidate)
 
 
 def test_temporal_views_preserve_explicit_selections_and_independent_appearance() -> (
