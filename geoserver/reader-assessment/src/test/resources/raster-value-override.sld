@@ -4,7 +4,7 @@
     <UserStyle>
       <FeatureTypeStyle>
         <Transformation>
-          <ogc:Function name="eolabMaskRasterValue"><ogc:Literal>-9999.5</ogc:Literal></ogc:Function>
+          <ogc:Function name="eolabMaskRasterValue"><ogc:Literal>gradient</ogc:Literal><ogc:Literal>-9999.5,-9999.5</ogc:Literal></ogc:Function>
         </Transformation>
         <Rule>
           <RasterSymbolizer>
@@ -18,11 +18,11 @@
         </Rule>
       </FeatureTypeStyle>
       <FeatureTypeStyle>
-        <Transformation><ogc:Function name="eolabMaskRasterValue"/></Transformation>
+        <Transformation><ogc:Function name="eolabMaskRasterValue"><ogc:Literal>ranges</ogc:Literal><ogc:Literal>-9999.5,-9999.5</ogc:Literal></ogc:Function></Transformation>
         <Rule>
           <RasterSymbolizer>
             <Opacity>0.5</Opacity>
-            <ColorMap type="values"><ColorMapEntry quantity="-9999.5" color="#ff0000" opacity="0.5"/></ColorMap>
+            <ColorMap type="values"><ColorMapEntry quantity="1" color="#ff0000" opacity="0.5"/></ColorMap>
           </RasterSymbolizer>
         </Rule>
       </FeatureTypeStyle>

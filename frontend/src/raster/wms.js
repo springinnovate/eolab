@@ -13,9 +13,10 @@ import { normalizeCategoricalRasterStyle } from "./categorical-style.js";
  *
  * @param {import("./style.js").RasterStyle} style Numeric thresholds and
  * six-digit hex colors.
- * @return {string} Gradient assignments, followed by the exact value, color
- * and opacity only when the layer has a single-value override.
- * @throws {Error} If thresholds or colors violate the style contract.
+ * @return {string} Gradient assignments and optional exact and range overrides.
+ * Each range carries lower bound, upper bound, color and opacity in display order.
+ * An empty bound leaves that side open.
+ * @throws {Error} If a gradient stop, override bounds, color or opacity is invalid.
  */
 export function buildRasterStyleEnvironment(style) {
     validateRasterStyle(style);
@@ -33,6 +34,11 @@ export function buildRasterStyleEnvironment(style) {
     if (style.valueOverride) {
         const { value, color, opacity } = style.valueOverride;
         fields.push(`vexact:${value}`, `cexact:${color.toLowerCase()}`, `aexact:${opacity}`);
+    }
+    if (style.rangeOverrides) {
+        const ranges = style.rangeOverrides.map(({minimum, maximum, color, opacity}) =>
+            [minimum, maximum, color.toLowerCase(), opacity].join(","));
+        fields.push(`ranges:${ranges.join("|")}`);
     }
     return fields.join(";");
 }

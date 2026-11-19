@@ -1393,14 +1393,15 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     const key = record.entry.key;
     h.viewer.openStyle(key);
     h.controlsView.style = { ...h.controlsView.style, minimum: -5, midpoint: 0, maximum: 30,
-        valueOverride: {value: -9999.5, color: "#e57149", opacity: 0} };
+        valueOverride: {value: -9999.5, color: "#e57149", opacity: 0},
+        rangeOverrides: [{minimum: 100, maximum: null, color: "#ff00ff", opacity: 1}] };
     h.controlsView.paletteName = "custom";
     h.controlsView.handlers.onStyleInput(false);
     h.controlsView.handlers.onStyleChange();
     const continuous = record.adapter.exportSavedState(record).continuous;
     assert.deepEqual(continuous.definition.valueOverride, h.controlsView.style.valueOverride);
     assert.deepEqual(h.mapLayers.snapshots()[0].legend.entries.map(entry => [entry.label, entry.symbol.fillOpacity]),
-        [["Value -9999.5 · Transparent", 0]]);
+        [["Value -9999.5 · Transparent", 0], ["Value ≥ 100 · 100% opacity", 1]]);
     const style = categoricalAppearance();
     assert.ok(h.controlsView.layerHistograms.every((summary) =>
         !Object.hasOwn(summary, "unavailableMessage")
@@ -1436,7 +1437,7 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     await flushPromises();
     assert.equal(Object.hasOwn(record.state.layer.wmsParams, "raster_style"), false);
     assert.match(record.state.layer.wmsParams.env, /min:-5;med:0;max:30/);
-    assert.match(record.state.layer.wmsParams.env, /;vexact:-9999.5;cexact:#e57149;aexact:0$/);
+    assert.match(record.state.layer.wmsParams.env, /;vexact:-9999.5;cexact:#e57149;aexact:0;ranges:100,,#ff00ff,1$/);
     assert.equal(Object.hasOwn(record.adapter.renderDescriptor(record), "styleDefinition"), false);
     assert.equal(h.mapLayers.snapshots().find((layer) => layer.key === key).legend.kind, "gradient");
     assert.deepEqual(h.controlsView.style, continuous.definition);
@@ -1771,7 +1772,8 @@ test("Reverse colors commits only the editing view and survives percentile edits
         h.controlsView.handlers.onClearSampleWindow();
         await flushPromises();
         h.viewer.openStyle(key);
-        const before = { ...appearance.readStyle(), minimumOpacity: 0.25, midpointOpacity: 0.5, maximumOpacity: 0.75 };
+        const before = { ...appearance.readStyle(), minimumOpacity: 0.25, midpointOpacity: 0.5, maximumOpacity: 0.75,
+            rangeOverrides: [{minimum: -5.5, maximum: 1, color: "#ff00ff", opacity: 0.375}] };
         appearance.setStyle(before, "blue-yellow-red");
         h.controlsView.handlers.onStyleInput(false);
         h.controlsView.handlers.onStyleChange();
@@ -1801,6 +1803,9 @@ test("Reverse colors commits only the editing view and survives percentile edits
         assert.deepEqual(parseSavedMapView(serializeSavedMapView(saved)).layers[0].style, savedAppearance);
         const copied = h.mapLayers.getRecord(await h.mapLayers.addAnotherView(key));
         assert.deepEqual(copied.adapter.exportSavedState(copied), savedAppearance);
+        assert.ok(h.mapLayers.copyStyle(key));
+        assert.ok(await h.mapLayers.pasteStyle(original.entry.key));
+        assert.deepEqual(original.adapter.exportSavedState(original).continuous.definition.rangeOverrides, before.rangeOverrides);
         h.viewer.openStyle(key);
         appearance.palette.value = "blue-yellow-red";
         appearance.palette.dispatchEvent(new Event("change"));

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from eolab_app.raster.categorical_sld import build_categorical_raster_sld
-from eolab_app.raster.composite_sld import build_raster_composite_sld
+from eolab_app.raster.composite_sld import RasterColorRange, build_raster_composite_sld
 from eolab_app.raster.styles import (
     parse_categorical_raster_style,
     parse_categorical_raster_style_json,
@@ -28,20 +28,60 @@ _STYLE_ENVIRONMENT_ERROR = (
 )
 
 
-def parse_raster_style_environment(environment: str) -> dict[str, str]:
-    """Parse validated substitutions consumed by the dynamic raster SLD.
+def _parse_color_ranges(value: str) -> list[RasterColorRange]:
+    """Read the ordered, inclusive range overrides from one WMS ranges assignment.
 
     Args:
-        environment: Three thresholds, three colors and three opacities, with
-            an optional value, color and opacity for a single-value override.
+        value: Pipe-separated rows of lower bound, upper bound, hex color and opacity.
+            Either bound may be empty.
 
     Returns:
-        Exact validated assignment names and serialized values.
+        One to sixteen validated rules in first-match order.
+
+    Raises:
+        PublishedLayerRequestError: If the count, bounds, color or opacity are invalid.
+    """
+    rows = value.split("|")
+    if len(rows) > 16:
+        raise PublishedLayerRequestError("A raster style accepts up to 16 ranges")
+    ranges = []
+    for row in rows:
+        try:
+            low, high, color, alpha = row.split(",")
+            minimum = float(low) if low else None
+            maximum = float(high) if high else None
+            opacity = float(alpha)
+        except ValueError as error:
+            raise PublishedLayerRequestError("Invalid raster range fields") from error
+        if (
+            (minimum is None and maximum is None)
+            or (minimum is not None and not math.isfinite(minimum))
+            or (maximum is not None and not math.isfinite(maximum))
+            or (minimum is not None and maximum is not None and minimum > maximum)
+            or not _STYLE_COLOR_PATTERN.fullmatch(color)
+            or not 0 <= opacity <= 1
+        ):
+            raise PublishedLayerRequestError("Invalid raster range bounds, color or opacity")
+        ranges.append(RasterColorRange(minimum, maximum, color, opacity))
+    return ranges
+
+
+def parse_raster_style_environment(
+    environment: str,
+) -> tuple[dict[str, str], list[RasterColorRange]]:
+    """Read the continuous gradient and ordered color overrides for a WMS request.
+
+    Args:
+        environment: WMS ``env`` with a threshold, color and opacity for each
+            gradient stop and optional exact-value and inclusive range overrides.
+
+    Returns:
+        Gradient assignments and validated overrides ordered by matching priority.
 
     Raises:
         PublishedLayerRequestError: If the dynamic raster style is malformed.
     """
-    if len(environment) > 384:
+    if len(environment) > 2048:
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     assignments = {}
     for field in environment.split(";"):
@@ -49,23 +89,27 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
         if separator == "" or name in assignments:
             raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
         assignments[name] = value
-    if assignments.keys() - _EXACT_VALUE_KEYS != _GRADIENT_KEYS:
+    range_text = assignments.pop("ranges", None)
+    range_length = len(";ranges:") + len(range_text) if range_text is not None else 0
+    if (
+        len(environment) - range_length > 384
+        or assignments.keys() - _EXACT_VALUE_KEYS != _GRADIENT_KEYS
+    ):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
-    exact_keys = assignments.keys() & _EXACT_VALUE_KEYS
-    if exact_keys:
+    overrides = []
+    if assignments.keys() & _EXACT_VALUE_KEYS:
+        exact_error = "Single-value styling requires a finite value, hex color and opacity from 0 through 1"
         try:
-            valid_override = (
-                exact_keys == _EXACT_VALUE_KEYS
-                and math.isfinite(float(assignments["vexact"]))
-                and _STYLE_COLOR_PATTERN.fullmatch(assignments["cexact"])
-                and 0 <= float(assignments["aexact"]) <= 1
-            )
-        except ValueError:
-            valid_override = False
-        if not valid_override:
-            raise PublishedLayerRequestError(
-                "Single-value styling requires a finite value, hex color and opacity from 0 through 1"
-            )
+            value = float(assignments.pop("vexact"))
+            color = assignments.pop("cexact")
+            opacity = float(assignments.pop("aexact"))
+        except (KeyError, ValueError) as error:
+            raise PublishedLayerRequestError(exact_error) from error
+        if not (math.isfinite(value) and _STYLE_COLOR_PATTERN.fullmatch(color) and 0 <= opacity <= 1):
+            raise PublishedLayerRequestError(exact_error)
+        overrides.append(RasterColorRange(value, value, color, opacity))
+    if range_text is not None:
+        overrides.extend(_parse_color_ranges(range_text))
     try:
         thresholds = tuple(
             float(assignments[name]) for name in ("min", "med", "max")
@@ -85,7 +129,7 @@ def parse_raster_style_environment(environment: str) -> dict[str, str]:
         )
     ):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
-    return assignments
+    return assignments, overrides
 
 
 def validate_raster_style_environment(environment: str) -> None:
@@ -96,8 +140,8 @@ def validate_raster_style_environment(environment: str) -> None:
 
     Raises:
         PublishedLayerRequestError: If the value does not contain exactly the
-            three thresholds, three colors and three bounded opacities, with
-            an optional complete exact-value rule.
+            three thresholds, three colors and three bounded opacities, or
+            contains an invalid exact-value or range override.
     """
     parse_raster_style_environment(environment)
 
@@ -158,9 +202,9 @@ class PublishedRasterAuthorization:
         if "vector_style" in query or "vector_calculated_fields" in query:
             raise PublishedLayerRequestError("vector_style is not supported for raster layers")
         if "env" in query:
-            assignments = parse_raster_style_environment(query["env"])
-            if "vexact" in assignments and operation != "getmap":
-                raise PublishedLayerRequestError("Single-value raster styling requires GetMap")
+            _, overrides = parse_raster_style_environment(query["env"])
+            if overrides and operation != "getmap":
+                raise PublishedLayerRequestError("Raster value styling requires GetMap")
 
     def prepare_query(
         self, operation: str, query: list[tuple[str, str]],
@@ -184,9 +228,9 @@ class PublishedRasterAuthorization:
         if definition is not None:
             style = parse_categorical_raster_style_json(definition)
             document = build_categorical_raster_sld(normalized["layers"], style, 1)
-        elif "vexact:" in environment:
-            assignments = parse_raster_style_environment(environment)
-            document = build_raster_composite_sld(normalized["layers"], assignments, 1)
+        elif "vexact:" in environment or "ranges:" in environment:
+            assignments, overrides = parse_raster_style_environment(environment)
+            document = build_raster_composite_sld(normalized["layers"], assignments, overrides, 1)
         else:
             # Global WMS and GeoWebCache identify workspace styles by their full name.
             return [
@@ -268,5 +312,5 @@ class PublishedRasterAuthorization:
         if style_definition is not None:
             style = parse_categorical_raster_style(style_definition)
             return build_categorical_raster_sld(layer_name, style, opacity)
-        assignments = parse_raster_style_environment(style_environment)
-        return build_raster_composite_sld(layer_name, assignments, opacity)
+        assignments, overrides = parse_raster_style_environment(style_environment)
+        return build_raster_composite_sld(layer_name, assignments, overrides, opacity)

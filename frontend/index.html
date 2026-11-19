@@ -1667,10 +1667,7 @@
                                 <span><small>Midpoint</small><span id="raster-legend-midpoint"></span></span>
                                 <span><small>Maximum</small><span id="raster-legend-maximum"></span></span>
                               </div>
-                              <ul id="raster-override-legend" class="map-layer-legend-list" hidden>
-                                <li><span class="map-layer-legend-gradient" aria-hidden="true"><span id="raster-override-legend-color"></span></span>
-                                  <span id="raster-override-legend-label"></span></li>
-                              </ul>
+                              <ul id="raster-override-legend" class="map-layer-legend-list" hidden></ul>
                               <p class="raster-style-error" id="raster-style-error" role="status"></p>
                             </div>
                           </details>
@@ -1686,6 +1683,14 @@
                               <p class="raster-category-guidance">0% opacity hides pixels with this exact value.</p>
                               <p id="raster-override-error" class="raster-style-error" role="status"></p>
                             </div>
+                          </div>
+                          <div class="raster-value-override">
+                            <p id="raster-range-guidance" class="raster-category-guidance" hidden>Leave either bound blank for an open-ended range. Add up to 16 ranges. The exact value takes priority, then the first matching range. Other values use the color gradient.</p>
+                            <div id="raster-color-ranges" class="raster-category-rows"></div>
+                            <div class="raster-style-actions">
+                              <button id="add-raster-color-range" class="secondary-button" type="button">Add color range</button>
+                            </div>
+                            <p id="raster-range-error" class="raster-style-error" role="status"></p>
                           </div>
                           </div>
                           <section id="raster-categorical-editor" class="raster-categorical-editor" aria-labelledby="raster-category-heading" hidden>

@@ -40,30 +40,35 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 /** Check pixels painted by GeoTools from the same SLD emitted by the application's WMS adapter. */
 class RasterValueOverrideStyleTest {
+    /** Parse a style fixture checked against the production SLD builder by the WMS tests. */
+    private static Style readStyle(String resource) throws Exception {
+        try (var input = RasterValueOverrideStyleTest.class.getResourceAsStream(resource)) {
+            assertNotNull(input);
+            return new SLDParser(CommonFactoryFinder.getStyleFactory(), input).readXML()[0];
+        }
+    }
+
     /** Load the checked SLD and select the same gradient with or without an exact value. */
     private static Style style(Double target, double opacity) throws Exception {
-        try (var input = RasterValueOverrideStyleTest.class.getResourceAsStream("/raster-value-override.sld")) {
-            assertNotNull(input);
-            var style = new SLDParser(CommonFactoryFinder.getStyleFactory(), input).readXML()[0];
-            var passes = style.featureTypeStyles();
-            if (target == null) {
-                passes.remove(1);
-                passes.get(0).setTransformation(null);
-                return style;
-            }
-            var filters = CommonFactoryFinder.getFilterFactory();
-            var mask = (Function) passes.get(0).getTransformation();
-            passes.get(0).setTransformation(filters.function(mask.getName(), filters.literal(target)));
-            if (opacity == 0) {
-                passes.remove(1);
-            } else {
-                var symbolizer = (RasterSymbolizer) passes.get(1).rules().get(0).symbolizers().get(0);
-                var entry = symbolizer.getColorMap().getColorMapEntries()[0];
-                entry.setQuantity(filters.literal(target));
-                entry.setOpacity(filters.literal(opacity));
-            }
+        var style = readStyle("/raster-value-override.sld");
+        var passes = style.featureTypeStyles();
+        if (target == null) {
+            passes.remove(1);
+            passes.get(0).setTransformation(null);
             return style;
         }
+        var filters = CommonFactoryFinder.getFilterFactory();
+        var mask = (Function) passes.get(0).getTransformation();
+        var bounds = filters.literal(target + "," + target);
+        passes.get(0).setTransformation(filters.function(mask.getName(), filters.literal("gradient"), bounds));
+        passes.get(1).setTransformation(filters.function(mask.getName(), filters.literal("ranges"), bounds));
+        if (opacity == 0) {
+            passes.remove(1);
+        } else {
+            var symbolizer = (RasterSymbolizer) passes.get(1).rules().get(0).symbolizers().get(0);
+            symbolizer.getColorMap().getColorMapEntries()[0].setOpacity(filters.literal(opacity));
+        }
+        return style;
     }
 
     /** Paint complete layers bottom-first on a transparent map, disposing their readers afterward. */
@@ -139,6 +144,7 @@ class RasterValueOverrideStyleTest {
         var name = "/categorical-float-nodata.tif";
         var ordinary = render(8, 8, rasterFixture(name, style(null, 0)));
         var styled = render(8, 8, rasterFixture(name, style(101551.296875, 0.5)));
+        var ranged = render(8, 8, rasterFixture(name, readStyle("/raster-range-overrides.sld")));
         for (int y = 0; y < 8; y++) {
             for (int x = 0; x < 8; x++) {
                 int expected = switch (x) {
@@ -147,6 +153,12 @@ class RasterValueOverrideStyleTest {
                     default -> ordinary.getRGB(x, y);
                 };
                 assertEquals(expected, styled.getRGB(x, y));
+                int rangeColor = switch (x) {
+                    case 2, 3 -> 0x80ff00ff;
+                    case 4, 5 -> 0;
+                    default -> 0x80000000;
+                };
+                assertEquals(rangeColor, ranged.getRGB(x, y));
             }
         }
     }
@@ -178,6 +190,13 @@ class RasterValueOverrideStyleTest {
         assertTrue(Arrays.stream(expected).anyMatch(pixel -> pixel == 0));
         assertTrue(Arrays.stream(expected).anyMatch(pixel -> pixel == 0x800000ff));
         assertArrayEquals(expected, colored.getRGB(0, 0, 127, 124, null, 0, 127));
+        var ranged = render(crop, 127, 124,
+                new GridReaderLayer(new GeoTiffReader(file), readStyle("/raster-range-overrides.sld")));
+        for (int y = 0; y < 124; y++) {
+            for (int x = 0; x < 127; x++) {
+                assertEquals(hidden.getRGB(x, y) == 0 ? 0 : 0x80000000, ranged.getRGB(x, y));
+            }
+        }
     }
 
     /** Transparent matches reveal an independently rendered layer below them in a combined map. */
@@ -221,5 +240,47 @@ class RasterValueOverrideStyleTest {
                 assertEquals(expected, styled.getRGB(x, 0), "Sample " + samples[x] + ", target " + target);
             }
         }
+    }
+
+    /** Paint inclusive ranges, exact exceptions, and intervening gradient samples at layer opacity 50%. */
+    @Test
+    void rangesReplaceOnlyMatchingPixelsInPriorityOrder() throws Exception {
+        double[] samples = {-32768, Math.nextDown(-9999.5), -9999.5, Math.nextUp(-9999.5),
+                -15, 0, 1, Math.nextUp(1d), 10, Math.nextDown(25.25),
+                25.25, 30.5, Math.nextUp(30.5), 40, Math.nextUp(40d), 50, Math.nextDown(100d),
+                100, 100.25, 1000, 100};
+        var resource = "/raster-range-overrides.sld";
+        var gradient = readStyle(resource);
+        gradient.featureTypeStyles().remove(1);
+        gradient.featureTypeStyles().get(0).setTransformation(null);
+        var ordinary = render(samples.length, 1, sampleRow(samples, gradient));
+        var styled = render(samples.length, 1, sampleRow(samples, readStyle(resource)));
+        for (int x = 0; x < samples.length; x++) {
+            double value = samples[x];
+            int expected = ordinary.getRGB(x, 0);
+            if (x == samples.length - 1 || value == -32768 || value == -9999.5) expected = 0;
+            else if (value <= 1) expected = 0x80000000;
+            else if (value >= 100) expected = 0x80ff00ff;
+            else if (value >= 25.25 && value <= 30.5) expected = replacementColor(0.5);
+            else if (value <= 40 && value >= 30.5) expected = 0;
+            assertEquals(expected, styled.getRGB(x, 0), "Sample " + value + " at " + x);
+        }
+    }
+
+    /** Tiny overlapping intervals retain distinct neighbors on either side of an exact transparent zero. */
+    @Test
+    void smallRangesKeepAdjacentDoubleSamplesDistinct() throws Exception {
+        var style = readStyle("/raster-range-overrides.sld");
+        var filters = CommonFactoryFinder.getFilterFactory();
+        var bounds = filters.literal("0.0,0.0|-1e-8,1e-8|1e-8,2e-8");
+        for (var pass : style.featureTypeStyles()) {
+            var mask = (Function) pass.getTransformation();
+            pass.setTransformation(filters.function(mask.getName(), mask.getParameters().get(0), bounds));
+        }
+        double[] samples = {-1e-8, Math.nextDown(0d), 0, Math.nextUp(0d),
+                1e-8, Math.nextUp(1e-8), 2e-8, 0};
+        var styled = render(samples.length, 1, sampleRow(samples, style));
+        assertArrayEquals(new int[]{0x80000000, 0x80000000, 0, 0x80000000,
+                0x80000000, 0x80ff00ff, 0x80ff00ff, 0}, styled.getRGB(0, 0, samples.length, 1, null, 0, samples.length));
     }
 }

@@ -1,6 +1,8 @@
 """Build GeoServer color maps for an authorized continuous raster appearance."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Literal
 from xml.etree import ElementTree
 
 
@@ -8,18 +10,42 @@ _SLD = "{http://www.opengis.net/sld}"
 _OGC = "{http://www.opengis.net/ogc}"
 
 
-def _mask_raster_samples(feature_style: ElementTree.Element, value: str | None = None) -> None:
-    """Exclude declared NoData and an optional exact value before coloring a raster pass.
+@dataclass(frozen=True)
+class RasterColorRange:
+    """Inclusive sample bounds and their replacement appearance before layer opacity.
+
+    Attributes:
+        minimum: Lowest matching sample, or None for no lower bound.
+        maximum: Highest matching sample, or None for no upper bound.
+            Equal bounds select one exact value.
+        color: Six-digit RGB hex color of matching samples.
+        opacity: Fraction from transparent (0) through opaque (1).
+    """
+
+    minimum: float | None
+    maximum: float | None
+    color: str
+    opacity: float
+
+
+def _select_raster_samples(
+    feature_style: ElementTree.Element, mode: Literal["gradient", "ranges"], bounds: str
+) -> None:
+    """Select gradient samples or matching range indices from the same sampled coverage.
 
     Args:
         feature_style: Raster drawing pass that receives the input mask.
-        value: Additional sample to hide in the gradient. Omit for the replacement color.
+        mode: `gradient` passes through unmatched values. `ranges` returns a
+            one-based rule index for each match.
+        bounds: Ordered pairs of inclusive sample bounds for both passes.
     """
     transformation = ElementTree.Element(_SLD + "Transformation")
     feature_style.insert(0, transformation)
-    mask = ElementTree.SubElement(transformation, _OGC + "Function", name="eolabMaskRasterValue")
-    if value is not None:
-        ElementTree.SubElement(mask, _OGC + "Literal").text = value
+    mask = ElementTree.SubElement(
+        transformation, _OGC + "Function", name="eolabMaskRasterValue"
+    )
+    ElementTree.SubElement(mask, _OGC + "Literal").text = mode
+    ElementTree.SubElement(mask, _OGC + "Literal").text = bounds
 
 
 def _append_color_map(
@@ -52,14 +78,16 @@ def _append_color_map(
 def build_raster_composite_sld(
     layer_name: str,
     assignments: Mapping[str, str],
+    overrides: Sequence[RasterColorRange],
     opacity: float,
 ) -> bytes:
-    """Draw the ordinary gradient and replace the color of one optional exact value.
+    """Draw a continuous gradient with optional inclusive color and opacity overrides.
 
     Args:
         layer_name: Current workspace-qualified GeoServer raster layer.
         assignments: Authorized quantity, color and opacity for every gradient
-            stop, plus any exact-value override.
+            stop.
+        overrides: Color rules in first-match order, with any exact value first.
         opacity: Whole-layer opacity from zero through one.
 
     Returns:
@@ -79,12 +107,18 @@ def build_raster_composite_sld(
         for stop in ("min", "med", "max")
     ]
     gradient = _append_color_map(user_style, "ramp", opacity, stops)
-    if "vexact" in assignments:
-        quantity = str(float(assignments["vexact"]))
-        _mask_raster_samples(gradient, quantity)
-        alpha = float(assignments["aexact"])
-        if alpha > 0:
-            replacement = {"quantity": quantity, "color": assignments["cexact"], "opacity": str(alpha)}
-            exact = _append_color_map(user_style, "values", opacity, [replacement])
-            _mask_raster_samples(exact)
+    if overrides:
+        bounds = "|".join(
+            ",".join("" if bound is None else str(bound) for bound in (rule.minimum, rule.maximum))
+            for rule in overrides
+        )
+        _select_raster_samples(gradient, "gradient", bounds)
+        entries = [
+            {"quantity": str(index), "color": rule.color, "opacity": str(rule.opacity)}
+            for index, rule in enumerate(overrides, start=1)
+            if rule.opacity > 0
+        ]
+        if entries:
+            replacements = _append_color_map(user_style, "values", opacity, entries)
+            _select_raster_samples(replacements, "ranges", bounds)
     return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
