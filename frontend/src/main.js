@@ -190,7 +190,7 @@ let basemapControl = null;
  * @property {string} wmsUrl Browser-facing WMS endpoint.
  * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {string[]} scanDisplayPaths User-facing directories scanned recursively.
- * @property {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} basemap Background tile settings; optional providers are present only when configured.
+ * @property {import("./basemap-control.js").BasemapConfiguration} basemap Background tile settings.
  * @property {{apiKey:string}} [placeSearch] Browser-visible MapTiler credentials for submitted place searches.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
