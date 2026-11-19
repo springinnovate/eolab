@@ -654,19 +654,24 @@ def test_clip_retry_recovers_the_accepted_job_after_a_drawing_changes(upload_bou
     assert fresh.status_code == 409, fresh.text
 
 
+@pytest.mark.parametrize("use_boundary", [False, True], ids=["uploaded-target", "uploaded-boundary"])
 def test_batch_keeps_accepted_upload_and_rejects_foreign_neighbor(
     upload_boundary: UploadBoundary,
     store: PostgresJobStore,
+    use_boundary: bool,
 ) -> None:
     """Authorize each batch item without preventing valid neighbors from running.
 
     Args:
         upload_boundary: Actual private upload and Processing components.
         store: Disposable job database containing the accepted batch.
+        use_boundary: Filter a public target against the private upload.
     """
     owner, worker, service, uploads, selection = upload_boundary
-    endpoint, body = processing_request(owner, selection, "summary")
-    missing = {**selection, "uploadId": str(uuid4())}
+    valid, missing = selection, {**selection, "uploadId": str(uuid4())}
+    if use_boundary:
+        valid, missing = catalog_filtered_by(owner, valid), catalog_filtered_by(owner, missing)
+    endpoint, body = processing_request(owner, valid, "summary")
     response = owner.post(
         endpoint + "/batch",
         headers=HEADERS,

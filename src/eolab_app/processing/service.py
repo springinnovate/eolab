@@ -1688,9 +1688,10 @@ class ProcessingService:
             for sources in raster_sources
             for source in sources
         ) or any(
-            isinstance(selection, (UploadedSelection, ArtifactVectorSelection))
+            isinstance(source, (UploadedSelection, ArtifactVectorSelection, DrawingSelection))
             for inputs in selections
             for selection in inputs.values()
+            for source in (selection, *referenced_layers(selection.filter))
         ):
             results = await self._submit_jobs_with_uploaded_inputs(
                 owner, submissions, selections, upload_owner, raster_sources
