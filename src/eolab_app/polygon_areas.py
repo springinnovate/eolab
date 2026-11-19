@@ -7,9 +7,7 @@ from collections.abc import Callable
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from shapely.geometry import Polygon
 
-from eolab_app.feature_predicate import PolygonAreaReference as PolygonAreaReference
 
 MAX_POLYGON_AREA_BYTES = 8 * 1024 * 1024
 MAX_POLYGON_AREA_COORDINATES = 100_000
@@ -40,6 +38,8 @@ class SummaryPolygon(BaseModel):
         Raises:
             ValueError: If the ring is open, self-crossing or has zero area.
         """
+        from shapely.geometry import Polygon
+
         ring = self.coordinates[0]
         if ring[0] != ring[-1]:
             raise ValueError("A summary polygon must end at its starting vertex.")
@@ -107,6 +107,14 @@ class PolygonSummaryInput(BaseModel):
             max(p[0] for p in points),
             max(p[1] for p in points),
         )
+
+
+class PolygonAreaReference(BaseModel):
+    """An expiring browser-owned input ID and the hash of its exact geometry."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
+    sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 
 class PolygonAreaUploadResponse(BaseModel):

@@ -18,6 +18,16 @@ from geoserver.initialize import (
 )
 
 
+VECTOR_STYLE_DOCUMENTS = {
+    "vector-point": b"<point/>",
+    "vector-line": b"<line/>",
+    "vector-polygon": b"<polygon/>",
+    "vector-highlight-point": b"<highlight-point/>",
+    "vector-highlight-line": b"<highlight-line/>",
+    "vector-highlight-polygon": b"<highlight-polygon/>",
+}
+
+
 class RecordingGeoServerClient:
     """Return planned HTTP (status, body) pairs while recording requests."""
 
@@ -76,7 +86,7 @@ class RecordingGeoServerClient:
 
 
 def test_initialization_creates_only_missing_eolab_resources() -> None:
-    """Create the scan-source rule, workspace, and style when absent."""
+    """Create the scan-source rule, workspace, raster style and missing vector styles."""
     client = RecordingGeoServerClient(
         [
             (200, b'{"oldMasterPassword":"geoserver"}'),
@@ -87,10 +97,10 @@ def test_initialization_creates_only_missing_eolab_resources() -> None:
             (201, b""),
             (404, b""),
             (201, b""),
-        ]
+        ] + [(404, b""), (201, b"")] * len(VECTOR_STYLE_DOCUMENTS)
     )
 
-    initialize_geoserver(client, "new-master-password", b"<sld/>")
+    initialize_geoserver(client, "new-master-password", b"<sld/>", VECTOR_STYLE_DOCUMENTS)
 
     assert [request[0] for request in client.requests] == [
         "GET",
@@ -101,7 +111,7 @@ def test_initialization_creates_only_missing_eolab_resources() -> None:
         "POST",
         "GET",
         "POST",
-    ]
+    ] + ["GET", "POST"] * len(VECTOR_STYLE_DOCUMENTS)
     assert all(request[0] != "DELETE" for request in client.requests)
     assert json.loads(client.requests[1][2]) == {
         "oldMasterPassword": "geoserver",
@@ -127,7 +137,7 @@ def test_initialization_creates_only_missing_eolab_resources() -> None:
 
 
 def test_initialization_updates_existing_style_without_destructive_changes() -> None:
-    """Repair the URL rule and style without destructive changes on rerun."""
+    """Update the URL rule and existing raster and vector styles on rerun."""
     client = RecordingGeoServerClient(
         [
             (200, b'{"oldMasterPassword":"new-master-password"}'),
@@ -136,10 +146,12 @@ def test_initialization_updates_existing_style_without_destructive_changes() -> 
             (200, b""),
             (200, b"<old-style/>"),
             (200, b""),
-        ]
+        ] + [(200, b"<old-style/>"), (200, b"")] * len(VECTOR_STYLE_DOCUMENTS)
     )
 
-    initialize_geoserver(client, "new-master-password", b"<current-style/>")
+    initialize_geoserver(
+        client, "new-master-password", b"<current-style/>", VECTOR_STYLE_DOCUMENTS
+    )
 
     assert [request[0] for request in client.requests] == [
         "GET",
@@ -148,13 +160,12 @@ def test_initialization_updates_existing_style_without_destructive_changes() -> 
         "GET",
         "GET",
         "PUT",
-    ]
+    ] + ["GET", "PUT"] * len(VECTOR_STYLE_DOCUMENTS)
     assert client.requests[2][1] == "/urlchecks/eolab-scan-source"
     assert json.loads(client.requests[2][2])["regexUrlCheck"]["regex"] == (
         MOUNTED_SOURCE_URL_PATTERN
     )
-    assert client.requests[-1][1] == ("/workspaces/eolab/styles/dynamic-raster")
-    assert client.requests[-1][2] == b"<current-style/>"
+    assert client.requests[5][1:3] == ("/workspaces/eolab/styles/dynamic-raster", b"<current-style/>")
     assert all(request[0] != "DELETE" for request in client.requests)
 
 
@@ -182,20 +193,12 @@ def test_initialization_converges_every_fixed_vector_style() -> None:
             (201, b""),
         ]
     )
-    vector_styles = {
-        "vector-point": b"<point/>",
-        "vector-line": b"<line/>",
-        "vector-polygon": b"<polygon/>",
-        "vector-highlight-point": b"<highlight-point/>",
-        "vector-highlight-line": b"<highlight-line/>",
-        "vector-highlight-polygon": b"<highlight-polygon/>",
-    }
 
     initialize_geoserver(
         client,
         "new-master-password",
         b"<raster/>",
-        vector_styles,
+        VECTOR_STYLE_DOCUMENTS,
     )
 
     style_writes = [
@@ -228,7 +231,7 @@ def test_initialization_rejects_unexpected_geoserver_response() -> None:
     client = RecordingGeoServerClient([(401, b"")])
 
     with pytest.raises(RuntimeError, match="401 for GET /security/masterpw.json"):
-        initialize_geoserver(client, "new-master-password", b"<sld/>")
+        initialize_geoserver(client, "new-master-password", b"<sld/>", VECTOR_STYLE_DOCUMENTS)
 
 
 def test_geowebcache_initialization_uses_only_epsg3857_and_bounded_storage() -> None:

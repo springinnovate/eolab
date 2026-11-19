@@ -185,7 +185,7 @@ def test_observations_publish_original_files_and_refresh_without_gating_analysis
         **top,
         "opacity": 0.75,
         "styleEnvironment": (
-            "min:10;med:20;max:30;cmin:#ff0000;cmed:#00ff00;cmax:#0000ff"
+            "min:10;med:20;max:30;cmin:#ff0000;cmed:#00ff00;cmax:#0000ff;amin:1;amed:1;amax:1"
         ),
     }
     plan = api.post("/api/map-rendering/plans", json={"layers": [top, bottom]})

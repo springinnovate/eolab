@@ -1,104 +1,58 @@
-"""Transfer per-request feature membership to a native Jobs reader without copying geometries."""
+"""Pass original sources and selected feature IDs between a request and its native Jobs worker."""
 
-from contextlib import ExitStack, contextmanager
-from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from secrets import token_hex
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx2
-from pydantic import TypeAdapter
-from eolab_app.catalog_selection import ResolvedCatalogSelection, SelectionUnavailableError
+
+from eolab_app.catalog_selection import FeatureMatches, ResolvedCatalogSelection, SelectionUnavailableError
 
 if TYPE_CHECKING:
     from eolab_app.feature_intersection import IntersectionLayer
 
+SPATIAL_READ_URL = "http://app:8000/api/vector-sampling/spatial-read"
+
 
 @dataclass
-class SpatialComparison:
-    """A single Jobs worker's authorized original inputs and returned whole-feature IDs."""
+class SpatialRead:
+    """Data available to one native reader until its submitting request ends."""
 
-    layers: list[dict[str, Any]]
-    matches: tuple[int, ...] | None = None
+    inputs: dict[str, Any]
+    result: FeatureMatches | None = None
 
 
 class SpatialReads:
-    """Hold native feature IDs only while the submitting request owns the source reads."""
+    """Keep large inputs and results out of the Jobs queue while original sources are held."""
 
     def __init__(self) -> None:
         """Start with no outstanding native reads."""
-        self._reads: dict[str, dict[str, frozenset[int]]] = {}
-        self._comparisons: dict[str, SpatialComparison] = {}
+        self._reads: dict[str, SpatialRead] = {}
 
     @contextmanager
-    def comparison(self, target: "IntersectionLayer", polygons: "IntersectionLayer") -> Iterator[tuple[str, SpatialComparison]]:
-        """Make a pair of original sources available for one authenticated native job.
-
-        Args:
-            target: Authorized vector or committed drawings to filter.
-            polygons: Authorized polygon view with its current filter already bound.
-
-        Yields:
-            A short-lived token and the result slot for this comparison. Only device
-            drawings carry coordinates. File sources carry ordinary Jobs read credentials.
-        """
-        with ExitStack() as stack:
-            layers = []
-            for layer in (target, polygons):
-                if isinstance(layer, ResolvedCatalogSelection):
-                    grant = {"selection": layer.selection.model_dump(mode="json", by_alias=True),
-                             "uploadOwner": layer.upload_owner, "readLease": layer.read_lease}
-                    if layer.intersections:
-                        grant["spatialRead"] = stack.enter_context(self.hold(layer.intersections))
-                    layers.append(grant)
-                else:
-                    layers.append({"polygons": [polygon.model_dump(mode="json") for polygon in layer]})
-            token = token_hex(32)
-            comparison = SpatialComparison(layers)
-            self._comparisons[token] = comparison
-            try:
-                yield token, comparison
-            finally:
-                self._comparisons.pop(token)
-
-    def get_comparison(self, token: str) -> SpatialComparison | None:
-        """Return the active comparison identified by a worker's private bearer token.
-
-        Args:
-            token: Credential from the submitted job.
-
-        Returns:
-            Its source pair and result slot, or None after cancellation or completion.
-        """
-        return self._comparisons.get(token)
-
-    @contextmanager
-    def hold(self, memberships: dict[str, frozenset[int]]) -> Iterator[str]:
-        """Give one supervised operation temporary access to its spatial matches.
-
-        Args:
-            memberships: Native target IDs for each authorized polygon view.
-
-        Yields:
-            A random bearer credential, discarded when the operation stops.
-        """
+    def hold(self, inputs: dict[str, Any]) -> Iterator[tuple[str, SpatialRead]]:
+        """Yield a temporary worker credential and remove it when the source read ends."""
         token = token_hex(32)
-        self._reads[token] = memberships
+        read = self._reads[token] = SpatialRead(inputs)
         try:
-            yield token
+            yield token, read
         finally:
-            self._reads.pop(token)
+            del self._reads[token]
 
-    def get(self, token: str) -> Mapping[str, frozenset[int]] | None:
-        """Look up the membership for a live native read.
-
-        Args:
-            token: Server-issued bearer credential presented by the Jobs worker.
-
-        Returns:
-            Authorized original IDs, or None for an unknown or completed read.
-        """
+    def get(self, token: str) -> SpatialRead | None:
+        """Return the active read for a worker's bearer token, or None after it has ended."""
         return self._reads.get(token)
+
+
+def worker_layer(layer: "IntersectionLayer") -> dict[str, Any]:
+    """Describe an authorized vector file or supply the committed drawing polygons for a native read."""
+    if not isinstance(layer, ResolvedCatalogSelection):
+        return {"polygons": [polygon.model_dump(mode="json") for polygon in layer]}
+    return {"selection": layer.selection.model_dump(mode="json", by_alias=True),
+            "uploadOwner": layer.upload_owner, "readLease": layer.read_lease,
+            "matches": layer.matches.model_dump(mode="json") if layer.matches is not None else None}
 
 
 async def load_spatial_read(
@@ -121,9 +75,8 @@ async def load_spatial_read(
         return resolved
     if token is None:
         raise SelectionUnavailableError("The selected polygon filter is unavailable.")
-    reply = await client.get("http://app:8000/api/vector-sampling/spatial-read",
+    reply = await client.get(SPATIAL_READ_URL,
                              headers={"Authorization": f"Bearer {token}"})
     if reply.status_code != 200:
         raise SelectionUnavailableError("The selected polygon filter is no longer available.")
-    memberships = TypeAdapter(dict[str, frozenset[int]]).validate_json(reply.content)
-    return replace(resolved, intersections=memberships)
+    return replace(resolved, matches=FeatureMatches.model_validate_json(reply.content))

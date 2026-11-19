@@ -15,17 +15,20 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
-from eolab_app.feature_predicate import DrawingSelection, PolygonAreaReference, VectorSourceOwners
-from eolab_app.polygon_areas import PolygonSummaryInput, SummaryPolygon
+from eolab_app.polygon_areas import SummaryPolygon
 
 from eolab_app.catalog_selection import (
     CatalogSelection,
+    FeatureMatches,
     ResolvedCatalogSelection,
     ArtifactVectorSelection,
     SelectionUnavailableError,
     UploadedSelection,
     UploadedVectorFilterRequest,
     VectorSelection,
+    DrawingReference,
+    DrawingSelection,
+    VectorSourceOwners,
 )
 from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
 from eolab_app.vector.filters import (
@@ -45,8 +48,8 @@ from eolab_app.vector.parcel_models import (
 )
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
-from eolab_app.vector.spatial_read import SpatialReads
 from eolab_app.vector.lasso import LassoSelectionResult
+from eolab_app.vector.spatial_read import SpatialReads, worker_layer
 from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.source_files import (
     LeasedSourceFiles,
@@ -163,7 +166,7 @@ class VectorSamplingService:
         parcel_executor: VectorParcelExecutor | None = None,
         uploads: VectorUploadStore | None = None,
         artifact_files: Callable[[], LeasedSourceFiles] | None = None,
-        read_drawing: Callable[[str, PolygonAreaReference], Awaitable[PolygonSummaryInput]] | None = None,
+        read_drawing: Callable[[str, DrawingReference], Awaitable[tuple[SummaryPolygon, ...]]] | None = None,
         comparison_executor: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         """Connect vector source resolution with feature-count, extent and outline jobs.
@@ -184,7 +187,7 @@ class VectorSamplingService:
             uploads: Original browser-owned GeoPackages and their admission metadata.
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
-            read_drawing: Load committed drawing polygons under their Processing session.
+            read_drawing: Read a saved drawing revision or a device-only input owned by this browser.
             comparison_executor: Submit an interactive intersection to the ordinary Jobs queue.
         """
         self.catalog = catalog
@@ -290,7 +293,7 @@ class VectorSamplingService:
         resolved = await resolve_selection(self.catalog, self.resolver, request)
         if request.filter.intersections:
             async with self.open_selection(resolved.selection, source_owner) as target:
-                with self.spatial_reads.hold(target.intersections) as token:
+                with self.spatial_reads.hold(target.matches.model_dump(mode="json")) as (token, _):
                     page = await self._parcel_executor.read_rows(resolved.selection, request.idField, request.fields,
                                                                 request.offset, request.limit, token)
             return ParcelRowsResponse(**page.model_dump(), selection=resolved.selection)
@@ -321,19 +324,15 @@ class VectorSamplingService:
             SourceFileError: If a result's ownership, expiry or lease changes.
             asyncio.CancelledError: After the native metadata read finishes.
         """
-        if selection.filter.intersections:
+        async with AsyncExitStack() as stack:
+            original = await stack.enter_async_context(self._open_original(selection, source_owner))
+
+            async def read_layer(source: VectorSelection | DrawingSelection) -> IntersectionLayer:
+                """Keep the chosen polygon source available until the consumer finishes."""
+                return await stack.enter_async_context(self.open_polygon_view(source, source_owner))
+
             from eolab_app.feature_intersection import bind_intersections
-
-            async with AsyncExitStack() as stack:
-                async def read_layer(source: VectorSelection | DrawingSelection) -> ResolvedCatalogSelection | tuple[SummaryPolygon, ...]:
-                    """Open a polygon view for the duration of this read, including its own active conditions."""
-                    return await stack.enter_async_context(self.open_polygon_view(source, source_owner))
-
-                async with self._open_original(selection, source_owner) as original:
-                    yield await bind_intersections(original, read_layer, compare=self.compare_layers)
-            return
-        async with self._open_original(selection, source_owner) as original:
-            yield original
+            yield await bind_intersections(original, read_layer, compare=self.compare_layers)
 
     @asynccontextmanager
     async def open_polygon_view(
@@ -365,35 +364,42 @@ class VectorSamplingService:
                 owner = owners.processing if isinstance(owners, VectorSourceOwners) else None
                 if self._read_drawing is None or owner is None:
                     raise SelectionUnavailableError("This drawing is unavailable to this browser.")
-                yield (await self._read_drawing(owner, selection.polygonArea)).polygons
+                yield await self._read_drawing(owner, selection.polygonArea)
 
     async def compare_layers(
-        self, target: IntersectionLayer, polygons: IntersectionLayer,
-    ) -> tuple[int, ...]:
-        """Compare two authorized views through the interactive Jobs queue.
+        self, target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,
+        drawing_properties: tuple[dict[str, str], ...] = (),
+        *, required_area: SummaryPolygon | None = None,
+    ) -> FeatureMatches:
+        """Queue one read of the original target and all filtered polygon sources.
 
         Args:
-            target: Original target file or committed target drawings.
-            polygons: Current authorized polygons.
+            target: Unfiltered vector or committed target drawings.
+            boundaries: Authorized polygon views keyed by their map-layer ID.
+            predicate: Field and spatial conditions on the target.
+            drawing_properties: Name and note in target order for drawing filters.
+            required_area: Additional validated WGS84 polygon every match must
+                intersect, independently of the target's field-condition grouping.
 
         Returns:
-            Matching native target IDs in original order.
+            Matching original IDs and the total target feature count.
 
         Raises:
-            VectorConflictError: If the native comparison is unavailable or exceeds the interactive read limits.
+            VectorConflictError: If the Jobs worker is unavailable or cannot return the comparison.
         """
-        if target == () or polygons == ():
-            return ()
         if self._comparison_executor is None:
             raise VectorConflictError("The polygon intersection reader is unavailable.")
-        for layer in (target, polygons):
+        for layer in (target, *boundaries.values()):
             if isinstance(layer, ResolvedCatalogSelection) and layer.upload_owner:
                 await asyncio.to_thread(self._uploads.prepare_source_read, layer.path)
-        with self.spatial_reads.comparison(target, polygons) as (token, comparison):
+        inputs = {"target": worker_layer(target), "boundaries": {key: worker_layer(layer) for key, layer in boundaries.items()},
+                  "filter": predicate.model_dump(mode="json", by_alias=True), "drawingProperties": drawing_properties,
+                  "requiredArea": required_area.model_dump(mode="json") if required_area is not None else None}
+        with self.spatial_reads.hold(inputs) as (token, read):
             await self._comparison_executor(token)
-            if comparison.matches is None:
+            if read.result is None:
                 raise VectorConflictError("The polygon intersection reader returned no result.")
-            return comparison.matches
+            return read.result
 
     async def lasso(
         self,
@@ -420,7 +426,8 @@ class VectorSamplingService:
         from eolab_app.vector.lasso import read_lasso_highlights
 
         async with self.open_selection(selection, source_owner) as target:
-            feature_ids = await self.compare_layers(target, (polygon,))
+            matches = await self.compare_layers(target, {}, VectorFilter(), required_area=polygon)
+            feature_ids = tuple(sorted(matches.ids))
             geometry = await read_lasso_highlights(target, feature_ids)
             return LassoSelectionResult(
                 matched=len(feature_ids), featureIds=feature_ids, geometry=geometry
@@ -490,7 +497,7 @@ class VectorSamplingService:
         """
         if selection.filter.intersections:
             async with self.open_selection(selection, source_owner) as resolved:
-                with self.spatial_reads.hold(resolved.intersections) as token:
+                with self.spatial_reads.hold(resolved.matches.model_dump(mode="json")) as (token, _):
                     return await executor(selection, resolved.upload_owner, resolved.read_lease, token)
         if isinstance(source_owner, VectorSourceOwners):
             source_owner = source_owner.for_source(selection)
@@ -547,12 +554,8 @@ class VectorSamplingService:
             VectorUploadError: If the upload is unavailable to this browser.
         """
         try:
-            if isinstance(selection, ArtifactVectorSelection) or selection.filter.intersections or isinstance(source_owner, VectorSourceOwners):
-                async with self.open_selection(selection, source_owner) as resolved:
-                    return resolved
-            resolved = await resolve_selection(
-                self.catalog, self.resolver, selection, self._uploads, source_owner
-            )
+            async with self.open_selection(selection, source_owner) as resolved:
+                return resolved
         except SelectionUnavailableError:
             raise
         except VectorConflictError as error:
@@ -561,11 +564,6 @@ class VectorSamplingService:
             raise SelectionUnavailableError(
                 "The selected vector is unavailable; select it again."
             ) from error
-        if resolved.selection != selection:
-            raise SelectionUnavailableError(
-                "The selected vector identity changed; select it again."
-            )
-        return resolved
 
     async def resolve_source(
         self, source: CatalogVectorRequest
@@ -642,13 +640,17 @@ class VectorSamplingService:
             asyncio.CancelledError: After the Jobs client cancels abandoned work.
         """
         resolved = await self._resolve_request_source(request, source_owner)
-        if self._selection_executor is None:
-            raise VectorConflictError("The vector selection executor is unavailable")
-        if isinstance(resolved.selection, UploadedSelection):
-            await asyncio.to_thread(self._uploads.prepare_source_read, resolved.path)
-        result = await self._execute_selection(
-            resolved.selection, source_owner, self._selection_executor
-        )
+        if request.filter.intersections:
+            async with self.open_selection(resolved.selection, source_owner) as target:
+                result = target.matches.counts
+                if not result["matched"]:
+                    raise VectorConflictError("No matching polygon features; change the filter")
+        else:
+            if self._selection_executor is None:
+                raise VectorConflictError("The vector selection executor is unavailable")
+            if isinstance(resolved.selection, UploadedSelection):
+                await asyncio.to_thread(self._uploads.prepare_source_read, resolved.path)
+            result = await self._execute_selection(resolved.selection, source_owner, self._selection_executor)
         return {
             **result,
             "selection": resolved.selection.model_dump(mode="json", by_alias=True),

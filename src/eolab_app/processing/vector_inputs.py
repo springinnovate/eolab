@@ -14,11 +14,11 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
     VectorSelection,
+    DrawingSelection,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.bounded_vector import resolve_vector_file_selection
-from eolab_app.polygon_areas import PolygonSummaryInput, SummaryPolygon
-from eolab_app.feature_predicate import DrawingSelection
+from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.feature_intersection import bind_intersections
 
 class RetainedVectorSelectionReader:
@@ -35,7 +35,7 @@ class RetainedVectorSelectionReader:
         uploads: VectorUploadStore | None,
         input_uploads: Mapping[str, str],
         retained_file: Callable[[str, str], Awaitable[Path]] | None = None,
-        drawings: Mapping[str, dict[str, Any]] | None = None,
+        drawings: Mapping[str, list[dict[str, Any]]] | None = None,
     ) -> None:
         """Bind vector reading to original upload and result files retained for one job.
 
@@ -46,7 +46,7 @@ class RetainedVectorSelectionReader:
                 retention tokens, supplied by job storage.
             retained_file: Resolve a published result under the current job's retained
                 input authorization, including when its parent has expired.
-            drawings: Device-authored polygon inputs captured at submission, keyed by input ID.
+            drawings: Selected drawing polygons captured at submission, keyed by the exact source reference.
         """
         self.catalog = catalog
         self.uploads = uploads
@@ -127,9 +127,11 @@ class RetainedVectorSelectionReader:
         if isinstance(source, DrawingSelection):
             if source.polygonArea is None:
                 return ()
-            if source.polygonArea.id not in self.drawings:
-                raise SelectionUnavailableError("The drawing was not captured for this calculation.")
-            return PolygonSummaryInput.model_validate(self.drawings[source.polygonArea.id]).polygons
+            try:
+                polygons = self.drawings[source.polygonArea.model_dump_json()]
+            except KeyError as error:
+                raise SelectionUnavailableError("The drawing was not captured for this calculation.") from error
+            return tuple(SummaryPolygon.model_validate(polygon) for polygon in polygons)
         return await self.resolve_for_sampling(source)
 
     async def _resolve_original(self, selection: VectorSelection) -> ResolvedCatalogSelection:

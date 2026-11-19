@@ -13,9 +13,9 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 
 TEST_GEOTIFF_ITEM_ID = "geotiff-0123456789abcdef01234567"
 RASTER_STYLE_ENVIRONMENT_ERROR = (
-    "env must define ordered finite min, med, and max values plus cmin, "
-    "cmed, and cmax six-digit hex colors, optionally followed by amin, "
-    "amed, and amax finite opacities from 0 through 1"
+    "env requires ordered finite min, med, and max values, six-digit hex "
+    "colors for cmin, cmed, and cmax, and opacities from 0 through 1 "
+    "for amin, amed, and amax"
 )
 VALID_GEOSERVER_METRICS = """
 eolab_jvm_heap_used_bytes 268435456

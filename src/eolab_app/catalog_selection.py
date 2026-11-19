@@ -3,16 +3,254 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Mapping, Protocol
+from typing import Annotated, Any, Literal, Protocol
+from uuid import UUID
+from math import isfinite
+
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
 
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
-from eolab_app.calculated_fields import CompiledCalculatedField
-from eolab_app.attribute_filter import matches_filter
-from eolab_app.feature_predicate import (
-    ArtifactVectorSelection as ArtifactVectorSelection, CatalogSelection as CatalogSelection,
-    UploadedSelection as UploadedSelection, UploadedVectorFilterRequest as UploadedVectorFilterRequest,
-    VectorSelection as VectorSelection, VectorSourceOwners,
-)
+from eolab_app.polygon_areas import PolygonAreaReference
+from eolab_app.calculated_fields import CalculatedField, CompiledCalculatedField
+
+MAX_FILTER_RULES = 12
+
+
+class SavedDrawingReference(BaseModel):
+    """Selected editor feature IDs at an acknowledged revision of a linked drawing."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    drawingLayerId: UUID
+    revision: int = Field(strict=True, ge=1)
+    featureIds: tuple[Annotated[str, Field(pattern=r"^[a-zA-Z0-9-]{1,100}$")], ...] = Field(max_length=500)
+
+
+DrawingReference = PolygonAreaReference | SavedDrawingReference
+
+
+class DrawingSelection(BaseModel):
+    """Committed drawing polygons and any filtered sources that contributed to the selection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["drawing"]
+    polygonArea: DrawingReference | None
+    filter: "VectorFilter | None" = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class VectorFilterRule(BaseModel):
+    """A field comparison with a fixed operator and a scalar value."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    field: StrictStr = Field(min_length=1, max_length=256)
+    operator: Literal[
+        "eq", "ne", "gt", "ge", "lt", "le", "contains", "missing", "present"
+    ]
+    value: StrictBool | StrictInt | StrictFloat | StrictStr | None = None
+
+    @field_validator("field", "value")
+    @classmethod
+    def bounded_literal(cls, value: Any) -> Any:
+        """Reject long or control-containing text and numbers unsafe for the browser.
+
+        Args:
+            value: Submitted property name or literal.
+
+        Returns:
+            Unchanged safe scalar.
+
+        Raises:
+            ValueError: If text exceeds 256 characters or contains control characters,
+                or a number is nonfinite or exceeds the browser's safe numeric range.
+        """
+        if isinstance(value, str) and (
+            len(value) > 256 or any(ord(c) < 32 for c in value)
+        ):
+            raise ValueError(
+                "Text must be at most 256 characters without control characters"
+            )
+        if type(value) in {int, float} and (
+            not isfinite(value) or abs(value) > 2**53 - 1
+        ):
+            raise ValueError(
+                "Numbers must be finite and within the browser's safe numeric range"
+            )
+        return value
+
+
+class IntersectsLayer(BaseModel):
+    """Keep target features touching any polygon that passes the source view’s current filter."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    operator: Literal["intersects"]
+    layerId: UUID
+    source: "CatalogSelection | UploadedSelection | ArtifactVectorSelection | DrawingSelection"
+
+
+class VectorFilter(BaseModel):
+    """An enabled or disabled set of field or spatial conditions combined with all or any."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    enabled: StrictBool = True
+    match: Literal["all", "any"] = "all"
+    rules: tuple[VectorFilterRule | IntersectsLayer, ...] = Field(default=(), max_length=MAX_FILTER_RULES)
+
+    @field_validator("rules")
+    @classmethod
+    def check_view_sources(cls, rules: tuple[VectorFilterRule | IntersectsLayer, ...]) -> tuple[VectorFilterRule | IntersectsLayer, ...]:
+        """Require repeated conditions on a view to identify the same selected polygons.
+
+        Args:
+            rules: Conditions submitted for this target.
+
+        Returns:
+            The unchanged conditions.
+
+        Raises:
+            ValueError: If two conditions assign different sources to one view ID.
+        """
+        sources = {}
+        for rule in rules:
+            if isinstance(rule, IntersectsLayer) and sources.setdefault(rule.layerId, rule.source) != rule.source:
+                raise ValueError("A polygon view must have the same source and filter in every condition.")
+        return rules
+
+    @property
+    def active(self) -> bool:
+        """Return whether this state restricts the layer."""
+        return self.enabled and bool(self.rules)
+
+    @property
+    def fields(self) -> tuple[str, ...]:
+        """Return the original or calculated attributes needed by field comparisons."""
+        return tuple(dict.fromkeys(rule.field for rule in self.rules if isinstance(rule, VectorFilterRule)))
+
+    @property
+    def intersections(self) -> tuple[IntersectsLayer, ...]:
+        """Return each active polygon view once, in the order its conditions appear."""
+        if not self.active:
+            return ()
+        return tuple({rule.layerId: rule for rule in self.rules if isinstance(rule, IntersectsLayer)}.values())
+
+
+class CatalogSelection(CatalogVectorRequest):
+    """A catalog vector layer and attribute filter identifying features for analysis.
+
+    Asset and layer names are checked against the authoritative Catalog on every
+    resolution. Source files are immutable after admission. Ordered calculated_fields
+    travel with the view and filter; readers evaluate them from original attributes.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    filter: VectorFilter
+    assetKey: str = Field(min_length=1, max_length=256)
+    layerName: str = Field(min_length=1, max_length=256)
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields", exclude_if=lambda value: not value
+    )
+
+
+class UploadedVectorFilterRequest(BaseModel):
+    """Identify an upload, its view-owned calculated fields and feature predicate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    uploadId: UUID
+    filter: VectorFilter
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields", exclude_if=lambda value: not value
+    )
+
+
+class UploadedSelection(UploadedVectorFilterRequest):
+    """Identify selected features in one browser-owned immutable GeoPackage.
+
+    The server checks ownership separately from this public descriptor. The layer
+    name must match the sole layer recorded when the upload was admitted.
+    """
+
+    layerName: str
+
+
+class ArtifactVectorSelection(BaseModel):
+    """Select original features from a private immutable Processing result.
+
+    Attributes:
+        kind: The literal string "runArtifact" identifies its source lifetime.
+        jobId: Opaque owning run ID, authorized by the Processing source boundary.
+        artifactId: Opaque published file ID within the run.
+        layerName: Original native GeoPackage layer, checked when the file opens.
+        filter: Accepted attribute predicate, including calculated attributes.
+        calculated_fields: Ordered view-owned definitions captured with the predicate.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    kind: Literal["runArtifact"]
+    jobId: str = Field(pattern=r"^[a-f0-9]{32}$")
+    artifactId: str = Field(pattern=r"^[a-f0-9]{32}$")
+    layerName: str = Field(min_length=1, max_length=256)
+    filter: VectorFilter
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields", exclude_if=lambda value: not value
+    )
+
+
+VectorSelection = CatalogSelection | UploadedSelection | ArtifactVectorSelection
+"""Path-free source identity and attribute filter for vector analysis."""
+
+
+IntersectsLayer.model_rebuild()
+VectorFilter.model_rebuild()
+
+
+@dataclass(frozen=True)
+class VectorSourceOwners:
+    """The browser's separate credentials for uploads and private run results or drawings."""
+
+    uploads: str | None = None
+    processing: str | None = None
+
+    def for_source(self, source: VectorSelection | DrawingSelection) -> str | None:
+        """Choose the ownership credential checked by this source's authority.
+
+        Args:
+            source: Original catalog, upload, run result or committed drawing.
+
+        Returns:
+            The appropriate private identity, or None for a public catalog item.
+        """
+        if isinstance(source, UploadedVectorFilterRequest):
+            return self.uploads
+        if isinstance(source, (ArtifactVectorSelection, DrawingSelection)):
+            return self.processing
+        return None
+
+
+def referenced_layers(predicate: VectorFilter) -> tuple[VectorSelection | DrawingSelection, ...]:
+    """List the sources needed by active spatial conditions, including nested filters.
+
+    Args:
+        predicate: Captured filter of the view to be read.
+
+    Returns:
+        Every referenced layer in condition order, with its captured filter.
+    """
+    layers = []
+    for rule in predicate.intersections:
+        layers.append(rule.source)
+        if rule.source.filter is not None:
+            layers.extend(referenced_layers(rule.source.filter))
+    return tuple(layers)
+
+
+class FeatureMatches(BaseModel, frozen=True):
+    """Original feature IDs selected by the complete filter, and the whole-layer count."""
+
+    ids: frozenset[int]
+    total: NonNegativeInt
+
+    @property
+    def counts(self) -> dict[str, int]:
+        """Return the matched and total counts shown beside the filter."""
+        return {"matched": len(self.ids), "total": self.total}
 
 
 class SelectionUnavailableError(ValueError):
@@ -38,8 +276,7 @@ class ResolvedCatalogSelection:
         driver: Allowed Fiona driver.
         where: Server-compiled conservative OGR predicate.
         calculated_fields: Programs validated against the original source schema.
-        intersections: Original target IDs that meet each authorized spatial condition.
-            Bound only for this read, never serialized with the source descriptor.
+        matches: IDs and count after evaluating a spatial filter during this read.
         upload_owner: Server-only ownership credential for a worker reading an authorized upload.
         read_lease: Server-only lease held while a worker reads a private result file.
     """
@@ -49,25 +286,9 @@ class ResolvedCatalogSelection:
     driver: str
     where: str | None
     calculated_fields: tuple[CompiledCalculatedField, ...] = ()
-    intersections: dict[str, frozenset[int]] = field(default_factory=dict)
+    matches: FeatureMatches | None = None
     upload_owner: str | None = field(default=None, repr=False, compare=False)
     read_lease: str | None = field(default=None, repr=False, compare=False)
-
-    def matches_feature(self, feature_id: str | int, properties: Mapping[str, Any]) -> bool:
-        """Test one original feature against the captured field and spatial conditions.
-
-        Args:
-            feature_id: Native Fiona feature ID from this dataset.
-            properties: Original attributes with this view's calculated fields.
-
-        Returns:
-            Whether the entire original feature belongs to this selection.
-
-        Raises:
-            AttributeFilterError: If a required polygon source has not been bound.
-        """
-        matches = {key: int(feature_id) in ids for key, ids in self.intersections.items()}
-        return matches_filter(self.selection.filter, properties, matches)
 
 
 class CatalogSelectionReader(Protocol):

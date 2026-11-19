@@ -1,6 +1,7 @@
 """Describe a freehand feature selection and its optional bounded map highlight."""
 
 import json
+from contextlib import closing
 from time import monotonic
 from typing import Any
 
@@ -14,7 +15,7 @@ from eolab_app.execution.bounded_process import (
     ProcessResultWriter,
     run_bounded_process,
 )
-from eolab_app.feature_intersection import read_original_features
+from eolab_app.feature_intersection import iter_original_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.vector.display_geometry import MAX_DISPLAY_BYTES, MAX_DISPLAY_COORDINATES
 
@@ -36,7 +37,7 @@ class LassoSelectionResult(BaseModel):
 
     Attributes:
         matched: Exact number of selected original features, including zero.
-        featureIds: Native IDs in original source order, with each feature once.
+        featureIds: Native IDs in ascending order, with each feature once.
         geometry: Attribute-free whole-feature display geometry, or None when
             it cannot fit the ordinary map read or display budget.
     """
@@ -100,10 +101,10 @@ def _read_highlights(
     size = 64
     try:
         with _limit_memory(limits.memory_bytes):
-            with read_original_features(
-                target, limits, monotonic() + limits.seconds
+            with closing(
+                iter_original_features(target, limits, monotonic() + limits.seconds)
             ) as originals:
-                for feature_id, geometry in originals:
+                for feature_id, _properties, geometry in originals:
                     if feature_id not in selected:
                         continue
                     coordinates += int(get_num_coordinates(geometry))

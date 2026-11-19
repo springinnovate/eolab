@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
+from typing import Any
 
 import fiona
 import pytest
@@ -12,9 +13,13 @@ from shapely.geometry.base import BaseGeometry
 
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.bounded_vector import count_selected_features, resolve_vector_file_selection
-from eolab_app.catalog_selection import ResolvedCatalogSelection, UploadedSelection
-from eolab_app.feature_intersection import bind_intersections, intersecting_feature_ids
-from eolab_app.feature_predicate import DrawingSelection, VectorSelection
+from eolab_app.catalog_selection import (
+    ResolvedCatalogSelection,
+    UploadedSelection,
+    DrawingSelection,
+    VectorSelection,
+)
+from eolab_app.feature_intersection import bind_intersections, match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.vector.display_feature_ids import display_feature_ranges
 from eolab_app.vector.parcels import read_parcel_rows
@@ -46,6 +51,12 @@ def _write_layer(
     ))
 
 
+def _spatial_rule() -> VectorFilter:
+    """Give the geometry tests one spatial clause with an independently supplied polygon view."""
+    return VectorFilter.model_validate({"rules": [{"operator": "intersects", "layerId": UUID(int=1),
+                                        "source": {"kind": "drawing", "polygonArea": None}}]})
+
+
 def test_filtered_source_uses_exact_geometry_and_includes_boundary_contact(tmp_path: Path) -> None:
     """Check entire target membership against overlapping polygons with a hole."""
     forest = VectorFilter.model_validate({"rules": [{"field": "group", "operator": "eq", "value": "forest"}]})
@@ -58,8 +69,8 @@ def test_filtered_source_uses_exact_geometry_and_includes_boundary_contact(tmp_p
         (Point(5, 5), "inside the hole"), (Point(20.5, 20.5), "excluded polygon"),
         (box(-1, -1, 11, 11), "contains polygon"), (None, "no geometry"),
     ])
-    assert intersecting_feature_ids(target, polygons) == (1, 2, 5)
-    assert intersecting_feature_ids(target, ()) == ()
+    assert match_features(target, {str(UUID(int=1)): polygons}, _spatial_rule()).ids == {1, 2, 5}
+    assert match_features(target, {str(UUID(int=1)): ()}, _spatial_rule()).counts == {"matched": 0, "total": 6}
 
 
 @pytest.mark.parametrize("as_target", [True, False])
@@ -70,10 +81,10 @@ def test_drawings_and_projected_source_share_one_comparison(tmp_path: Path, as_t
     ], crs="EPSG:3857")
     drawn = (SummaryPolygon.model_validate(mapping(box(0.95, -0.02, 1.05, 0.02))),)
     target, polygons = (drawn, projected) if as_target else (projected, drawn)
-    assert intersecting_feature_ids(target, polygons) == ((0,) if as_target else (1,))
+    assert match_features(target, {str(UUID(int=1)): polygons}, _spatial_rule()).ids == ({0} if as_target else {1})
 
 
-@pytest.mark.parametrize(("match", "expected"), [("all", ["field and spatial"]), ("any", ["field and spatial", "spatial", "field"])])
+@pytest.mark.parametrize(("match", "expected"), [("all", ["field and spatial"]), ("any", ["field and spatial", "spatial", "field", "field without geometry"])])
 def test_mixed_filter_counts_and_pages_original_features(tmp_path: Path, match: str, expected: list[str]) -> None:
     """Count, display and page the same whole features for mixed field and spatial conditions.
 
@@ -86,7 +97,7 @@ def test_mixed_filter_counts_and_pages_original_features(tmp_path: Path, match: 
                             predicate=VectorFilter.model_validate({"rules": [{"field": "group", "operator": "eq", "value": "west"}]}))
     original = _write_layer(tmp_path / "targets.gpkg", [
         (box(-1, -1, 0, 0), "field and spatial"), (box(1, 1, 2, 2), "spatial"),
-        (box(3, 3, 4, 4), "field"), (None, "neither")], geometry_type="Polygon")
+        (box(3, 3, 4, 4), "field"), (None, "field without geometry")], geometry_type="Polygon")
     view_id = str(UUID(int=42))
     predicate = VectorFilter.model_validate({"match": match, "rules": [
         {"operator": "intersects", "layerId": view_id, "source": boundary.selection},
@@ -101,7 +112,7 @@ def test_mixed_filter_counts_and_pages_original_features(tmp_path: Path, match: 
 
     bound = asyncio.run(bind_intersections(target, read_polygons))
     assert count_selected_features(bound) == {"matched": len(expected), "total": 4}
-    assert display_feature_ranges(bound) == {view_id: "1:2"}
+    assert display_feature_ranges(bound, bound.matches.ids) == ("1" if match == "all" else "1:4")
     page = read_parcel_rows(bound, "group", ("group",), 0, 10)
     assert [row.properties["group"] for row in page.rows] == expected
 
@@ -142,7 +153,11 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
             await selection_operation.return_intersecting_ids(client, selection_operation.ComparisonInput(spatialRead=token))
         completed.append(token)
 
-    reader = VectorSamplingService(StaticCatalog(item), MountedVectorResolver(tmp_path), uploads=uploads, comparison_executor=run_job)
+    async def read_drawing(owner: str, reference: Any) -> tuple[SummaryPolygon, ...]:
+        """Return three committed drawing positions in their original order."""
+        return tuple(SummaryPolygon.model_validate(mapping(box(x, 0, x + 0.001, 0.001))) for x in (0, 2, 3))
+
+    reader = VectorSamplingService(StaticCatalog(item), MountedVectorResolver(tmp_path), uploads=uploads, comparison_executor=run_job, read_drawing=read_drawing)
     app.include_router(create_vector_sampling_router(reader))
     app.include_router(create_vector_uploads_router(uploads))
     app.include_router(create_spatial_filter_router(reader, registry, lambda request, response: "unused"))
@@ -155,14 +170,39 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
             {"field": "count", "operator": "eq", "value": 7}]}}
         condition = {"operator": "intersects", "layerId": str(UUID(int=2)), "source": source}
         target = {"collectionId": item["collection"], "itemId": item["id"], "assetKey": registry.require_current(published.layer_name).source.asset_key,
-                  "layerName": "categories", "filter": {"rules": [condition]}}
+                  "layerName": "categories", "filter": {"rules": [condition, condition]}}
         request = {"layerName": published.layer_name, "selection": target}
         url = "/api/vector-filters/map"
+        scans = []
+        original_filter = fiona.Collection.filter
+
+        def track_scan(dataset: fiona.Collection, *args: Any, **kwargs: Any) -> Any:
+            """Record each native feature scan performed while applying this map filter."""
+            scans.append(dataset.name)
+            return original_filter(dataset, *args, **kwargs)
+
+        monkeypatch.setattr(fiona.Collection, "filter", track_scan)
         result = owner.post(url, json=request, headers=HEADERS)
         assert result.status_code == 200, result.text
         assert result.json()["count"] == {"matched": 8, "total": 8, "complete": True}
+        assert scans == ["areas", "categories"]
+        assert len(completed) == 1
         assert registry.private_inputs(result.json()["layerName"]).uploads == {UUID(identifier)}
-        assert owner.get("/api/vector-sampling/spatial-comparison", headers={"Authorization": f"Bearer {completed[-1]}"}).status_code == 404
+        assert owner.get("/api/vector-sampling/spatial-read", headers={"Authorization": f"Bearer {completed[-1]}"}).status_code == 404
+        scans.clear()
+        second = {**condition, "layerId": str(UUID(int=4)), "source": {**source, "filter": {"rules": [
+            {"field": "count", "operator": "eq", "value": 9}]}}}
+        both = {**request, "selection": {**target, "filter": {"match": "all", "rules": [condition, second]}}}
+        assert owner.post(url, json=both, headers=HEADERS).json()["count"]["matched"] == 0
+        assert scans == ["areas", "areas", "categories"]
+        assert len(completed) == 2
+        drawings = {"target": {"kind": "drawing", "polygonArea": {"id": "a" * 32, "sha256": "b" * 64}},
+                    "properties": [{"name": "near"}, {"name": "keep"}, {"name": "far"}],
+                    "filter": {"match": "any", "rules": [condition, condition, {"field": "name", "operator": "eq", "value": "keep"}]}}
+        selected = owner.post("/api/vector-filters/drawings", headers=HEADERS, json=drawings)
+        assert selected.status_code == 200, selected.text
+        assert selected.json() == [0, 1]
+        assert len(completed) == 3
         assert other.post(url, json=request, headers=HEADERS).status_code == 404
         nested = {"operator": "intersects", "layerId": str(UUID(int=3)), "source": {
             "kind": "drawing", "polygonArea": None, "filter": {"rules": [condition]}}}

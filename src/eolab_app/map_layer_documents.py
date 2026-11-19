@@ -15,7 +15,7 @@ from pydantic import (
 )
 
 from eolab_app.attribute_filter import VectorFilter, validate_filter
-from eolab_app.feature_predicate import VectorFilterRule, MAX_FILTER_RULES
+from eolab_app.catalog_selection import VectorFilterRule, MAX_FILTER_RULES
 from eolab_app.calculated_fields import CalculatedField
 
 MAX_APPEARANCE_DEFINITION_BYTES = 65_536

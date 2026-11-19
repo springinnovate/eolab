@@ -18,7 +18,7 @@ from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.planning.store import PlanningToolStore
 from eolab_app.planning.service import PlanningToolService
 from eolab_app.planning.scenario_service import PlanningScenarioService
-from eolab_app.drawings.models import DrawingLayer
+from eolab_app.drawings.models import DrawingError, DrawingLayer
 from eolab_app.drawings.store import DrawingLayerStore
 from eolab_app.routes.drawings import create_drawings_router
 from eolab_app.routes.planning_tools import (
@@ -58,7 +58,13 @@ from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.polygon_areas import (
     PolygonAreaReference,
     PolygonSummaryInput,
+    SummaryPolygon,
     read_polygon_area_input,
+)
+from eolab_app.catalog_selection import (
+    DrawingReference,
+    SavedDrawingReference,
+    CatalogSelection,
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
@@ -157,7 +163,6 @@ from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
 from eolab_app.vector.extent_jobs import ExtentJobs
@@ -268,6 +273,35 @@ def create_app(
         app_global_configuration.vector_upload_max_bytes,
         storage=upload_storage,
     )
+    drawing_store = DrawingLayerStore()
+
+    async def read_filter_drawing(owner: str, reference: DrawingReference) -> tuple[SummaryPolygon, ...]:
+        """Read the selected features of a saved drawing revision or a private device input.
+
+        Args:
+            owner: Browser identity for temporary polygon inputs.
+            reference: Opaque saved drawing and feature IDs, or a private input ID and checksum.
+
+        Returns:
+            Original polygons in the selected feature order, including an empty selection.
+
+        Raises:
+            ProcessingError: The drawing changed, is unavailable or belongs to another browser.
+        """
+        if isinstance(reference, PolygonAreaReference):
+            return (await read_polygon_area_input(processing_store.get_input, owner, reference)).polygons
+        try:
+            drawing = await asyncio.to_thread(drawing_store.read_layer, reference.drawingLayerId)
+        except DrawingError as error:
+            raise ProcessingError("drawing_unavailable", str(error), error.status) from error
+        if drawing.revision != reference.revision:
+            raise ProcessingError("drawing_changed", "The drawing changed. Reapply its filter.", 409)
+        features = {feature.id: feature for feature in drawing.collection.features}
+        try:
+            return tuple(SummaryPolygon(coordinates=features[fid].geometry.coordinates) for fid in reference.featureIds)
+        except KeyError as error:
+            raise ProcessingError("drawing_changed", "A selected drawing polygon is unavailable.", 409) from error
+
     vector_selection_reader = VectorSamplingService(
         vector_catalog,
         vector_source_resolver,
@@ -278,7 +312,7 @@ def create_app(
         parcel_executor=ParcelJobs(vector_jobs),
         uploads=vector_uploads,
         artifact_files=lambda: source_files,
-        read_drawing=lambda owner, reference: read_polygon_area_input(processing_store.get_input, owner, reference),
+        read_drawing=read_filter_drawing,
     )
     processing_limits = load_processing_limits()
     processing_events = PostgresJobEvents()
@@ -300,6 +334,7 @@ def create_app(
         uploads=vector_uploads,
         upload_storage=upload_storage,
         areas=vector_selection_reader,
+        read_filter_drawing=read_filter_drawing,
         operation_submission_dependencies={
             HABITAT_CONDITION_OPERATION: habitat_submission_dependencies,
             HABITAT_INPUT_PREPARATION_OPERATION: habitat_submission_dependencies,
@@ -445,13 +480,18 @@ def create_app(
                     request, Response(), processing_session_ttl
                 )
                 for drawing in drawings:
-                    await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256, include_geometry=False)
+                    if isinstance(drawing, SavedDrawingReference):
+                        revision = await asyncio.to_thread(drawing_store.read_revision, drawing.drawingLayerId)
+                        if revision != drawing.revision:
+                            raise PublishedLayerChangedError("The drawing changed. Reapply its filter.")
+                    else:
+                        await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256, include_geometry=False)
                 private = (
                     await vector_publication.authorize_artifact_layers(layer_names, owner)
                     or private
                 )
             return private
-        except ProcessingError as error:
+        except (DrawingError, ProcessingError) as error:
             raise HTTPException(error.status, str(error), headers={"Cache-Control": "private, no-store"}) from error
         except (SourceFileError, VectorUploadError, UploadError) as error:
             raise HTTPException(
@@ -775,7 +815,6 @@ def create_app(
         )
         return resolved.selection
 
-    drawing_store = DrawingLayerStore()
     application.include_router(create_drawings_router(drawing_store))
 
     async def read_drawing_source(identifier: UUID) -> DrawingLayer:

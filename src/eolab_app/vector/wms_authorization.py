@@ -52,7 +52,7 @@ class PublishedVectorAuthorization:
     filter: VectorFilter | None = None
     inspection_layer_name: str | None = None
     calculated_fields: tuple[CalculatedField, ...] = ()
-    spatial_ranges: Mapping[str, str] | None = None
+    spatial_ranges: str | None = None
 
     def sign_style_name(self, style_name: str) -> str:
         """Sign a validated content identity for this immutable vector source.

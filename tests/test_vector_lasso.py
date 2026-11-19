@@ -1,6 +1,7 @@
 """Check exact lasso membership, whole-feature highlights and private source access."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,7 +12,7 @@ from pydantic import ValidationError
 from shapely.geometry import LineString, Point, box, mapping, shape
 
 from eolab_app.attribute_filter import VectorFilter
-from eolab_app.feature_intersection import intersecting_feature_ids
+from eolab_app.feature_intersection import match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
@@ -55,16 +56,34 @@ def test_lasso_uses_exact_geometry_and_keeps_whole_filtered_features(
         predicate=predicate,
     )
     polygon = SummaryPolygon(coordinates=(((0, 0), (4, 0), (0, 4), (0, 0)),))
-    ids = intersecting_feature_ids(target, (polygon,))
+    ids = tuple(
+        sorted(
+            match_features(
+                target, {}, VectorFilter(), required_area=shape(polygon.model_dump())
+            ).ids
+        )
+    )
     assert ids == (1, 2, 4)
+    original = replace(
+        target,
+        where=None,
+        selection=target.selection.model_copy(update={"filter": VectorFilter()}),
+    )
+    combined = match_features(
+        original, {}, predicate, required_area=shape(polygon.model_dump())
+    )
+    assert combined.ids == frozenset(ids)
+    assert combined.total == 6
     highlights = asyncio.run(read_lasso_highlights(target, ids))
     assert highlights is not None
     assert [feature["id"] for feature in highlights["features"]] == [1, 2, 4]
     assert shape(highlights["features"][-1]["geometry"]).equals(box(-1, -1, 5, 5))
     assert all(feature["properties"] == {} for feature in highlights["features"])
     assert target.selection.filter == predicate
-    empty = intersecting_feature_ids(
-        target, (SummaryPolygon.model_validate(mapping(box(30, 30, 31, 31))),)
+    empty = tuple(
+        match_features(
+            target, {}, VectorFilter(), required_area=box(30, 30, 31, 31)
+        ).ids
     )
     assert empty == ()
     assert asyncio.run(read_lasso_highlights(target, empty)) == {
@@ -101,8 +120,8 @@ def test_highlight_budget_does_not_change_membership(
         monkeypatch: Reduce only the optional display coordinate budget.
     """
     target = _write_layer(tmp_path / "targets.gpkg", [(box(0, 0, 2, 2), "forest")])
-    ids = intersecting_feature_ids(
-        target, (SummaryPolygon.model_validate(mapping(box(1, 1, 3, 3))),)
+    ids = tuple(
+        match_features(target, {}, VectorFilter(), required_area=box(1, 1, 3, 3)).ids
     )
     result = []
 

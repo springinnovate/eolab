@@ -1,9 +1,10 @@
 """Find whole target features that intersect the selected original polygons."""
 
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable, Generator, Mapping
+from contextlib import closing
 from dataclasses import replace
 from time import monotonic
+from typing import Any
 
 import fiona
 from fiona.transform import transform_geom
@@ -16,9 +17,16 @@ from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.bounded_vector import VectorReadLimits, _limit_memory, _source_collection
 from eolab_app.execution.bounded_process import ProcessDeadlineError, ProcessResultWriter, run_bounded_process
 from eolab_app.calculated_fields import evaluate_calculated_fields
-from eolab_app.catalog_selection import ResolvedCatalogSelection
+from eolab_app.attribute_filter import matches_filter
+from eolab_app.catalog_selection import (
+    FeatureMatches,
+    ResolvedCatalogSelection,
+    SelectionUnavailableError,
+    DrawingSelection,
+    VectorFilter,
+    VectorSelection,
+)
 from eolab_app.polygon_areas import SummaryPolygon
-from eolab_app.feature_predicate import DrawingSelection, VectorFilter, VectorSelection
 
 IntersectionLayer = ResolvedCatalogSelection | tuple[SummaryPolygon, ...]
 """An authorized original vector layer or committed WGS84 drawings, in browser order."""
@@ -28,7 +36,7 @@ async def bind_intersections(
     target: ResolvedCatalogSelection,
     read_layer: Callable[[VectorSelection | DrawingSelection], Awaitable[IntersectionLayer]],
     *, limits: VectorReadLimits | None = VectorReadLimits(),
-    compare: Callable[[IntersectionLayer, IntersectionLayer], Awaitable[tuple[int, ...]]] | None = None,
+    compare: Callable[[IntersectionLayer, dict[str, IntersectionLayer], VectorFilter], Awaitable[FeatureMatches]] | None = None,
 ) -> ResolvedCatalogSelection:
     """Evaluate spatial conditions against original files while their owners hold access.
 
@@ -40,8 +48,7 @@ async def bind_intersections(
         compare: Caller-owned scheduler for native comparisons, or an independently supervised process.
 
     Returns:
-        The original target with membership for each spatial clause. Field comparisons
-        and spatial matches are combined when the caller reads a feature.
+        The original target with the final matching IDs and whole-layer count.
 
     Raises:
         GeometryValidationError: If a native comparison fails or exceeds its budget.
@@ -52,109 +59,112 @@ async def bind_intersections(
     if not conditions:
         return target
     original = replace(target, where=None, selection=target.selection.model_copy(update={"filter": VectorFilter()}))
-    memberships = {}
-    for rule in conditions:
-        polygons = await read_layer(rule.source)
-        ids = await compare(original, polygons) if compare else await read_intersection(original, polygons, limits=limits)
-        memberships[str(rule.layerId)] = frozenset(ids)
-    return replace(target, intersections=memberships)
+    boundaries = {str(rule.layerId): await read_layer(rule.source) for rule in conditions}
+    predicate = target.selection.filter
+    matches = (await compare(original, boundaries, predicate) if compare
+               else await read_intersection(original, boundaries, predicate, limits=limits))
+    return replace(target, matches=matches)
 
 
 async def read_intersection(
-    target: IntersectionLayer, polygons: IntersectionLayer, *, limits: VectorReadLimits | None = VectorReadLimits(),
-) -> tuple[int, ...]:
-    """Compare originals in a cancellable native worker and wait for it to exit.
+    target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,
+    *, limits: VectorReadLimits | None = VectorReadLimits(),
+) -> FeatureMatches:
+    """Read filtered features in a cancellable process while the caller holds the original files.
 
     Args:
-        target: Authorized original features or committed target drawings.
-        polygons: Authorized reference polygons with their applied filter.
-        limits: Interactive budgets, or None for an unlimited Processing calculation.
+        target: Original features with the target filter removed.
+        boundaries: Authorized polygon views with their own filters applied.
+        predicate: Complete target filter, including field conditions.
+        limits: Interactive budgets or None for an unlimited Processing calculation.
 
     Returns:
-        Matching original feature IDs.
+        Matching original feature IDs and the total number of target features.
 
     Raises:
-        GeometryValidationError: If geometry, native memory or the elapsed-time budget prevents a result.
-        asyncio.CancelledError: After a cancelled worker has stopped using its files.
+        GeometryValidationError: If the native read fails or exceeds its budget.
     """
     try:
-        ids, error = await run_bounded_process(_compare_originals, (target, polygons, limits), limits.seconds if limits else None)
+        matches, error = await run_bounded_process(
+            _compare_originals, (target, boundaries, predicate, limits), limits.seconds if limits else None,
+        )
     except ProcessDeadlineError as error:
         raise GeometryValidationError("The spatial comparison could not finish within the map read budget.") from error
     if error:
         raise GeometryValidationError(error)
-    return ids
+    return matches
 
 
-def _compare_originals(writer: ProcessResultWriter, target: IntersectionLayer, polygons: IntersectionLayer,
-                       limits: VectorReadLimits | None) -> None:
-    """Return matching IDs or a readable source error through the supervised native worker's pipe.
-
-    Args:
-        writer: Parent process waiting for one result.
-        target: Authorized target source.
-        polygons: Authorized polygon view.
-        limits: Interactive budgets, or None for unlimited Processing work.
-    """
-    from eolab_app.catalog_selection import SelectionUnavailableError
+def _compare_originals(
+    writer: ProcessResultWriter, target: IntersectionLayer, boundaries: dict[str, IntersectionLayer],
+    predicate: VectorFilter, limits: VectorReadLimits | None,
+) -> None:
+    """Send the complete selection or its source error back to the supervising reader."""
     try:
         with _limit_memory(limits.memory_bytes if limits else None):
-            ids = intersecting_feature_ids(target, polygons, limits=limits)
-        writer.put((ids, None))
+            matches = match_features(target, boundaries, predicate, limits=limits)
+        writer.put((matches, None))
     except (GeometryValidationError, SelectionUnavailableError) as error:
-        writer.put(((), str(error)))
+        writer.put((None, str(error)))
     except MemoryError:
-        writer.put(((), "The spatial comparison ran out of memory."))
+        writer.put((None, "The spatial comparison ran out of memory."))
 
 
-def intersecting_feature_ids(
-    target: IntersectionLayer,
-    polygons: IntersectionLayer,
-    *,
-    limits: VectorReadLimits | None = VectorReadLimits(),
-) -> tuple[int, ...]:
-    """Return each original target ID once if any selected polygon touches it.
-
-    Both layers use their applied predicates. The comparison uses full geometries
-    in WGS84, including holes and multipart polygons. The spatial index lasts
-    for one comparison. Drawings use their position in the supplied tuple as ID.
+def match_features(
+    target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,
+    drawing_properties: tuple[dict[str, str], ...] = (), *, limits: VectorReadLimits | None = VectorReadLimits(),
+    required_area: BaseGeometry | None = None,
+) -> FeatureMatches:
+    """Index each selected polygon view once and evaluate every condition in one pass over the target.
 
     Args:
-        target: Original features or committed drawings to filter.
-        polygons: Selected catalog, uploaded, result or drawn polygons.
-        limits: Interactive read budgets, or None for supervised unlimited work.
+        target: Original vector features or committed drawing polygons in browser order.
+        boundaries: Current polygon views keyed by the condition's layer ID.
+        predicate: Field and intersection conditions to evaluate together.
+        drawing_properties: Name and note for each target drawing, in the same order.
+        limits: Interactive read budgets or None for a retained calculation.
+        required_area: Optional validated WGS84 area every selected feature must
+            intersect, independently of Match all or Match any field conditions.
 
     Returns:
-        Matching target IDs in native read order, including an empty result.
+        Selected native feature IDs (zero-based positions for drawings) and total features read.
 
     Raises:
-        GeometryValidationError: If geometries cannot be compared or a read exceeds its budget.
-        SelectionUnavailableError: If an authorized original source cannot be read.
+        GeometryValidationError: If original geometries cannot be compared or a read exceeds its budget.
+        SelectionUnavailableError: If an authorized original cannot be read.
     """
     deadline = monotonic() + limits.seconds if limits else None
+    indexes = {}
     try:
-        with read_original_features(polygons, limits, deadline) as features:
-            selected = []
-            for _, polygon in features:
-                if polygon.geom_type not in {"Polygon", "MultiPolygon"} or not polygon.is_valid:
-                    raise GeometryValidationError("Choose a layer with valid polygon geometry.")
-                selected.append(polygon)
-        index = STRtree(selected)
-        if not len(index):
-            return ()
-        with read_original_features(target, limits, deadline) as features:
-            return tuple(
-                feature_id for feature_id, geometry in features
-                if index.query(geometry, predicate="intersects").size
-            )
+        for key, layer in boundaries.items():
+            polygons = []
+            with closing(iter_original_features(layer, limits, deadline)) as features:
+                for _, _, geometry in features:
+                    if geometry is None:
+                        continue
+                    if geometry.geom_type not in {"Polygon", "MultiPolygon"} or not geometry.is_valid:
+                        raise GeometryValidationError("Choose a layer with valid polygon geometry.")
+                    polygons.append(geometry)
+            indexes[key] = STRtree(polygons)
+        ids = set()
+        total = 0
+        with closing(iter_original_features(target, limits, deadline)) as features:
+            for fid, properties, geometry in features:
+                total += 1
+                if required_area is not None and (geometry is None or not geometry.intersects(required_area)):
+                    continue
+                spatial = {key: geometry is not None and index.query(geometry, predicate="intersects").size > 0
+                           for key, index in indexes.items()}
+                if matches_filter(predicate, drawing_properties[fid] if drawing_properties else properties, spatial):
+                    ids.add(fid)
+        return FeatureMatches(ids=ids, total=total)
     except (fiona.errors.TransformError, GEOSException) as error:
         raise GeometryValidationError("The layer geometries could not be compared in WGS84.") from error
 
 
-@contextmanager
-def read_original_features(
+def iter_original_features(
     layer: IntersectionLayer, limits: VectorReadLimits | None, deadline: float | None,
-) -> Iterator[Iterator[tuple[int, BaseGeometry]]]:
+) -> Generator[tuple[int, Mapping[str, Any], BaseGeometry | None], None, None]:
     """Open the target's original point, line or polygon features with their IDs.
 
     Args:
@@ -163,40 +173,40 @@ def read_original_features(
         deadline: Monotonic deadline shared with the polygon read, or None.
 
     Yields:
-        Selected native IDs and WGS84 geometry while the dataset remains open.
+        Selected native IDs, properties and optional WGS84 geometry while the dataset remains open.
 
     Raises:
         GeometryValidationError: If the source has no CRS or exceeds a read budget.
         SelectionUnavailableError: If the native dataset cannot be opened.
     """
     if not isinstance(layer, ResolvedCatalogSelection):
-        yield ((index, shape(polygon.model_dump())) for index, polygon in enumerate(layer))
+        for index, polygon in enumerate(layer):
+            yield index, {}, shape(polygon.model_dump())
         return
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"), _source_collection(layer) as dataset:
         if not dataset.crs:
             raise GeometryValidationError("The target layer has no coordinate reference system.")
 
         needs_projection = dataset.crs.to_epsg() != 4326
-
-        def records() -> Iterator[tuple[int, BaseGeometry]]:
-            """Yield nonempty original features after applying the target view's predicate."""
-            options = {"where": layer.where} if layer.where else {}
-            for count, feature in enumerate(dataset.filter(**options), 1):
-                if limits and count > limits.features:
-                    raise GeometryValidationError("The intersection exceeded the interactive feature limit.")
-                if deadline is not None and monotonic() >= deadline:
-                    raise GeometryValidationError("The intersection exceeded the interactive read time.")
-                properties = dict(feature.properties)
-                properties.update(evaluate_calculated_fields(layer.calculated_fields, properties))
-                if feature.geometry is None or not layer.matches_feature(feature.id, properties):
-                    continue
-                geometry = shape(feature.geometry)
-                if geometry.is_empty:
-                    continue
-                if limits and get_num_coordinates(geometry) > limits.coordinates_per_feature:
-                    raise GeometryValidationError("A target feature exceeds the interactive coordinate limit.")
-                if needs_projection:
-                    geometry = shape(transform_geom(dataset.crs, "EPSG:4326", feature.geometry, antimeridian_cutting=False))
-                yield int(feature.id), geometry
-
-        yield records()
+        options = {"where": layer.where} if layer.where else {}
+        for count, feature in enumerate(dataset.filter(**options), 1):
+            if limits and count > limits.features:
+                raise GeometryValidationError("The intersection exceeded the interactive feature limit.")
+            if deadline is not None and monotonic() >= deadline:
+                raise GeometryValidationError("The intersection exceeded the interactive read time.")
+            fid = int(feature.id)
+            if layer.matches is not None and fid not in layer.matches.ids:
+                continue
+            properties = dict(feature.properties)
+            properties.update(evaluate_calculated_fields(layer.calculated_fields, properties))
+            if layer.matches is None and not matches_filter(layer.selection.filter, properties):
+                continue
+            geometry = shape(feature.geometry) if feature.geometry is not None else None
+            if geometry is None or geometry.is_empty:
+                yield fid, properties, None
+                continue
+            if limits and get_num_coordinates(geometry) > limits.coordinates_per_feature:
+                raise GeometryValidationError("A target feature exceeds the interactive coordinate limit.")
+            if needs_projection:
+                geometry = shape(transform_geom(dataset.crs, "EPSG:4326", feature.geometry, antimeridian_cutting=False))
+            yield fid, properties, geometry

@@ -10,17 +10,10 @@ export const ANNOTATION_FIELDS = Object.freeze([{ name: "name", type: "str" }, {
  * @throws {TypeError} If the filter cannot be represented by the vector rule contract.
  */
 export function annotationFilterRules(filter) {
-    const rules = filter.rules.map(rule => {
-        if (rule.operator !== "intersects") return rule;
-        const {matchingIds, ...condition} = rule;
-        return condition;
-    });
-    const validated = normalizeVectorFilter({...filter, rules}, ANNOTATION_FIELDS);
-    for (const [index, rule] of validated.rules.entries()) {
-        const ids = filter.rules[index].matchingIds;
-        if (rule.operator === "intersects" && Array.isArray(ids) && ids.every(id => typeof id === "string")) {
-            rule.matchingIds = [...ids];
-        }
+    const {matchingIds, ...conditions} = filter;
+    const validated = normalizeVectorFilter(conditions, ANNOTATION_FIELDS);
+    if (Array.isArray(matchingIds) && matchingIds.every(id => typeof id === "string")) {
+        validated.matchingIds = [...matchingIds];
     }
     return validated;
 }
@@ -32,9 +25,12 @@ export function annotationFilterRules(filter) {
  */
 export function filterAnnotationPolygons(polygons, filter) {
     if (!filter.enabled || !filter.rules.length) return polygons;
+    if (filter.rules.some(rule => rule.operator === "intersects")) {
+        const matches = new Set(filter.matchingIds);
+        return polygons.filter(polygon => matches.has(polygon.id));
+    }
     return polygons.filter(polygon => {
-        const matches = filter.rules.map(({ field, operator, value, matchingIds }) => {
-            if (operator === "intersects") return matchingIds?.includes(polygon.id) ?? false;
+        const matches = filter.rules.map(({ field, operator, value }) => {
             const actual = polygon[field];
             if (operator === "missing") return actual == null;
             if (operator === "present") return actual != null;
@@ -62,11 +58,14 @@ export function annotationSummaryPolygons(polygons, filter) {
 /** Describe a committed layer without exposing its editing draft or renderer.
  * @param {string} key Map-layer identity.
  * @param {Object} layer Committed annotation layer.
+ * @param {Object|null} [drawingSource] Linked source when it covers every displayed polygon.
  * @return {Object} Independent summary target with geometry-sensitive identity.
  * @throws {TypeError} If its stored filter is invalid.
  */
-export function annotationSummaryTarget(key, layer) {
+export function annotationSummaryTarget(key, layer, drawingSource = layer.drawingSource) {
     const polygons = structuredClone(layer.polygons);
-    return { key, label: layer.name, item: null, polygons, filter: annotationFilterRules(layer.filter),
+    return { key, label: layer.name, item: null, polygons,
+        ...(drawingSource && {drawingSource: {id: drawingSource.id, revision: drawingSource.revision, pending: drawingSource.pending}, selectedIds: filter => filterAnnotationPolygons(polygons, filter).map(polygon => polygon.id)}),
+        filter: annotationFilterRules(layer.filter),
         selectionIdentity: filter => JSON.stringify(filterAnnotationPolygons(polygons, filter).map(polygon => polygon.vertices)) };
 }

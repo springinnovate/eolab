@@ -4,8 +4,8 @@ from eolab_app.catalog_selection import (
     CatalogSelectionReader,
     ArtifactVectorSelection,
     SelectionUnavailableError,
+    VectorSourceOwners,
 )
-from eolab_app.feature_predicate import VectorSourceOwners
 import asyncio
 import logging
 import math
