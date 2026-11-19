@@ -31,8 +31,6 @@ Search the **Catalog** by place name, filename, keyword, author, paper title, or
 
 In **Map contents**, show, hide, rename, or reorder layers. The first layer draws on top. Duplicate a layer to try a second style or filter and keep both views. Copy a style between compatible layers, and use the legend to show readers what the colors mean.
 
-Choose **Street map** in **Basemap** to see labeled roads and places behind your layers. This option is available when the site has a [MapTiler key](.env.example) configured.
-
 The panels fade together so you can see the map beneath them. Hover over a panel or move keyboard focus into it to bring all panels back to full opacity. When you click the map to inspect a histogram or feature, the visible result stays readable as you pan or sample another spot. Close it, minimize it, or switch tools to let it fade again. Open **Settings** at the bottom of the map tools menu to turn fading off or adjust the delays, fade durations, and idle opacity. EOLab remembers your choices in this browser.
 
 <details>

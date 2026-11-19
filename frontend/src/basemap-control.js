@@ -44,15 +44,9 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
 
     const tileOptions = [
         { id: "detailed", label: "Detailed", tiles: configuration },
-        {
-            id: "maptiler-streets", label: "Street map",
-            tiles: configuration.maptilerStreets, mapTilerName: "Street map",
-        },
+        { id: "maptiler-streets", label: "Street map", tiles: configuration.maptilerStreets },
         { id: "carto", label: "Light (CARTO)", tiles: configuration.carto },
-        {
-            id: "maptiler", label: "Satellite (MapTiler)",
-            tiles: configuration.maptiler, mapTilerName: "Satellite",
-        },
+        { id: "maptiler", label: "Satellite (MapTiler)", tiles: configuration.maptiler },
     ].filter(option => option.tiles);
     const options = [
         ...tileOptions,
@@ -61,7 +55,6 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
     ];
 
     const layers = new Map();
-    const mapTilerTileErrorHandlers = new Map();
     let activeLayer = null;
     let pending = null;
     let select, status;
@@ -87,14 +80,20 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
 
     /**
      * Report failed tiles on the active MapTiler background without exposing its URL or key.
-     * @param {Object} layer Leaflet tile layer reporting a failure.
-     * @param {string} name User-facing name of that map background.
      * @return {void}
      */
-    function reportMapTilerTileError(layer, name) {
-        if (activeLayer !== layer) return;
+    function reportMapTilerTileError() {
+        const name = select.value === "maptiler" ? "Satellite" : "Street map";
         status.hidden = false;
         status.textContent = `Some ${name.toLowerCase()} tiles could not load. Choose another basemap, or select ${name} again to retry. Check the MapTiler key, allowed domains and quota if this continues.`;
+    }
+
+    /** Detach the active background and its tile error listener. @return {void} */
+    function removeActiveBasemap() {
+        if (!activeLayer) return;
+        activeLayer.off("tileerror", reportMapTilerTileError);
+        map.removeLayer(activeLayer);
+        activeLayer = null;
     }
 
     /**
@@ -106,8 +105,7 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
     async function selectBasemap(id) {
         pending?.abort();
         pending = null;
-        if (activeLayer) map.removeLayer(activeLayer);
-        activeLayer = null;
+        removeActiveBasemap();
         status.textContent = "";
         status.hidden = true;
         select.removeAttribute("aria-busy");
@@ -143,19 +141,16 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
                     }
                 }
             } else {
-                const { tiles, mapTilerName } = tileOptions.find(option => option.id === id);
-                const layer = tileBackground(tiles);
-                if (mapTilerName) {
-                    const handleError = () => reportMapTilerTileError(layer, mapTilerName);
-                    layer.on("tileerror", handleError);
-                    mapTilerTileErrorHandlers.set(layer, handleError);
-                }
-                layers.set(id, layer);
+                const { tiles } = tileOptions.find(option => option.id === id);
+                layers.set(id, tileBackground(tiles));
             }
         }
         activeLayer = layers.get(id);
         status.textContent = "";
         status.hidden = true;
+        if (id === "maptiler" || id === "maptiler-streets") {
+            activeLayer.on("tileerror", reportMapTilerTileError);
+        }
         activeLayer.addTo(map);
     }
 
@@ -222,12 +217,7 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         pending = null;
         select.removeEventListener("change", applySelectedBasemap);
         control.getContainer().removeEventListener("keydown", stopMapKeys);
-        if (activeLayer) map.removeLayer(activeLayer);
-        activeLayer = null;
-        for (const [layer, handleError] of mapTilerTileErrorHandlers) {
-            layer.off("tileerror", handleError);
-        }
-        mapTilerTileErrorHandlers.clear();
+        removeActiveBasemap();
         layers.clear();
     };
     return control.addTo(map);
