@@ -1120,6 +1120,12 @@
               <div id="vector-time-series-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
               <p id="vector-time-series-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
+            <div class="vector-selection-history" role="group" aria-label="Selection history">
+              <button id="vector-time-series-previous-selection" class="secondary-button" type="button"
+                aria-controls="vector-time-series-plots vector-time-series-values" disabled><span aria-hidden="true">←</span> Previous selection</button>
+              <button id="vector-time-series-next-selection" class="secondary-button" type="button"
+                aria-controls="vector-time-series-plots vector-time-series-values" disabled>Next selection <span aria-hidden="true">→</span></button>
+            </div>
             <div id="vector-time-series-plots" class="vector-plot-results">
               <div class="vector-plot-figure" id="vector-time-series-first"><h3 id="vector-time-series-chart-title"></h3><svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg></div>
               <div id="vector-time-series-extra-charts"></div>

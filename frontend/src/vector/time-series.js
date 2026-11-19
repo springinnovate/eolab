@@ -161,11 +161,12 @@ export class VectorTimeSeriesController {
      * @param {(identity:{label:string,title:string}|null)=>void} configuration.onPresentationChange Update the dock tab.
      * @param {(focus:VectorInspectionObservation["focus"])=>boolean} configuration.onFeatureZoom Zoom to the selected source feature.
      * @param {(index:number|null)=>void} configuration.onOpenFeature Open a single feature, or the inspector's current one.
+     * @param {(direction:"previous"|"next")=>void} configuration.onNavigateSelection Request the adjacent map selection.
      * @param {Document} [configuration.documentContext=document] Owning document.
-     * @throws {TypeError} If visibility, dock identity, or zoom callbacks are missing.
+     * @throws {TypeError} If visibility, dock identity, zoom, or selection navigation callbacks are missing.
      */
-    constructor({onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, documentContext = document}) {
-        for (const [name, callback] of Object.entries({onVisibilityChange, onPresentationChange, onFeatureZoom})) {
+    constructor({onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, onNavigateSelection, documentContext = document}) {
+        for (const [name, callback] of Object.entries({onVisibilityChange, onPresentationChange, onFeatureZoom, onNavigateSelection})) {
             if (typeof callback !== "function") throw new TypeError(name + " must be a function.");
         }
         this.document = documentContext;
@@ -192,6 +193,8 @@ export class VectorTimeSeriesController {
         this.zoomFeatureButton = documentContext.querySelector("#zoom-vector-time-series-feature");
         this.featureList = element("feature-list");
         this.openFeature = element("one");
+        this.previousSelection = element("previous-selection");
+        this.nextSelection = element("next-selection");
         this.plotPanel = new VectorPlotPanel(documentContext, "vector-time-series", () => this.render());
         this.fields = new VectorPlotFields(documentContext, "vector-time-series", names => {
             this.settings.yFields = names;
@@ -207,6 +210,18 @@ export class VectorTimeSeriesController {
         this.failedLayers = 0;
         this.abort = new AbortController();
         const listen = {signal: this.abort.signal};
+        this.setSelectionNavigation({canPrevious: false, canNext: false});
+        for (const [direction, button, opposite] of [
+            ["previous", this.previousSelection, this.nextSelection],
+            ["next", this.nextSelection, this.previousSelection],
+        ]) {
+            button.addEventListener("click", () => {
+                if (button.disabled) return;
+                const wasFocused = documentContext.activeElement === button;
+                onNavigateSelection(direction);
+                if (wasFocused && button.disabled && !opposite.disabled) opposite.focus();
+            }, listen);
+        }
         documentContext.querySelector("#close-vector-time-series").addEventListener("click", () => this.close({moveFocus:true}), listen);
         for (const [control, setting] of [[this.xField,"xField"],[this.direction,"direction"],[this.chartType,"chartType"]]) {
             control.addEventListener("change", () => { this.settings[setting] = control.value; this.render(); }, listen);
@@ -246,6 +261,16 @@ export class VectorTimeSeriesController {
     close({moveFocus = false} = {}) {
         this.plotPanel.closePicker(false);
         this.onVisibilityChange(false, moveFocus);
+    }
+
+    /**
+     * Enable each history button when another completed map selection is available.
+     * @param {Readonly<{canPrevious:boolean,canNext:boolean}>} navigation Available directions.
+     * @return {void}
+     */
+    setSelectionNavigation({canPrevious, canNext}) {
+        this.previousSelection.disabled = !canPrevious;
+        this.nextSelection.disabled = !canNext;
     }
 
     /**

@@ -14,7 +14,7 @@ import { VectorTimeSeriesController } from "../../src/vector/time-series.js";
  * evaluates existing initialization code rather than copying the callbacks.
  * @return {{inspector:Object,profile:VectorFeatureProfileController,
  * series:VectorTimeSeriesController,documentContext:FakeRasterControlDocument,
- * status:Object,zooms:Object[]}} Composed consumers and their presentation outputs.
+ * status:Object,zooms:Object[],selectionDirections:string[]}} Composed consumers and their presentation outputs.
  */
 function composition() {
   const source = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
@@ -26,6 +26,7 @@ function composition() {
   documentContext.removeEventListener = events.removeEventListener.bind(events);
   const status = {};
   const zooms = [];
+  const selectionDirections = [];
   const dependencies = {
     VectorTimeSeriesController: function (options) {
       return new VectorTimeSeriesController({...options, documentContext});
@@ -33,7 +34,9 @@ function composition() {
     VectorFeatureProfileController: function (options) {
       return new VectorFeatureProfileController({...options, documentContext});
     },
-    VectorFeatureInspectorController: function (options) { return options; },
+    VectorFeatureInspectorController: function (options) {
+      return {...options, navigateSelection: direction => selectionDirections.push(direction)};
+    },
     mapInspection: {
       setVectorTimeSeriesIdentity() {},
       setVectorFeatureProfileIdentity() {},
@@ -51,7 +54,7 @@ function composition() {
     `let vectorFeatureInspector;\n${source.slice(start, end)}\n` +
     "return {inspector: vectorFeatureInspector, profile: vectorFeatureProfile, series: vectorTimeSeries};"
   )(...Object.values(dependencies));
-  return {...controllers, documentContext, status, zooms};
+  return {...controllers, documentContext, status, zooms, selectionDirections};
 }
 
 /**
@@ -124,4 +127,27 @@ test("a new inspection replaces the prior chart and communicates partial results
   assert.equal(series.observations.length, 0);
   assert.equal(documentContext.querySelector("#vector-time-series-table-body").children.length, 0);
   assert.deepEqual(status.feature, {state: "invalidated", message: "Source removed"});
+});
+
+test("comparison history controls request the adjacent selection through composition", t => {
+  const {inspector, profile, series, documentContext, status, selectionDirections} = composition();
+  t.after(() => { profile.destroy(); series.destroy(); });
+  const previous = documentContext.querySelector("#vector-time-series-previous-selection");
+  const next = documentContext.querySelector("#vector-time-series-next-selection");
+  assert.equal(previous.disabled, true);
+  assert.equal(next.disabled, true);
+
+  inspector.onSampleChange({state: "empty", message: "No features", observations: []});
+  inspector.onSelectionNavigationChange({canPrevious: true, canNext: false});
+  previous.dispatchEvent(new Event("click"));
+  assert.deepEqual(selectionDirections, ["previous"]);
+
+  const position = {lng: 21, lat: 11};
+  inspector.onSampleChange({state: "ready", message: "Ready", observations: [observation(1), observation(9)], position});
+  inspector.onSelectionNavigationChange({canPrevious: false, canNext: true});
+  assert.deepEqual(status.feature.position, position);
+  assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
+    .children.map(row => row.children[1].children[0].textContent), ["1", "9"]);
+  next.dispatchEvent(new Event("click"));
+  assert.deepEqual(selectionDirections, ["previous", "next"]);
 });
