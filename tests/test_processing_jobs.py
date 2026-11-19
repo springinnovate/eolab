@@ -502,6 +502,7 @@ def test_job_store_admits_operation_data_without_raster_fields(
         specification={"operation": "test.summary.v1", "fields": ["year"]},
         summary={"operation": "test.summary.v1", "label": "Year summary"},
         reserved_bytes=4096,
+        operation="test.summary.v1",
     )
     submitted_job = store.submit(
         "owner", "summary-request", prepared, "fixture-input-hash"
@@ -751,7 +752,9 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     pending = store.submit(
         "owner",
         "before-restart",
-        PreparedJobPlan({"operation": "test.v1"}, {"label": "Test"}, 4096),
+        PreparedJobPlan(
+            {"operation": "test.v1"}, {"label": "Test"}, 4096, operation="test.v1"
+        ),
         "a" * 64,
     )
 
@@ -898,7 +901,9 @@ def test_worker_restart_interrupts_unfinished_jobs(
         store: Disposable real PostgreSQL adapter.
         status: Unfinished state retained from the stopped worker.
     """
-    prepared = PreparedJobPlan({"operation": "test.v1"}, {"label": "Test"}, 4096)
+    prepared = PreparedJobPlan(
+        {"operation": "test.v1"}, {"label": "Test"}, 4096, operation="test.v1"
+    )
     completed = store.submit("owner", "completed-request", prepared, "a" * 64)
     claimed = store.claim_next_job()
     assert claimed["id"] == completed["id"]

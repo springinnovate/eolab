@@ -1305,7 +1305,11 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
             "fixture-owner",
             uuid4().hex,
             PreparedJobPlan(
-                {}, {}, 0, retained_metadata={"oversized": "x" * (192 * 1024)}
+                {},
+                {},
+                0,
+                operation="test.v1",
+                retained_metadata={"oversized": "x" * (192 * 1024)},
             ),
             "fixture-request",
         )

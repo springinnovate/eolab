@@ -57,7 +57,7 @@ class PreparedJobPlan:
     specification: dict[str, object]
     summary: dict[str, object]
     reserved_bytes: int
-    operation: str = ""
+    operation: str
     work_key: str | None = None
     presentation: dict[str, object] | None = None
     retained_metadata: dict[str, object] | None = None
