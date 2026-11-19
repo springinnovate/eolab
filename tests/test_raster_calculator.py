@@ -340,6 +340,52 @@ def test_calculator_reports_a_cut_inside_the_output_projection(
             assert result.valid_pixels == 2
 
 
+@pytest.mark.parametrize("source_left", [0, -180])
+@pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
+@pytest.mark.parametrize(
+    ("west", "east", "expected"), [(179.5, 180, 179.25), (-180, -179.5, 179.75)]
+)
+def test_global_bilinear_samples_agree_across_longitude_encodings(
+    tmp_path: Path,
+    source_left: int,
+    crs: str,
+    west: float,
+    east: float,
+    expected: float,
+) -> None:
+    """Use the neighboring sample beyond ±180° in either full-world encoding."""
+    values = (source_left + np.arange(360, dtype="int16")) % 360
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(values, (2, 1)),
+        transform=from_origin(source_left, 2, 1, 1),
+    )
+    project = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    dx, top = project.transform(0.5, 2)
+    left, _ = project.transform(west, 2)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="bilinear"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(kind="custom", crs=crs, pixelSize=(dx, top / 2)),
+        ),
+        selectedBounds=Wgs84Bounds(west=west, south=0, east=east, north=2),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == 2
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert output.transform.almost_equals(from_origin(left, top, dx, top / 2))
+        np.testing.assert_allclose(
+            output.read(1), [[expected], [expected]], rtol=0, atol=1e-7
+        )
+
+
 @pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
 def test_regional_longitudes_keep_a_fractional_cell_size(
     tmp_path: Path, crs: str
