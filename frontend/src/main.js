@@ -2068,7 +2068,17 @@ async function initializeCatalog(
         },
         onPresentationChange: (identity) =>
             mapInspection.setVectorTimeSeriesIdentity(identity),
-        onFeatureZoom: zoomInspectedVectorFeature,
+        /**
+         * Highlight the original inspection result and fit its geographic bounds.
+         * @param {import("./vector/inspection-observation.js").VectorInspectionObservation["focus"]} focus
+         * Map focus from the inspected feature.
+         * @param {number} index Position in the inspector sample used by the plot.
+         * @return {boolean} Whether the map could fit the feature.
+         */
+        onFeatureZoom: (focus, index) => {
+            vectorFeatureInspector.showResult(index);
+            return zoomInspectedVectorFeature(focus);
+        },
         onNavigateSelection: direction => vectorFeatureInspector.navigateSelection(direction),
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({

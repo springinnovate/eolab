@@ -58,7 +58,16 @@ function observations() {
   ];
 }
 
-function fixture() {
+/**
+ * Connect a comparison plot to a test dock and record its map requests.
+ * @param {(focus:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"])=>boolean}
+ * [canZoom] Whether the requested feature can be fitted on the map.
+ * @return {{controller:VectorTimeSeriesController,documentContext:FakeRasterControlDocument,
+ * visibility:{visible:boolean,moveFocus:boolean}[],presentations:({label:string,title:string}|null)[],
+ * zoomRequests:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"][]}}
+ * Test dock and its recorded interactions.
+ */
+function fixture(canZoom = () => true) {
   const documentContext = new FakeRasterControlDocument();
   const events = new EventTarget();
   documentContext.addEventListener = events.addEventListener.bind(events);
@@ -83,7 +92,7 @@ function fixture() {
     onNavigateSelection() {},
     onFeatureZoom: (featureFocus) => {
       zoomRequests.push(featureFocus);
-      return true;
+      return canZoom(featureFocus);
     },
   });
   return {
@@ -127,6 +136,7 @@ test("two measurements share positions, retain exact cells, and zoom to the chos
   assert.equal(bars(first)[0].getAttribute("x"),bars(second)[0].getAttribute("x"));
   assert.notEqual(bars(second)[0].getAttribute("x"),bars(second)[1].getAttribute("x"));
   bars(second)[1].dispatchEvent(new Event("click"));
+  assert.equal(zoomRequests.at(-1), sample[1].focus, "The bar requests zoom to its own feature");
   const zoom=doc.querySelector("#zoom-vector-time-series-feature");
   zoom.dispatchEvent(new Event("click"));
   assert.equal(zoomRequests.at(-1),sample[1].focus);
@@ -190,6 +200,7 @@ test("comparison stacks fields on separate feature rows while retaining exact fe
   assert.match(doc.querySelector("#vector-time-series-status").textContent, /One field value is missing/);
   assert.match(segments.at(-2).getAttribute("aria-label"), /areaForest = 3.25$/);
   segments.at(-2).dispatchEvent(new Event("click"));
+  assert.deepEqual(zoomRequests, [sample[3].focus], "Activating a segment immediately locates its feature");
   doc.querySelector("#zoom-vector-time-series-feature").dispatchEvent(new Event("click"));
   assert.equal(zoomRequests.at(-1), sample[3].focus);
 
@@ -394,9 +405,17 @@ test("chart points identify observations and request selected-feature zoom", () 
     observations: observations(),
     message: "Ready",
   });
+  h.controller.open();
+  const chartType = h.documentContext.querySelector("#vector-time-series-chart-type");
+  chartType.value = "scatter";
+  chartType.dispatchEvent(new Event("change"));
+  const xAxis = h.documentContext.querySelector("#vector-time-series-x");
+  xAxis.value = "year";
+  xAxis.dispatchEvent(new Event("change"));
   const chart = h.documentContext.querySelector("#vector-time-series-chart");
   const points = chart.querySelectorAll(".series-chart-point");
   points[0].dispatchEvent(new Event("click"));
+  assert.deepEqual(h.zoomRequests, [focus(2, 1)], "Clicking a point requests zoom immediately");
   assert.equal(points[0].getAttribute("aria-pressed"), "true");
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-selection").hidden,
@@ -412,12 +431,13 @@ test("chart points identify observations and request selected-feature zoom", () 
   );
   zoom
     .dispatchEvent(new Event("click"));
-  assert.deepEqual(h.zoomRequests, [focus(2, 1)]);
+  assert.deepEqual(h.zoomRequests, [focus(2, 1), focus(2, 1)]);
 
   const keyboardSelection = new Event("keydown", { cancelable: true });
   Object.defineProperty(keyboardSelection, "key", { value: "Enter" });
   points[2].dispatchEvent(keyboardSelection);
   assert.equal(keyboardSelection.defaultPrevented, true);
+  assert.deepEqual(h.zoomRequests.at(-1), focus(10, 1, [9, 0, 11, 2]));
   assert.match(
     h.documentContext.querySelector("#vector-time-series-selection-text")
       .textContent,
@@ -425,6 +445,33 @@ test("chart points identify observations and request selected-feature zoom", () 
   );
   zoom.dispatchEvent(new Event("click"));
   assert.deepEqual(h.zoomRequests.at(-1), focus(10, 1, [9, 0, 11, 2]));
+  assert.deepEqual(h.visibility, [{visible: true, moveFocus: false}]);
+
+  const order = h.documentContext.querySelector("#vector-time-series-direction");
+  order.value = "descending";
+  order.dispatchEvent(new Event("change"));
+  assert.equal(h.zoomRequests.length, 4, "Redrawing the selected feature does not request zoom");
+  assert.equal(chart.querySelectorAll(".series-chart-point")[0].getAttribute("aria-pressed"), "true");
+});
+
+test("a point with no map bounds stays selected and another point can still zoom", () => {
+  const {controller, documentContext: doc, zoomRequests} = fixture(featureFocus => featureFocus.bounds !== null);
+  controller.setSample({ state: "ready", observations: observations(), message: "Ready" });
+  const marks = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point");
+  const selection = doc.querySelector("#vector-time-series-selection-text");
+  const zoom = doc.querySelector("#zoom-vector-time-series-feature");
+
+  marks[0].dispatchEvent(new Event("click"));
+  assert.equal(marks[0].getAttribute("aria-pressed"), "true");
+  assert.match(selection.textContent, /risk\.2a.*Feature location is unavailable/);
+  assert.equal(zoom.disabled, true);
+
+  marks[2].dispatchEvent(new Event("click"));
+  assert.equal(marks[2].getAttribute("aria-pressed"), "true");
+  assert.match(selection.textContent, /risk\.10a/);
+  assert.doesNotMatch(selection.textContent, /unavailable/);
+  assert.equal(zoom.disabled, false);
+  assert.deepEqual(zoomRequests, [focus(2, 1), focus(10, 1, [9, 0, 11, 2])]);
 });
 
 test("a new inspection sample clears the selected series point", () => {

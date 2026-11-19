@@ -162,7 +162,8 @@ export class VectorTimeSeriesController {
      * @param {Object} configuration Browser composition callbacks.
      * @param {(visible:boolean,moveFocus:boolean)=>void} configuration.onVisibilityChange Show or close the dock view.
      * @param {(identity:{label:string,title:string}|null)=>void} configuration.onPresentationChange Update the dock tab.
-     * @param {(focus:VectorInspectionObservation["focus"])=>boolean} configuration.onFeatureZoom Zoom to the selected source feature.
+     * @param {(focus:VectorInspectionObservation["focus"],index:number)=>boolean} configuration.onFeatureZoom
+     * Highlight the inspected result at this index and return whether the map could fit its bounds.
      * @param {(index:number|null)=>void} configuration.onOpenFeature Open a single feature, or the inspector's current one.
      * @param {(direction:"previous"|"next")=>void} configuration.onNavigateSelection Request the adjacent map selection.
      * @param {Document} [configuration.documentContext=document] Owning document.
@@ -237,10 +238,7 @@ export class VectorTimeSeriesController {
             this.plotPanel.closePicker();
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
-            if (this.selected && !onFeatureZoom(this.observations[this.selected.index].focus)) {
-                this.zoomFeatureButton.disabled = true;
-                this.status.textContent = "Feature location is unavailable. The map has not moved.";
-            }
+            if (this.selected) this.#zoomToFeature(this.selected.index);
         }, listen);
         documentContext.addEventListener("keydown", event => {
             if (event.key !== "Escape" || this.panel.hidden || !this.panel.contains(documentContext.activeElement)) return;
@@ -417,7 +415,7 @@ export class VectorTimeSeriesController {
                 xAxisLabel:xLabel,yAxisLabel:"Value",ariaLabel:plot.field + " by " + xLabel,
                 pointAccessibleLabel:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
                 pointTooltip:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
-                onPointSelect:p => this.#select(p.sourceIndex,plot.field),
+                onPointSelect: point => this.#selectAndZoomToFeature(point.sourceIndex, plot.field),
             });
             labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
             this.pointElements.push(...handles.pointElements);
@@ -461,7 +459,7 @@ export class VectorTimeSeriesController {
             valueAxisLabel: "Value",
             ariaLabel: "Numeric fields stacked by feature",
             describePoint: (point, field) => this.#identity(point.observation, point.sourceIndex, field, point.xLabel),
-            onPointSelect: (point, field) => this.#select(point.sourceIndex, field),
+            onPointSelect: (point, field) => this.#selectAndZoomToFeature(point.sourceIndex, field),
         }).pointElements;
         const missing = rows.length * plots.length - readingCount;
         if (missing) this.status.textContent = missing === 1 ? "One field value is missing. See Values." :
@@ -510,6 +508,29 @@ export class VectorTimeSeriesController {
             else circle.classList.remove("is-selected");
             circle.setAttribute("aria-pressed",String(chosen));
         }
+    }
+
+    /**
+     * Select the plotted reading, highlight its feature, and zoom to it.
+     * @param {number} index Feature position in the current inspection sample.
+     * @param {string} field Measurement represented by the activated mark.
+     * @return {void}
+     */
+    #selectAndZoomToFeature(index, field) {
+        this.#select(index, field);
+        this.#zoomToFeature(index);
+    }
+
+    /**
+     * Highlight the selected feature on the map and fit its bounds.
+     * Report unavailable bounds beside the selected reading.
+     * @param {number} index Position in the current inspection sample.
+     * @return {void}
+     */
+    #zoomToFeature(index) {
+        if (this.onFeatureZoom(this.observations[index].focus, index)) return;
+        this.zoomFeatureButton.disabled = true;
+        this.selectionText.textContent += " · Feature location is unavailable.";
     }
 
     /**
