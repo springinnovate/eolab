@@ -346,6 +346,7 @@ test("composition forwards compatible map areas and closes inspection when no ra
         /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*histogram: mapInteractionMode === "box",\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*if \(mapInteractionMode === "box"\) \{\s*const box = pixelPoint && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
+    assert.match(COMPOSITION_SOURCE, /if \(mapInteractionMode === "pixel"\) \{\s*void vectorFeatureInspector\.inspect\(event\);\s*annotations\?\.inspectAt\(event\.latlng\);\s*\}/);
     assert.match(COMPOSITION_SOURCE, /if \(!\["pixel", "box"\]\.includes\(mapInteractionMode\)\) return/);
 });
 

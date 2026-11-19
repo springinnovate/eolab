@@ -2010,7 +2010,7 @@ async function initializeCatalog(
         onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**
-     * Sample rasters and catalog vectors, then foreground any clicked annotation's details.
+     * Place a histogram box or inspect a map point using the selected tool.
      * Leaflet emits this event only for a completed click, not a drag-pan.
      *
      * @param {{latlng:{lng:number,lat:number},containerPoint?:{x:number,y:number}}}
@@ -2042,8 +2042,10 @@ async function initializeCatalog(
                 }
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
-            void vectorFeatureInspector.inspect(event);
-            annotations?.inspectAt(event.latlng);
+            if (mapInteractionMode === "pixel") {
+                void vectorFeatureInspector.inspect(event);
+                annotations?.inspectAt(event.latlng);
+            }
             mapInspection.keepVisibleClickResultReadable();
         } finally {
             selectingMapClick = false;
