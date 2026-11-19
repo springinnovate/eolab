@@ -153,7 +153,7 @@ Drawings stay on this device until you share their layer or save them through Pl
 
 If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
 
-The server stores private uploads for seven days. GeoPackages and reference masks share a five-file allowance per browser. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
+The server stores private uploads for seven days. Each browser can store up to 100 files across GeoPackages and reference masks, within the server's storage limits. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
 
 </details>
 

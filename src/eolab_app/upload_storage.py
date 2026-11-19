@@ -16,7 +16,7 @@ import re
 import shutil
 from tempfile import TemporaryDirectory
 from threading import RLock
-from typing import Any, BinaryIO, Literal, TypeVar
+from typing import Any, BinaryIO, Final, Literal, TypeVar
 from uuid import UUID, uuid4
 
 from pydantic import (
@@ -32,6 +32,7 @@ from eolab_app.source_files import finish_source_task
 
 UploadKind = Literal["vector", "raster"]
 UPLOAD_LIFETIME = timedelta(days=7)
+UPLOAD_MAX_FILES_PER_OWNER: Final = 100
 UPLOAD_QUEUE_CAPACITY = 32
 UPLOAD_QUEUE_WAIT_SECONDS = 30
 T = TypeVar("T")
@@ -94,11 +95,15 @@ def read_stored_upload(content: bytes) -> StoredUploadFile:
 
 
 class UploadSummary(BaseModel):
-    """Describe visible originals and occupied upload storage for one browser."""
+    """Describe available originals and quota usage for one browser.
+
+    All formats share the file allowance. Pending uploads and originals retained
+    by calculations count toward usage.
+    """
 
     uploads: list[UploadRecord]
     used_files: int
-    max_files: Literal[5] = 5
+    max_files: Literal[100] = UPLOAD_MAX_FILES_PER_OWNER
     used_bytes: int
     max_bytes: int
     max_file_bytes: int
@@ -475,8 +480,8 @@ class UploadStorage:
             Staged original for bounded format inspection and publish().
 
         Raises:
-            UploadError: If five files or a byte budget is exhausted, admission's
-                queue is full or times out, or the incoming body exceeds 120 seconds.
+            UploadError: If the file allowance or a byte budget is exhausted, the
+                admission queue is full or times out, or the body exceeds 120 seconds.
             OSError: If staging fails.
             asyncio.CancelledError: After pending writes and cleanup finish.
         """
@@ -498,10 +503,12 @@ class UploadStorage:
                 with self._disk_lock:
                     self.sweep_expired()
                     usage = self._usage()
-                    if len(usage.files.get(owner, set())) >= 5:
+                    if len(usage.files.get(owner, set())) >= UPLOAD_MAX_FILES_PER_OWNER:
                         raise UploadError(
                             409,
-                            "You have 5 uploaded files. Delete an uploaded file in Your uploads before uploading another. Files in use count until the calculation stops.",
+                            f"You have {UPLOAD_MAX_FILES_PER_OWNER} uploaded files. "
+                            "Delete an uploaded file in Your uploads before uploading another. "
+                            "Files in use count until the calculation stops.",
                         )
                     owner_path = self.root / owner
                     owner_path.mkdir(parents=True, exist_ok=True)
