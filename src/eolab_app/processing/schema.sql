@@ -1,12 +1,9 @@
--- Processing owns this schema; pgSTAC migrations and tables are untouched.
-CREATE SCHEMA IF NOT EXISTS processing;
-CREATE TABLE IF NOT EXISTS processing.schema_version (
-    version integer PRIMARY KEY
-);
--- Early clip-only installations constrained this registry to version 1.
-ALTER TABLE processing.schema_version DROP CONSTRAINT IF EXISTS schema_version_version_check;
-INSERT INTO processing.schema_version VALUES (1) ON CONFLICT DO NOTHING;
-CREATE TABLE IF NOT EXISTS processing.jobs (
+-- Install only in a new Processing namespace under the Processing advisory lock.
+CREATE SCHEMA processing;
+CREATE TABLE processing.schema_version (version integer PRIMARY KEY);
+
+-- A job owns execution and files. Subscribers own the public handles.
+CREATE TABLE processing.jobs (
     id text PRIMARY KEY,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -17,40 +14,43 @@ CREATE TABLE IF NOT EXISTS processing.jobs (
     summary jsonb NOT NULL DEFAULT '{}'::jsonb,
     attempt_id text,
     lease_until timestamptz,
-    deadline_at timestamptz,
     progress jsonb NOT NULL DEFAULT '{}'::jsonb,
     artifact jsonb,
-    error jsonb
+    error jsonb,
+    operation text NOT NULL,
+    started_at timestamptz,
+    work_key text,
+    retained_metadata jsonb,
+    retained_outcome jsonb,
+    metadata_expires_at timestamptz,
+    metadata_ttl_seconds bigint NOT NULL DEFAULT 604800 CHECK (metadata_ttl_seconds > 0),
+    result_ttl_seconds bigint CHECK (result_ttl_seconds > 0),
+    input_uploads jsonb NOT NULL DEFAULT '{}'::jsonb
 );
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS summary jsonb NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS operation text NOT NULL DEFAULT '';
-INSERT INTO processing.schema_version VALUES (2) ON CONFLICT DO NOTHING;
-CREATE INDEX IF NOT EXISTS jobs_status ON processing.jobs(status, created_at);
-CREATE TABLE IF NOT EXISTS processing.transfers (
+
+CREATE INDEX jobs_status ON processing.jobs(status, created_at);
+CREATE UNIQUE INDEX jobs_active_work ON processing.jobs(work_key)
+    WHERE work_key IS NOT NULL AND status IN ('queued','running');
+
+CREATE TABLE processing.transfers (
     id text PRIMARY KEY,
     job_id text NOT NULL REFERENCES processing.jobs(id) ON DELETE CASCADE,
     expires_at timestamptz NOT NULL
 );
-CREATE INDEX IF NOT EXISTS transfers_job ON processing.transfers(job_id, expires_at);
-
--- A hint is delivered only after the state transaction commits. The payload is
--- an internal owner hash, never a session cookie, job result, input or path.
-DROP TRIGGER IF EXISTS processing_job_change ON processing.jobs;
-INSERT INTO processing.schema_version VALUES (3) ON CONFLICT DO NOTHING;
+CREATE INDEX transfers_job ON processing.transfers(job_id, expires_at);
 
 -- Small completed values only: no source paths, polygons or artifact references.
-CREATE TABLE IF NOT EXISTS processing.calculation_results (
+CREATE TABLE processing.calculation_results (
     cache_key text PRIMARY KEY CHECK (cache_key ~ '^[0-9a-f]{64}$'),
     payload jsonb NOT NULL CHECK (octet_length(payload::text) <= 32768),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     expires_at timestamptz NOT NULL
 );
-CREATE INDEX IF NOT EXISTS calculation_results_expiry
+CREATE INDEX calculation_results_expiry
     ON processing.calculation_results(expires_at);
-INSERT INTO processing.schema_version VALUES (4) ON CONFLICT DO NOTHING;
 
 -- Bounded owner-private calculation inputs. Accepted jobs retain their own copy.
-CREATE TABLE IF NOT EXISTS processing.inputs (
+CREATE TABLE processing.inputs (
     id text PRIMARY KEY,
     owner text NOT NULL,
     sha256 text NOT NULL,
@@ -58,48 +58,9 @@ CREATE TABLE IF NOT EXISTS processing.inputs (
     bytes integer NOT NULL CHECK (bytes > 0 AND bytes <= 8388608),
     expires_at timestamptz NOT NULL
 );
-CREATE INDEX IF NOT EXISTS inputs_expiry ON processing.inputs(expires_at);
-INSERT INTO processing.schema_version VALUES (5) ON CONFLICT DO NOTHING;
+CREATE INDEX inputs_expiry ON processing.inputs(expires_at);
 
-INSERT INTO processing.schema_version VALUES (6) ON CONFLICT DO NOTHING;
-
--- Retained input documents have individual payload limits, not a cumulative
--- byte budget. Recreate the dependent view below in this transaction.
-DROP VIEW IF EXISTS processing.subscribed_jobs;
-DROP TRIGGER IF EXISTS processing_job_input_bytes ON processing.jobs;
-DROP FUNCTION IF EXISTS processing.measure_job_input_bytes();
-ALTER TABLE processing.jobs DROP COLUMN IF EXISTS input_bytes;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS started_at timestamptz;
--- Earlier jobs have no recorded start time. Their last update supplies a
--- one-time approximation for scheduling history, never calculation timing.
-UPDATE processing.jobs SET started_at=updated_at
-    WHERE started_at IS NULL AND attempt_id IS NOT NULL;
-INSERT INTO processing.schema_version VALUES (7) ON CONFLICT DO NOTHING;
-
--- Retire profiling metadata after dropping its dependent view above.
-ALTER TABLE processing.jobs DROP COLUMN IF EXISTS preparation;
-INSERT INTO processing.schema_version VALUES (8) ON CONFLICT DO NOTHING;
-
--- Worker startup discards unfinished jobs; no persisted compatibility versions.
-ALTER TABLE processing.jobs DROP COLUMN IF EXISTS job_format_version;
-DROP TRIGGER IF EXISTS processing_claim_protocol ON processing.jobs;
-DROP FUNCTION IF EXISTS processing.require_claim_protocol();
-ALTER TABLE processing.jobs DROP COLUMN IF EXISTS minimum_claim_version;
-INSERT INTO processing.schema_version VALUES (9) ON CONFLICT DO NOTHING;
-
--- Preparation belongs to jobs; retire the independent plan queue and records.
-DROP TABLE IF EXISTS processing.plans;
-DROP FUNCTION IF EXISTS processing.notify_plan_change();
-ALTER TABLE processing.jobs DROP COLUMN IF EXISTS plan_id;
-INSERT INTO processing.schema_version VALUES (10) ON CONFLICT DO NOTHING;
-
--- A computation owns execution and files; subscribers own public handles.
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS work_key text;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS execution_memory_bytes bigint NOT NULL DEFAULT 0;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS required_disk_bytes bigint NOT NULL DEFAULT 0;
-CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_work ON processing.jobs(work_key)
-    WHERE work_key IS NOT NULL AND status IN ('queued','running');
-CREATE TABLE IF NOT EXISTS processing.job_subscribers (
+CREATE TABLE processing.job_subscribers (
     id text PRIMARY KEY,
     job_id text NOT NULL REFERENCES processing.jobs(id) ON DELETE CASCADE,
     owner text NOT NULL,
@@ -109,44 +70,16 @@ CREATE TABLE IF NOT EXISTS processing.job_subscribers (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     status text CHECK (status IN ('cancelling','cancelled','deleted')),
     presentation jsonb CHECK (octet_length(presentation::text) <= 32768),
+    deletion_id text,
+    deletion_undo_until timestamptz,
+    status_before_deletion text CHECK (status_before_deletion IN ('cancelled','cancelling')),
     UNIQUE(owner,request_key)
 );
-CREATE INDEX IF NOT EXISTS subscribers_job ON processing.job_subscribers(job_id);
-CREATE INDEX IF NOT EXISTS subscribers_owner ON processing.job_subscribers(owner,created_at DESC);
--- An explicit short Undo window hides a handle before its files can be removed.
-ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS deletion_id text;
-ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS deletion_undo_until timestamptz;
-ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS status_before_deletion text
-    CHECK (status_before_deletion IN ('cancelled','cancelling'));
-DO $$ BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='processing'
-               AND table_name='jobs' AND column_name='owner') THEN
-        ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS request_hash text;
-        INSERT INTO processing.job_subscribers
-            (id,job_id,owner,request_key,request_hash,created_at,updated_at)
-        SELECT id,id,owner,request_key,request_hash,created_at,updated_at FROM processing.jobs
-        ON CONFLICT DO NOTHING;
-        ALTER TABLE processing.jobs DROP COLUMN owner;
-        ALTER TABLE processing.jobs DROP COLUMN request_key;
-        ALTER TABLE processing.jobs DROP COLUMN request_hash;
-    END IF;
-END $$;
+CREATE INDEX subscribers_job ON processing.job_subscribers(job_id);
+CREATE INDEX subscribers_owner ON processing.job_subscribers(owner,created_at DESC);
 
--- Optional opaque application metadata survives scratch cleanup. Counts are
--- bounded by max_job_records; each metadata/outcome pair has a 256 KiB ceiling.
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_metadata jsonb;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_outcome jsonb;
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_expires_at timestamptz;
--- Capture the deployment's chosen lifetime when each job is submitted. Existing
--- records keep the original seven-day metadata policy. Terminal deadlines start
--- once; explicit renewal may extend an available result and its saved details.
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_ttl_seconds bigint
-    NOT NULL DEFAULT 604800 CHECK (metadata_ttl_seconds > 0);
--- Optional owner-selected result lifetime. NULL preserves ordinary processing
--- and historical jobs' deployment-level result policy.
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS result_ttl_seconds bigint
-    CHECK (result_ttl_seconds > 0);
-CREATE OR REPLACE FUNCTION processing.retain_terminal_metadata() RETURNS trigger
+-- Set each terminal deadline once and retain the published result after scratch cleanup.
+CREATE FUNCTION processing.retain_terminal_metadata() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.retained_metadata IS NOT NULL AND NEW.metadata_expires_at IS NULL
        AND NEW.status IN ('ready','failed','cancelled','interrupted') THEN
@@ -164,18 +97,17 @@ LANGUAGE plpgsql AS $$ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-DROP TRIGGER IF EXISTS processing_retained_metadata ON processing.jobs;
 CREATE TRIGGER processing_retained_metadata BEFORE INSERT OR UPDATE ON processing.jobs
 FOR EACH ROW EXECUTE FUNCTION processing.retain_terminal_metadata();
 
-CREATE OR REPLACE VIEW processing.subscribed_jobs AS
+CREATE VIEW processing.subscribed_jobs AS
 SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        j.created_at,s.created_at AS subscribed_at,
        greatest(s.updated_at,j.updated_at) AS updated_at,j.expires_at,
        CASE WHEN s.status='cancelling' AND j.status<>'cancelling' THEN 'cancelled'
             ELSE coalesce(s.status,j.status) END AS status,
        j.operation,CASE WHEN j.spec IS NULL THEN NULL ELSE j.summary END AS spec,
-       j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,
+       j.reserved_bytes,j.attempt_id,j.lease_until,j.progress,
        CASE WHEN s.status IS NULL THEN j.artifact END AS artifact,
        CASE WHEN s.status IS NULL THEN j.error END AS error,
        j.summary,j.metadata_expires_at,s.deletion_id,s.deletion_undo_until,
@@ -186,7 +118,8 @@ SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
             THEN j.retained_outcome END AS retained_outcome
 FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id;
 
-CREATE OR REPLACE FUNCTION processing.notify_job_change() RETURNS trigger
+-- Notifications carry private owner hashes so subscribers can refresh their own handles.
+CREATE FUNCTION processing.notify_job_change() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE subscriber_owner text;
 BEGIN
@@ -202,18 +135,16 @@ END;
 $$;
 CREATE TRIGGER processing_job_change AFTER UPDATE OF status, progress, expires_at ON processing.jobs
 FOR EACH ROW EXECUTE FUNCTION processing.notify_job_change();
-CREATE OR REPLACE FUNCTION processing.notify_subscriber_change() RETURNS trigger
+CREATE FUNCTION processing.notify_subscriber_change() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
     PERFORM pg_notify('eolab_processing_job_changes', NEW.owner);
     RETURN NEW;
 END $$;
-DROP TRIGGER IF EXISTS processing_subscriber_change ON processing.job_subscribers;
 CREATE TRIGGER processing_subscriber_change AFTER INSERT OR UPDATE ON processing.job_subscribers
 FOR EACH ROW EXECUTE FUNCTION processing.notify_subscriber_change();
-INSERT INTO processing.schema_version VALUES (11) ON CONFLICT DO NOTHING;
 
 -- Wake claimers after execution stops or cleanup releases retained disk space.
-CREATE OR REPLACE FUNCTION processing.notify_execution_capacity() RETURNS trigger
+CREATE FUNCTION processing.notify_execution_capacity() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
     IF (OLD.status IN ('running','cancelling') AND NEW.status NOT IN ('running','cancelling'))
        OR NEW.reserved_bytes < OLD.reserved_bytes THEN
@@ -221,30 +152,23 @@ LANGUAGE plpgsql AS $$ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-DROP TRIGGER IF EXISTS processing_capacity_change ON processing.jobs;
 CREATE TRIGGER processing_capacity_change AFTER UPDATE OF status,reserved_bytes ON processing.jobs
 FOR EACH ROW EXECUTE FUNCTION processing.notify_execution_capacity();
-INSERT INTO processing.schema_version VALUES (12) ON CONFLICT DO NOTHING;
-INSERT INTO processing.schema_version VALUES (13) ON CONFLICT DO NOTHING;
 
--- Resource accounting need not visit cleaned history with no disk reservation.
-CREATE INDEX IF NOT EXISTS jobs_reserved_bytes ON processing.jobs(reserved_bytes)
+-- Only jobs with retained files need byte accounting.
+CREATE INDEX jobs_reserved_bytes ON processing.jobs(reserved_bytes)
     WHERE reserved_bytes>0;
-CREATE INDEX IF NOT EXISTS jobs_pending_cleanup ON processing.jobs(updated_at)
+CREATE INDEX jobs_pending_cleanup ON processing.jobs(updated_at)
     WHERE status NOT IN ('queued','running','cancelling','ready')
       AND (reserved_bytes>0 OR spec IS NOT NULL);
-CREATE INDEX IF NOT EXISTS jobs_cleaned_history ON processing.jobs(updated_at)
+CREATE INDEX jobs_cleaned_history ON processing.jobs(updated_at)
     WHERE reserved_bytes=0 AND spec IS NULL
       AND status NOT IN ('queued','running','cancelling','ready');
-INSERT INTO processing.schema_version VALUES (14) ON CONFLICT DO NOTHING;
-INSERT INTO processing.schema_version VALUES (15) ON CONFLICT DO NOTHING;
-INSERT INTO processing.schema_version VALUES (16) ON CONFLICT DO NOTHING;
-INSERT INTO processing.schema_version VALUES (17) ON CONFLICT DO NOTHING;
 
 -- Accepted inputs outlive ordinary parent expiry and deletion until the child
--- stops. Parent reservations account for their bytes exactly once, even when
+-- stops. The parent records the published byte count once, even when
 -- several children retain the same files. These are not download leases.
-CREATE TABLE IF NOT EXISTS processing.input_files (
+CREATE TABLE processing.input_files (
     job_id text NOT NULL REFERENCES processing.jobs(id) ON DELETE CASCADE,
     parent_id text NOT NULL REFERENCES processing.jobs(id),
     run_id text NOT NULL,
@@ -254,31 +178,23 @@ CREATE TABLE IF NOT EXISTS processing.input_files (
     PRIMARY KEY(job_id,run_id,artifact_id),
     CHECK (job_id <> parent_id)
 );
-CREATE INDEX IF NOT EXISTS input_files_parent ON processing.input_files(parent_id);
-CREATE OR REPLACE FUNCTION processing.release_finished_inputs() RETURNS trigger
+CREATE INDEX input_files_parent ON processing.input_files(parent_id);
+CREATE FUNCTION processing.release_finished_inputs() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.status NOT IN ('queued','running','cancelling') THEN
         DELETE FROM processing.input_files WHERE job_id=NEW.id;
     END IF;
     RETURN NEW;
 END $$;
-DROP TRIGGER IF EXISTS processing_release_inputs ON processing.jobs;
 CREATE TRIGGER processing_release_inputs AFTER UPDATE OF status ON processing.jobs
 FOR EACH ROW EXECUTE FUNCTION processing.release_finished_inputs();
-INSERT INTO processing.schema_version VALUES (18) ON CONFLICT DO NOTHING;
-INSERT INTO processing.schema_version VALUES (19) ON CONFLICT DO NOTHING;
-INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;
-
--- The upload store retains immutable source links for accepted computations.
--- Tokens remain server-only and are not included in the subscribed_jobs view.
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS input_uploads jsonb NOT NULL DEFAULT '{}'::jsonb;
-INSERT INTO processing.schema_version VALUES (21) ON CONFLICT DO NOTHING;
 
 -- Preparation references retain the original Catalog selection, not a new area identity.
 -- Exact JSONB equality preserves numeric predicate identity across browser round trips.
-CREATE TABLE IF NOT EXISTS processing.habitat_preparation_selections (
+CREATE TABLE processing.habitat_preparation_selections (
     selection jsonb NOT NULL CHECK (jsonb_typeof(selection) = 'object')
 );
-CREATE INDEX IF NOT EXISTS habitat_preparation_selections_selection
+CREATE INDEX habitat_preparation_selections_selection
     ON processing.habitat_preparation_selections USING hash (selection);
-INSERT INTO processing.schema_version VALUES (22) ON CONFLICT DO NOTHING;
+
+INSERT INTO processing.schema_version VALUES (22);

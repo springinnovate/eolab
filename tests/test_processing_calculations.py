@@ -539,6 +539,64 @@ def test_operation_mismatch_and_language_rejected_before_admission(
     )
 
 
+@pytest.mark.parametrize("operation", ["", "obsolete.operation.v1"])
+def test_job_operation_survives_discarded_spec_and_rejects_untyped_handles(
+    boundary: Any, store: Any, operation: str
+) -> None:
+    """Keep typed job status after input cleanup and reject unsupported stored types.
+
+    Args:
+        boundary: Real Processing HTTP endpoints and a session-owned job.
+        store: Disposable database in which the execution specification is discarded.
+        operation: Historical blank discriminator or an unsupported stored operation.
+    """
+    client, worker, *_ = boundary
+    clip = clip_inputs(client)
+    key = uuid4().hex
+    job = submitted(client, clip, key)
+    assert asyncio.run(worker.run_once())
+    identifier = job["jobId"]
+    path = f"/api/processing/jobs/{identifier}"
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET spec=NULL WHERE id="
+            "(SELECT job_id FROM processing.job_subscribers WHERE id=%s)",
+            (identifier,),
+        )
+    typed = client.get(path)
+    assert typed.status_code == 200
+    assert typed.json()["operation"] == "raster.clip.v1"
+    assert typed.json()["grid"] is None
+    result_url = typed.json()["result"]["url"]
+    assert client.get(result_url).status_code == 200
+    other = submitted(client, clip)["jobId"]
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET operation=%s WHERE id="
+            "(SELECT job_id FROM processing.job_subscribers WHERE id=%s)",
+            (operation, identifier),
+        )
+    response = client.get(path)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "unsupported_job_operation"
+    assert client.get(result_url).status_code == 409
+    statuses = client.post(
+        "/api/processing/jobs/status",
+        json={"jobIds": [identifier, other]},
+        headers=HEADERS,
+    ).json()
+    assert [job["jobId"] for job in statuses["jobs"]] == [other]
+    assert statuses["unavailableJobIds"] == [identifier]
+    assert (
+        client.post(
+            "/api/processing/raster-clips",
+            json={**clip, "requestId": key},
+            headers=HEADERS,
+        ).status_code
+        == 409
+    )
+
+
 @pytest.mark.parametrize("area_expression", [False, True])
 def test_catalog_selection_calculates(
     boundary: Any, tmp_path: Path, area_expression: bool
@@ -581,10 +639,10 @@ def test_catalog_selection_calculates(
         assert ready["result"]["rows"][0]["value"] == "3200"
 
 
-def test_worker_restart_invalidates_legacy_queued_jobs(
+def test_worker_restart_preserves_completed_result_during_status_read(
     boundary: Any, store: Any
 ) -> None:
-    """Retire old schema fields while preserving completed results and queue recovery.
+    """Keep a completed CSV, its handle and view grants while interrupting queued work.
 
     Args:
         boundary: Actual HTTP and worker composition.
@@ -598,24 +656,8 @@ def test_worker_restart_invalidates_legacy_queued_jobs(
     result_url = completed_job["result"]["url"]
     original_csv = client.get(result_url).content
     job = submit_calculation(client, calculation_inputs(client))
-    with psycopg.connect(store.conninfo) as conn:
-        conn.execute("ALTER TABLE processing.jobs ADD COLUMN preparation jsonb")
-        conn.execute(
-            "UPDATE processing.jobs SET preparation=%s", (Jsonb({"seconds": 0.1}),)
-        )
-        previous_view = (
-            conn.execute(
-                "SELECT pg_get_viewdef('processing.subscribed_jobs'::regclass)"
-            )
-            .fetchone()[0]
-            .rstrip(";\n ")
-        )
-        conn.execute(
-            "CREATE OR REPLACE VIEW processing.subscribed_jobs AS "
-            f"SELECT existing.*, j.preparation FROM ({previous_view}) existing "
-            "JOIN processing.jobs j ON j.id=existing.job_id"
-        )
-        conn.execute(
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
             "UPDATE processing.jobs SET artifact=artifact || %s "
             "WHERE id=(SELECT job_id FROM processing.job_subscribers WHERE id=%s)",
             (
@@ -628,23 +670,38 @@ def test_worker_restart_invalidates_legacy_queued_jobs(
                 completed["jobId"],
             ),
         )
-        conn.execute(
-            "CREATE TABLE processing.plans (id text PRIMARY KEY, request jsonb)"
+        connection.execute("GRANT SELECT ON processing.subscribed_jobs TO PUBLIC")
+        connection.execute(
+            "ALTER INDEX processing.subscribers_owner RENAME TO subscriber_owner_lookup"
         )
-        conn.execute("INSERT INTO processing.plans VALUES ('old-plan', '{}'::jsonb)")
-        conn.execute("ALTER TABLE processing.jobs ADD COLUMN plan_id text")
-        conn.execute(
-            "ALTER TABLE processing.jobs ADD COLUMN job_format_version integer NOT NULL DEFAULT 1"
+        connection.execute(
+            "ALTER INDEX processing.habitat_preparation_selections_selection RENAME TO habitat_selection_lookup"
         )
-        conn.execute(
-            "ALTER TABLE processing.jobs ADD COLUMN minimum_claim_version integer NOT NULL DEFAULT 1"
-        )
-        conn.execute("DELETE FROM processing.schema_version WHERE version>1")
-        conn.execute(
-            "ALTER TABLE processing.schema_version ADD CONSTRAINT schema_version_version_check CHECK(version=1)"
-        )
-    store.migrate()
-    store.migrate()
+    try:
+        with psycopg.connect(store.conninfo) as reader:
+            result = reader.execute(
+                "SELECT id, status FROM processing.subscribed_jobs WHERE id=%s",
+                (completed["jobId"],),
+            ).fetchone()
+            assert result == (completed["jobId"], "ready")
+            view_identity = (
+                "SELECT oid, relacl FROM pg_class "
+                "WHERE oid='processing.subscribed_jobs'::regclass"
+            )
+            before = reader.execute(view_identity).fetchone()
+            store.migrate()
+            assert reader.execute(view_identity).fetchone() == before
+    finally:
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute(
+                "REVOKE SELECT ON processing.subscribed_jobs FROM PUBLIC"
+            )
+            connection.execute(
+                "ALTER INDEX processing.subscriber_owner_lookup RENAME TO subscribers_owner"
+            )
+            connection.execute(
+                "ALTER INDEX processing.habitat_selection_lookup RENAME TO habitat_preparation_selections_selection"
+            )
     store.interrupt_unfinished_jobs_on_restart()
     asyncio.run(worker.cleanup())
     assert not asyncio.run(worker.run_once())
@@ -653,22 +710,9 @@ def test_worker_restart_invalidates_legacy_queued_jobs(
     assert failed["error"]["code"] == "worker_restarted"
     assert failed["sources"] is None
     assert client.get(result_url).content == original_csv
-    migrated = client.get(f"/api/processing/jobs/{completed['jobId']}").json()
-    assert migrated == completed_job
-    with psycopg.connect(store.conninfo) as conn:
-        assert conn.execute(
-            "SELECT version FROM processing.schema_version ORDER BY version"
-        ).fetchall() == [(n,) for n in range(1, 23)]
-        assert (
-            conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_schema='processing' "
-                "AND table_name='jobs' AND column_name IN ('minimum_claim_version','job_format_version','plan_id','preparation')"
-            ).fetchone()
-            is None
-        )
-        assert conn.execute("SELECT to_regclass('processing.plans')").fetchone() == (
-            None,
-        )
+    assert (
+        client.get(f"/api/processing/jobs/{completed['jobId']}").json() == completed_job
+    )
 
 
 def paused_calculation(queue: Any, operation: str, arguments: tuple) -> None:

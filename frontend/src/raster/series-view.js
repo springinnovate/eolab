@@ -6,6 +6,13 @@ import { describeTemporalPeriod } from "../temporal-period.js";
 
 const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No matches", no_valid_data: "No valid data", invalid_arithmetic: "Invalid arithmetic", overflow: "Overflow" };
 
+/** Update a result caption only when its displayed text changes.
+ * @param {HTMLElement} element Caption or control. @param {string} text Display text. @return {void}
+ */
+function setCaption(element, text) {
+    if (element.textContent !== text) element.textContent = text;
+}
+
 /**
  * @typedef {Object} SeriesValueRow
  * @property {string} label Full raster name.
@@ -63,6 +70,8 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {SeriesPlot[]} plots Display numbers and settings in plot order.
  * @property {"forward"|"reverse"} direction Display direction; temporal data and CSV retain observation order.
  * @property {boolean} showingPrevious Whether plots use retained results.
+ * @property {{longitude:number,latitude:number}|null} [pixelPoint] Captured point for pixel statistics.
+ * @property {number[]|null} [resultBounds] Geographic extent of the result source when supplied.
  * @property {Object|null} [temporal] Dataset, variable and period controls; absent for ordinary raster layers.
  */
 
@@ -73,10 +82,12 @@ export class RasterSeriesView {
      * @param {Document} [documentContext=document] Owning browser document.
      * @param {Object} [options] Presentation callbacks.
      * @param {(context:{source:string,scope:string,usesSamplingBox:boolean})=>void} [options.onContextChange] Display-only source, area and box-control context.
+     * @param {import("./series-locator.js").RasterResultLocator} [options.locator] Optional geographic thumbnail for a single result.
      */
-    constructor(documentContext = document, { onContextChange = () => {} } = {}) {
+    constructor(documentContext = document, { onContextChange = () => {}, locator } = {}) {
         this.document = documentContext;
         this.onContextChange = onContextChange;
+        this.locator = locator;
         this.root = documentContext.querySelector("#raster-series");
         this.status = documentContext.querySelector("#raster-series-status");
         this.sources = documentContext.querySelector("#raster-series-sources");
@@ -105,8 +116,20 @@ export class RasterSeriesView {
         this.formulaNodes = new Map();
         this.frame = null;
         this.pendingState = null;
-        this.values.addEventListener("toggle", () => {
-            if (this.snapshot?.active) this.renderValuesTable(this.snapshot.rows);
+        this.valuesSelected = false;
+        this.resultButton = documentContext.querySelector("#raster-series-result-button");
+        this.valuesButton = documentContext.querySelector("#raster-series-values-button");
+        this.reading = documentContext.querySelector("#raster-series-reading");
+        this.measureChoice = documentContext.querySelector("#raster-series-selected-statistic");
+        for (const [button, showValues] of [[this.resultButton, false], [this.valuesButton, true]]) {
+            button.addEventListener("click", () => {
+                this.valuesSelected = showValues;
+                if (this.snapshot?.active) this.draw(this.snapshot);
+            });
+        }
+        this.measureChoice.addEventListener("change", () => {
+            this.selectedStatisticId = Number(this.measureChoice.value);
+            if (this.snapshot?.active) this.draw(this.snapshot);
         });
         this.resizeObserver = new this.document.defaultView.ResizeObserver(entries => {
             const width = entries[0].contentRect.width;
@@ -146,13 +169,39 @@ export class RasterSeriesView {
     bind(actions) {
         this.actions = actions;
         this.plotsView = new RasterSeriesPlotsView(this.document, actions);
-        const inputs = this.document.querySelector("#raster-series-inputs");
-        const toggleInputs = this.document.querySelector("#raster-series-toggle-inputs");
-        toggleInputs.addEventListener("click", () => {
-            inputs.hidden = !inputs.hidden;
-            toggleInputs.setAttribute("aria-expanded", String(!inputs.hidden));
-            toggleInputs.textContent = inputs.hidden ? "Inputs · Show" : "Inputs · Hide";
-            this.root.scrollTop = 0;
+        const sourceButton = this.document.querySelector("#raster-series-source-button");
+        const areaButton = this.document.querySelector("#raster-series-open-area");
+        const pickers = [[sourceButton, this.document.querySelector("#raster-series-data-inputs")],
+            [areaButton, this.document.querySelector("#raster-series-area-picker")]];
+        /** Open one context picker or close both, optionally returning focus to its trigger.
+         * @param {HTMLElement|null} button Trigger to expand. @param {boolean} [restoreFocus] Return focus when closing. @return {void}
+         */
+        const openPicker = (button, restoreFocus = false) => {
+            for (const [trigger, panel] of pickers) {
+                if (restoreFocus && !panel.hidden) trigger.focus({preventScroll: true});
+                panel.hidden = button !== trigger;
+                trigger.setAttribute("aria-expanded", String(!panel.hidden));
+            }
+        };
+        for (const [trigger, panel] of pickers) {
+            trigger.addEventListener("click", () => openPicker(panel.hidden ? trigger : null));
+        }
+        this.root.addEventListener("keydown", event => {
+            if (event.key === "Escape" && pickers.some(([, panel]) => !panel.hidden)) {
+                event.preventDefault(); event.stopPropagation(); openPicker(null, true);
+            }
+        });
+        this.document.querySelector("#raster-series-sources-done").addEventListener("click", () => openPicker(null, true));
+        for (const [choice] of this.areaChoices) {
+            this.document.querySelector("#raster-series-pick-" + choice).addEventListener("click", () => {
+                openPicker(null, true);
+                if (choice === this.snapshot.area.areaChoice && this.snapshot.area.area) return;
+                actions.onArea(choice);
+                if (choice === "vector" || (choice === "selection" && !this.snapshot.area.area)) actions.onOpenArea();
+            });
+        }
+        this.document.querySelector("#raster-series-adjust-area").addEventListener("click", () => {
+            openPicker(null, true); actions.onOpenArea();
         });
         this.document.querySelector("#raster-series-temporal-variable").addEventListener("change", event => actions.onTemporalVariable(event.target.value));
         /** Create a text-only period control element.
@@ -179,7 +228,6 @@ export class RasterSeriesView {
         for (const input of [order, direction]) input.addEventListener("change", () => actions.onOrder(order.value, direction.value));
         this.document.querySelector("#raster-series-chart-type").addEventListener("change", event => actions.onChartType(event.target.value));
         this.download.addEventListener("click", actions.onDownload);
-        this.document.querySelector("#raster-series-open-area").addEventListener("click", actions.onOpenArea);
         this.document.querySelector("#raster-series-use-current-filter").addEventListener("click", () => {
             if (this.snapshot.area.areaChoice === "vector") {
                 actions.onArea("vector");
@@ -191,6 +239,10 @@ export class RasterSeriesView {
         }
         this.document.querySelector("#raster-series-add-formula").addEventListener("change", event => {
             actions.onAddFormula(event.target.value); event.target.value = "";
+        });
+        this.document.querySelector("#raster-series-write-formula").addEventListener("click", () => {
+            this.focusNewFormula = true;
+            actions.onAddFormula("custom");
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
         for (const [id, action] of [["retry", actions.onRetry], ["exact-statistics", actions.onExactStatistics],
@@ -215,6 +267,7 @@ export class RasterSeriesView {
             usesSamplingBox: state.area.areaChoice === "selection" && !["catalogSelection", "polygonArea"].includes(state.area.area?.kind) });
         this.pendingState = state;
         if (!state.active) {
+            this.locator?.render(null, "");
             if (this.frame !== null) this.document.defaultView.cancelAnimationFrame(this.frame);
             this.frame = null;
             this.pendingState = null;
@@ -231,8 +284,8 @@ export class RasterSeriesView {
 
     /** Update changed controls and figures from one coalesced snapshot.
      * Unchanged presentation leaves existing DOM nodes and attributes intact.
-     * One result position opens the existing values table instead of drawing a
-     * chart. Pending temporal calculations open the plot area with measured progress; completed failures
+     * One result position shows a scalar and its geographic context. Pending
+     * temporal calculations open the plot area with measured progress; completed failures
      * and NoData remain available in the values table without an empty chart.
      * Pending raster comparisons can set up plots before numeric values arrive.
      * Previous-area values remain plotted while replacements are calculated.
@@ -246,7 +299,7 @@ export class RasterSeriesView {
         if (this.singleResult !== singleResult) {
             this.singleResult = singleResult;
             this.root.classList.toggle("raster-series-single-result", singleResult);
-            this.values.open = singleResult;
+            this.valuesSelected = false;
         }
         const valueCaption = singleResult ? state.statistics[0].rows[0].label : "";
         if (this.valueCaption.textContent !== valueCaption) this.valueCaption.textContent = valueCaption;
@@ -317,41 +370,103 @@ export class RasterSeriesView {
             (showingPrevious ? statistic.previousRows : statistic.rows).some(row => row.state === "value"));
         const hasResultRows = state.rows.some(row => row.state !== "waiting");
         const calculating = this.renderCalculationProgress(state);
-        const hidePlots = singleResult || !hasPlotValues;
-        const preparingComparison = hidePlots && !timeRange && state.busy &&
+        const hidePlots = this.valuesSelected || singleResult || !hasPlotValues;
+        const preparingComparison = !hasPlotValues && !timeRange && state.busy &&
             Boolean(state.area.area) && resultPositions > 1;
-        const hideResults = !hasPlotValues && !hasResultRows && !calculating && !preparingComparison;
+        const noObservations = timeRange && !state.busy && state.canDownload && !resultPositions;
+        const hideResults = !hasPlotValues && !hasResultRows && !calculating && !preparingComparison && !noObservations;
         if (this.results.hidden !== hideResults) this.results.hidden = hideResults;
         if (this.plots.hidden !== hidePlots) this.plots.hidden = hidePlots;
-        const hideAddPlot = hidePlots && !preparingComparison;
+        const hideAddPlot = singleResult || (!hasPlotValues && !preparingComparison);
         if (this.addPlot.hidden !== hideAddPlot) this.addPlot.hidden = hideAddPlot;
         const hideToolbar = hideAddPlot && !calculating;
         if (this.chartToolbar.hidden !== hideToolbar) this.chartToolbar.hidden = hideToolbar;
-        const hideHeading = hidePlots && !calculating;
+        const hideHeading = this.valuesSelected || (hidePlots && !calculating);
         if (this.plotHeading.hidden !== hideHeading) this.plotHeading.hidden = hideHeading;
+        const contextualHeading = Boolean(state.temporal || showingPrevious);
+        if (this.plotHeading.classList.contains("visually-hidden") === contextualHeading) {
+            this.plotHeading.classList.toggle("visually-hidden", !contextualHeading);
+        }
         this.renderPlotHeading(state);
-        const hideValues = (calculating || preparingComparison) && !hasResultRows;
+        const hideValues = !this.valuesSelected || !state.rows.length;
         if (this.values.hidden !== hideValues) this.values.hidden = hideValues;
-        if (this.chartSettings.hidden !== !hasPlotValues) this.chartSettings.hidden = !hasPlotValues;
-        if (this.chartNote.hidden !== !showingPrevious) this.chartNote.hidden = !showingPrevious;
-        const chartNote = showingPrevious ? "Previous results — calculating replacements." : "";
+        const hideSettings = singleResult || (!hasPlotValues && !preparingComparison);
+        if (this.chartSettings.hidden !== hideSettings) this.chartSettings.hidden = hideSettings;
+        const retainedPlot = showingPrevious && !this.valuesSelected;
+        if (this.chartNote.hidden !== !retainedPlot) this.chartNote.hidden = !retainedPlot;
+        const chartNote = retainedPlot ? "Previous results — calculating replacements." : "";
         if (this.chartNote.textContent !== chartNote) this.chartNote.textContent = chartNote;
         const pendingPlot = !hidePlots && this.plotsView.renderPlots(state);
         if (this.plotProgress.classList.contains("is-summary") !== Boolean(pendingPlot)) {
             this.plotProgress.classList.toggle("is-summary", Boolean(pendingPlot));
         }
+        this.renderResult(state, singleResult, hasPlotValues, noObservations);
         this.renderValuesTable(state.rows);
         if (this.download.disabled !== !state.canDownload) this.download.disabled = !state.canDownload;
     }
 
-    /** Update the values table only while its disclosure is open.
-     * Opening the disclosure renders the latest retained rows, including results
-     * received while it was closed. Exact values and download data stay unchanged.
+    /** Show the statistic, source, precision and optional location for the selected result.
+     * Geometry and result-view choices never submit a calculation.
+     * @param {SeriesPresentation} state Current presentation.
+     * @param {boolean} single One requested raster or returned observation.
+     * @param {boolean} hasPlotValues At least one numerical value is available.
+     * @param {boolean} noObservations A completed temporal period returned no rows.
+     * @return {void}
+     */
+    renderResult(state, single, hasPlotValues, noObservations) {
+        /** @param {string} id Result element's ID suffix. @return {HTMLElement} Mounted result element. */
+        const find = id => this.document.querySelector("#raster-series-" + id);
+        const statistic = state.statistics.find(item => item.id === this.selectedStatisticId) ?? state.statistics[0];
+        const selected = state.sources.filter(source => source.selected);
+        const source = state.temporal ? state.temporal.item?.properties.title || "Temporal dataset"
+            : selected.length === 1 ? selected[0].label : selected.length ? selected.length + " rasters" : "Choose rasters";
+        setCaption(this.sourceSummary, source);
+        const name = statistic.label || statistic.expression || "Custom statistic";
+        const variable = state.temporal?.item?.properties["cube:variables"]?.[state.temporal.variable];
+        const measure = single || state.statistics.length === 1 ? name : "Selected statistics";
+        setCaption(find("measure"), single && variable ? measure + " · " + (variable.description || state.temporal.variable) : measure);
+        const chooseMeasure = single && !this.valuesSelected && state.statistics.length > 1;
+        const choice = find("measure-choice");
+        if (choice.hidden === chooseMeasure) choice.hidden = !chooseMeasure;
+        if (chooseMeasure) this.setOptions(this.measureChoice, state.statistics.map(item => ({
+            value: String(item.id), label: item.label || item.expression || "Custom statistic"
+        })), String(statistic.id));
+        const row = single && statistic.rows[0];
+        const showReading = Boolean(row && !this.valuesSelected && row.state !== "waiting");
+        if (this.reading.hidden === showReading) this.reading.hidden = !showReading;
+        if (showReading) {
+            const number = row.state === "value" ? formatSeriesNumber(row.value) : row.errorMessage || STATES[row.state];
+            setCaption(find("number"), number);
+            setCaption(find("unit"), row.state === "value" ? row.unit || "" : "");
+            setCaption(find("method"), ({estimated: "Estimated", exact: "Exact"})[row.method] || "");
+            setCaption(find("observation"), state.temporal ? row.label : "");
+            if (this.reading.classList.contains("is-message") !== (row.state !== "value")) {
+                this.reading.classList.toggle("is-message", row.state !== "value");
+            }
+        }
+        const exact = find("exact-statistics");
+        const exactContainer = showReading && row.method && row.method !== "exact" ? find("precision") : find("run-actions");
+        if (exact.parentElement !== exactContainer) exactContainer.append(exact);
+        this.locator?.render(showReading ? state : null, statistic.expression);
+        setCaption(this.resultButton, single ? "Result" : "Plot");
+        for (const [button, pressed] of [[this.resultButton, !this.valuesSelected], [this.valuesButton, this.valuesSelected]]) {
+            if (button.getAttribute("aria-pressed") !== String(pressed)) button.setAttribute("aria-pressed", String(pressed));
+        }
+        const empty = noObservations ? "No observations in this period."
+            : !single && !hasPlotValues && !state.busy && state.rows.length && !this.valuesSelected
+                ? "No values to plot. Open Values for each result." : "";
+        setCaption(find("empty"), empty);
+        if (find("empty").hidden !== !empty) find("empty").hidden = !empty;
+    }
+
+    /** Populate Values on demand, including every row received since it was last displayed.
      * @param {SeriesValueRow[]} rows Latest ordered result values.
      * @return {void}
      */
     renderValuesTable(rows) {
-        if (!this.values.open) return;
+        if (!this.valuesSelected) return;
+        const showStatus = rows.some(row => row.state !== "value" || row.errorMessage || row.cached);
+        if (this.values.classList.contains("has-status") !== showStatus) this.values.classList.toggle("has-status", showStatus);
         const tableValues = rows.map(row => [row.label, row.statisticLabel,
             row.state === "value" ? (row.rawValue ?? formatSeriesNumber(row.value)) + (row.unit ? " " + row.unit : "") : "-",
             row.errorMessage || (row.state === "value" ? (row.cached ? "Cached" : "Value") : STATES[row.state])]);
@@ -399,7 +514,9 @@ export class RasterSeriesView {
     renderCalculationProgress(state) {
         const calculating = Boolean(state.temporal && state.busy && state.area.area && !state.temporal.selectionError);
         if (this.plotProgress.hidden !== !calculating) this.plotProgress.hidden = !calculating;
-        if (this.status.hidden !== calculating) this.status.hidden = calculating;
+        const hideStatus = !state.message || (calculating && !this.valuesSelected);
+        if (this.status.hidden !== hideStatus) this.status.hidden = hideStatus;
+        if (this.plotArea.hidden !== this.valuesSelected) this.plotArea.hidden = this.valuesSelected;
         if (this.plotArea.classList.contains("is-calculating") !== calculating) this.plotArea.classList.toggle("is-calculating", calculating);
         if (!calculating) return false;
         const total = state.workProgress?.total;
@@ -474,6 +591,10 @@ export class RasterSeriesView {
             }));
             if (this.formulaRows.contains(focused)) focused.focus({ preventScroll: true });
             else if (ownedFocus) this.document.querySelector("#raster-series-add-formula").focus();
+            if (this.focusNewFormula) {
+                this.focusNewFormula = false;
+                this.formulaNodes.get(area.formulas.at(-1).id).querySelector('input[data-field="expression"]').focus();
+            }
         }
         for (const row of this.formulaRows.children) {
             const formula = state.statistics.find(item => item.id === Number(row.dataset.formulaId));
@@ -540,6 +661,13 @@ export class RasterSeriesView {
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
         const addFormula = this.document.querySelector("#raster-series-add-formula");
         if (addFormula.disabled !== (area.formulas.length >= 5)) addFormula.disabled = area.formulas.length >= 5;
+        const writeFormula = this.document.querySelector("#raster-series-write-formula");
+        if (writeFormula.disabled !== addFormula.disabled) writeFormula.disabled = addFormula.disabled;
+        for (const [choice] of this.areaChoices) {
+            const button = this.document.querySelector("#raster-series-pick-" + choice);
+            const pressed = String(choice === area.areaChoice);
+            if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
+        }
         const exact = this.document.querySelector("#raster-series-exact-statistics");
         if (exact.hidden !== !area.canCalculateExactStatistics) exact.hidden = !area.canCalculateExactStatistics;
         const retry = this.document.querySelector("#raster-series-retry");
@@ -594,6 +722,7 @@ export class RasterSeriesView {
         color.setAttribute("aria-label", "Statistic color");
         color.addEventListener("input", () => this.actions.onStatisticDisplay(formula.id, {color: color.value}));
         colorLabel.append(color); editor.append(colorLabel);
+        editor.append(this.document.querySelector("#raster-series-formula-help").content.cloneNode(true));
         const remove = this.document.createElement("button"); remove.type = "button"; remove.textContent = "×";
         remove.className = "summary-text-button";
         remove.addEventListener("click", () => this.actions.onRemoveFormula(formula.id));

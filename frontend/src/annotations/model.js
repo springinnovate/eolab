@@ -43,7 +43,7 @@ export function validateAnnotationStyle(style) {
 
 /**
  * Validate device storage before allowing it into the editor.
- * Older documents without positions retain their annotation order at the top of the stack.
+ * Each drawing must carry its saved position among all layers in Map contents.
  * Unreadable filters are cleared without changing drawings or supported filters.
  * @param {AnnotationDocument} document Versioned annotation document.
  * @param {(layerId:string)=>void} [onFilterCleared] Receives each layer whose unreadable filter was cleared.
@@ -55,9 +55,10 @@ export function readAnnotationLayers(document, onFilterCleared = () => {}) {
         new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) throw new Error("Saved polygons have an unsupported format or exceed the storage limit.");
     const layers = structuredClone(document.layers);
     const identifiers = new Set();
-    for (const [index, layer] of layers.entries()) {
-        if (layer.position === undefined) layer.position = index;
-        if (!Number.isSafeInteger(layer.position) || layer.position < 0) throw new Error("Saved polygon layer position is invalid.");
+    for (const layer of layers) {
+        if (!Number.isSafeInteger(layer.position) || layer.position < 0) {
+            throw new Error("A saved polygon layer is missing a valid position in Map contents. Your drawings are still stored on this device.");
+        }
         requireIdentifier(layer.id, identifiers);
         requireText(layer.name, MAX_ANNOTATION_NAME_LENGTH, false);
         try { layer.filter = annotationFilterRules(layer.filter); }

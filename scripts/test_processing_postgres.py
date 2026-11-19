@@ -109,8 +109,8 @@ def build_image(application_image: str | None) -> str:
                     ROOT / name for name in ("pyproject.toml", "README.md", "LICENSE")
                 ]
                 paths += list((ROOT / "tests").rglob("*.py"))
-                paths.append(ROOT / "tests" / "fixtures" / "saved-map-v1.json")
-                paths.append(ROOT / "tests" / "fixtures" / "saved-map-v2.json")
+                paths.append(ROOT / "tests" / "fixtures" / "saved-map-catalog.json")
+                paths.append(ROOT / "tests" / "fixtures" / "saved-map-shared.json")
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-v5.json")
                 paths.append(ROOT / "tests" / "fixtures" / "drawing-admission.json")
                 paths += [ROOT / "scripts" / "processing_postgres_suite.py"]

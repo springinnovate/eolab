@@ -158,6 +158,25 @@ class DrawingLayerStore:
                 raise DrawingError(404, "Drawing layer not found.")
             return self._read_layer(row, owner)
 
+    def read_revision(self, identifier: UUID) -> int:
+        """Read the committed revision for a map tile without loading the drawing's coordinates.
+
+        Args:
+            identifier: Opaque read reference to the linked drawing.
+
+        Returns:
+            Current source revision.
+
+        Raises:
+            DrawingError: The source is unavailable.
+        """
+        with self.transaction() as cursor:
+            cursor.execute("SELECT revision FROM drawings.layers WHERE id=%s", (identifier,))
+            row = cursor.fetchone()
+            if row is None:
+                raise DrawingError(404, "Drawing layer not found.")
+            return row["revision"]
+
     def list_layers(self, owner: str) -> list[DrawingLayerSummary]:
         """Find this browser's reusable sources for recovery and reopening.
 

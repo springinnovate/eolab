@@ -217,7 +217,7 @@ async def _read_catalog_parcel_rows(inputs: ParcelRowsInput) -> ParcelRowsResult
     from eolab_app.bounded_vector import _limit_memory
     from eolab_app.vector.parcels import read_parcel_rows
 
-    resolved = await _resolve_parcel_source(inputs.selection)
+    resolved = await _resolve_parcel_source(inputs.selection, inputs.spatialRead)
     with _limit_memory():
         page = read_parcel_rows(
             resolved, inputs.idField, inputs.fields, inputs.offset, inputs.limit
@@ -227,11 +227,13 @@ async def _read_catalog_parcel_rows(inputs: ParcelRowsInput) -> ParcelRowsResult
 
 async def _resolve_parcel_source(
     selection: CatalogSelection,
+    spatial_read: str | None = None,
 ) -> ResolvedCatalogSelection:
     """Resolve and recheck the Catalog identity accepted before queueing.
 
     Args:
         selection: Path-free immutable source descriptor.
+        spatial_read: Temporary feature membership supplied by the source owner.
 
     Returns:
         The authorized original layer and exact attribute-filter program.
@@ -253,6 +255,9 @@ async def _resolve_parcel_source(
             MountedVectorResolver(SCAN_MOUNT),
             selection,
         )
+        if spatial_read is not None:
+            from eolab_app.vector.spatial_read import load_spatial_read
+            resolved = await load_spatial_read(client, resolved, spatial_read)
     if resolved.selection != selection:
         raise SelectionUnavailableError(
             "The selected vector identity changed; select it again."

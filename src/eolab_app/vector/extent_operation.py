@@ -14,6 +14,7 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.calculated_fields import CalculatedField
 from eolab_app.source_files import SourceFileError, resolve_leased_source_path
+from eolab_app.vector.spatial_read import load_spatial_read
 
 if TYPE_CHECKING:
     import httpx2
@@ -64,6 +65,7 @@ class ExtentInput(BaseModel):
     selection: VectorSelection | ArtifactExtentSelection
     uploadOwner: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     readLease: OpaqueId | None = None
+    spatialRead: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
     @model_validator(mode="after")
     def check_artifact_lease(self) -> "ExtentInput":
@@ -196,7 +198,7 @@ async def _measure_selected_extent(
             inputs.selection, (ArtifactExtentSelection, ArtifactVectorSelection)
         ):
             return await _measure_artifact_extent(
-                client, inputs.selection, cast(str, inputs.readLease)
+                client, inputs.selection, cast(str, inputs.readLease), inputs.spatialRead
             )
         resolved = await resolve_selection(
             StacVectorCatalog(client, CATALOG_URL),
@@ -209,6 +211,7 @@ async def _measure_selected_extent(
             raise SelectionUnavailableError(
                 "The selected vector identity changed; select it again."
             )
+        resolved = await load_spatial_read(client, resolved, inputs.spatialRead)
         with _limit_memory():
             extent = FeatureExtent.model_validate(read_selected_extent(resolved))
         return SelectionExtentResult(extent=extent)
@@ -218,6 +221,7 @@ async def _measure_artifact_extent(
     client: "httpx2.AsyncClient",
     selection: ArtifactExtentSelection | ArtifactVectorSelection,
     read_lease: str,
+    spatial_read: str | None = None,
 ) -> SelectionExtentResult:
     """Resolve a leased result through its authority and read the original GeoPackage.
 
@@ -225,6 +229,7 @@ async def _measure_artifact_extent(
         client: Internal HTTP client with fixed endpoint and bounded request timeout.
         selection: Opaque artifact identity and exact source predicate.
         read_lease: Existing transfer capability, held by the caller until native exit.
+        spatial_read: Temporary access to authorized target membership for a spatial filter.
 
     Returns:
         Original filtered feature count and bounds without retaining geometry.
@@ -255,9 +260,13 @@ async def _measure_artifact_extent(
         ) from error
     with _limit_memory():
         try:
-            extent = FeatureExtent.model_validate(
-                read_file_extent(path, selection.filter, selection.calculated_fields)
-            )
+            if spatial_read is not None and isinstance(selection, ArtifactVectorSelection):
+                from eolab_app.bounded_vector import resolve_vector_file_selection
+                from eolab_app.vector.extents import read_selected_extent
+                resolved = await load_spatial_read(client, resolve_vector_file_selection(path, selection), spatial_read)
+                extent = FeatureExtent.model_validate(read_selected_extent(resolved))
+            else:
+                extent = FeatureExtent.model_validate(read_file_extent(path, selection.filter, selection.calculated_fields))
         except GeometryValidationError:
             raise
         except (OSError, ValueError, fiona.errors.FionaError) as error:

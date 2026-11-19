@@ -24,8 +24,22 @@ import {
  * @property {number} [midpointOpacity=1] Midpoint-stop opacity, zero through one.
  * @property {number} [maximumOpacity=1] Maximum-stop opacity, zero through one.
  * @property {{value:number,color:string,opacity:number}} [valueOverride] Color
- * and opacity for one exact finite sample. Omit to use the ramp for every value.
+ * and opacity for one exact finite sample, taking precedence over ranges.
+ * @property {ReadonlyArray<RasterColorRange>} [rangeOverrides] Inclusive ranges
+ * in priority order. Samples outside all overrides use the gradient.
  */
+
+/**
+ * An inclusive range with its own pixel color and opacity.
+ * @typedef {Object} RasterColorRange
+ * @property {number|null} minimum Lowest matching sample, or null for no lower bound.
+ * @property {number|null} maximum Highest matching sample, or null for no upper bound.
+ * @property {string} color Six-digit hex color for matching samples.
+ * @property {number} opacity Fraction from transparent (0) to opaque (1).
+ */
+
+/** Maximum range rows in one WMS appearance, in addition to the optional exact value. */
+export const MAX_RASTER_COLOR_RANGES = 16;
 
 /** Default three-stop raster style shown before statistics are available. */
 export const DEFAULT_RASTER_STYLE = Object.freeze({
@@ -98,11 +112,23 @@ function rasterStyleContractError(message, fieldGroup) {
 }
 
 /**
+ * Identify the range and input fields for a browser validation message.
+ * @param {string} message Correction the user can make in the range editor.
+ * @param {number} index Zero-based range position.
+ * @param {string[]} fields Inputs that need correction.
+ * @return {Error & {fieldGroup:string,rangeIndex:number,rangeFields:string[]}} Localized error.
+ */
+function rasterRangeError(message, index, fields) {
+    return Object.assign(rasterStyleContractError(`Range ${index + 1} — ${message}`, "ranges"),
+        {rangeIndex: index, rangeFields: fields});
+}
+
+/**
  * Validate the canonical numeric and color fields of a raster style.
  *
  * @param {RasterStyle} style Candidate numeric thresholds and colors.
  * @return {RasterStyle} The validated style.
- * @throws {Error} If thresholds or colors violate the style contract.
+ * @throws {Error} If any gradient stop, override bounds, color or opacity is invalid.
  */
 export function validateRasterStyle(style) {
     const thresholds = [style.minimum, style.midpoint, style.maximum];
@@ -148,6 +174,31 @@ export function validateRasterStyle(style) {
         }
         if (!Number.isFinite(override.opacity) || override.opacity < 0 || override.opacity > 1) {
             throw rasterStyleContractError("Enter a pixel opacity from 0 to 100 percent.", "overrideOpacity");
+        }
+    }
+    if (Object.hasOwn(style, "rangeOverrides")) {
+        if (!Array.isArray(style.rangeOverrides) || style.rangeOverrides.length < 1 ||
+            style.rangeOverrides.length > MAX_RASTER_COLOR_RANGES) {
+            throw rasterStyleContractError(`Choose 1 to ${MAX_RASTER_COLOR_RANGES} ranges.`, "ranges");
+        }
+        for (const [index, range] of style.rangeOverrides.entries()) {
+            if (!range || (range.minimum === null && range.maximum === null)) {
+                throw rasterRangeError("enter a lower or upper bound.", index, ["minimum", "maximum"]);
+            }
+            for (const field of ["minimum", "maximum"]) {
+                if (range[field] !== null && !Number.isFinite(range[field])) {
+                    throw rasterRangeError("enter a finite number or leave the bound blank.", index, [field]);
+                }
+            }
+            if (range.minimum !== null && range.maximum !== null && range.minimum > range.maximum) {
+                throw rasterRangeError("the lower bound must be at or below the upper bound.", index, ["minimum", "maximum"]);
+            }
+            if (typeof range.color !== "string" || !RASTER_COLOR_PATTERN.test(range.color)) {
+                throw rasterRangeError("choose a six-digit hex color.", index, ["color"]);
+            }
+            if (!Number.isFinite(range.opacity) || range.opacity < 0 || range.opacity > 1) {
+                throw rasterRangeError("enter an opacity from 0 to 100 percent.", index, ["opacity"]);
+            }
         }
     }
     return style;
@@ -324,8 +375,9 @@ export function applyRasterColorPalette(style, paletteName) {
  * Build the visible and accessible legend from a validated raster style.
  *
  * @param {RasterStyle} style Committed raster style.
- * @return {{midpointPosition:number,gradient:string,description:string,overrideLabel?:string}}
- * Gradient and text alternative, with a separate key when one value has its own appearance.
+ * @return {{midpointPosition:number,gradient:string,description:string,
+ * overrides?:Array<{label:string,color:string,opacity:number}>}}
+ * Gradient and text alternative, with swatches in matching priority order.
  */
 export function buildRasterLegend(style) {
     const midpointPosition =
@@ -347,12 +399,25 @@ export function buildRasterLegend(style) {
             .toString(16).padStart(2, "0");
         return `${color}${alpha} ${position * 100}%`;
     }).join(", ") : null;
-    const override = style.valueOverride;
-    const overrideLabel = override && `Value ${override.value} · ${override.opacity === 0
-        ? "Transparent" : `${Number((override.opacity * 100).toPrecision(12))}% opacity`}`;
+    const overrides = [];
+    if (style.valueOverride) {
+        const {value, color, opacity} = style.valueOverride;
+        overrides.push({label: `Value ${value}`, color, opacity});
+    }
+    for (const {minimum, maximum, color, opacity} of style.rangeOverrides ?? []) {
+        let label = `${minimum} ≤ value ≤ ${maximum}`;
+        if (minimum === null) label = `Value ≤ ${maximum}`;
+        else if (maximum === null) label = `Value ≥ ${minimum}`;
+        else if (minimum === maximum) label = `Value ${minimum}`;
+        overrides.push({label, color, opacity});
+    }
+    for (const entry of overrides) {
+        entry.label += entry.opacity === 0 ? " · Transparent" :
+            ` · ${Number((entry.opacity * 100).toPrecision(12))}% opacity`;
+    }
     return {
         midpointPosition,
-        ...(override ? { overrideLabel } : {}),
+        ...(overrides.length ? { overrides } : {}),
         gradient: alphaGradient === null
             ? `linear-gradient(90deg, ${style.minimumColor} 0%, ` +
                 `${style.midpointColor} ${midpointPosition}%, ${style.maximumColor} 100%)`
@@ -365,7 +430,7 @@ export function buildRasterLegend(style) {
                 ["minimum", "midpoint", "maximum"].map(
                     (stop) => `${Math.round((style[`${stop}Opacity`] ?? 1) * 100)}%`
                 ).join(", ") + "." : "") +
-            (override ? ` ${overrideLabel} (${override.color}).` : "")
+            overrides.map(entry => ` ${entry.label} (${entry.color}).`).join("")
     };
 }
 

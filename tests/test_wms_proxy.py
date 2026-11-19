@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx2
 import pytest
@@ -627,6 +628,7 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
     env_response = client.get(
         f"/geoserver/eolab/wms{query}&env=min%3A0%3Bmed%3A1%3Bmax%3A2%3B"
         "cmin%3A%23000000%3Bcmed%3A%23888888%3Bcmax%3A%23ffffff"
+        "%3Bamin%3A1%3Bamed%3A1%3Bamax%3A1"
     )
     unbounded_feature_response = client.get(
         "/geoserver/eolab/wms?service=WMS&version=1.3.0"
@@ -795,14 +797,17 @@ def test_wms_proxy_forwards_supported_read_operation(
     assert response.content == b'<WMS_Capabilities version="1.3.0"/>'
 
 
-@pytest.mark.parametrize("opacity_environment", ["", ";amin:0;amed:0.25;amax:1"])
+@pytest.mark.parametrize("style_environment", [
+    None,
+    "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c;amin:0;amed:0.25;amax:1",
+])
 @pytest.mark.parametrize("style_name", ["dynamic-raster", "eolab:dynamic-raster"])
 def test_wms_proxy_allows_bounded_png_rendering(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
-    opacity_environment: str,
+    style_environment: str | None,
     style_name: str,
 ) -> None:
     """Allow tiles only after this app process approves the current source.
@@ -812,7 +817,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
         monkeypatch: Environment mutation fixture for the scan mount.
         tmp_path: Temporary directory containing the controlled raster.
         version_file_path: Baked application-version fixture path.
-        opacity_environment: Legacy or per-color-opacity WMS substitutions.
+        style_environment: Full custom ramp, or None to request the named defaults.
         style_name: Accepted public style name, with or without its workspace.
 
     Returns:
@@ -852,10 +857,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
         assert request.url.params["format"] == "image/png"
         assert request.url.params["width"] == "256"
         assert request.url.params["height"] == "256"
-        assert request.url.params["env"] == (
-            "min:0;med:50;max:100;cmin:#2b83ba;"
-            "cmed:#ffffbf;cmax:#d7191c" + opacity_environment
-        )
+        assert request.url.params.get("env") == style_environment
         if len(wms_requests) == 2:
             return httpx2.Response(
                 200,
@@ -912,10 +914,9 @@ def test_wms_proxy_allows_bounded_png_rendering(
             "&bbox=0%2C0%2C1%2C1&width=256&height=256"
             "&format=image%2Fpng&transparent=true"
             "&tiled=true&tilesorigin=-20037508.342789244%2C-20037508.342789244"
-            "&env=min%3A0%3Bmed%3A50%3Bmax%3A100%3B"
-            "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c"
         )
-        tile_url += opacity_environment.replace(":", "%3A").replace(";", "%3B")
+        if style_environment is not None:
+            tile_url += "&" + urlencode({"env": style_environment})
         response = client.get(tile_url)
         diagnostics = client.get("/api/rendering/diagnostics")
         exception_response = client.get(tile_url)

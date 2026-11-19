@@ -102,7 +102,7 @@ def test_category_appearance_defaults_and_input_validation() -> None:
 def test_saved_map_preserves_the_owner_validated_vector_category_table() -> None:
     """Round-trip an opaque vector definition through the existing map contract."""
     view = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v1.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-catalog.json").read_text()
     )
     style = default_vector_style("polygon").model_dump(by_alias=True)
     style["categorical"] = {

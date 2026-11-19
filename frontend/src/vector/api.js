@@ -72,11 +72,13 @@ export async function getVectorFilterExtent(source, filter, signal, fetchImpleme
     const artifact = source.kind === "runArtifact";
     let response;
     try {
-        response = await fetchImplementation(artifact ? `/api/vector-rendering/artifacts/${encodeURIComponent(source.jobId)}/${encodeURIComponent(source.artifactId)}/extent` : "/api/vector-sampling/extent", {
+        const spatial = filter.rules?.some(rule => rule.operator === "intersects");
+        const artifactEndpoint = artifact && !spatial;
+        response = await fetchImplementation(artifactEndpoint ? `/api/vector-rendering/artifacts/${encodeURIComponent(source.jobId)}/${encodeURIComponent(source.artifactId)}/extent` : "/api/vector-sampling/extent", {
             method: "POST", signal, credentials: "same-origin", cache: "no-store",
             headers: { Accept: "application/json", "Content-Type": "application/json",
-                ...(uploaded ? {"X-EOLab-Uploads": "1"} : artifact ? {"X-EOLab-Processing": "1"} : {}) },
-            body: JSON.stringify({ ...(artifact ? {} : uploaded ? {uploadId: source.uploadId}
+                ...(uploaded || spatial ? {"X-EOLab-Uploads": "1"} : {}), ...(artifact || spatial ? {"X-EOLab-Processing": "1"} : {}) },
+            body: JSON.stringify({ ...(artifactEndpoint ? {} : artifact ? {kind: source.kind, jobId: source.jobId, artifactId: source.artifactId, layerName: source.layerName} : uploaded ? {uploadId: source.uploadId}
                 : {collectionId: source.collectionId, itemId: source.itemId}), filter,
                 ...(source.calculatedFields?.length ? {calculatedFields: source.calculatedFields} : {}) }),
         });

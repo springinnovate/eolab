@@ -509,6 +509,7 @@
                       </div>
                     </details>
                     </div>
+                    <p id="annotation-storage-status" class="map-layer-action-status" role="status" hidden></p>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map contents controls">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map contents" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map contents" disabled>Hide all</button>
@@ -618,6 +619,20 @@
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
+        <section id="map-interaction-tools" aria-label="Map interaction tools">
+          <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
+            <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
+            <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
+            <button type="button" data-map-mode="box" aria-pressed="false">Histogram box</button>
+            <button type="button" data-map-mode="lasso" aria-pressed="false">Lasso</button>
+          </div>
+          <div id="lasso-controls" hidden>
+            <label for="lasso-layer">Select features from</label>
+            <select id="lasso-layer"></select>
+            <button id="clear-lasso-selection" type="button" class="secondary-button" hidden>Clear selection</button>
+          </div>
+          <p id="map-interaction-status" role="status" aria-live="polite"></p>
+        </section>
         <section id="raster-sampling-tool" aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
@@ -783,7 +798,7 @@
               <h2>Panel fading</h2>
               <button id="close-settings" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close Settings">×</button>
             </header>
-            <label class="panel-fade-toggle"><input id="enable-panel-fading" type="checkbox" checked>Fade panels when idle</label>
+            <label class="panel-fade-toggle"><input id="enable-panel-fading" type="checkbox">Fade panels when idle</label>
             <p>Move the pointer back onto the map to try your changes.</p>
             <fieldset id="panel-fade-options">
               <legend class="visually-hidden">Panel fade timing and opacity</legend>
@@ -855,88 +870,117 @@
             </div>
           </section>
           <section id="raster-series" role="tabpanel" aria-labelledby="open-raster-series-dock" hidden>
-            <button id="raster-series-toggle-inputs" type="button" aria-expanded="true" aria-controls="raster-series-inputs">Inputs · Hide</button>
-            <div id="raster-series-inputs">
-              <div id="raster-series-data-inputs">
-              <div id="raster-series-sources" aria-label="Raster sources"></div>
-              <div id="raster-series-temporal" class="temporal-period" hidden>
-                <p id="raster-series-temporal-title"></p>
-                <div class="raster-series-controls">
-                  <label>Variable <select id="raster-series-temporal-variable"></select></label>
+            <header class="raster-series-bar">
+              <h2>Raster statistics</h2>
+              <div class="raster-series-switch" role="group" aria-label="Result view">
+                <button id="raster-series-result-button" class="secondary-button" type="button" aria-pressed="true">Result</button>
+                <button id="raster-series-values-button" class="secondary-button" type="button" aria-pressed="false">Values</button>
+              </div>
+            </header>
+            <div class="raster-series-field">
+              <h3 id="raster-series-measure">Mean</h3>
+              <div class="raster-series-context">
+                <button id="raster-series-source-button" class="summary-text-button" type="button" aria-expanded="false" aria-controls="raster-series-data-inputs"><span id="raster-series-source-summary">Choose rasters</span></button>
+                <span aria-hidden="true">·</span>
+                <button id="raster-series-open-area" class="summary-text-button" type="button" aria-expanded="false" aria-controls="raster-series-area-picker"><span id="raster-series-area-summary">Sample area</span></button>
+              </div>
+              <div id="raster-series-data-inputs" class="raster-series-picker" hidden>
+                <div class="raster-series-picker-heading"><strong>Rasters</strong><button id="raster-series-sources-done" class="summary-text-button" type="button">Done</button></div>
+                <div id="raster-series-sources" aria-label="Raster sources"></div>
+                <div id="raster-series-temporal" class="temporal-period" hidden>
+                  <p id="raster-series-temporal-title"></p>
+                  <div class="raster-series-controls">
+                    <label>Variable <select id="raster-series-temporal-variable"></select></label>
+                  </div>
+                  <div id="raster-series-period"></div>
                 </div>
-                <div id="raster-series-period"></div>
               </div>
-            </div>
-            <div class="raster-series-controls raster-series-sample-area"><span>Sample area:</span>
-              <button id="raster-series-open-area" class="summary-text-button" type="button" aria-controls="raster-sampling-tool" title="Change sample area on map"><span id="raster-series-area-summary">No area selected</span></button>
-              <button id="raster-series-use-current-filter" class="secondary-button" type="button" hidden>Use current polygon filter</button></div>
-            <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
-              <div class="raster-series-statistics-header">
-                <h3 id="raster-series-statistics-title">Statistics</h3>
-                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="count">Count above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom formula</option></select></label>
+              <div id="raster-series-area-picker" class="raster-series-picker" role="group" aria-label="Choose sample area" hidden>
+                <button id="raster-series-pick-selection" class="secondary-button" type="button">Sampling box</button>
+                <button id="raster-series-pick-vector" class="secondary-button" type="button">Selected polygons</button>
+                <button id="raster-series-pick-whole" class="secondary-button" type="button">Whole raster</button>
+                <button id="raster-series-adjust-area" class="summary-text-button" type="button" aria-controls="raster-sampling-tool">Adjust area on map…</button>
               </div>
-              <div id="raster-series-formulas"></div>
-            </section>
-            </div>
-            <div class="raster-series-run-controls">
-              <p id="raster-series-status" role="status" aria-live="polite"></p>
-              <div class="raster-series-actions">
-                <button id="raster-series-exact-statistics" class="secondary-button" type="button" hidden>Calculate exact statistics</button>
-                <button id="raster-series-retry" class="secondary-button" type="button" hidden>Retry failed rasters</button>
-                <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel</button>
-                <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
-              </div>
-            </div>
-            <p id="raster-series-chart-note" hidden></p>
-            <div id="raster-series-results" role="region" aria-label="Statistic results" hidden>
-              <div id="raster-series-chart-toolbar" class="raster-series-chart-toolbar"><label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bar</option></select></label>
-              <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
-              </div>
-              <div id="raster-series-plot-heading">
-                <h3 id="raster-series-plot-title"></h3>
-                <p id="raster-series-plot-context"></p>
-              </div>
-              <div id="raster-series-plot-area">
-                <div id="raster-series-plot-progress" role="status" aria-live="polite" hidden>
-                  <div class="raster-series-progress-message">
-                  <strong>Calculating statistics</strong>
-                  <p id="raster-series-plot-progress-detail"></p>
-                  <progress id="raster-series-plot-progress-bar" aria-label="Calculation progress"></progress>
+              <button id="raster-series-use-current-filter" class="secondary-button" type="button" hidden>Use current polygon filter</button>
+              <p id="raster-series-chart-note" hidden></p>
+              <div id="raster-series-results" role="region" aria-label="Statistic results" hidden>
+                <div id="raster-series-reading" hidden>
+                  <div class="raster-series-readout">
+                    <p><output id="raster-series-number" aria-labelledby="raster-series-measure"></output> <span id="raster-series-unit"></span></p>
+                    <div id="raster-series-precision"><span id="raster-series-method"></span></div>
+                    <span id="raster-series-observation"></span>
+                  </div>
+                  <figure id="raster-series-locator" hidden><div id="raster-series-locator-map" role="img" aria-label="Sample area location"></div><figcaption id="raster-series-locator-caption"></figcaption></figure>
+                </div>
+                <div id="raster-series-plot-heading">
+                  <h3 id="raster-series-plot-title"></h3>
+                  <p id="raster-series-plot-context"></p>
+                </div>
+                <div id="raster-series-plot-area">
+                  <div id="raster-series-plot-progress" role="status" aria-live="polite" hidden>
+                    <div class="raster-series-progress-message">
+                    <strong>Calculating statistics</strong>
+                    <p id="raster-series-plot-progress-detail"></p>
+                    <progress id="raster-series-plot-progress-bar" aria-label="Calculation progress"></progress>
+                    </div>
+                  </div>
+                  <div id="raster-series-plots" tabindex="0" role="region" aria-labelledby="raster-series-plot-title"></div>
+                </div>
+                <p id="raster-series-empty" hidden></p>
+                <div id="raster-series-values" hidden>
+                  <div class="raster-series-table-scroll" tabindex="0" role="region" aria-label="Statistic values">
+                    <table><caption id="raster-series-value-caption"></caption><thead><tr><th id="raster-series-value-source" scope="col">Raster</th><th scope="col">Statistic</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
                   </div>
                 </div>
-                <div id="raster-series-plots" tabindex="0" role="region" aria-labelledby="raster-series-plot-title"></div>
               </div>
-              <details id="raster-series-values" class="raster-series-settings">
-                <summary>Values &amp; download</summary>
-                <div class="raster-series-actions">
-                  <button id="raster-series-download" class="secondary-button" type="button" disabled>Download CSV</button>
+              <div class="raster-series-run-controls">
+                <p id="raster-series-status" role="status" aria-live="polite"></p>
+                <div id="raster-series-run-actions" class="raster-series-actions">
+                  <button id="raster-series-exact-statistics" class="summary-text-button" type="button" hidden>Calculate exact</button>
+                  <button id="raster-series-retry" class="summary-text-button" type="button" hidden>Retry failed rasters</button>
+                  <button id="raster-series-cancel" class="summary-text-button" type="button" hidden>Cancel</button>
+                  <button id="raster-series-recover" class="summary-text-button" type="button" hidden>Recover / retry</button>
                 </div>
-                <div class="raster-series-table-scroll" tabindex="0" role="region" aria-label="Statistic values">
-                  <table><caption id="raster-series-value-caption"></caption><thead><tr><th id="raster-series-value-source" scope="col">Raster</th><th scope="col">Statistic</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
+              </div>
+              <label id="raster-series-measure-choice" hidden>Show statistic <select id="raster-series-selected-statistic"></select></label>
+            </div>
+            <div class="raster-series-refine">
+              <details id="raster-series-statistics" class="raster-series-settings">
+                <summary>Choose statistics</summary>
+                <div class="raster-series-statistics-header">
+                  <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="count">Count above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option></select></label>
+                  <button id="raster-series-write-formula" class="summary-text-button" type="button">Write a formula…</button>
                 </div>
+                <div id="raster-series-formulas"></div>
               </details>
               <details id="raster-series-data-settings" class="raster-series-settings">
-                <summary id="raster-series-source-summary">Axis and plot options</summary>
+                <summary>Plot options</summary>
+                <div id="raster-series-chart-toolbar" class="raster-series-chart-toolbar"><label>Plot style <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Columns</option></select></label>
+                  <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
+                </div>
                 <div class="raster-series-controls">
                   <label>Order by <select id="raster-series-order"><option value="map">Map contents order</option><option value="name">Layer name</option></select></label>
                   <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
                 </div>
                 <div id="raster-series-plot-options"></div>
               </details>
+              <button id="raster-series-download" class="summary-text-button" type="button" disabled>Download CSV</button>
             </div>
-            <details class="raster-series-help raster-series-settings"><summary>Formula reference</summary>
-              <p>Area formulas use the same box, imported polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
-              <ul>
-                <li><code>pixelValue(a)</code> — Native pixel at your last map click, independent of the selected area.</li>
-                <li><code>mean(a)</code> — Average of valid pixel values.</li>
-                <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. One pixel gives zero; no matching pixels gives no value.</li>
-                <li><code>min(a)</code> / <code>max(a)</code> — Smallest / largest valid value.</li>
-                <li><code>sum(a)</code> — Sum of valid pixel values.</li>
-                <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
-                <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
-              </ul>
-              <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter area statistics: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one calculation per raster. Assign statistics with different units or ranges to separate plots as needed.</p>
-            </details>
+            <template id="raster-series-formula-help">
+              <details class="raster-series-help raster-series-settings"><summary>Formula help</summary>
+                <p><code>a</code> is each selected raster on its original pixel grid. Area functions use the selected sample area.</p>
+                <ul>
+                  <li><code>pixelValue(a)</code> — Native pixel at your last map click, independent of the selected area.</li>
+                  <li><code>mean(a)</code> — Average of valid pixel values.</li>
+                  <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. One pixel gives zero; no matching pixels gives no value.</li>
+                  <li><code>min(a)</code> / <code>max(a)</code> — Smallest / largest valid value.</li>
+                  <li><code>sum(a)</code> — Sum of valid pixel values.</li>
+                  <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
+                  <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
+                </ul>
+                <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter area statistics: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one calculation per raster. Assign statistics with different units or ranges to separate plots as needed.</p>
+              </details>
+            </template>
           </section>
           <section id="annotations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-annotations" hidden>
             <header class="map-histogram-toolbar"><h2 id="annotation-panel-title" tabindex="-1">Polygons</h2><button id="close-annotations" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close polygon editor">&times;</button></header>
@@ -1210,8 +1254,6 @@
               <div class="downloads-actions">
                 <button id="calculate-bivariate-x" class="secondary-button" type="button">Analyze X</button>
                 <button id="calculate-bivariate-y" class="secondary-button" type="button">Analyze Y</button>
-                <button id="download-bivariate-x" class="secondary-button" type="button">Download X clip</button>
-                <button id="download-bivariate-y" class="secondary-button" type="button">Download Y clip</button>
               </div>
               <details class="raster-bivariate-style-ranges" id="raster-bivariate-style-ranges">
                 <summary>Style rasters</summary>
@@ -1647,10 +1689,7 @@
                                 <span><small>Midpoint</small><span id="raster-legend-midpoint"></span></span>
                                 <span><small>Maximum</small><span id="raster-legend-maximum"></span></span>
                               </div>
-                              <ul id="raster-override-legend" class="map-layer-legend-list" hidden>
-                                <li><span class="map-layer-legend-gradient" aria-hidden="true"><span id="raster-override-legend-color"></span></span>
-                                  <span id="raster-override-legend-label"></span></li>
-                              </ul>
+                              <ul id="raster-override-legend" class="map-layer-legend-list" hidden></ul>
                               <p class="raster-style-error" id="raster-style-error" role="status"></p>
                             </div>
                           </details>
@@ -1666,6 +1705,14 @@
                               <p class="raster-category-guidance">0% opacity hides pixels with this exact value.</p>
                               <p id="raster-override-error" class="raster-style-error" role="status"></p>
                             </div>
+                          </div>
+                          <div class="raster-value-override">
+                            <p id="raster-range-guidance" class="raster-category-guidance" hidden>Leave either bound blank for an open-ended range. Add up to 16 ranges. The exact value takes priority, then the first matching range. Other values use the color gradient.</p>
+                            <div id="raster-color-ranges" class="raster-category-rows"></div>
+                            <div class="raster-style-actions">
+                              <button id="add-raster-color-range" class="secondary-button" type="button">Add color range</button>
+                            </div>
+                            <p id="raster-range-error" class="raster-style-error" role="status"></p>
                           </div>
                           </div>
                           <section id="raster-categorical-editor" class="raster-categorical-editor" aria-labelledby="raster-category-heading" hidden>
@@ -1799,6 +1846,29 @@
         </div>
       </form>
     </dialog>
+    <section id="raster-download-sheet" popover="manual" role="dialog" aria-labelledby="raster-download-title raster-download-source">
+      <div class="raster-download-scroll">
+        <header class="raster-download-heading">
+          <div><h2 id="raster-download-title">Download raster</h2><strong id="raster-download-source"></strong></div>
+          <button id="raster-download-close" type="button" class="analysis-panel-action" aria-label="Close raster download">&times;</button>
+        </header>
+        <fieldset id="raster-download-areas">
+          <legend>Area to download</legend>
+          <label><input type="radio" name="raster-download-area" value="viewport"><span>Visible map area<small>The view when you opened Download</small></span></label>
+          <label><input type="radio" name="raster-download-area" value="whole"><span>Entire raster<small>Full extent at the original resolution</small></span></label>
+          <label><input type="radio" name="raster-download-area" value="box"><span>Sampling box<small></small></span></label>
+          <label><input type="radio" name="raster-download-area" value="polygons"><span>Selected polygons<small></small></span></label>
+        </fieldset>
+        <p id="raster-download-file"></p>
+        <p id="raster-download-status" role="status" aria-live="polite"></p>
+      </div>
+      <footer class="raster-download-footer">
+        <button id="raster-download-cancel" class="secondary-button" type="button" hidden>Cancel download</button>
+        <button id="raster-download-new" class="secondary-button" type="button" hidden>Prepare another</button>
+        <button id="raster-download-prepare" class="primary-button" type="button">Prepare GeoTIFF</button>
+        <a id="raster-download-file-link" class="primary-button" download hidden>Download GeoTIFF</a>
+      </footer>
+    </section>
     <script type="module" src="/src/main.js"></script>
 
   </body>

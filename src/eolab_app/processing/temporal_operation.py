@@ -122,7 +122,6 @@ def build_temporal_submission(
             "reduction": request.reduction.model_dump(mode="json"),
             "grid": None,
         },
-        reserved_bytes=0,
         operation=queued.operation,
     )
 
@@ -225,7 +224,6 @@ async def prepare_temporal_map(
             "grid": spec.grid.model_dump(mode="json"),
             "area": spec.area.model_dump(mode="json"),
         },
-        reserved_bytes=0,
         operation=spec.operation,
     )
 

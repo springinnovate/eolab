@@ -79,7 +79,6 @@ def test_job_retains_upload_until_execution_stops(
     plan = PreparedJobPlan(
         specification={"operation": "retention-test"},
         summary={},
-        reserved_bytes=0,
         operation="retention-test",
         input_uploads=retained,
     )

@@ -259,6 +259,9 @@ export class FakeRasterControlDocument extends EventTarget {
                 new FakeRasterControlElement(type, this)
             );
         }
+        if (selector === "#raster-series-formula-help") {
+            this.elements.get(selector).content ??= {cloneNode: () => this.createElement("details")};
+        }
         return this.elements.get(selector);
     }
 

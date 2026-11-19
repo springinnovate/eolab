@@ -2399,6 +2399,7 @@ div.chart-tooltip {
   box-shadow: inset 3px 0 0 var(--brand);
 }
 
+.map-selection-footprint,
 .catalog-footprint.is-selected {
   fill: var(--brand);
   fill-opacity: 0.16;
@@ -3538,15 +3539,6 @@ article.raster-histogram-summary {
   padding: 5px 8px;
   font-size: 0.68rem;
 }
-.raster-histogram-summary-actions .raster-histogram-download {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  margin-inline-start: auto;
-  width: 30px;
-  padding: 5px;
-}
 .raster-histogram-list[hidden] { display: none; }
 .raster-histogram-overview:has(#raster-histogram-list[hidden]) { display: none; }
 
@@ -4115,6 +4107,41 @@ article.raster-histogram-summary {
   width: min(var(--inspection-width), var(--map-tools-available-width));
   padding-bottom: 6px;
   pointer-events: none;
+}
+#map-interaction-tools {
+  padding: 5px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: var(--elevation-control);
+  pointer-events: auto;
+}
+.map-interaction-strip { display: flex; flex-wrap: wrap; gap: 3px; }
+.map-interaction-strip button {
+  flex: 1 0 auto;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: var(--font-size-support);
+  cursor: pointer;
+}
+.map-interaction-strip button:hover { background: var(--surface-hover); }
+.map-interaction-strip button[aria-pressed="true"] {
+  color: var(--brand-hover);
+  border-color: var(--brand);
+  background: var(--surface-selected);
+}
+#lasso-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
+#lasso-controls[hidden] { display: none; }
+#lasso-controls label { font-size: var(--font-size-support); color: var(--text-2); }
+#lasso-layer { flex: 1 1 110px; min-width: 0; max-width: 100%; }
+#map-interaction-status { margin: 6px 2px 0; color: var(--text-2); font-size: var(--font-size-support); overflow-wrap: anywhere; }
+.leaflet-container.is-lasso-active { cursor: crosshair; touch-action: none; }
+@media (pointer: coarse) {
+  .map-interaction-strip button, #lasso-layer, #clear-lasso-selection { min-height: 44px; }
 }
 #app :is(.control-panel, .map-tool-openers) {
   transition: width 220ms ease, var(--panel-fade, opacity 0s);
@@ -5347,6 +5374,7 @@ summary:hover > .raster-disclosure-chevron {
 #vector-filter-panel { padding: 16px; }
 #vector-filter-title { overflow-wrap: anywhere; font-weight: 600; }
 .vector-filter-options, .vector-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 12px; }
+.vector-filter-condition-choices:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px; }
 .vector-filter-options label { display: flex; align-items: center; gap: 6px; }
 .vector-filter-rule { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr); gap: 8px; padding: 10px; margin-block: 8px; border: 1px solid var(--border-1); border-radius: 8px; }
 .vector-filter-rule select, .vector-filter-rule input { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 8px; font: inherit; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }
@@ -5445,6 +5473,51 @@ summary:hover > .raster-disclosure-chevron {
 .download-job .secondary-button { display: inline-block; margin: 0.25rem 0.35rem 0 0; text-decoration: none; }
 .download-job progress { width: 100%; }
 #raster-clips-message:empty, #raster-clips-job-message:empty { display: none; }
+
+#raster-download-sheet {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  max-width: none;
+  overflow: visible;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-panel);
+  font: inherit;
+}
+#raster-download-sheet:popover-open { display: flex; flex-direction: column; }
+#raster-download-sheet[data-side="right"]::before {
+  content: ""; position: absolute; left: -6px; top: calc(var(--download-arrow-y) - 6px);
+  width: 10px; height: 10px; transform: rotate(45deg); background: var(--surface-2);
+  border: solid var(--border-2); border-width: 0 0 1px 1px; pointer-events: none;
+}
+.raster-download-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
+.raster-download-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.raster-download-heading h2 { margin: 0 0 3px; font-size: 1rem; }
+#raster-download-source, #raster-download-file, #raster-download-status { overflow-wrap: anywhere; }
+#raster-download-source { color: var(--text-2); font-size: .85rem; }
+#raster-download-areas { display: grid; gap: 5px; margin: 12px 0; padding: 0; border: 0; min-width: 0; }
+#raster-download-areas legend { margin-bottom: 5px; padding: 0; font-weight: 600; }
+#raster-download-areas label { display: flex; align-items: baseline; gap: 7px; padding: 6px 8px; border: 1px solid var(--border-2); border-radius: var(--radius); cursor: pointer; }
+#raster-download-areas label:has(:checked) { background: var(--surface-selected); border-color: var(--brand); }
+#raster-download-areas label:has(:disabled) { color: var(--text-2); cursor: default; }
+#raster-download-areas input { margin: 0; accent-color: var(--brand); }
+#raster-download-areas small { display: block; color: var(--text-2); overflow-wrap: anywhere; }
+#raster-download-file, #raster-download-status { margin: 8px 0 0; font-size: .85rem; }
+#raster-download-status:empty, #raster-download-sheet [hidden] { display: none; }
+.raster-download-footer { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 6px; padding: 7px 12px; border-top: 1px solid var(--border-2); }
+.raster-download-footer:not(:has(:not([hidden]))) { display: none; }
+.raster-download-footer .primary-button { padding: 6px 10px; color: var(--surface-2); background: var(--brand); border: 1px solid var(--brand); border-radius: var(--radius); font: inherit; text-decoration: none; cursor: pointer; }
+.raster-download-footer button:disabled { opacity: .65; cursor: default; }
+.raster-layer-row:has([data-layer-action="download"][aria-expanded="true"]) { box-shadow: inset 3px 0 var(--brand); }
+[data-layer-action="download"][aria-expanded="true"] { border-color: var(--brand); }
+@media (pointer: coarse) {
+  #raster-download-sheet :is(button,a,label) { min-height: 44px; }
+}
 /* Summary controls, saved results and passive activity on the sampling rectangle. */
 .calculation-functions { padding-left: 1.25rem; font-size: 0.85rem; line-height: 1.5; }
 .calculation-functions li { margin: 0.55rem 0; }
@@ -5466,7 +5539,8 @@ summary:hover > .raster-disclosure-chevron {
     .leaflet-pane path.is-calculating { fill-opacity: 0.15; }
 }
 
-.histogram-bar-height-scale {
+.histogram-bar-height-scale,
+.raster-series-switch {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5476,14 +5550,14 @@ summary:hover > .raster-disclosure-chevron {
   font-size: var(--font-size-ui);
 }
 
-.histogram-bar-height-scale .secondary-button {
+:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker) > .secondary-button {
   margin: 0;
   min-height: 24px;
   padding: 2px 7px;
   font-size: inherit;
 }
 
-.histogram-bar-height-scale .secondary-button[aria-pressed="true"] {
+:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker) > .secondary-button[aria-pressed="true"] {
   background: var(--brand-hover);
   color: var(--surface-2);
 }

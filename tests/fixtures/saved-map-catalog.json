@@ -1,6 +1,7 @@
 {
   "format": "eolab-map-view",
-  "schemaVersion": 1,
+  "schemaVersion": 5,
+  "basemap": "detailed",
   "viewer": {"version": "0.6.0", "origin": "https://core-areas.wwfus.science"},
   "createdAt": "2026-09-22T12:00:00.000Z",
   "viewport": {"center": {"latitude": -8, "longitude": -65}, "zoom": 5},

@@ -159,6 +159,8 @@ function canRetryRasterStatistics(error) {
 
 /**
  * @typedef {Object} RasterViewer
+ * @property {(enabled:boolean)=>void} setPixelPickingEnabled Enable or hide transient pixel values.
+ * @property {(enabled:boolean)=>void} setSamplingBoxPointerEnabled Enable or clear box previews and first-sample guidance.
  * @property {() => void} clear Remove all retained raster interactions.
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
@@ -167,7 +169,7 @@ function canRetryRasterStatistics(error) {
  * showSource Retain an authorized original raster through the same controls.
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
- * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void}) => boolean} exploreAt Select
+ * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void,histogram?:boolean}) => boolean} exploreAt Select
  * one validated, in-bounds map window and request its histogram when analysis
  * is active.
  * @property {(enabled:boolean) => void} setFirstSampleHintEnabled Allow the first-sample hint and preview while browsing the map.
@@ -227,8 +229,6 @@ function canRetryRasterStatistics(error) {
  * Report the presented area and an in-flight polygon choice or removed area to composition.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
- * @property {(item:Object,area:Readonly<Object>|null,label:string)=>void} [onDownloadRequested]
- * Notify composition of a raster, its explicit selected area and originating view name.
  * @property {(item:Object,area:Readonly<Object>|null,label:string,key:string)=>void} [onCalculateRequested]
  * Calculate the original raster with its explicit area and originating view name/key.
  * @property {(selectedKeys:string[]|null)=>void}
@@ -293,7 +293,6 @@ export function initializeRasterViewer(
         onHistogramChange = () => {},
         onSamplingAreaChange = () => {},
         onSamplingMethodChange = () => {},
-        onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @param {string} _label View name. @return {void} */ (_item, _area, _label) => {},
         onLayersChange = /**
          * Ignore layer snapshots when no application observer is supplied.
          * Accepts no parameters; callback arguments are intentionally unused.
@@ -384,6 +383,7 @@ export function initializeRasterViewer(
     let mapDragging = false;
     let pixelPickerEnabled = true;
     let pointerInspectionEnabled = true;
+    let samplingBoxPointerEnabled = true;
     let firstSampleHintEnabled = true;
     let hasPlacedSamplingBox = false;
     let rasterCursorPosition = null;
@@ -1767,29 +1767,6 @@ export function initializeRasterViewer(
         if (pair && area?.kind !== "polygonArea") onCalculateRequested(pair[`${axis}Candidate`].item, area, pair[`${axis}Candidate`].label, pair[`${axis}Candidate`].key);
     }
 
-    /** Open the clip dialog for a histogram whose area can be carried over.
-     * @param {string} key Histogram session.
-     * @return {void}
-     */
-    function downloadHistogram(key) {
-        if (pendingVectorSelection) return;
-        const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
-        const area = getSelectedArea(key, "1d");
-        if (session?.item && area?.kind !== "polygonArea") onDownloadRequested(session.item, area,
-            mapLayers.getRecord(key)?.entry.label ?? getRasterDisplayName(session.item));
-    }
-
-    /** Open the clip dialog for a paired axis whose area can be carried over.
-     * @param {"x"|"y"} axis Histogram axis.
-     * @return {void}
-     */
-    function downloadPairedHistogram(axis) {
-        if (pendingVectorSelection) return;
-        const pair = getBivariatePairCandidates();
-        const area = getSelectedArea(null, "2d");
-        if (pair && area?.kind !== "polygonArea") onDownloadRequested(pair[`${axis}Candidate`].item, area, pair[`${axis}Candidate`].label);
-    }
-
     /**
      * Release cancelled loading markers while preserving completed results.
      *
@@ -1846,11 +1823,11 @@ export function initializeRasterViewer(
         return area;
     }
 
-    /** Return whether ordinary map browsing can offer a first sample from a visible raster.
+    /** Return whether box sampling can offer a first sample from a visible raster.
      * @return {boolean} True until a box is placed, except while drawing or using another sample area or tool.
      */
     function canOfferFirstSample() {
-        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && !pendingVectorSelection &&
+        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && samplingBoxPointerEnabled && !pendingVectorSelection &&
             initialPolygonSamplingArea() === null && activeRasterItem?.capabilities?.statistics !== false &&
             mapLayers.getRecord(activeLayerKey)?.entry.visible === true;
     }
@@ -2365,10 +2342,9 @@ export function initializeRasterViewer(
                     kind: "gradient",
                     gradient: definition.gradient,
                     description: definition.description,
-                    ...(presentationStyle.valueOverride ? { entries: [{
-                        label: definition.overrideLabel,
-                        symbol: rasterFillLegendSymbol(presentationStyle.valueOverride),
-                    }] } : {}),
+                    ...(definition.overrides ? { entries: definition.overrides.map(entry => ({
+                        label: entry.label, symbol: rasterFillLegendSymbol(entry),
+                    })) } : {}),
                     label: opacityLocked
                         ? `${record.entry.key === bivariateMode.xKey ? "X" : "Y"} color contribution; combines with the other raster on the map.`
                         : "Raster values",
@@ -3738,14 +3714,16 @@ export function initializeRasterViewer(
      * @param {Object} [options] Composition-owned selection notification.
      * @param {function(Object|null):void} [options.onSelected] Called synchronously
      * with the committed sampling area only when the box is accepted.
+     * @param {boolean} [options.histogram] Explicitly request or suppress box placement;
+     * omitted callers retain the existing automatic histogram behavior.
      * @return {boolean} Whether raster coverage makes the histogram workspace
      * relevant, including guidance when the requested box cannot be selected.
      */
-    function exploreAt(position, { onSelected = () => {} } = {}) {
+    function exploreAt(position, { onSelected = () => {}, histogram } = {}) {
         if (!canUseRasterMapInteractions() && rasterPointSampleParticipants().length === 0) {
             return false;
         }
-        if (vectorSelection && (bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling)?.id === vectorSelection.id) {
+        if (histogram === undefined && vectorSelection && (bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling)?.id === vectorSelection.id) {
             onSelected(getSelectedArea());
             return true;
         }
@@ -3757,7 +3735,7 @@ export function initializeRasterViewer(
             pointSamplesController.clear();
             return false;
         }
-        const openHistogram = shouldOpenRasterHistogram(point);
+        const openHistogram = histogram ?? shouldOpenRasterHistogram(point);
         if (openHistogram) {
             if (rasterAnalysis.selectedPolygonSampling !== null) {
                 restoreWholeRasterStatistics();
@@ -4086,6 +4064,25 @@ export function initializeRasterViewer(
     function setPointerInspectionEnabled(enabled) {
         pointerInspectionEnabled = enabled;
         if (!enabled) handleMapMouseLeave();
+        updateFirstSampleHint();
+    }
+
+    /** Enable or hide raster pixel sampling for the selected pointer action.
+     * @param {boolean} enabled Whether pointer movement should pick raster values.
+     * @return {void}
+     */
+    function setPixelPickingEnabled(enabled) {
+        if (enabled) showPixelPicker();
+        else hidePixelPicker();
+    }
+
+    /** Enable box previews and first-sample guidance independently of pixel picking.
+     * @param {boolean} enabled Whether pointer movement should preview a sampling box.
+     * @return {void}
+     */
+    function setSamplingBoxPointerEnabled(enabled) {
+        samplingBoxPointerEnabled = enabled;
+        if (!enabled) rasterSampleWindowController.clearPreview();
         updateFirstSampleHint();
     }
 
@@ -4490,7 +4487,7 @@ export function initializeRasterViewer(
             return;
         }
         const overMapControl = mapEvent.originalEvent?.target?.closest?.(".leaflet-control");
-        if (!overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
+        if (samplingBoxPointerEnabled && !overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
             (canOfferFirstSample() && shouldOpenRasterHistogram(point)))) {
             rasterSampleWindowController.previewAt(mapEvent.latlng);
         } else {
@@ -5173,10 +5170,8 @@ export function initializeRasterViewer(
         },
         onSelectHistogram: handleSelectLayerHistogram,
         onStyleHistogram: onStyleRequested,
-        onDownloadHistogram: downloadHistogram,
         onCalculateHistogram: calculateHistogram,
         onCalculatePairedHistogram: calculatePairedHistogram,
-        onDownloadPairedHistogram: downloadPairedHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
@@ -5228,6 +5223,8 @@ export function initializeRasterViewer(
         stage,
         syncVisibleLayers,
         setPointerInspectionEnabled,
+        setPixelPickingEnabled,
+        setSamplingBoxPointerEnabled,
         setFirstSampleHintEnabled,
         exploreAt,
         openStyle,

@@ -4,6 +4,7 @@ import {
     EMPTY_VECTOR_FILTER, MAX_VECTOR_FILTER_RULES, normalizeVectorFilter,
     vectorFilterFieldKind, vectorFilterOperators, vectorFilterSummary,
 } from "./filter.js";
+import { viewFilter } from "../selected-area.js";
 import { getVectorFieldValues, getVectorFilterExtent } from "./api.js";
 import { VectorFilterValuePicker } from "./filter-value-picker.js";
 
@@ -21,11 +22,13 @@ export class VectorFilterControls {
      * @param {typeof getVectorFieldValues} [options.loadValues=getVectorFieldValues] Prepared-value lookup; targets with a path-free source enable suggestions.
      * @param {typeof getVectorFilterExtent} [options.loadExtent=getVectorFilterExtent] Original-source extent API.
      * @param {((bbox:[number,number,number,number])=>void)|null} [options.onZoom=null] Composition-owned padded map fit; only map editors offer zoom.
+     * @param {((key:string)=>Array<{id:string,label:string,count?:string}>)|null} [options.getPolygonLayers=null] Eligible polygon views, including hidden views, for this target.
+     * @param {(()=>Promise<string|null>)|null} [options.drawPolygon=null] Draw and save a polygon, returning its view ID or null on cancellation.
      */
     constructor({ getTarget, inspection, host = null, documentContext = document,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
         clearTimer = (timer) => globalThis.clearTimeout(timer), loadValues = getVectorFieldValues,
-        loadExtent = getVectorFilterExtent, onZoom = null }) {
+        loadExtent = getVectorFilterExtent, onZoom = null, getPolygonLayers = null, drawPolygon = null }) {
         this.document = documentContext;
         this.getTarget = getTarget;
         this.inspection = inspection;
@@ -35,6 +38,8 @@ export class VectorFilterControls {
         this.loadValues = loadValues;
         this.loadExtent = loadExtent;
         this.onZoom = onZoom;
+        this.getPolygonLayers = getPolygonLayers;
+        this.drawPolygon = drawPolygon;
         this.zoomRequest = null;
         this.valuePickers = [];
         const template = documentContext.querySelector("#vector-filter-panel");
@@ -60,15 +65,29 @@ export class VectorFilterControls {
         this.timer = null;
         this.generation = 0;
         this.listeners = [];
+        this.conditionChoices = null;
+        if (getPolygonLayers) {
+            this.conditionChoices = documentContext.createElement("div");
+            this.conditionChoices.className = "vector-filter-condition-choices";
+            this.conditionChoices.hidden = true;
+            this.conditionChoices.id = `${this.add.id}-choices`;
+            this.add.setAttribute("aria-controls", this.conditionChoices.id);
+            this.add.setAttribute("aria-expanded", "false");
+            this.add.parentElement?.insertBefore(this.conditionChoices, this.add.nextSibling);
+            for (const [label, spatial] of [["Field value", false], ["Intersects layer", true]]) {
+                const button = documentContext.createElement("button");
+                button.type = "button"; button.className = "secondary-button"; button.textContent = label;
+                this.#listen(button, "click", () => this.#addCondition(spatial));
+                this.conditionChoices.append(button);
+            }
+        }
         this.#listen(this.enabled, "change", () => { this.draft.enabled = this.enabled.checked; this.#changed(); });
         this.#listen(this.match, "change", () => { this.draft.match = this.match.value; this.#changed(); });
         this.#listen(this.add, "click", () => {
-            const target = this.getTarget(this.key);
-            if (!target || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES) return;
-            const field = target.fields[0];
-            this.draft.rules.push({ field: field?.name ?? "", operator: vectorFilterOperators(field?.type)[0].value, value: "" });
-            this.#renderRules(); this.#changed();
-            this.rules.lastElementChild?.querySelector("select")?.focus();
+            if (!this.conditionChoices) { this.#addCondition(false); return; }
+            this.conditionChoices.hidden = !this.conditionChoices.hidden;
+            this.add.setAttribute("aria-expanded", String(!this.conditionChoices.hidden));
+            if (!this.conditionChoices.hidden) this.conditionChoices.querySelector("button:not(:disabled)")?.focus();
         });
         this.#listen(this.clear, "click", () => {
             this.draft = structuredClone(EMPTY_VECTOR_FILTER);
@@ -124,6 +143,10 @@ export class VectorFilterControls {
         this.cancelZoom();
         this.zoomStatus.textContent = "";
         this.key = key;
+        if (this.conditionChoices) {
+            this.conditionChoices.hidden = true;
+            this.add.setAttribute("aria-expanded", "false");
+        }
         this.action = action;
         this.onApplied = onApplied;
         this.applyContext = applyContext;
@@ -150,17 +173,26 @@ export class VectorFilterControls {
         const target = this.getTarget(this.key);
         if (!target) { this.close(); return; }
         if (this.fieldSignature !== JSON.stringify(target.fields)) this.#renderRules();
+        if (this.getPolygonLayers && this.draft.rules.some(rule => rule.operator === "intersects")) {
+            const choices = this.getPolygonLayers(this.key);
+            if (this.polygonSignature !== JSON.stringify(choices)) {
+                this.#refreshPolygonChoices(choices);
+                this.#validate();
+            }
+        }
         this.zoomButton.hidden = !this.onZoom || !!this.host || !!this.action || !target.source;
         if (this.zoomRequest && !this.#isZoomCurrent(this.zoomRequest)) {
             this.cancelZoom("The applied filter changed. Zoom again to find its features.");
         }
         this.title.textContent = target.label;
         if (!this.host) this.inspection.updateLayerEditorName("filter", target.label);
+        const layerName = id => this.getPolygonLayers?.(this.key).find(choice => choice.id === id)?.label;
         this.applied.textContent = this.action
-            ? `${this.action.filterLabel ?? "Sampling filter"}: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
-            : `Applied: ${vectorFilterSummary(target.filter)}`;
+            ? `${this.action.filterLabel ?? "Sampling filter"}: ${vectorFilterSummary(this.action.filter ?? target.filter, layerName)}`
+            : `Applied: ${vectorFilterSummary(target.filter, layerName)}`;
         this.count.textContent = this.action ? "The complete selection is checked when you apply." : target.status || "All features are included.";
-        this.add.disabled = target.fields.length === 0 || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
+        this.add.disabled = (!this.getPolygonLayers && !target.fields.length) || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
+        if (this.conditionChoices) this.conditionChoices.children[0].disabled = !target.fields.length;
     }
 
     /** Apply pending map edits, release action preparation, hide the panel and restore focus. @return {void} */
@@ -284,7 +316,12 @@ export class VectorFilterControls {
         const target = this.getTarget(this.key);
         if (!target) return null;
         try {
-            const candidate = normalizeVectorFilter(this.draft, target.fields);
+            const candidate = normalizeVectorFilter(viewFilter(this.draft), target.fields);
+            for (const rule of candidate.rules) {
+                if (candidate.enabled && rule.operator === "intersects" && !this.getPolygonLayers?.(this.key).some(layer => layer.id === rule.layerId)) {
+                    throw new TypeError("The polygon layer is unavailable. Choose another layer.");
+                }
+            }
             this.status.textContent = this.action ? "Apply when all conditions are ready. Text comparisons are case-sensitive." : "Changes apply automatically. Text comparisons are case-sensitive.";
             this.status.classList.remove("is-error");
             this.applyButton.disabled = false;
@@ -348,9 +385,51 @@ export class VectorFilterControls {
         this.valuePickers = [];
     }
 
+    /** Append a field comparison or a spatial condition and focus its first choice.
+     * @param {boolean} spatial Whether to choose a polygon view.
+     * @return {void}
+     */
+    #addCondition(spatial) {
+        const target = this.getTarget(this.key);
+        if (!target || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES) return;
+        const field = target.fields[0];
+        if (!spatial && !field) return;
+        this.draft.rules.push(spatial ? {operator: "intersects", layerId: ""}
+            : {field: field.name, operator: vectorFilterOperators(field.type)[0].value, value: ""});
+        if (this.conditionChoices) {
+            this.conditionChoices.hidden = true;
+            this.add.setAttribute("aria-expanded", "false");
+        }
+        this.#renderRules(); this.#changed();
+        this.rules.lastElementChild?.querySelector("select")?.focus();
+    }
+
+    /** Update spatial choices and counts without moving keyboard focus.
+     * @param {Array<{id:string,label:string,count?:string}>} choices Eligible source views.
+     * @return {void}
+     */
+    #refreshPolygonChoices(choices) {
+        this.polygonSignature = JSON.stringify(choices);
+        for (const {select, rule} of this.polygonSelects) {
+            const options = [{id: "", label: "Choose a polygon layer"}, ...choices];
+            if (rule.layerId && !choices.some(choice => choice.id === rule.layerId)) {
+                options.push({id: rule.layerId, label: "Unavailable polygon layer"});
+            }
+            if (this.drawPolygon) options.push({id: "draw", label: "Draw a polygon…"});
+            select.replaceChildren(...options.map(choice => {
+                const option = this.document.createElement("option");
+                option.value = choice.id;
+                option.textContent = choice.count ? `${choice.label} (${choice.count})` : choice.label;
+                return option;
+            }));
+            select.value = rule.layerId;
+        }
+    }
+
     /** Render accessible field/operator/value rows; input edits keep focus. @return {void} */
     #renderRules() {
         this.#clearValuePickers();
+        this.polygonSelects = [];
         const target = this.getTarget(this.key);
         const fields = target?.fields ?? [];
         this.fieldSignature = JSON.stringify(fields);
@@ -366,55 +445,82 @@ export class VectorFilterControls {
                 element.value = selected;
                 return element;
             };
-            const field = select("field", fields.map(({ name }) => ({ value: name, label: name })), rule.field);
-            const type = fields.find(({ name }) => name === rule.field)?.type;
-            const operator = select("comparison", vectorFilterOperators(type), rule.operator);
-            field.addEventListener("change", () => {
-                rule.field = field.value;
-                const options = vectorFilterOperators(fields.find(({ name }) => name === rule.field)?.type);
-                rule.operator = options[0].value; rule.value = "";
-                this.#renderRules(); this.#changed();
-                this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
-            });
-            operator.addEventListener("change", () => {
-                rule.operator = operator.value;
-                rule.value = ["missing", "present"].includes(rule.operator) ? null : "";
-                this.#renderRules(); this.#changed();
-                this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
-            });
-            row.append(field, operator);
-            if (!["missing", "present"].includes(rule.operator)) {
-                const kind = vectorFilterFieldKind(type);
-                const input = kind === "boolean" ? select("value", [
-                    { value: "", label: "Choose value" }, { value: "true", label: "True" }, { value: "false", label: "False" },
-                ], String(rule.value)) : this.document.createElement("input");
-                if (kind !== "boolean") {
-                    input.type = kind === "number" ? "number" : kind === "date" ? "date" : "text";
-                    input.step = "any"; input.maxLength = 256; input.value = rule.value ?? "";
-                    input.placeholder = kind === "number" ? "Enter number" : "Enter value";
-                    input.setAttribute("aria-label", `Condition ${index + 1} value`);
-                }
-                input.addEventListener(kind === "boolean" ? "change" : "input", () => {
-                    rule.value = kind === "number" ? (input.value.trim() === "" ? "" : Number(input.value)) :
-                        kind === "boolean" ? (input.value === "" ? "" : input.value === "true") : input.value;
-                    this.#changed();
+            if (rule.operator === "intersects") {
+                const label = this.document.createElement("label");
+                label.textContent = "Intersects";
+                const polygon = select("polygon layer", [], rule.layerId);
+                this.polygonSelects.push({select: polygon, rule});
+                polygon.addEventListener("change", async () => {
+                    const drawn = polygon.value === "draw";
+                    let selected = polygon.value;
+                    if (drawn) {
+                        try { selected = await this.drawPolygon(); }
+                        catch (error) {
+                            if (this.key === key && this.draft.rules.includes(rule)) this.status.textContent = error.message;
+                            selected = null;
+                        }
+                    }
+                    if (this.key !== key || !this.draft.rules.includes(rule)) return;
+                    if (selected !== null) rule.layerId = selected;
+                    this.#refreshPolygonChoices(this.getPolygonLayers?.(key) ?? []);
+                    if (drawn && this.key === key) {
+                        if (!this.host) this.inspection.showFilter(target.label);
+                        polygon.focus();
+                    }
+                    if (selected !== null) this.#changed();
                 });
-                row.append(input);
-                if (kind === "string" && source) {
-                    const picker = new VectorFilterValuePicker({documentContext: this.document, input,
-                        field: rule.field, condition: index + 1, setTimer: this.setTimer, clearTimer: this.clearTimer,
-                        isCurrent: () => !this.destroyed && this.key === key && this.getTarget(key) !== null,
-                        loadValues: (query, signal) => this.loadValues(source, query, signal),
-                        acceptsValue: value => {
-                            try {
-                                normalizeVectorFilter({enabled: true, match: "all", rules: [{...rule, value}]}, fields);
-                                return true;
-                            } catch { return false; }
-                        },
-                        selectValue: value => { rule.value = value; input.value = value; this.#changed(); },
+                label.append(polygon); row.append(label);
+            } else {
+                const field = select("field", fields.map(({ name }) => ({ value: name, label: name })), rule.field);
+                const type = fields.find(({ name }) => name === rule.field)?.type;
+                const operator = select("comparison", vectorFilterOperators(type), rule.operator);
+                field.addEventListener("change", () => {
+                    rule.field = field.value;
+                    const options = vectorFilterOperators(fields.find(({ name }) => name === rule.field)?.type);
+                    rule.operator = options[0].value; rule.value = "";
+                    this.#renderRules(); this.#changed();
+                    this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
+                });
+                operator.addEventListener("change", () => {
+                    rule.operator = operator.value;
+                    rule.value = ["missing", "present"].includes(rule.operator) ? null : "";
+                    this.#renderRules(); this.#changed();
+                    this.rules.children[index]?.querySelectorAll("select")[1]?.focus();
+                });
+                row.append(field, operator);
+                if (!["missing", "present"].includes(rule.operator)) {
+                    const kind = vectorFilterFieldKind(type);
+                    const input = kind === "boolean" ? select("value", [
+                        { value: "", label: "Choose value" }, { value: "true", label: "True" }, { value: "false", label: "False" },
+                    ], String(rule.value)) : this.document.createElement("input");
+                    if (kind !== "boolean") {
+                        input.type = kind === "number" ? "number" : kind === "date" ? "date" : "text";
+                        input.step = "any"; input.maxLength = 256; input.value = rule.value ?? "";
+                        input.placeholder = kind === "number" ? "Enter number" : "Enter value";
+                        input.setAttribute("aria-label", `Condition ${index + 1} value`);
+                    }
+                    input.addEventListener(kind === "boolean" ? "change" : "input", () => {
+                        rule.value = kind === "number" ? (input.value.trim() === "" ? "" : Number(input.value)) :
+                            kind === "boolean" ? (input.value === "" ? "" : input.value === "true") : input.value;
+                        this.#changed();
                     });
-                    input.addEventListener("input", () => picker.close());
-                    this.valuePickers.push(picker); row.append(picker.root);
+                    row.append(input);
+                    if (kind === "string" && source) {
+                        const picker = new VectorFilterValuePicker({documentContext: this.document, input,
+                            field: rule.field, condition: index + 1, setTimer: this.setTimer, clearTimer: this.clearTimer,
+                            isCurrent: () => !this.destroyed && this.key === key && this.getTarget(key) !== null,
+                            loadValues: (query, signal) => this.loadValues(source, query, signal),
+                            acceptsValue: value => {
+                                try {
+                                    normalizeVectorFilter({enabled: true, match: "all", rules: [{...rule, value}]}, fields);
+                                    return true;
+                                } catch { return false; }
+                            },
+                            selectValue: value => { rule.value = value; input.value = value; this.#changed(); },
+                        });
+                        input.addEventListener("input", () => picker.close());
+                        this.valuePickers.push(picker); row.append(picker.root);
+                    }
                 }
             }
             const remove = this.document.createElement("button"); remove.type = "button"; remove.className = "secondary-button";
@@ -423,6 +529,7 @@ export class VectorFilterControls {
             row.append(remove);
             return row;
         }));
-        this.add.disabled = fields.length === 0 || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
+        if (this.polygonSelects.length) this.#refreshPolygonChoices(this.getPolygonLayers?.(key) ?? []);
+        this.add.disabled = (!this.getPolygonLayers && !fields.length) || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
     }
 }

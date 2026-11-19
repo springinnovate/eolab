@@ -1,15 +1,11 @@
 /** Save, share and restore map layers, styles and viewport settings. */
+import { viewFilter, waitingForPolygonLayer } from "../selected-area.js";
 
 import {
-    decodeSavedMapViewFragment,
-    encodeSavedMapViewFragment,
-    isSavedMapViewFragment,
-} from "./fragment-codec.js";
-import {
     createSavedMapView,
-    MAX_SAVED_MAP_VIEW_BYTES,
     parseSavedMapView,
     serializeSavedMapView,
+    IncompatibleSavedMap,
 } from "./model.js";
 
 const RESTORE_CONCURRENCY = 4;
@@ -34,7 +30,7 @@ export class SavedMapViewController {
      * @param {Object|null} [configuration.initialViewport] Configured canonical
      * viewport used by Reset view.
      * @param {boolean} [configuration.restoreSharedMap=false] Reset to the opening
-     * shared fragment, ignore private autosave, and leave personal storage untouched.
+     * named map and keep personal map storage private to the authoring viewer.
      * @param {(isCurrent:()=>boolean)=>void|Promise<void>} [configuration.beforeRestore] Composition-owned
      * readiness and cleanup before restoring layers. Private startup appearance
      * does not wait for this callback; explicit map actions commit appearance later.
@@ -50,7 +46,7 @@ export class SavedMapViewController {
      * @param {(record:Object)=>Object|null} configuration.exportTemporal Export a temporal selection and raster appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreTemporal Retain an independent temporal row with saved appearance; return its key, including unavailable observations shown with a row error, or null after supersession.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
-     * @param {string|null} [configuration.namedMapSlug] URL name to load instead of fragments or private autosave.
+     * @param {string|null} [configuration.namedMapSlug] Published map name for a viewer or administrator URL.
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
@@ -117,7 +113,6 @@ export class SavedMapViewController {
         this.viewerOrigin = viewerOrigin;
         this.storage = restoreSharedMap || editPublishedMap ? null : storage;
         this.restoreSharedMap = restoreSharedMap;
-        this.startingFragment = null;
         this.beforeRestore = beforeRestore;
         this.exportAnnotation = exportAnnotation;
         this.restoreAnnotation = restoreAnnotation;
@@ -149,6 +144,7 @@ export class SavedMapViewController {
         this.rememberGeneration = 0;
         this.rememberTimer = null;
         this.rememberPending = false;
+        this.keepUnsupportedMap = false;
         this.undoView = null;
         this.destroyed = false;
         this.initialView = initialViewport === null
@@ -174,26 +170,15 @@ export class SavedMapViewController {
     }
 
     /**
-     * Copy the original named URL, or a compressed link for an older fragment view.
+     * Copy the original published map URL so recipients see the author’s starting view.
      *
      * @return {Promise<void>} Completion after copy or fallback presentation.
      */
     async copyMapLink() {
-        if (this.busy || this.destroyed) return;
+        if (this.busy || this.destroyed || this.namedMapSlug === null) return;
         this.#setBusy(true);
         try {
-            if (this.namedMapSlug !== null) {
-                const result = await this.view.copyNamedMapLink(this.namedMapSlug);
-                if (result.copied) this.view.showCopied();
-                else this.view.showCopyFallback(result.url);
-                return;
-            }
-            const savedMapView = this.#snapshotCurrentView();
-            const fragment = await encodeSavedMapViewFragment(
-                serializeSavedMapView(savedMapView),
-                { maximumInputBytes: MAX_SAVED_MAP_VIEW_BYTES }
-            );
-            const result = await this.view.copyLink(fragment);
+            const result = await this.view.copyNamedMapLink(this.namedMapSlug);
             if (result.copied) this.view.showCopied();
             else this.view.showCopyFallback(result.url);
         } catch (error) {
@@ -244,7 +229,7 @@ export class SavedMapViewController {
 
     /**
      * Load the named record, then restore it through the ordinary layer owners.
-     * Never falls back to a fragment or private map when a record cannot be loaded.
+     * A missing record is reported to the visitor without reading personal storage.
      * @return {Promise<void>} Completion after restoring the map or reporting its failure.
      */
     async openNamedMap() {
@@ -304,70 +289,19 @@ export class SavedMapViewController {
     }
 
     /**
-     * Validate and restore one shared map fragment.
+     * Restore the published map named in the URL or the author's private remembered view.
+     * A read-only visitor without a map name sees a missing-link error. Private
+     * startup applies appearance before loading layers so later edits survive.
      *
-     * Unrelated fragments are ignored so this component does not own other
-     * application anchors.
-     *
-     * @param {string} fragment Current browser URL fragment.
-     * @return {Promise<void>} Completion after restoration.
+     * @return {Promise<void>} Completion after named or private restoration.
      */
-    async openSharedFragment(fragment) {
-        if (!isSavedMapViewFragment(fragment)) return;
-        if (this.busy || this.destroyed) return;
-        this.#cancelScheduledRemember();
-        const restoreGeneration = this.restoreGeneration + 1;
-        this.restoreGeneration = restoreGeneration;
-        this.#setBusy(true);
-        try {
-            const serialized = await decodeSavedMapViewFragment(fragment, {
-                maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES,
-            });
-            const savedMapView = parseSavedMapView(serialized);
-            this.view.showLoading(savedMapView.layers.length);
-            const report = await this.#restore(
-                savedMapView,
-                restoreGeneration
-            );
-            if (report !== null) {
-                this.view.showResults(report);
-                this.rememberPending = true;
-            }
-        } catch (error) {
-            this.view.showError(asError(error), "open");
-        } finally {
-            this.#setBusy(false);
-        }
-    }
-
-    /**
-     * Restore the authoritative startup source with shared-link precedence.
-     *
-     * A named URL takes precedence over fragments and private storage.
-     * Otherwise an owned `#view=` fragment is attempted and never falls back to
-     * private storage when malformed. Authoring mode can restore the last
-     * validated origin-local document without a fragment; a shared viewer
-     * requires a shared fragment and never restores private map storage.
-     * Private startup applies appearance before loading layers so later user
-     * changes are not replaced when those layers finish.
-     *
-     * @param {string} fragment Current browser URL fragment.
-     * @return {Promise<void>} Completion after shared or local restoration.
-     */
-    async restoreStartupView(fragment) {
+    async restoreStartupView() {
         if (this.namedMapSlug !== null) {
             await this.openNamedMap();
             return;
         }
         if (this.restoreSharedMap) {
-            this.startingFragment = fragment;
-            if (!isSavedMapViewFragment(fragment)) {
-                this.view.showError(new Error("This shared viewer needs a map link. Ask the map author for the complete link."), "open");
-                return;
-            }
-        }
-        if (isSavedMapViewFragment(fragment)) {
-            await this.openSharedFragment(fragment);
+            this.view.showError(new Error("This link has no map name. Ask the author for the published map link."), "open");
             return;
         }
         if (this.busy || this.destroyed || this.storage === null) return;
@@ -376,7 +310,13 @@ export class SavedMapViewController {
         let savedMapView;
         try {
             savedMapView = parseSavedMapView(serialized);
-        } catch {
+        } catch (error) {
+            if (error instanceof IncompatibleSavedMap) {
+                this.#cancelScheduledRemember();
+                this.keepUnsupportedMap = true;
+                this.view.showError(new Error("Your remembered map has settings this site cannot open. Choose Reset view to replace the copy in this browser."), "open");
+                return;
+            }
             this.storage.clear();
             return;
         }
@@ -471,7 +411,7 @@ export class SavedMapViewController {
      */
     async resetView() {
         if (this.restoreSharedMap) {
-            await this.restoreStartupView(this.startingFragment ?? "");
+            await this.restoreStartupView();
             return;
         }
         if (this.busy || this.destroyed || this.initialView === null) return;
@@ -487,6 +427,7 @@ export class SavedMapViewController {
             );
             if (report === null) return;
             this.undoView = previousView;
+            this.keepUnsupportedMap = false;
             this.storage?.write(serializeSavedMapView(this.initialView));
             this.view.showUndoReset();
             this.rememberPending = true;
@@ -619,7 +560,11 @@ export class SavedMapViewController {
         const layer = this.exportTemporal(record) ?? (record.entry.item === null
             ? this.exportUpload(record) ?? this.exportArtifact(record) ?? this.exportDrawing(record) ?? this.exportAnnotation(record)
             : this.#exportCatalogLayer(record));
-        return layer === null ? null : {...layer, isCustom: record.entry.isCustom,
+        if (layer === null) return null;
+        const filter = record.requestedSpatialFilter ?? layer.filter;
+        return {...layer, isCustom: record.entry.isCustom,
+            ...(record.filterViewId ? {filterViewId: record.filterViewId} : {}),
+            ...(filter?.rules?.some(rule => rule.operator === "intersects") ? {filter: viewFilter(filter)} : {}),
             ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})};
     }
 
@@ -804,7 +749,25 @@ export class SavedMapViewController {
      * @param {{strictStyle?:boolean}} [options] Require exact Catalog appearance for atomic additions.
      * @return {Promise<{key?:string|null,staged:Object|null,detail:string|null}>} Detached view, attached source-owned key or failure detail.
      */
-    async #restoreLayer(layer, origin, isCurrent, {strictStyle = false} = {}) {
+    async #restoreLayer(savedLayer, origin, isCurrent, {strictStyle = false} = {}) {
+        const spatial = savedLayer.filter?.rules?.some(rule => rule.operator === "intersects");
+        const layer = spatial ? {...savedLayer, filter: waitingForPolygonLayer(savedLayer.filter)} : savedLayer;
+        const result = await this.#openLayer(layer, origin, isCurrent, {strictStyle});
+        if (!savedLayer.filterViewId && !spatial) return result;
+        const record = result.staged?.record ?? (result.key ? this.mapLayers.getRecord(result.key) : null);
+        if (record && savedLayer.filterViewId) record.filterViewId = savedLayer.filterViewId;
+        if (record && spatial && savedLayer.filter.enabled) record.requestedSpatialFilter = savedLayer.filter;
+        return result;
+    }
+
+    /** Open one source's saved presentation through its ordinary catalog, upload or drawing owner.
+     * @param {Object} layer Source and presentation ready to stage.
+     * @param {string} origin Original EOLab site.
+     * @param {()=>boolean} isCurrent Whether the caller still owns this restore.
+     * @param {{strictStyle:boolean}} options Whether a failed style prevents attachment.
+     * @return {Promise<Object>} Staged or attached view, or the owner's error.
+     */
+    async #openLayer(layer, origin, isCurrent, {strictStyle}) {
         if (layer.catalogItem) return this.#prepareLayer(layer, {strictStyle});
         let restore, label, sourceLabel;
         if (layer.drawingLayerId) {
@@ -919,7 +882,7 @@ export class SavedMapViewController {
      * @return {void}
      */
     #queueRemember() {
-        if (this.storage === null || this.destroyed) return;
+        if (this.storage === null || this.destroyed || this.keepUnsupportedMap) return;
         this.rememberGeneration += 1;
         const generation = this.rememberGeneration;
         if (this.rememberTimer !== null) {

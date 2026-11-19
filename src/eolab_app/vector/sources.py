@@ -5,13 +5,14 @@ up by upload ID and checked against the owning browser.
 """
 
 from collections import OrderedDict
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from threading import Lock
 from pathlib import Path
 import re
 from secrets import token_bytes
 from eolab_app.vector.filters import VectorFilter
+from eolab_app.catalog_selection import ArtifactVectorSelection, DrawingReference, DrawingSelection, UploadedSelection, referenced_layers
 from eolab_app.calculated_fields import CalculatedField
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -357,6 +358,20 @@ class MountedVectorResolver:
                      if extension in paths)
 
 
+@dataclass(frozen=True)
+class PrivateVectorInputs:
+    """All private originals required to serve a vector map view or cached tile."""
+
+    uploads: frozenset[UUID]
+    artifacts: frozenset[tuple[str, str]]
+    drawings: frozenset[DrawingReference]
+
+    @property
+    def private(self) -> bool:
+        """Return whether serving this layer requires a browser ownership check."""
+        return bool(self.uploads or self.artifacts or self.drawings)
+
+
 class PublishedVectorRegistry:
     """Authorize exact immutable vector sources for the public WMS proxy."""
 
@@ -364,59 +379,39 @@ class PublishedVectorRegistry:
         """Create an empty process-local vector authorization registry."""
         self._filters: OrderedDict[
             str,
-            tuple[str, ResolvedVectorSource, VectorFilter, tuple[CalculatedField, ...]],
+            tuple[str, ResolvedVectorSource, VectorFilter, tuple[CalculatedField, ...], str | None],
         ] = OrderedDict()
         self._filter_lock = Lock()
         self._sources: dict[str, PublishedVectorAuthorization] = {}
 
-    def get_upload_id(self, layer_name: str) -> UUID | None:
-        """Return the upload behind a published layer or one of its filtered views.
-
-        Base upload names carry their UUID so ownership can still be checked
-        after an application restart. Filter aliases refer to their original
-        layer in this registry. Catalog and raster names return None.
+    def private_inputs(self, layer_name: str) -> PrivateVectorInputs:
+        """Find the private files and drawings behind the target and all its spatial conditions.
 
         Args:
-            layer_name: Workspace-qualified layer name, or a bare resource name.
+            layer_name: Requested original layer or opaque filtered view.
 
         Returns:
-            The private upload UUID, or None for another kind of source.
+            The upload IDs, run/file IDs and drawing references to check before serving it.
 
         Raises:
-            PublishedLayerChangedError: If a requested filtered view has expired.
+            PublishedLayerChangedError: If the filtered view expired.
         """
+        references = ()
         if layer_name.startswith("eolab:filtered-"):
             with self._filter_lock:
                 view = self._filters.get(layer_name)
             if view is None:
-                raise PublishedLayerChangedError(
-                    "The vector filter expired; reapply it or reload the map"
-                )
+                raise PublishedLayerChangedError("The vector filter expired; reapply it or reload the map")
             layer_name = view[0]
-        match = re.fullmatch(r"(?:eolab:)?upload_([a-f0-9]{32})", layer_name)
-        return UUID(hex=match[1]) if match else None
-
-    def get_artifact_reference(self, layer_name: str) -> tuple[str, str] | None:
-        """Identify the run file behind an ordinary or filtered result layer.
-
-        Args:
-            layer_name: Qualified WMS layer or unqualified datastore name.
-
-        Returns:
-            Opaque run/file IDs, or None for another vector source.
-
-        Raises:
-            PublishedLayerChangedError: If a filtered display identity expired.
-        """
-        if layer_name.startswith("eolab:filtered-"):
-            with self._filter_lock:
-                view = self._filters.get(layer_name)
-            if view is None:
-                raise PublishedLayerChangedError(
-                    "The vector filter expired; reapply it or reload the map"
-                )
-            layer_name = view[0]
-        return parse_artifact_vector_name(layer_name)
+            references = referenced_layers(view[2])
+        uploads = {source.uploadId for source in references if isinstance(source, UploadedSelection)}
+        artifacts = {(source.jobId, source.artifactId) for source in references if isinstance(source, ArtifactVectorSelection)}
+        drawings = {source.polygonArea for source in references if isinstance(source, DrawingSelection) and source.polygonArea}
+        if match := re.fullmatch(r"(?:eolab:)?upload_([a-f0-9]{32})", layer_name):
+            uploads.add(UUID(hex=match[1]))
+        if artifact := parse_artifact_vector_name(layer_name):
+            artifacts.add(artifact)
+        return PrivateVectorInputs(frozenset(uploads), frozenset(artifacts), frozenset(drawings))
 
     def revoke(self, layer_name: str) -> None:
         """Withdraw a publication and its filtered aliases after source expiry.
@@ -501,6 +496,7 @@ class PublishedVectorRegistry:
         layer_name: str,
         candidate: VectorFilter,
         calculated_fields: tuple[CalculatedField, ...] = (),
+        spatial_ranges: str | None = None,
     ) -> str:
         """Retain a bounded immutable per-map view of a current publication.
 
@@ -508,6 +504,7 @@ class PublishedVectorRegistry:
             layer_name: Original authorized vector publication identity.
             candidate: Catalog-validated filter state.
             calculated_fields: Source-validated view definitions needed by the predicate.
+            spatial_ranges: Original feature ID ranges selected by the complete predicate.
 
         Returns:
             Opaque filtered identity, or the original identity when inactive.
@@ -517,6 +514,8 @@ class PublishedVectorRegistry:
             PublishedLayerNotAuthorizedError: If the source is not published.
         """
         authorization = self.require_current(layer_name)
+        if candidate.intersections and spatial_ranges is None:
+            raise VectorConflictError("Choose the polygon layer again to apply this filter.")
         if not candidate.active and not calculated_fields:
             return layer_name
         identity = (
@@ -530,6 +529,7 @@ class PublishedVectorRegistry:
                 authorization.source,
                 candidate,
                 calculated_fields,
+                spatial_ranges,
             )
             self._filters.move_to_end(alias)
             while len(self._filters) > 256:
@@ -560,7 +560,7 @@ class PublishedVectorRegistry:
                 if view is None:
                     raise PublishedLayerChangedError("The vector filter expired; reapply it or reload the map")
                 self._filters.move_to_end(layer_name)
-            base_name, source, candidate, calculated_fields = view
+            base_name, source, candidate, calculated_fields, spatial_ranges = view
             authorization = self.require_current(base_name)
             if authorization.source != source:
                 raise PublishedLayerChangedError("The filtered layer binding changed; reapply the filter")
@@ -569,6 +569,7 @@ class PublishedVectorRegistry:
                 upstream_layer_name=base_name,
                 filter=candidate if candidate.active else None,
                 calculated_fields=calculated_fields,
+                spatial_ranges=spatial_ranges,
             )
         authorization = self._sources.get(layer_name)
         if authorization is None:

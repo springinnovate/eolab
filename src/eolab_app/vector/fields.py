@@ -175,6 +175,8 @@ class OgrVectorFieldReader:
         Returns:
             Exact matched/total counts only when the bounded read is complete.
         """
+        if candidate.intersections:
+            raise VectorConflictError("Use the layer intersection filter to count these features.")
         total = matched = 0
         deadline = monotonic() + 20
 
@@ -194,7 +196,7 @@ class OgrVectorFieldReader:
                 cancel_event.set()
 
         complete = self._visit_properties(
-            source, tuple(dict.fromkeys(rule.field for rule in candidate.rules)),
+            source, candidate.fields,
             feature_limit, cancel_event, visit,
         )
         return VectorFilterCount(matched=matched, total=total, complete=True) if complete else VectorFilterCount()

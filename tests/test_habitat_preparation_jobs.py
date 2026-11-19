@@ -210,7 +210,7 @@ def test_admin_history_and_commands_cannot_access_other_job_scopes(
         HABITAT_PREPARATION_OWNER,
         uuid4().hex,
         PreparedJobPlan(
-            {"operation": "raster.clip.v1"}, {}, 0, operation="raster.clip.v1"
+            {"operation": "raster.clip.v1"}, {}, operation="raster.clip.v1"
         ),
         "unrelated-request",
     )

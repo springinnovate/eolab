@@ -7,7 +7,7 @@ import math
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import PurePath
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
@@ -38,6 +38,7 @@ from eolab_app.processing.aggregate_models import (
 from eolab_app.polygon_areas import (
     PolygonAreaReference,
     PolygonSummaryInput,
+    SummaryPolygon,
     read_polygon_area_input,
 )
 from eolab_app.processing.ports import (
@@ -97,6 +98,9 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
     UploadedSelection,
     VectorSelection,
+    DrawingReference,
+    DrawingSelection,
+    referenced_layers,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.upload_storage import UploadStorage, UploadRecord, UploadError
@@ -106,6 +110,38 @@ HABITAT_PREPARATION_OPERATIONS = (
     HABITAT_BULK_PREPARATION_OPERATION,
 )
 """Individual and bulk jobs visible through Habitat administration."""
+
+RASTER_JOB_OPERATIONS = ("raster.clip.v1", "raster.aggregate.v1")
+"""Operations shown in the browser's recent raster job list."""
+
+PUBLIC_JOB_OPERATIONS = (
+    *RASTER_JOB_OPERATIONS,
+    MODEL_OPERATION,
+    *HABITAT_PREPARATION_OPERATIONS,
+)
+"""Stored job operations with public status and result contracts."""
+
+
+def get_stored_job_operation(row: dict[str, Any]) -> str:
+    """Return the stored operation that identifies an owned job's public contract.
+
+    Args:
+        row: Job record returned by the ownership check, even after input cleanup.
+
+    Returns:
+        The versioned operation used to select status fields and result links.
+
+    Raises:
+        ProcessingError: If the stored operation is missing or unsupported.
+    """
+    operation = row.get("operation")
+    if operation not in PUBLIC_JOB_OPERATIONS:
+        raise ProcessingError(
+            "unsupported_job_operation",
+            "This job has a missing or unsupported processing operation.",
+            409,
+        )
+    return operation
 
 
 def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
@@ -180,14 +216,9 @@ def require_operation(row: dict[str, Any], operation: str | tuple[str, ...]) -> 
         operation: One supported operation or the endpoint's allowed operations.
 
     Raises:
-        ProcessingError: When the supplied job belongs to a different operation.
+        ProcessingError: If the stored operation is unsupported or does not match.
     """
-
-    actual = (
-        row.get("operation")
-        or (row.get("spec") or {}).get("operation")
-        or "raster.clip.v1"
-    )
+    actual = get_stored_job_operation(row)
     if actual not in ((operation,) if isinstance(operation, str) else operation):
         raise ProcessingError(
             "operation_mismatch",
@@ -204,10 +235,14 @@ def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Public lifecycle, grid, source, and result links without storage metadata.
+
+    Raises:
+        ProcessingError: If the stored operation is missing or unsupported.
     """
-    if row.get("operation") == MODEL_OPERATION:
+    operation = get_stored_job_operation(row)
+    if operation == MODEL_OPERATION:
         return serialize_model_job(row)
-    if row.get("operation") in HABITAT_PREPARATION_OPERATIONS:
+    if operation in HABITAT_PREPARATION_OPERATIONS:
         return serialize_habitat_input_preparation(row)
     identifier = row["id"]
     spec = row.get("spec") or {}
@@ -228,7 +263,6 @@ def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
     if status == "ready" and row["expires_at"] <= datetime.now(timezone.utc):
         status = "expired"
     ready = status == "ready"
-    operation = row.get("operation") or spec.get("operation") or "raster.clip.v1"
     calculation = operation == "raster.aggregate.v1"
     return {
         "jobId": identifier,
@@ -296,6 +330,7 @@ class ProcessingService:
         upload_storage: UploadStorage | None = None,
         areas: CatalogSelectionReader | None = None,
         operation_submission_dependencies: Mapping[str, object] | None = None,
+        read_filter_drawing: Callable[[str, DrawingReference], Awaitable[tuple[SummaryPolygon, ...]]] | None = None,
     ) -> None:
         """Configure job storage, source access and the installed model library.
 
@@ -313,6 +348,7 @@ class ProcessingService:
             uploads: Original GeoPackages and retained links for accepted jobs.
             upload_storage: Shared upload authority retaining raster originals alongside vectors.
             areas: Existing reader authorizing Catalog and uploaded vector selections.
+            read_filter_drawing: Capture the selected drawing geometry when accepting a spatial filter.
             operation_submission_dependencies: Server-only dependencies keyed by
                 installed operation ID. Only that operation's before_queue callback
                 interprets its value; these bindings are never persisted or exposed
@@ -336,6 +372,7 @@ class ProcessingService:
         self.uploads = uploads
         self.upload_storage = upload_storage
         self.areas = areas
+        self.read_filter_drawing = read_filter_drawing
         self.operation_submission_dependencies = dict(
             operation_submission_dependencies or {}
         )
@@ -944,8 +981,9 @@ class ProcessingService:
         if not any(
             isinstance(source, UploadedRasterReference) for source in raster_sources
         ) and not any(
-            isinstance(selection, UploadedSelection)
+            isinstance(source, UploadedSelection)
             for selection in selections.values()
+            for source in (selection, *referenced_layers(selection.filter))
         ):
             prepared = await self._capture_vector_result_inputs(
                 owner, prepared, selections
@@ -987,7 +1025,17 @@ class ProcessingService:
         """
         files = list(prepared.input_files)
         captured = {(file.run_id, file.artifact_id) for file in files}
-        for selection in selections.values():
+        drawings = {}
+        sources = [source for selection in selections.values() for source in (selection, *referenced_layers(selection.filter))]
+        for selection in sources:
+            if isinstance(selection, DrawingSelection) and selection.polygonArea:
+                drawing = selection.polygonArea
+                key = drawing.model_dump_json()
+                if key not in drawings:
+                    if self.read_filter_drawing is None:
+                        raise ProcessingError("drawing_unavailable", "The selected drawing is unavailable.", 409)
+                    polygons = await self.read_filter_drawing(owner, drawing)
+                    drawings[key] = [polygon.model_dump(mode="json") for polygon in polygons]
             if not isinstance(selection, ArtifactVectorSelection):
                 continue
             identity = (selection.jobId, selection.artifactId)
@@ -1008,6 +1056,8 @@ class ProcessingService:
                 )
             files.append(file)
             captured.add(identity)
+        if drawings:
+            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings}, work_key=None)
         return (
             replace(prepared, input_files=tuple(files), work_key=None)
             if len(files) != len(prepared.input_files)
@@ -1074,9 +1124,10 @@ class ProcessingService:
                     except ProcessingError as error:
                         prepared = error
                 uploaded = [
-                    selection
+                    source
                     for selection in inputs.values()
-                    if isinstance(selection, UploadedSelection)
+                    for source in (selection, *referenced_layers(selection.filter))
+                    if isinstance(source, UploadedSelection)
                 ]
                 raster_uploads = [
                     source
@@ -1112,9 +1163,8 @@ class ProcessingService:
                                     self.upload_storage.retain_source, path
                                 )
                         for selection in uploaded:
-                            resolved = await self.areas.resolve_for_sampling(
-                                selection, upload_owner
-                            )
+                            resolve = self.areas.resolve_original_selection if selection.filter.intersections else self.areas.resolve_for_sampling
+                            resolved = await resolve(selection, upload_owner)
                             upload_id = str(selection.uploadId)
                             if upload_id not in retained:
                                 retained[upload_id] = await asyncio.to_thread(
@@ -1457,6 +1507,15 @@ class ProcessingService:
             prepared = await self.capture_input_file(
                 owner, operation.source(request), prepared
             )
+            row = await self._submit_job(
+                owner,
+                request.requestId,
+                prepared,
+                request_hash,
+                operation.vector_selections(request),
+                upload_owner,
+                (operation.source(request),),
+            )
         except ProcessingError:
             existing = await asyncio.to_thread(
                 self.jobs.find_request, owner, request.requestId
@@ -1471,15 +1530,6 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
-        row = await self._submit_job(
-            owner,
-            request.requestId,
-            prepared,
-            request_hash,
-            operation.vector_selections(request),
-            upload_owner,
-            (operation.source(request),),
-        )
         require_operation(row, operation.id)
         return serialize_processing_job(row)
 
@@ -1638,9 +1688,10 @@ class ProcessingService:
             for sources in raster_sources
             for source in sources
         ) or any(
-            isinstance(selection, (UploadedSelection, ArtifactVectorSelection))
+            isinstance(source, (UploadedSelection, ArtifactVectorSelection, DrawingSelection))
             for inputs in selections
             for selection in inputs.values()
+            for source in (selection, *referenced_layers(selection.filter))
         ):
             results = await self._submit_jobs_with_uploaded_inputs(
                 owner, submissions, selections, upload_owner, raster_sources
@@ -1741,7 +1792,7 @@ class ProcessingService:
             At most 50 public job summaries, newest first.
         """
         rows = await asyncio.to_thread(
-            self.jobs.list_owned, owner, ("raster.clip.v1", "raster.aggregate.v1")
+            self.jobs.list_owned, owner, RASTER_JOB_OPERATIONS
         )
         return [serialize_processing_job(row) for row in rows]
 
@@ -1756,10 +1807,14 @@ class ProcessingService:
 
         Returns:
             Public jobs and unavailable IDs, each in request order with duplicates
-            removed. Foreign and nonexistent IDs are indistinguishable.
+            removed. Foreign, nonexistent and unsupported jobs are unavailable.
         """
         rows = await asyncio.to_thread(self.jobs.read_owned_jobs, owner, identifiers)
-        by_id = {row["id"]: row for row in rows}
+        by_id = {
+            row["id"]: row
+            for row in rows
+            if row.get("operation") in PUBLIC_JOB_OPERATIONS
+        }
         requested = list(dict.fromkeys(identifiers))
         return {
             "jobs": [
@@ -1871,12 +1926,13 @@ class ProcessingService:
             also carries small replacement bytes using this caller's formula labels.
 
         Raises:
-            ProcessingError: If unavailable, expired, or transfer capacity is full.
+            ProcessingError: If the job is unavailable, unsupported or expired, or transfer capacity is full.
         """
         row, lease = await asyncio.to_thread(
             self.jobs.acquire_transfer, identifier, owner
         )
         try:
+            operation = get_stored_job_operation(row)
             artifact = row["artifact"]
             path = await asyncio.to_thread(
                 self.artifacts.result_path,
@@ -1898,7 +1954,7 @@ class ProcessingService:
                 )
                 media_type = artifact["media_type"]
             content = None
-            if row.get("presentation") and row["operation"] != MODEL_OPERATION:
+            if row.get("presentation") and operation != MODEL_OPERATION:
                 rows = present_calculation_rows(artifact["rows"], row["presentation"])
                 content = statistics_csv(rows)
                 if provenance:
@@ -1916,7 +1972,7 @@ class ProcessingService:
                     content = json.dumps(document, allow_nan=False).encode("utf-8")
                 size = len(content)
                 sha256 = hashlib.sha256(content).hexdigest()
-            if row["operation"] == MODEL_OPERATION:
+            if operation == MODEL_OPERATION:
                 output_name = (
                     "provenance" if provenance else row["summary"]["output"]["name"]
                 )

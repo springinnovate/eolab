@@ -52,6 +52,7 @@ class PublishedVectorAuthorization:
     filter: VectorFilter | None = None
     inspection_layer_name: str | None = None
     calculated_fields: tuple[CalculatedField, ...] = ()
+    spatial_ranges: str | None = None
 
     def sign_style_name(self, style_name: str) -> str:
         """Sign a validated content identity for this immutable vector source.
@@ -139,7 +140,7 @@ class PublishedVectorAuthorization:
         upstream_layer = (
             self.inspection_layer_name
             if self.inspection_layer_name is not None
-            and (operation == "getfeatureinfo" or "featureid" in normalized)
+            and (self.spatial_ranges is not None or operation == "getfeatureinfo" or "featureid" in normalized)
             else self.upstream_layer_name
         )
         style_parameter = "style" if operation == "getlegendgraphic" else "styles"
@@ -210,7 +211,7 @@ class PublishedVectorAuthorization:
                 )
                 for key, value in query
             ]
-        predicate = filter_ecql(self.filter, self.calculated_fields)
+        predicate = filter_ecql(self.filter, self.calculated_fields, self.spatial_ranges)
         feature_id = normalized.get("featureid")
         if feature_id is not None:
             # The public boundary already restricts this to one safe feature ID.
@@ -289,13 +290,13 @@ class PublishedVectorAuthorization:
         document = build_vector_sld(
             style_name,
             style,
-            layer_name=self.upstream_layer_name or layer_name,
+            layer_name=(self.inspection_layer_name if self.spatial_ranges is not None else None) or self.upstream_layer_name or layer_name,
             opacity_multiplier=opacity,
             geometry_name=geometry_name,
             calculated_fields=calculated_fields,
         )
         return (
-            filter_vector_sld(document, self.filter, self.calculated_fields)
+            filter_vector_sld(document, self.filter, self.calculated_fields, self.spatial_ranges)
             if self.filter is not None
             else document
         )
