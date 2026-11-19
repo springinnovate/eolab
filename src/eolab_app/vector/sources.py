@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 from secrets import token_bytes
 from eolab_app.vector.filters import VectorFilter
-from eolab_app.feature_predicate import ArtifactVectorSelection, DrawingSelection, PolygonAreaReference, UploadedSelection, referenced_layers
+from eolab_app.feature_predicate import ArtifactVectorSelection, DrawingReference, DrawingSelection, UploadedSelection, referenced_layers
 from eolab_app.calculated_fields import CalculatedField
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -364,7 +364,7 @@ class PrivateVectorInputs:
 
     uploads: frozenset[UUID]
     artifacts: frozenset[tuple[str, str]]
-    drawings: frozenset[PolygonAreaReference]
+    drawings: frozenset[DrawingReference]
 
     @property
     def private(self) -> bool:

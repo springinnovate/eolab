@@ -20,6 +20,8 @@ from rasterio.transform import from_origin
 
 from eolab_app.catalog.geopackage import build_stac_items
 from eolab_app.catalog_selection import VectorSelection
+from eolab_app.feature_predicate import SavedDrawingReference
+from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest, UnpreparedClip
@@ -508,14 +510,14 @@ def test_second_vector_input_rejection_releases_unused_retention(
 
 
 @pytest.mark.parametrize(
-    ("operation", "private_boundary"),
-    [("clip", False), ("summary", False), ("model-clip", False), ("model-summary", False), ("clip", True)],
+    ("operation", "boundary"),
+    [("clip", None), ("summary", None), ("model-clip", None), ("model-summary", None), ("clip", "upload"), ("clip", "drawing")],
 )
 def test_accepted_upload_survives_deletion_and_worker_restart(
     upload_boundary: UploadBoundary,
     store: PostgresJobStore,
     operation: str,
-    private_boundary: bool,
+    boundary: str | None,
 ) -> None:
     """Retain exact filtered polygons for accepted work without granting new access.
 
@@ -523,14 +525,29 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
         upload_boundary: Actual upload, HTTP and native Processing components.
         store: Disposable durable job database.
         operation: Public submission contract exercised with the same polygons.
-        private_boundary: Use the filtered upload as a boundary on a public catalog target.
+        boundary: Apply a filtered private upload or a specific saved drawing revision.
     """
     owner, worker, service, uploads, selection = upload_boundary
     target = selection
-    if private_boundary:
+    if boundary == "upload":
         item = owner.app.state.vector_item
         target = {"collectionId": item["collection"], "itemId": item["id"], "assetKey": "data", "layerName": "areas",
                   "filter": {"rules": [{"operator": "intersects", "layerId": str(uuid4()), "source": selection}]}}
+    elif boundary == "drawing":
+        reference = SavedDrawingReference(drawingLayerId=uuid4(), revision=1, featureIds=["boundary"])
+        revision = 1
+
+        async def read_drawing(owner_hash: str, requested: SavedDrawingReference) -> tuple[SummaryPolygon, ...]:
+            """Supply the selected boundary only while its requested revision is current."""
+            assert owner_hash and requested == reference
+            if requested.revision != revision:
+                raise ProcessingError("drawing_changed", "The drawing changed.", 409)
+            return (SummaryPolygon(coordinates=(((0, -1), (1, -1), (1, 1), (0, 1), (0, -1)),)),)
+
+        service.read_filter_drawing = read_drawing
+        rule = {"operator": "intersects", "layerId": str(uuid4()), "source": {
+            "kind": "drawing", "polygonArea": reference.model_dump(mode="json")}}
+        target = {**selection, "filter": {**selection["filter"], "rules": [*selection["filter"]["rules"], rule]}}
     endpoint, body = processing_request(owner, target, operation)
     with TestClient(owner.app, base_url="https://testserver") as other:
         denied = other.post(endpoint, json=body, headers=HEADERS)
@@ -538,6 +555,10 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
     response = owner.post(endpoint, json=body, headers=HEADERS)
     assert response.status_code == 202, response.text
     job = response.json()
+    if boundary == "drawing":
+        revision += 1
+        stale = owner.post(endpoint, json={**body, "requestId": uuid4().hex}, headers=HEADERS)
+        assert stale.status_code == 409, stale.text
     (token,) = store.active_input_uploads()
     retained = uploads.get_retained_source(token)
     assert retained.is_file()

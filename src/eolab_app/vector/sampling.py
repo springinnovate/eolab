@@ -15,8 +15,8 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
-from eolab_app.feature_predicate import DrawingSelection, PolygonAreaReference, VectorSourceOwners
-from eolab_app.polygon_areas import PolygonSummaryInput, SummaryPolygon
+from eolab_app.feature_predicate import DrawingReference, DrawingSelection, VectorSourceOwners
+from eolab_app.polygon_areas import SummaryPolygon
 
 from eolab_app.catalog_selection import (
     CatalogSelection,
@@ -163,7 +163,7 @@ class VectorSamplingService:
         parcel_executor: VectorParcelExecutor | None = None,
         uploads: VectorUploadStore | None = None,
         artifact_files: Callable[[], LeasedSourceFiles] | None = None,
-        read_drawing: Callable[[str, PolygonAreaReference], Awaitable[PolygonSummaryInput]] | None = None,
+        read_drawing: Callable[[str, DrawingReference], Awaitable[tuple[SummaryPolygon, ...]]] | None = None,
         comparison_executor: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         """Connect vector source resolution with feature-count, extent and outline jobs.
@@ -184,7 +184,7 @@ class VectorSamplingService:
             uploads: Original browser-owned GeoPackages and their admission metadata.
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
-            read_drawing: Load committed drawing polygons under their Processing session.
+            read_drawing: Read a saved drawing revision or a device-only input owned by this browser.
             comparison_executor: Submit an interactive intersection to the ordinary Jobs queue.
         """
         self.catalog = catalog
@@ -361,7 +361,7 @@ class VectorSamplingService:
                 owner = owners.processing if isinstance(owners, VectorSourceOwners) else None
                 if self._read_drawing is None or owner is None:
                     raise SelectionUnavailableError("This drawing is unavailable to this browser.")
-                yield (await self._read_drawing(owner, selection.polygonArea)).polygons
+                yield await self._read_drawing(owner, selection.polygonArea)
 
     async def compare_layers(
         self, target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,

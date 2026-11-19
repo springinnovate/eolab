@@ -21,12 +21,24 @@ class PolygonAreaReference(BaseModel):
     sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 
+class SavedDrawingReference(BaseModel):
+    """Selected editor feature IDs at an acknowledged revision of a linked drawing."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    drawingLayerId: UUID
+    revision: int = Field(strict=True, ge=1)
+    featureIds: tuple[Annotated[str, Field(pattern=r"^[a-zA-Z0-9-]{1,100}$")], ...] = Field(max_length=500)
+
+
+DrawingReference = PolygonAreaReference | SavedDrawingReference
+
+
 class DrawingSelection(BaseModel):
-    """The selected device-drawn polygons and any source filter needed to read them."""
+    """Committed drawing polygons and any filtered sources that contributed to the selection."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["drawing"]
-    polygonArea: PolygonAreaReference | None
+    polygonArea: DrawingReference | None
     filter: "VectorFilter | None" = Field(default=None, exclude_if=lambda value: value is None)
 
 

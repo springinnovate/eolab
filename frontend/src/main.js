@@ -1351,7 +1351,7 @@ async function initializeCatalog(
         });
     }
     const spatialViews = new SpatialFilterViews({layers: spatialPolygonLayers, drawingGeometry: annotationSummaryPolygons,
-        upload: polygons => processingApi.uploadPolygonArea(polygons), discard: id => processingApi.discardPolygonArea(id)});
+        refresh: () => refreshSpatialFilters(), upload: polygons => processingApi.uploadPolygonArea(polygons), discard: id => processingApi.discardPolygonArea(id)});
     const drawingFilterAttempts = new Map();
     /** Apply field and spatial conditions to committed drawings without disturbing the editing draft.
      * @param {string} key Drawing view to filter.

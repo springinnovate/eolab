@@ -118,6 +118,24 @@ export function polygonAreaReferencesEqual(left, right) {
     return !!left && !!right && left.id === right.id && left.sha256 === right.sha256;
 }
 
+/** Copy the committed saved drawing selection or the browser's temporary polygon input.
+ * @param {Object|null} reference Opaque source and revision or upload ID and checksum.
+ * @return {Readonly<Object>|null} Reference to the exact selected polygons.
+ * @throws {TypeError} If the drawing identity or selected IDs are invalid.
+ */
+function drawingReference(reference) {
+    if (reference === null) return null;
+    if (!Object.hasOwn(reference, "drawingLayerId")) return validatePolygonAreaReference(reference);
+    const {drawingLayerId, revision, featureIds} = reference;
+    if (Object.keys(reference).sort().join() !== "drawingLayerId,featureIds,revision" ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(drawingLayerId) ||
+        !Number.isSafeInteger(revision) || revision < 1 || !Array.isArray(featureIds) || featureIds.length > 500 ||
+        !featureIds.every(id => typeof id === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(id))) {
+        throw new TypeError("Invalid saved drawing selection.");
+    }
+    return Object.freeze({drawingLayerId, revision, featureIds: Object.freeze([...featureIds])});
+}
+
 /** Validate and copy the source identity and filter for selected vector features.
  * @param {Object} value Public catalog, upload or owned run-result identity and typed predicate.
  * @return {Readonly<Object>} Deeply immutable source identity, layer and filter.
@@ -160,7 +178,7 @@ function validateSelectionFilter(input) {
                 !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(rule.layerId)) throw new TypeError("Invalid polygon layer condition.");
             let source;
             if (rule.source?.kind === "drawing" && ["kind,polygonArea", "filter,kind,polygonArea"].includes(Object.keys(rule.source).sort().join())) {
-                source = Object.freeze({kind: "drawing", polygonArea: rule.source.polygonArea === null ? null : validatePolygonAreaReference(rule.source.polygonArea),
+                source = Object.freeze({kind: "drawing", polygonArea: drawingReference(rule.source.polygonArea),
                     ...(Object.hasOwn(rule.source, "filter") ? {filter: validateSelectionFilter(rule.source.filter)} : {})});
             } else source = validateVectorSelection(rule.source);
             return Object.freeze({operator: "intersects", layerId: rule.layerId, source});

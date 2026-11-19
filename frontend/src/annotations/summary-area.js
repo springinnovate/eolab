@@ -58,11 +58,14 @@ export function annotationSummaryPolygons(polygons, filter) {
 /** Describe a committed layer without exposing its editing draft or renderer.
  * @param {string} key Map-layer identity.
  * @param {Object} layer Committed annotation layer.
+ * @param {Object|null} [drawingSource] Linked source when it covers every displayed polygon.
  * @return {Object} Independent summary target with geometry-sensitive identity.
  * @throws {TypeError} If its stored filter is invalid.
  */
-export function annotationSummaryTarget(key, layer) {
+export function annotationSummaryTarget(key, layer, drawingSource = layer.drawingSource) {
     const polygons = structuredClone(layer.polygons);
-    return { key, label: layer.name, item: null, polygons, filter: annotationFilterRules(layer.filter),
+    return { key, label: layer.name, item: null, polygons,
+        ...(drawingSource && {drawingSource: {id: drawingSource.id, revision: drawingSource.revision, pending: drawingSource.pending}, selectedIds: filter => filterAnnotationPolygons(polygons, filter).map(polygon => polygon.id)}),
+        filter: annotationFilterRules(layer.filter),
         selectionIdentity: filter => JSON.stringify(filterAnnotationPolygons(polygons, filter).map(polygon => polygon.vertices)) };
 }

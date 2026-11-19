@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {VectorFilterControls} from "../../src/vector/filter-controls.js";
 import {SpatialFilterViews} from "../../src/vector/spatial-filter.js";
+import {annotationSummaryTarget, annotationSummaryPolygons} from "../../src/annotations/summary-area.js";
 import {FakeRasterControlDocument} from "../../test-support/raster/fake-controls-document.js";
 
 const firstId = "00000000-0000-4000-8000-000000000001";
@@ -9,6 +10,29 @@ const copyId = "00000000-0000-4000-8000-000000000002";
 const all = {enabled: true, match: "all", rules: []};
 const condition = layerId => ({operator: "intersects", layerId});
 const filtered = value => ({...all, rules: [{field: "zone", operator: "eq", value}]});
+
+test("a filtered saved drawing keeps its revision across days and follows the next save", async t => {
+    t.mock.timers.enable({apis: ["Date"], now: new Date("2026-01-01")});
+    const drawing = {name: "Boundary", drawingSource: {id: firstId, revision: 4, pending: false},
+        polygons: ["west", "east"].map((name, i) => ({id: name, name, note: "", vertices: [[i,0],[i,1],[i+1,1]]})),
+        filter: {...all, rules: [{field: "name", operator: "eq", value: "east"}]}};
+    let uploads = 0;
+    const views = new SpatialFilterViews({layers: () => [{...annotationSummaryTarget("drawing", drawing), id: copyId}],
+        drawingGeometry: annotationSummaryPolygons, upload: async () => ({polygonArea: {id: String(++uploads)}}), discard: async () => {}});
+    const filter = {...all, rules: [condition(copyId)]};
+    const targets = [{key: "parcels", filter, update: t.mock.fn()}];
+    views.follow(targets);
+    const source = async () => (await views.bind("parcels", filter)).rules[0].source;
+    const first = await source();
+    t.mock.timers.tick(25 * 60 * 60 * 1000);
+    assert.deepEqual(await source(), first);
+    assert.equal(uploads, 0);
+    assert.deepEqual(first.polygonArea, {drawingLayerId: firstId, revision: 4, featureIds: ["east"]});
+    drawing.drawingSource.revision++;
+    views.follow(targets);
+    assert.equal(targets[0].update.mock.callCount(), 2);
+    assert.equal((await source()).polygonArea.revision, 5);
+});
 
 test("a hidden duplicate follows its own filter and keeps its identity across renames", async () => {
     const source = {collectionId: "land", itemId: "zones", layerName: "zones", assetKey: "data"};
@@ -37,6 +61,26 @@ test("a hidden duplicate follows its own filter and keeps its identity across re
     assert.equal(disabled.rules[0].source.polygonArea, null);
     original.filter = {...all, rules: [condition(firstId)]};
     await assert.rejects(views.bind("parcels", original.filter), /refer back/);
+});
+
+test("an active device-only boundary renews even when the map has not changed", async t => {
+    t.mock.timers.enable({apis: ["Date", "setTimeout"], now: new Date("2026-01-01")});
+    const layer = {id: copyId, key: "local", polygons: [{id: "local-polygon"}], filter: all};
+    const requested = {...all, rules: [condition(copyId)]};
+    const work = [];
+    let uploads = 0;
+    const targets = [{key: "parcels", filter: requested, update: () => work.push(views.bind("parcels", requested))}];
+    const views = new SpatialFilterViews({layers: () => [layer], drawingGeometry: polygons => polygons,
+        upload: async () => ({polygonArea: {id: String(++uploads)}}), discard: async () => {},
+        refresh: () => views.follow(targets)});
+    views.follow(targets);
+    assert.equal((await work[0]).rules[0].source.polygonArea.id, "1");
+    t.mock.timers.tick(23 * 60 * 60 * 1000);
+    assert.equal(work.length, 2);
+    assert.equal((await work[1]).rules[0].source.polygonArea.id, "2");
+    targets.length = 0;
+    t.mock.timers.tick(23 * 60 * 60 * 1000);
+    assert.equal(uploads, 2);
 });
 
 test("Add condition selects a filtered polygon view and keeps the choice after cancelling a draw", async () => {

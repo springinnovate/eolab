@@ -25,9 +25,10 @@ export class SpatialFilterViews {
      * @param {(polygons:Object[])=>Promise<Object>} options.upload Save an exact committed drawing as a private input.
      * @param {(polygons:Object[],filter:Object)=>Object[]} options.drawingGeometry Select committed drawing polygons in source order.
      * @param {(id:string)=>Promise<void>} options.discard Release an obsolete private drawing input.
+     * @param {()=>void} options.refresh Reapply active filters when a device-only input needs renewal.
      */
-    constructor({layers, upload, drawingGeometry, discard}) {
-        Object.assign(this, {layers, upload, drawingGeometry, discard});
+    constructor({layers, upload, drawingGeometry, discard, refresh}) {
+        Object.assign(this, {layers, upload, drawingGeometry, discard, refresh});
         this.drawings = new Map();
         this.followed = new Map();
     }
@@ -39,6 +40,11 @@ export class SpatialFilterViews {
      * @throws {Error} If the device polygons could not be saved for the comparison.
      */
     async drawing(layer, filter) {
+        if (layer.drawingSource) {
+            const {id, revision, pending} = layer.drawingSource;
+            if (pending) throw new Error("Save the drawing changes before using this layer as a filter.");
+            return {kind: "drawing", polygonArea: {drawingLayerId: id, revision, featureIds: layer.selectedIds(filter)}};
+        }
         const polygons = this.drawingGeometry(layer.polygons, filter);
         if (!polygons.length) return {kind: "drawing", polygonArea: null};
         const key = JSON.stringify([layer.key, filter === EMPTY_VECTOR_FILTER]);
@@ -50,6 +56,15 @@ export class SpatialFilterViews {
             this.drawings.set(key, entry);
             try { await entry.pending; }
             catch (error) { if (this.drawings.get(key) === entry) this.drawings.delete(key); throw error; }
+            if (this.drawings.get(key) === entry) {
+                clearTimeout(previous?.timer);
+                entry.timer = setTimeout(() => {
+                    if (this.drawings.get(key) !== entry) return;
+                    this.drawings.delete(key);
+                    this.followed.clear();
+                    this.refresh();
+                }, Math.max(0, entry.renewAt - Date.now()));
+            }
             if (previous) void previous.pending.then(area => this.discard(area.polygonArea.id)).catch(() => {});
         }
         return {kind: "drawing", polygonArea: (await entry.pending).polygonArea};
@@ -95,12 +110,13 @@ export class SpatialFilterViews {
             const layer = layers.find(view => view.id === rule.layerId);
             if (!layer || path.has(layer.key)) return [rule.layerId, null];
             const drawingMatches = layer.filter.matchingIds;
-            return [rule.layerId, layer.selection, layer.polygons, drawingMatches, layer.filter.enabled, layer.filter.match,
+            return [rule.layerId, layer.selection, layer.drawingSource ?? layer.polygons, drawingMatches, layer.filter.enabled, layer.filter.match,
                 inputs(layer.filter, new Set(path).add(layer.key))];
         });
         for (const target of active) {
+            const layer = layers.find(view => view.key === target.key);
             const signature = JSON.stringify([viewFilter(target.filter), inputs(target.filter, new Set([target.key])),
-                layers.find(layer => layer.key === target.key)?.polygons]);
+                layer?.drawingSource ?? layer?.polygons]);
             if (this.followed.get(target.key) === signature) continue;
             this.followed.set(target.key, signature);
             const current = () => this.followed.get(target.key) === signature;

@@ -7,7 +7,7 @@ import math
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import PurePath
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
@@ -38,9 +38,10 @@ from eolab_app.processing.aggregate_models import (
 from eolab_app.polygon_areas import (
     PolygonAreaReference,
     PolygonSummaryInput,
+    SummaryPolygon,
     read_polygon_area_input,
 )
-from eolab_app.feature_predicate import DrawingSelection, referenced_layers
+from eolab_app.feature_predicate import DrawingReference, DrawingSelection, referenced_layers
 from eolab_app.processing.ports import (
     JobArtifactStore,
     JobStore,
@@ -297,6 +298,7 @@ class ProcessingService:
         upload_storage: UploadStorage | None = None,
         areas: CatalogSelectionReader | None = None,
         operation_submission_dependencies: Mapping[str, object] | None = None,
+        read_filter_drawing: Callable[[str, DrawingReference], Awaitable[tuple[SummaryPolygon, ...]]] | None = None,
     ) -> None:
         """Configure job storage, source access and the installed model library.
 
@@ -314,6 +316,7 @@ class ProcessingService:
             uploads: Original GeoPackages and retained links for accepted jobs.
             upload_storage: Shared upload authority retaining raster originals alongside vectors.
             areas: Existing reader authorizing Catalog and uploaded vector selections.
+            read_filter_drawing: Capture the selected drawing geometry when accepting a spatial filter.
             operation_submission_dependencies: Server-only dependencies keyed by
                 installed operation ID. Only that operation's before_queue callback
                 interprets its value; these bindings are never persisted or exposed
@@ -337,6 +340,7 @@ class ProcessingService:
         self.uploads = uploads
         self.upload_storage = upload_storage
         self.areas = areas
+        self.read_filter_drawing = read_filter_drawing
         self.operation_submission_dependencies = dict(
             operation_submission_dependencies or {}
         )
@@ -994,9 +998,12 @@ class ProcessingService:
         for selection in sources:
             if isinstance(selection, DrawingSelection) and selection.polygonArea:
                 drawing = selection.polygonArea
-                if drawing.id not in drawings:
-                    polygons = await read_polygon_area_input(self.jobs.get_input, owner, drawing)
-                    drawings[drawing.id] = polygons.model_dump(mode="json")
+                key = drawing.model_dump_json()
+                if key not in drawings:
+                    if self.read_filter_drawing is None:
+                        raise ProcessingError("drawing_unavailable", "The selected drawing is unavailable.", 409)
+                    polygons = await self.read_filter_drawing(owner, drawing)
+                    drawings[key] = [polygon.model_dump(mode="json") for polygon in polygons]
             if not isinstance(selection, ArtifactVectorSelection):
                 continue
             identity = (selection.jobId, selection.artifactId)

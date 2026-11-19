@@ -585,7 +585,8 @@ export class AnnotationController {
      * @return {Object[]} Layer identities, fields and polygon snapshots.
      */
     summaryTargets() {
-        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, this.displayLayer(layer)));
+        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(
+            `local:annotation:${layer.id}`, this.displayLayer(layer), this.shared.has(layer.id) ? null : layer.drawingSource));
     }
 
     /** Return annotation fields and callbacks for the existing filter dialog.

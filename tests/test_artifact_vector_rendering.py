@@ -20,6 +20,7 @@ from eolab_app.vector.geoserver import GeoServerVectorPublisher
 from eolab_app.vector.models import VectorFormat, VectorGeometryKind
 from eolab_app.vector.publication import VectorPublicationService
 from tests.test_raster_source_access import FileAuthority, FileLease, PRIVATE
+from tests.test_drawings import collection
 from tests.test_uploaded_vector_rendering import RecordingRenderer, FILTER
 from tests.test_vector_publication import VectorGeoServerScenario
 from tests.test_vector_uploads import write_layer
@@ -278,7 +279,11 @@ def result_boundary(
                     inputs = (await client.get(path, headers=headers)).json()
                     target = inputs["target"]
                     boundary, = inputs["boundaries"].values()
-                    assert target["readLease"] in authority.leases and boundary["uploadOwner"]
+                    assert target["readLease"] in authority.leases
+                    if "polygons" in boundary:
+                        assert boundary["polygons"] == [collection()["features"][1]["geometry"]]
+                    else:
+                        assert boundary["uploadOwner"]
                     assert (await client.put(path, headers=headers, json={"ids": [1], "total": 2})).status_code == 204
                 authority.jobs_outcome = "comparison"
             else:
@@ -623,15 +628,16 @@ def test_disconnected_result_extent_keeps_lease_until_jobs_stops(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("private_boundary", [False, True])
+@pytest.mark.parametrize("boundary", ["fields", "upload", "saved drawing"])
 def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
-    result_boundary: tuple[Any, ...], private_boundary: bool,
+    result_boundary: tuple[Any, ...], boundary: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Keep ordinary rendered and cached results private until their source expires.
 
     Args:
         result_boundary: Real application services and ownership fixture.
-        private_boundary: Give both browsers the target result, but only its owner the uploaded polygon boundary.
+        boundary: Field-only, browser-owned upload or a selected polygon of a saved drawing.
+        monkeypatch: Supply the current saved drawing and its revision.
     """
     owner, other, authority, _, _, forwarded = result_boundary
     published = owner.post(BASE + "/layers", headers=HEADERS).json()
@@ -639,16 +645,25 @@ def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
         BASE + "/filters", json={"filter": FILTER}, headers=HEADERS
     ).json()
     headers = {**HEADERS, "X-EOLab-Uploads": "1"}
-    if private_boundary:
+    if boundary == "upload":
         upload = owner.post("/api/vector-uploads", params={"name": "Boundary"}, headers=headers, content=authority.path.read_bytes())
         assert upload.status_code == 201, upload.text
         mask = {"uploadId": upload.json()["id"], "layerName": "features", "filter": FILTER}
+    elif boundary == "saved drawing":
+        identifier = uuid4()
+        drawing = application_module.DrawingLayer(id=identifier, revision=1, collection=collection(), canEdit=False,
+                                                  createdAt="2026-01-01T00:00:00Z", updatedAt="2026-01-01T00:00:00Z")
+        monkeypatch.setattr(application_module.DrawingLayerStore, "read_layer", lambda _, key: drawing if key == identifier else None)
+        monkeypatch.setattr(application_module.DrawingLayerStore, "read_revision", lambda _, key: drawing.revision if key == identifier else None)
+        mask = {"kind": "drawing", "polygonArea": {"drawingLayerId": str(identifier), "revision": 1, "featureIds": ["parcel-b"]}}
+    if boundary != "fields":
         rule = {"operator": "intersects", "layerId": str(uuid4()), "source": mask}
         result = owner.post("/api/vector-filters/map", headers=headers, json={"layerName": published["layerName"],
                             "selection": {**PRIVATE, "layerName": "features", "filter": {"rules": [rule]}}})
         assert result.status_code == 200, result.text
         assert result.json()["count"]["matched"] == 1
         filtered = result.json()
+    if boundary == "upload":
         second_token = "d" * 64
         authority.owners.add(hashlib.sha256(second_token.encode()).hexdigest())
         other.cookies.set(COOKIE, second_token)
@@ -726,10 +741,18 @@ def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
     assert owner.get(tile).status_code == 409
     assert owner.get("/geoserver/eolab/wms", params=params).status_code == 409
     assert not authority.leases
-    if private_boundary:
+    if boundary == "upload":
         authority.ready = True
         assert owner.delete(f"/api/vector-uploads/{mask['uploadId']}", headers=headers).status_code == 204
         assert owner.get(tile).status_code == 404
+    elif boundary == "saved drawing":
+        authority.ready = True
+        drawing.revision += 1
+        assert owner.get(tile).status_code == 409
+        stale = owner.post("/api/vector-filters/map", headers=headers, json={"layerName": published["layerName"],
+                           "selection": {**PRIVATE, "layerName": "features", "filter": {"rules": [rule]}}})
+        assert stale.status_code == 409
+
 
 
 def test_result_cleanup_waits_for_active_reads_and_removes_restart_publications(
