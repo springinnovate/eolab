@@ -24,6 +24,7 @@ export class VectorPlotPanel {
         this.pickers = [
             {button: this.featureButton, body: element("features-picker"), done: element("features-done")},
             {button: this.fieldButton, body: element("fields-picker"), done: element("fields-done")},
+            {button: element("statistics-button"), body: element("statistics-picker"), done: element("statistics-done")},
         ];
         this.activePicker = null;
         for (const picker of this.pickers) {

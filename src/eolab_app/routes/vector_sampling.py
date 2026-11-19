@@ -1,4 +1,4 @@
-"""HTTP routes for original-source vector selections, bounds and display outlines."""
+"""HTTP routes for original-source vector selections and layer measurements."""
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from typing import Any
@@ -23,6 +23,10 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
+from eolab_app.vector.field_statistics import (
+    VectorFieldStatistics,
+    VectorLayerStatisticsRequest,
+)
 from eolab_app.vector.lasso import LassoSelectionRequest, LassoSelectionResult
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
@@ -107,6 +111,33 @@ def create_vector_sampling_router(
             return await run_until_http_disconnect(request, read)
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Parcel reading cancelled") from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
+
+    @router.post("/layer-statistics", response_model=tuple[VectorFieldStatistics, ...])
+    async def layer_statistics(
+        payload: VectorLayerStatisticsRequest, request: Request, response: Response
+    ) -> tuple[VectorFieldStatistics, ...]:
+        """Return exact whole-layer benchmarks for the requested numeric fields.
+
+        Args:
+            payload: Original source identity and the fields shown in the plot.
+            request: Incoming request used for source ownership and cancellation.
+            response: Renews private ownership cookies when needed.
+
+        Returns:
+            Mean, minimum, maximum and numeric count per requested field.
+
+        Raises:
+            HTTPException: If the source is unavailable or the client disconnects.
+        """
+        owner = read_source_owner(payload.source, request, response)
+        try:
+            return await run_until_http_disconnect(
+                request, service.layer_statistics(payload, owner)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Reading layer statistics was cancelled.") from error
         except SelectionUnavailableError as error:
             raise HTTPException(409, error.detail) from error
 

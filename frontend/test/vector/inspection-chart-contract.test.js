@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { vectorInspectionObservation } from "../../src/vector/feature-inspector.js";
@@ -27,7 +28,20 @@ function composition() {
   const status = {};
   const zooms = [];
   const selectionDirections = [];
+  const vectorMapLayerAdapter = {
+    describeSource: record => ({
+      selection: {
+        collectionId: "eolab-mounted-vectors", itemId: record.itemId, assetKey: "data", layerName: record.itemId,
+      },
+      numericFields: [{ name: "R1999" }, { name: "R2000" }],
+    }),
+  };
+  const records = ["habitat", "watersheds"].map(itemId => ({
+    itemId, entry: { key: "catalog|" + itemId }, adapter: vectorMapLayerAdapter,
+  }));
   const dependencies = {
+    vectorMapLayerAdapter,
+    mapLayerController: { getRecord: key => records.find(record => record.entry.key === key) },
     VectorTimeSeriesController: function (options) {
       return new VectorTimeSeriesController({...options, documentContext});
     },
@@ -40,6 +54,8 @@ function composition() {
     mapInspection: {
       setVectorTimeSeriesIdentity() {},
       setVectorFeatureProfileIdentity() {},
+      showVectorFeatureProfile() {},
+      showVectorTimeSeries() {},
       hideVectorFeatureProfile() {},
       hideVectorTimeSeries() {},
       setClickResult(kind, result) { status[kind] = result; },
@@ -60,10 +76,11 @@ function composition() {
 /**
  * Construct an observation through the inspector's actual source-data boundary.
  * @param {number} id Source feature identity and contrasting numeric value.
+ * @param {string} [layer="habitat"] Original layer identity.
  * @return {import("../../src/vector/inspection-observation.js").VectorInspectionObservation}
  * Immutable observation suitable for both chart consumers.
  */
-function observation(id) {
+function observation(id, layer = "habitat") {
   return vectorInspectionObservation({
     feature: {
       id: `habitat.${id}`,
@@ -71,7 +88,7 @@ function observation(id) {
       bbox: [20, 10, 20, 10],
       properties: { R1999: id, R2000: id + 1, nested: { ignored: true } },
     },
-    target: { sourceId: "catalog|habitat", label: "Habitat" },
+    target: { sourceId: "catalog|" + layer, label: layer[0].toUpperCase() + layer.slice(1) },
     inspectionPosition: { lng: 21, lat: 11 },
   });
 }
@@ -150,4 +167,82 @@ test("comparison history controls request the adjacent selection through composi
     .children.map(row => row.children[1].children[0].textContent), ["1", "9"]);
   next.dispatchEvent(new Event("click"));
   assert.deepEqual(selectionDirections, ["previous", "next"]);
+});
+
+test("feature plot benchmarks follow the original layer and ignore obsolete results", async t => {
+  const {inspector, profile, series, documentContext} = composition();
+  t.after(() => { profile.destroy(); series.destroy(); });
+  const requests = [];
+  t.mock.method(globalThis, "fetch", (url, options) => new Promise(resolve => {
+    requests.push({url, ...JSON.parse(options.body), signal: options.signal, resolve});
+  }));
+  const control = suffix => documentContext.querySelector("#vector-feature-profile-" + suffix);
+  inspector.onCurrentObservationChange(observation(1));
+  inspector.onFeatureProfileRequested();
+  assert.equal(requests.length, 0);
+  assert.equal(control("statistics").hidden, true);
+
+  control("statistics-button").dispatchEvent(new Event("click"));
+  control("statistics-mean").checked = true;
+  control("statistics-mean").dispatchEvent(new Event("change"));
+  assert.equal(control("statistics-status").textContent, "Reading whole-layer statistics…");
+  assert.deepEqual(requests[0].fields, ["R1999", "R2000"]);
+  assert.deepEqual(requests[0].source, {
+    collectionId: "eolab-mounted-vectors", itemId: "habitat", assetKey: "data", layerName: "habitat", filter: {},
+  });
+
+  inspector.onCurrentObservationChange(observation(9, "watersheds"));
+  assert.equal(requests[0].signal.aborted, true);
+  assert.equal(requests[1].source.itemId, "watersheds");
+  const summary = (field, mean) => ({field, count: 4, mean, minimum: 0, maximum: 80});
+  requests[1].resolve(Response.json([summary("R1999", 40), summary("R2000", 50)]));
+  await nextTurn();
+  const statistics = control("statistics-results");
+  assert.deepEqual(statistics.querySelectorAll("dd").map(cell => cell.textContent), ["40", "50"]);
+  requests[0].resolve(Response.json([summary("R1999", 20), summary("R2000", 25)]));
+  await nextTurn();
+  assert.deepEqual(statistics.querySelectorAll("dd").map(cell => cell.textContent), ["40", "50"]);
+
+  control("statistics-maximum").checked = true;
+  control("statistics-maximum").dispatchEvent(new Event("change"));
+  control("statistics-mean").checked = false;
+  control("statistics-mean").dispatchEvent(new Event("change"));
+  control("statistics-done").dispatchEvent(new Event("click"));
+  assert.equal(documentContext.activeElement, control("statistics-button"));
+  assert.deepEqual(statistics.querySelectorAll("dt").map(cell => cell.textContent), ["Maximum", "Maximum"]);
+  assert.deepEqual(statistics.querySelectorAll("dd").map(cell => cell.textContent), ["80", "80"]);
+  assert.equal(requests.length, 2);
+  assert.equal(control("table-body").children[0].children[2].textContent, "9");
+});
+
+test("comparison displays each layer's chosen benchmarks alongside exact feature values", async t => {
+  const {inspector, profile, series, documentContext} = composition();
+  t.after(() => { profile.destroy(); series.destroy(); });
+  const requests = t.mock.method(globalThis, "fetch", async (url, options) => {
+    const {source, fields} = JSON.parse(options.body);
+    assert.equal(url, "/api/vector-sampling/layer-statistics");
+    assert.deepEqual(fields, ["R1999"]);
+    const minimum = source.itemId === "habitat" ? -12 : 0;
+    return Response.json([{field: "R1999", count: 20, minimum, mean: 50, maximum: 100}]);
+  });
+  inspector.onSampleChange({
+    state: "ready", message: "Ready",
+    observations: [observation(1), observation(3), observation(9, "watersheds")],
+  });
+  inspector.onTimeSeriesRequested();
+  const control = suffix => documentContext.querySelector("#vector-time-series-" + suffix);
+  control("statistics-minimum").checked = true;
+  control("statistics-minimum").dispatchEvent(new Event("change"));
+  await nextTurn();
+  assert.equal(requests.mock.callCount(), 2);
+  const groups = control("statistics-results").children;
+  assert.deepEqual(groups.map(group => [group.children[0].textContent, group.querySelector("dd").textContent]),
+    [["Habitat", "-12"], ["Watersheds", "0"]]);
+  control("values-button").dispatchEvent(new Event("click"));
+  assert.equal(control("statistics").hidden, false);
+  assert.equal(control("values").hidden, false);
+  assert.deepEqual(control("table-body").children.map(row => row.children[1].children[0].textContent), ["1", "3", "9"]);
+  control("statistics-minimum").checked = false;
+  control("statistics-minimum").dispatchEvent(new Event("change"));
+  assert.equal(control("statistics").hidden, true);
 });

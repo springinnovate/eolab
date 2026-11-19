@@ -1,4 +1,4 @@
-"""Authorize vector selections and read feature counts, bounds, outlines or parcels.
+"""Authorize vector sources and read counts, bounds, attributes or outlines.
 
 Source/filter preparation lives in selection_source so readers and installed Jobs
 operations use the same rules without constructing this service.
@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
+from threading import Event
 from typing import TYPE_CHECKING, Any, Protocol
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
@@ -31,6 +32,11 @@ from eolab_app.catalog_selection import (
     VectorSourceOwners,
 )
 from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
+from eolab_app.vector.field_statistics import (
+    VectorFieldStatistics,
+    VectorLayerStatisticsRequest,
+    read_vector_layer_statistics,
+)
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
 )
@@ -60,6 +66,8 @@ from eolab_app.source_files import (
 
 if TYPE_CHECKING:
     from eolab_app.feature_intersection import IntersectionLayer
+
+_LAYER_STATISTICS_TIMEOUT_SECONDS = 20
 
 
 class VectorSelectionExecutor(Protocol):
@@ -153,7 +161,7 @@ class VectorParcelExecutor(Protocol):
 
 
 class VectorSamplingService:
-    """Authorize vector sources for counts, bounds, outlines and parcel identity/rows."""
+    """Authorize original vector layers and coordinate reads of their features."""
 
     def __init__(
         self,
@@ -201,6 +209,51 @@ class VectorSamplingService:
         self._read_drawing = read_drawing
         self.spatial_reads = SpatialReads()
         self._comparison_executor = comparison_executor
+        self._statistics_slots = asyncio.Semaphore(2)
+
+    async def layer_statistics(
+        self,
+        request: VectorLayerStatisticsRequest,
+        source_owner: str | VectorSourceOwners | None,
+    ) -> tuple[VectorFieldStatistics, ...]:
+        """Read whole-layer benchmarks while the original source is authorized.
+
+        Two reads may run at once. The interactive deadline includes waiting
+        for a reader. A stopped read holds its slot and any source lease until
+        its native work exits.
+
+        Args:
+            request: Unfiltered source identity and selected numeric fields.
+            source_owner: Server-derived identity for a private source, if any.
+
+        Returns:
+            Complete original-layer statistics for the requested fields.
+
+        Raises:
+            SelectionUnavailableError: If the original source cannot be resolved.
+            SourceFileError: If the private result is unavailable or its lease is lost.
+            VectorConflictError: If reading fails or exceeds the deadline.
+            asyncio.CancelledError: After a cancelled native read finishes.
+        """
+        stop = Event()
+        try:
+            async with asyncio.timeout(_LAYER_STATISTICS_TIMEOUT_SECONDS):
+                async with (
+                    self._statistics_slots,
+                    self._open_original(request.source, source_owner) as source,
+                ):
+                    task = asyncio.create_task(
+                        asyncio.to_thread(
+                            read_vector_layer_statistics, source, request.fields, stop
+                        )
+                    )
+                    try:
+                        return await asyncio.shield(task)
+                    finally:
+                        stop.set()
+                        await finish_source_task(task)
+        except TimeoutError as error:
+            raise VectorConflictError("Reading the whole layer took too long.") from error
 
     async def validate_parcel_ids(
         self, request: ParcelIdRequest

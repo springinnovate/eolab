@@ -8,6 +8,7 @@ import {
     describeVectorArtifact,
     getVectorFieldValues,
     getVectorFilterExtent,
+    getVectorLayerStatistics,
     publishVector,
     styleVector,
     summarizeVectorCategories,
@@ -18,6 +19,29 @@ import {
 const VECTOR_ITEM = Object.freeze({
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
+});
+
+test("layer benchmarks use the artifact owner and bound each request without truncating fields", async () => {
+    const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32), layerName: "areas"};
+    const fields = Array.from({length: 33}, (_, index) => "Field " + index);
+    const signal = new AbortController().signal;
+    const batches = [];
+    const statistics = await getVectorLayerStatistics(source, fields, signal, async (url, options) => {
+        assert.equal(url, "/api/vector-sampling/layer-statistics");
+        assert.equal(options.method, "POST");
+        assert.equal(options.cache, "no-store");
+        assert.equal(options.credentials, "same-origin");
+        assert.equal(options.signal, signal);
+        assert.equal(options.headers["X-EOLab-Processing"], "1");
+        const body = JSON.parse(options.body);
+        assert.deepEqual(body.source, {...source, filter: {}});
+        batches.push(body.fields.length);
+        return Response.json(body.fields.map(field => ({field, count: 0, mean: null, minimum: null, maximum: null})));
+    });
+    assert.deepEqual(batches, [32, 1]);
+    assert.deepEqual(statistics.map(summary => summary.field), fields);
+    await assert.rejects(getVectorLayerStatistics(source, ["Field 1"], signal, async () =>
+        Response.json([{field: "Field 1", count: 1, mean: null, minimum: 0, maximum: 0}])), /invalid/);
 });
 
 test("formula validation sends original metadata and definitions without source access", async () => {
