@@ -59,6 +59,11 @@ test('map modes coordinate through callbacks and restore panning after lasso and
     assert.deepEqual(h.modes.at(-1),['lasso',false]);
     h.tools.setEditing(false);assert.equal(h.map.dragEnabled,false);
     h.tools.setMode('pan');assert.equal(h.map.dragEnabled,true);
+    h.tools.setMode('lasso');
+    const showPixels=new Event('keydown',{cancelable:true});Object.defineProperty(showPixels,'key',{value:'p'});
+    h.document.dispatchEvent(showPixels);
+    assert.equal(h.tools.mode,'pixel','The existing P shortcut must return to pixel inspection');
+    assert.equal(h.map.dragEnabled,true);
     h.tools.dispose();
 });
 

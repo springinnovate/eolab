@@ -3,7 +3,7 @@
 /** Map-tool controls and lasso drawing, independent of raster and vector implementations. */
 export class MapInteractionTools {
     /**
-     * Connect the tool strip to composition-supplied source choices and selection.
+     * Connect the tool strip, P/Escape keys and composition-supplied source choices.
      * @param {Object} options Map and UI dependencies.
      * @param {Document} options.documentContext Owning document.
      * @param {Object} options.map Leaflet map used to capture geographic positions.
@@ -42,6 +42,11 @@ export class MapInteractionTools {
         this.listen(this.container, 'pointercancel', () => this.cancelStroke(), true);
         this.listen(this.container, 'lostpointercapture', () => this.cancelStroke(), true);
         this.listen(documentContext, 'keydown', event => {
+            if ((event.key === 'p' || event.key === 'P') && !this.editing &&
+                !event.ctrlKey && !event.metaKey && !event.altKey &&
+                !event.target?.closest?.('input, textarea, select, [contenteditable]')) {
+                event.preventDefault(); this.setMode('pixel'); return;
+            }
             if (event.key !== 'Escape' || this.mode !== 'lasso' || this.editing) return;
             if (!this.stroke && !this.abort) return;
             event.preventDefault(); event.stopPropagation();
