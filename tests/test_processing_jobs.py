@@ -19,7 +19,10 @@ import pytest
 import rasterio
 
 from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.job_store import (
+    PostgresJobStore,
+    UnsupportedProcessingSchemaError,
+)
 from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import (
     Artifact,
@@ -673,7 +676,9 @@ def test_clip_retry_rejects_changed_inputs(boundary: Any) -> None:
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("incompatible", [False, True])
 def test_worker_composition_requires_only_catalog_and_processing_configuration(
+    incompatible: bool,
     tmp_path: Path,
     store: PostgresJobStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -681,6 +686,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     """Import prepared Catalog selections before reset and cleanup without web/rendering initialization.
 
     Args:
+        incompatible: Give the worker a partial schema and check that startup stops.
         tmp_path: Independent source and artifact roots.
         store: Real migrated processing database.
         monkeypatch: Supply only the worker's validated dependencies.
@@ -806,6 +812,37 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.setattr(composition, "create_app", unexpected)
     monkeypatch.setattr(composition, "GeoServerRasterPublisher", unexpected)
     monkeypatch.setattr(composition, "serve_processing", consume)
+    if incompatible:
+        with psycopg.connect(store.conninfo, autocommit=True) as db:
+            db.execute("DROP INDEX processing.habitat_preparation_selections_selection")
+            try:
+
+                async def unexpected_retry(delay: float) -> None:
+                    """Fail if startup retries the partial database layout.
+
+                    Args:
+                        delay: Requested retry interval in seconds.
+                    """
+                    pytest.fail(
+                        f"Incompatible schemas should stop startup, retried in {delay}"
+                    )
+
+                monkeypatch.setattr(asyncio, "sleep", unexpected_retry)
+                with pytest.raises(
+                    UnsupportedProcessingSchemaError,
+                    match="Habitat selection hash index",
+                ):
+                    asyncio.run(composition.run_processing_worker())
+                assert not composed_workers and resets == 0
+                assert db.execute(
+                    "SELECT status FROM processing.jobs WHERE id=%s",
+                    (pending["job_id"],),
+                ).fetchone() == ("queued",)
+            finally:
+                db.execute(
+                    "CREATE INDEX habitat_preparation_selections_selection ON processing.habitat_preparation_selections USING hash (selection)"
+                )
+        return
     asyncio.run(composition.run_processing_worker())
     assert len(composed_workers) == 2
     assert composed_workers[0].native is not composed_workers[1].native

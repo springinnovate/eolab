@@ -468,57 +468,82 @@ def test_concurrent_maintenance_and_submission_preserve_record_limit(
     assert admit(store, "owner", plan)["status"] == "queued"
 
 
-def test_migration_removes_metadata_accounting_and_preserves_jobs(
-    store: PostgresJobStore,
+@pytest.mark.parametrize(
+    "change",
+    [
+        "ALTER TABLE processing.habitat_preparation_selections RENAME TO habitat_prepared_areas",
+        "DROP INDEX processing.habitat_preparation_selections_selection; "
+        "CREATE INDEX habitat_preparation_selections_selection "
+        "ON processing.habitat_preparation_selections USING btree (selection)",
+        "ALTER TABLE processing.jobs DROP COLUMN input_uploads",
+        "DROP TRIGGER processing_release_inputs ON processing.jobs",
+        "ALTER TABLE processing.transfers DROP CONSTRAINT transfers_job_id_fkey",
+        "DELETE FROM processing.schema_version; INSERT INTO processing.schema_version VALUES (1)",
+    ],
+)
+def test_schema_startup_leaves_partial_or_historical_layout_untouched(
+    store: PostgresJobStore, change: str
 ) -> None:
-    """Remove the old byte column, trigger and dependent view without losing jobs.
+    """Install a new database, then refuse incomplete or ambiguous layouts without repair.
 
     Args:
-        store: Disposable PostgreSQL store, rebuilt to the previous column shape.
+        store: Guarded disposable PostgreSQL store.
+        change: Historical registry or incompatible structure retaining marker 22.
     """
-    plan = make_plan(store, "owner")
-    first = admit(store, "owner", plan)
-    active = store.claim_next_job()
-    waiting = admit(store, "owner", plan)
-    with psycopg.connect(store.conninfo) as connection:
-        connection.execute("DROP VIEW processing.subscribed_jobs")
+    with psycopg.connect(store.conninfo, autocommit=True) as connection:
         connection.execute(
-            "ALTER TABLE processing.jobs ADD COLUMN input_bytes bigint NOT NULL DEFAULT 0"
+            "ALTER SCHEMA processing RENAME TO processing_before_startup_test"
         )
-        connection.execute(
-            "CREATE FUNCTION processing.measure_job_input_bytes() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.input_bytes := octet_length(NEW.spec::text); RETURN NEW; END $$"
-        )
-        connection.execute(
-            "CREATE TRIGGER processing_job_input_bytes BEFORE INSERT OR UPDATE OF spec,summary ON processing.jobs FOR EACH ROW EXECUTE FUNCTION processing.measure_job_input_bytes()"
-        )
-        connection.execute(
-            "CREATE OR REPLACE VIEW processing.subscribed_jobs AS SELECT s.*, j.input_bytes FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id"
-        )
-    store.migrate()
-    store.migrate()
-    with psycopg.connect(store.conninfo) as connection:
-        rows = connection.execute(
-            "SELECT id,spec,started_at FROM processing.jobs ORDER BY created_at"
-        ).fetchall()
-        assert (
-            connection.execute(
-                "SELECT 1 FROM information_schema.columns WHERE table_schema='processing' AND table_name='jobs' AND column_name='input_bytes'"
+        try:
+            store.migrate()
+            assert connection.execute(
+                "SELECT version FROM processing.schema_version"
+            ).fetchall() == [(22,)]
+            assert (
+                connection.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema='processing' AND table_name IN ('jobs','subscribed_jobs') "
+                    "AND column_name IN ('required_disk_bytes','execution_memory_bytes','deadline_at')"
+                ).fetchall()
+                == []
+            )
+            plan = make_plan(store, "owner")
+            first = admit(store, "owner", plan)
+            finish(store, store.claim_next_job())
+            connection.execute(change)
+            view = connection.execute(
+                "SELECT 'processing.subscribed_jobs'::regclass::oid"
             ).fetchone()
-            is None
-        )
-        assert connection.execute(
-            "SELECT to_regprocedure('processing.measure_job_input_bytes()')"
-        ).fetchone() == (None,)
-        assert (
-            connection.execute(
-                "SELECT 1 FROM pg_trigger WHERE tgrelid='processing.jobs'::regclass AND tgname='processing_job_input_bytes'"
-            ).fetchone()
-            is None
-        )
-    assert rows[0][1] == plan[1].specification and rows[0][2] is not None
-    assert rows[1][0] == waiting["id"] and rows[1][2] is None
-    assert store.claim_next_job() is None
-    assert store.heartbeat(first["id"], active["attempt_id"], {})
+            versions = connection.execute(
+                "SELECT version FROM processing.schema_version"
+            ).fetchall()
+            with pytest.raises(
+                job_store_module.UnsupportedProcessingSchemaError, match="unsupported"
+            ) as failure:
+                store.migrate()
+            assert "Processing schema" in str(failure.value)
+            assert (
+                connection.execute(
+                    "SELECT 'processing.subscribed_jobs'::regclass::oid"
+                ).fetchone()
+                == view
+            )
+            assert (
+                connection.execute(
+                    "SELECT version FROM processing.schema_version"
+                ).fetchall()
+                == versions
+            )
+            assert store.get(first["id"], "owner")["status"] == "ready"
+            assert (
+                store.find_request("owner", first["request_key"])["id"] == first["id"]
+            )
+        finally:
+            with connection.transaction():
+                connection.execute("DROP SCHEMA IF EXISTS processing CASCADE")
+                connection.execute(
+                    "ALTER SCHEMA processing_before_startup_test RENAME TO processing"
+                )
 
 
 def test_retained_files_do_not_block_new_preparation(store: PostgresJobStore) -> None:

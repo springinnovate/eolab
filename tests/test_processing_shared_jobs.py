@@ -293,11 +293,11 @@ def test_polygon_inputs_are_authorized_before_joining(
         ).fetchone() == (1,)
 
 
-def test_upgrade_preserves_existing_owner_handles(store: PostgresJobStore) -> None:
-    """Move old owner fields into subscriptions without changing public IDs or ready files.
+def test_restart_preserves_existing_owner_handles(store: PostgresJobStore) -> None:
+    """Preserve public subscriber IDs and ready files during startup and queue recovery.
 
     Args:
-        store: Disposable PostgreSQL rebuilt to the previous ownership layout.
+        store: Current disposable PostgreSQL database with a ready and queued computation.
     """
     plan = PreparedJobPlan({}, {}, operation="test.v1")
     one = store.submit("first", "one", plan, "hash")
@@ -306,15 +306,6 @@ def test_upgrade_preserves_existing_owner_handles(store: PostgresJobStore) -> No
         claimed["id"], claimed["attempt_id"], Artifact(1, "0" * 64, "test.csv")
     )
     two = store.submit("second", "two", plan, "other-hash")
-    with psycopg.connect(store.conninfo) as connection:
-        connection.execute("DROP VIEW processing.subscribed_jobs")
-        connection.execute(
-            "ALTER TABLE processing.jobs ADD COLUMN owner text, ADD COLUMN request_key text, ADD COLUMN request_hash text"
-        )
-        connection.execute(
-            "UPDATE processing.jobs j SET owner=s.owner,request_key=s.request_key,request_hash=s.request_hash FROM processing.job_subscribers s WHERE s.job_id=j.id"
-        )
-        connection.execute("DROP TABLE processing.job_subscribers")
     store.migrate()
     store.migrate()
     assert store.get(one["id"], "first")["status"] == "ready"

@@ -1007,15 +1007,17 @@ async def run_processing_worker() -> None:
     """Start configured worker loops, each with its own native calculation process.
 
     No web application or GeoServer client is constructed.
-    Migrate, import retained Habitat preparation selections, and interrupt
+    Install or verify the Processing schema, import retained Habitat selections, and interrupt
     unfinished jobs once before starting any loops. The container must replace
     the previous worker container, not overlap it.
     Completed results remain available. Child recycling never repeats the reset.
 
     Raises:
         ValueError: If source and artifact configuration is unsafe.
+        UnsupportedProcessingSchemaError: If the database needs an operator migration.
         asyncio.CancelledError: After orderly native-child shutdown.
     """
+
     settings = load_processing_worker_settings()
     limits = load_processing_limits()
     artifacts = LocalJobArtifacts(
