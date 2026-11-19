@@ -28,6 +28,13 @@
 .models-vector-row-remove { justify-self: end; }
 .models-vector-row-remove:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .models-vector-row-add { justify-self: start; }
+.models-formula-layers { display: grid; gap: 8px; }
+.models-form .models-formula-row { gap: 6px 8px; margin: 0; padding: 6px 8px 8px; border: 1px solid var(--border-1); border-radius: var(--radius); }
+.models-formula-row, .models-formula-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 6px 8px; }
+.models-formula-row :is(p, button), .models-formula-grid > :first-child { grid-column: 1 / -1; }
+.models-formula-row button { justify-self: end; }
+.models-formula-insert { display: flex; flex-wrap: wrap; gap: 4px; }
+.models-formula-insert button { font-family: monospace; }
 .models-spatial-reference { padding: 8px; border: 1px solid var(--border-1); border-radius: var(--radius); }
 .models-habitat-datasets { display: grid; gap: 6px; font-size: var(--font-size-ui); line-height: 1.35; }
 .models-habitat-datasets .models-details { margin: 0; font-size: inherit; }

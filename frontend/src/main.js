@@ -122,7 +122,7 @@ import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
 import { ModelsController } from "./models/controller.js";
-import { describeRasterSource } from "./raster/source-api.js";
+import { describeRasterSource } from "./raster-source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
 import { createArtifactPreviewLayer } from "./model-output-preview/leaflet.js";
 import { labeledRasterSource } from "./raster-source.js";

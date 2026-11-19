@@ -1,0 +1,27 @@
+schema: eolab.model/v1
+id: raster-calculator
+version: "1.0.0"
+title: Raster calculator
+description: Combine raster values cell by cell within a selected area and save the result as a GeoTIFF.
+inputs:
+  calculation:
+    type: raster_formula
+    label: Input rasters
+  area:
+    type: explicit_area
+    label: Analysis area
+parameters: {}
+steps:
+  - id: calculate
+    operation: raster.calculator.v1
+    inputs:
+      calculation: {input: calculation}
+      area: {input: area}
+    parameters: {}
+outputs:
+  raster:
+    source: calculate.raster
+    role: result
+    presentation: map
+    saveEligible: true
+executionProfile: raster-calculator

@@ -1,6 +1,6 @@
 /** Keep opt-in output displays tied to their originating run and file lifetime. */
 import { readArtifactPreview } from "./api.js";
-import { describeRasterSource } from "../raster/source-api.js";
+import { describeRasterSource } from "../raster-source-api.js";
 import { describeVectorArtifact } from "../vector/api.js";
 import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
 

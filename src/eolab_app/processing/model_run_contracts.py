@@ -165,6 +165,11 @@ SummaryArea = Annotated[
     Field(discriminator="kind"),
 ]
 
+ExplicitModelArea = Annotated[
+    BoundsArea | SamplingBoxArea | SelectionArea | PolygonArea,
+    Field(discriminator="kind"),
+]
+
 
 # Raster clips require an explicit box or vector predicate.
 ClipModelArea = Annotated[
@@ -237,6 +242,7 @@ class ModelInvocation(ModelSchema):
             "catalog_raster": TypeAdapter(CatalogRasterRequest),
             "clip_area": TypeAdapter(ClipModelArea),
             "summary_area": TypeAdapter(SummaryArea),
+            "explicit_area": TypeAdapter(ExplicitModelArea),
             **dict(operation.input_adapters),
         }
         for name, role in definition.inputs.items():

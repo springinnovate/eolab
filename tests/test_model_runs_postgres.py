@@ -678,6 +678,45 @@ def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     return job
 
 
+def test_raster_calculator_publishes_an_owned_geotiff(model_boundary: Any) -> None:
+    """Submit, execute and download a two-binding formula through model Runs."""
+
+    client, worker, _ = model_boundary
+    body = model_request(client, "raster-calculator", label="Canopy gain")
+    body["inputs"].pop("raster")
+    body["inputs"]["calculation"] = {
+        "layers": [
+            {"alias": "a", "source": SOURCE, "resampling": "nearest"},
+            {"alias": "b", "source": SOURCE, "resampling": "mean"},
+        ],
+        "expression": "max(0, b - a) + 2",
+        "grid": {"kind": "match", "alias": "a"},
+    }
+    job = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    base = f"/api/processing/jobs/{job['jobId']}"
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    result = ready["result"]
+    assert result["validPixels"] == 6400
+    download = client.get(result["url"])
+    assert download.status_code == 200
+    with rasterio.MemoryFile(download.content) as file, file.open() as output:
+        assert output.crs.to_epsg() == 4326
+        assert output.transform == rasterio.transform.from_origin(0.1, 9.9, 0.01, 0.01)
+        np.testing.assert_array_equal(output.read(1), np.full((80, 80), 2.0))
+    saved = client.get(base + "/invocation").json()["invocation"]
+    assert saved["inputs"] == body["inputs"]
+    provenance = client.get(result["provenanceUrl"]).json()
+    assert provenance["grid"]["transform"] == result["grid"]["transform"]
+    assert (
+        provenance["inputs"]["calculation"]["expression"]
+        == body["inputs"]["calculation"]["expression"]
+    )
+    client.cookies.clear()
+    assert client.get(result["url"]).status_code == 404
+
+
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_renaming_preserves_execution_and_changes_only_display_names(
     model_boundary: Any,

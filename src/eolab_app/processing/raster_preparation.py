@@ -15,12 +15,16 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
+from rasterio.warp import transform
 from rasterio.windows import Window
 
-from eolab_app.bounded_vector import PolygonRasterizer
+from eolab_app.bounded_vector import PolygonRasterizer, polygon_features
+from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.raster_mask import temporary_polygon_mask
+from eolab_app.raster.bounded_window import project_polygons_to_crs
+from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,69 @@ def calculate_raster_grid(
         width=last_column - first_column,
         height=last_row - first_row,
     )
+
+
+def read_preparation_polygons(
+    selection: ResolvedCatalogSelection, crs: CRS
+) -> tuple[dict[str, object], ...]:
+    """Read selected polygons from the original vector in the calculation CRS.
+
+    Args:
+        selection: Authorized original vector and exact feature predicate.
+        crs: Output CRS independent of raster coverage.
+    Returns:
+        Projected polygons to use within this calculation.
+    Raises:
+        ValueError: If no polygons match or coordinates cannot be projected.
+        SelectionUnavailableError: If the original vector cannot be read.
+    """
+    with polygon_features(selection, limits=None) as features:
+        polygons = tuple(
+            projected
+            for geometry in features
+            for projected in project_polygons_to_crs(
+                "EPSG:4326", crs, (geometry,), None
+            )
+        )
+    if not polygons:
+        raise ValueError("The vector selection contains no polygons.")
+    return polygons
+
+
+def project_preparation_box(
+    box: Wgs84SamplingBox, crs: CRS, pixel_size: tuple[float, float]
+) -> dict[str, object]:
+    """Project a geodesic sampling box at the output grid's pixel accuracy.
+
+    Args:
+        box: Captured geographic center and box dimensions.
+        crs: Output coordinate system.
+        pixel_size: Positive output X/Y cell sizes in the output CRS.
+    Returns:
+        A polygon in the output coordinate system.
+    Raises:
+        ValueError: If the box cannot be projected.
+    """
+
+    def project_pixels(
+        positions: tuple[tuple[float, float], ...],
+    ) -> tuple[tuple[float, float], ...]:
+        """Return output-grid pixel positions for edge refinement."""
+        x, y = transform(
+            "EPSG:4326",
+            crs,
+            [point[0] for point in positions],
+            [point[1] for point in positions],
+        )
+        return tuple(
+            (a / pixel_size[0], b / pixel_size[1]) for a, b in zip(x, y, strict=True)
+        )
+
+    ring = tessellate_sampling_box(box, project_pixels)
+    x, y = transform(
+        "EPSG:4326", crs, [point[0] for point in ring], [point[1] for point in ring]
+    )
+    return {"type": "Polygon", "coordinates": [tuple(zip(x, y, strict=True))]}
 
 
 def _write_masked_source_vrt(source: rasterio.io.DatasetReader, path: Path) -> None:

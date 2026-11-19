@@ -639,16 +639,16 @@ def describe_summary_result(
     return {"rows": artifact["rows"], "cacheHit": False}
 
 
-def describe_clip_result(
+def describe_raster_result(
     summary: dict[str, Any],
     artifact: dict[str, Any],
     numerical_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Describe the raster produced by a completed clip operation.
+    """Describe the grid and valid-cell count of a completed raster result.
 
     Args:
         summary: Persisted public output grid, independent of YAML retention.
-        artifact: Completed clip file and validity count.
+        artifact: Completed raster file and validity count.
         numerical_policy: Recorded calculation settings, or None after metadata expiry.
 
     Returns:
@@ -669,11 +669,11 @@ def describe_summary_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
     return {"statistics": artifact["rows"]}
 
 
-def describe_clip_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
-    """Retain completed clip file metadata in the Run YAML contract.
+def describe_raster_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
+    """Retain completed raster file metadata in the Run YAML contract.
 
     Args:
-        artifact: Completed clip file metadata and validity count.
+        artifact: Completed raster file metadata and validity count.
 
     Returns:
         Operation-owned scientific outcome metadata without a download URL.

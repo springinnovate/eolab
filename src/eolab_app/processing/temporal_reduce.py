@@ -4,7 +4,6 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
-import hashlib
 import json
 import math
 import mmap
@@ -15,7 +14,6 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 import rasterio
-from rasterio.shutil import copy as copy_raster
 from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.bounded_vector import PolygonRasterizer
@@ -23,9 +21,11 @@ from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
+from eolab_app.processing.model_result_contracts import RasterResultGrid
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import prepare_raster_area_tools
 from eolab_app.processing.raster_mask import temporary_polygon_mask
+from eolab_app.processing.raster_output import write_float64_cog
 from eolab_app.processing.temporal_grid import (
     TemporalReadGrid,
     plan_temporal_grid,
@@ -384,53 +384,20 @@ def _create_cog(
         ProcessingError: If the generated file fails output-integrity checks.
         OSError: If conversion, verification or checksumming fails.
     """
-    copy_raster(
+    return write_float64_cog(
         stage,
         destination,
-        driver="COG",
-        COMPRESS="DEFLATE",
-        BLOCKSIZE=512,
-        PREDICTOR="YES",
-        OVERVIEW_RESAMPLING="NEAREST",
-        NUM_THREADS="2",
-        BIGTIFF="IF_SAFER",
-    )
-    with rasterio.open(destination) as result:
-        if (
-            result.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") != "COG"
-            or result.width != grid.width
-            or result.height != grid.height
-            or result.count != 1
-            or result.dtypes != ("float64",)
-            or result.crs.to_wkt() != grid.crs
-            or tuple(result.transform)[:6] != grid.transform
-            or not math.isnan(result.nodata)
-            or result.units != (unit,)
-            or (max(result.shape) > 512 and not result.overviews(1))
-        ):
-            raise ProcessingError(
-                "invalid_output", "The temporal result failed grid/COG validation.", 500
-            )
-        actual_valid = sum(
-            int(np.count_nonzero(result.read_masks(1, window=window)))
-            for _, window in result.block_windows(1)
-        )
-        if actual_valid != valid_pixels:
-            raise ProcessingError(
-                "invalid_output",
-                "The temporal result failed validity-mask validation.",
-                500,
-            )
-    with destination.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    stage.unlink()
-    return ProducedFile(
-        name="raster" if destination.stem == "result" else "count",
-        storage_name=destination.name,
-        filename=destination.name,
-        media_type="image/tiff",
-        size=destination.stat().st_size,
-        sha256=digest,
+        RasterResultGrid(
+            crs=grid.crs,
+            transform=grid.transform,
+            width=grid.width,
+            height=grid.height,
+            dtype=grid.dtype,
+        ),
+        valid_pixels,
+        unit,
+        output_name="raster" if destination.stem == "result" else "count",
+        description="The temporal result",
     )
 
 

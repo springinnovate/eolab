@@ -1,11 +1,13 @@
-"""Bounded, typed raster expression grammar and streaming scalar reductions."""
+"""Parse raster formulas and evaluate pixel values or streaming reductions."""
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 import math
 import re
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
+from numpy.typing import NDArray
 
 from eolab_app.processing.models import ProcessingError
 
@@ -15,7 +17,7 @@ FUNCTIONS = frozenset(
 MAX_NODES = 256
 MAX_DEPTH = 20
 TOKEN = re.compile(
-    r"\s*(?:(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)|([A-Za-z][A-Za-z0-9_]*)|(>=|<=|==|!=|&&|\|\||[+*/!<>()=,\-]))"
+    r"\s*(?:(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)|([A-Za-z][A-Za-z0-9_]*)|(>=|<=|==|!=|&&|\|\||[+*/^!<>()=,\-]))"
 )
 PRECEDENCE = {
     "||": 1,
@@ -31,6 +33,7 @@ PRECEDENCE = {
     "*": 6,
     "/": 6,
 }
+PIXEL_FUNCTIONS = frozenset({"min", "max"})
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,8 @@ class Node:
     Attributes:
         op: Source, literal, operator or statistic name.
         args: Child expressions supplying this node's operands or arguments.
-        value: Numeric literal when op is "number".
+        value: Numeric literal for "number", or the binding name for "source"
+            in a pixel formula.
         boolean: Whether the expression produces a true/false condition.
         scalar: Whether the expression produces one value rather than pixel values.
         depth: Number of levels from this node to its deepest child.
@@ -48,7 +52,7 @@ class Node:
 
     op: str
     args: tuple["Node", ...] = ()
-    value: float | None = None
+    value: float | str | None = None
     boolean: bool = False
     scalar: bool = False
     depth: int = 1
@@ -56,6 +60,8 @@ class Node:
 
 class Parser:
     """Parse only the documented calculation grammar with bounded recursion."""
+
+    precedence: Mapping[str, int] = PRECEDENCE
 
     def __init__(self, text: str, alias: str) -> None:
         """Tokenize bounded text against one bound source name.
@@ -162,9 +168,28 @@ class Parser:
         elif token == "(":
             left = self.expression()
             self.take(")")
-        elif token == self.alias:
-            left = self.node("source")
-        elif token in FUNCTIONS:
+        else:
+            left = self.read_operand(token)
+        while self.precedence.get(self.tokens[self.index][0], -1) >= minimum:
+            op = self.take()
+            right = self.expression(self.precedence[op] + (op != "^"))
+            left = self.read_binary_operator(op, left, right)
+        self.nesting -= 1
+        return left
+
+    def read_operand(self, token: str) -> Node:
+        """Parse a raster, aggregate call or constant after its first token.
+
+        Args:
+            token: First token of the operand.
+        Returns:
+            Parsed operand with its scalar or pixel type.
+        Raises:
+            ProcessingError: If the operand is unknown or invalid.
+        """
+        if token == self.alias:
+            return self.node("source")
+        if token in FUNCTIONS:
             self.take("(")
             argument = self.expression()
             args = (argument,)
@@ -191,34 +216,104 @@ class Parser:
                 )
             if token not in {"count", "sum", "areaha"} and argument.boolean:
                 raise self.error(f"{token} requires numeric values")
-            left = self.node(token, args, scalar=True)
-        else:
-            try:
-                value = float(token)
-            except ValueError as error:
-                raise self.error(f"Unknown source or function '{token}'") from error
-            if not math.isfinite(value):
-                raise self.error("Use finite numeric constants")
-            left = self.node("number", value=value, scalar=True)
-        while PRECEDENCE.get(self.tokens[self.index][0], -1) >= minimum:
-            op = self.take()
-            right = self.expression(PRECEDENCE[op] + 1)
-            boolean = op in {"&&", "||", "==", "!=", ">", "<", ">=", "<="}
-            if op in {"&&", "||"}:
-                if not left.boolean or not right.boolean:
-                    raise self.error("Logical operators require conditions")
-            elif left.boolean or right.boolean:
-                raise self.error("Arithmetic and comparisons require numeric values")
-            if op == "/" and right.op == "number" and right.value == 0:
-                raise self.error("Cannot divide by zero")
-            left = self.node(
-                op, (left, right), boolean=boolean, scalar=left.scalar and right.scalar
+            return self.node(token, args, scalar=True)
+        return self.read_number(token)
+
+    def read_number(self, token: str) -> Node:
+        """Return a finite numerical literal from one operand token.
+
+        Args:
+            token: Candidate number token.
+        Returns:
+            Scalar number node.
+        Raises:
+            ProcessingError: If the token is unknown or represents a nonfinite value.
+        """
+        try:
+            value = float(token)
+        except ValueError as error:
+            raise self.error(f"Unknown source or function '{token}'") from error
+        if not math.isfinite(value):
+            raise self.error("Use finite numeric constants")
+        return self.node("number", value=value, scalar=True)
+
+    def read_binary_operator(self, op: str, left: Node, right: Node) -> Node:
+        """Return a typed operator for two operands of an aggregate expression.
+
+        Args:
+            op: Operator selected by the grammar.
+            left: First operand.
+            right: Second operand.
+        Returns:
+            Operator with its result type and operands.
+        Raises:
+            ProcessingError: If operand types or literal division are invalid.
+        """
+        boolean = op in {"&&", "||", "==", "!=", ">", "<", ">=", "<="}
+        if op in {"&&", "||"}:
+            if not left.boolean or not right.boolean:
+                raise self.error("Logical operators require conditions")
+        elif left.boolean or right.boolean:
+            raise self.error("Arithmetic and comparisons require numeric values")
+        if op == "/" and right.op == "number" and right.value == 0:
+            raise self.error("Cannot divide by zero")
+        return self.node(
+            op, (left, right), boolean=boolean, scalar=left.scalar and right.scalar
+        )
+
+
+class PixelExpressionParser(Parser):
+    """Parse numerical formulas over named rasters without scalar reductions."""
+
+    precedence: Mapping[str, int] = {"+": 5, "-": 5, "*": 6, "/": 6, "^": 7}
+
+    def __init__(self, text: str, aliases: frozenset[str]) -> None:
+        """Set the raster names available to a pixel formula.
+
+        Args:
+            text: User formula using the calculator's arithmetic grammar.
+            aliases: Validated, distinct raster names.
+        """
+        super().__init__(text, "")
+        self.aliases = aliases
+
+    def read_operand(self, token: str) -> Node:
+        """Return a named raster, two-argument function or number.
+
+        Args:
+            token: First token of the operand.
+        Returns:
+            Parsed numerical operand.
+        Raises:
+            ProcessingError: If a name is unknown or a call lacks two arguments.
+        """
+        if token in self.aliases:
+            return self.node("source", value=token)
+        if token in PIXEL_FUNCTIONS:
+            self.take("(")
+            first = self.expression()
+            self.take(",")
+            second = self.expression()
+            self.take(")")
+            return self.node(
+                token, (first, second), scalar=first.scalar and second.scalar
             )
-        self.nesting -= 1
-        return left
+        return self.read_number(token)
+
+    def read_binary_operator(self, op: str, left: Node, right: Node) -> Node:
+        """Construct arithmetic whose undefined values become missing at evaluation.
+
+        Args:
+            op: Arithmetic operator selected by the calculator grammar.
+            left: First numerical operand.
+            right: Second numerical operand.
+        Returns:
+            Operator and its operands.
+        """
+        return self.node(op, (left, right), scalar=left.scalar and right.scalar)
 
 
-def walk(node: Node):
+def walk(node: Node) -> Iterator[Node]:
     """Yield syntax nodes in bounded tree order.
 
     Args:
@@ -258,6 +353,26 @@ def compile_expression(text: str, alias: str) -> Node:
     return root
 
 
+def compile_pixel_expression(text: str, aliases: frozenset[str]) -> Node:
+    """Check a formula that produces one numerical value per output cell.
+
+    Args:
+        text: Bounded user formula containing at least one raster name.
+        aliases: Names of the rasters bound to the formula.
+    Returns:
+        Parsed raster formula with the binding names retained in source nodes.
+    Raises:
+        ProcessingError: If the formula has invalid syntax or names no raster.
+    """
+    parser = PixelExpressionParser(text, aliases)
+    root = parser.expression()
+    if parser.tokens[parser.index][0]:
+        raise parser.error("Unexpected trailing input")
+    if root.scalar:
+        raise parser.error("Use at least one raster variable")
+    return root
+
+
 def apply_operator(node: Node, values: list[Any]) -> Any:
     """Evaluate an allowlisted arithmetic/logical operator on values.
 
@@ -284,6 +399,12 @@ def apply_operator(node: Node, values: list[Any]) -> Any:
         return a * b
     if op == "/":
         return a / b
+    if op == "^":
+        return np.power(a, b)
+    if op == "min":
+        return np.minimum(a, b)
+    if op == "max":
+        return np.maximum(a, b)
     if op == ">":
         return a > b
     if op == "<":
@@ -301,6 +422,35 @@ def apply_operator(node: Node, values: list[Any]) -> Any:
     if op == "||":
         return np.logical_or(a, b)
     raise ValueError("Unrecognized validated operator")
+
+
+def evaluate_pixel_expression(
+    root: Node, samples: Mapping[str, NDArray[np.float64]]
+) -> NDArray[np.float64]:
+    """Calculate a tile, preserving missing samples and undefined arithmetic.
+
+    Args:
+        root: Parsed pixel formula referencing one or more rasters.
+        samples: Equally shaped tiles keyed by raster name, with NaN for NoData.
+    Returns:
+        Float64 tile with NaN wherever an input or intermediate value is invalid.
+    """
+
+    def evaluate(node: Node) -> NDArray[np.float64] | np.float64:
+        """Evaluate one formula node against the supplied tile samples."""
+        if node.op == "source":
+            return samples[cast(str, node.value)]
+        if node.op == "number":
+            return np.float64(cast(float, node.value))
+        operands = [evaluate(child) for child in node.args]
+        value = apply_operator(node, operands)
+        valid = np.isfinite(value)
+        for operand in operands:
+            valid = valid & np.isfinite(operand)
+        return np.where(valid, value, np.nan)
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        return cast(NDArray[np.float64], evaluate(root))
 
 
 class Reduction:
