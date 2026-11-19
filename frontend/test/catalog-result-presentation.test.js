@@ -208,7 +208,7 @@ test("native source binding chooses layer and asset while preserving descriptive
   assert.equal(buildCatalogResultPresentation(item, "Vector").filename, "Habitat classes");
 });
 
-test("Catalog results infer legacy layer labels only from vector containers", () => {
+test("Catalog results retain the literal title of an unbound vector container", () => {
   const presentation = buildCatalogResultPresentation(
     {
       id: "geopackage-layer",
@@ -217,8 +217,8 @@ test("Catalog results infer legacy layer labels only from vector containers", ()
     },
     "Vector",
   );
-  assert.equal(presentation.filename, "Survey — 2020.gpkg");
-  assert.equal(presentation.context, "Layer: wetlands");
+  assert.equal(presentation.filename, "Maui/Survey — 2020.gpkg — wetlands");
+  assert.equal(presentation.context, null);
 });
 
 test("Catalog results retain compact paths for scanner-supported file formats", () => {

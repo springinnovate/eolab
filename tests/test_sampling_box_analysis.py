@@ -5,6 +5,7 @@ from itertools import product
 from pathlib import Path
 from unittest.mock import patch
 from numpy.typing import NDArray
+from osgeo import gdal
 
 import numpy as np
 import pytest
@@ -367,13 +368,16 @@ def test_sampling_box_requests_binding_and_cache_identity_preserve_rectangles() 
             CatalogRasterStatisticsRequest(**SOURCE, **fields)
 
 
-@pytest.mark.parametrize("method", ["nearest", "average", "mode", "unknown", "masked"])
+@pytest.mark.parametrize(
+    "method",
+    ["nearest", "band-nearest", "file-nearest", "mixed", "average", "mode", "unknown", "masked"],
+)
 def test_box_statistics_share_one_representative_overview(tmp_path: Path, method: str) -> None:
-    """Keep valid zeros and sparse peaks, and reject levels with unknown weights.
+    """Use the nearest marked level and preserve its zeros, sparse peaks and validity.
 
     Args:
         tmp_path: Isolated original GeoTIFF directory.
-        method: Declared pyramid construction or embedded mask variant.
+        method: Overview methods, metadata placement or embedded mask for this file.
     """
     path = tmp_path / "mean.tif"
     # A box overlapping the western half of this raster contains aligned
@@ -381,6 +385,11 @@ def test_box_statistics_share_one_representative_overview(tmp_path: Path, method
     values = np.zeros((1024, 1024), dtype=np.float32)
     values[::32, :] = 800
     values[1::32, :] = values[2::32, :] = values[3::32, :] = 800
+    if method == "mixed":
+        # Retain the native and factor-four distribution, but let factor-two
+        # averaging change both the deviation and the percentage above zero.
+        values[1::32, :] = values[3::32, :] = 0
+        values[5::32, :] = values[7::32, :] = 800
     values[:, 256:512] = -9999
     values[192:256] = np.nan
     with rasterio.open(path, "w", driver="GTiff", count=1, width=1024, height=1024,
@@ -391,20 +400,28 @@ def test_box_statistics_share_one_representative_overview(tmp_path: Path, method
             target.write_mask(np.full(values.shape, 255, dtype=np.uint8))
         algorithm = method if method in ("average", "mode") else "nearest"
         target.build_overviews([2, 4], Resampling[algorithm])
-        if method != "unknown":
+        if method not in ("unknown", "band-nearest"):
             target.update_tags(ns="rio_overview", resampling=algorithm)
+    if method == "mixed":
+        with rasterio.open(path, "r+") as target:
+            target.build_overviews([2], Resampling.average)
+    if method in ("unknown", "file-nearest"):
+        with gdal.Open(str(path), gdal.GA_Update) as target:
+            band = target.GetRasterBand(1)
+            for index in range(band.GetOverviewCount()):
+                band.GetOverview(index).SetMetadataItem("RESAMPLING", None)
     box = Wgs84SamplingBox(center={"longitude": 0, "latitude": 0}, sideLengthKm=225)
     statistics = ("mean", "stdev", PercentAbove(percentAbove=0), PercentAbove(percentAbove=800))
     with patch("eolab_app.raster.statistics.read_bounded_overview", wraps=read_bounded_overview) as read:
         preview = read_sampling_box_preview(path, SamplingBoxArea(box), statistics=statistics)
-    if method != "nearest":
+    if method in ("average", "mode", "unknown", "masked"):
         assert preview.method == "unavailable" and [row.value for row in preview.values] == [None] * 4
         return
+    assert preview.method == "estimated"
     read.assert_called_once()
     area = AggregateArea(kind="samplingBox", bounds=sampling_box_bounds(box), samplingBox=box)
     spec = make_spec(path, ["mean(a)", "stdev(a)", "100 * count(a > 0) / count(a)", "100 * count(a > 800) / count(a)"], area)
     native = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
-    assert preview.method == "estimated"
     assert 50 < preview.values[0].value < 125
     assert [row.value for row in preview.values] == pytest.approx([float(row["value"]) for row in native.rows], rel=0.02)
     assert preview.values[-1].value == 0
