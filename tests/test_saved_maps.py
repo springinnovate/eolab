@@ -19,7 +19,7 @@ from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.settings import load_settings
 
 VIEW = json.loads(
-    (Path(__file__).parent / "fixtures" / "saved-map-v1.json").read_text()
+    (Path(__file__).parent / "fixtures" / "saved-map-catalog.json").read_text()
 )
 HEADERS = {"X-EOLab-Saved-Maps": "1"}
 BASE = "/api/saved-maps"
@@ -41,12 +41,21 @@ def test_browser_document_round_trip() -> None:
     """Keep optional fields absent and preserve the existing browser wire document."""
     result = CreateSavedMap.model_validate(map_request())
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
+    for version in (1, 2, 3, 4, 6):
+        request = map_request()
+        request["view"].update(schemaVersion=version, layers=[])
+        if version >= 3:
+            request["view"]["basemap"] = "none"
+        else:
+            request["view"].pop("basemap", None)
+        with pytest.raises(ValidationError, match="schemaVersion"):
+            CreateSavedMap.model_validate(request)
 
 
 def test_calculated_fields_and_private_results_round_trip() -> None:
     """Persist ordered definitions and private references without source data."""
     candidate = map_request()
-    candidate["view"].update(schemaVersion=4, basemap="detailed")
+    candidate["view"].update(basemap="detailed")
     fields = [
         {
             "version": 1,
@@ -98,24 +107,13 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
         invalid["view"]["layers"][0]["calculatedFields"] = [invalid_field]
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(invalid)
-    invalid = deepcopy(candidate)
-    invalid["view"]["schemaVersion"] = 3
-    with pytest.raises(ValidationError, match="version four"):
-        CreateSavedMap.model_validate(invalid)
 
 
-@pytest.mark.parametrize("schema_version", [3, 4])
-def test_raster_upload_view_round_trip_preserves_private_source_and_style(
-    schema_version: int,
-) -> None:
-    """Persist an opaque raster upload without publishing data or vector predicates.
-
-    Args:
-        schema_version: Supported saved-map version admitting private uploads.
-    """
+def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> None:
+    """Persist an opaque raster upload without publishing data or vector predicates."""
     candidate = map_request()
     view = candidate["view"]
-    view.update(schemaVersion=schema_version, basemap="none")
+    view["basemap"] = "none"
     layer = view["layers"][0]
     layer.pop("catalogItem")
     layer.update(uploadId="12345678-1234-1234-1234-123456789abc", isCustom=True)
@@ -143,7 +141,7 @@ def test_raster_upload_view_round_trip_preserves_private_source_and_style(
 
 
 def test_repeated_catalog_views_round_trip() -> None:
-    """Preserve ordered views of the same raster and vector with distinct appearance."""
+    """Preserve duplicate raster and vector views while keeping polygon view IDs unique."""
     candidate = map_request()
     raster, vector = candidate["view"]["layers"]
     second_raster = deepcopy(raster)
@@ -151,6 +149,7 @@ def test_repeated_catalog_views_round_trip() -> None:
     second_raster["style"]["continuous"]["definition"]["minimumColor"] = "#FFFFFF"
     second_vector = deepcopy(vector)
     second_vector.update(customName="Brazil", visible=True, legendIncluded=False)
+    second_vector["filterViewId"] = "00000000-0000-4000-8000-000000000042"
     second_vector["style"]["definition"]["color"] = "#123456"
     second_vector["filter"] = {"field": "ISO3", "value": "BRA"}
     candidate["view"]["layers"] = [raster, second_vector, second_raster, vector]
@@ -162,6 +161,9 @@ def test_repeated_catalog_views_round_trip() -> None:
         ).model_dump(mode="json", exclude_unset=True)
         == candidate
     )
+    vector["filterViewId"] = second_vector["filterViewId"]
+    with pytest.raises(ValidationError, match="needs its own ID"):
+        CreateSavedMap.model_validate(candidate)
 
 
 def test_temporal_views_preserve_explicit_selections_and_independent_appearance() -> (
@@ -169,7 +171,7 @@ def test_temporal_views_preserve_explicit_selections_and_independent_appearance(
 ):
     """Round-trip repeated observations without accepting paths or rendering state."""
     candidate = map_request()
-    candidate["view"].update(schemaVersion=3, basemap="detailed")
+    candidate["view"].update(basemap="detailed")
     layer = {
         "temporalSource": {
             "collectionId": "eolab-temporal-datasets",
@@ -221,7 +223,7 @@ def test_temporal_views_preserve_explicit_selections_and_independent_appearance(
 def test_private_upload_reference_contract() -> None:
     """Preserve separate upload views without accepting source data or credentials."""
     candidate = map_request()
-    candidate["view"].update(schemaVersion=3, basemap="detailed")
+    candidate["view"].update(basemap="detailed")
     candidate["view"]["layers"] = [
         {
             "uploadId": "11111111-1111-4111-8111-111111111111",
@@ -265,11 +267,6 @@ def test_private_upload_reference_contract() -> None:
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(invalid)
     invalid = deepcopy(candidate)
-    invalid["view"]["schemaVersion"] = 2
-    del invalid["view"]["basemap"]
-    with pytest.raises(ValidationError, match="version three"):
-        CreateSavedMap.model_validate(invalid)
-    invalid = deepcopy(candidate)
     invalid["view"]["layers"][0]["uploadId"] = "../private.gpkg"
     with pytest.raises(ValidationError):
         CreateSavedMap.model_validate(invalid)
@@ -303,10 +300,10 @@ def test_custom_layer_name_round_trip() -> None:
 
 
 def test_subtitle_and_basemap_contract() -> None:
-    """Store an optional subtitle and only a provider ID in version-three maps."""
+    """Store an optional subtitle and only a provider ID in saved maps."""
     candidate = map_request()
     candidate["subtitle"] = "  Explore habitat  "
-    candidate["view"].update(schemaVersion=3, basemap="maptiler")
+    candidate["view"].update(basemap="maptiler")
     parsed = CreateSavedMap.model_validate(candidate)
     assert parsed.subtitle == "Explore habitat"
     assert parsed.view.basemap == "maptiler"
@@ -318,16 +315,16 @@ def test_subtitle_and_basemap_contract() -> None:
     candidate["view"].pop("basemap")
     with pytest.raises(ValidationError, match="basemap"):
         CreateSavedMap.model_validate(candidate)
-    candidate["view"]["schemaVersion"] = 1
+    candidate["view"]["basemap"] = "none"
     candidate["subtitle"] = "x" * 241
     with pytest.raises(ValidationError):
         CreateSavedMap.model_validate(candidate)
 
 
 def test_shared_annotation_reference_contract() -> None:
-    """Round-trip the browser fixture while rejecting credentials, polygons and v1 references."""
+    """Round-trip the browser fixture while rejecting credentials and copied polygons."""
     view = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-shared.json").read_text()
     )
     request = {"title": "Shared map", "slug": "shared-map", "view": view}
     assert (
@@ -354,10 +351,6 @@ def test_shared_annotation_reference_contract() -> None:
         with pytest.raises(ValidationError, match="notes"):
             CreateSavedMap.model_validate(candidate)
     candidate = deepcopy(request)
-    candidate["view"]["schemaVersion"] = 1
-    with pytest.raises(ValidationError, match="version two"):
-        CreateSavedMap.model_validate(candidate)
-    candidate = deepcopy(request)
     candidate["view"]["layers"] *= 2
     with pytest.raises(ValidationError, match="duplicate"):
         CreateSavedMap.model_validate(candidate)
@@ -371,14 +364,14 @@ def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
         source: Saved layer reference to exercise through create and edit routes.
     """
     view = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-shared.json").read_text()
     )
     if source == "drawing":
         view = json.loads(
             (Path(__file__).parent / "fixtures" / "saved-map-v5.json").read_text()
         )
     elif source == "upload":
-        view.update(schemaVersion=3, basemap="detailed")
+        view.update(basemap="detailed")
         view["layers"] = [
             {
                 "uploadId": "11111111-1111-4111-8111-111111111111",
@@ -388,7 +381,7 @@ def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
             }
         ]
     elif source == "artifact":
-        view.update(schemaVersion=4, basemap="detailed")
+        view.update(basemap="detailed")
         view["layers"] = [
             {
                 "runArtifact": {
@@ -583,7 +576,7 @@ def test_map_legend_preferences_round_trip() -> None:
     """Persist optional legend choices for both layer types without weakening validation."""
     candidate = map_request()
     candidate["view"] = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-shared.json").read_text()
     )
     candidate["view"]["mapLegend"] = {"visible": False, "collapsed": True}
     for layer in candidate["view"]["layers"]:
@@ -606,9 +599,7 @@ def test_versioned_raster_appearance_round_trip() -> None:
     """Preserve both raster configurations and optional category state unchanged."""
     candidate = map_request()
     candidate["view"] = json.loads(
-        (
-            Path(__file__).parent / "fixtures" / "saved-map-v3-categorical.json"
-        ).read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-categorical.json").read_text()
     )
     for mode in ("categorical", "continuous"):
         candidate["view"]["layers"][0]["style"]["mode"] = mode
@@ -646,9 +637,7 @@ def test_versioned_raster_appearance_boundaries(
     """
     candidate = map_request()
     candidate["view"] = json.loads(
-        (
-            Path(__file__).parent / "fixtures" / "saved-map-v3-categorical.json"
-        ).read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-categorical.json").read_text()
     )
     target = candidate["view"]["layers"][0]["style"]
     for part in path[:-1]:
@@ -662,9 +651,7 @@ def test_versioned_raster_appearance_requires_all_envelope_fields() -> None:
     """Reject incomplete and unversioned raster appearance in imported maps."""
     candidate = map_request()
     candidate["view"] = json.loads(
-        (
-            Path(__file__).parent / "fixtures" / "saved-map-v3-categorical.json"
-        ).read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-categorical.json").read_text()
     )
     for field in ("appearanceVersion", "mode", "continuous", "categorical"):
         invalid = deepcopy(candidate)

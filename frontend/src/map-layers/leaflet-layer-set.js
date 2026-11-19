@@ -10,9 +10,9 @@ export class LeafletLayerSet {
      * Create an empty keyed layer set.
      *
      * @param {{removeLayer:(layer:Object)=>void}} leafletMap Leaflet map.
-     * @param {{update:(layers:Object[])=>void,clear:()=>void}|null}
+     * @param {{update:(layers:Object[])=>void,clear:()=>void,prepare:(layers:Object[],signal:AbortSignal)=>Promise<void>}|null}
      * [compositeRenderer=null] Optional ordinary-map composite renderer.
-     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus)=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
+     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:string[])=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
      * [tileStatus=null] Optional feedback for independent grids beside local layers.
      */
     constructor(leafletMap, compositeRenderer = null, tileStatus = null) {
@@ -296,14 +296,32 @@ export class LeafletLayerSet {
                 record.attached = false;
             }
         }
-        this.compositeRenderer.update(
-            this.rendering
-                .filter(({ visible, opacity, descriptor }) => visible && opacity > 0 && descriptor !== null)
-                .map(({ opacity, descriptor }) => ({
-                    ...structuredClone(descriptor),
-                    opacity,
-                }))
-        );
+        this.compositeRenderer.update(this.#compositeLayers());
+    }
+
+    /** Prepare an ordinary composite with one replacement while preserving its neighbors and their drawing order.
+     * Independent grids begin loading when selected through their existing display strategy.
+     * @param {string} key Retained layer being replaced.
+     * @param {Object} descriptor Authorized replacement including its style.
+     * @param {AbortSignal} signal Lifetime of the prepared tiles.
+     * @return {Promise<void>} Completion when preparation finishes or independent rendering is in use.
+     * @throws {Error} If the map plan cannot be prepared.
+     */
+    async prepareLayer(key, descriptor, signal) {
+        if (this.compositeRenderer && !this.showingLocalLayers && this.individualRenderingKeys === null &&
+            this.rendering.some(layer => layer.key === key && layer.visible && layer.opacity > 0 && layer.descriptor)) {
+            await this.compositeRenderer.prepare(this.#compositeLayers(key, descriptor), signal);
+        }
+    }
+
+    /** Build the same top-first plan for displayed and upcoming layers.
+     * @param {string} [key] Optional key to replace for preloading.
+     * @param {Object} [replacement] Authorized descriptor for that key.
+     * @return {Object[]} Visible styled descriptors with their current opacity.
+     */
+    #compositeLayers(key, replacement) {
+        return this.rendering.filter(layer => layer.visible && layer.opacity > 0 && layer.descriptor !== null)
+            .map(layer => ({...structuredClone(layer.key === key ? replacement : layer.descriptor), opacity: layer.opacity}));
     }
 
     /**
@@ -332,6 +350,9 @@ export class LeafletLayerSet {
     /** Retry failed visible independent tiles without reloading successful ones. @return {void} */
     retryFailedTiles() {
         for (const { recovery } of this.localTileRecovery.values()) recovery.retryFailedTiles();
+        if (!this.showingLocalLayers && this.individualRenderingKeys !== null && this.activeIndividualRenderingSignature === null) {
+            this.#prepareIndividualRendering();
+        }
     }
 
     /**
@@ -387,7 +408,9 @@ export class LeafletLayerSet {
             : statuses.some(status => status.phase === "retrying") ? "retrying"
             : statuses.some(status => status.phase === "loading") ? "loading"
             : failed ? "incomplete" : "complete";
-        this.tileStatus.onStatus({ phase, total, loaded, failed });
+        const displayed = this.rendering.filter(layer => this.localTileRecovery.get(layer.key)?.status.phase === "complete")
+            .map(layer => layer.descriptor.layerName);
+        this.tileStatus.onStatus({ phase, total, loaded, failed }, displayed);
     }
 
     /**
@@ -495,6 +518,7 @@ export class LeafletLayerSet {
             listeners: [],
         };
         this.pendingIndividualRendering = pending;
+        this.tileStatus?.onStatus({phase: "loading", total: 0, loaded: 0, failed: 0}, []);
         for (const key of keys) {
             const record = this.#require(key);
             if (!record.attached) {
@@ -551,6 +575,9 @@ export class LeafletLayerSet {
             }
         }
         this.activeIndividualRenderingSignature = pending.signature;
+        const displayed = this.rendering.filter(layer => pending.keys.has(layer.key) && layer.descriptor)
+            .map(layer => layer.descriptor.layerName);
+        this.tileStatus?.onStatus({phase: "complete", total: 0, loaded: 0, failed: 0}, displayed);
     }
 
     /**
@@ -617,6 +644,8 @@ export class LeafletLayerSet {
             }
         }
         this.activeIndividualRenderingSignature = null;
+        this.tileStatus?.onStatus({phase: "error", total: 0, loaded: 0, failed: 0,
+            message: "The selected map layers could not be drawn."}, []);
     }
 
     /**

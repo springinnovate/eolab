@@ -38,8 +38,8 @@ class ClipInputs(BaseModel):
     Catalog requests use collectionId/itemId or a nested ``source`` reference.
     Temporal observations and private run files use their exact nested ``source``
     references.
-    The clip area may be a geodesic sampling box, geographic rectangle, or
-    features selected from a Catalog vector or private upload.
+    Choose the entire native grid explicitly, a geodesic sampling box, a
+    geographic rectangle, or features from a Catalog vector or private upload.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -56,6 +56,9 @@ class ClipInputs(BaseModel):
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
     catalogSelection: VectorSelection | None = None
+    wholeRaster: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="wrap")
     @classmethod
@@ -95,11 +98,14 @@ class ClipInputs(BaseModel):
                     request.selectedBounds,
                     request.samplingBox,
                     request.catalogSelection,
+                    request.wholeRaster,
                 )
             )
             != 1
         ):
-            raise ValueError("Choose exactly one map area or vector selection")
+            raise ValueError(
+                "Choose exactly one map area, vector selection, or entire raster"
+            )
         return request
 
 
@@ -120,14 +126,14 @@ class UnpreparedClip(BaseModel):
 
 
 class ClipArea(BaseModel):
-    """Retain a rectangle, geodesic box or vector predicate for a native clip.
+    """Retain an explicit whole grid, rectangle, geodesic box or vector predicate for a native clip.
 
     Geodesic boxes keep their center and kilometer side length; their bounds are
     only the geographic envelope. Workers derive polygon rings for their own grid."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "samplingBox", "catalogSelection"]
-    bounds: tuple[float, float, float, float]
+    kind: Literal["bounds", "samplingBox", "catalogSelection", "wholeRaster"]
+    bounds: tuple[float, float, float, float] | None
     samplingBox: Wgs84SamplingBox | None = None
     catalogSelection: VectorSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
@@ -142,6 +148,20 @@ class ClipArea(BaseModel):
         Raises:
             ValueError: For inconsistent vector or box inputs.
         """
+        if self.kind == "wholeRaster":
+            if any(
+                value is not None
+                for value in (
+                    self.bounds,
+                    self.samplingBox,
+                    self.catalogSelection,
+                    self.resolved,
+                )
+            ):
+                raise ValueError("An entire raster cannot also specify a clip area")
+            return self
+        if self.bounds is None:
+            raise ValueError("A clipped area requires geographic bounds")
         Wgs84Bounds(
             west=self.bounds[0],
             south=self.bounds[1],
@@ -253,7 +273,7 @@ class ClipSpec(BaseModel):
 class ClipAreaSummary(BaseModel):
     """Browser-safe area description without copying geometry into every poll."""
 
-    kind: Literal["bounds", "samplingBox", "catalogSelection"]
+    kind: Literal["bounds", "samplingBox", "catalogSelection", "wholeRaster"]
     bounds: tuple[float, float, float, float] | None
     samplingBox: Wgs84SamplingBox | None = Field(
         default=None, exclude_if=lambda value: value is None

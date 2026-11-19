@@ -29,6 +29,7 @@ class ExtentJobs:
         selection: VectorSelection,
         upload_owner: str | None = None,
         read_lease: str | None = None,
+        spatial_read: str | None = None,
     ) -> dict[str, Any]:
         """Queue an original-source read and return projected feature envelopes.
 
@@ -36,6 +37,7 @@ class ExtentJobs:
             selection: Catalog or upload source and filter, with no private path.
             upload_owner: Server-derived browser identity, kept inside Jobs.
             read_lease: Result-file capability held until native work stops.
+            spatial_read: Temporary credential for authorized intersection matches.
 
         Returns:
             Matching count and WGS84 bounds, including an empty successful result.
@@ -49,8 +51,9 @@ class ExtentJobs:
                 "selection": selection.model_dump(mode="json", by_alias=True),
                 "uploadOwner": upload_owner,
                 **({"readLease": read_lease} if read_lease is not None else {}),
+                **({"spatialRead": spatial_read} if spatial_read is not None else {}),
             },
-            require_terminal_cleanup=read_lease is not None,
+            require_terminal_cleanup=read_lease is not None or spatial_read is not None,
         )
 
     async def measure_artifact(

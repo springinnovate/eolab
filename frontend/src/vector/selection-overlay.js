@@ -9,7 +9,7 @@ export class VectorSelectionOverlay {
     /**
      * Request a bounded outline without delaying numeric selection activation.
      * @param {Object} area Validated selection response.
-     * @return {Promise<void>} Presentation completion; failures leave no outline.
+     * @return {Promise<Object|undefined>} Displayed GeoJSON for other map previews, or undefined if unavailable or superseded.
      */
     async load(area) {
         this.clear();
@@ -18,7 +18,9 @@ export class VectorSelectionOverlay {
         try {
             const response = await fetch("/api/vector-sampling/outline", {
                 method: "POST", signal: this.abort.signal,
-                headers: { "Content-Type": "application/json", ...(area.selection.uploadId ? { "X-EOLab-Uploads": "1" } : {}), ...(area.selection.kind === "runArtifact" ? {"X-EOLab-Processing": "1"} : {}) },
+                headers: { "Content-Type": "application/json",
+                    ...(area.selection.uploadId || area.selection.filter.rules.some(rule => rule.operator === "intersects") ? {"X-EOLab-Uploads": "1"} : {}),
+                    ...(area.selection.kind === "runArtifact" || area.selection.filter.rules.some(rule => rule.operator === "intersects") ? {"X-EOLab-Processing": "1"} : {}) },
                 credentials: "same-origin", cache: "no-store", body: JSON.stringify(area.selection),
             });
             if (!response.ok) return;
@@ -27,6 +29,7 @@ export class VectorSelectionOverlay {
             this.layer = this.leaflet.geoJSON(value.geometry, {
                 style: { color: "#f59e0b", weight: 2, fillOpacity: 0.05 }, interactive: false,
             }).addTo(this.map);
+            return value.geometry;
         } catch { /* Optional outline failure never changes the analysis selection. */ }
     }
 

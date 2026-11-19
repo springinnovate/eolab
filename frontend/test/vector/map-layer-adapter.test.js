@@ -300,6 +300,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
           rules: [{
             value: { kind: "string", value: "large" },
             color: "#ff0000",
+            label: null, opacity: 1,
           }],
           otherColor: null,
           missingColor: null,

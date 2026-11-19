@@ -18,7 +18,7 @@ function startup(sharedViewer, status = 200) {
     let release;
     const pending = new Promise(resolve => { release = resolve; });
     const dependencies = {
-        document: {querySelector: () => ({})},
+        document: {querySelector: selector => ({selector})},
         isSharedViewer: sharedViewer,
         editableMapSlug: null,
         window: {setTimeout},
@@ -31,9 +31,25 @@ function startup(sharedViewer, status = 200) {
         applyAppGlobalConfiguration: () => {},
         initializeRenderingDiagnostics: () => {},
         initializeMap: () => ({}),
-        EomapLayoutController: class { showWorkspace() {} },
+        EomapLayoutController: class {
+            showWorkspace() {}
+            /** Exercise the startup connection from the dock to its workspace surface.
+             * @param {{selector:string}} panel Selected surface.
+             * @param {(listener:(active:boolean)=>void)=>()=>void} subscribe Dock subscription.
+             * @return {void}
+             */
+            registerPanelActivitySource(panel, subscribe) {
+                subscribe(active => calls.push({panel: panel.selector, active}));
+            }
+        },
+        bindPanelFadeSettings: () => calls.push({panelSettings: true}),
         SavedMapViewLocalStorage: class {},
-        MapInspectionController: class {},
+        MapInspectionController: class {
+            /** Replay initial activity. @param {(active:boolean)=>void} listener Layout listener.
+             * @return {()=>void} Disconnect the test source.
+             */
+            subscribeClickResultActivity(listener) { listener(false); return () => {}; }
+        },
         initializeCatalog: async configuration => {
             calls.push({features: configuration});
             return () => {};
@@ -59,7 +75,9 @@ for (const sharedViewer of [false, true]) {
         assert.equal(calls.length, 1);
         release();
         await running;
-        assert.deepEqual(calls[1], {features: {appTitle: "Test"}});
+        assert.deepEqual(calls.slice(1), [
+            {panelSettings: true}, {panel: "#map-inspection", active: false}, {features: {appTitle: "Test"}},
+        ]);
     });
 
     test(`failed identity bootstrap keeps feature controls uninitialized (shared=${sharedViewer})`, async () => {

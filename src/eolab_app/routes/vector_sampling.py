@@ -11,13 +11,19 @@ from eolab_app.routes.http_disconnect import (
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_http import PrivateVectorRoute, vector_http_exception
 from eolab_app.catalog_selection import (
+    FeatureMatches,
     SelectionUnavailableError,
     ArtifactVectorSelection,
     UploadedVectorFilterRequest,
     VectorSelection,
+    DrawingSelection,
+    UploadedSelection,
+    VectorSourceOwners,
+    referenced_layers,
 )
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
+from eolab_app.vector.lasso import LassoSelectionRequest, LassoSelectionResult
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.parcel_models import (
@@ -76,13 +82,14 @@ def create_vector_sampling_router(
 
     @router.post("/parcels/rows", response_model=ParcelRowsResponse)
     async def parcel_rows(
-        payload: ParcelRowsRequest, request: Request
+        payload: ParcelRowsRequest, request: Request, response: Response
     ) -> ParcelRowsResponse:
         """Return original parcel IDs and display attributes after exact filtering.
 
         Args:
             payload: Catalog source, ordinary filter, original fields and page bounds.
             request: HTTP disconnect observer for the supervised native read.
+            response: Renews private ownership cookies when the filter uses private sources.
 
         Returns:
             One complete page, including empty success, with source and next offset.
@@ -92,17 +99,17 @@ def create_vector_sampling_router(
             VectorFeatureError: Safe source, field or Jobs error translated by the route.
         """
         try:
-            return await run_until_http_disconnect(
-                request, service.read_parcel_rows(payload)
-            )
+            read = (service.read_parcel_rows(payload, read_source_owner(payload, request, response))
+                    if payload.filter.intersections else service.read_parcel_rows(payload))
+            return await run_until_http_disconnect(request, read)
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Parcel reading cancelled") from error
         except SelectionUnavailableError as error:
             raise HTTPException(409, error.detail) from error
 
     def read_source_owner(
-        payload: object, request: Request, response: Response
-    ) -> str | None:
+        payload: CatalogVectorFilterRequest | VectorSelection | UploadedVectorFilterRequest, request: Request, response: Response
+    ) -> str | VectorSourceOwners | None:
         """Read the private identity required by an upload or immutable run result.
 
         Args:
@@ -116,6 +123,15 @@ def create_vector_sampling_router(
         Raises:
             HTTPException: If private result access is unavailable or unauthorized.
         """
+        if payload.filter.intersections:
+            sources = (payload, *referenced_layers(payload.filter))
+            upload = get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads") if any(isinstance(source, UploadedVectorFilterRequest) for source in sources) else None
+            processing = None
+            if any(isinstance(source, (ArtifactVectorSelection, DrawingSelection)) for source in sources):
+                if read_artifact_owner is None:
+                    raise HTTPException(404, "This polygon layer is unavailable.")
+                processing = read_artifact_owner(request, response)
+            return VectorSourceOwners(upload, processing)
         if isinstance(payload, ArtifactVectorSelection):
             if read_artifact_owner is None:
                 raise HTTPException(404, "This vector result is unavailable.")
@@ -125,6 +141,23 @@ def create_vector_sampling_router(
                 request, response, mutation_header="X-EOLab-Uploads"
             )
         return None
+
+    @router.api_route("/spatial-read", methods=["GET", "PUT"], include_in_schema=False)
+    async def spatial_read(request: Request) -> Response:
+        """Exchange original sources or matching feature IDs with the authorized Jobs worker.
+
+        The submitting request owns the bearer token and holds every source until the worker stops.
+        """
+        from fastapi.responses import JSONResponse
+
+        scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+        read = service.spatial_reads.get(token) if scheme.lower() == "bearer" else None
+        if read is None:
+            raise HTTPException(404, "This polygon filter is unavailable.")
+        if request.method == "GET":
+            return JSONResponse(read.inputs)
+        read.result = FeatureMatches.model_validate_json(await request.body())
+        return Response(status_code=204)
 
     @router.post("/areas")
     async def select_area(
@@ -194,6 +227,37 @@ def create_vector_sampling_router(
             )
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Vector zoom cancelled") from error
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
+        except SourceFileError as error:
+            raise HTTPException(error.status, str(error)) from error
+
+    @router.post("/lasso", response_model=LassoSelectionResult)
+    async def lasso(
+        payload: LassoSelectionRequest, request: Request, response: Response
+    ) -> LassoSelectionResult:
+        """Select original features intersecting the drawn polygon, without WMS.
+
+        Args:
+            payload: Path-free filtered target and validated WGS84 lasso.
+            request: Browser ownership and disconnect observer.
+            response: Renews the selected private source's browser cookie.
+
+        Returns:
+            Exact matching IDs and count, plus optional whole-feature highlights.
+
+        Raises:
+            HTTPException: For invalid ownership, unavailable sources or failed reads.
+        """
+        source_owner = read_source_owner(payload.selection, request, response)
+        try:
+            return await run_until_http_disconnect(
+                request, service.lasso(payload.selection, payload.polygon, source_owner)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Lasso selection cancelled") from error
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
         except SelectionUnavailableError as error:

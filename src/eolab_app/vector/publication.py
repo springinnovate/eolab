@@ -186,8 +186,7 @@ class VectorPublicationService:
         """
         private = False
         for name in names:
-            reference = self._vector_registry.get_artifact_reference(name)
-            if reference is not None:
+            for reference in self._vector_registry.private_inputs(name).artifacts:
                 private = True
                 if self._artifact_sources is None:
                     raise SourceFileError("This vector result is unavailable.", 404)
@@ -210,12 +209,7 @@ class VectorPublicationService:
         Raises:
             SourceFileError: If expiry or ownership rejects the queued read.
         """
-        references = set(
-            filter(
-                None,
-                (self._vector_registry.get_artifact_reference(name) for name in names),
-            )
-        )
+        references = {reference for name in names for reference in self._vector_registry.private_inputs(name).artifacts}
         if not references:
             yield
             return

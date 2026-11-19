@@ -62,6 +62,8 @@ function boxStatisticLabel(label, statistic, method) {
 }
 
 /** Resolve the displayed scalar, its calculation method, and its owning job.
+ * Exact box presets use the preset's percentage unit or the source band's stored unit.
+ * Custom formulas keep the unit assigned by Processing to their result row.
  * @param {Object|undefined} result Captured measurements for one original source.
  * @param {Object} formula Current named statistic, including its preset identity.
  * @return {{row:Object|undefined,label:string,method:string|null,error:string,job:Object|null}} Value for both the plot and export.
@@ -83,7 +85,7 @@ function seriesValue(result, formula) {
                 state: sample?.value != null ? "ok" : method === "exact" ? "no_valid_data" : "error"}};
     }
     if (result.exactBox && row) {
-        const unit = result.previewUnits?.get(formula.expression) ?? definition.unit ?? row.unit;
+        const unit = definition.unit ?? result.job.grid?.storedUnit;
         return {label: boxStatisticLabel(label, definition.label, "exact"), method: "exact",
             row: {...row, unit}, job: result.job, error: ""};
     }
@@ -123,6 +125,7 @@ export class RasterSeriesController {
         this.formulas = [{ id: 1, ...SERIES_STATISTICS.mean }];
         this.formulaSerial = 1;
         this.areaChoice = "selection";
+        this.useOpeningArea = true;
         /** @type {import("./series-view.js").SeriesPlot[]} Plots in creation order. */
         this.plots = [{ id: 1, displayNumber: 1, scale: "linear", bounds: null, xBounds: null }];
         this.plotSerial = 1;
@@ -147,7 +150,7 @@ export class RasterSeriesController {
         this.active = false;
         this.order = "map";
         this.direction = "forward";
-        this.chartType = "line";
+        this.chartType = "bar";
         this.sourceMode = "layers";
         this.temporal = {datasets: [], datasetKey: "", item: null, variable: "", periodMode: "month",
             startTime: "", endTime: "", loading: false, error: ""};
@@ -190,6 +193,7 @@ export class RasterSeriesController {
         const area = this.areaStatistics;
         const started = area.start();
         if (area.hasCapturedInputs) {
+            this.useOpeningArea = false;
             this.formulas = area.formulas.map(formula => ({...formula}));
             this.formulaSerial = Math.max(...this.formulas.map(formula => formula.id));
             this.statisticDisplay = new Map(this.formulas.map((formula, index) =>
@@ -244,6 +248,7 @@ export class RasterSeriesController {
         this.selectedKeys = new Set([key]);
         this.selectionOverrides = new Map(this.sources.map(item => [item.key, item.key === key]));
         if (area !== undefined) {
+            this.useOpeningArea = false;
             this.areaChoice = area?.kind === "wholeRaster" ? "whole" : "selection";
             this.selectedArea = area;
             this.selectedAreaLabel = "Selected histogram area";
@@ -485,14 +490,22 @@ export class RasterSeriesController {
     }
 
     /**
-     * Start automatic calculations when shown; keep submitted work running when hidden.
-     * Completed values and settings remain available when the panel is reopened.
+     * Start automatic calculations with the selected area, using the full raster on
+     * first open if the user has not chosen an area. Closing keeps submitted work
+     * running and preserves completed values, settings and explicit area choices.
      * @param {boolean} panelVisible Whether Raster series is the visible, active tool.
      * @return {void}
      */
     updateSamplingForPanelVisibility(panelVisible) {
         if (this.active === panelVisible) return;
         this.active = panelVisible;
+        if (panelVisible && this.useOpeningArea) {
+            this.useOpeningArea = false;
+            if (this.areaChoice === "selection" && !this.selectedArea) {
+                this.areaChoice = "whole";
+                this.updateAreaInputs();
+            }
+        }
         this.areaStatistics.updateCalculationForPanelVisibility(panelVisible);
         this.render();
     }
@@ -600,7 +613,8 @@ export class RasterSeriesController {
     /** Supply the area calculator with chosen original sources, independent of chart order. @return {void} */
     updateAreaInputs() {
         const area = this.getSelectedArea();
-        const label = this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel;
+        const label = this.areaChoice === "whole" ? "Whole raster"
+            : this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel;
         if (this.sourceMode === "temporal") {
             const temporal = this.temporal;
             const source = this.temporalSelectionError() ? null : {collectionId: temporal.item.collection, itemId: temporal.item.id,
@@ -619,6 +633,7 @@ export class RasterSeriesController {
      * @param {"selection"|"vector"|"whole"} choice Area source. @return {void}
      */
     chooseArea(choice) {
+        this.useOpeningArea = false;
         this.preservedVectorPreparations.clear();
         this.pendingVectorArea = null;
         this.areaChoice = choice;
@@ -748,6 +763,9 @@ export class RasterSeriesController {
         });
         const statistics = this.formulas.map(formula => ({ ...formula, ...this.statisticDisplay.get(formula.id), rows: rowsFor(area.results, formula) }));
         const rows = sources.flatMap((source, index) => statistics.map(statistic => statistic.rows[index]));
+        const completedRasters = sources.filter((_, index) => statistics.every(statistic => statistic.rows[index].state !== "waiting")).length;
+        const completedSuccessfully = area.complete && !area.hasErrors && !area.commonError && !area.needsRecovery;
+        const showProgress = !completedSuccessfully && sources.length > 1 && (area.busy || area.results.size > 0);
         const showingPrevious = !!(area.busy && !rows.some(row => row.state === "value") && area.previousResults);
         for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
@@ -760,9 +778,11 @@ export class RasterSeriesController {
             sources: this.sourceChoices(),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType, direction: this.direction,
-            message: area.results.size + " of " + sources.length + " rasters complete. " + area.message +
-                (this.hasPendingInputs ? " Results use the previous inputs." : "") +
-                (this.pendingVectorAreaMessage ? " " + this.pendingVectorAreaMessage : ""),
+            pixelPoint: area.pixelPoint,
+            resultBounds: sources.length === 1 ? sources[0].bounds : null,
+            message: [showProgress ? completedRasters + " of " + sources.length + " rasters complete." : "",
+                completedSuccessfully ? "" : area.message,
+                this.hasPendingInputs ? "Results use the previous inputs." : "", this.pendingVectorAreaMessage].filter(Boolean).join(" "),
             canDownload: area.results.size > 0 && !area.busy,
         });
     }
@@ -793,8 +813,8 @@ export class RasterSeriesController {
             statistics, plots: this.plots, sources: this.sourceChoices(), rows: showingPrevious ? [] : observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, workProgress: area.temporalWork, chartType: this.chartType, direction: this.direction,
-            message: (this.temporalSelectionError() || area.message) +
-                (this.pendingVectorAreaMessage ? " " + this.pendingVectorAreaMessage : ""),
+            pixelPoint: area.pixelPoint, resultBounds: this.temporal.item?.bbox,
+            message: [this.temporalSelectionError() || (area.complete ? "" : area.message), this.pendingVectorAreaMessage].filter(Boolean).join(" "),
             canDownload: !!result && !area.busy});
     }
 

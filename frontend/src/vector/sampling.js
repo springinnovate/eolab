@@ -161,7 +161,9 @@ export async function createVectorSamplingArea(source, filter, signal) {
     const identity = source.kind === "runArtifact" ? {kind: source.kind, jobId: source.jobId, artifactId: source.artifactId, layerName: source.layerName}
         : source.uploadId ? { uploadId: source.uploadId } : { collectionId: source.collectionId, itemId: source.itemId };
     const response = await fetch("/api/vector-sampling/areas", { method: "POST", signal,
-        headers: { "Content-Type": "application/json", ...(source.uploadId ? { "X-EOLab-Uploads": "1" } : {}), ...(source.kind === "runArtifact" ? {"X-EOLab-Processing": "1"} : {}) },
+        headers: { "Content-Type": "application/json",
+            ...(source.uploadId || filter.rules.some(rule => rule.operator === "intersects") ? {"X-EOLab-Uploads": "1"} : {}),
+            ...(source.kind === "runArtifact" || filter.rules.some(rule => rule.operator === "intersects") ? {"X-EOLab-Processing": "1"} : {}) },
         credentials: "same-origin", cache: "no-store",
         body: JSON.stringify({ ...identity, filter, ...(source.calculatedFields?.length ? {calculatedFields: source.calculatedFields} : {}) }) });
     const value = await response.json();

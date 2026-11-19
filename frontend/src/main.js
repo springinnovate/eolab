@@ -2,12 +2,15 @@ import {
     createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink,
     catalogReferenceIdentity, createCatalogDisclosure,
 } from "./catalog-curated-metadata.js";
-import { rasterSamplingAreaBounds } from "./selected-area.js";
+import { captureMapViewportArea, rasterSamplingAreaBounds, viewFilter, waitingForPolygonLayer } from "./selected-area.js";
 import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
 import { getFeatureInfoViewport } from "./vector/feature-info-viewport.js";
-import { annotationSummaryPolygons } from "./annotations/summary-area.js";
+import { annotationSummaryPolygons, filterAnnotationPolygons } from "./annotations/summary-area.js";
+import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
+import { MapInteractionTools } from "./map-interaction-tools.js";
+import { selectLassoFeatures } from "./vector/lasso.js";
 /**
  * Browser entry point and application composition root for EOLab.
  *
@@ -52,6 +55,7 @@ import {
 } from "./catalog-result-presentation.js";
 import { createCatalogResultView } from "./catalog-result-view.js";
 import { EomapLayoutController } from "./eomap-layout-controller.js";
+import { bindPanelFadeSettings } from "./panel-fade-settings.js";
 import { MapInspectionController } from "./map-inspection-controller.js";
 import {
     applyCatalogSystemState,
@@ -81,12 +85,14 @@ import {
 } from "./catalog-map-actions.js";
 import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { TemporalScrubber } from "./raster/temporal-scrubber.js";
 import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
 import { loadSamplingBoxPreview } from "./raster/analysis-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
 import { RasterSeriesView } from "./raster/series-view.js";
+import { RasterResultLocator } from "./raster/series-locator.js";
 import { isCanonicalWgs84Position } from "./raster/geometry.js";
 import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
@@ -128,6 +134,7 @@ import { CalculationSessionStorage } from "./processing/calculation-session.js";
 import { ProcessingJobs } from "./processing/jobs.js";
 import { RasterClipsController } from "./processing/raster-clips-controller.js";
 import { RasterClipsView } from "./processing/raster-clips-view.js";
+import { RasterDownloadSheet } from "./processing/raster-download-sheet.js";
 import { PendingSubmissionStorage } from "./processing/pending-submission.js";
 
 /** Describe a calculation input using its original source identity and map label.
@@ -835,7 +842,7 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let mapInteractionMode = "inspection";
+    let mapInteractionMode = "pixel";
     let rasterVisualization = null;
     let rasterSeries = null;
     /** List each retained temporal dataset once, independent of its displayed observations.
@@ -867,7 +874,9 @@ async function initializeCatalog(
     let planning = null;
     let vectorFeatureInspector = null;
     let mapFeatureHover = null;
+    let mapInteractionTools = null;
     let vectorFilterControls = null;
+    let refreshSpatialFilters = null;
     let vectorFieldCalculator = null;
     let vectorSampling = null;
     let summarySampling = null;
@@ -875,6 +884,7 @@ async function initializeCatalog(
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
     const mapLayerStackView = new MapLayerStackView(document, { allowRemoval: !isSharedViewer });
+    let rasterClips = null;
     const mapLegend = new OnMapLegend(L, leafletMap, {
         toggleButton: document.querySelector("#toggle-map-legend"),
         onRestoreRequested: () => mapInspection.showToolActions(),
@@ -887,14 +897,37 @@ async function initializeCatalog(
             leafletLayers.retryFailedTiles();
         },
     );
+    const timelineRoot = document.querySelector("#temporal-scrubber");
+    L.DomEvent.disableClickPropagation(timelineRoot);
+    L.DomEvent.disableScrollPropagation(timelineRoot);
+    const timeline = new TemporalScrubber(timelineRoot, {
+        selectTime: (key, time) => rasterVisualization.selectTemporalTime(key, time),
+        selectMonth: (key, month, edge) => rasterVisualization.selectTemporalMonth(key, month, edge),
+        prepare: async (key, time, signal) => {
+            const frame = await rasterVisualization.prepareTemporalFrame(key, time, signal);
+            if (!frame) return null;
+            await leafletLayers.prepareLayer(key, frame.descriptor, signal);
+            return frame.show;
+        },
+    });
+    leafletMap.once("unload", () => timeline.destroy());
+    /** Present tile progress and tell the timeline which publications are actually on screen.
+     * @param {import("./map-layers/tile-recovery.js").MapTileStatus} status Current viewport progress.
+     * @param {string[]} displayed Names of fully drawn layers.
+     * @return {void}
+     */
+    function presentMapStatus(status, displayed) {
+        mapRenderStatus.update(status);
+        timeline.setMapStatus(status, displayed);
+    }
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
         leafletMap,
         client: new CompositeMapPlanClient(),
-        onStatus: (status) => mapRenderStatus.update(status),
+        onStatus: presentMapStatus,
     });
     const leafletLayers = new LeafletLayerSet(leafletMap, compositeLeafletRenderer, {
-        onStatus: status => mapRenderStatus.update(status),
+        onStatus: presentMapStatus,
         onLayerStatus: (key, status) => mapLayerController.updateTileStatus(key, status),
     });
     const mapLayerController = new MapLayerController({
@@ -903,6 +936,7 @@ async function initializeCatalog(
         leafletLayers,
         onLayersChange: (layers, change) => {
             mapLegend.update(layers);
+            timeline.setLayers(layers);
             planning?.refreshMapLayers();
             if (change?.kind === "opacity") {
                 layerStyleEditor?.refresh();
@@ -910,9 +944,13 @@ async function initializeCatalog(
                 savedMapViewController?.scheduleRemember();
                 return;
             }
+            const calculationLayers = layers.filter(layer => layer.capabilities?.calculations);
+            rasterClips?.syncLayerDownloads(calculationLayers);
             refreshCatalogMapAction();
+            mapInteractionTools?.refresh();
             annotations?.observeLayerOrder(layers);
-            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.capabilities?.calculations), temporalDatasets(layers));
+            refreshSpatialFilters?.();
+            rasterSeries?.updateAvailableRasters(calculationLayers, temporalDatasets(layers));
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
@@ -1035,6 +1073,7 @@ async function initializeCatalog(
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
     const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxPreview: loadSamplingBoxPreview });
+    const resultLocator = new RasterResultLocator(document, L, appGlobalConfiguration.basemap);
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
@@ -1048,13 +1087,18 @@ async function initializeCatalog(
             }
         },
         view: new RasterSeriesView(document, {
+            locator: resultLocator,
             onContextChange: context => presentSamplingContext("raster-series", context),
         }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
-    const rasterClips = new RasterClipsController({
+    rasterClips = new RasterClipsController({
         api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
             onContextChange: context => presentSamplingContext("raster-clips", context),
+        }),
+        layerView: new RasterDownloadSheet({
+            document, map: leafletMap.getContainer(), list: mapLayerStackView.list, scrollContainer: mapLayerStackView.scrollContainer,
+            getButton: key => mapLayerStackView.getDownloadButton(key),
         }),
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: processingContext,
@@ -1068,8 +1112,15 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => rasterClips.setActive(tool === "raster-clips"));
     mapLayerController.onDownload = (key) => {
-        const record = mapLayerController.getRecord(key);
-        if (record) rasterClips.open(describeCalculationSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
+        const layer = mapLayerController.snapshots().find(item => item.key === key);
+        if (!layer?.capabilities?.calculations) return;
+        const bounds = leafletMap.getBounds();
+        let viewport = null, viewportError = "";
+        try {
+            viewport = captureMapViewportArea({west:bounds.getWest(), east:bounds.getEast(), south:bounds.getSouth(), north:bounds.getNorth()});
+        } catch (error) { viewportError = error.message; }
+        rasterClips.toggleLayer(key, describeCalculationSource(layer.source, layer.label),
+            {viewport, viewportError, selection: rasterVisualization?.getSelectedArea()});
     };
     mapLayerController.onCalculate = (key) => {
         const record = mapLayerController.getRecord(key);
@@ -1086,7 +1137,6 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onDownloadRequested: (item, area, label) => rasterClips.open(describeCalculationSource(item, label), area),
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
@@ -1329,23 +1379,84 @@ async function initializeCatalog(
         });
         void uploadsDialog.refreshUsage();
     }
+    /** List every retained polygon view with an identity independent of its name and visibility.
+     * @param {boolean} [withCounts=false] Include the human-readable counts shown by the polygon picker.
+     * @return {Object[]} Current source, filter, committed polygons and known whole-layer count.
+     */
+    function spatialPolygonLayers(withCounts = false) {
+        return getSamplingPolygonTargets().map(layer => {
+            const record = mapLayerController.getRecord(layer.key);
+            const id = record.filterViewId ??= (layer.key.startsWith("local:annotation:")
+                ? layer.key.slice("local:annotation:".length) : crypto.randomUUID());
+            if (!withCounts) return {...layer, id};
+            const status = record.adapter.describeFilter?.(record).status;
+            const total = layer.polygons?.length;
+            const description = status || (total === undefined ? "" : `${filterAnnotationPolygons(layer.polygons, layer.filter).length} of ${total} polygons`);
+            return {...layer, id, count: description};
+        });
+    }
+    const spatialViews = new SpatialFilterViews({layers: spatialPolygonLayers, drawingGeometry: annotationSummaryPolygons,
+        refresh: () => refreshSpatialFilters(), upload: polygons => processingApi.uploadPolygonArea(polygons), discard: id => processingApi.discardPolygonArea(id)});
+    const drawingFilterAttempts = new Map();
+    /** Apply field and spatial conditions to committed drawings without disturbing the editing draft.
+     * @param {string} key Drawing view to filter.
+     * @param {Object} candidate Rule builder state.
+     * @param {()=>boolean} [current] Whether a source change that triggered this refresh is still current.
+     * @return {Promise<Object|null>} Applied rules, or null after replacement or removal.
+     * @throws {Error} If the polygon source cannot be read.
+     */
+    async function applyDrawingFilter(key, candidate, current) {
+        const attempt = Symbol();
+        drawingFilterAttempts.set(key, attempt);
+        const layers = spatialPolygonLayers();
+        const target = layers.find(view => view.key === key);
+        if (!target) return null;
+        const captured = await spatialViews.bind(key, candidate, layers);
+        const spatial = captured.enabled && captured.rules.some(rule => rule.operator === "intersects");
+        if (spatial) {
+            const original = await spatialViews.drawing(target, EMPTY_VECTOR_FILTER);
+            const properties = target.polygons.map(({name, note}) => ({name, note}));
+            const positions = await applySpatialFilter("drawings", {target: original, filter: captured, properties});
+            captured.matchingIds = positions.map(index => target.polygons[index].id);
+        }
+        const editor = annotations.filterTarget(key);
+        if (!editor || drawingFilterAttempts.get(key) !== attempt || (current && !current())) return null;
+        if (spatial && !current) spatialViews.trackSources(key, captured, layers);
+        editor.apply(captured);
+        return captured;
+    }
     let modelFilterControls = null;
     /** @type {symbol} Distinguish explicit statistics-area edits from passive map-filter updates. */
     const statisticsAreaFilterIntent = Symbol("statistics-area-filter");
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
+        getPolygonLayers: key => spatialPolygonLayers(true).filter(layer => layer.key !== key)
+            .map(({id, label, count}) => ({id, label, count})),
+        drawPolygon: () => new Promise(resolve => annotations.drawPrivatePolygon(key =>
+            resolve(key ? spatialPolygonLayers().find(layer => layer.key === key)?.id ?? null : null))),
         onZoom: ([west, south, east, north]) => leafletMap.fitBounds(
             L.latLngBounds([[south, west], [north, east]]).pad(0.15), {padding: [24, 24], maxZoom: 14}),
         getTarget: (key) => {
             const annotation = annotations?.filterTarget(key);
-            if (annotation) return annotation;
             const record = mapLayerController.getRecord(key);
+            if (annotation) return {...annotation,
+                filter: record?.requestedSpatialFilter ?? annotation.filter,
+                status: record?.spatialFilterError ?? annotation.status,
+                cancelPending: () => drawingFilterAttempts.delete(key),
+                apply: candidate => {
+                    if (record) {
+                        delete record.requestedSpatialFilter;
+                        delete record.spatialFilterError;
+                    }
+                    return applyDrawingFilter(key, candidate);
+                }};
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
             return {
                 key, label: record.entry.label,
                 fields: record.adapter.describeSource(record).fields,
-                source: record.adapter.describeSource(record).source,
+                source: record.adapter.describeSource(record).selection ?? record.adapter.describeSource(record).source,
                 ...record.adapter.describeFilter(record),
+                ...(record.requestedSpatialFilter ? {filter: record.requestedSpatialFilter} : {}),
                 /** Commit the map view's filter while retaining any captured statistics polygons.
                  * @param {Object} candidate Complete field conditions.
                  * @param {unknown} context Opaque caller context; statistics-area edits commit their own explicit intent.
@@ -1354,16 +1465,36 @@ async function initializeCatalog(
                  */
                 apply: async (candidate, context) => {
                     const release = context === statisticsAreaFilterIntent ? null : rasterSeries.preserveCapturedVectorArea();
-                    try { return await record.adapter.applyFilterState(record, candidate); }
+                    const attempt = Symbol();
+                    record.filterEdit = attempt;
+                    try {
+                        const filter = candidate.rules.some(rule => rule.operator === "intersects") ? await spatialViews.bind(key, candidate) : candidate;
+                        if (record.filterEdit !== attempt || mapLayerController.getRecord(key) !== record) return null;
+                        delete record.requestedSpatialFilter;
+                        delete record.spatialFilterError;
+                        return await record.adapter.applyFilterState(record, filter);
+                    }
                     finally { release?.(); }
                 },
-                cancelPending: () => record.adapter.cancelPendingFilter(record),
+                cancelPending: () => {
+                    delete record.filterEdit;
+                    record.adapter.cancelPendingFilter(record);
+                },
             };
         },
     });
     leafletMap.on("movestart", () => vectorFilterControls.cancelZoom("Map moved. Zoom again to find filtered features."));
     mapLayerController.onFilter = key => vectorFilterControls.open(key);
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
+    /** Share the active polygon's display outline with the single-raster thumbnail.
+     * @param {Object} area Prepared selection with optional geographic bounds.
+     * @return {Promise<void>} The available display geometry has been delivered.
+     */
+    const showSamplingOutline = async area => {
+        resultLocator.setPolygon(area);
+        const geometry = await vectorSamplingOverlay.load(area);
+        if (geometry) resultLocator.setPolygon(area, geometry);
+    };
     /** Read polygon choices for Models, histogram and summary controls.
      * Visibility and WMS publication do not determine numerical selection.
      * @return {Array<{key:string,label:string,sourceOrigin:"catalog"|"upload"|"runArtifact",item:import("./vector/sampling.js").VectorSamplingSource,
@@ -1400,6 +1531,7 @@ async function initializeCatalog(
         if (!polygons.length) throw new Error("No polygons match this filter. Add a polygon or change the conditions.");
         // Let the upload reply settle so the owner can release a superseded reference.
         const area = await processingApi.uploadPolygonArea(polygons);
+        if (!signal.aborted) resultLocator.setPolygon(area, {type: "GeometryCollection", geometries: polygons});
         return { ...area, label: target.label, total: target.polygons.length, filter };
     };
     /** Release the private reference owned by a superseded picker selection.
@@ -1480,8 +1612,10 @@ async function initializeCatalog(
             const target = {key: request.key, label: request.source.label, source: request.source,
                 fields: request.source.fields ?? [], filter: request.filter};
             modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
+                getPolygonLayers: key => spatialPolygonLayers(true).filter(layer => layer.key !== key)
+                    .map(({id, label, count}) => ({id, label, count})),
                 getTarget: key => key === target.key && request.isCurrent() ? target : null});
-            modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
+            modelFilterControls.open(request.key, {filter: request.filter, apply: async candidate => request.apply(await spatialViews.bind(request.key, candidate)), complete: request.complete, cancel: request.cancel,
                 applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
                 help: "Change the filter for this map item and every tool input using it. Create a copy to use a different filter.",
             });
@@ -1512,6 +1646,39 @@ async function initializeCatalog(
         if (models.state.selectedRun === id) models.requestRunDeletion();
     };
     leafletMap.on("moveend resize", () => models.refreshMapArea());
+    refreshSpatialFilters = () => {
+        const targets = mapLayerController.retainedRecords.flatMap(record => {
+            const key = record.entry.key;
+            const drawing = annotations?.filterTarget(key);
+            if (!drawing && record.adapter !== vectorMapLayerAdapter) return [];
+            const filter = record.requestedSpatialFilter ?? drawing?.filter ?? record.adapter.exportFilterState(record);
+            return [{key, filter, update: async (requested, current) => {
+                try {
+                    if (drawing) {
+                        delete record.spatialFilterError;
+                        await applyDrawingFilter(key, requested, current);
+                    } else {
+                        const captured = await spatialViews.bind(key, requested);
+                        if (!current() || !mapLayerController.getRecord(key)) return;
+                        if (!record.spatialFilterError && JSON.stringify(record.adapter.exportFilterState(record)) === JSON.stringify(captured)) return;
+                        delete record.spatialFilterError;
+                        await record.adapter.applyFilterState(record, captured);
+                    }
+                    if (current()) delete record.requestedSpatialFilter;
+                } catch (error) {
+                    if (!current() || !mapLayerController.getRecord(key)) return;
+                    record.requestedSpatialFilter = viewFilter(requested);
+                    record.spatialFilterError = error.message;
+                    const empty = waitingForPolygonLayer(requested);
+                    if (drawing) drawing.apply(empty);
+                    else await record.adapter.applyFilterState(record, empty).catch(() => {
+                        if (current()) record.adapter.hideUnavailableFilter(record, empty);
+                    });
+                }
+            }}];
+        });
+        spatialViews.follow(targets);
+    };
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(document, {
             polygonAreaHelp: "For calculations, choose this layer in Raster statistics. For clips, choose a sampling box or a Catalog or uploaded polygon layer.",
@@ -1530,7 +1697,7 @@ async function initializeCatalog(
          * @return {void}
          */
         onActivate: area => {
-            if (area.selection) void vectorSamplingOverlay.load(area);
+            if (area.selection) void showSamplingOutline(area);
             const label = `${area.label} · ${area.matched} of ${area.total} features`;
             rasterVisualization.setVectorSelection({ ...area, label });
         },
@@ -1558,7 +1725,7 @@ async function initializeCatalog(
         onSelectionState: selection => rasterSeries.setVectorSelectionState(selection),
         onActivate: area => {
             const label = `${area.label} · ${area.matched} of ${area.total} features`;
-            if (area.selection) void vectorSamplingOverlay.load(area);
+            if (area.selection) void showSamplingOutline(area);
             else vectorSamplingOverlay.clear();
             updateRasterSeriesArea(area.polygonArea ? {kind: "polygonArea", polygonArea: area.polygonArea}
                 : {kind: "catalogSelection", catalogSelection: area.selection}, label);
@@ -1894,7 +2061,7 @@ async function initializeCatalog(
         onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**
-     * Sample rasters and catalog vectors, then foreground any clicked annotation's details.
+     * Place a histogram box or inspect a map point using the selected tool.
      * Leaflet emits this event only for a completed click, not a drag-pan.
      *
      * @param {{latlng:{lng:number,lat:number},containerPoint?:{x:number,y:number}}}
@@ -1902,7 +2069,7 @@ async function initializeCatalog(
      * @return {void}
      */
     function exploreMap(event) {
-        if (mapInteractionMode !== "inspection") return;
+        if (!["pixel", "box"].includes(mapInteractionMode)) return;
         mapInspection.beginMapClick(event.latlng);
         const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
         pixelPoint = isCanonicalWgs84Position(position) ? Object.freeze(position) : null;
@@ -1911,6 +2078,7 @@ async function initializeCatalog(
         selectingMapClick = true;
         try {
             rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
+                histogram: mapInteractionMode === "box",
                 onSelected: area => {
                     if (area?.kind === "polygonArea") return;
                     updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : ["selectedArea", "samplingBox"].includes(area?.kind) ? "Sampling box" : "Sample area");
@@ -1918,13 +2086,18 @@ async function initializeCatalog(
             });
             if (!rasterClickSelected) {
                 mapInspection.closeHistogram(false);
-                const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
-                    ? rasterVisualization.selectSamplingBox(event.latlng) : null;
-                updateRasterSeriesArea(box, box ? "Sampling box" : "");
+                if (mapInteractionMode === "box") {
+                    const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
+                        ? rasterVisualization.selectSamplingBox(event.latlng) : null;
+                    updateRasterSeriesArea(box, box ? "Sampling box" : "");
+                }
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
-            void vectorFeatureInspector.inspect(event);
-            annotations?.inspectAt(event.latlng);
+            if (mapInteractionMode === "pixel") {
+                void vectorFeatureInspector.inspect(event);
+                annotations?.inspectAt(event.latlng);
+            }
+            mapInspection.keepVisibleClickResultReadable();
         } finally {
             selectingMapClick = false;
         }
@@ -1944,14 +2117,15 @@ async function initializeCatalog(
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
             onRenameContributor: id => annotationSessions.editContributorName(id),
             requestEditing: id => annotationSessions.requestDrawing(id),
-            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
+            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); refreshSpatialFilters?.(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
             onFilter: key => vectorFilterControls.open(key),
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
                 mapFeatureHover?.setEnabled(!editing);
-                mapInteractionMode = editing ? "layer-editing" : "inspection";
+                mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
                 document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
                 rasterVisualization.setPointerInspectionEnabled(!editing);
+                mapInteractionTools?.setEditing(editing);
                 onLayoutChange();
             },
         });
@@ -1973,9 +2147,9 @@ async function initializeCatalog(
             vectorSampling.refresh();
             summarySampling.refresh();
         });
-        const restoringMap = savedMapViewController.restoreStartupView(globalThis.location.hash);
+        const restoringMap = savedMapViewController.restoreStartupView();
         void Promise.all([annotationsReady, restoringMap]).then(() => {
-            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash,
+            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null,
                 mapOrderedLayerIds: [...annotationSessions.bookmarkedLayerIds(),
                     ...annotations.drawingLayers().filter(layer => layer.drawingLayerId).map(layer => layer.localLayerId)] });
             void annotationSessions.refresh();
@@ -1994,6 +2168,24 @@ async function initializeCatalog(
         }),
     });
     leafletMap.getContainer().classList.add("leaflet-crosshair");
+    mapInteractionTools = new MapInteractionTools({
+        documentContext: document, map: leafletMap, leaflet: L,
+        getTargets: () => mapLayerController.retainedRecords.flatMap(record => {
+            if (record.adapter !== vectorMapLayerAdapter) return [];
+            const source = record.adapter.describeSource(record);
+            return source.selection ? [{key: record.entry.key, label: record.entry.label,
+                selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
+        }),
+        selectFeatures: selectLassoFeatures,
+        onModeChange: (mode, enabled) => {
+            mapInteractionMode = enabled ? mode : "layer-editing";
+            mapFeatureHover.setEnabled(enabled && mode === "pixel");
+            rasterVisualization.setPointerInspectionEnabled(enabled && ["pixel", "box"].includes(mode));
+            rasterVisualization.setPixelPickingEnabled(enabled && mode === "pixel");
+            rasterVisualization.setSamplingBoxPointerEnabled(enabled && mode === "box");
+        },
+    });
+    leafletMap.on("unload", () => mapInteractionTools.dispose());
     leafletMap.on("click", exploreMap);
     onRasterViewerReady(rasterVisualization, rasterClips);
     /**
@@ -2603,6 +2795,8 @@ async function startApplication() {
     }
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
+    bindPanelFadeSettings(document.querySelector("#app"),
+        new SavedMapViewLocalStorage(undefined, "eolab.panel-fading.v1"));
     if (!isSharedViewer) initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     layoutController = new EomapLayoutController({
@@ -2622,6 +2816,8 @@ async function startApplication() {
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
+    layoutController.registerPanelActivitySource(document.querySelector("#map-inspection"),
+        listener => mapInspection.subscribeClickResultActivity(listener));
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,

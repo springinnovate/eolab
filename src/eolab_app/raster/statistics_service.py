@@ -4,6 +4,7 @@ from eolab_app.catalog_selection import (
     CatalogSelectionReader,
     ArtifactVectorSelection,
     SelectionUnavailableError,
+    VectorSourceOwners,
 )
 import asyncio
 import logging
@@ -871,7 +872,14 @@ class RasterStatisticsService:
             SourceFileError: If a result expires or loses its source lease.
         """
         try:
-            if isinstance(request.catalog_selection, ArtifactVectorSelection):
+            if request.catalog_selection and request.catalog_selection.filter.intersections:
+                if self._catalog_selection_reader is None:
+                    raise SelectionUnavailableError("The polygon source is unavailable.")
+                async with self._catalog_selection_reader.open_selection(
+                    request.catalog_selection, VectorSourceOwners(upload_owner, owner)
+                ) as resolved:
+                    yield CatalogSelectionSamplingArea(resolved)
+            elif isinstance(request.catalog_selection, ArtifactVectorSelection):
                 if self._catalog_selection_reader is None or owner is None:
                     raise SelectionUnavailableError(
                         "This vector result is unavailable to this browser."

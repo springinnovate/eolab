@@ -13,15 +13,14 @@ from eolab_app.saved_maps.models import CreateSavedMap
 def test_custom_presentation_round_trip_for_all_source_kinds() -> None:
     """Preserve explicit card meaning without changing source identity or order."""
     view = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v1.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-catalog.json").read_text()
     )
-    view.update(schemaVersion=3, basemap="detailed")
     candidate = {"slug": "custom-layers", "title": "Custom layers", "view": view}
     raster, vector = view["layers"]
     raster["isCustom"] = False
     vector["isCustom"] = True
     annotation = json.loads(
-        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+        (Path(__file__).parent / "fixtures" / "saved-map-shared.json").read_text()
     )["layers"][0]
     view["layers"].extend(
         [

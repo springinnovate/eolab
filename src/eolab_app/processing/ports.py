@@ -146,16 +146,17 @@ class JobStore(Protocol):
         """
         ...
 
-    def get_input(self, owner: str, identifier: str, checksum: str) -> dict[str, Any]:
+    def get_input(self, owner: str, identifier: str, checksum: str, *, include_geometry: bool = True) -> dict[str, Any]:
         """Read an owned, unexpired input with the expected identity.
 
         Args:
             owner: Browser-session hash.
             identifier: Opaque retained input identifier.
             checksum: Expected content identity.
+            include_geometry: Return coordinates when needed by the reader.
 
         Returns:
-            JSON input for operation validation.
+            JSON input for operation validation, or an empty object after an access-only check.
 
         Raises:
             ProcessingError: If the input is unavailable to this owner.
@@ -223,7 +224,7 @@ class JobStore(Protocol):
         Args:
             owner: Current session hash.
             request_key: Client idempotency key.
-            expected: Validated inputs, reservation, optional work key and labels.
+            expected: Validated inputs, optional work key and labels.
             request_hash: Stable input identity required for direct submissions.
 
         Returns:
@@ -232,6 +233,7 @@ class JobStore(Protocol):
         Raises:
             ProcessingError: If the request identity conflicts or job storage is unavailable.
         """
+
         ...
 
     def submit_batch(

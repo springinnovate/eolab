@@ -45,6 +45,7 @@ class ParcelRowsInput(ParcelIdInput):
     """Supply an authorized selection and bounded attribute page to a native job."""
 
     fields: tuple[ParcelField, ...] = ()
+    spatialRead: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None)
     offset: ParcelOffset = 0
     limit: ParcelPageSize = 100
 

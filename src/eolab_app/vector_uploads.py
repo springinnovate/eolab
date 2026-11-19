@@ -27,6 +27,7 @@ from eolab_app.upload_storage import (
     UploadRecord,
     UploadStorage,
     finish_upload_disk_operation,
+    read_stored_upload,
 )
 from eolab_app.vector_field_values import (
     INVENTORY_ADAPTER,
@@ -220,11 +221,13 @@ class VectorUploadStore:
                 if directory.name.startswith("."):
                     continue
                 try:
-                    record = UploadRecord.model_validate_json(
-                        (directory / "metadata.json").read_text(encoding="utf-8")
+                    record = read_stored_upload(
+                        (directory / "metadata.json").read_bytes()
                     )
-                    if record.kind == "vector" and record.expires_at > datetime.now(
-                        timezone.utc
+                    if (
+                        isinstance(record, UploadRecord)
+                        and record.kind == "vector"
+                        and record.expires_at > datetime.now(timezone.utc)
                     ):
                         uploads.append(self.get_upload_source(owner, record.id)[0])
                 except FileNotFoundError:

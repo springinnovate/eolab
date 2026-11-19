@@ -1,8 +1,7 @@
-"""Choose initial contributor colors and preserve colors for older memberships."""
+"""Choose palette colors for new contributors to a shared layer."""
 
 from collections import Counter
 from collections.abc import Iterable
-from uuid import UUID
 
 DEFAULT_CONTRIBUTOR_COLORS: tuple[str, ...] = (
     "#FFBE0B",
@@ -31,24 +30,6 @@ DEFAULT_CONTRIBUTOR_COLORS: tuple[str, ...] = (
     "#FF9F68",
     "#118AB2",
 )
-
-
-def get_contributor_color(contributor_id: UUID, saved_color: str | None) -> str:
-    """Return a saved color, or a stable palette color for an older membership.
-
-    Args:
-        contributor_id: Persistent membership identifier, distinct for each session.
-        saved_color: Validated custom or assigned color; older rows contain null.
-
-    Returns:
-        A six-digit hexadecimal color that remains stable across reloads.
-    """
-    return (
-        saved_color
-        or DEFAULT_CONTRIBUTOR_COLORS[
-            contributor_id.int % len(DEFAULT_CONTRIBUTOR_COLORS)
-        ]
-    )
 
 
 def choose_contributor_color(existing_colors: Iterable[str]) -> str:

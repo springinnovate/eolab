@@ -267,7 +267,7 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
         STYLESHEET,
         /\.tool-tab\s*\{[^}]*text-overflow:\s*ellipsis/s
     );
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#models-panel,\s*#planning-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#models-panel,\s*#planning-panel,\s*#settings-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 
@@ -343,9 +343,11 @@ test("composition forwards inspection layout and CSS does not infer it from chan
 test("composition forwards compatible map areas and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*const box = pixelPoint && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
+        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*histogram: mapInteractionMode === "box",\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*if \(mapInteractionMode === "box"\) \{\s*const box = pixelPoint && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
+    assert.match(COMPOSITION_SOURCE, /if \(mapInteractionMode === "pixel"\) \{\s*void vectorFeatureInspector\.inspect\(event\);\s*annotations\?\.inspectAt\(event\.latlng\);\s*\}/);
+    assert.match(COMPOSITION_SOURCE, /if \(!\["pixel", "box"\]\.includes\(mapInteractionMode\)\) return/);
 });
 
 test("map-layer Info can reveal Catalog through composition", () => {
@@ -517,7 +519,7 @@ test("workspace overflow shares one native action list", () => {
     const actions = requireElementRange("workspace-tool-actions");
     assert.match(actions.source, /popover="auto"/);
     assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
-    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
+    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend", "open-settings"]) {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }

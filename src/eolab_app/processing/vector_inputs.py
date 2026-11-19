@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,9 +14,12 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
     VectorSelection,
+    DrawingSelection,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.bounded_vector import resolve_vector_file_selection
+from eolab_app.polygon_areas import SummaryPolygon
+from eolab_app.feature_intersection import bind_intersections
 
 class RetainedVectorSelectionReader:
     """Read private vector inputs retained until an accepted Processing job stops.
@@ -31,6 +35,7 @@ class RetainedVectorSelectionReader:
         uploads: VectorUploadStore | None,
         input_uploads: Mapping[str, str],
         retained_file: Callable[[str, str], Awaitable[Path]] | None = None,
+        drawings: Mapping[str, list[dict[str, Any]]] | None = None,
     ) -> None:
         """Bind vector reading to original upload and result files retained for one job.
 
@@ -41,11 +46,13 @@ class RetainedVectorSelectionReader:
                 retention tokens, supplied by job storage.
             retained_file: Resolve a published result under the current job's retained
                 input authorization, including when its parent has expired.
+            drawings: Selected drawing polygons captured at submission, keyed by the exact source reference.
         """
         self.catalog = catalog
         self.uploads = uploads
         self.input_uploads = input_uploads
         self.retained_file = retained_file
+        self.drawings = drawings or {}
 
     @asynccontextmanager
     async def open_selection(
@@ -98,8 +105,51 @@ class RetainedVectorSelectionReader:
             SelectionUnavailableError: If the retained file or catalog source
                 cannot be read.
         """
+        original = await self._resolve_original(selection)
+        if not selection.filter.intersections:
+            return original
+        return await bind_intersections(original, self._read_polygon_view, limits=None)
+
+    async def _read_polygon_view(
+        self, source: VectorSelection | DrawingSelection,
+    ) -> ResolvedCatalogSelection | tuple[SummaryPolygon, ...]:
+        """Open a job's captured polygon view, following its own active conditions.
+
+        Args:
+            source: Captured vector selection or device drawing input.
+
+        Returns:
+            Selected original vector or committed drawing polygons.
+
+        Raises:
+            SelectionUnavailableError: If the job lacks the required original input.
+        """
+        if isinstance(source, DrawingSelection):
+            if source.polygonArea is None:
+                return ()
+            try:
+                polygons = self.drawings[source.polygonArea.model_dump_json()]
+            except KeyError as error:
+                raise SelectionUnavailableError("The drawing was not captured for this calculation.") from error
+            return tuple(SummaryPolygon.model_validate(polygon) for polygon in polygons)
+        return await self.resolve_for_sampling(source)
+
+    async def _resolve_original(self, selection: VectorSelection) -> ResolvedCatalogSelection:
+        """Locate the job's original vector before binding right-hand spatial conditions.
+
+        Args:
+            selection: Accepted path-free identity, fields and filter.
+
+        Returns:
+            Authorized catalog or retained private original.
+
+        Raises:
+            SelectionUnavailableError: If job retention cannot supply the file.
+        """
         if isinstance(selection, CatalogSelection):
-            return await self.catalog.resolve_for_sampling(selection)
+            if not selection.filter.intersections:
+                return await self.catalog.resolve_for_sampling(selection)
+            return await self.catalog.resolve_original_selection(selection)
         if isinstance(selection, ArtifactVectorSelection):
             if self.retained_file is None:
                 raise SelectionUnavailableError(

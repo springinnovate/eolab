@@ -185,7 +185,6 @@ def _save_retained_preparation(
         PreparedJobPlan(
             specification=spec,
             summary=inputs.model_dump(mode="json", by_alias=True),
-            reserved_bytes=0,
             operation=operation,
             retained_metadata=spec,
         ),

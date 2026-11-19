@@ -7,6 +7,11 @@ test("version five shares drawing view definitions with the server without copyi
   const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v5.json", import.meta.url), "utf8"));
   assert.deepEqual(parseSavedMapView(JSON.stringify(fixture)), fixture);
   assert.deepEqual(parseSavedMapView(serializeSavedMapView(createSavedMapView(fixture))), fixture);
+  for (const schemaVersion of [1, 2, 3, 4, 6]) {
+    const view = {...fixture, schemaVersion, layers: []};
+    if (schemaVersion < 3) delete view.basemap;
+    assert.throws(() => parseSavedMapView(JSON.stringify(view)), /version|schema/i);
+  }
   assert.equal(fixture.layers[1].drawingLayerId, fixture.layers[2].drawingLayerId);
   for (const mutate of [
     value => { value.schemaVersion = 4; },
@@ -31,7 +36,7 @@ test("version five shares drawing view definitions with the server without copyi
   assert.equal(createSavedMapView(renamed).layers[1].customName, null);
 });
 
-test("version four round-trips calculated vectors and raster uploads without values or credentials", () => {
+test("saved maps round-trip calculated vectors and raster uploads without values or credentials", () => {
   const fields = [{version: 1, name: "Density", expression: "'Population' / 'Area km2'", numericText: false}];
   const presentation = {isCustom: true, visible: true, opacity: 1, calculatedFields: fields,
     style: {kind: "vector", definition: {graduated: {field: "Density"}}},
@@ -62,12 +67,9 @@ test("version four round-trips calculated vectors and raster uploads without val
   }
 });
 
-test("version two accepts only portable annotation references and version one stays unchanged", () => {
-  const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
+test("shared maps accept only portable annotation references", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-shared.json", import.meta.url), "utf8"));
   assert.deepEqual(parseSavedMapView(JSON.stringify(fixture)), fixture);
-  const old = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v1.json", import.meta.url), "utf8"));
-  assert.deepEqual(parseSavedMapView(JSON.stringify(old)), old);
-  assert.throws(() => parseSavedMapView(JSON.stringify({ ...fixture, schemaVersion: 1 })), /version two/);
   for (const field of ["features", "credential", "contributorId", "browserHash", "collection"]) {
     const candidate = structuredClone(fixture);
     candidate.layers[0].sharedAnnotation[field] = "must not be exported";
@@ -109,10 +111,6 @@ test("private upload references preserve appearance without accepting data or cr
   duplicate.layers[1].customName = "Another wetlands view";
   duplicate.layers[1].style.definition.fillColor = "#abcdef";
   assert.deepEqual(parseSavedMapView(JSON.stringify(duplicate)), duplicate);
-  const older = structuredClone(candidate);
-  older.schemaVersion = 2;
-  delete older.basemap;
-  assert.throws(() => parseSavedMapView(JSON.stringify(older)), /version three/);
   const invalidId = structuredClone(candidate);
   invalidId.layers[0].uploadId = "../private.gpkg";
   assert.throws(() => parseSavedMapView(JSON.stringify(invalidId)), /identifier/);
@@ -140,7 +138,7 @@ test("saved map serialization preserves vector CSV rules as an opaque owner defi
 });
 
 test("backend parity fixture preserves the browser saved-map document", () => {
-  const text = readFileSync(new URL("../../../tests/fixtures/saved-map-v1.json", import.meta.url), "utf8");
+  const text = readFileSync(new URL("../../../tests/fixtures/saved-map-catalog.json", import.meta.url), "utf8");
   assert.deepEqual(parseSavedMapView(text), JSON.parse(text));
   assert.deepEqual(JSON.parse(serializeSavedMapView(parseSavedMapView(text))), JSON.parse(text));
 });
@@ -217,7 +215,7 @@ test("saved map model rejects incompatible and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
     () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 6 })),
-    /schema 6 is not supported/,
+    /unsupported format.*version 5/,
   );
 
   const extended = savedMapCandidate();
@@ -248,7 +246,7 @@ test("Catalog and Custom presentation round-trips for every source kind with str
   const candidate = savedMapCandidate();
   candidate.layers[0].isCustom = false;
   const annotation = JSON.parse(readFileSync(new URL(
-    "../../../tests/fixtures/saved-map-v2.json", import.meta.url
+    "../../../tests/fixtures/saved-map-shared.json", import.meta.url
   ), "utf8")).layers[0];
   candidate.layers.push(
     { ...structuredClone(candidate.layers[0]), isCustom: true, customName: "Rainfall comparison" },
@@ -271,8 +269,8 @@ test("Catalog and Custom presentation round-trips for every source kind with str
   }
 });
 
-test("map legend preferences round-trip for catalog and shared layers without changing older maps", () => {
-  const candidate = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
+test("map legend preferences round-trip for catalog and shared layers", () => {
+  const candidate = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-shared.json", import.meta.url), "utf8"));
   candidate.mapLegend = { visible: false, collapsed: true };
   for (const layer of candidate.layers) layer.legendIncluded = false;
   assert.deepEqual(parseSavedMapView(JSON.stringify(candidate)), candidate);
@@ -288,7 +286,7 @@ test("map legend preferences round-trip for catalog and shared layers without ch
 
 test("versioned raster appearance round-trips both configurations without interpreting them", () => {
   const candidate = JSON.parse(readFileSync(new URL(
-    "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
+    "../../../tests/fixtures/saved-map-categorical.json", import.meta.url
   ), "utf8"));
   for (const mode of ["categorical", "continuous"]) {
     candidate.layers[0].style.mode = mode;
@@ -300,7 +298,7 @@ test("versioned raster appearance round-trips both configurations without interp
 
 test("saved raster appearance rejects mixed envelopes, invalid edit state and unbounded definitions", () => {
   const fixture = JSON.parse(readFileSync(new URL(
-    "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
+    "../../../tests/fixtures/saved-map-categorical.json", import.meta.url
   ), "utf8"));
   for (const mutate of [
     style => { delete style.appearanceVersion; },

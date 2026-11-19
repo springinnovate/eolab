@@ -39,7 +39,6 @@ class PreparedJobPlan:
     Attributes:
         specification: JSON-compatible, path-free operation specification.
         summary: Bounded public operation metadata, excluding large input payloads.
-        reserved_bytes: Historical byte estimate; new plans use zero and do not reserve storage.
         operation: Opaque versioned operation discriminator supplied by its owner.
         work_key: Complete computation identity; None means never join active work.
         presentation: Small caller-specific labels, separate from shared execution.
@@ -56,8 +55,7 @@ class PreparedJobPlan:
 
     specification: dict[str, object]
     summary: dict[str, object]
-    reserved_bytes: int
-    operation: str = ""
+    operation: str
     work_key: str | None = None
     presentation: dict[str, object] | None = None
     retained_metadata: dict[str, object] | None = None

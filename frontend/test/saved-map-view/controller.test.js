@@ -3,10 +3,7 @@ import test from "node:test";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
 import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
-import {
-  decodeSavedMapViewFragment,
-  encodeSavedMapViewFragment,
-} from "../../src/saved-map-view/fragment-codec.js";
+import { createNamedMapFixture } from "../../test-support/named-map.js";
 import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
@@ -203,7 +200,8 @@ test("calculated fields restore before dependent styles and filters and unavaila
   delete artifact.catalogItem;
   const saved = {...emptySavedMap(0, 0, 2), layers: [missing, layer, artifact]};
   const view = createView(), records = [], order = [];
-  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.editor, view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
     viewport: {restore() {}, snapshot: () => saved.viewport},
     mapLayers: {retainedRecords: records, commitStaged(staged) {records.push(...staged.map(value => value.record));},
       setLegendIncluded() {}},
@@ -221,12 +219,11 @@ test("calculated fields restore before dependent styles and filters and unavaila
     catalogItems: {get: async identity => {if (identity.id === "missing") throw new Error("Source unavailable"); return identity;}},
     restoreArtifact: async () => {throw new Error("Result expired");},
   });
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  await controller.restoreStartupView();
   assert.deepEqual(order, ["fields", "style", "filter"]);
   assert.equal(view.result.loaded, 1);
   assert.match(view.result.details.join(" "), /remain saved/);
-  await controller.copyMapLink();
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const copied = await publication.saveEdits(controller);
   assert.deepEqual(copied.layers, saved.layers);
 });
 
@@ -236,15 +233,15 @@ test("live unavailable results retain only identities and definitions in the nex
   const layers = ["a", "b"].map(id => ({runArtifact: {jobId: "c".repeat(32), artifactId: id.repeat(32), layerName: "results"},
     visible: true, opacity: 1, calculatedFields: fields, style: {kind: "vector", definition: {}}}));
   const records = layers.map((layer, index) => ({entry: {key: String(index), label: `Result ${index}`, item: null, isCustom: true}, layer}));
-  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+  const publication = createNamedMapFixture();
+  const controller = createController({ ...publication.author, view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
     viewport: {snapshot: () => saved.viewport}, mapLayers: {retainedRecords: records}, exportArtifact: record => record.layer});
   for (const key of ["0", "1"]) {
     controller.retainUnavailableLayer(key);
     records.splice(records.findIndex(record => record.entry.key === key), 1);
   }
   assert.match(view.result.details[0], /Result 1.*remain saved/);
-  await controller.copyMapLink();
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const copied = await publication.publish(controller);
   assert.deepEqual(copied.layers, layers.map(layer => ({...layer, isCustom: true})));
   assert.equal(records.length, 0);
 });
@@ -254,27 +251,26 @@ test("unavailable private references keep their origin and can be explicitly rem
     visible: true, opacity: 1, calculatedFields: [{version: 1, name: "Scaled", expression: "'score' * 2", numericText: false}],
     style: {kind: "vector", definition: {}}}]};
   const view = createView(), records = [];
-  const controller = createController({view, viewerVersion: "1", viewerOrigin: "https://other.example",
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.editor, view, viewerVersion: "1", viewerOrigin: "https://other.example",
     viewport: {snapshot: () => saved.viewport, restore() {}}, mapLayers: {retainedRecords: records, commitStaged() {}},
     catalogVisualization: {clear() {}}, restoreArtifact: async () => assert.fail("foreign private source was requested"),
     exportArtifact: record => record.layer});
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  await controller.restoreStartupView();
   assert.match(view.result.details.join(" "), /original EOLab site/);
-  await controller.copyMapLink();
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const copied = await publication.saveEdits(controller);
   assert.equal(copied.viewer.origin, saved.viewer.origin);
   assert.deepEqual(copied.layers, saved.layers);
   records.push({entry: {key: "local-result", item: null, isCustom: true}, layer: saved.layers[0]});
-  await controller.copyMapLink();
-  assert.match(view.error.message, /layers linked to different EOLab sites/);
+  await controller.savePublishedMapChanges({ title: "Survey", subtitle: "" });
+  assert.match(view.editStatus, /layers linked to different EOLab sites/);
   assert.equal(view.unavailableCount, 1);
   view.handlers.onShowUnavailableLayers();
   assert.deepEqual(view.unavailableLayers, [{index: 0, label: "Private run result", sourceSite: saved.viewer.origin, fields: ["Scaled"]}]);
   view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
   assert.equal(view.unavailableCount, 0);
   assert.deepEqual(view.unavailableLayers, []);
-  await controller.copyMapLink();
-  const afterRemoval = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const afterRemoval = await publication.saveEdits(controller);
   assert.equal(afterRemoval.viewer.origin, "https://other.example");
   assert.deepEqual(afterRemoval.layers, [{...saved.layers[0], isCustom: true}]);
   assert.equal(records.length, 1);
@@ -285,7 +281,8 @@ test("removing an unavailable saved layer preserves the order of remaining live 
   const layers = ["A", "B", "C", "D"].map(name => ({catalogItem: {collection: "vectors", id: name},
     visible: true, opacity: 1, isCustom: true, calculatedFields: fields, style: {kind: "vector", definition: {}}}));
   const saved = {...emptySavedMap(0, 0, 2), layers}, view = createView(), records = [];
-  const controller = createController({view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.editor, view, viewerVersion: "1", viewerOrigin: saved.viewer.origin,
     viewport: {restore() {}, snapshot: () => saved.viewport},
     mapLayers: {retainedRecords: records, commitStaged(staged) {records.push(...staged.map(value => value.record));}, setLegendIncluded() {}},
     catalogVisualization: {clear() {}, prepare: async item => item,
@@ -297,16 +294,14 @@ test("removing an unavailable saved layer preserves the order of remaining live 
       return identity;
     }},
   });
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+  await controller.restoreStartupView();
   view.handlers.onShowUnavailableLayers();
   assert.deepEqual(view.unavailableLayers.map(layer => layer.label), ["A", "C"]);
   view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
-  await controller.copyMapLink();
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const copied = await publication.saveEdits(controller);
   assert.deepEqual(copied.layers.map(layer => layer.catalogItem.id), ["B", "C", "D"]);
   view.handlers.onRemoveUnavailableLayer(view.unavailableLayers[0].index);
-  await controller.copyMapLink();
-  const afterBothRemoved = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const afterBothRemoved = await publication.saveEdits(controller);
   assert.deepEqual(afterBothRemoved.layers.map(layer => layer.catalogItem.id), ["B", "D"]);
 });
 
@@ -331,7 +326,7 @@ test("published drafts ignore personal autosave and only write on explicit save"
     viewport: { snapshot: () => position, restore(value) { position = value; } },
     catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
   });
-  await controller.restoreStartupView("#view=ignored");
+  await controller.restoreStartupView();
   assert.equal(view.editor.complete, true);
   position = emptySavedMap(30, 40, 8).viewport;
   controller.scheduleRemember();
@@ -418,7 +413,7 @@ test("publication captures once and preserves that view while correcting a dupli
   assert.equal(submissions[1].subtitle, "");
 });
 
-test("named URLs override fragments and private state, restore basemap and copy the original link", async () => {
+test("named URLs take precedence over private state, restore basemap and copy the original link", async () => {
   const view = createView(), storage = createStorage("private"), loaded = [], headings = [], basemaps = [];
   let position;
   view.copyNamedMapLink = async slug => { view.namedCopy = slug; return { copied: true }; };
@@ -430,7 +425,7 @@ test("named URLs override fragments and private state, restore basemap and copy 
     basemap: { restore: async id => { basemaps.push(id); return null; } },
     catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
   });
-  await controller.restoreStartupView("#view=invalid-fragment");
+  await controller.restoreStartupView();
   position = emptySavedMap(0, 0, 2).viewport;
   await controller.copyMapLink();
   assert.equal(view.namedCopy, "amazon");
@@ -443,12 +438,12 @@ test("named URLs override fragments and private state, restore basemap and copy 
   assert.equal(storage.writes.length, 0);
 });
 
-test("missing named maps never fall back to fragments or private maps", async () => {
+test("missing named maps never fall back to private maps", async () => {
   const view = createView(), storage = createStorage("private");
   const controller = createController({ view, storage, restoreSharedMap: true, namedMapSlug: "missing",
     publicationApi: { async get() { throw new Error("Saved map not found."); } },
   });
-  await controller.restoreStartupView("#view=other-map");
+  await controller.restoreStartupView();
   assert.match(view.error.message, /not found/);
   assert.equal(storage.reads, 0);
   assert.equal(view.errorOperation, "open");
@@ -460,11 +455,11 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
   const catalog = { catalogItem: { collection: "vectors", id: "included" },
     visible: true, isCustom: false, legendIncluded: false, opacity: 1, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), mapLegend: { visible: false, collapsed: true }, layers: [catalog, annotation] };
-  const fragment = await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 });
   const view = createView(), records = [], restorations = [], ordered = [];
   const annotationRecord = { entry: { key: "local:annotation:mine", item: null, isCustom: true }, polygons: ["private polygon"] };
   let legendPreferences;
-  const controller = createController({ view, restoreSharedMap: true,
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.editor, view,
     viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
@@ -485,22 +480,22 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
       return annotationRecord.entry.key;
     },
   });
-  await controller.restoreStartupView(fragment);
+  await controller.restoreStartupView();
   assert.equal(view.result.loaded, 2);
   assert.deepEqual(legendPreferences, saved.mapLegend);
   assert.ok(records.every(record => record.entry.legendIncluded === false));
   assert.deepEqual(ordered.at(-1), [records[0].entry.key, "local:annotation:mine"]);
   records.push({ entry: { key: "local:private", item: null }, polygons: ["do not share"] });
-  await controller.copyMapLink();
-  const exported = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  const exported = await publication.saveEdits(controller);
   assert.deepEqual(exported.layers, saved.layers);
   assert.deepEqual(exported.mapLegend, saved.mapLegend);
   assert.equal(JSON.stringify(exported).includes("private polygon"), false);
-  await controller.resetView();
+  await controller.restoreStartupView();
   assert.deepEqual(restorations, [annotation, annotation]);
   assert.deepEqual(annotationRecord.polygons, ["private polygon"]);
   const foreign = { ...saved, viewer: { ...saved.viewer, origin: "https://another-site.example" } };
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(foreign), { maximumInputBytes: 512 * 1024 }));
+  publication.record.view = foreign;
+  await controller.restoreStartupView();
   assert.match(view.result.details[0], /original EOLab site/);
   assert.equal(restorations.length, 2, "foreign invitations never reach the annotation API");
 });
@@ -512,7 +507,8 @@ test("ordinary map save and restore includes independent drawing views with Cata
   const saved = createSavedMapView({...emptySavedMap(12, 22, 7), layers: [first, catalog, second]});
   const records = [], view = createView(), storage = createStorage(serializeSavedMapView(saved)), timers = createTimers();
   const reads = [];
-  const controller = createController({view, storage, setTimer: timers.setTimer, clearTimer: timers.clearTimer,
+  const publication = createNamedMapFixture();
+  const controller = createController({ ...publication.author, view, storage, setTimer: timers.setTimer, clearTimer: timers.clearTimer,
     viewerVersion: "1", viewerOrigin: saved.viewer.origin,
     initialViewport: saved.viewport,
     viewport: {snapshot: () => saved.viewport, restore() {}},
@@ -534,15 +530,14 @@ test("ordinary map save and restore includes independent drawing views with Cata
       return {key, record: {entry: {key, item: null, isCustom: true}, definition: structuredClone(definition), adapter: {}}, layer: {remove() {}}};
     },
   });
-  await controller.restoreStartupView("");
+  await controller.restoreStartupView();
   assert.equal(records.length, 3);
   assert.deepEqual(records.map(record => record.entry.item?.id ?? record.definition.customName), [first.customName, "regions", second.customName]);
   assert.deepEqual(reads, [first.drawingLayerId, first.drawingLayerId]);
   records.push({entry: {key: "unsaved-local", item: null}, polygons: ["private local geometry"]});
   controller.scheduleRemember(); timers.runOnly();
   assert.deepEqual(JSON.parse(storage.serialized).layers, saved.layers);
-  await controller.copyMapLink();
-  const shared = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const shared = await publication.publish(controller);
   assert.deepEqual(shared.layers, saved.layers);
   assert.equal(JSON.stringify(shared).includes("private local geometry"), false);
   await controller.resetView();
@@ -557,25 +552,25 @@ for (const foreign of [false, true]) {
     const drawing = drawingDefinition(); delete drawing.customName;
     const saved = createSavedMapView({...emptySavedMap(0, 0, 2), layers: [drawing]});
     const view = createView(), records = []; let reads = 0;
-    const controller = createController({view, viewerVersion: "1", viewerOrigin: foreign ? "https://other.example" : saved.viewer.origin,
+    const publication = createNamedMapFixture(saved);
+    const controller = createController({ ...publication.editor, view, viewerVersion: "1", viewerOrigin: foreign ? "https://other.example" : saved.viewer.origin,
       viewport: {snapshot: () => saved.viewport, restore() {}},
       mapLayers: {retainedRecords: records, commitStaged() {}}, catalogVisualization: {clear() {}},
       exportDrawing: record => record.definition ?? null,
       stageDrawing: async () => { reads++; throw new Error("Drawing unavailable"); },
     });
-    await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {maximumInputBytes: 512 * 1024}));
+    await controller.restoreStartupView();
     assert.equal(view.result.loaded, 0); assert.equal(reads, foreign ? 0 : 1);
     assert.match(view.result.details.join(" "), foreign ? /original EOLab site/ : /Drawing unavailable/);
     assert.equal(view.unavailableCount, 1);
     controller.showUnavailableLayers();
     assert.deepEqual(view.unavailableLayers, [{index: 0, label: "Saved drawing", sourceSite: foreign ? saved.viewer.origin : null, fields: []}]);
-    await controller.copyMapLink();
-    const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+    const copied = await publication.saveEdits(controller);
     assert.deepEqual(copied.layers, saved.layers); assert.equal(copied.viewer.origin, saved.viewer.origin);
     if (foreign) {
       records.push({entry: {key: "this-site-drawing", item: null, isCustom: true}, definition: drawingDefinition("This site's drawing")});
-      await controller.copyMapLink();
-      assert.match(view.error.message, /layers linked to different EOLab sites/);
+      await controller.savePublishedMapChanges({ title: "Survey", subtitle: "" });
+      assert.match(view.editStatus, /layers linked to different EOLab sites/);
     }
     controller.removeUnavailableLayer(0);
     assert.equal(view.unavailableCount, 0);
@@ -588,10 +583,10 @@ test("shared viewer restores its starting presentation and never reads or writes
   const layer = { catalogItem: { collection: "vectors", id: "included" },
     visible: true, opacity: 0.6, style: { kind: "vector", definition: { color: "red" } },
     filter: { enabled: true, match: "all", rules: [] } };
-  const fragment = await encodeSavedMapViewFragment(serializeSavedMapView({ ...saved, layers: [layer] }), { maximumInputBytes: 512 * 1024 });
   let position;
   const records = [];
-  const controller = createController({ view, storage, restoreSharedMap: true,
+  const publication = createNamedMapFixture({ ...saved, layers: [layer] });
+  const controller = createController({ ...publication.viewer, view, storage,
     viewport: { snapshot: () => position, restore: value => { position = value; } },
     mapLayers: { retainedRecords: records, commitStaged: staged => records.push(...staged.map(item => item.record)),
       setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; } },
@@ -604,7 +599,7 @@ test("shared viewer restores its starting presentation and never reads or writes
       } } }),
     }, viewerVersion: "0.6.0", viewerOrigin: "https://viewer.example",
   });
-  await controller.restoreStartupView(fragment);
+  await controller.restoreStartupView();
   assert.equal(records.length, 1);
   records[0].entry.visible = false;
   position = emptySavedMap(0, 0, 2).viewport;
@@ -619,17 +614,14 @@ test("shared viewer restores its starting presentation and never reads or writes
   assert.equal(storage.serialized, "private map");
 });
 
-test("missing and invalid shared links report errors without falling back to private maps", async () => {
-  for (const fragment of ["", "#view=bad"]) {
-    const view = createView(), storage = createStorage("private map");
-    const controller = createController({ view, storage, restoreSharedMap: true });
-    await controller.restoreStartupView(fragment);
-    assert.equal(view.errorOperation, "open");
-    await controller.resetView();
-    assert.equal(view.errorOperation, "open");
-    assert.equal(storage.reads, 0);
-    assert.equal(storage.clears, 0);
-  }
+test("a shared viewer without a map name leaves the private map untouched", async () => {
+  const view = createView(), storage = createStorage("private map");
+  const controller = createController({ view, storage, restoreSharedMap: true });
+  await controller.restoreStartupView();
+  assert.match(view.error.message, /published map link/);
+  await controller.resetView();
+  assert.equal(view.errorOperation, "open");
+  assert.deepEqual([storage.reads, storage.writes.length, storage.clears], [0, 0, 0]);
 });
 
 test("saved filters restore before commit and invalid filters never expose an unfiltered layer", async () => {
@@ -645,7 +637,8 @@ test("saved filters restore before commit and invalid filters never expose an un
     const layers = { retainedRecords: [],
       commitStaged(staged) { calls.push("commit"); this.retainedRecords = staged.map(value => value.record); },
       setLegendIncluded(key, value) { this.retainedRecords.find(record => record.entry.key === key).entry.legendIncluded = value; } };
-    const controller = createController({ view,
+    const publication = createNamedMapFixture(saved);
+    const controller = createController({ ...publication.viewer, view,
       viewport: { snapshot: () => saved.viewport, restore() {} }, mapLayers: layers,
       catalogItems: { get: async (identity) => identity },
       catalogVisualization: { clear() {}, prepare: async (item) => item,
@@ -658,7 +651,7 @@ test("saved filters restore before commit and invalid filters never expose an un
         } } }),
       }, viewerVersion: "0.5.0", viewerOrigin: "https://viewer.example",
     });
-    await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 }));
+    await controller.restoreStartupView();
     assert.deepEqual(calls, ["style", "filter", "commit"]);
     assert.equal(layers.retainedRecords.length, valid ? 1 : 0);
     if (!valid) assert.match(view.result.details[0], /Filter field is no longer present/);
@@ -680,10 +673,13 @@ function createView() {
     bind(handlers) { this.handlers = handlers; },
     unbind() { this.handlers = null; },
     setBusy(value) { this.busy.push(value); },
-    async copyLink(fragment) {
-      this.fragment = fragment;
-      return { copied: true, url: `https://viewer.example/${fragment}` };
-    },
+    showPublicationForm() {},
+    setPublicationBusy() {},
+    showPublishedMap(slug) { this.published = slug; },
+    showPublicationError(message) { this.publicationError = message; },
+    showPublishedMapEditor() {},
+    setPublishedMapSaving() {},
+    showPublishedMapEditStatus(message) { this.editStatus = message; },
     showCopied() { this.copied = true; },
     showCopyFallback(url) { this.copyFallback = url; },
     showResults(result) { this.result = result; },
@@ -776,7 +772,7 @@ async function flushAsyncWork() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-test("saved map controller copies ordered Catalog layers and current viewport", async () => {
+test("saved map controller publishes ordered Catalog layers and current viewport", async () => {
   const view = createView();
   const item = { collection: "vectors", id: "roads" };
   const record = {
@@ -786,7 +782,8 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
       exportFilterState: () => ({ enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] }),
     },
   };
-  const controller = createController({
+  const publication = createNamedMapFixture();
+  const controller = createController({ ...publication.author,
     view,
     viewport: { snapshot: () => ({
       center: { latitude: 10, longitude: 20 }, zoom: 4,
@@ -799,17 +796,13 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
     clock: () => new Date("2026-09-01T12:00:00Z"),
   });
 
-  await controller.copyMapLink();
-
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {
-    maximumOutputBytes: 512 * 1024,
-  }));
+  const copied = await publication.publish(controller);
   assert.deepEqual(copied.layers[0].catalogItem, item);
   assert.equal(copied.layers[0].customName, "Workshop roads");
   assert.deepEqual(copied.layers[0].filter, record.adapter.exportFilterState());
   assert.equal(Object.hasOwn(copied.layers[0].style, "filter"), false);
-  assert.equal(view.copied, true);
-  assert.deepEqual(view.busy, [true, false]);
+  assert.equal(view.published, "survey");
+  assert.deepEqual(view.busy, [true, false, true, false]);
 });
 
 for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive export and reload and can be removed independently`, async () => {
@@ -831,7 +824,7 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
     second.style.continuous.definition.minimumColor = "#ABCDEF";
   }
   const saved = { ...emptySavedMap(10, 20, 6), layers: [first, second] };
-  const view = createView(), storage = createStorage(), timers = createTimers();
+  const view = createView(), storage = createStorage(serializeSavedMapView(saved)), timers = createTimers();
   const mapLayers = new MapLayerController({
     leafletMap: { removeLayer() {} },
     view: { bind() {}, unbind() {}, render() {}, setStatus() {} },
@@ -851,7 +844,8 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
       exportFilterState: record => record.state.filter,
     } : {}),
   };
-  const controller = createController({ view, storage, mapLayers,
+  const publication = createNamedMapFixture();
+  const controller = createController({ ...publication.author, view, storage, mapLayers,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear: () => mapLayers.clear(), prepare: async item => item,
@@ -859,16 +853,13 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
   });
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
-    maximumInputBytes: 512 * 1024,
-  }));
-  assert.deepEqual(view.result.details, []);
-  assert.equal(view.result.loaded, 2);
+  await controller.restoreStartupView();
+  assert.equal(view.result, null, "successful private recovery is silent");
+  assert.equal(mapLayers.retainedRecords.length, 2);
   assert.deepEqual(mapLayers.retainedRecords.map(record => record.entry.isCustom), [false, true]);
   const originalKeys = mapLayers.retainedRecords.map(record => record.entry.key);
   assert.equal(new Set(originalKeys).size, 2);
-  await controller.copyMapLink();
-  const exported = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  const exported = await publication.publish(controller);
   assert.deepEqual(exported.layers, saved.layers);
   controller.scheduleRemember();
   timers.runOnly();
@@ -880,8 +871,7 @@ for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive ex
   assert.deepEqual(restored.map(record => record.entry.isCustom), [false, true]);
   mapLayers.removeKey(restored[0].entry.key);
   assert.equal(mapLayers.retainedRecords[0], restored[1]);
-  await controller.copyMapLink();
-  const remaining = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  const remaining = await publication.publish(controller);
   assert.deepEqual(remaining.layers, [second]);
   controller.destroy();
   mapLayers.destroy();
@@ -946,7 +936,8 @@ test("saved map controller stages concurrently and commits final saved order", a
       },
     ],
   });
-  const controller = createController({
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.viewer,
     view,
     viewport: {
       snapshot: () => saved.viewport,
@@ -962,10 +953,7 @@ test("saved map controller stages concurrently and commits final saved order", a
     viewerOrigin: "https://viewer.example",
   });
 
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(
-    serializeSavedMapView(saved),
-    { maximumInputBytes: 512 * 1024 },
-  ));
+  await controller.restoreStartupView();
 
   const restoredKeys = mapLayers.retainedRecords.map(record => record.entry.key);
   assert.equal(new Set(restoredKeys).size, 2);
@@ -1037,7 +1025,8 @@ test("saved map restoration bounds work and isolates layer failures", async () =
       return { key: presentation.key, record, layer: {} };
     },
   };
-  const controller = createController({
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.viewer,
     view,
     viewport: { restore() {} },
     mapLayers,
@@ -1047,10 +1036,7 @@ test("saved map restoration bounds work and isolates layer failures", async () =
     viewerOrigin: "https://viewer.example",
   });
 
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(
-    serializeSavedMapView(saved),
-    { maximumInputBytes: 512 * 1024 },
-  ));
+  await controller.restoreStartupView();
 
   assert.equal(Math.max(...activeCounts), 4);
   assert.equal(commitWhileActive, 0);
@@ -1089,7 +1075,8 @@ test("destroyed saved map restoration never commits its detached batch", async (
     viewport: { center: { latitude: 0, longitude: 0 }, zoom: 3 },
     layers: [layer],
   });
-  const controller = createController({
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.viewer,
     view,
     viewport: { restore: () => assert.fail("stale viewport restored") },
     mapLayers: {
@@ -1116,11 +1103,7 @@ test("destroyed saved map restoration never commits its detached batch", async (
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
   });
-  const opening = controller.openSharedFragment(
-    await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
-      maximumInputBytes: 512 * 1024,
-    })
-  );
+  const opening = controller.restoreStartupView();
 
   await stageStarted;
   controller.destroy();
@@ -1131,32 +1114,14 @@ test("destroyed saved map restoration never commits its detached batch", async (
   assert.equal(view.result, null);
 });
 
-test("saved map controller ignores fragments owned by other components", async () => {
-  const view = createView();
-  const controller = createController({
-    view,
-    viewport: {},
-    mapLayers: { retainedRecords: [] },
-    catalogVisualization: {},
-    catalogItems: {},
-    viewerVersion: "0.2.0",
-    viewerOrigin: "https://viewer.example",
-  });
-
-  await controller.openSharedFragment("#catalog=roads");
-
-  assert.deepEqual(view.busy, []);
-  assert.equal(view.loading, null);
-});
-
 test("saved map controller exposes the URL when clipboard access is denied", async () => {
   const view = createView();
-  view.copyLink = async (fragment) => ({
+  view.copyNamedMapLink = async (slug) => ({
     copied: false,
-    url: `https://viewer.example/${fragment}`,
+    url: `https://viewer.example/maps/${slug}`,
   });
   const controller = createController({
-    view,
+    view, namedMapSlug: "survey", restoreSharedMap: true,
     viewport: { snapshot: () => ({
       center: { latitude: 0, longitude: 0 }, zoom: 2,
     }) },
@@ -1169,78 +1134,8 @@ test("saved map controller exposes the URL when clipboard access is denied", asy
 
   await controller.copyMapLink();
 
-  assert.match(view.copyFallback, /^https:\/\/viewer\.example\/#view=/);
+  assert.equal(view.copyFallback, "https://viewer.example/maps/survey");
   assert.equal(view.copied, undefined);
-});
-
-test("saved map controller reports malformed owned fragments without clearing", async () => {
-  const view = createView();
-  let cleared = false;
-  const controller = createController({
-    view,
-    viewport: {},
-    mapLayers: { retainedRecords: [] },
-    catalogVisualization: { clear: () => { cleared = true; } },
-    catalogItems: {},
-    viewerVersion: "0.2.0",
-    viewerOrigin: "https://viewer.example",
-  });
-
-  await controller.openSharedFragment("#view=not+base64");
-
-  assert.equal(cleared, false);
-  assert.match(view.error.message, /invalid encoded view/);
-  assert.deepEqual(view.busy, [true, false]);
-});
-
-test("startup shared fragments take precedence over remembered local views", async () => {
-  const localView = emptySavedMap(1, 2, 3);
-  const sharedView = emptySavedMap(40, -120, 7);
-  const storage = createStorage(serializeSavedMapView(localView));
-  const timers = createTimers();
-  const restored = [];
-  const controller = createController({
-    view: createView(),
-    viewport: { restore: (viewport) => restored.push(viewport) },
-    mapLayers: { retainedRecords: [], commitStaged() {} },
-    catalogVisualization: { clear() {} },
-    catalogItems: {},
-    viewerVersion: "0.2.0",
-    viewerOrigin: "https://viewer.example",
-    storage,
-    setTimer: timers.setTimer.bind(timers),
-    clearTimer: timers.clearTimer.bind(timers),
-  });
-
-  await controller.restoreStartupView(await encodeSavedMapViewFragment(
-    serializeSavedMapView(sharedView),
-    { maximumInputBytes: 512 * 1024 },
-  ));
-
-  assert.equal(storage.reads, 0);
-  assert.deepEqual(restored, [sharedView.viewport]);
-});
-
-test("malformed owned startup fragments never fall back to private state", async () => {
-  const storage = createStorage(serializeSavedMapView(emptySavedMap(1, 2, 3)));
-  const view = createView();
-  let restored = false;
-  const controller = createController({
-    view,
-    viewport: { restore: () => { restored = true; } },
-    mapLayers: { retainedRecords: [] },
-    catalogVisualization: { clear() {} },
-    catalogItems: {},
-    viewerVersion: "0.2.0",
-    viewerOrigin: "https://viewer.example",
-    storage,
-  });
-
-  await controller.restoreStartupView("#view=not+base64");
-
-  assert.equal(storage.reads, 0);
-  assert.equal(restored, false);
-  assert.match(view.error.message, /invalid encoded view/);
 });
 
 test("startup silently restores a valid remembered map through the transaction", async () => {
@@ -1265,7 +1160,7 @@ test("startup silently restores a valid remembered map through the transaction",
     clearTimer: timers.clearTimer.bind(timers),
   });
 
-  await controller.restoreStartupView("#catalog=roads");
+  await controller.restoreStartupView();
 
   assert.equal(storage.reads, 1);
   assert.deepEqual(calls, [
@@ -1339,7 +1234,7 @@ for (const destroyDuringLoad of [false, true]) {
       },
     });
 
-    const restoring = controller.restoreStartupView("");
+    const restoring = controller.restoreStartupView();
     assert.deepEqual(position, saved.viewport);
     assert.equal(background, saved.basemap);
     assert.deepEqual(legend, saved.mapLegend);
@@ -1404,7 +1299,7 @@ test("destroyed startup cannot prepare or commit layers after composition become
       const readinessCurrent = [];
       let cleared = 0;
       const view = createView();
-      const controller = createController({ view, storage,
+      const controller = createController({ view, storage, ...(shared ? createNamedMapFixture(saved).viewer : {}),
         beforeRestore: async isCurrent => {
           readinessCurrent.push(isCurrent()); markRestoreStarted(); await pendingReadiness;
           readinessCurrent.push(isCurrent());
@@ -1414,8 +1309,7 @@ test("destroyed startup cannot prepare or commit layers after composition become
         catalogVisualization: { clear() { cleared++; } },
         mapLayers: { retainedRecords: [], commitStaged() { assert.fail("Stale startup must not commit layers"); } },
       });
-      const fragment = shared ? await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 }) : "";
-      const restoring = controller.restoreStartupView(fragment);
+      const restoring = controller.restoreStartupView();
       await restoreStarted;
       assert.deepEqual(positions, shared ? [] : [saved.viewport]);
       assert.equal(cleared, 1, "clear at the explicit restore request, before waiting");
@@ -1442,7 +1336,7 @@ test("startup without a remembered view leaves readiness and current appearance 
     catalogVisualization: { clear() { assert.fail("Keep the current map"); } },
     mapLayers: { retainedRecords: [] },
   });
-  await controller.restoreStartupView("");
+  await controller.restoreStartupView();
   assert.equal(storage.reads, 1);
   assert.deepEqual(view.busy, []);
   assert.deepEqual(storage.writes, []);
@@ -1464,7 +1358,7 @@ test("startup discards corrupt remembered content without blocking the map", asy
     storage,
   });
 
-  await controller.restoreStartupView("");
+  await controller.restoreStartupView();
 
   assert.equal(storage.clears, 1);
   assert.equal(clearedMap, false);
@@ -1572,6 +1466,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
     },
   };
   const view = createView();
+  const savedMap = emptySavedMap(1, 2, 3);
   const storage = createStorage();
   const timers = createTimers();
   const controller = createController({
@@ -1595,6 +1490,16 @@ test("reset and one-step undo reuse complete validated restore documents", async
     clearTimer: timers.clearTimer.bind(timers),
   });
 
+  for (const incompatible of [{...savedMap, schemaVersion: 3}, {...savedMap, layers: [{obsoleteSettings: true}]}]) {
+    const original = JSON.stringify(incompatible);
+    storage.serialized = original;
+    controller.scheduleRemember();
+    await controller.restoreStartupView("");
+    assert.match(view.error.message, /Reset view/);
+    controller.scheduleRemember();
+    assert.equal(timers.scheduled.size, 0);
+    assert.equal(storage.serialized, original);
+  }
   await controller.resetView();
 
   assert.deepEqual(currentViewport, initialViewport);
@@ -1648,14 +1553,14 @@ test("reset and one-step undo reuse complete validated restore documents", async
 
 test("shared map links exclude private local annotation contents", async () => {
   const view = createView();
-  const controller = createController({ view,
+  const publication = createNamedMapFixture();
+  const controller = createController({ ...publication.author, view,
     viewport: {snapshot: () => ({center: {latitude: 0, longitude: 0}, zoom: 4})},
     mapLayers: {retainedRecords: [{entry: {item: null, label: "Private workshop"},
       adapter: {exportSavedState() {throw new Error("Local data must never be exported here");}}}]},
     catalogVisualization: {}, catalogItems: {}, viewerVersion: "0.5.0", viewerOrigin: "https://viewer.example",
   });
-  await controller.copyMapLink();
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
+  const copied = await publication.publish(controller);
   assert.deepEqual(copied.layers, []);
 });
 
@@ -1667,7 +1572,8 @@ test("upload references survive autosave and links with their appearance and map
   const record = { entry: { item: null, isCustom: true, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
   const storage = createStorage(), view = createView(), timers = createTimers();
   const saved = emptySavedMap(10, 20, 6);
-  const controller = createController({ view, storage,
+  const publication = createNamedMapFixture();
+  const controller = createController({ ...publication.author, view, storage,
     viewport: { snapshot: () => saved.viewport }, mapLayers: { retainedRecords: [record] },
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     exportUpload: candidate => candidate === record ? upload : null,
@@ -1676,8 +1582,7 @@ test("upload references survive autosave and links with their appearance and map
   controller.scheduleRemember();
   timers.runOnly();
   assert.deepEqual(JSON.parse(storage.serialized).layers, [upload]);
-  await controller.copyMapLink();
-  const linked = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  const linked = await publication.publish(controller);
   assert.deepEqual(linked.layers, [upload]);
   controller.destroy();
 
@@ -1694,7 +1599,7 @@ test("upload references survive autosave and links with their appearance and map
     },
     setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
   });
-  await restarted.restoreStartupView("");
+  await restarted.restoreStartupView();
   assert.deepEqual(restored, [upload]);
   assert.deepEqual(order, [[record.entry.key]]);
   assert.equal(restoredView.result, null, "successful private restoration stays quiet");
@@ -1706,24 +1611,24 @@ test("unavailable private uploads are explained after refresh and when opening l
     visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), layers: [upload] };
   const serialized = serializeSavedMapView(saved);
-  const fragment = await encodeSavedMapViewFragment(serialized, { maximumInputBytes: 512 * 1024 });
   for (const useLink of [false, true]) {
     const view = createView(), timers = createTimers();
     let attempts = 0;
     const controller = createController({ view, storage: createStorage(serialized),
+      ...(useLink ? createNamedMapFixture(saved).viewer : {}),
       viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
       viewport: { restore() {} }, catalogVisualization: { clear() {} },
       mapLayers: { retainedRecords: [], commitStaged() {} },
       restoreUpload: async () => { attempts += 1; throw new Error("This upload is unavailable. Open it in the browser that uploaded it; it may have been deleted."); },
       setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
     });
-    await controller.restoreStartupView(useLink ? fragment : "");
+    await controller.restoreStartupView();
     assert.equal(attempts, 1);
     assert.equal(view.result.loaded, 0);
     assert.equal(view.result.total, 1);
     assert.match(view.result.details[0], /Wetlands:.*browser that uploaded it/);
     controller.viewerOrigin = "https://different-site.example";
-    await controller.openSharedFragment(fragment);
+    await controller.restoreStartupView();
     assert.equal(attempts, 1, "foreign upload identifiers never reach local source access");
     assert.match(view.result.details[0], /original EOLab site/);
     controller.destroy();
@@ -1753,7 +1658,7 @@ test("removing a restored upload while another layer loads does not discard the 
     },
     setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
   });
-  const restoring = controller.restoreStartupView("");
+  const restoring = controller.restoreStartupView();
   await flushAsyncWork();
   assert.equal(records.length, 1);
   records.length = 0;
@@ -1803,7 +1708,8 @@ test("temporal views restore independently in mixed map order and retain unavail
   const saved = { ...emptySavedMap(10, 20, 6), layers: [temporal, catalog,
     { ...structuredClone(temporal), customName: "Second", isCustom: true, opacity: 0.3 }] };
   const records = [], view = createView(), order = [];
-  const controller = createController({ view,
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.editor, view,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
@@ -1824,15 +1730,12 @@ test("temporal views restore independently in mixed map order and retain unavail
       return key;
     },
   });
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
-    maximumInputBytes: 512 * 1024,
-  }));
+  await controller.restoreStartupView();
   assert.equal(view.result.loaded, 3);
   assert.deepEqual(order, [["local:temporal:First", records[1].entry.key, "local:temporal:Second"]]);
   assert.match(records[2].error, /unavailable/);
   assert.deepEqual(records.map(record => record.entry.isCustom), [false, false, true]);
-  await controller.copyMapLink();
-  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  const copied = await publication.saveEdits(controller);
   assert.deepEqual(copied.layers, saved.layers);
   controller.destroy();
 });
@@ -1850,7 +1753,8 @@ test("superseded temporal restoration cannot add a late row or commit its saved 
       continuous: { definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom", styleWasEdited: true },
       categorical: null },
   }] };
-  const controller = createController({ view,
+  const publication = createNamedMapFixture(saved);
+  const controller = createController({ ...publication.viewer, view,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { restore: () => assert.fail("superseded viewport restored") },
     catalogVisualization: { clear() {} },
@@ -1861,9 +1765,7 @@ test("superseded temporal restoration cannot add a late row or commit its saved 
       return null;
     },
   });
-  const opening = controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
-    maximumInputBytes: 512 * 1024,
-  }));
+  const opening = controller.restoreStartupView();
   await started;
   controller.destroy(); release(); await opening;
   assert.equal(view.result, null);

@@ -29,12 +29,14 @@ class SourceRevisionMigration:
         revision: Current map revision after this operation.
         changed_layers: Number of layers with obsolete Catalog or shared-label fields removed.
         applied: Whether the database was updated; false for previews and no-ops.
+        upgrades_format: Whether the protected Site Condition map needs its version marker updated.
     """
 
     slug: str
     revision: int
     changed_layers: int
     applied: bool
+    upgrades_format: bool
 
 
 class SavedMapStore:
@@ -150,7 +152,13 @@ class SavedMapStore:
             row = cursor.fetchone()
             if row is None:
                 raise SavedMapError(404, "Saved map not found.")
-            return SavedMap.model_validate(row)
+            try:
+                return SavedMap.model_validate(row)
+            except ValidationError as error:
+                raise SavedMapError(
+                    422,
+                    "This saved map has settings this site cannot open. Ask the map owner for an updated map.",
+                ) from error
 
     def list_published_maps(self) -> list[dict[str, Any]]:
         """List active and deleted maps for administration without loading documents.
@@ -207,6 +215,14 @@ class SavedMapStore:
             if row is None:
                 raise SavedMapError(404, "Saved map not found.")
             candidate = deepcopy(row)
+            if not isinstance(candidate["view"], dict):
+                raise SavedMapError(422, "The stored map must be a JSON object.")
+            upgrades_format = (
+                slug == "nhi-site-condition-mapper"
+                and candidate["view"].get("schemaVersion") == 3
+            )
+            if upgrades_format:
+                candidate["view"]["schemaVersion"] = 5
             changed_layers = 0
             # Persisted legacy JSON cannot satisfy the current contract until
             # these fields are removed. Validate the entire result below.
@@ -238,7 +254,7 @@ class SavedMapStore:
                     422,
                     "This map has other incompatible settings. Inspect the saved document before upgrading.",
                 ) from error
-            applied = apply and changed_layers > 0
+            applied = apply and (changed_layers > 0 or upgrades_format)
             if applied:
                 if expected_revision != row["revision"]:
                     raise SavedMapError(
@@ -252,7 +268,7 @@ class SavedMapStore:
                 )
                 row["revision"] = cursor.fetchone()["revision"]
             return SourceRevisionMigration(
-                slug, row["revision"], changed_layers, applied
+                slug, row["revision"], changed_layers, applied, upgrades_format
             )
 
     def set_map_deleted(self, slug: str, *, deleted: bool) -> None:

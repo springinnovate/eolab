@@ -10,9 +10,13 @@
   <pre id="results" role="status">Running...</pre>
   <script type="module">
     import L from "leaflet";
+    import "leaflet/dist/leaflet.css";
+    import { createSingleWorldMap } from "../src/map.js";
     import { OnMapLegend } from "../src/map-layers/on-map-legend.js";
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
+    import { bindPanelFadeSettings } from "../src/panel-fade-settings.js";
+    import { SavedMapViewLocalStorage } from "../src/saved-map-view/local-storage.js";
     import { MapInspectionController } from "../src/map-inspection-controller.js";
     import { MapLayerStackView } from "../src/map-layers/layer-stack-view.js";
     import { ModelsController } from "../src/models/controller.js";
@@ -73,7 +77,10 @@
      * @throws {Error} If either action loses its focus target or changes the active tool.
      */
     function checkLegendControls(inspection) {
-      const map = L.map(document.querySelector("#map"), {zoomControl: false, attributionControl: false}).setView([0, 0], 2);
+      const map = createSingleWorldMap(L, {
+        initialView: {latitude: 0, longitude: 0, zoom: 2},
+        basemap: {url: L.Util.emptyImageUrl, attribution: "Test map"},
+      });
       const command = document.querySelector("#toggle-map-legend");
       const menu = document.querySelector("#workspace-tool-actions");
       const legend = new OnMapLegend(L, map, {
@@ -81,6 +88,14 @@
         onChange() {}, onInclusion() {},
       });
       try {
+        checkPanelFade(map.getContainer(), legend.root);
+        if (innerWidth >= 1200) {
+          map.fitBounds([[0, 0], [0, 0]], {maxZoom: 8, animate: false});
+          const x = map.latLngToContainerPoint([0, 0]).x + map.getContainer().getBoundingClientRect().left;
+          const freeLeft = document.querySelector("#control-panel").getBoundingClientRect().right;
+          const freeRight = document.querySelector("#map-inspection").getBoundingClientRect().left;
+          check(Math.abs(x - (freeLeft + freeRight) / 2) <= 2, "Zoom to layer missed the clear center between the open panels");
+        }
         document.querySelector("#toggle-map-inspection-dock").click();
         const hide = legend.root.querySelector('button[aria-label="Hide map legend"]');
         check(hide.textContent === "×", "The legend has no local ×");
@@ -96,6 +111,124 @@
       } finally {
         legend.remove();
         map.remove();
+      }
+    }
+
+    /** Finish the workspace's opacity transition and check what the user sees.
+     * @param {Element} panel Workspace surface.
+     * @param {string} opacity Expected CSS opacity after the configured delay and fade.
+     * @returns {void}
+     * @throws {Error} If the rendered opacity differs.
+     */
+    function checkPanelOpacity(panel, opacity) {
+      for (const animation of panel.getAnimations()) {
+        if (animation.transitionProperty === "opacity") animation.finish();
+      }
+      check(getComputedStyle(panel).opacity === opacity, `Expected ${panel.id || panel.className} opacity ${opacity}`);
+    }
+
+    /** Verify shared panel opacity, a cancelled exit and the map beneath the desktop sidebar.
+     * @param {HTMLElement} map Live Leaflet map container.
+     * @param {HTMLElement} legend Leaflet's interactive legend.
+     * @returns {void}
+     * @throws {Error} If a panel fades independently or the sidebar covers empty space.
+     */
+    function checkPanelFade(map, legend) {
+      const sidebar = document.querySelector("#control-panel");
+      const openers = document.querySelector("#map-tools-toolbar");
+      const panels = [sidebar, openers, legend];
+      const pointer = {bubbles: true, pointerType: "mouse", pointerId: 7};
+      /** Finish only the panel opacity transitions to inspect their rendered endpoints.
+       * @param {string} opacity Expected opacity of every panel.
+       * @returns {void}
+       */
+      function checkOpacity(opacity) {
+        for (const panel of panels) checkPanelOpacity(panel, opacity);
+      }
+      map.dispatchEvent(new PointerEvent("pointermove", pointer));
+      checkOpacity("0.4");
+      legend.dispatchEvent(new PointerEvent("pointerover", pointer));
+      checkOpacity("1");
+      legend.dispatchEvent(new PointerEvent("pointerout", {...pointer, relatedTarget: map}));
+      check(getComputedStyle(legend).opacity === "1", "Leaving the legend skipped the exit delay");
+      sidebar.dispatchEvent(new PointerEvent("pointerover", pointer));
+      checkOpacity("1");
+      sidebar.dispatchEvent(new PointerEvent("pointerout", {...pointer, relatedTarget: map}));
+      checkOpacity("0.4");
+      if (innerWidth >= 1200) {
+        const canvas = map.getBoundingClientRect(), left = sidebar.getBoundingClientRect();
+        check(canvas.left <= left.left && canvas.right >= openers.getBoundingClientRect().right,
+          "The map does not extend beneath both panels");
+        check(legend.getBoundingClientRect().left >= left.right, "The sidebar covers the map legend");
+      }
+    }
+
+    /** Tune panel fading through Tools, reopen the controls, and check the result on the map.
+     * @returns {void}
+     * @throws {Error} If a chosen value, visible panel opacity, or keyboard destination is wrong.
+     */
+    function checkFadeSettings() {
+      const app = document.querySelector("#app");
+      const panel = document.querySelector("#settings-panel");
+      const chooser = document.querySelector("#map-tool-chooser");
+      const toggle = panel.querySelector("#enable-panel-fading");
+      const fields = [...panel.querySelectorAll('input[type="number"]')];
+      const [enterDelay, fadeIn, exitDelay, fadeOut, opacity] = fields;
+      const storage = new SavedMapViewLocalStorage(sessionStorage, "eolab.test.panel-fading");
+      const defaults = "50,150,750,1000,40";
+      storage.clear();
+      // The production stylesheet can express the same default in seconds.
+      app.style.setProperty("--panel-fade-in", "0.15s");
+      let unbind = bindPanelFadeSettings(app, storage);
+      /** Enter a value with the same input and change events as a completed edit.
+       * @param {HTMLInputElement} input Slider or exact number to change.
+       * @param {number} value Numeric input to exercise.
+       * @return {void}
+       */
+      function edit(input, value) {
+        input.value = String(value);
+        input.dispatchEvent(new Event("input", {bubbles: true}));
+        input.dispatchEvent(new Event("change", {bubbles: true}));
+      }
+      try {
+        chooser.click();
+        const menu = document.querySelector("#workspace-tool-actions");
+        const command = menu.querySelector("#open-settings");
+        check([...menu.querySelectorAll("button")].at(-1) === command, "Settings is not the last Tools command");
+        command.click();
+        check(document.activeElement === panel && panel.getClientRects().length && !menu.matches(":popover-open"),
+          "Settings did not open in the dock with keyboard focus");
+        check(toggle.checked && fields.map(field => field.value).join(",") === defaults, "Unexpected fade defaults");
+        edit(enterDelay, 0); edit(fadeIn, 0); edit(exitDelay, 3123); edit(fadeOut, 0);
+        const slider = opacity.parentElement.querySelector('input[type="range"]');
+        edit(slider, 63);
+        check(opacity.value === "63" && exitDelay.parentElement.querySelector('input[type="range"]').value === "3123",
+          "The slider and exact inputs disagree");
+        const map = document.querySelector("#map");
+        const pointer = {bubbles: true, pointerType: "mouse", pointerId: 28};
+        map.dispatchEvent(new PointerEvent("pointermove", pointer));
+        panel.dispatchEvent(new PointerEvent("pointerout", {...pointer, relatedTarget: map}));
+        const sidebar = document.querySelector("#control-panel");
+        check(getComputedStyle(sidebar).transitionDelay.split(", ").includes("3.123s"), "The map ignored the new exit delay");
+        toggle.click();
+        check(opacity.matches(":disabled") && getComputedStyle(sidebar).opacity === "1", "Turning fading off left a translucent panel or enabled inputs");
+        unbind();
+        unbind = bindPanelFadeSettings(app, storage);
+        check(!toggle.checked && opacity.value === "63" && exitDelay.value === "3123", "Reopening lost the saved toggle or values");
+        toggle.click(); edit(exitDelay, 0);
+        check(getComputedStyle(sidebar).opacity === "0.63" && getComputedStyle(document.querySelector("#map-inspection")).opacity === "0.63",
+          "Both panels must use the selected idle opacity");
+        edit(opacity, 101);
+        opacity.dispatchEvent(new Event("blur"));
+        check(opacity.value === "63" && getComputedStyle(sidebar).opacity === "0.63", "An invalid edit replaced the last valid opacity");
+        panel.querySelector("#restore-panel-fade-defaults").click();
+        check(toggle.checked && fields.map(field => field.value).join(",") === defaults && storage.read() === null,
+          "Restoring defaults left a custom preference");
+        panel.querySelector("#close-settings").click();
+        check(document.activeElement === chooser && panel.hidden, "Closing Settings lost keyboard focus");
+      } finally {
+        unbind();
+        storage.clear();
       }
     }
 
@@ -128,6 +261,39 @@
       const featureError = "The selected feature could not be read.";
       dock.setClickResult("feature", { state: "error", message: featureError });
       check(header.innerText.includes(featureError), "Feature inspection lost its own error feedback");
+    }
+
+    /** Inspect two map points, change tools during loading and check the dock's rendered opacity.
+     * @param {MapInspectionController} dock Mounted map inspection panel.
+     * @returns {void}
+     * @throws {Error} If another panel stays opaque or a late result revives dismissed activity.
+     */
+    function checkMapClickFade(dock) {
+      const panel = document.querySelector("#map-inspection");
+      const sidebar = document.querySelector("#control-panel");
+      const map = document.querySelector("#map");
+      const pointer = {bubbles: true, pointerType: "mouse", pointerId: 7};
+      dock.showHistogram();
+      map.dispatchEvent(new PointerEvent("pointermove", pointer));
+      for (const lat of [22, 24]) {
+        dock.beginMapClick({lat, lng: 80});
+        dock.setClickResult("histogram", {state: "loading"});
+        dock.keepVisibleClickResultReadable();
+        checkPanelOpacity(panel, "1");
+        checkPanelOpacity(sidebar, "0.4");
+        map.dispatchEvent(new PointerEvent("pointerdown", {...pointer, buttons: 1}));
+        map.dispatchEvent(new PointerEvent("pointermove", {...pointer, buttons: 1}));
+        map.dispatchEvent(new PointerEvent("pointerup", pointer));
+        dock.setClickResult("histogram", {state: "ready"});
+        checkPanelOpacity(panel, "1");
+      }
+      dock.beginMapClick({lat: 25, lng: 80});
+      dock.setClickResult("histogram", {state: "loading"});
+      dock.keepVisibleClickResultReadable();
+      dock.showFeatureInspector();
+      dock.setClickResult("histogram", {state: "ready"});
+      checkPanelOpacity(panel, "0.4");
+      check(dock.activeTool === "feature", "A completed histogram changed the foreground tool");
     }
 
     /** Check the crowded tab row, context menu, shared typography and retained selection.
@@ -431,11 +597,15 @@
       const inspection = new MapInspectionController({
         onLayoutChange: state => layout.setInspectionLayout(state),
       });
+      layout.registerPanelActivitySource(document.querySelector("#map-inspection"),
+        listener => inspection.subscribeClickResultActivity(listener));
       await checkPanelDisclosures(inspection);
       checkLegendControls(inspection);
+      checkFadeSettings();
       await checkOpenMapViews(inspection);
       await checkDataToolTabs(inspection);
       checkHistogramResultNavigation(inspection);
+      checkMapClickFade(inspection);
       inspection.destroy();
       layout.destroy();
     }

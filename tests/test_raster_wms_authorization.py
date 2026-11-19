@@ -10,6 +10,7 @@ from eolab_app.raster.wms_authorization import (
     validate_raster_style_environment,
 )
 from eolab_app.rendering.errors import PublishedLayerRequestError
+from eolab_app.rendering.models import CompositeMapLayerRequest
 from tests.app_support import RASTER_STYLE_ENVIRONMENT_ERROR
 
 
@@ -17,11 +18,11 @@ from tests.app_support import RASTER_STYLE_ENVIRONMENT_ERROR
     "environment",
     (
         "",
-        "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;opacity:1",
-        "min:0;min:1;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf",
-        "min:0;med:NaN;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c",
-        "min:0;med:100;max:50;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c",
-        "min:0;med:50;max:100;cmin:blue;cmed:#ffffbf;cmax:#d7191c",
+        "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;opacity:1;amin:1;amed:1;amax:1",
+        "min:0;min:1;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;amin:1;amed:1;amax:1",
+        "min:0;med:NaN;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c;amin:1;amed:1;amax:1",
+        "min:0;med:100;max:50;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c;amin:1;amed:1;amax:1",
+        "min:0;med:50;max:100;cmin:blue;cmed:#ffffbf;cmax:#d7191c;amin:1;amed:1;amax:1",
     ),
 )
 def test_raster_style_environment_rejects_unowned_or_unsafe_values(
@@ -39,13 +40,6 @@ def test_raster_style_environment_rejects_unowned_or_unsafe_values(
         validate_raster_style_environment(environment)
 
     assert str(error.value) == RASTER_STYLE_ENVIRONMENT_ERROR
-
-
-def test_raster_style_environment_accepts_bounded_thresholds_and_colors() -> None:
-    """Accept the exact substitutions consumed by the deployed raster SLD."""
-    validate_raster_style_environment(
-        "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c"
-    )
 
 
 def test_raster_authorization_rejects_vector_feature_filter() -> None:
@@ -76,20 +70,24 @@ def test_raster_style_accepts_three_bounded_opacities(alpha: str) -> None:
 
 
 @pytest.mark.parametrize("suffix", [
+    "", ";vexact:0;cexact:#123456;aexact:0.5",
     ";amin:0", ";amin:0;amed:0.5", ";amin:0;amed:0.5;other:1",
     ";amin:0;amin:0.5;amax:1", ";amin:NaN;amed:0.5;amax:1",
     ";amin:0;amed:Infinity;amax:1", ";amin:0;amed:0.5;amax:-0.1",
     ";amin:0;amed:0.5;amax:1.01", ";amin:;amed:0.5;amax:1",
     ";amin:0;amed:0.5;amax:blue", ";amin:0;amed:0.5;amax:1;opacity:0.5",
     ";amin:0;amed:0.5;amax:" + "0" * 384,
-    ";vexact:0;cexact:#123456", ";vexact:NaN;cexact:#123456;aexact:0",
-    ";vexact:-9999;cexact:red;aexact:0", ";vexact:0;cexact:#123456;aexact:1.01",
+    ";amin:1;amed:1;amax:1;vexact:0;cexact:#123456",
+    ";amin:1;amed:1;amax:1;vexact:NaN;cexact:#123456;aexact:0",
+    ";amin:1;amed:1;amax:1;vexact:-9999;cexact:red;aexact:0",
+    ";amin:1;amed:1;amax:1;vexact:0;cexact:#123456;aexact:1.01",
+    pytest.param(";ranges:,1,#ff00ff,1", id="range-without-gradient-opacities"),
 ])
 def test_raster_style_rejects_incomplete_or_unsafe_opacities(suffix: str) -> None:
-    """Reject invalid alpha without widening the other authorized substitutions.
+    """Reject gradients with missing or invalid opacities and malformed exact rules.
 
     Args:
-        suffix: Malformed optional opacity assignments.
+        suffix: Missing or invalid gradient opacities or exact-value overrides.
     """
     with pytest.raises(PublishedLayerRequestError):
         validate_raster_style_environment(
@@ -97,8 +95,28 @@ def test_raster_style_rejects_incomplete_or_unsafe_opacities(suffix: str) -> Non
         )
 
 
-def test_deployed_raster_sld_consumes_opacity_with_opaque_legacy_defaults() -> None:
-    """Keep native GeoServer alpha names/defaults aligned with authorization."""
+@pytest.mark.parametrize("suffix", [
+    ";ranges:", ";ranges:,,#ff00ff,1", ";ranges:1,0,#ff00ff,1",
+    ";ranges:NaN,100,#ff00ff,1", ";ranges:0,Infinity,#ff00ff,1",
+    ";ranges:,1,magenta,1", ";ranges:100,,#ff00ff,NaN", ";ranges:100,,#ff00ff,-0.1",
+    ";ranges:0,1,#ff00ff,1|", ";ranges:0,1,#ff00ff,1;ranges:2,3,#ff00ff,1",
+    ";ranges:" + "|".join(["0,1,#ff00ff,1"] * 17),
+])
+def test_raster_style_rejects_invalid_ranges(suffix: str) -> None:
+    """Reject invalid range assignments on an otherwise valid gradient.
+
+    Args:
+        suffix: Malformed range override assignments.
+    """
+    with pytest.raises(PublishedLayerRequestError):
+        validate_raster_style_environment(
+            "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c"
+            ";amin:1;amed:1;amax:1" + suffix
+        )
+
+
+def test_deployed_raster_sld_defaults_to_opaque_stops_without_a_custom_ramp() -> None:
+    """Use opaque stops for the named style when the client sends no environment."""
     document = ElementTree.parse(Path(__file__).parents[1] / "geoserver/dynamic-raster.sld")
     entries = document.findall(".//{http://www.opengis.net/sld}ColorMapEntry")
     assert [entry.attrib["opacity"] for entry in entries] == [
@@ -129,3 +147,43 @@ def test_exact_raster_rule_uses_the_same_color_maps_for_tiles_and_composites() -
     assert [entry.get("type") for entry in passes] == ["ramp"]
     with pytest.raises(PublishedLayerRequestError, match="requires GetMap"):
         owner.validate_parameters("getfeatureinfo", query)
+
+
+@pytest.mark.parametrize("exact", ["", ";vexact:-9999.5;cexact:#ff0000;aexact:0"])
+def test_raster_ranges_use_the_same_native_style_for_tiles_and_composites(exact: str) -> None:
+    """Match the painted-pixel fixture for open-ended and overlapping bounded rules.
+
+    Args:
+        exact: Optional exact-value exception within the first range.
+    """
+    owner = PublishedRasterAuthorization()
+    ramp = "min:0;med:50;max:100;cmin:#101010;cmed:#0000ff;cmax:#00ff00;amin:0.4;amed:1;amax:0.8"
+    ranges = ";ranges:,1,#000000,1|100,,#ff00ff,1|25.25,30.5,#ff0000,0.5|30.5,40,#00ff00,0"
+    env = ramp + exact + ranges
+    query = {"layers": "eolab:depth", "styles": "dynamic-raster", "env": env, "tiled": "true"}
+    owner.validate_parameters("getmap", query)
+    direct = dict(owner.prepare_query("getmap", list(query.items())))
+    assert "env" not in direct and "interpolations" not in direct and "tiled" not in direct
+    assert direct["sld_body"] == owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 1).decode()
+    with pytest.raises(PublishedLayerRequestError, match="requires GetMap"):
+        owner.validate_parameters("getfeatureinfo", query)
+    if exact:
+        composite = owner.build_composite_sld("eolab:depth", "dynamic-raster", env, None, 0.5)
+        fixture = Path(__file__).parents[1] / "geoserver/reader-assessment/src/test/resources/raster-range-overrides.sld"
+        assert ElementTree.canonicalize(fixture.read_text(), strip_text=True, rewrite_prefixes=True) == (
+            ElementTree.canonicalize(composite, strip_text=True, rewrite_prefixes=True)
+        )
+
+
+def test_composite_plan_accepts_sixteen_full_precision_color_ranges() -> None:
+    """Carry all range rows through the composite request envelope and raster authorization."""
+    ranges = "|".join(f"{index + 0.123456789012345},{index + 0.5},#ff00ff,0.75" for index in range(16))
+    env = f"min:0;med:50;max:100;cmin:#101010;cmed:#0000ff;cmax:#00ff00;amin:1;amed:1;amax:1;ranges:{ranges}"
+    layer = CompositeMapLayerRequest(
+        layerName="eolab:depth", styleName="dynamic-raster", opacity=1, styleEnvironment=env
+    )
+    document = PublishedRasterAuthorization().build_composite_sld(
+        layer.layer_name, layer.style_name, layer.style_environment, layer.style_definition, layer.opacity
+    )
+    colors = ElementTree.fromstring(document).findall(".//{*}ColorMap[@type='values']/{*}ColorMapEntry")
+    assert [entry.get("quantity") for entry in colors] == [str(i) for i in range(1, 17)]

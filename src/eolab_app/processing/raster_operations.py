@@ -155,11 +155,12 @@ async def prepare_summary(
         authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
-        Prepared summary plan and its disk reservation.
+        Prepared summary inputs and display metadata.
 
     Raises:
         ProcessingError: If the selection, native planning or resource limits fail.
     """
+
     request = queued.request
     alias = next(iter(request.sources))
     signature = (
@@ -254,7 +255,7 @@ async def prepare_summary(
             area=area,
             grid=grid,
         )
-    prepared = prepare_aggregate_job(spec, context.aggregate_limits)
+    prepared = prepare_aggregate_job(spec)
     return prepared
 
 
@@ -271,7 +272,7 @@ async def prepare_clip(
         authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
-        Prepared clip plan and its disk reservation.
+        Prepared clip inputs and display metadata.
 
     Raises:
         ProcessingError: If the selection, native planning or resource limits fail.
@@ -289,7 +290,9 @@ async def prepare_clip(
             if authorized.source_signature is not None
             else None
         )
-    if request.samplingBox is not None:
+    if request.wholeRaster:
+        area = ClipArea(kind="wholeRaster", bounds=None)
+    elif request.samplingBox is not None:
         area = ClipArea(
             kind="samplingBox",
             bounds=sampling_box_bounds(request.samplingBox),
@@ -502,7 +505,6 @@ def build_summary_submission(
     return PreparedJobPlan(
         specification=queued.model_dump(mode="json", by_alias=True),
         summary=summary,
-        reserved_bytes=0,
         operation=queued.operation,
         work_key=identify_shared_calculation(queued),
         presentation={"calculations": summary["calculations"]},
@@ -522,31 +524,26 @@ def build_clip_submission(request: ClipJobRequest, polygons: None) -> PreparedJo
     """
     inputs = request
     queued = UnpreparedClip(request=inputs)
-    bounds = inputs.selectedBounds
+    if inputs.samplingBox:
+        area = {
+            "kind": "samplingBox",
+            "bounds": sampling_box_bounds(inputs.samplingBox),
+            "samplingBox": inputs.samplingBox.model_dump(mode="json"),
+        }
+    elif inputs.selectedBounds:
+        area = {"kind": "bounds", "bounds": inputs.selectedBounds.canonical_tuple()}
+    else:
+        area = {
+            "kind": "wholeRaster" if inputs.wholeRaster else "catalogSelection",
+            "bounds": None,
+        }
     return PreparedJobPlan(
         specification=queued.model_dump(mode="json", by_alias=True),
         summary={
             "source": get_clip_source(request).model_dump(mode="json", by_alias=True),
             "grid": None,
-            "area": {
-                "kind": (
-                    "samplingBox"
-                    if inputs.samplingBox
-                    else "bounds" if bounds else "catalogSelection"
-                ),
-                "bounds": (
-                    sampling_box_bounds(inputs.samplingBox)
-                    if inputs.samplingBox
-                    else bounds.canonical_tuple() if bounds else None
-                ),
-                **(
-                    {"samplingBox": inputs.samplingBox.model_dump(mode="json")}
-                    if inputs.samplingBox
-                    else {}
-                ),
-            },
+            "area": area,
         },
-        reserved_bytes=0,
         operation=queued.operation,
         work_key=identify_shared_calculation(queued),
     )

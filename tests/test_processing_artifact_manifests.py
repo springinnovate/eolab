@@ -231,7 +231,6 @@ def test_worker_waits_for_publication_after_repeated_cancellation() -> None:
                 {
                     "spec": {"operation": "raster.clip.v1"},
                     "attempt_id": ATTEMPT,
-                    "reserved_bytes": 100_000,
                 },
                 artifact,
             )

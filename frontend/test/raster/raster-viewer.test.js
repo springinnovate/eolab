@@ -825,34 +825,6 @@ test("retained custom names reach histograms and paired axes without new calcula
     h.destroy();
 });
 
-test("download intents preserve distinct 1D and 2D boxes without waiting for statistics", async () => {
-    const downloads = [];
-    const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
-        onDownloadRequested: (item, area) => downloads.push({ item, area }),
-    });
-    await h.viewer.show(createRasterItem("download-x"));
-    await h.viewer.show(createRasterItem("download-y"));
-    await flushPromises();
-    assert.equal(h.viewer.getSelectedArea(), null);
-    h.viewer.exploreAt({ lng: 78, lat: 22 });
-    const oneD = h.viewer.getSelectedArea();
-    assert.ok(Object.isFrozen(oneD.samplingBox));
-    h.controlsView.handlers.onDownloadHistogram(h.layerStackView.activeKey);
-    assert.deepEqual(downloads.at(-1).area, oneD);
-    h.controlsView.handlers.onBivariateModeChange("bivariate");
-    h.viewer.exploreAt({ lng: 80, lat: 24 });
-    const twoD = h.viewer.getSelectedArea();
-    assert.notDeepEqual(twoD, oneD);
-    h.controlsView.handlers.onDownloadPairedHistogram("x");
-    h.controlsView.handlers.onDownloadPairedHistogram("y");
-    assert.deepEqual(downloads.at(-1).area, twoD);
-    assert.deepEqual(downloads.at(-2).area, twoD);
-    assert.notEqual(downloads.at(-1).item.id, downloads.at(-2).item.id);
-    h.controlsView.handlers.onBivariateModeChange("overlay");
-    assert.deepEqual(h.viewer.getSelectedArea(), oneD);
-    h.destroy();
-});
-
 test("calculation entry points emit source identities and committed areas without reading histogram results", async () => {
     const calculations = [], areas = [], committed = [];
     const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
@@ -1421,14 +1393,15 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     const key = record.entry.key;
     h.viewer.openStyle(key);
     h.controlsView.style = { ...h.controlsView.style, minimum: -5, midpoint: 0, maximum: 30,
-        valueOverride: {value: -9999.5, color: "#e57149", opacity: 0} };
+        valueOverride: {value: -9999.5, color: "#e57149", opacity: 0},
+        rangeOverrides: [{minimum: 100, maximum: null, color: "#ff00ff", opacity: 1}] };
     h.controlsView.paletteName = "custom";
     h.controlsView.handlers.onStyleInput(false);
     h.controlsView.handlers.onStyleChange();
     const continuous = record.adapter.exportSavedState(record).continuous;
     assert.deepEqual(continuous.definition.valueOverride, h.controlsView.style.valueOverride);
     assert.deepEqual(h.mapLayers.snapshots()[0].legend.entries.map(entry => [entry.label, entry.symbol.fillOpacity]),
-        [["Value -9999.5 · Transparent", 0]]);
+        [["Value -9999.5 · Transparent", 0], ["Value ≥ 100 · 100% opacity", 1]]);
     const style = categoricalAppearance();
     assert.ok(h.controlsView.layerHistograms.every((summary) =>
         !Object.hasOwn(summary, "unavailableMessage")
@@ -1464,7 +1437,7 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     await flushPromises();
     assert.equal(Object.hasOwn(record.state.layer.wmsParams, "raster_style"), false);
     assert.match(record.state.layer.wmsParams.env, /min:-5;med:0;max:30/);
-    assert.match(record.state.layer.wmsParams.env, /;vexact:-9999.5;cexact:#e57149;aexact:0$/);
+    assert.match(record.state.layer.wmsParams.env, /;vexact:-9999.5;cexact:#e57149;aexact:0;ranges:100,,#ff00ff,1$/);
     assert.equal(Object.hasOwn(record.adapter.renderDescriptor(record), "styleDefinition"), false);
     assert.equal(h.mapLayers.snapshots().find((layer) => layer.key === key).legend.kind, "gradient");
     assert.deepEqual(h.controlsView.style, continuous.definition);
@@ -1743,10 +1716,9 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
 test("another Catalog raster view copies appearance and keeps histogram actions tied to that view", async () => {
     let catalog;
     const item = createRasterItem("two-views");
-    const calculations = [], downloads = [];
+    const calculations = [];
     const h = visibleLayerFixture(undefined, {}, {
         onCalculateRequested: (...args) => calculations.push(args),
-        onDownloadRequested: (...args) => downloads.push(args),
     }, {restoreRemovedLayer: (snapshot, isCurrent) =>
         catalog.restoreRemovedLayer(snapshot, async () => item, isCurrent)});
     catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
@@ -1770,9 +1742,7 @@ test("another Catalog raster view copies appearance and keeps histogram actions 
         editCategoricalAppearance(h, copiedKey, changed);
         assert.deepEqual(original.adapter.exportSavedState(original), appearance);
         h.controlsView.handlers.onCalculateHistogram(copiedKey);
-        h.controlsView.handlers.onDownloadHistogram(copiedKey);
         assert.deepEqual(calculations[0], [item, null, "Forest only", copiedKey]);
-        assert.deepEqual(downloads[0], [item, null, "Forest only"]);
         h.mapLayers.removeKey(original.entry.key);
         assert.equal(h.mapLayers.findLayerKey(item), copiedKey);
         assert.equal(h.mapLayers.getRecord(copiedKey), copied);
@@ -1802,7 +1772,8 @@ test("Reverse colors commits only the editing view and survives percentile edits
         h.controlsView.handlers.onClearSampleWindow();
         await flushPromises();
         h.viewer.openStyle(key);
-        const before = { ...appearance.readStyle(), minimumOpacity: 0.25, midpointOpacity: 0.5, maximumOpacity: 0.75 };
+        const before = { ...appearance.readStyle(), minimumOpacity: 0.25, midpointOpacity: 0.5, maximumOpacity: 0.75,
+            rangeOverrides: [{minimum: -5.5, maximum: 1, color: "#ff00ff", opacity: 0.375}] };
         appearance.setStyle(before, "blue-yellow-red");
         h.controlsView.handlers.onStyleInput(false);
         h.controlsView.handlers.onStyleChange();
@@ -1832,6 +1803,9 @@ test("Reverse colors commits only the editing view and survives percentile edits
         assert.deepEqual(parseSavedMapView(serializeSavedMapView(saved)).layers[0].style, savedAppearance);
         const copied = h.mapLayers.getRecord(await h.mapLayers.addAnotherView(key));
         assert.deepEqual(copied.adapter.exportSavedState(copied), savedAppearance);
+        assert.ok(h.mapLayers.copyStyle(key));
+        assert.ok(await h.mapLayers.pasteStyle(original.entry.key));
+        assert.deepEqual(original.adapter.exportSavedState(original).continuous.definition.rangeOverrides, before.rangeOverrides);
         h.viewer.openStyle(key);
         appearance.palette.value = "blue-yellow-red";
         appearance.palette.dispatchEvent(new Event("change"));
@@ -2950,7 +2924,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
             return area.kind === "polygonArea" ? {...pairedStatistics(), scope: "polygonArea", polygonArea} : pairedStatistics();
         },
     }, {
-        onDownloadRequested: (...args) => handoffs.push(args),
         onCalculateRequested: (...args) => handoffs.push(args),
     });
     t.after(() => h.destroy());
@@ -2961,7 +2934,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
     assert.equal(h.controlsView.pairedAreaActionsAvailable, false);
     const firstKey = h.mapLayers.retainedRecords[0].entry.key;
     h.controlsView.handlers.onCalculateHistogram(firstKey);
-    h.controlsView.handlers.onDownloadHistogram(firstKey);
     assert.deepEqual(handoffs, []);
     h.viewer.setVectorSelection({polygonArea, label: "Maui study area"});
     await flushPromises();
@@ -2973,7 +2945,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
         assert.equal(canCalculate, false);
         assert.deepEqual(h.viewer.getSelectedArea(key, "1d"), selectedArea);
         h.controlsView.handlers.onCalculateHistogram(key);
-        h.controlsView.handlers.onDownloadHistogram(key);
     }
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
@@ -2981,7 +2952,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
     assert.deepEqual(h.viewer.getSelectedArea(null, "2d"), selectedArea);
     assert.equal(h.controlsView.pairedAreaActionsAvailable, false);
     h.controlsView.handlers.onCalculatePairedHistogram("x");
-    h.controlsView.handlers.onDownloadPairedHistogram("x");
     assert.deepEqual(handoffs, []);
 
     const requestCount = areas.length + pairedAreas.length;
@@ -3931,6 +3901,11 @@ test("first sample previews the clicked footprint without opening a histogram or
         const key = h.mapLayers.retainedRecords[0].entry.key;
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(hover(-20), undefined);
+        h.viewer.setSamplingBoxPointerEnabled(false);
+        assert.equal(h.controlsView.firstSampleHintVisible, false, "Pixel picking must not invite histogram-box placement");
+        assert.equal(hover(2), undefined);
+        h.viewer.setSamplingBoxPointerEnabled(true);
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(h.viewer.exploreAt({lng: -20, lat: 0}), false);
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         const beforeHover = reads.length;
@@ -5143,6 +5118,10 @@ test("histogram clicks use visible coverage without requesting unused pixel valu
 
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.exploreAt({ lng: 0, lat: 20 }), false);
+    assert.equal(viewer.exploreAt({ lng: 80, lat: 20 }, { histogram: false }), false);
+    await flushPromises();
+    assert.equal(histogramPresentationRequests, 0, "Pixel picker must not open a histogram");
+    assert.equal(rectangleLayers.some(layer => layer.kind === "selection"), false);
     await flushPromises();
     assert.equal(pixelRequests.length, 0);
     assert.equal(histogramPresentationRequests, 0);
@@ -6085,6 +6064,55 @@ test("independent temporal views preserve explicit saved selections and reset ra
         assert.equal(second.state.item.source.variable, "temperature");
         assert.equal(first.state.item.capabilities.calculations, true);
     } finally {fixture.destroy();}
+});
+
+test("timeline selections reuse the row, consume only admitted prepared times and browse actual month boundaries", async () => {
+    const jan = ["2020-01-02T00:00:00Z", "2020-01-24T00:00:00Z", "2020-01-24T02:00:00Z"];
+    const may = ["2020-05-06T03:00:00Z"], publications = [];
+    const firstRange = createDeferred();
+    const f = temporalFixture({
+        loadStatistics: async (item, area) => {
+            await firstRange.promise;
+            const suggestedRange = may.includes(item.source.time) ? {minimum: 235, midpoint: 280, maximum: 318} :
+                {minimum: 230, midpoint: 277, maximum: 310};
+            return {...createLayerStatistics(item, area), suggestedRange};
+        },
+        loadTimes: async (_item, _variable, month = "2020-01") => ({
+            month, months: ["2020-01", "2020-05"], times: [...(month === "2020-01" ? jan : may)],
+        }),
+        publishRaster: async raster => {
+            publications.push(raster.source.time);
+            return {layerName: raster.source.time, bbox: raster.bbox};
+        },
+    });
+    try {
+        const row = await f.viewer.showTemporal(temporalItem()), key = row.entry.key;
+        const signal = new AbortController().signal;
+        assert.equal(await f.viewer.prepareTemporalFrame(key, may[0], signal), null);
+        const frame = await f.viewer.prepareTemporalFrame(key, jan[1], signal);
+        assert.equal(f.temporalViews[0].state.time, jan[0], "preparing must leave the original source selected");
+        assert.equal(frame.descriptor.layerName, jan[1]);
+        frame.show();
+        assert.deepEqual(publications, jan.slice(0, 2));
+        assert.equal(f.mapLayers.snapshots()[0].timeline.time, f.temporalViews[0].state.time);
+        assert.equal(f.viewer.exportTemporal(row).temporalSource.time, jan[1]);
+        firstRange.resolve();
+        await flushPromises();
+        assert.deepEqual(f.mapLayers.snapshots()[0].legend.labels, [230, 277, 310],
+            "starting playback before statistics arrive must admit the first measured temperature range");
+        const obsolete = await f.viewer.prepareTemporalFrame(key, jan[2], signal);
+        await f.viewer.selectTemporalMonth(key, "2020-05", "first");
+        obsolete.show();
+        assert.equal(f.temporalViews[0].state.time, may[0]);
+        assert.deepEqual(f.mapLayers.snapshots()[0].legend.labels, [230, 277, 310], "later dates retain the established range");
+        await f.viewer.selectTemporalMonth(key, "2020-01", "last");
+        assert.equal(f.temporalViews[0].state.time, jan[2]);
+        await f.viewer.selectTemporalMonth(key, "2020-01", "firstOfLastDay");
+        assert.equal(f.temporalViews[0].state.time, jan[1]);
+        await f.viewer.selectTemporalTime(key, jan[0]);
+        assert.equal(f.temporalViews[0].state.time, jan[0]);
+        assert.equal(f.mapLayers.retainedRecords[0], row);
+    } finally { f.destroy(); }
 });
 
 test("refresh keeps a removed observation explicit and retry recovers publication without losing the row", async () => {

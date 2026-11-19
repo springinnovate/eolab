@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AnnotationController } from "../../src/annotations/controller.js";
+import { AnnotationStorage } from "../../src/annotations/storage.js";
 import { AnnotationModel, readAnnotationLayers } from "../../src/annotations/model.js";
 import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
@@ -16,7 +17,7 @@ function controller() {
         drawingSaveErrors: new Map(), unavailableDrawingSources: new Set(), deviceSaveError: null,
         downloadDialog: { async choose(filename) { return filename; } }, exportInProgress: false, loaded: true, dirty: false, saving: false, pendingSave: false,
         controls: new Map(), clearedFilterLayerIds: new Set(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
-        panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
+        panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" }, storageStatus: { textContent: "", hidden: true },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, drawButton: { disabled: true }, importButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
@@ -184,6 +185,44 @@ test("private drawing cannot replace polygons while device storage is unavailabl
     assert.equal(annotations.model.draft, null);
     assert.equal(writes, 0);
     assert.match(annotations.status.textContent, /Cannot open database/);
+});
+
+test("a missing layer position preserves the entire stored document and explains the disabled drawing controls", async () => {
+    const {annotations} = privateDrawingController();
+    const source = new AnnotationModel();
+    source.createLayer(); source.createLayer();
+    const original = source.document();
+    original.layers[0].position = 7;
+    original.layers[0].filter = {corrupt: true};
+    delete original.layers[1].position;
+    const record = {revision: 3, document: original}, before = structuredClone(record);
+    const modes = [];
+    /** Resolve a browser storage request on the next microtask.
+     * @param {Object} result Database or stored document returned to the reader.
+     * @return {Object} Request exposing the assigned success handler.
+     */
+    const request = result => {
+        const pending = {result};
+        queueMicrotask(() => pending.onsuccess());
+        return pending;
+    };
+    annotations.storage = new AnnotationStorage({open: () => request({
+        transaction(_store, mode = "readonly") {
+            modes.push(mode);
+            assert.equal(mode, "readonly", "opening this unsupported record must not rewrite its filter or position");
+            return {objectStore: () => ({get: () => request(record)})};
+        },
+    })});
+    annotations.loaded = false;
+    await annotations.load();
+    assert.equal(annotations.loaded, false);
+    assert.equal(annotations.drawButton.disabled, true);
+    assert.equal(annotations.importButton.disabled, true);
+    assert.equal(annotations.storageStatus.hidden, false);
+    assert.match(annotations.storageStatus.textContent, /position in Map contents/);
+    assert.match(annotations.storageStatus.textContent, /stored on this device/);
+    assert.deepEqual(modes, ["readonly"]);
+    assert.deepEqual(record, before);
 });
 
 test("a new private drawing survives a failed device save and can retry without losing the draft", async () => {

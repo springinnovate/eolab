@@ -94,20 +94,6 @@ def test_drawing_definition_rejects_invalid_sources_and_view_state(
         SavedMapView.model_validate({**VIEW, "layers": [definition]})
 
 
-@pytest.mark.parametrize("schema_version", [1, 2, 3, 4])
-def test_drawing_references_require_saved_map_version_five(schema_version: int) -> None:
-    """Keep documents with new source references out of earlier map formats.
-
-    Args:
-        schema_version: Earlier saved-map format without drawing references.
-    """
-    candidate = {**deepcopy(VIEW), "schemaVersion": schema_version}
-    if schema_version < 3:
-        candidate.pop("basemap")
-    with pytest.raises(ValidationError, match="version five"):
-        SavedMapView.model_validate(candidate)
-
-
 def test_portable_layer_contract_does_not_import_its_storage_owners() -> None:
     """Keep the common drawing definition independent of Planning and saved maps."""
     tree = ast.parse(Path("src/eolab_app/map_layer_documents.py").read_text())

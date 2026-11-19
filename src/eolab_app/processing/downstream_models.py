@@ -111,7 +111,6 @@ class DownstreamPlan(HydrologySchema):
     inputs: DownstreamRequest
     grid: ClipGrid
     watershedSelection: CatalogSelection
-    reservedBytes: Annotated[int, Field(ge=0)]
 
     @model_validator(mode="after")
     def check_watershed_selection(self) -> "DownstreamPlan":

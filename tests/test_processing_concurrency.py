@@ -58,8 +58,15 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     """
     store.limits = replace(store.limits, worker_count=2)
     for index in range(6):
-        store.submit("stack", str(index), PreparedJobPlan({}, {}, 0), str(index))
-    visitor = store.submit("visitor", "first", PreparedJobPlan({}, {}, 0), "visitor")
+        store.submit(
+            "stack",
+            str(index),
+            PreparedJobPlan({}, {}, operation="test.v1"),
+            str(index),
+        )
+    visitor = store.submit(
+        "visitor", "first", PreparedJobPlan({}, {}, operation="test.v1"), "visitor"
+    )
     with ProcessPoolExecutor(max_workers=4, mp_context=get_context("spawn")) as workers:
         claims = list(
             workers.map(claim_from_process, [(store.conninfo, store.limits)] * 8)
@@ -68,10 +75,6 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     assert len(active) == 2
     assert {row["owner"] for row in active} == {"stack", "visitor"}
     assert visitor["job_id"] in {row["id"] for row in active}
-    assert all(
-        row["execution_memory_bytes"] == 0 and row["deadline_at"] is None
-        for row in active
-    )
     assert store.claim_next_job() is None
     # Cancellation and an expired heartbeat do not release native capacity.
     row = active[0]
@@ -89,19 +92,21 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
 def test_prepared_job_keeps_its_attempt_without_disk_admission(
     store: PostgresJobStore,
 ) -> None:
-    """Preparation keeps its worker slot and attempt regardless of old reservation metadata.
+    """Preparation keeps its running attempt until the worker publishes the result.
 
     Args:
         store: Disposable PostgreSQL queue with two worker slots.
     """
     store.limits = replace(store.limits, worker_count=2)
     for owner in ("first", "second"):
-        store.submit(owner, "request", PreparedJobPlan({}, {}, 0), "hash")
+        store.submit(
+            owner, "request", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
+        )
     first, second = store.claim_next_job(), store.claim_next_job()
     saved = store.save_prepared_job(
         second["id"],
         second["attempt_id"],
-        PreparedJobPlan({"prepared": True}, {}, 2**40),
+        PreparedJobPlan({"prepared": True}, {}, operation="test.v1"),
     )
     assert saved["status"] == "running" and saved["attempt_id"] == second["attempt_id"]
     assert saved["reserved_bytes"] == 0
@@ -119,9 +124,9 @@ def test_release_wakes_idle_workers_before_fallback(store: PostgresJobStore) -> 
     Args:
         store: Disposable PostgreSQL queue.
     """
-    store.submit("one", "one", PreparedJobPlan({}, {}, 0), "one")
+    store.submit("one", "one", PreparedJobPlan({}, {}, operation="test.v1"), "one")
     active = store.claim_next_job()
-    store.submit("two", "two", PreparedJobPlan({}, {}, 0), "two")
+    store.submit("two", "two", PreparedJobPlan({}, {}, operation="test.v1"), "two")
 
     async def scenario() -> None:
         """Register, check occupied capacity, then await a real PostgreSQL hint."""

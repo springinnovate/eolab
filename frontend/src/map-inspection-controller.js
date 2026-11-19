@@ -8,6 +8,11 @@ import { ToolTabStrip, positionToolMenu } from "./tool-tab-strip.js";
 
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
+    /** @type {boolean} Whether the user is reading a result of an explicit map click. */
+    #readingClickResult = false;
+    /** @type {Set<(active:boolean)=>void>} Subscribers to the visible result's reading state. */
+    #clickResultActivityListeners = new Set();
+
     /**
      * Bind the collapsible Map tools panel, its tool chooser, and retained results.
      *
@@ -84,11 +89,16 @@ export class MapInspectionController {
         );
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
+        this.settingsPanel = documentContext.querySelector("#settings-panel");
+        this.openSettingsButton = documentContext.querySelector("#open-settings");
+        this.closeSettingsButton = documentContext.querySelector("#close-settings");
         this.tools = [
             { name: "planning", label: "Planning", panel: documentContext.querySelector("#planning-panel"),
                 tab: documentContext.querySelector("#map-inspection-tab-planning") },
             { name: "models", label: "Data tools", panel: documentContext.querySelector("#models-panel"),
                 tab: documentContext.querySelector("#map-inspection-tab-models") },
+            { name: "settings", label: "Settings", panel: this.settingsPanel,
+                tab: documentContext.querySelector("#map-inspection-tab-settings") },
             { name: "raster-series", label: "Raster statistics", panel: this.rasterSeries, raster: true, resultTab: true,
                 tab: documentContext.querySelector("#open-raster-series-dock") },
             { name: "annotations", label: "Polygons", panel: this.annotations,
@@ -143,6 +153,18 @@ export class MapInspectionController {
         /** @type {ReturnType<typeof setTimeout>|null} Expiry of the explicit destination cue. */
         this.toolAttentionTimer = null;
         this.onClose = () => this.closeHistogram();
+        /** Open Settings from Tools and move keyboard focus into its panel. @return {void} */
+        this.onOpenSettings = () => {
+            this.#showTool("settings");
+            this.settingsPanel.focus();
+        };
+        /** Close Settings, restore the preceding view and focus the Tools chooser. @return {void} */
+        this.onCloseSettings = () => {
+            this.#hideTool("settings");
+            this.mapToolsButton.focus();
+        };
+        this.openSettingsButton.addEventListener("click", this.onOpenSettings);
+        this.closeSettingsButton.addEventListener("click", this.onCloseSettings);
         /** Collapse or restore all Map tools controls and focus the matching disclosure.
          * @param {MouseEvent} event Activation of the visible panel button.
          * @return {void}
@@ -160,7 +182,14 @@ export class MapInspectionController {
         this.onToggleFeatureDetails = () =>
             this.setFeatureInspectorExpanded(this.featureDetails.hidden);
         this.onKeydown = (event) => {
-            if (event.key !== "Escape" || this.histogram.hidden ||
+            if (event.key !== "Escape") return;
+            if (this.activeTool === "settings" && this.settingsPanel.contains(this.document.activeElement)) {
+                event.preventDefault();
+                event.stopPropagation();
+                this.onCloseSettings();
+                return;
+            }
+            if (this.histogram.hidden ||
                 !(this.histogram.contains(this.document.activeElement) ||
                     this.document.activeElement === this.closeButton)) return;
             event.preventDefault();
@@ -413,6 +442,36 @@ export class MapInspectionController {
             entry.unread = false;
         }
         this.#renderDock();
+    }
+
+    /**
+     * Keep the visible click result readable after a user samples the map. Call once the
+     * click's synchronous tool selections have settled, before asynchronous results arrive.
+     * Closing, minimizing or switching away ends the reading session.
+     * @return {void}
+     */
+    keepVisibleClickResultReadable() {
+        this.#setClickResultActivity(!this.minimized && this.clickResults.some(entry => entry.name === this.activeTool));
+    }
+
+    /** Subscribe to reading a foreground map-click result, including the current state.
+     * @param {(active:boolean)=>void} listener Receives true while the result should stay readable.
+     * @return {()=>void} Stop receiving reading-state changes.
+     */
+    subscribeClickResultActivity(listener) {
+        this.#clickResultActivityListeners.add(listener);
+        listener(this.#readingClickResult);
+        return () => this.#clickResultActivityListeners.delete(listener);
+    }
+
+    /** Notify presentation listeners when a map-click reading session starts or ends.
+     * @param {boolean} active Whether the current result is still being read.
+     * @return {void}
+     */
+    #setClickResultActivity(active) {
+        if (active === this.#readingClickResult) return;
+        this.#readingClickResult = active;
+        for (const listener of this.#clickResultActivityListeners) listener(active);
     }
 
     /** Present an owning analysis stream's current, already stale-checked status.
@@ -853,6 +912,7 @@ export class MapInspectionController {
             contexts, hidden: this.minimized, titleButton: loneToolTitle,
         });
         if (active !== this.reportedActiveTool) {
+            this.#setClickResultActivity(false);
             this.#clearToolAttention();
             this.reportedActiveTool = active;
             for (const listener of this.activityListeners) listener(active);
@@ -898,6 +958,8 @@ export class MapInspectionController {
         for (const {button} of this.clickResults) button.removeEventListener("click", this.onSummaryClick);
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
+        this.openSettingsButton.removeEventListener("click", this.onOpenSettings);
+        this.closeSettingsButton.removeEventListener("click", this.onCloseSettings);
         this.collapseButton.removeEventListener("click", this.onTogglePanel);
         this.expandButton.removeEventListener("click", this.onTogglePanel);
         for (const { tab } of this.tools.filter(tool => !tool.resultTab)) {
@@ -908,6 +970,7 @@ export class MapInspectionController {
         );
         this.document.removeEventListener("keydown", this.onKeydown);
         this.histogram.hidden = true;
+        this.settingsPanel.hidden = true;
         this.style.hidden = true;
         this.filter.hidden = true;
         this.rasterClips.hidden = true;
@@ -924,5 +987,6 @@ export class MapInspectionController {
         this.#synchronize();
         this.tabStrip.destroy();
         this.activityListeners.clear();
+        this.#clickResultActivityListeners.clear();
     }
 }

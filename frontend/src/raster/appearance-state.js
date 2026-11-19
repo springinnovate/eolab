@@ -49,8 +49,8 @@ function validateAppearanceFields(candidate, fields, label) {
  * @throws {Error} If any field, threshold, color, or opacity is invalid.
  */
 function normalizeContinuousDefinition(candidate) {
-    const fields = candidate && Object.hasOwn(candidate, "valueOverride")
-        ? [...CONTINUOUS_STYLE_FIELDS, "valueOverride"] : CONTINUOUS_STYLE_FIELDS;
+    const fields = [...CONTINUOUS_STYLE_FIELDS,
+        ...["valueOverride", "rangeOverrides"].filter(key => candidate && Object.hasOwn(candidate, key))];
     const record = validateAppearanceFields(candidate, fields, "Saved raster style");
     const definition = { ...record };
     if (Object.hasOwn(record, "valueOverride")) {
@@ -63,6 +63,11 @@ function normalizeContinuousDefinition(candidate) {
         throw new TypeError("Saved raster colors and opacities are invalid.");
     }
     validateRasterStyle(definition);
+    if (definition.rangeOverrides) {
+        definition.rangeOverrides = Object.freeze(definition.rangeOverrides.map(range => Object.freeze({
+            ...validateAppearanceFields(range, ["minimum", "maximum", "color", "opacity"], "Raster range"),
+        })));
+    }
     return Object.freeze(definition);
 }
 

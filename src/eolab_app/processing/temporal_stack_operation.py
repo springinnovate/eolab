@@ -95,7 +95,6 @@ def build_stack_submission(
             "metrics": request.metrics.model_dump(mode="json"),
             "grid": None,
         },
-        reserved_bytes=0,
         operation=queued.operation,
     )
 
@@ -162,7 +161,6 @@ async def prepare_temporal_stack(
             "grid": spec.grid.model_dump(mode="json"),
             "area": spec.area.model_dump(mode="json", by_alias=True),
         },
-        reserved_bytes=0,
         operation=spec.operation,
     )
 

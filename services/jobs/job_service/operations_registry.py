@@ -22,6 +22,9 @@ from eolab_app.vector.extent_operation import (
     measure_selected_extent,
 )
 from eolab_app.vector.selection_operation import (
+    ComparisonInput,
+    ComparisonResult,
+    compare_selected_features,
     SelectionMeasurementInput,
     SelectionMeasurementResult,
     measure_selected_features,
@@ -103,6 +106,13 @@ OPERATIONS = {
         SelectionMeasurementInput,
         SelectionMeasurementResult,
         measure_selected_features,
+    ),
+    "vector.intersection.v1": InstalledOperation(
+        "vector.intersection.v1",
+        "Find whole features intersecting the filtered polygons of an authorized layer.",
+        ComparisonInput,
+        ComparisonResult,
+        compare_selected_features,
     ),
     "vector.field-calculation.v1": InstalledOperation(
         "vector.field-calculation.v1",

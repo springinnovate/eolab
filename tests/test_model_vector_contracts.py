@@ -579,7 +579,6 @@ def test_preparation_records_vector_policy_without_reading_a_raster_grid(
             operation=spec.operation,
             specification=spec.model_dump(mode="json"),
             summary={},
-            reserved_bytes=0,
         ),
         ProcessingLimits(),
     )

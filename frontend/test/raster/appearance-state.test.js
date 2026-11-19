@@ -9,19 +9,27 @@ import { normalizeRasterAppearanceState } from "../../src/raster/appearance-stat
  */
 function appearance() {
     return JSON.parse(readFileSync(new URL(
-        "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
+        "../../../tests/fixtures/saved-map-categorical.json", import.meta.url
     ), "utf8")).layers[0].style;
 }
 
 test("portable appearance preserves both styles and remains independent of its caller", () => {
     const candidate = appearance();
     candidate.continuous.definition.valueOverride = {value: -9999, color: "#223344", opacity: 0};
+    candidate.continuous.definition.rangeOverrides = [
+        {minimum: null, maximum: 1, color: "#223344", opacity: 1},
+        {minimum: 100, maximum: null, color: "#ff00ff", opacity: 1},
+    ];
     const normalized = normalizeRasterAppearanceState(candidate);
     assert.deepEqual(normalized, candidate);
     candidate.continuous.definition.minimum = -500;
     candidate.continuous.definition.valueOverride.value = 1;
     assert.equal(normalized.continuous.definition.valueOverride.value, -9999);
     assert.ok(Object.isFrozen(normalized.continuous.definition.valueOverride));
+    candidate.continuous.definition.rangeOverrides[0].maximum = -100;
+    assert.equal(normalized.continuous.definition.rangeOverrides[0].maximum, 1);
+    assert.ok(Object.isFrozen(normalized.continuous.definition.rangeOverrides));
+    assert.ok(Object.isFrozen(normalized.continuous.definition.rangeOverrides[0]));
     candidate.categorical.categories[0].label = "Changed";
     assert.equal(normalized.continuous.definition.minimum, 0);
     assert.equal(normalized.categorical.categories[0].label, "Forest");
@@ -35,6 +43,11 @@ test("portable appearance preserves both styles and remains independent of its c
 
 test("portable appearance rejects malformed modes, retained styles, and category tables", () => {
     const mutations = [
+        candidate => { candidate.continuous.definition.rangeOverrides = []; },
+        candidate => { candidate.continuous.definition.rangeOverrides = [{minimum: 0, maximum: null, color: "#000000", opacity: 1, other: true}]; },
+        candidate => { candidate.continuous.definition.rangeOverrides = [{minimum: null, maximum: null, color: "#000000", opacity: 1}]; },
+        candidate => { candidate.continuous.definition.rangeOverrides = [{minimum: 2, maximum: 1, color: "#000000", opacity: 1}]; },
+        candidate => { candidate.continuous.definition.rangeOverrides = [{minimum: "1", maximum: null, color: "#000000", opacity: 1}]; },
         candidate => { candidate.continuous.definition.valueOverride = {value: 0, color: "#000000", opacity: 1, other: true}; },
         candidate => { candidate.continuous.definition.valueOverride = {value: 0, color: "blue", opacity: 1}; },
         candidate => { candidate.continuous.definition.valueOverride = {value: "0", color: "#000000", opacity: 1}; },
