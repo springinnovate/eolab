@@ -924,7 +924,7 @@ test("More actions keeps utility actions while frequent actions remain on the co
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   const raster = { ...LAYERS[0], datasetKind: "raster", capabilities: {calculations: true}, legend: { kind: "fixed", label: "Raster" } };
-  const vector = { ...LAYERS[1], datasetKind: "vector", canFilter: true };
+  const vector = { ...LAYERS[1], datasetKind: "vector", capabilities: undefined, canFilter: true };
   view.render([raster, vector].map(layer => ({...layer,
     styleClipboard: {...layer.styleClipboard, canPaste: true, sourceLabel: "Copied source"}})), null);
   for (const row of doc.querySelector("#raster-layer-list").children) {
@@ -967,12 +967,34 @@ test("More actions keeps utility actions while frequent actions remain on the co
   assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "calculate")));
   assert.equal(actionControl(rasterRow, "info").textContent, "Raster information");
   assert.equal(actionControl(vectorRow, "info").textContent, "Vector information");
-  assert.equal(actionControl(rasterRow, "download").textContent, "Download clip");
+  assert.equal(actionControl(rasterRow, "download").textContent, "Download");
   assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "legend")));
   assert.ok(elementsByClass(rasterRow, "map-layer-details")[0].contains(elementsByClass(rasterRow, "map-layer-legend")[0]));
-  assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "download")));
+  assert.ok(strip.contains(actionControl(rasterRow, "download")));
+  assert.throws(() => actionControl(vectorRow, "download"), /expected one download/);
   assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].contains(actionControl(vectorRow, "filter")));
   assert.equal(actionControl(vectorRow, "filter").textContent, "Filter");
+});
+
+test("Download opens the requested raster view while More actions is closed", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const opened = [];
+  view.bind({onDownload: key => opened.push(key)});
+  const original = {...LAYERS[0], datasetKind: "raster", capabilities: {calculations: true}};
+  const copy = {...original, key: "biomass-copy", label: "Forest biomass", visible: false};
+  const unavailable = {...LAYERS[1], datasetKind: "raster", capabilities: {calculations: false}};
+  view.render([original, copy, unavailable], original.key);
+  const [originalRow, copyRow, unavailableRow] = view.list.children;
+  for (const [row, layer] of [[copyRow, copy], [originalRow, original]]) {
+    assert.equal(actionControl(row, "details").getAttribute("aria-expanded"), "false");
+    const download = actionControl(row, "download");
+    assert.ok(elementsByClass(row, "map-layer-data-actions")[0].contains(download));
+    assert.ok(download.getAttribute("aria-label").includes(layer.label));
+    download.dispatchEvent(new Event("click"));
+  }
+  assert.deepEqual(opened, [copy.key, original.key]);
+  assert.throws(() => actionControl(unavailableRow, "download"), /expected one download/);
 });
 
 test("joined clipboard icons explain empty, incompatible and pending states without activating unavailable actions", () => {

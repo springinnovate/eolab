@@ -87,7 +87,6 @@ class FakeBivariateDocument {
       "#raster-bivariate-panel",
       "#raster-bivariate-palette",
       "#swap-raster-bivariate-axes",
-      "#download-bivariate-x", "#download-bivariate-y",
       "#calculate-bivariate-x", "#calculate-bivariate-y",
       "#raster-bivariate-legend",
       "#raster-bivariate-legend-x-range",
@@ -589,6 +588,7 @@ test("2D range disclosure lives beside its histogram and markers cannot intercep
   }
   assert.doesNotMatch(markup, /id="layer-paired-style"|id="raster-bivariate-[xy]-label"/);
   assert.doesNotMatch(section, /id="layer-style-opacity"/);
+  assert.doesNotMatch(section, /Download [XY] clip|id="download-bivariate-/i);
   for (const axis of ["x", "y"]) {
     for (const name of ["lower", "middle", "upper"]) {
       assert.ok(section.includes(`id="bivariate-${axis}-${name}"`));
@@ -658,21 +658,17 @@ test("2D log axes align cells, marginal hover bands and markers without new anal
 });
 
 
-test("paired Processing actions follow each axis source without hiding the comparison", () => {
+test("paired calculation buttons follow each axis source without hiding the comparison", () => {
   const doc = new FakeBivariateDocument();
   const view = new BivariateRasterControlsView(doc);
   const temporal = { capabilities: { calculations: false } };
   view.renderMode({ active: true, ...PRESENTATION, xItem: temporal });
-  for (const action of ["calculate", "download"]) {
-    assert.equal(doc.querySelector(`#${action}-bivariate-x`).hidden, true);
-    assert.equal(doc.querySelector(`#${action}-bivariate-y`).hidden, false);
-  }
+  assert.equal(doc.querySelector("#calculate-bivariate-x").hidden, true);
+  assert.equal(doc.querySelector("#calculate-bivariate-y").hidden, false);
   assert.equal(doc.querySelector("#raster-bivariate-statistics").hidden, false);
   view.renderMode({ active: true, ...PRESENTATION, yItem: temporal });
-  for (const action of ["calculate", "download"]) {
-    assert.equal(doc.querySelector(`#${action}-bivariate-x`).hidden, false);
-    assert.equal(doc.querySelector(`#${action}-bivariate-y`).hidden, true);
-  }
+  assert.equal(doc.querySelector("#calculate-bivariate-x").hidden, false);
+  assert.equal(doc.querySelector("#calculate-bivariate-y").hidden, true);
 });
 
 for (const axis of ["x", "y"]) {

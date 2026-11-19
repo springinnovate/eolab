@@ -312,7 +312,7 @@ test("clip form and job cards show grid, real progress, direct links and indepen
     view.unbind();
 });
 
-test("layer, 1D and X/Y review intents retain their distinct captured source and area", async () => {
+test("opening a download reviews its source and area and keeps earlier downloads accessible", async () => {
     const h = fixture({}, new Map(), true);
     const other = { ...source, itemId: "other-raster", label: "Other raster" };
     const pairedArea = { kind: "selectedArea", selectedBounds: { west: 1, south: 2, east: 3, north: 4 } };
@@ -339,6 +339,20 @@ test("layer, 1D and X/Y review intents retain their distinct captured source and
     assert.equal(h.requests.length, 1);
     h.view.elements.close.dispatchEvent(new Event("click")); h.controller.destroy();
     assert.equal(h.requests.length, 1, "closing and teardown neither cancel nor delete accepted work");
+});
+
+test("the download form preselects the named map view when rasters share names or sources", async t => {
+    const h = fixture({}, new Map(), true);
+    t.after(() => h.controller.destroy());
+    const copy = {...source, label: "Forest biomass"};
+    const other = {...copy, itemId: "different-raster"};
+    h.setContext({sources: [source, other, copy], area: box});
+    h.controller.open(copy);
+    assert.equal(h.view.elements["source-name"].textContent, copy.label);
+    assert.equal(h.view.elements.source.value, "2");
+    assert.equal(h.requests.length, 0);
+    await h.controller.submit();
+    assert.deepEqual(h.requests[0].source, copy);
 });
 
 test("changing unsubmitted sampling intent keeps the chosen raster and accepted work intact", async () => {

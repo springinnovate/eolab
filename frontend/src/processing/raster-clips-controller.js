@@ -83,7 +83,7 @@ export class RasterClipsController {
      * Review explicit entry-point inputs, or resume the current owned download.
      * Returning from area controls updates only unsubmitted intent. A pending
      * submission always retains its original inputs and request key.
-     * @param {Object|null} [source=null] Requested Catalog raster.
+     * @param {Object|null} [source=null] Original raster reference with the name of the chosen map view.
      * @param {Object|null|undefined} [area] Explicit entry-point selection; undefined uses presented selection.
      * @return {void}
      * @throws {TypeError} If an explicit sampling descriptor violates the neutral area contract.
@@ -99,7 +99,7 @@ export class RasterClipsController {
                 const fixed = source ?? (this.editingArea && this.sourceWasChosen ? this.state.source : null);
                 const chosen = fixed ?? (this.getQuerySources ? this.getQuerySources(this.state.area)[0] : this.state.sources[0]) ?? null;
                 this.sourceWasChosen = !!fixed;
-                if (chosen && !this.state.sources.some(item => rasterSourceKey(item) === rasterSourceKey(chosen))) {
+                if (chosen && !this.state.sources.some(item => item.label === chosen.label && rasterSourceKey(item) === rasterSourceKey(chosen))) {
                     this.state.sources.unshift(copyClipRasterSource(chosen));
                 }
                 this.state.source = chosen ? copyClipRasterSource(chosen) : null;
