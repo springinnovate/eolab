@@ -4682,6 +4682,20 @@ article.raster-histogram-summary {
 .series-chart-line-hit:focus { outline: none; stroke: var(--series-color, var(--brand)); stroke-opacity: 0.2; }
 .series-chart-point { cursor: pointer; fill: var(--surface-1); stroke: var(--series-color, var(--brand)); stroke-width: 2.5; }
 .series-chart-bar { fill: var(--series-color, var(--brand)); stroke-width: 0; }
+.series-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 8px 9px 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-ui);
+}
+.series-chart-legend[hidden] { display: none; }
+.series-chart-legend li { display: flex; align-items: baseline; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+.series-chart-legend li::before { content: ""; flex: none; width: 0.65em; height: 0.65em; background: var(--series-color); }
+.series-chart-zero { stroke: var(--text-2); }
+.series-chart-empty-stack { fill: var(--text-2); font-size: 11px; }
 .series-chart-bar:hover,
 .series-chart-bar.is-selected { stroke-width: 2.5; }
 .series-chart-point:hover,

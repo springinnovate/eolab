@@ -26,6 +26,7 @@ test("vector time-series controls and accessible outputs are present", () => {
     "vector-time-series-field-list",
     "vector-time-series-direction",
     "vector-time-series-chart-type",
+    "vector-time-series-legend",
     "vector-time-series-status",
     "vector-time-series-chart",
     "vector-time-series-selection",
@@ -56,7 +57,7 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-field-search">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
-  assert.match(MARKUP, /<select id="vector-time-series-chart-type">.*<option value="bar" selected>Bars<\/option>/);
+  assert.match(MARKUP, /<select id="vector-time-series-chart-type">.*<option value="bar" selected>Bars<\/option>.*<option value="stacked">Stacked bars<\/option>/);
   assert.match(MARKUP, />Compare features<\/button>/);
   assert.match(MARKUP, />Compare features<\/h2>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
@@ -77,6 +78,7 @@ test("vector time-series controls and accessible outputs are present", () => {
 });
 
 test("feature-field plotting has searchable, accessible series controls", () => {
+  assert.match(MARKUP, /<select id="vector-feature-profile-chart-type">.*<option value="stacked">Stacked bars<\/option>/);
   for (const identifier of [
     "open-vector-feature-profile",
     "vector-feature-profile-action-help",

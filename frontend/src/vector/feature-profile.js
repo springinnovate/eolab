@@ -4,6 +4,7 @@
 import {
     formatSeriesNumber,
     renderOrdinalSeriesChart,
+    renderStackedSeriesChart,
 } from "../charts/series-chart.js";
 
 import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
@@ -359,6 +360,7 @@ export class VectorFeatureProfileController {
         this.selectionText = documentContext.querySelector("#vector-feature-profile-selection-text");
         this.figure = documentContext.querySelector("#vector-feature-profile-figure");
         this.chartTitle = documentContext.querySelector("#vector-feature-profile-chart-title");
+        this.legend = documentContext.querySelector("#vector-feature-profile-legend");
         this.xHeading = documentContext.querySelector("#vector-feature-profile-x-heading");
         this.selectedField = null;
         this.abort = new AbortController();
@@ -498,9 +500,10 @@ export class VectorFeatureProfileController {
         this.compare.disabled = observations.length < 2;
     }
 
-    /** Render controls, chart, accessible data, and current-feature status. @return {void} */
+    /** Render the chosen profile chart, exact field values, and current-feature status. @return {void} */
     render() {
         this.chart.replaceChildren();
+        this.legend.hidden = true;
         this.pointElements = [];
         this.fieldCells = new Map();
         this.figure.hidden = true;
@@ -519,10 +522,11 @@ export class VectorFeatureProfileController {
             this.status.textContent = "Inspect a vector feature first.";
             return;
         }
-        this.#renderPresentation(vectorFeatureProfilePresentation(
+        const presentation = vectorFeatureProfilePresentation(
             this.currentObservation,
             settings.titleField
-        ));
+        );
+        this.#renderPresentation(presentation);
         this.#renderTitleOptions(settings);
         this.direction.value = settings.direction;
         this.chartType.value = settings.chartType;
@@ -536,7 +540,8 @@ export class VectorFeatureProfileController {
             this.currentObservation,
             settings
         );
-        this.xHeading.hidden = profile.xScale === "ordinal";
+        const stacked = settings.chartType === "stacked";
+        this.xHeading.hidden = stacked || profile.xScale === "ordinal";
         this.xHeading.textContent = profile.xAxisLabel;
         this.#renderTable(profile.points);
         if (profile.points.length === 0) {
@@ -553,31 +558,56 @@ export class VectorFeatureProfileController {
         const first = profile.points[0].fieldName;
         this.chartTitle.textContent = profile.points.length === 1 ? first :
             profile.xScale === "numeric" ? first + " – " + profile.points.at(-1).fieldName : "";
-        this.chartTitle.hidden = this.chartTitle.textContent === "";
-        const {pointElements} = renderOrdinalSeriesChart({
-            documentContext: this.document,
-            chart: this.chart,
-            points: profile.points,
-            width: this.plotPanel.width || undefined,
-            height: 218,
-            fitXAxisLabels: true,
-            chartType: settings.chartType,
-            xScale: profile.xScale,
-            xReverse: profile.xScale === "numeric" && settings.direction === "descending",
-            xAxisLabel: profile.xAxisLabel,
-            yAxisLabel: "Value",
-            ariaLabel: `${settings.chartType} chart of ${profile.finiteCount} ` +
-                `numeric fields for ${this.currentObservation.layerLabel}.`,
-            pointAccessibleLabel: (point) => `${point.fieldName}: ` +
-                `${formatSeriesNumber(point.yValue)}`,
-            pointTooltip: point => point.fieldName + " · " + point.yValue,
-            onPointSelect: point => this.#selectField(point.fieldName),
-        });
-        this.pointElements = pointElements;
-        labelVectorPlotValues(this.chart, pointElements, settings.chartType);
+        this.chartTitle.hidden = stacked || this.chartTitle.textContent === "";
+        if (stacked) {
+            this.#drawStackedProfile(profile.points, presentation.heading);
+        } else {
+            const {pointElements} = renderOrdinalSeriesChart({
+                documentContext: this.document,
+                chart: this.chart,
+                points: profile.points,
+                width: this.plotPanel.width || undefined,
+                height: 218,
+                fitXAxisLabels: true,
+                chartType: settings.chartType,
+                xScale: profile.xScale,
+                xReverse: profile.xScale === "numeric" && settings.direction === "descending",
+                xAxisLabel: profile.xAxisLabel,
+                yAxisLabel: "Value",
+                ariaLabel: `${settings.chartType} chart of ${profile.finiteCount} ` +
+                    `numeric fields for ${this.currentObservation.layerLabel}.`,
+                pointAccessibleLabel: (point) => `${point.fieldName}: ` +
+                    `${formatSeriesNumber(point.yValue)}`,
+                pointTooltip: point => point.fieldName + " · " + point.yValue,
+                onPointSelect: point => this.#selectField(point.fieldName),
+            });
+            this.pointElements = pointElements;
+            labelVectorPlotValues(this.chart, pointElements, settings.chartType);
+        }
         if (this.selectedField !== null) this.#selectField(this.selectedField);
         if (profile.missingCount) this.status.textContent = profile.missingCount === 1
             ? "One field has no numeric value." : profile.missingCount + " fields have no numeric value.";
+    }
+
+    /**
+     * Draw the current feature as a single stack in the profile's field order.
+     * @param {{fieldName:string,yValue:number|null}[]} points Parsed field readings.
+     * @param {string} featureLabel Name shown beside the stack.
+     * @return {void}
+     */
+    #drawStackedProfile(points, featureLabel) {
+        this.pointElements = renderStackedSeriesChart({
+            documentContext: this.document,
+            chart: this.chart,
+            legend: this.legend,
+            width: this.plotPanel.width || undefined,
+            series: points.map(point => ({id: point.fieldName, label: point.fieldName, points: [point]})),
+            rowLabels: [featureLabel],
+            valueAxisLabel: "Value",
+            ariaLabel: `Stacked bars for ${featureLabel}`,
+            describePoint: point => `${point.fieldName}: ${point.yValue}`,
+            onPointSelect: point => this.#selectField(point.fieldName),
+        }).pointElements;
     }
 
     /** @return {Object|null} Mutable settings for the current source. */

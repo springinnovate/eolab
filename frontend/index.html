@@ -1121,7 +1121,11 @@
               <p id="vector-time-series-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
             <div id="vector-time-series-plots" class="vector-plot-results">
-              <div class="vector-plot-figure" id="vector-time-series-first"><h3 id="vector-time-series-chart-title"></h3><svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg></div>
+              <div class="vector-plot-figure" id="vector-time-series-first">
+                <h3 id="vector-time-series-chart-title"></h3>
+                <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+              </div>
               <div id="vector-time-series-extra-charts"></div>
             </div>
             <div id="vector-time-series-values" hidden>
@@ -1141,12 +1145,12 @@
                 <summary>Plot options</summary>
                 <div class="vector-plot-options-grid">
                   <label for="vector-time-series-chart-type">Chart style
-                    <select id="vector-time-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option></select>
+                    <select id="vector-time-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option><option value="stacked">Stacked bars</option></select>
                   </label>
                   <label for="vector-time-series-direction">Order
                     <select id="vector-time-series-direction"><option value="ascending">Ascending</option><option value="descending">Descending</option></select>
                   </label>
-                  <label for="vector-time-series-x">X axis<select id="vector-time-series-x"></select></label>
+                  <label for="vector-time-series-x"><span id="vector-time-series-x-label">X axis</span><select id="vector-time-series-x"></select></label>
                 </div>
               </details>
               <button id="zoom-vector-time-series-feature" class="summary-text-button vector-plot-zoom" type="button"
@@ -1201,6 +1205,7 @@
             <div id="vector-feature-profile-plots" class="vector-plot-results">
               <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
                 <h3 id="vector-feature-profile-chart-title" hidden></h3>
+                <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
                 <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
               </div>
             </div>
@@ -1221,7 +1226,7 @@
                 <summary>Plot options</summary>
                 <div class="vector-plot-options-grid">
                   <label for="vector-feature-profile-chart-type">Chart style
-                    <select id="vector-feature-profile-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option></select>
+                    <select id="vector-feature-profile-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option><option value="stacked">Stacked bars</option></select>
                   </label>
                   <label for="vector-feature-profile-direction">Order
                     <select id="vector-feature-profile-direction"><option value="ascending">Ascending</option><option value="descending">Descending</option></select>
