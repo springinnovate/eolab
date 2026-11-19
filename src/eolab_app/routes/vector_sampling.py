@@ -16,6 +16,10 @@ from eolab_app.catalog_selection import (
     ArtifactVectorSelection,
     UploadedVectorFilterRequest,
     VectorSelection,
+    DrawingSelection,
+    UploadedSelection,
+    VectorSourceOwners,
+    referenced_layers,
 )
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
@@ -28,7 +32,6 @@ from eolab_app.vector.parcel_models import (
     ParcelRowsResponse,
 )
 from eolab_app.source_files import SourceFileError
-from eolab_app.feature_predicate import DrawingSelection, UploadedSelection, VectorSourceOwners, referenced_layers
 
 
 def create_vector_sampling_router(

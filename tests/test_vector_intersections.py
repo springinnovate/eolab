@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
+from typing import Any
 
 import fiona
 import pytest
@@ -12,9 +13,13 @@ from shapely.geometry.base import BaseGeometry
 
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.bounded_vector import count_selected_features, resolve_vector_file_selection
-from eolab_app.catalog_selection import ResolvedCatalogSelection, UploadedSelection
+from eolab_app.catalog_selection import (
+    ResolvedCatalogSelection,
+    UploadedSelection,
+    DrawingSelection,
+    VectorSelection,
+)
 from eolab_app.feature_intersection import bind_intersections, match_features
-from eolab_app.feature_predicate import DrawingSelection, VectorSelection
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.vector.display_feature_ids import display_feature_ranges
 from eolab_app.vector.parcels import read_parcel_rows
@@ -148,7 +153,11 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
             await selection_operation.return_intersecting_ids(client, selection_operation.ComparisonInput(spatialRead=token))
         completed.append(token)
 
-    reader = VectorSamplingService(StaticCatalog(item), MountedVectorResolver(tmp_path), uploads=uploads, comparison_executor=run_job)
+    async def read_drawing(owner: str, reference: Any) -> tuple[SummaryPolygon, ...]:
+        """Return three committed drawing positions in their original order."""
+        return tuple(SummaryPolygon.model_validate(mapping(box(x, 0, x + 0.001, 0.001))) for x in (0, 2, 3))
+
+    reader = VectorSamplingService(StaticCatalog(item), MountedVectorResolver(tmp_path), uploads=uploads, comparison_executor=run_job, read_drawing=read_drawing)
     app.include_router(create_vector_sampling_router(reader))
     app.include_router(create_vector_uploads_router(uploads))
     app.include_router(create_spatial_filter_router(reader, registry, lambda request, response: "unused"))
@@ -167,7 +176,7 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         scans = []
         original_filter = fiona.Collection.filter
 
-        def track_scan(dataset, *args, **kwargs):
+        def track_scan(dataset: fiona.Collection, *args: Any, **kwargs: Any) -> Any:
             """Record each native feature scan performed while applying this map filter."""
             scans.append(dataset.name)
             return original_filter(dataset, *args, **kwargs)
@@ -187,6 +196,13 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         assert owner.post(url, json=both, headers=HEADERS).json()["count"]["matched"] == 0
         assert scans == ["areas", "areas", "categories"]
         assert len(completed) == 2
+        drawings = {"target": {"kind": "drawing", "polygonArea": {"id": "a" * 32, "sha256": "b" * 64}},
+                    "properties": [{"name": "near"}, {"name": "keep"}, {"name": "far"}],
+                    "filter": {"match": "any", "rules": [condition, condition, {"field": "name", "operator": "eq", "value": "keep"}]}}
+        selected = owner.post("/api/vector-filters/drawings", headers=HEADERS, json=drawings)
+        assert selected.status_code == 200, selected.text
+        assert selected.json() == [0, 1]
+        assert len(completed) == 3
         assert other.post(url, json=request, headers=HEADERS).status_code == 404
         nested = {"operator": "intersects", "layerId": str(UUID(int=3)), "source": {
             "kind": "drawing", "polygonArea": None, "filter": {"rules": [condition]}}}

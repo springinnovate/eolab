@@ -14,11 +14,11 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
     VectorSelection,
+    DrawingSelection,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.bounded_vector import resolve_vector_file_selection
 from eolab_app.polygon_areas import SummaryPolygon
-from eolab_app.feature_predicate import DrawingSelection
 from eolab_app.feature_intersection import bind_intersections
 
 class RetainedVectorSelectionReader:

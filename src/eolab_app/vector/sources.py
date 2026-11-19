@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 from secrets import token_bytes
 from eolab_app.vector.filters import VectorFilter
-from eolab_app.feature_predicate import ArtifactVectorSelection, DrawingReference, DrawingSelection, UploadedSelection, referenced_layers
+from eolab_app.catalog_selection import ArtifactVectorSelection, DrawingReference, DrawingSelection, UploadedSelection, referenced_layers
 from eolab_app.calculated_fields import CalculatedField
 from typing import Any
 from urllib.parse import unquote, urlsplit

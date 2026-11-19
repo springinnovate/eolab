@@ -61,7 +61,11 @@ from eolab_app.polygon_areas import (
     SummaryPolygon,
     read_polygon_area_input,
 )
-from eolab_app.feature_predicate import DrawingReference, SavedDrawingReference
+from eolab_app.catalog_selection import (
+    DrawingReference,
+    SavedDrawingReference,
+    CatalogSelection,
+)
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.habitat_preparation_selections import (
@@ -159,7 +163,6 @@ from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
 from eolab_app.vector.extent_jobs import ExtentJobs

@@ -2,9 +2,8 @@
 
 import {
     EMPTY_VECTOR_FILTER, MAX_VECTOR_FILTER_RULES, normalizeVectorFilter,
-    vectorFilterFieldKind, vectorFilterOperators, vectorFilterSummary,
+    vectorFilterFieldKind, vectorFilterOperators, vectorFilterSummary, viewFilter,
 } from "./filter.js";
-import { viewFilter } from "../layer-filter.js";
 import { getVectorFieldValues, getVectorFilterExtent } from "./api.js";
 import { VectorFilterValuePicker } from "./filter-value-picker.js";
 

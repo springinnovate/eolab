@@ -1,6 +1,5 @@
 /** Bind spatial conditions to the selected map view and its currently applied filter. */
-import { EMPTY_VECTOR_FILTER } from "./filter.js";
-import { viewFilter, waitingForPolygonLayer } from "../layer-filter.js";
+import { EMPTY_VECTOR_FILTER, viewFilter, waitingForPolygonLayer } from "./filter.js";
 
 
 /** Send an authorized original-source intersection request.
@@ -33,10 +32,10 @@ export class SpatialFilterViews {
         this.followed = new Map();
     }
 
-    /** Return the selected drawing geometry as an owned input, reusing an identical selection.
+    /** Reference selected polygons at their saved revision, or upload a device-only drawing.
      * @param {Object} layer A committed drawing view.
      * @param {Object} filter Current filter, or all polygons for a drawing target.
-     * @return {Promise<Object>} Opaque private drawing reference, including an empty view.
+     * @return {Promise<Object>} Reference to the selected drawing features, including an empty view.
      * @throws {Error} If the device polygons could not be saved for the comparison.
      */
     async drawing(layer, filter) {

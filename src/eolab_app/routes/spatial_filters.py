@@ -8,7 +8,13 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.catalog_selection import SelectionUnavailableError, VectorSelection
+from eolab_app.catalog_selection import (
+    SelectionUnavailableError,
+    VectorSelection,
+    DrawingSelection,
+    VectorFilter,
+    VectorSourceOwners,
+)
 from eolab_app.processing.models import ProcessingError
 from eolab_app.rendering.errors import PublishedLayerChangedError, PublishedLayerNotAuthorizedError
 from eolab_app.routes.browser_identity import get_browser_owner_hash
@@ -17,7 +23,6 @@ from eolab_app.routes.vector_http import PrivateVectorRoute
 from eolab_app.vector.display_feature_ids import display_feature_ranges
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import PublishedVectorRegistry
-from eolab_app.feature_predicate import DrawingSelection, VectorFilter, VectorSourceOwners
 from eolab_app.drawings.models import DrawingProperties
 from eolab_app.attribute_filter import validate_filter, AttributeFilterError
 
@@ -99,11 +104,10 @@ def create_spatial_filter_router(
                 if len(body.properties) != len(target):
                     raise HTTPException(409, "The target drawing changed. Reapply its filter.")
                 validate_filter(body.filter, {"name": "str", "note": "str"})
-                boundaries = {}
-                for rule in body.filter.intersections:
-                    key = str(rule.layerId)
-                    if key not in boundaries:
-                        boundaries[key] = await stack.enter_async_context(reader.open_polygon_view(rule.source, credentials))
+                boundaries = {
+                    str(rule.layerId): await stack.enter_async_context(reader.open_polygon_view(rule.source, credentials))
+                    for rule in body.filter.intersections
+                }
                 properties = tuple(feature.model_dump() for feature in body.properties)
                 matches = await reader.compare_layers(target, boundaries, body.filter, properties)
                 return sorted(matches.ids)

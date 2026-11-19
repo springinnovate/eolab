@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from eolab_app.feature_predicate import (
+from eolab_app.catalog_selection import (
     MAX_FILTER_RULES as MAX_FILTER_RULES, IntersectsLayer, VectorFilter as VectorFilter,
     VectorFilterRule as VectorFilterRule,
 )

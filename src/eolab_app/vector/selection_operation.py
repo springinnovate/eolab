@@ -35,7 +35,7 @@ SOURCE_FILES_URL = "http://app:8000/api/processing/source-files"
 
 
 class ComparisonInput(BaseModel):
-    """A one-job credential for reading the authorized pair of original vector sources."""
+    """A one-job credential for reading the original target and its authorized polygon sources."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     spatialRead: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -251,7 +251,7 @@ def compare_selected_features(inputs: ComparisonInput) -> ComparisonResult:
 
 
 async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: ComparisonInput) -> None:
-    """Read the two original layers and send their matching IDs directly to the waiting request.
+    """Read the original layers and send the complete selection and count to the waiting request.
 
     Args:
         client: Internal connection to the application, catalog and leased-file authority.
@@ -264,7 +264,7 @@ async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: Comparis
     """
     from eolab_app.bounded_vector import _limit_memory
     from eolab_app.feature_intersection import match_features
-    from eolab_app.feature_predicate import VectorFilter
+    from eolab_app.catalog_selection import VectorFilter
     from eolab_app.vector.spatial_read import SPATIAL_READ_URL
     from eolab_app.polygon_areas import SummaryPolygon
 

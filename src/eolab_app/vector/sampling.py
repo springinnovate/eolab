@@ -15,7 +15,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
-from eolab_app.feature_predicate import DrawingReference, DrawingSelection, VectorSourceOwners
 from eolab_app.polygon_areas import SummaryPolygon
 
 from eolab_app.catalog_selection import (
@@ -27,6 +26,9 @@ from eolab_app.catalog_selection import (
     UploadedSelection,
     UploadedVectorFilterRequest,
     VectorSelection,
+    DrawingReference,
+    DrawingSelection,
+    VectorSourceOwners,
 )
 from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
 from eolab_app.vector.filters import (
@@ -515,12 +517,8 @@ class VectorSamplingService:
             VectorUploadError: If the upload is unavailable to this browser.
         """
         try:
-            if isinstance(selection, ArtifactVectorSelection) or selection.filter.intersections or isinstance(source_owner, VectorSourceOwners):
-                async with self.open_selection(selection, source_owner) as resolved:
-                    return resolved
-            resolved = await resolve_selection(
-                self.catalog, self.resolver, selection, self._uploads, source_owner
-            )
+            async with self.open_selection(selection, source_owner) as resolved:
+                return resolved
         except SelectionUnavailableError:
             raise
         except VectorConflictError as error:
@@ -529,11 +527,6 @@ class VectorSamplingService:
             raise SelectionUnavailableError(
                 "The selected vector is unavailable; select it again."
             ) from error
-        if resolved.selection != selection:
-            raise SelectionUnavailableError(
-                "The selected vector identity changed; select it again."
-            )
-        return resolved
 
     async def resolve_source(
         self, source: CatalogVectorRequest

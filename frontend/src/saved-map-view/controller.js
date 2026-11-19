@@ -1,5 +1,5 @@
 /** Save, share and restore map layers, styles and viewport settings. */
-import { viewFilter, waitingForPolygonLayer } from "../layer-filter.js";
+import { viewFilter, waitingForPolygonLayer } from "../vector/filter.js";
 
 import {
     decodeSavedMapViewFragment,

@@ -6,9 +6,8 @@ import { rasterSamplingAreaBounds } from "./selected-area.js";
 import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
 import { getFeatureInfoViewport } from "./vector/feature-info-viewport.js";
-import { annotationSummaryPolygons } from "./annotations/summary-area.js";
+import { annotationSummaryPolygons, filterAnnotationPolygons } from "./annotations/summary-area.js";
 import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.js";
-import { viewFilter, waitingForPolygonLayer } from "./layer-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 /**
  * Browser entry point and application composition root for EOLab.
@@ -110,7 +109,7 @@ import {
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
 import { VectorFieldCalculator } from "./vector/field-calculator.js";
-import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./vector/filter.js";
+import { EMPTY_VECTOR_FILTER, vectorFilterSummary, viewFilter, waitingForPolygonLayer } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { UploadsDialog } from "./uploads/dialog.js";
 import { getUpload, getRasterUpload } from "./uploads/api.js";
@@ -1346,7 +1345,7 @@ async function initializeCatalog(
             if (!withCounts) return {...layer, id};
             const status = record.adapter.describeFilter?.(record).status;
             const total = layer.polygons?.length;
-            const description = status || (total === undefined ? "" : `${annotationSummaryPolygons(layer.polygons, layer.filter).length} of ${total} polygons`);
+            const description = status || (total === undefined ? "" : `${filterAnnotationPolygons(layer.polygons, layer.filter).length} of ${total} polygons`);
             return {...layer, id, count: description};
         });
     }

@@ -1,7 +1,7 @@
 """Find whole target features that intersect the selected original polygons."""
 
-from collections.abc import Awaitable, Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable, Generator, Mapping
+from contextlib import closing
 from dataclasses import replace
 from time import monotonic
 from typing import Any
@@ -18,9 +18,15 @@ from eolab_app.bounded_vector import VectorReadLimits, _limit_memory, _source_co
 from eolab_app.execution.bounded_process import ProcessDeadlineError, ProcessResultWriter, run_bounded_process
 from eolab_app.calculated_fields import evaluate_calculated_fields
 from eolab_app.attribute_filter import matches_filter
-from eolab_app.catalog_selection import FeatureMatches, ResolvedCatalogSelection, SelectionUnavailableError
+from eolab_app.catalog_selection import (
+    FeatureMatches,
+    ResolvedCatalogSelection,
+    SelectionUnavailableError,
+    DrawingSelection,
+    VectorFilter,
+    VectorSelection,
+)
 from eolab_app.polygon_areas import SummaryPolygon
-from eolab_app.feature_predicate import DrawingSelection, VectorFilter, VectorSelection
 
 IntersectionLayer = ResolvedCatalogSelection | tuple[SummaryPolygon, ...]
 """An authorized original vector layer or committed WGS84 drawings, in browser order."""
@@ -53,11 +59,7 @@ async def bind_intersections(
     if not conditions:
         return target
     original = replace(target, where=None, selection=target.selection.model_copy(update={"filter": VectorFilter()}))
-    boundaries = {}
-    for rule in conditions:
-        key = str(rule.layerId)
-        if key not in boundaries:
-            boundaries[key] = await read_layer(rule.source)
+    boundaries = {str(rule.layerId): await read_layer(rule.source) for rule in conditions}
     predicate = target.selection.filter
     matches = (await compare(original, boundaries, predicate) if compare
                else await read_intersection(original, boundaries, predicate, limits=limits))
@@ -133,7 +135,7 @@ def match_features(
     try:
         for key, layer in boundaries.items():
             polygons = []
-            with _target_features(layer, limits, deadline) as features:
+            with closing(_features(layer, limits, deadline)) as features:
                 for _, _, geometry in features:
                     if geometry is None:
                         continue
@@ -143,7 +145,7 @@ def match_features(
             indexes[key] = STRtree(polygons)
         ids = set()
         total = 0
-        with _target_features(target, limits, deadline) as features:
+        with closing(_features(target, limits, deadline)) as features:
             for fid, properties, geometry in features:
                 total += 1
                 spatial = {key: geometry is not None and index.query(geometry, predicate="intersects").size > 0
@@ -155,10 +157,9 @@ def match_features(
         raise GeometryValidationError("The layer geometries could not be compared in WGS84.") from error
 
 
-@contextmanager
-def _target_features(
+def _features(
     layer: IntersectionLayer, limits: VectorReadLimits | None, deadline: float | None,
-) -> Iterator[Iterator[tuple[int, Mapping[str, Any], BaseGeometry | None]]]:
+) -> Generator[tuple[int, Mapping[str, Any], BaseGeometry | None], None, None]:
     """Open the target's original point, line or polygon features with their IDs.
 
     Args:
@@ -174,34 +175,33 @@ def _target_features(
         SelectionUnavailableError: If the native dataset cannot be opened.
     """
     if not isinstance(layer, ResolvedCatalogSelection):
-        yield ((index, {}, shape(polygon.model_dump())) for index, polygon in enumerate(layer))
+        for index, polygon in enumerate(layer):
+            yield index, {}, shape(polygon.model_dump())
         return
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"), _source_collection(layer) as dataset:
         if not dataset.crs:
             raise GeometryValidationError("The target layer has no coordinate reference system.")
 
         needs_projection = dataset.crs.to_epsg() != 4326
-
-        def records() -> Iterator[tuple[int, Mapping[str, Any], BaseGeometry | None]]:
-            """Yield whole features, including rows without geometry, from the requested view."""
-            options = {"where": layer.where} if layer.where else {}
-            for count, feature in enumerate(dataset.filter(**options), 1):
-                if limits and count > limits.features:
-                    raise GeometryValidationError("The intersection exceeded the interactive feature limit.")
-                if deadline is not None and monotonic() >= deadline:
-                    raise GeometryValidationError("The intersection exceeded the interactive read time.")
-                properties = dict(feature.properties)
-                properties.update(evaluate_calculated_fields(layer.calculated_fields, properties))
-                if not layer.matches_feature(feature.id, properties):
-                    continue
-                geometry = shape(feature.geometry) if feature.geometry is not None else None
-                if geometry is None or geometry.is_empty:
-                    yield int(feature.id), properties, None
-                    continue
-                if limits and get_num_coordinates(geometry) > limits.coordinates_per_feature:
-                    raise GeometryValidationError("A target feature exceeds the interactive coordinate limit.")
-                if needs_projection:
-                    geometry = shape(transform_geom(dataset.crs, "EPSG:4326", feature.geometry, antimeridian_cutting=False))
-                yield int(feature.id), properties, geometry
-
-        yield records()
+        options = {"where": layer.where} if layer.where else {}
+        for count, feature in enumerate(dataset.filter(**options), 1):
+            if limits and count > limits.features:
+                raise GeometryValidationError("The intersection exceeded the interactive feature limit.")
+            if deadline is not None and monotonic() >= deadline:
+                raise GeometryValidationError("The intersection exceeded the interactive read time.")
+            fid = int(feature.id)
+            if layer.matches is not None and fid not in layer.matches.ids:
+                continue
+            properties = dict(feature.properties)
+            properties.update(evaluate_calculated_fields(layer.calculated_fields, properties))
+            if layer.matches is None and not matches_filter(layer.selection.filter, properties):
+                continue
+            geometry = shape(feature.geometry) if feature.geometry is not None else None
+            if geometry is None or geometry.is_empty:
+                yield fid, properties, None
+                continue
+            if limits and get_num_coordinates(geometry) > limits.coordinates_per_feature:
+                raise GeometryValidationError("A target feature exceeds the interactive coordinate limit.")
+            if needs_projection:
+                geometry = shape(transform_geom(dataset.crs, "EPSG:4326", feature.geometry, antimeridian_cutting=False))
+            yield fid, properties, geometry

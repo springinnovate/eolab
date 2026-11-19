@@ -41,7 +41,6 @@ from eolab_app.polygon_areas import (
     SummaryPolygon,
     read_polygon_area_input,
 )
-from eolab_app.feature_predicate import DrawingReference, DrawingSelection, referenced_layers
 from eolab_app.processing.ports import (
     JobArtifactStore,
     JobStore,
@@ -99,6 +98,9 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
     UploadedSelection,
     VectorSelection,
+    DrawingReference,
+    DrawingSelection,
+    referenced_layers,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.upload_storage import UploadStorage, UploadRecord, UploadError

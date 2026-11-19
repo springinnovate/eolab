@@ -19,8 +19,10 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from eolab_app.catalog.geopackage import build_stac_items
-from eolab_app.catalog_selection import VectorSelection
-from eolab_app.feature_predicate import SavedDrawingReference
+from eolab_app.catalog_selection import (
+    VectorSelection,
+    SavedDrawingReference,
+)
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.artifacts import LocalJobArtifacts
@@ -573,6 +575,10 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
     assert (
         owner.post(endpoint, json=body, headers=HEADERS).json()["jobId"] == job["jobId"]
     )
+    if boundary == "drawing":
+        reference = reference.model_copy(update={"revision": revision})
+        rule["source"]["polygonArea"] = reference.model_dump(mode="json")
+        _, body = processing_request(owner, target, operation)
     rejected = owner.post(
         endpoint, json={**body, "requestId": uuid4().hex}, headers=HEADERS
     )

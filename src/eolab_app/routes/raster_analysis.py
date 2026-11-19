@@ -5,8 +5,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from eolab_app.catalog_selection import ArtifactVectorSelection, CatalogSelection, UploadedSelection
-from eolab_app.feature_predicate import DrawingSelection, referenced_layers
+from eolab_app.catalog_selection import (
+    ArtifactVectorSelection,
+    CatalogSelection,
+    UploadedSelection,
+    DrawingSelection,
+    referenced_layers,
+)
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.vector_uploads import VectorUploadError

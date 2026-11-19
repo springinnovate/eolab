@@ -200,7 +200,7 @@ def _visit_parcel_attributes(
             receive,
             calculated_fields=resolved.calculated_fields if filtered else (),
             where=resolved.where if filtered else original_where,
-            **({"accept_feature": resolved.matches_feature} if filtered and resolved.matches is not None else {}),
+            **({"feature_ids": resolved.matches.ids} if filtered and resolved.matches is not None else {}),
         )
     except (RuntimeError, OSError, UnicodeDecodeError) as error:
         raise SelectionUnavailableError(
