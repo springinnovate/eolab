@@ -704,7 +704,7 @@ def test_raster_calculator_publishes_an_owned_geotiff(model_boundary: Any) -> No
     with rasterio.MemoryFile(download.content) as file, file.open() as output:
         assert output.crs.to_epsg() == 4326
         assert output.transform == rasterio.transform.from_origin(0.1, 9.9, 0.01, 0.01)
-        np.testing.assert_array_equal(output.read(1), np.full((80, 80), 2.0))
+        numpy.testing.assert_array_equal(output.read(1), numpy.full((80, 80), 2.0))
     saved = client.get(base + "/invocation").json()["invocation"]
     assert saved["inputs"] == body["inputs"]
     provenance = client.get(result["provenanceUrl"]).json()
