@@ -3,23 +3,23 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 from typing import Any
 from collections.abc import Callable
+from functools import partial
 
 from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
     run_until_http_disconnect,
 )
-from eolab_app.routes.browser_identity import get_browser_owner_hash
-from eolab_app.routes.vector_http import PrivateVectorRoute, vector_http_exception
+from eolab_app.routes.vector_http import (
+    PrivateVectorRoute,
+    read_vector_source_owners,
+    vector_http_exception,
+)
 from eolab_app.catalog_selection import (
     FeatureMatches,
     SelectionUnavailableError,
     ArtifactVectorSelection,
     UploadedVectorFilterRequest,
     VectorSelection,
-    DrawingSelection,
-    UploadedSelection,
-    VectorSourceOwners,
-    referenced_layers,
 )
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
@@ -52,6 +52,9 @@ def create_vector_sampling_router(
         prefix="/api/vector-sampling",
         tags=["sampling"],
         route_class=PrivateVectorRoute,
+    )
+    read_source_owner = partial(
+        read_vector_source_owners, read_artifact_owner=read_artifact_owner
     )
 
     @router.post("/parcels/validate-id", response_model=ParcelIdValidationResponse)
@@ -106,41 +109,6 @@ def create_vector_sampling_router(
             raise HTTPException(499, "Parcel reading cancelled") from error
         except SelectionUnavailableError as error:
             raise HTTPException(409, error.detail) from error
-
-    def read_source_owner(
-        payload: CatalogVectorFilterRequest | VectorSelection | UploadedVectorFilterRequest, request: Request, response: Response
-    ) -> str | VectorSourceOwners | None:
-        """Read the private identity required by an upload or immutable run result.
-
-        Args:
-            payload: Validated source request or selection.
-            request: Incoming same-origin request.
-            response: Response renewing the relevant private session cookie.
-
-        Returns:
-            Source-appropriate browser identity, or None for a Catalog source.
-
-        Raises:
-            HTTPException: If private result access is unavailable or unauthorized.
-        """
-        if payload.filter.intersections:
-            sources = (payload, *referenced_layers(payload.filter))
-            upload = get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads") if any(isinstance(source, UploadedVectorFilterRequest) for source in sources) else None
-            processing = None
-            if any(isinstance(source, (ArtifactVectorSelection, DrawingSelection)) for source in sources):
-                if read_artifact_owner is None:
-                    raise HTTPException(404, "This polygon layer is unavailable.")
-                processing = read_artifact_owner(request, response)
-            return VectorSourceOwners(upload, processing)
-        if isinstance(payload, ArtifactVectorSelection):
-            if read_artifact_owner is None:
-                raise HTTPException(404, "This vector result is unavailable.")
-            return read_artifact_owner(request, response)
-        if isinstance(payload, UploadedVectorFilterRequest):
-            return get_browser_owner_hash(
-                request, response, mutation_header="X-EOLab-Uploads"
-            )
-        return None
 
     @router.api_route("/spatial-read", methods=["GET", "PUT"], include_in_schema=False)
     async def spatial_read(request: Request) -> Response:

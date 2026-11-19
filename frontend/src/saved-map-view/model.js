@@ -261,6 +261,7 @@ function validateAnnotationReference(candidate) {
  * Upload identifiers locate data; they never grant another browser access.
  * isCustom preserves the card's presentation without changing its source identity.
  * When absent, restoration uses the source owner's ordinary presentation.
+ * isDuplicate records a private vector copy that can open the geometry editor.
  *
  * @param {unknown} candidate Untrusted layer value.
  * @return {Readonly<Object>} Frozen normalized layer entry.
@@ -276,6 +277,7 @@ function validateLayer(candidate) {
         [isTemporal ? "temporalSource" : isUpload ? "uploadId" : isArtifact ? "runArtifact" : "catalogItem", "visible", "opacity", "style",
             ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
             ...(Object.hasOwn(candidate, "isCustom") ? ["isCustom"] : []),
+            ...(isUpload && Object.hasOwn(candidate, "isDuplicate") ? ["isDuplicate"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filterViewId") ? ["filterViewId"] : []),
@@ -347,6 +349,9 @@ function validateLayer(candidate) {
     if (isUpload && candidate.style.kind === "raster" && Object.hasOwn(candidate, "filter")) {
         throw new SavedMapViewValidationError("Uploaded raster layers cannot have polygon filters.");
     }
+    if (Object.hasOwn(candidate, "isDuplicate") && (candidate.isDuplicate !== true || candidate.style.kind !== "vector")) {
+        throw new SavedMapViewValidationError("Only a duplicated vector view can have the duplicate marker.");
+    }
     if (isTemporal && candidate.style.kind !== "raster") {
         throw new SavedMapViewValidationError("Temporal layers require a raster style.");
     }
@@ -360,6 +365,7 @@ function validateLayer(candidate) {
         ...(customName === undefined ? {} : { customName }),
         ...(Object.hasOwn(candidate, "legendIncluded") ? { legendIncluded: candidate.legendIncluded } : {}),
         ...(Object.hasOwn(candidate, "isCustom") ? { isCustom: candidate.isCustom } : {}),
+        ...(candidate.isDuplicate ? {isDuplicate: true} : {}),
         visible: candidate.visible,
         opacity: candidate.opacity,
         style: structuredClone(candidate.style),
