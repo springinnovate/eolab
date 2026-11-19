@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from math import ceil, floor
+from math import ceil, floor, isclose, radians, tau
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
@@ -11,16 +11,27 @@ from xml.etree import ElementTree
 
 from affine import Affine
 import numpy as np
+from numpy.typing import NDArray
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from rasterio.transform import array_bounds
 from rasterio.vrt import WarpedVRT
+from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
 
-from eolab_app.bounded_vector import PolygonRasterizer
+from eolab_app.bounded_vector import PolygonRasterizer, polygon_features
+from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.raster_mask import temporary_polygon_mask
+from eolab_app.raster.bounded_window import (
+    grid_boundary_projection,
+    project_polygons_to_crs,
+)
+from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
+
+AlignedRaster = rasterio.io.DatasetReader | WarpedVRT
 
 
 @dataclass(frozen=True)
@@ -83,6 +94,101 @@ def calculate_raster_grid(
     )
 
 
+def read_preparation_polygons(
+    selection: ResolvedCatalogSelection,
+    crs: CRS,
+    *,
+    pixel_size: tuple[float, float] | None = None,
+) -> tuple[dict[str, object], ...]:
+    """Read selected polygons from the original vector in the calculation CRS.
+
+    Args:
+        selection: Authorized original vector and exact feature predicate.
+        crs: Output CRS independent of raster coverage.
+        pixel_size: Positive X/Y sizes for projecting native edges to cell
+            accuracy. Omit to use the existing WGS84 polygon stream.
+    Returns:
+        Projected polygons to use within this calculation.
+    Raises:
+        ValueError: If no polygons match or coordinates cannot be projected.
+        SelectionUnavailableError: If the original vector cannot be read.
+    """
+
+    def project_native_polygon(
+        source_crs: CRS, geometry: dict[str, object]
+    ) -> dict[str, object]:
+        """Project one selected polygon directly from its original CRS."""
+        return project_polygons_to_crs(
+            source_crs, crs, (geometry,), None, pixel_size=pixel_size
+        )[0]
+
+    projector = project_native_polygon if pixel_size is not None else None
+    with polygon_features(
+        selection, limits=None, project_geometry=projector
+    ) as features:
+        if projector is not None:
+            polygons = tuple(features)
+        else:
+            polygons = tuple(
+                project_polygons_to_crs("EPSG:4326", crs, (geometry,), None)[0]
+                for geometry in features
+            )
+    if not polygons:
+        raise ValueError("The vector selection contains no polygons.")
+    return polygons
+
+
+def project_preparation_box(
+    box: Wgs84SamplingBox,
+    crs: CRS,
+    pixel_size: tuple[float, float],
+    *,
+    seam_aware: bool = False,
+) -> dict[str, object]:
+    """Project a geodesic sampling box at the output grid's pixel accuracy.
+
+    Args:
+        box: Captured geographic center and box dimensions.
+        crs: Output coordinate system.
+        pixel_size: Positive output X/Y cell sizes in the output CRS.
+        seam_aware: Split geographic seams and reject cuts in projected grids.
+    Returns:
+        A polygon or antimeridian-split multipolygon in the output CRS.
+    Raises:
+        ValueError: If the box cannot be projected.
+    """
+
+    project_boundary = (
+        grid_boundary_projection("EPSG:4326", crs) if seam_aware else None
+    )
+
+    def project_pixels(
+        positions: tuple[tuple[float, float], ...],
+    ) -> tuple[tuple[float, float], ...]:
+        """Return output-grid pixel positions for edge refinement."""
+        if project_boundary is None:
+            x, y = transform(
+                "EPSG:4326",
+                crs,
+                [point[0] for point in positions],
+                [point[1] for point in positions],
+            )
+            projected = zip(x, y, strict=True)
+        else:
+            projected = project_boundary(positions)
+        return tuple((a / pixel_size[0], b / pixel_size[1]) for a, b in projected)
+
+    ring = tessellate_sampling_box(box, project_pixels)
+    if seam_aware and crs.is_geographic:
+        return transform_geom(
+            "EPSG:4326", crs, {"type": "Polygon", "coordinates": [ring]}
+        )
+    x, y = transform(
+        "EPSG:4326", crs, [point[0] for point in ring], [point[1] for point in ring]
+    )
+    return {"type": "Polygon", "coordinates": [tuple(zip(x, y, strict=True))]}
+
+
 def _write_masked_source_vrt(source: rasterio.io.DatasetReader, path: Path) -> None:
     """Exclude masks, NoData and nonfinite source values before interpolation.
 
@@ -143,6 +249,214 @@ def _write_masked_source_vrt(source: rasterio.io.DatasetReader, path: Path) -> N
     tree.write(path)
 
 
+def _write_periodic_longitude_vrt(
+    source: rasterio.io.DatasetReader, masked_path: Path, period: float
+) -> Path:
+    """Repeat a full-period geographic source on a continuous pixel lattice.
+
+    The virtual copies reference the original values and alpha band. GDAL can
+    read across either seam before computing bilinear or aggregate samples.
+
+    Args:
+        source: Original raster whose columns cover one full longitude period.
+        masked_path: Attempt-owned VRT exposing the numeric band and its alpha.
+        period: A full turn in the source CRS's angular units.
+
+    Returns:
+        Path to the periodic virtual source on the same pixel lattice.
+
+    Raises:
+        OSError: If the virtual grid cannot be written in the attempt directory.
+    """
+    affine = source.transform
+    left, _, right, _ = source.bounds
+    center_period = floor((left + right) / (2 * period) + 0.5)
+    longitude_origin = affine.c - center_period * period - source.width * affine.a
+    virtual_transform = Affine(affine.a, 0, longitude_origin, 0, affine.e, affine.f)
+    root = ElementTree.Element(
+        "VRTDataset",
+        rasterXSize=str(3 * source.width),
+        rasterYSize=str(source.height),
+    )
+    ElementTree.SubElement(root, "SRS").text = source.crs.to_wkt()
+    ElementTree.SubElement(root, "GeoTransform").text = ",".join(
+        str(value) for value in virtual_transform.to_gdal()
+    )
+    dimensions = {"yOff": "0", "xSize": str(source.width), "ySize": str(source.height)}
+    for number, dtype in ((1, "Float64"), (2, "Byte")):
+        band = ElementTree.SubElement(
+            root, "VRTRasterBand", band=str(number), dataType=dtype
+        )
+        if number == 1:
+            ElementTree.SubElement(band, "NoDataValue").text = "nan"
+        else:
+            ElementTree.SubElement(band, "ColorInterp").text = "Alpha"
+        for copy in range(3):
+            reference = ElementTree.SubElement(band, "SimpleSource")
+            ElementTree.SubElement(
+                reference, "SourceFilename", relativeToVRT="1"
+            ).text = masked_path.name
+            ElementTree.SubElement(reference, "SourceBand").text = str(number)
+            ElementTree.SubElement(reference, "SrcRect", xOff="0", **dimensions)
+            ElementTree.SubElement(
+                reference, "DstRect", xOff=str(copy * source.width), **dimensions
+            )
+    wrapped_path = masked_path.with_name(f"{masked_path.stem}-wrapped.vrt")
+    ElementTree.ElementTree(root).write(wrapped_path)
+    return wrapped_path
+
+
+def _warp_regional_longitudes(
+    source: rasterio.io.DatasetReader,
+    masked_path: Path,
+    grid: RasterGrid,
+    resampling: Resampling,
+) -> Path:
+    """Create a lazy warp that normalizes longitudes around the source region.
+
+    GDAL's dataset-aware transformer derives a center longitude from the
+    geographic source. Use that native path for a regional layer so its original
+    pixel size and entire footprint are retained, even when it spans a seam.
+
+    Args:
+        source: Original geographic source supplying the angular units.
+        masked_path: Virtual source with the original values and validity band.
+        grid: Output grid in its original CRS and pixel coordinates.
+        resampling: GDAL method for reading samples from the source.
+
+    Returns:
+        A VRT in the attempt directory with the requested output transform.
+
+    Raises:
+        RasterioError: If GDAL cannot create the virtual warp.
+    """
+    from osgeo import gdal, osr
+
+    path = masked_path.with_name(f"{masked_path.stem}-regional.vrt")
+    try:
+        with gdal.ExceptionMgr():
+            degree = radians(1)
+            to_degrees = source.crs.units_factor[1] / degree
+            if not isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12):
+                # The native longitude-centering transformer expects degrees.
+                # Change only the coordinate units of the virtual source.
+                degree_path = masked_path.with_name(f"{masked_path.stem}-degrees.vrt")
+                with osr.ExceptionMgr():
+                    srs = osr.SpatialReference(wkt=source.crs.to_wkt())
+                    srs.SetAngularUnits("degree", degree)
+                    degree_wkt = srs.ExportToWkt()
+                with gdal.Translate(
+                    str(degree_path),
+                    str(masked_path),
+                    format="VRT",
+                    outputSRS=degree_wkt,
+                    outputGeotransform=[
+                        value * to_degrees for value in source.transform.to_gdal()
+                    ],
+                ):
+                    pass
+                masked_path = degree_path
+            with gdal.Warp(
+                str(path),
+                str(masked_path),
+                format="VRT",
+                outputBounds=array_bounds(grid.height, grid.width, grid.transform),
+                xRes=grid.transform.a,
+                yRes=-grid.transform.e,
+                dstSRS=grid.crs.to_wkt(),
+                resampleAlg=int(resampling),
+                srcAlpha=True,
+                srcNodata=np.nan,
+                dstNodata=np.nan,
+                outputType=gdal.GDT_Float64,
+                errorThreshold=0,
+                warpOptions=["UNIFIED_SRC_NODATA=NO"],
+            ):
+                pass
+    except RuntimeError as error:
+        raise rasterio.errors.RasterioError(
+            "Could not create the regional longitude warp"
+        ) from error
+    return path
+
+
+@contextmanager
+def open_warped_raster(
+    path: Path, resampling: Resampling, grid: RasterGrid, vrt_path: Path
+) -> Iterator[tuple[rasterio.io.DatasetReader, AlignedRaster]]:
+    """Open the original metadata and a lazy, validity-aware warp on a common grid.
+
+    Args:
+        path: Authorized original single-band raster.
+        resampling: GDAL method for sampling original pixels.
+        grid: Destination grid independent of source coverage.
+        vrt_path: Private file in a caller-owned temporary directory.
+
+    Yields:
+        Original source for band metadata and aligned GDAL view for window reads.
+        The caller removes the VRT files after the readers have closed.
+
+    Raises:
+        RasterioError: If the source or warp cannot be opened.
+        OSError: If a virtual source cannot be written.
+    """
+    with rasterio.open(path) as source:
+        _write_masked_source_vrt(source, vrt_path)
+        axes = source.transform
+        if source.crs.is_geographic and axes.b == axes.d == 0 and axes.a != 0:
+            period = tau / source.crs.units_factor[1]
+            left, _, right, _ = source.bounds
+            span = abs(axes.a) * source.width
+            if isclose(span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6):
+                vrt_path = _write_periodic_longitude_vrt(source, vrt_path, period)
+            elif span < period and (left < -period / 2 or right > period / 2):
+                with rasterio.open(
+                    _warp_regional_longitudes(source, vrt_path, grid, resampling)
+                ) as warped:
+                    yield source, warped
+                return
+        with (
+            rasterio.open(vrt_path) as masked_source,
+            WarpedVRT(
+                masked_source,
+                crs=grid.crs,
+                transform=grid.transform,
+                width=grid.width,
+                height=grid.height,
+                resampling=resampling,
+                dtype="float64",
+                src_alpha=2,
+                src_nodata=np.nan,
+                nodata=np.nan,
+                UNIFIED_SRC_NODATA="NO",
+            ) as warped,
+        ):
+            yield source, warped
+
+
+def read_warped_tile(
+    raster: AlignedRaster, window: Window, inside: NDArray[np.bool_] | None
+) -> NDArray[np.float64]:
+    """Return aligned Float64 samples with NaN for invalid or excluded cells.
+
+    Args:
+        raster: Open GDAL warp produced by open_warped_raster.
+        window: Tile on the destination grid.
+        inside: Optional Boolean tile with True for included destination cells.
+
+    Returns:
+        Stored band values after resampling and applying the destination mask.
+
+    Raises:
+        RasterioError: If a native read or warp fails.
+    """
+    values = raster.read(1, window=window)
+    values[~np.isfinite(values)] = np.nan
+    if inside is not None:
+        values[~inside] = np.nan
+    return values
+
+
 @contextmanager
 def prepare_raster_stack(
     inputs: Mapping[str, tuple[Path, Resampling]],
@@ -199,73 +513,60 @@ def prepare_raster_stack(
         for index, (name, (path, resampling)) in enumerate(inputs.items()):
             output = scratch / f"input-{index}.tif"
             vrt_path = scratch / f"input-{index}.vrt"
-            with rasterio.open(path) as source:
-                _write_masked_source_vrt(source, vrt_path)
-                with (
-                    rasterio.open(vrt_path) as masked_source,
-                    WarpedVRT(
-                        masked_source,
-                        crs=grid.crs,
-                        transform=grid.transform,
-                        width=grid.width,
-                        height=grid.height,
-                        resampling=resampling,
-                        dtype="float64",
-                        src_alpha=2,
-                        src_nodata=np.nan,
-                        nodata=np.nan,
-                        UNIFIED_SRC_NODATA="NO",
-                    ) as warped,
-                ):
-                    if index == 0:
-                        polygon_mask = resources.enter_context(
-                            temporary_polygon_mask(
-                                warped,
-                                Window(0, 0, grid.width, grid.height),
-                                polygons,
-                                scratch,
-                                limits,
-                                all_touched=all_touched,
-                            )
+            with open_warped_raster(path, resampling, grid, vrt_path) as (
+                source,
+                warped,
+            ):
+                if index == 0:
+                    polygon_mask = resources.enter_context(
+                        temporary_polygon_mask(
+                            warped,
+                            Window(0, 0, grid.width, grid.height),
+                            polygons,
+                            scratch,
+                            limits,
+                            all_touched=all_touched,
                         )
-                    with rasterio.open(
-                        output,
-                        "w",
-                        driver="GTiff",
-                        count=1,
-                        dtype="float64",
-                        crs=grid.crs,
-                        transform=grid.transform,
-                        width=grid.width,
-                        height=grid.height,
-                        nodata=np.nan,
-                        tiled=True,
-                        blockxsize=tile_side,
-                        blockysize=tile_side,
-                        compress="DEFLATE",
-                        BIGTIFF="IF_SAFER",
-                    ) as destination:
-                        destination.scales = source.scales
-                        destination.offsets = source.offsets
-                        destination.units = source.units
-                        destination.descriptions = source.descriptions
-                        for _, window in destination.block_windows(1):
-                            values = warped.read(1, window=window)
-                            values[~np.isfinite(values)] = np.nan
-                            if polygon_mask is not None:
-                                values[polygon_mask.read(1, window=window) == 0] = (
-                                    np.nan
-                                )
-                            destination.write(values, 1, window=window)
-                            completed += 1
-                            if time.monotonic() - last_progress > 0.5:
-                                write_progress(
-                                    directory,
-                                    "preparing_rasters",
-                                    completed,
-                                    total,
-                                )
-                                last_progress = time.monotonic()
+                    )
+                with rasterio.open(
+                    output,
+                    "w",
+                    driver="GTiff",
+                    count=1,
+                    dtype="float64",
+                    crs=grid.crs,
+                    transform=grid.transform,
+                    width=grid.width,
+                    height=grid.height,
+                    nodata=np.nan,
+                    tiled=True,
+                    blockxsize=tile_side,
+                    blockysize=tile_side,
+                    compress="DEFLATE",
+                    BIGTIFF="IF_SAFER",
+                ) as destination:
+                    destination.scales = source.scales
+                    destination.offsets = source.offsets
+                    destination.units = source.units
+                    destination.descriptions = source.descriptions
+                    for _, window in destination.block_windows(1):
+                        inside = (
+                            None
+                            if polygon_mask is None
+                            else polygon_mask.read(1, window=window) != 0
+                        )
+                        destination.write(
+                            read_warped_tile(warped, window, inside), 1, window=window
+                        )
+                        completed += 1
+                        if time.monotonic() - last_progress > 0.5:
+                            write_progress(
+                                directory,
+                                "preparing_rasters",
+                                completed,
+                                total,
+                            )
+                            last_progress = time.monotonic()
             outputs[name] = output
         write_progress(directory, "preparing_rasters", completed, total)
         yield outputs

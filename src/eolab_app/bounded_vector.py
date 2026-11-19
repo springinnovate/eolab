@@ -1,8 +1,9 @@
 """Streaming polygon source reads with bounded per-feature geometry allocation."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from functools import partial
 import math
 from time import monotonic
 from pathlib import Path
@@ -61,6 +62,7 @@ from eolab_app.calculated_fields import (
 MAX_SCANNED_FEATURES = 1_000_000
 READ_SECONDS = 15.0
 MAX_FEATURE_COORDINATES = 500_000
+PolygonProjection = Callable[[CRS, dict[str, Any]], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -164,8 +166,9 @@ def polygon_features(
     cancellation_requested: RasterReadCancellationCheck | None = None,
     *,
     limits: VectorReadLimits | None = VectorReadLimits(),
+    project_geometry: PolygonProjection | None = None,
 ) -> Iterator[Iterator[dict[str, Any]]]:
-    """Open the original dataset and yield exact WGS84 polygons, one at a time.
+    """Open the original dataset and stream the polygons matching the selection.
 
     Args:
         resolved: Authorized source and compiled attribute predicate.
@@ -174,6 +177,8 @@ def polygon_features(
                 caller wants this work to stop. Checked between expensive steps;
                 cancellation raises RasterReadCancelled.
         limits: Source-read budgets, or None for caller-supervised unlimited work.
+        project_geometry: Optional projection from the native CRS and geometry.
+            Omit it to read in WGS84.
 
     Yields:
         An iterator whose geometries never outlive the owning source context.
@@ -190,6 +195,7 @@ def polygon_features(
         timeout_seconds=limits.seconds if limits else None,
         max_features=limits.features if limits else None,
         max_feature_coordinates=limits.coordinates_per_feature if limits else None,
+        project_geometry=project_geometry,
     ) as records:
         yield (geometry for geometry, _ in records)
 
@@ -204,8 +210,9 @@ def polygon_records(
     timeout_seconds: float | None = READ_SECONDS,
     max_features: int | None = MAX_SCANNED_FEATURES,
     max_feature_coordinates: int | None = MAX_FEATURE_COORDINATES,
+    project_geometry: PolygonProjection | None = None,
 ) -> Iterator[Iterator[tuple[dict[str, Any], dict[str, Any]]]]:
-    """Stream validated WGS84 polygons and requested attributes from the original source.
+    """Stream validated polygons and requested attributes from the original source.
 
     Geometry-only readers and readers needing attributes share the same source,
     filter, projection, cancellation and per-feature work limits. The caller
@@ -227,6 +234,8 @@ def polygon_records(
         max_features: Candidate-feature ceiling, or None to consume the full stream.
         max_feature_coordinates: Per-feature coordinate ceiling, or None to validate
             coordinate values without limiting their count.
+        project_geometry: Optional projection receiving the source CRS and native
+            polygon. The default returns canonical WGS84 polygons.
 
     Yields:
         An iterator of polygon/attribute pairs, valid only inside this context.
@@ -262,6 +271,11 @@ def polygon_records(
                 raise GeometryValidationError(
                     "The catalog vector has no coordinate reference system"
                 )
+            project = (
+                None
+                if project_geometry is None
+                else partial(project_geometry, CRS.from_user_input(dataset.crs))
+            )
             candidates = dataset
             if resolved.driver == "GPKG" and resolved.selection.filter.active:
                 filter_fields = required_source_fields(
@@ -285,7 +299,7 @@ def polygon_records(
                 """Yield polygons and requested attributes within the source-read budget.
 
                 Yields:
-                    Validated WGS84 geometry and its original selected attribute values.
+                    Validated polygon and its original selected attribute values.
 
                 Raises:
                     GeometryValidationError: If geometry or actual read work exceeds limits.
@@ -328,9 +342,16 @@ def polygon_records(
                     _validate_native_polygon_coordinates(
                         raw, max_feature_coordinates, validate_wgs84_bounds=False
                     )
-                    geometry = to_dict(
-                        transform_geom(
-                            dataset.crs, "EPSG:4326", raw, antimeridian_cutting=False
+                    geometry = (
+                        project(raw)
+                        if project is not None
+                        else to_dict(
+                            transform_geom(
+                                dataset.crs,
+                                "EPSG:4326",
+                                raw,
+                                antimeridian_cutting=False,
+                            )
                         )
                     )
                     if (
@@ -340,9 +361,12 @@ def polygon_records(
                         raise GeometryValidationError(
                             "Sampling requires valid polygons; repair the source first"
                         )
-                    _validate_native_polygon_coordinates(
-                        geometry, max_feature_coordinates, validate_wgs84_bounds=True
-                    )
+                    if geometry is not raw:
+                        _validate_native_polygon_coordinates(
+                            geometry,
+                            max_feature_coordinates,
+                            validate_wgs84_bounds=project is None,
+                        )
                     yield geometry, {name: properties[name] for name in property_names}
 
             yield iterate()

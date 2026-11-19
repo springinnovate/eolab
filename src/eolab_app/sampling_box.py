@@ -6,6 +6,11 @@ from typing import TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from eolab_app.projected_boundary import (
+    BoundaryCoordinateLimitError,
+    tessellate_projected_ring,
+)
+
 MEAN_EARTH_RADIUS_KM = 6371.0088
 MAXIMUM_SAMPLING_BOX_SIDE_KM = math.floor(math.pi * MEAN_EARTH_RADIUS_KM / math.sqrt(2))
 SAMPLING_BOX_BOUNDARY_ERROR = "Sampling box reaches a pole or crosses the date line"
@@ -155,37 +160,6 @@ def interpolate_great_circle(
 class SamplingBoxCoordinateLimitError(ValueError):
     """A box's projected boundary needs more coordinates than its caller permits."""
 
-
-def _distance_to_segment(
-    point: ProjectedPosition, start: ProjectedPosition, end: ProjectedPosition
-) -> float:
-    """Measure geometric deviation from a chord in the caller's pixel coordinates.
-
-    Args:
-        point: Projected geodesic position.
-        start: Projected chord start.
-        end: Projected chord end.
-
-    Returns:
-        Euclidean distance to the closest point of the finite chord.
-    """
-    delta = tuple(b - a for a, b in zip(start, end, strict=True))
-    offset = tuple(p - a for p, a in zip(point, start, strict=True))
-    squared_length = sum(value * value for value in delta)
-    fraction = (
-        min(
-            1.0,
-            max(
-                0.0,
-                sum(a * b for a, b in zip(offset, delta, strict=True)) / squared_length,
-            ),
-        )
-        if squared_length
-        else 0.0
-    )
-    return math.hypot(*(a - fraction * b for a, b in zip(offset, delta, strict=True)))
-
-
 def tessellate_sampling_box(
     box: Wgs84SamplingBox,
     project_positions: BoxProjection,
@@ -222,71 +196,19 @@ def tessellate_sampling_box(
             floating-point subdivision cannot meet the requested accuracy.
         SamplingBoxCoordinateLimitError: If the caller's capacity is exceeded.
     """
-    if not math.isfinite(maximum_error_pixels) or maximum_error_pixels <= 0:
-        raise ValueError("Sampling-box accuracy must be a positive finite pixel value")
     corners = sampling_box_corners(box)
-    projected: dict[GeographicPosition, ProjectedPosition] = {}
-
-    def project_missing(positions: tuple[GeographicPosition, ...]) -> None:
-        """Project previously unseen positions under this caller's coordinate budget.
-
-        Args:
-            positions: Geographic positions required for this subdivision round.
-
-        Raises:
-            SamplingBoxCoordinateLimitError: If projecting them exceeds capacity.
-            ValueError: If a transformed coordinate is not finite.
-        """
-        missing = tuple(
-            dict.fromkeys(point for point in positions if point not in projected)
+    try:
+        return tessellate_projected_ring(
+            (*corners, corners[0]),
+            project_positions,
+            maximum_error_pixels=maximum_error_pixels,
+            maximum_coordinates=maximum_coordinates,
+            interpolate=interpolate_great_circle,
         )
-        if not missing:
-            return
-        if (
-            maximum_coordinates is not None
-            and len(projected) + len(missing) > maximum_coordinates
-        ):
-            raise SamplingBoxCoordinateLimitError(
-                "Sampling-box boundary exceeds the transformed-coordinate capacity"
-            )
-        for geographic, pixel in zip(missing, project_positions(missing), strict=True):
-            if not all(math.isfinite(value) for value in pixel):
-                raise ValueError("Sampling-box boundary could not be projected")
-            projected[geographic] = pixel
-
-    project_missing(corners)
-    pending = [(edge, 0.0, 1.0) for edge in range(4)]
-    accepted: list[tuple[int, float, GeographicPosition]] = []
-    while pending:
-        probes = [
-            tuple(
-                interpolate_great_circle(
-                    corners[edge],
-                    corners[(edge + 1) % 4],
-                    start + (stop - start) * fraction,
-                )
-                for fraction in (0.0, 0.25, 0.5, 0.75, 1.0)
-            )
-            for edge, start, stop in pending
-        ]
-        project_missing(tuple(point for segment in probes for point in segment))
-        next_pending = []
-        for (edge, start, stop), positions in zip(pending, probes, strict=True):
-            error = max(
-                _distance_to_segment(
-                    projected[point], projected[positions[0]], projected[positions[-1]]
-                )
-                for point in positions[1:-1]
-            )
-            if error <= maximum_error_pixels:
-                accepted.append((edge, stop, positions[-1]))
-                continue
-            middle = (start + stop) / 2
-            if middle == start or middle == stop:
-                raise ValueError("Sampling-box boundary accuracy did not converge")
-            next_pending.extend(((edge, start, middle), (edge, middle, stop)))
-        pending = next_pending
-    return (corners[0], *(point for _, _, point in sorted(accepted)))
+    except BoundaryCoordinateLimitError as error:
+        raise SamplingBoxCoordinateLimitError(
+            "Sampling-box boundary exceeds the transformed-coordinate capacity"
+        ) from error
 
 
 def sampling_box_bounds(box: Wgs84SamplingBox) -> tuple[float, float, float, float]:

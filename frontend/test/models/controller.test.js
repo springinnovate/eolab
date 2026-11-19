@@ -138,6 +138,49 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     assert.equal(h.submitted.length, 0);
 });
 
+test("Raster calculator keeps formula aliases and captures the chosen output grid", async t => {
+    const calculator = {...model, id: "raster-calculator", title: "Raster calculator", parameters: {}, inputs: {
+        calculation: {type: "raster_formula", label: "Input rasters"},
+        area: {type: "explicit_area", label: "Analysis area"},
+    }};
+    const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+    const h = fixture({discoverModels: async () => [calculator]}, view);
+    t.after(() => h.controller.destroy());
+    const second = {...raster, itemId: "canopy-2020", label: "Canopy cover 2020"};
+    h.context.rasters.push(second);
+    await h.controller.open();
+    h.controller.chooseModel(calculator);
+    const editor = view.setup.inputs.calculation;
+    const change = (control, value, event = "change") => {
+        control.value = value;
+        control.dispatchEvent(new Event(event));
+    };
+    change(editor.rows.get("a").source, modelSourceKey(raster));
+    editor.add.dispatchEvent(new Event("click"));
+    change(editor.rows.get("b").source, modelSourceKey(second));
+    change(editor.rows.get("b").method, "mean");
+    change(editor.formula, "max(0, b - a)", "input");
+    const capture = () => captureModelSubmission(h.controller.state.draft, "calculator-request").inputs.calculation;
+    assert.deepEqual(capture().grid, {kind: "match", alias: "a"});
+    assert.deepEqual(capture().layers.map(({alias, resampling}) => [alias, resampling]), [["a", "nearest"], ["b", "mean"]]);
+    change(editor.grid, "custom-grid");
+    change(editor.crs, "EPSG:6933", "input");
+    change(editor.cellWidth, "30", "input");
+    change(editor.cellHeight, "60", "input");
+    assert.deepEqual(capture().grid, {kind: "custom", crs: "EPSG:6933", pixelSize: [30, 60]});
+    editor.rows.get("b").remove.dispatchEvent(new Event("click"));
+    assert.match(editor.status.textContent, /unknown variable, b/);
+    assert.equal(view.setup.run.disabled, true);
+    editor.add.dispatchEvent(new Event("click"));
+    assert.deepEqual([...editor.rows.keys()], ["a", "c"]);
+    change(editor.rows.get("c").source, modelSourceKey(second));
+    change(editor.formula, "min(a, c)^2", "input");
+    assert.equal(view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.equal(h.submitted[0].inputs.calculation.expression, "min(a, c)^2");
+    assert.deepEqual(h.submitted[0].inputs.calculation.layers.map(row => row.alias), ["a", "c"]);
+});
+
 const periodModel = {...model, id: "regional-period-statistic", parameters: {}, inputs: {
     weather: {type: "temporal_interval", label: "Dataset and period"},
     region: {type: "summary_area", label: "Analysis area"},

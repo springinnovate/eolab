@@ -4,6 +4,7 @@ from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.bounded_vector import summary_process
 from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.raster_aggregate import aggregate_process_target
+from eolab_app.processing.raster_calculator import raster_calculator_process
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.downstream_calculation import downstream_process_target
 from eolab_app.processing.temporal_reduce import temporal_process_target
@@ -36,6 +37,7 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
         (
             clip_process_target,
             aggregate_process_target,
+            raster_calculator_process,
             downstream_process_target,
             temporal_process_target,
             temporal_series_process_target,

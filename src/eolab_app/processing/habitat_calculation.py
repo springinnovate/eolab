@@ -24,9 +24,6 @@ from nhi_terrestrial_integrity_modeling.habitat_training import IntegrityConfigu
 from nhi_terrestrial_integrity_modeling.prepared_rasters import RasterBand
 from nhi_terrestrial_integrity_modeling.prepared_runner import run_habitat_condition
 
-from eolab_app.sampling_box import tessellate_sampling_box
-from rasterio.warp import transform
-from eolab_app.bounded_vector import polygon_features
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
@@ -51,6 +48,8 @@ from eolab_app.processing.raster_preparation import (
     RasterGrid,
     calculate_raster_grid,
     prepare_raster_stack,
+    project_preparation_box,
+    read_preparation_polygons,
 )
 from eolab_app.raster.bounded_window import project_polygons_to_crs
 
@@ -105,17 +104,7 @@ def read_habitat_polygons(
         ValueError: If no polygons were selected or a polygon cannot be projected.
         SelectionUnavailableError: If the original vector cannot be read.
     """
-    with polygon_features(selection, limits=None) as features:
-        polygons = tuple(
-            projected
-            for geometry in features
-            for projected in project_polygons_to_crs(
-                "EPSG:4326", crs, (geometry,), None
-            )
-        )
-    if not polygons:
-        raise ValueError("The vector selection contains no polygons.")
-    return polygons
+    return read_preparation_polygons(selection, crs)
 
 
 def read_habitat_area(
@@ -161,36 +150,7 @@ def read_habitat_area(
     elif area.kind == "catalogSelection":
         polygons = read_habitat_polygons(sources.vectors["area"], crs)
     elif area.kind == "samplingBox":
-
-        def project_box_pixels(
-            positions: tuple[tuple[float, float], ...],
-        ) -> tuple[tuple[float, float], ...]:
-            """Return output-grid positions for geodesic chord refinement.
-
-            Args:
-                positions: Adaptive WGS84 boundary coordinates.
-
-            Returns:
-                Floating output columns and rows; translation is immaterial.
-            """
-            x, y = transform(
-                "EPSG:4326",
-                crs,
-                [point[0] for point in positions],
-                [point[1] for point in positions],
-            )
-            return tuple(
-                (a / pixel_size[0], b / pixel_size[1])
-                for a, b in zip(x, y, strict=True)
-            )
-
-        ring = tessellate_sampling_box(area.samplingBox, project_box_pixels)
-        x, y = transform(
-            "EPSG:4326", crs, [point[0] for point in ring], [point[1] for point in ring]
-        )
-        polygons = (
-            {"type": "Polygon", "coordinates": [tuple(zip(x, y, strict=True))]},
-        )
+        polygons = (project_preparation_box(area.samplingBox, crs, pixel_size),)
     else:
         geometries = (
             (mapping(box(*area.bounds)),) if area.kind == "bounds" else area.geometries
