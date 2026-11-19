@@ -69,7 +69,7 @@ For a calculation you want to follow in **Runs**, use **Data tools → Raster su
 
 ### Plot attributes and summarize polygons
 
-In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Each comparison field has its own scale and shares the same X axis. Switch between **Plot** and **Values** to read exact measurements, including missing values. Click another place to update the open plot, or select a measurement and choose **Zoom to feature**. **Plot options** contains the chart style, order, and axis or title field.
+In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Line, scatter, and bar comparisons give each field its own scale and share the same X axis. In either plot, choose **Stacked bars** under **Plot options** to put the checked fields into one horizontal bar per feature. Stack fields that use the same units. Switch between **Plot** and **Values** to read exact measurements, including missing values. Click another place to update the open plot, or select a measurement and choose **Zoom to feature**. **Plot options** contains the chart style, order, and axis or title field.
 
 In **Compare features**, use **Previous selection** and **Next selection** to revisit earlier map clicks, including after a click that cleared the plot. If you go back and select a different set of features, the forward history clears.
 

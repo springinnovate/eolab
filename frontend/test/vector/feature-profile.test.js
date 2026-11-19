@@ -436,6 +436,42 @@ test("controller plots suggested fields and updates from partial search actions"
   assert.deepEqual(h.visibility, [{ visible: true, moveFocus: false }]);
 });
 
+test("one feature stacks the checked fields and keeps their exact readings", () => {
+  const {controller, documentContext: doc} = fixture();
+  controller.setCurrentObservation(observation({
+    properties: {node_nm: "Cedar Creek", areaForest: 10.5, areaWetland: 3, areaWater: 0},
+  }));
+  controller.open();
+  const search = doc.querySelector("#vector-feature-profile-field-search");
+  search.value = "area";
+  doc.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
+  const chartType = doc.querySelector("#vector-feature-profile-chart-type");
+  chartType.value = "stacked";
+  chartType.dispatchEvent(new Event("change"));
+
+  const chart = doc.querySelector("#vector-feature-profile-chart");
+  const legend = doc.querySelector("#vector-feature-profile-legend");
+  const segments = chart.querySelectorAll(".series-chart-bar");
+  assert.match(chart.getAttribute("aria-label"), /Stacked bars for Cedar Creek/);
+  assert.deepEqual(legend.children.map(item => item.textContent), ["areaForest", "areaWater", "areaWetland"]);
+  assert.deepEqual(segments.map(item => item.getAttribute("aria-label")), ["areaForest: 10.5", "areaWetland: 3"]);
+  assert.equal(segments[0].getAttribute("y"), segments[1].getAttribute("y"));
+  segments[1].dispatchEvent(new Event("click"));
+  assert.equal(doc.querySelector("#vector-feature-profile-selection-text").textContent, "areaWetland · 3");
+  doc.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
+  assert.deepEqual(doc.querySelector("#vector-feature-profile-table-body").children.map(row => row.children[2].textContent),
+    ["10.5", "0", "3"]);
+
+  search.value = "forest";
+  doc.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
+  assert.deepEqual(legend.children.map(item => item.textContent), ["areaForest"]);
+  assert.equal(chart.querySelectorAll(".series-chart-bar").length, 1);
+  chartType.value = "bar";
+  chartType.dispatchEvent(new Event("change"));
+  assert.equal(legend.hidden, true);
+  controller.destroy();
+});
+
 test("feature navigation publishes intent and redraws the current observation", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation(), {
