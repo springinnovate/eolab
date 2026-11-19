@@ -32,6 +32,10 @@ export function describeModelArea(area) {
         return `Box · W ${b.west}°, S ${b.south}°, E ${b.east}°, N ${b.north}°`;
     }
     if (area.kind === "catalogSelection") return `${area.selection.layerName} · ${describeModelFilter(area.selection.filter)}`;
+    if (area.kind === "polygonGroup") {
+        const count = area.members.length;
+        return `${area.name} · ${count} polygon ${count === 1 ? "layer" : "layers"} · Combined area`;
+    }
     return "Saved polygon selection";
 }
 
@@ -365,6 +369,10 @@ export class ModelsView {
         }
         areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: `${source.label} · Polygons`,
             group: source.sourceOrigin === "upload" ? "Your uploads" : source.sourceOrigin === "runArtifact" ? "Completed runs" : "Catalog layers"})));
+        if (input.type === "clip_area") {
+            areaChoices.push(...value.polygonGroups.map(group => ({value: `polygonGroup:${group.id}`,
+                label: group.name, group: "Polygon groups"})));
+        }
         if (references || input.type === "summary_area") {
             areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
@@ -377,6 +385,7 @@ export class ModelsView {
         }
         let selected = value.areaMode;
         if (drawn) selected = drawnLayer ? `drawn:${drawnLayer.key}` : "";
+        else if (value.areaMode === "polygonGroup") selected = `polygonGroup:${value.polygonGroupId}`;
         else if (value.areaMode === "vector") selected = value.vectorKey ? `vector:${value.vectorKey}` : "";
         else if (value.areaMode === "raster") selected = value.maskRaster ? `raster:${modelSourceKey(value.maskRaster)}` : "";
         this.options(controls.source, areaChoices, selected);

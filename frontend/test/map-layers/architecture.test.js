@@ -10,6 +10,7 @@ const MAP_LAYER_MODULES = [
     "controller.js",
     "layer-stack.js",
     "layer-stack-view.js",
+    "polygon-groups.js",
     "legend-view.js",
     "on-map-legend.js",
     "leaflet-layer-set.js",
