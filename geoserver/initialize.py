@@ -169,16 +169,16 @@ def initialize_geoserver(
     client: GeoServerRestClient,
     master_password: str,
     raster_style: bytes,
-    vector_styles: dict[str, bytes] | None = None,
+    vector_styles: dict[str, bytes],
 ) -> None:
-    """Ensure the EOLab security and rendering configuration.
+    """Configure EOLab security and install the supplied raster and vector styles.
 
     Args:
         client: Authenticated internal GeoServer REST client.
         master_password: Desired keystore password.
         raster_style: SLD document for the shared raster style.
-        vector_styles: Geometry-specific vector SLD documents keyed by their
-            initialized style names. ``None`` preserves the legacy test seam.
+        vector_styles: Default and selection-outline vector SLD documents keyed
+            by their GeoServer style names.
 
     Raises:
         KeyError: If GeoServer returns an invalid master-password document.
@@ -278,7 +278,7 @@ def initialize_geoserver(
         )
         _require_status(status, 200, "PUT", style_path)
 
-    for style_name, style_document in (vector_styles or {}).items():
+    for style_name, style_document in vector_styles.items():
         if style_name not in VECTOR_STYLE_NAMES:
             raise ValueError(f"Unsupported initialized vector style: {style_name}")
         vector_style_path = (

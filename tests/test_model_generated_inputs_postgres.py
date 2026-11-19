@@ -138,7 +138,7 @@ def generated_raster_model(
             reference_count=count,
         )
         return PreparedJobPlan(
-            plan.model_dump(mode="json", by_alias=True), {}, 0, plan.operation
+            plan.model_dump(mode="json", by_alias=True), {}, plan.operation
         )
 
     async def generation_inputs(
@@ -201,7 +201,6 @@ def generated_raster_model(
                 mode="json", by_alias=True
             ),
             {},
-            0,
             "test.generate.v1",
         ),
         prepare=prepare_generation,

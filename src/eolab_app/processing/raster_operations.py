@@ -155,11 +155,12 @@ async def prepare_summary(
         authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
-        Prepared summary plan and its disk reservation.
+        Prepared summary inputs and display metadata.
 
     Raises:
         ProcessingError: If the selection, native planning or resource limits fail.
     """
+
     request = queued.request
     alias = next(iter(request.sources))
     signature = (
@@ -254,7 +255,7 @@ async def prepare_summary(
             area=area,
             grid=grid,
         )
-    prepared = prepare_aggregate_job(spec, context.aggregate_limits)
+    prepared = prepare_aggregate_job(spec)
     return prepared
 
 
@@ -271,7 +272,7 @@ async def prepare_clip(
         authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
-        Prepared clip plan and its disk reservation.
+        Prepared clip inputs and display metadata.
 
     Raises:
         ProcessingError: If the selection, native planning or resource limits fail.
@@ -502,7 +503,6 @@ def build_summary_submission(
     return PreparedJobPlan(
         specification=queued.model_dump(mode="json", by_alias=True),
         summary=summary,
-        reserved_bytes=0,
         operation=queued.operation,
         work_key=identify_shared_calculation(queued),
         presentation={"calculations": summary["calculations"]},
@@ -546,7 +546,6 @@ def build_clip_submission(request: ClipJobRequest, polygons: None) -> PreparedJo
                 ),
             },
         },
-        reserved_bytes=0,
         operation=queued.operation,
         work_key=identify_shared_calculation(queued),
     )

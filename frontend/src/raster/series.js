@@ -62,6 +62,8 @@ function boxStatisticLabel(label, statistic, method) {
 }
 
 /** Resolve the displayed scalar, its calculation method, and its owning job.
+ * Exact box presets use the preset's percentage unit or the source band's stored unit.
+ * Custom formulas keep the unit assigned by Processing to their result row.
  * @param {Object|undefined} result Captured measurements for one original source.
  * @param {Object} formula Current named statistic, including its preset identity.
  * @return {{row:Object|undefined,label:string,method:string|null,error:string,job:Object|null}} Value for both the plot and export.
@@ -83,7 +85,7 @@ function seriesValue(result, formula) {
                 state: sample?.value != null ? "ok" : method === "exact" ? "no_valid_data" : "error"}};
     }
     if (result.exactBox && row) {
-        const unit = result.previewUnits?.get(formula.expression) ?? definition.unit ?? row.unit;
+        const unit = definition.unit ?? result.job.grid?.storedUnit;
         return {label: boxStatisticLabel(label, definition.label, "exact"), method: "exact",
             row: {...row, unit}, job: result.job, error: ""};
     }
@@ -761,6 +763,9 @@ export class RasterSeriesController {
         });
         const statistics = this.formulas.map(formula => ({ ...formula, ...this.statisticDisplay.get(formula.id), rows: rowsFor(area.results, formula) }));
         const rows = sources.flatMap((source, index) => statistics.map(statistic => statistic.rows[index]));
+        const completedRasters = sources.filter((_, index) => statistics.every(statistic => statistic.rows[index].state !== "waiting")).length;
+        const completedSuccessfully = area.complete && !area.hasErrors && !area.commonError && !area.needsRecovery;
+        const showProgress = !completedSuccessfully && sources.length > 1 && (area.busy || area.results.size > 0);
         const showingPrevious = !!(area.busy && !rows.some(row => row.state === "value") && area.previousResults);
         for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
@@ -775,8 +780,8 @@ export class RasterSeriesController {
             showingPrevious, busy: area.busy, chartType: this.chartType, direction: this.direction,
             pixelPoint: area.pixelPoint,
             resultBounds: sources.length === 1 ? sources[0].bounds : null,
-            message: [area.busy && sources.length > 1 ? area.results.size + " of " + sources.length + " rasters complete." : "",
-                area.complete && !area.hasErrors && !area.commonError && !area.needsRecovery ? "" : area.message,
+            message: [showProgress ? completedRasters + " of " + sources.length + " rasters complete." : "",
+                completedSuccessfully ? "" : area.message,
                 this.hasPendingInputs ? "Results use the previous inputs." : "", this.pendingVectorAreaMessage].filter(Boolean).join(" "),
             canDownload: area.results.size > 0 && !area.busy,
         });

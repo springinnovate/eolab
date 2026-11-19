@@ -38,7 +38,7 @@ const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{re
 function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}, initialArea = box(0)) {
     const requests=[],plans=new Map(),server=new Map(),timers=new Map();let serial=0,time=0;
     const clock={setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,delay,at:time+delay});return id;},clearTimeout(id){timers.delete(id);}};
-    const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326"};
+    const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326",storedUnit:null};
     const api={
         validateCalculation:async formulas=>{requests.push(["validate",formulas]);return {valid:true};},
         planCalculation:async intent=>{const planId=String(++serial).padStart(32,"0");requests.push(["plan",intent]);plans.set(planId,intent);return {planId,grid,expiresAt:"2099-01-01T00:00:00Z"};},
@@ -84,6 +84,29 @@ function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}, init
     const open=async()=>{controller.updateSamplingForPanelVisibility(true);await tick();};
     const close=()=>{area.destroy();calculationRequests.destroy();jobs.destroy();};
     return {api,calculationRequests,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,advance,finish,open,close};
+}
+
+/** Check the completed-raster count in the same status element as the open panel.
+ * @param {Object} h Area-series harness with the latest controller presentation.
+ * @return {(completed:number|null)=>void} Check the displayed count, or its removal after a successful run.
+ */
+function assertRasterProgress(h) {
+    const document = new FakeRasterControlDocument();
+    document.defaultView.ResizeObserver = class { observe() {} };
+    document.createElement("label").append(document.querySelector("#raster-series-order"));
+    const view = new RasterSeriesView(document);
+    view.bind(h.view.actions);
+    return completed => {
+        view.draw(h.view.state);
+        if (completed === null) {
+            assert.equal(h.view.state.rows.some(row => row.state === "waiting"), false);
+            assert.equal(view.status.textContent, "");
+            assert.equal(view.status.hidden, true);
+            return;
+        }
+        assert.equal(view.status.hidden, false);
+        assert.ok(view.status.textContent.startsWith(`${completed} of 2 rasters complete.`), view.status.textContent);
+    };
 }
 
 /** Bind production stack entry points to the real controller/execution boundary.
@@ -434,6 +457,54 @@ test("a waiting Sum plot shows raster stack progress until its first result arri
         plots.renderPlots(h.view.state);
         assert.equal(h.view.state.busy, false);
         assert.equal(sum.chart.querySelectorAll(".series-chart-point").length, 2);
+    } finally { h.close(); }
+});
+
+test("native results wait for each sampling-box preview before its raster counts as complete", async () => {
+    const previews = new Map();
+    const h = fixture({readBoxPreview(source) {
+        const reply = deferred();
+        previews.set(source.key, reply);
+        return reply.promise;
+    }});
+    const assertProgress = assertRasterProgress(h);
+    try {
+        h.controller.addFormula("min");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+        await h.open();
+        await h.finish(); await h.finish();
+        assert.deepEqual(h.view.state.rows.map(row => row.state), ["waiting", "value", "waiting", "value"]);
+        assertProgress(0);
+        previews.get("2").resolve({method: "exact", values: [{value: null, unit: "m"}]}); await flush();
+        assert.equal(h.view.state.rows[2].state, "no_valid_data");
+        assertProgress(1);
+        previews.get("1").resolve({method: "estimated", values: [{value: 0, unit: "m"}]}); await flush();
+        assert.equal(h.view.state.rows[0].value, 0);
+        assertProgress(null);
+    } finally { h.close(); }
+});
+
+test("a finished preview stays partial through native recovery and cancellation", async () => {
+    const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 0, unit: "m"}]})});
+    const assertProgress = assertRasterProgress(h);
+    const submit = h.api.submitCalculation;
+    let lost = true;
+    h.api.submitCalculation = async input => {
+        const job = await submit(input);
+        if (lost) { lost = false; throw Error("Connection lost"); }
+        return job;
+    };
+    try {
+        h.controller.addFormula("max");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+        await h.open(); await h.finish("ready", false, "2");
+        assert.equal(h.area.needsRecovery, true);
+        assertProgress(1);
+        await h.area.retryInterruptedCalculations();
+        assertProgress(1);
+        h.view.actions.onCancel(); await h.finish("cancelled");
+        assertProgress(1);
+        assert.equal(h.view.state.rows[0].value, 0);
     } finally { h.close(); }
 });
 
@@ -1025,6 +1096,7 @@ test("adding an identical completed raster statistic reuses exact values with in
  */
 function samplingComposition(h, drawings = []) {
     const document = new FakeRasterControlDocument();
+    document.createElement("label").append(document.querySelector("#raster-series-order"));
     document.defaultView.requestAnimationFrame = () => 1;
     document.defaultView.cancelAnimationFrame = () => {};
     document.defaultView.ResizeObserver = class {observe() {}};
@@ -1464,6 +1536,7 @@ test("sampling-box statistics use one read per raster, cancel together and run e
         reads.push({source, box, statistics, signal, reply});
         return reply.promise;
     }});
+    h.grid.storedUnit = "USD";
     const selection = longitude => ({kind: "samplingBox", samplingBox: {center: {longitude, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("stdev");
     h.controller.addFormula("percent");
@@ -1479,7 +1552,10 @@ test("sampling-box statistics use one read per raster, cancel together and run e
     reads[2].reply.resolve({method: "estimated", values}); await flush();
     assert.equal(h.view.state.rows[0].statisticLabel, "Estimated mean");
     assert.equal(h.view.state.rows[0].value, 0);
+    const assertProgress = assertRasterProgress(h);
+    assertProgress(1);
     reads[3].reply.resolve({method: "exact", values: [{value: 18, unit: "USD"}, ...values.slice(1)]}); await flush();
+    assertProgress(null);
     const names = ["mean", "standard deviation", "percent above 10", "percent above -2.5"];
     assert.deepEqual(h.view.state.rows.map(row => row.statisticLabel), ["Estimated", "Exact"].flatMap(method => names.map(name => method + " " + name)));
     assert.ok(h.view.state.area.canCalculateExactStatistics);
@@ -1498,8 +1574,49 @@ test("sampling-box statistics use one read per raster, cancel together and run e
     h.close();
 });
 
+test("exact statistics show each band unit in the values table and CSV when previews are incomplete", async () => {
+    const units = new Map([["estimated", "m"], ["pending", "K"], ["failed", "mg/kg"], ["unitless", null]]);
+    const pending = deferred();
+    const h = fixture({readBoxPreview: async source => {
+        if (source.key === "failed") throw new Error("Preview unavailable");
+        if (source.key !== "estimated") return pending.promise;
+        return {method: "estimated", values: [{value: 1, unit: "m"}, {value: 2, unit: "m"}, {value: 30, unit: "%"}]};
+    }});
+    const c = samplingComposition(h);
+    try {
+        h.controller.updateAvailableRasters([...units.keys()].map(source));
+        h.controller.addFormula("stdev");
+        h.controller.addFormula("percent");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+        await h.open();
+        c.presentation.draw(h.view.state);
+        const exact = c.document.querySelector("#raster-series-exact-statistics");
+        assert.equal(exact.hidden, false);
+        exact.dispatchEvent(new Event("click")); await h.tick();
+        for (const job of h.server.values()) {
+            job.grid = {...job.grid, storedUnit: units.get(job.sources.a.itemId)};
+            await h.finish("ready", false, job.sources.a.itemId);
+        }
+        c.presentation.valuesButton.dispatchEvent(new Event("click"));
+        c.presentation.download.dispatchEvent(new Event("click"));
+        const expected = [...units].flatMap(([id, unit]) => [
+            ["Raster " + id, "Exact mean", "-123.4567890123456789", unit ?? ""],
+            ["Raster " + id, "Exact standard deviation", "22", unit ?? ""],
+            ["Raster " + id, "Exact percent above 10", "22", "%"],
+        ]);
+        assert.deepEqual({
+            table: c.presentation.table.children.map(row => row.children.slice(0, 3).map(cell => cell.textContent)),
+            csv: csvParse(h.view.csv).map(row => [row.raster, row.statistic, row.value, row.unit]),
+        }, {
+            table: expected.map(([raster, statistic, value, unit]) => [raster, statistic, unit ? value + " " + unit : value]),
+            csv: expected,
+        });
+    } finally { c.close(); h.close(); }
+});
+
 test("a custom mean remains exact alongside an unavailable built-in estimate", async () => {
     const h = fixture({readBoxPreview: async () => ({method: "unavailable", values: [{value: null, unit: null}]})});
+    h.grid.storedUnit = "K";
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     h.controller.addFormula("custom");
     h.controller.editFormula(2, {label: "My exact formula", expression: "mean(a)"});
@@ -1510,6 +1627,7 @@ test("a custom mean remains exact alongside an unavailable built-in estimate", a
     await h.finish(); await h.finish();
     assert.deepEqual(h.view.state.rows.slice(0, 2).map(row => [row.state, row.method]),
         [["error", "unavailable"], ["value", null]]);
+    assert.equal(h.view.state.rows[1].unit, "");
     assert.ok(h.view.state.area.canCalculateExactStatistics);
     h.close();
 });
@@ -1537,20 +1655,26 @@ test("duplicate views share a raster preview while maximum runs exactly and retr
         reads.push(statistics);
         return {method: "estimated", values: [{value: 7, unit: "m"}]};
     }});
+    const assertProgress = assertRasterProgress(h);
     h.controller.updateAvailableRasters([source("1"), {...source("1"), key: "copy", label: "Second view"}]);
     h.controller.addFormula("max");
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
     await h.open();
     assert.deepEqual(reads, [["mean"]]);
+    assertProgress(0);
     assert.deepEqual(h.view.state.rows.map(row => row.state), ["value", "waiting", "value", "waiting"]);
     for (const [, intent] of h.requests.filter(([kind]) => kind === "submit")) {
         assert.deepEqual(intent.calculations, [{label: "stat-2", expression: "max(a)"}]);
     }
     await h.finish("failed");
+    assertProgress(1);
     await h.finish();
+    assertProgress(2);
     h.view.actions.onRetry(); await flush();
+    assertProgress(1);
     assert.equal(reads.length, 1);
     await h.finish();
+    assertProgress(null);
     assert.deepEqual(h.view.state.rows.map(row => [row.state, row.method]), [
         ["value", "estimated"], ["value", null], ["value", "estimated"], ["value", null],
     ]);
@@ -1559,6 +1683,7 @@ test("duplicate views share a raster preview while maximum runs exactly and retr
 
 test("reloading an exact box calculation restores the chosen threshold, units and pending jobs", async () => {
     const h = fixture({readBoxPreview: async () => ({method: "estimated", values: [{value: 1, unit: "m"}, {value: 20, unit: "%"}]})});
+    h.grid.storedUnit = "m";
     h.controller.addFormula("percent");
     h.controller.editFormula(2, {threshold: 4.5});
     h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
@@ -1575,3 +1700,100 @@ test("reloading an exact box calculation restores the chosen threshold, units an
     assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
     restored.close();
 });
+
+test("reload keeps hidden, duplicate, empty and outside rasters beside native results", async () => {
+    const layers = [source("2"), {...source("3"), visible: false}, source("1"), {...source("3"), key: "copy", label: "Second view"}, source("empty"), source("outside")];
+    const reads = [];
+    const previews = {readBoxPreview: async (layer, box) => {
+        reads.push([layer.key, box.center.longitude]);
+        if (layer.key === "outside") throw Object.assign(new Error("Box outside raster"), {code: "sampling_box_outside_raster"});
+        if (layer.key === "empty") return {method: "exact", values: [{value: null, unit: "cm"}]};
+        const exact = ["3", "copy"].includes(layer.key);
+        return {method: exact ? "exact" : "estimated", values: [{value: exact ? 11 : 1, unit: exact ? "cm" : "m"}]};
+    }};
+    const h = fixture(previews);
+    h.grid.storedUnit = "m";
+    h.controller.updateAvailableRasters(layers);
+    h.controller.selectRaster("3", true);
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 1255}});
+    await h.open();
+    h.view.actions.onExactStatistics(); await h.tick();
+    const originals = [...h.server.values()];
+    assert.equal(originals.length, 2);
+    h.close();
+    reads.length = 0;
+    const restored = fixture(previews, h.data);
+    for (const job of originals) restored.server.set(job.jobId, job);
+    const recovery = restored.controller.start();
+    restored.controller.updateAvailableRasters(layers);
+    await recovery;
+    await restored.finish(); await restored.finish();
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    const means = csvParse(restored.controller.exportCsv()).filter(row => row.formula === "mean(a)");
+    assert.deepEqual(means.map(row => row.raster), layers.map(layer => layer.label));
+    assert.deepEqual(means.filter(row => ["1", "2"].includes(row.item_id)).map(row => [row.value, row.unit]),
+        [["-123.4567890123456789", "m"], ["-123.4567890123456789", "m"]]);
+    assert.deepEqual(means.filter(row => row.item_id === "3").map(row => [row.value, row.unit, row.method, row.job_id]),
+        [["11", "cm", "exact", ""], ["11", "cm", "exact", ""]]);
+    assert.deepEqual(means.slice(-2).map(row => [row.status, row.value, row.error]),
+        [["no_valid_data", "", ""], ["error", "", "Box outside raster"]]);
+    assert.deepEqual(reads, [["3", -93], ["empty", -93], ["outside", -93]]);
+    restored.close();
+});
+
+test("reload keeps an exact preview and its previously completed custom statistic", async () => {
+    const previews = {readBoxPreview: async layer => ({method: layer.key === "1" ? "exact" : "estimated", values: [{value: 11, unit: "cm"}]})};
+    const h = fixture(previews);
+    h.controller.addFormula("max");
+    h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: -93, latitude: 42}, sideLengthKm: 10}});
+    await h.open();
+    const firstMax = await h.finish("ready", false, "1");
+    await h.finish("ready", false, "2");
+    h.view.actions.onExactStatistics(); await h.tick();
+    assert.equal(h.server.size, 3);
+    h.close();
+    const restored = fixture(previews, h.data);
+    for (const [id, job] of h.server) restored.server.set(id, job);
+    await restored.controller.start(); await restored.finish();
+    const rows = csvParse(restored.controller.exportCsv()).filter(row => row.item_id === "1");
+    assert.deepEqual(rows.map(row => [row.formula, row.value, row.job_id]),
+        [["mean(a)", "11", ""], ["max(a)", "-123.4567890123456789", firstMax]]);
+    assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+    restored.close();
+});
+
+for (const withMaximum of [false, true]) for (const failure of ["error", "estimated", "unavailable"]) {
+    test(`retry a recovered exact peer after ${failure}, ${withMaximum ? "retaining its maximum" : "without a native job"}`, async () => {
+        const exact = {method: "exact", values: [{value: 7, unit: "cm"}]};
+        const estimate = {method: "estimated", values: [{value: 20, unit: "cm"}]};
+        const h = fixture({readBoxPreview: async layer => layer.key === "1" ? exact : estimate});
+        if (withMaximum) h.controller.addFormula("max");
+        h.controller.setArea({kind: "samplingBox", samplingBox: {center: {longitude: 8, latitude: 14}, sideLengthKm: 75}});
+        await h.open();
+        const maximumJob = withMaximum ? await h.finish("ready", false, "1") : null;
+        if (withMaximum) await h.finish("ready", false, "2");
+        h.view.actions.onExactStatistics(); await h.tick(); h.close();
+
+        const retry = deferred(), reads = [];
+        const restored = fixture({readBoxPreview: async (layer, box) => {
+            reads.push([layer.key, box.center.longitude]);
+            if (reads.length > 1) return retry.promise;
+            if (failure === "error") throw new Error("Source read failed.");
+            return failure === "estimated" ? estimate : {method: "unavailable", values: [{value: null, unit: "cm"}]};
+        }}, h.data);
+        for (const [id, job] of h.server) restored.server.set(id, job);
+        try {
+            await restored.controller.start(); await restored.open(); await restored.finish();
+            assert.equal(restored.view.state.area.hasErrors, true);
+            restored.view.actions.onRetry(); await flush();
+            assert.deepEqual(reads, [["1", 8], ["1", 8]]);
+            assert.equal(restored.view.state.busy, true);
+            retry.resolve(exact); await flush();
+            assert.equal(restored.view.state.area.hasErrors, false);
+            const rows = csvParse(restored.controller.exportCsv()).filter(row => row.item_id === "1");
+            assert.deepEqual([rows[0].value, rows[0].unit, rows[0].method, rows[0].job_id], ["7", "cm", "exact", ""]);
+            if (withMaximum) assert.deepEqual([rows[1].value, rows[1].job_id], ["-123.4567890123456789", maximumJob]);
+            assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+        } finally { restored.close(); }
+    });
+}

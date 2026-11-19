@@ -74,8 +74,11 @@ test("result row has separate native map/details buttons without nested buttons"
 });
 
 test("result rows display curated titles and distinguish native vector layers", () => {
-  for (const layerName of ["habitat", "reference_sites"]) {
-    const title = "Central India habitat classes";
+  for (const [layerName, title] of [
+    ["habitat", "Central India habitat classes"],
+    ["reference_sites", "Central India habitat classes"],
+    ["habitat", "Central India habitat.gpkg — habitat classes"],
+  ]) {
     const presentation = buildCatalogResultPresentation({
       id: layerName,
       properties: {
@@ -93,6 +96,24 @@ test("result rows display curated titles and distinguish native vector layers", 
       "Vector");
     assert.equal(view.detailsButton.getAttribute("aria-label"),
       `More details for ${title}, Layer: ${layerName}, Vector`);
+  }
+});
+
+test("Catalog rows display filenames containing a container suffix without inventing a layer", () => {
+  for (const [folder, filename, type, vectorSource] of [
+    ["Survey", "Wetlands.gpkg — cover.tif", "Raster", null],
+    ["Transects", "Birds.gdb — counts.geojson", "Vector", {kind: "mounted", format: "geojson", asset_key: "data", layer_name: null}],
+  ]) {
+    const title = `${folder}/${filename}`;
+    const properties = vectorSource ? {title, "eolab:vector_source": vectorSource} : {title};
+    const presentation = buildCatalogResultPresentation({
+      id: filename, properties, assets: {data: {title}},
+    }, type);
+    const {view} = fixture(presentation);
+    assert.equal(view.element.children[0].textContent, filename);
+    assert.equal(view.element.children[1].textContent, folder);
+    assert.equal(view.detailsButton.getAttribute("aria-label"),
+      `More details for ${filename}, ${folder}, ${type}, Source: ${title}`);
   }
 });
 
