@@ -56,6 +56,7 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-field-search">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
+  assert.match(MARKUP, /<select id="vector-time-series-chart-type">.*<option value="bar" selected>Bars<\/option>/);
   assert.match(MARKUP, />Compare features<\/button>/);
   assert.match(MARKUP, />Compare features<\/h2>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
@@ -104,6 +105,7 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   }
   assert.match(MARKUP, />Plot this feature<\/button>/);
   assert.match(MARKUP, />One feature<\/h2>/);
+  assert.match(MARKUP, /<select id="vector-feature-profile-chart-type">.*<option value="bar" selected>Bars<\/option>/);
   assert.match(
     MARKUP,
     /class="vector-feature-navigation vector-feature-profile-navigation"[^>]+aria-label="Features in this inspection"/,
