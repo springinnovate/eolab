@@ -133,7 +133,7 @@ def intersecting_feature_ids(
     """
     deadline = monotonic() + limits.seconds if limits else None
     try:
-        with _target_features(polygons, limits, deadline) as features:
+        with read_original_features(polygons, limits, deadline) as features:
             selected = []
             for _, polygon in features:
                 if polygon.geom_type not in {"Polygon", "MultiPolygon"} or not polygon.is_valid:
@@ -142,7 +142,7 @@ def intersecting_feature_ids(
         index = STRtree(selected)
         if not len(index):
             return ()
-        with _target_features(target, limits, deadline) as features:
+        with read_original_features(target, limits, deadline) as features:
             return tuple(
                 feature_id for feature_id, geometry in features
                 if index.query(geometry, predicate="intersects").size
@@ -152,7 +152,7 @@ def intersecting_feature_ids(
 
 
 @contextmanager
-def _target_features(
+def read_original_features(
     layer: IntersectionLayer, limits: VectorReadLimits | None, deadline: float | None,
 ) -> Iterator[Iterator[tuple[int, BaseGeometry]]]:
     """Open the target's original point, line or polygon features with their IDs.

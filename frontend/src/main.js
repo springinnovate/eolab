@@ -10,6 +10,8 @@ import { annotationSummaryPolygons } from "./annotations/summary-area.js";
 import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.js";
 import { viewFilter, waitingForPolygonLayer } from "./layer-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
+import { MapInteractionTools } from "./map-interaction-tools.js";
+import { selectLassoFeatures } from "./vector/lasso.js";
 /**
  * Browser entry point and application composition root for EOLab.
  *
@@ -838,7 +840,7 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let mapInteractionMode = "inspection";
+    let mapInteractionMode = "pixel";
     let rasterVisualization = null;
     let rasterSeries = null;
     /** List each retained temporal dataset once, independent of its displayed observations.
@@ -870,6 +872,7 @@ async function initializeCatalog(
     let planning = null;
     let vectorFeatureInspector = null;
     let mapFeatureHover = null;
+    let mapInteractionTools = null;
     let vectorFilterControls = null;
     let refreshSpatialFilters = null;
     let vectorFieldCalculator = null;
@@ -915,6 +918,7 @@ async function initializeCatalog(
                 return;
             }
             refreshCatalogMapAction();
+            mapInteractionTools?.refresh();
             annotations?.observeLayerOrder(layers);
             refreshSpatialFilters?.();
             rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.capabilities?.calculations), temporalDatasets(layers));
@@ -2007,7 +2011,7 @@ async function initializeCatalog(
      * @return {void}
      */
     function exploreMap(event) {
-        if (mapInteractionMode !== "inspection") return;
+        if (!["pixel", "box"].includes(mapInteractionMode)) return;
         mapInspection.beginMapClick(event.latlng);
         const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
         pixelPoint = isCanonicalWgs84Position(position) ? Object.freeze(position) : null;
@@ -2016,6 +2020,7 @@ async function initializeCatalog(
         selectingMapClick = true;
         try {
             rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
+                histogram: mapInteractionMode === "box",
                 onSelected: area => {
                     if (area?.kind === "polygonArea") return;
                     updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : ["selectedArea", "samplingBox"].includes(area?.kind) ? "Sampling box" : "Sample area");
@@ -2023,9 +2028,11 @@ async function initializeCatalog(
             });
             if (!rasterClickSelected) {
                 mapInspection.closeHistogram(false);
-                const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
-                    ? rasterVisualization.selectSamplingBox(event.latlng) : null;
-                updateRasterSeriesArea(box, box ? "Sampling box" : "");
+                if (mapInteractionMode === "box") {
+                    const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
+                        ? rasterVisualization.selectSamplingBox(event.latlng) : null;
+                    updateRasterSeriesArea(box, box ? "Sampling box" : "");
+                }
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);
@@ -2055,9 +2062,10 @@ async function initializeCatalog(
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
                 mapFeatureHover?.setEnabled(!editing);
-                mapInteractionMode = editing ? "layer-editing" : "inspection";
+                mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
                 document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
                 rasterVisualization.setPointerInspectionEnabled(!editing);
+                mapInteractionTools?.setEditing(editing);
                 onLayoutChange();
             },
         });
@@ -2100,6 +2108,24 @@ async function initializeCatalog(
         }),
     });
     leafletMap.getContainer().classList.add("leaflet-crosshair");
+    mapInteractionTools = new MapInteractionTools({
+        documentContext: document, map: leafletMap, leaflet: L,
+        getTargets: () => mapLayerController.retainedRecords.flatMap(record => {
+            if (record.adapter !== vectorMapLayerAdapter) return [];
+            const source = record.adapter.describeSource(record);
+            return source.selection ? [{key: record.entry.key, label: record.entry.label,
+                selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
+        }),
+        selectFeatures: selectLassoFeatures,
+        onModeChange: (mode, enabled) => {
+            mapInteractionMode = enabled ? mode : "layer-editing";
+            mapFeatureHover.setEnabled(enabled && mode === "pixel");
+            rasterVisualization.setPointerInspectionEnabled(enabled && ["pixel", "box"].includes(mode));
+            rasterVisualization.setPixelPickingEnabled(enabled && mode === "pixel");
+            rasterVisualization.setSamplingBoxPointerEnabled(enabled && mode === "box");
+        },
+    });
+    leafletMap.on("unload", () => mapInteractionTools.dispose());
     leafletMap.on("click", exploreMap);
     onRasterViewerReady(rasterVisualization, rasterClips);
     /**

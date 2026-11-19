@@ -42,9 +42,11 @@ Use a color range for continuous measurements such as rainfall, named colors for
 
 ### Inspect a place and compare measurements
 
-Click a location to read raster pixel values or the attributes of a vector feature such as a parcel. Use **Previous** and **Next** in **Feature inspector** when features overlap. Results stay in the right panel. **All tabs** lists views that don’t fit across the top.
+Use the map tool strip to choose **Pan**, **Pixel picker**, **Histogram box**, or **Lasso**. Pixel picker reads raster values and inspects vector features at a click. Use **Previous** and **Next** in **Feature inspector** when features overlap. Results stay in the right panel. **All tabs** lists views that don’t fit across the top.
 
-Open **Histograms** for a sampling box or saved polygons. Click to place a box. Enter its width in kilometers or hold **Alt** and scroll to resize it. **1D** plots the distribution for each visible raster. A log scale makes small bars easier to see. **2D** compares the top two visible continuous rasters. Reorder the layers to change the pair or swap X and Y. Larger squares show more common pairs of values. Matching colors locate them on the map.
+For **Lasso**, choose a vector layer, drag around an area and release. EOLab selects whole original features that intersect the polygon, including boundary touches. Existing layer filters still apply. The strip shows the exact count and highlights the selected features when they fit the display budget. Draw again to replace the selection, use **Clear selection** to remove it, or press **Esc** to cancel unfinished work. Choose **Pan** to move the map.
+
+Choose **Histogram box** to place the sampling box at a click, or open **Histograms** for saved polygons. Enter the box width in kilometers or hold **Alt** and scroll to resize it. **1D** plots the distribution for each visible raster. A log scale makes small bars easier to see. **2D** compares the top two visible continuous rasters. Reorder the layers to change the pair or swap X and Y. Larger squares show more common pairs of values. Matching colors locate them on the map.
 
 For a categorical raster, point at a cell to read its class and code. The chart estimates hectares and percentage of valid area for each class. Missing pixels are excluded. A valid code with no class label is counted as **Unmapped**.
 

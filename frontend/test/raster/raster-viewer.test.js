@@ -5143,6 +5143,10 @@ test("histogram clicks use visible coverage without requesting unused pixel valu
 
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.exploreAt({ lng: 0, lat: 20 }), false);
+    assert.equal(viewer.exploreAt({ lng: 80, lat: 20 }, { histogram: false }), false);
+    await flushPromises();
+    assert.equal(histogramPresentationRequests, 0, "Pixel picker must not open a histogram");
+    assert.equal(rectangleLayers.some(layer => layer.kind === "selection"), false);
     await flushPromises();
     assert.equal(pixelRequests.length, 0);
     assert.equal(histogramPresentationRequests, 0);

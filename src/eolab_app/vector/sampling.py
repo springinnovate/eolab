@@ -46,6 +46,7 @@ from eolab_app.vector.parcel_models import (
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector.spatial_read import SpatialReads
+from eolab_app.vector.lasso import LassoSelectionResult
 from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.source_files import (
     LeasedSourceFiles,
@@ -393,6 +394,37 @@ class VectorSamplingService:
             if comparison.matches is None:
                 raise VectorConflictError("The polygon intersection reader returned no result.")
             return comparison.matches
+
+    async def lasso(
+        self,
+        selection: VectorSelection,
+        polygon: SummaryPolygon,
+        source_owner: str | VectorSourceOwners | None = None,
+    ) -> LassoSelectionResult:
+        """Select whole original features touching a user-drawn polygon.
+
+        Args:
+            selection: Catalog, upload or result identity with its applied filter.
+            polygon: Validated closed WGS84 outline captured by the map tool.
+            source_owner: Browser credentials for every private referenced source.
+
+        Returns:
+            Exact matching IDs and count, with optional complete display geometry.
+            Display limits never alter membership or make the count approximate.
+
+        Raises:
+            SelectionUnavailableError: If the source identity or access is invalid.
+            VectorConflictError: If the bounded original-source comparison fails.
+            asyncio.CancelledError: After native work has stopped using its sources.
+        """
+        from eolab_app.vector.lasso import read_lasso_highlights
+
+        async with self.open_selection(selection, source_owner) as target:
+            feature_ids = await self.compare_layers(target, (polygon,))
+            geometry = await read_lasso_highlights(target, feature_ids)
+            return LassoSelectionResult(
+                matched=len(feature_ids), featureIds=feature_ids, geometry=geometry
+            )
 
     @asynccontextmanager
     async def _open_original(

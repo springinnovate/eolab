@@ -596,6 +596,20 @@
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
+        <section id="map-interaction-tools" aria-label="Map interaction tools">
+          <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
+            <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
+            <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
+            <button type="button" data-map-mode="box" aria-pressed="false">Histogram box</button>
+            <button type="button" data-map-mode="lasso" aria-pressed="false">Lasso</button>
+          </div>
+          <div id="lasso-controls" hidden>
+            <label for="lasso-layer">Select features from</label>
+            <select id="lasso-layer"></select>
+            <button id="clear-lasso-selection" type="button" class="secondary-button" hidden>Clear selection</button>
+          </div>
+          <p id="map-interaction-status" role="status" aria-live="polite"></p>
+        </section>
         <section id="raster-sampling-tool" aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
