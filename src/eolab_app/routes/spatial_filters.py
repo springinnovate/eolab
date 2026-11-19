@@ -8,18 +8,18 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import count_selected_features
 from eolab_app.catalog_selection import SelectionUnavailableError, VectorSelection
 from eolab_app.processing.models import ProcessingError
 from eolab_app.rendering.errors import PublishedLayerChangedError, PublishedLayerNotAuthorizedError
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.http_disconnect import HttpClientDisconnectedError, run_until_http_disconnect
 from eolab_app.routes.vector_http import PrivateVectorRoute
-from eolab_app.source_files import finish_source_task
 from eolab_app.vector.display_feature_ids import display_feature_ranges
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import PublishedVectorRegistry
-from eolab_app.feature_predicate import DrawingSelection, VectorSourceOwners
+from eolab_app.feature_predicate import DrawingSelection, VectorFilter, VectorSourceOwners
+from eolab_app.drawings.models import DrawingProperties
+from eolab_app.attribute_filter import validate_filter, AttributeFilterError
 
 
 class SpatialMapFilter(BaseModel):
@@ -35,7 +35,8 @@ class DrawnIntersection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     target: DrawingSelection
-    source: VectorSelection | DrawingSelection
+    filter: VectorFilter
+    properties: tuple[DrawingProperties, ...] = Field(max_length=500)
 
 
 def create_spatial_filter_router(
@@ -70,16 +71,13 @@ def create_spatial_filter_router(
                 base = registry.require_current(body.layerName)
                 if (base.source.source_path, base.source.layer_name) != (resolved.path, resolved.selection.layerName):
                     raise HTTPException(409, "The target map layer changed. Open its filter again.")
-                count = asyncio.create_task(asyncio.to_thread(count_selected_features, resolved, require_match=False))
-                try:
-                    result = await asyncio.shield(count)
-                finally:
-                    await finish_source_task(count)
-                ranges = await asyncio.to_thread(display_feature_ranges, resolved)
+                if resolved.matches is None:
+                    raise HTTPException(422, "Choose an Intersects layer condition.")
+                ranges = await asyncio.to_thread(display_feature_ranges, resolved, resolved.matches.ids)
                 alias = registry.authorize_filter(base.upstream_layer_name or body.layerName, body.selection.filter,
                                                   body.selection.calculated_fields, ranges)
                 return {"layerName": alias, "filter": body.selection.filter.model_dump(mode="json", by_alias=True),
-                        "count": {**result, "complete": True}}
+                        "count": {**resolved.matches.counts, "complete": True}}
         try:
             return await run_until_http_disconnect(request, apply())
         except HttpClientDisconnectedError as error:
@@ -91,20 +89,29 @@ def create_spatial_filter_router(
 
     @router.post("/drawings")
     async def filter_drawings(body: DrawnIntersection, request: Request, response: Response) -> list[int]:
-        """Return matching zero-based drawing positions for one spatial condition."""
+        """Return matching zero-based drawing positions for the applied field and spatial conditions."""
         credentials = owners(request, response)
 
         async def apply() -> list[int]:
             """Compare the committed target drawing against the selected original polygons."""
             async with AsyncExitStack() as stack:
                 target = await stack.enter_async_context(reader.open_polygon_view(body.target, credentials))
-                source = await stack.enter_async_context(reader.open_polygon_view(body.source, credentials))
-                return list(await reader.compare_layers(target, source))
+                if len(body.properties) != len(target):
+                    raise HTTPException(409, "The target drawing changed. Reapply its filter.")
+                validate_filter(body.filter, {"name": "str", "note": "str"})
+                boundaries = {}
+                for rule in body.filter.intersections:
+                    key = str(rule.layerId)
+                    if key not in boundaries:
+                        boundaries[key] = await stack.enter_async_context(reader.open_polygon_view(rule.source, credentials))
+                properties = tuple(feature.model_dump() for feature in body.properties)
+                matches = await reader.compare_layers(target, boundaries, body.filter, properties)
+                return sorted(matches.ids)
         try:
             return await run_until_http_disconnect(request, apply())
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Drawing filter cancelled.") from error
-        except (GeometryValidationError, SelectionUnavailableError) as error:
+        except (GeometryValidationError, SelectionUnavailableError, AttributeFilterError) as error:
             raise HTTPException(409, str(error)) from error
         except ProcessingError as error:
             raise HTTPException(error.status, str(error)) from error

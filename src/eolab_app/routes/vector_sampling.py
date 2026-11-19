@@ -11,6 +11,7 @@ from eolab_app.routes.http_disconnect import (
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_http import PrivateVectorRoute, vector_http_exception
 from eolab_app.catalog_selection import (
+    FeatureMatches,
     SelectionUnavailableError,
     ArtifactVectorSelection,
     UploadedVectorFilterRequest,
@@ -137,48 +138,22 @@ def create_vector_sampling_router(
             )
         return None
 
-    @router.api_route("/spatial-comparison", methods=["GET", "PUT"], include_in_schema=False)
-    async def spatial_comparison(request: Request) -> Response:
-        """Exchange original source descriptors and matching IDs with one authorized worker.
+    @router.api_route("/spatial-read", methods=["GET", "PUT"], include_in_schema=False)
+    async def spatial_read(request: Request) -> Response:
+        """Exchange original sources or matching feature IDs with the authorized Jobs worker.
 
-        Args:
-            request: Internal GET for the input pair or PUT of matching original IDs.
-
-        Returns:
-            The original-source read descriptors or acknowledgment of the comparison result.
-
-        Raises:
-            HTTPException: If the read has ended or the credential is unknown.
+        The submitting request owns the bearer token and holds every source until the worker stops.
         """
         from fastapi.responses import JSONResponse
-        from pydantic import TypeAdapter
+
         scheme, _, token = request.headers.get("Authorization", "").partition(" ")
-        comparison = service.spatial_reads.get_comparison(token) if scheme.lower() == "bearer" else None
-        if comparison is None:
-            raise HTTPException(404, "This polygon comparison is unavailable.")
+        read = service.spatial_reads.get(token) if scheme.lower() == "bearer" else None
+        if read is None:
+            raise HTTPException(404, "This polygon filter is unavailable.")
         if request.method == "GET":
-            return JSONResponse(comparison.layers)
-        comparison.matches = TypeAdapter(tuple[int, ...]).validate_json(await request.body())
+            return JSONResponse(read.inputs)
+        read.result = FeatureMatches.model_validate_json(await request.body())
         return Response(status_code=204)
-
-    @router.get("/spatial-read", include_in_schema=False)
-    async def spatial_read(request: Request) -> dict[str, frozenset[int]]:
-        """Give a running native worker access to its request's authorized feature IDs.
-
-        Args:
-            request: Internal request presenting a temporary bearer credential.
-
-        Returns:
-            Matched original feature IDs per polygon view.
-
-        Raises:
-            HTTPException: If the submitting read ended or the credential is unknown.
-        """
-        scheme, _, credential = request.headers.get("Authorization", "").partition(" ")
-        membership = service.spatial_reads.get(credential) if scheme.lower() == "bearer" else None
-        if membership is None:
-            raise HTTPException(404, "The spatial read is unavailable.")
-        return dict(membership)
 
     @router.post("/areas")
     async def select_area(

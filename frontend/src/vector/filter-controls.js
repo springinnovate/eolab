@@ -4,6 +4,7 @@ import {
     EMPTY_VECTOR_FILTER, MAX_VECTOR_FILTER_RULES, normalizeVectorFilter,
     vectorFilterFieldKind, vectorFilterOperators, vectorFilterSummary,
 } from "./filter.js";
+import { viewFilter } from "../layer-filter.js";
 import { getVectorFieldValues, getVectorFilterExtent } from "./api.js";
 import { VectorFilterValuePicker } from "./filter-value-picker.js";
 
@@ -315,8 +316,7 @@ export class VectorFilterControls {
         const target = this.getTarget(this.key);
         if (!target) return null;
         try {
-            const candidate = normalizeVectorFilter({...this.draft, rules: this.draft.rules.map(rule =>
-                rule.operator === "intersects" ? {operator: rule.operator, layerId: rule.layerId} : rule)}, target.fields);
+            const candidate = normalizeVectorFilter(viewFilter(this.draft), target.fields);
             for (const rule of candidate.rules) {
                 if (candidate.enabled && rule.operator === "intersects" && !this.getPolygonLayers?.(this.key).some(layer => layer.id === rule.layerId)) {
                     throw new TypeError("The polygon layer is unavailable. Choose another layer.");

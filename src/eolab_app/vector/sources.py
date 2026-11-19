@@ -379,7 +379,7 @@ class PublishedVectorRegistry:
         """Create an empty process-local vector authorization registry."""
         self._filters: OrderedDict[
             str,
-            tuple[str, ResolvedVectorSource, VectorFilter, tuple[CalculatedField, ...], dict[str, str] | None],
+            tuple[str, ResolvedVectorSource, VectorFilter, tuple[CalculatedField, ...], str | None],
         ] = OrderedDict()
         self._filter_lock = Lock()
         self._sources: dict[str, PublishedVectorAuthorization] = {}
@@ -496,7 +496,7 @@ class PublishedVectorRegistry:
         layer_name: str,
         candidate: VectorFilter,
         calculated_fields: tuple[CalculatedField, ...] = (),
-        spatial_ranges: dict[str, str] | None = None,
+        spatial_ranges: str | None = None,
     ) -> str:
         """Retain a bounded immutable per-map view of a current publication.
 
@@ -504,7 +504,7 @@ class PublishedVectorRegistry:
             layer_name: Original authorized vector publication identity.
             candidate: Catalog-validated filter state.
             calculated_fields: Source-validated view definitions needed by the predicate.
-            spatial_ranges: Authorized original feature IDs per active spatial rule.
+            spatial_ranges: Original feature ID ranges selected by the complete predicate.
 
         Returns:
             Opaque filtered identity, or the original identity when inactive.

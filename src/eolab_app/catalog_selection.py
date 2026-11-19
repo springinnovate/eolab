@@ -5,6 +5,8 @@ from pathlib import Path
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Mapping, Protocol
 
+from pydantic import BaseModel, NonNegativeInt
+
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.calculated_fields import CompiledCalculatedField
 from eolab_app.attribute_filter import matches_filter
@@ -13,6 +15,18 @@ from eolab_app.feature_predicate import (
     UploadedSelection as UploadedSelection, UploadedVectorFilterRequest as UploadedVectorFilterRequest,
     VectorSelection as VectorSelection, VectorSourceOwners,
 )
+
+
+class FeatureMatches(BaseModel, frozen=True):
+    """Original feature IDs selected by the complete filter, and the whole-layer count."""
+
+    ids: frozenset[int]
+    total: NonNegativeInt
+
+    @property
+    def counts(self) -> dict[str, int]:
+        """Return the matched and total counts shown beside the filter."""
+        return {"matched": len(self.ids), "total": self.total}
 
 
 class SelectionUnavailableError(ValueError):
@@ -38,8 +52,7 @@ class ResolvedCatalogSelection:
         driver: Allowed Fiona driver.
         where: Server-compiled conservative OGR predicate.
         calculated_fields: Programs validated against the original source schema.
-        intersections: Original target IDs that meet each authorized spatial condition.
-            Bound only for this read, never serialized with the source descriptor.
+        matches: IDs and count after evaluating a spatial filter during this read.
         upload_owner: Server-only ownership credential for a worker reading an authorized upload.
         read_lease: Server-only lease held while a worker reads a private result file.
     """
@@ -49,7 +62,7 @@ class ResolvedCatalogSelection:
     driver: str
     where: str | None
     calculated_fields: tuple[CompiledCalculatedField, ...] = ()
-    intersections: dict[str, frozenset[int]] = field(default_factory=dict)
+    matches: FeatureMatches | None = None
     upload_owner: str | None = field(default=None, repr=False, compare=False)
     read_lease: str | None = field(default=None, repr=False, compare=False)
 
@@ -66,8 +79,9 @@ class ResolvedCatalogSelection:
         Raises:
             AttributeFilterError: If a required polygon source has not been bound.
         """
-        matches = {key: int(feature_id) in ids for key, ids in self.intersections.items()}
-        return matches_filter(self.selection.filter, properties, matches)
+        if self.matches is not None:
+            return int(feature_id) in self.matches.ids
+        return matches_filter(self.selection.filter, properties)
 
 
 class CatalogSelectionReader(Protocol):

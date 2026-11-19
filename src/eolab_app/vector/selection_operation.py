@@ -1,6 +1,7 @@
 """Count matching vector features in a Job service execution process."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,7 @@ from pydantic import (
 
 from eolab_app.catalog_selection import (
     ArtifactVectorSelection,
+    FeatureMatches,
     ResolvedCatalogSelection,
     VectorSelection,
     SelectionUnavailableError,
@@ -30,7 +32,6 @@ SCAN_MOUNT = Path("/scan-source")
 UPLOAD_MOUNT = Path("/vector-uploads")
 PROCESSING_MOUNT = Path("/processing-data")
 SOURCE_FILES_URL = "http://app:8000/api/processing/source-files"
-COMPARISON_URL = "http://app:8000/api/vector-sampling/spatial-comparison"
 
 
 class ComparisonInput(BaseModel):
@@ -53,7 +54,6 @@ class SelectionMeasurementInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     selection: VectorSelection
     uploadOwner: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-    spatialRead: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     readLease: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
 
     @model_validator(mode="after")
@@ -200,7 +200,6 @@ async def _open_job_selection(client: "httpx2.AsyncClient", inputs: SelectionMea
     from eolab_app.vector.catalog import StacVectorCatalog
     from eolab_app.vector.selection_source import resolve_selection
     from eolab_app.vector.sources import MountedVectorResolver
-    from eolab_app.vector.spatial_read import load_spatial_read
     from eolab_app.vector_uploads import VectorUploadStore
 
     if isinstance(inputs.selection, ArtifactVectorSelection):
@@ -220,7 +219,7 @@ async def _open_job_selection(client: "httpx2.AsyncClient", inputs: SelectionMea
         )
     if resolved.selection != inputs.selection:
         raise SelectionUnavailableError("The selected vector identity changed. Choose the layer again.")
-    return await load_spatial_read(client, resolved, inputs.spatialRead)
+    return resolved
 
 
 def compare_selected_features(inputs: ComparisonInput) -> ComparisonResult:
@@ -264,20 +263,26 @@ async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: Comparis
         httpx2.HTTPError: If the submitting request or an upstream service is unavailable.
     """
     from eolab_app.bounded_vector import _limit_memory
-    from eolab_app.feature_intersection import intersecting_feature_ids
+    from eolab_app.feature_intersection import match_features
+    from eolab_app.feature_predicate import VectorFilter
+    from eolab_app.vector.spatial_read import SPATIAL_READ_URL
     from eolab_app.polygon_areas import SummaryPolygon
 
     async def read_layer(layer: dict[str, Any]) -> "IntersectionLayer":
         """Open a bound file source or recover the committed drawings sent for this read."""
         if "polygons" in layer:
             return tuple(SummaryPolygon.model_validate(polygon) for polygon in layer["polygons"])
-        return await _open_job_selection(client, SelectionMeasurementInput.model_validate(layer))
+        matches = layer.pop("matches")
+        original = await _open_job_selection(client, SelectionMeasurementInput.model_validate(layer))
+        return replace(original, matches=FeatureMatches.model_validate(matches)) if matches is not None else original
 
     headers = {"Authorization": f"Bearer {inputs.spatialRead}"}
-    pair = await client.get(COMPARISON_URL, headers=headers)
-    pair.raise_for_status()
-    targets, polygons = pair.json()
+    response = await client.get(SPATIAL_READ_URL, headers=headers)
+    response.raise_for_status()
+    data = response.json()
     with _limit_memory():
-        ids = intersecting_feature_ids(await read_layer(targets), await read_layer(polygons))
-    delivered = await client.put(COMPARISON_URL, headers=headers, json=ids)
+        target = await read_layer(data["target"])
+        boundaries = {key: await read_layer(source) for key, source in data["boundaries"].items()}
+        matches = match_features(target, boundaries, VectorFilter.model_validate(data["filter"]), data["drawingProperties"])
+    delivered = await client.put(SPATIAL_READ_URL, headers=headers, json=matches.model_dump(mode="json"))
     delivered.raise_for_status()

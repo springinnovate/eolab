@@ -64,7 +64,7 @@ export class SpatialFilterViews {
      * @throws {Error} If a chosen view disappeared or creates a circular filter.
      */
     async bind(key, filter, ancestors = new Set(), views = this.layers()) {
-        if (!filter.enabled) return waitingForPolygonLayer(filter);
+        if (!filter.enabled) return waitingForPolygonLayer(viewFilter(filter));
         if (ancestors.has(key)) throw new Error("Choose a polygon layer whose filter does not refer back to this layer.");
         const path = new Set(ancestors).add(key);
         const rules = [];
@@ -77,7 +77,7 @@ export class SpatialFilterViews {
             if (!layer.selection && current.enabled && current.rules.some(condition => condition.operator === "intersects")) source.filter = current;
             rules.push({operator: "intersects", layerId: layer.id, source});
         }
-        return {...filter, rules};
+        return {enabled: filter.enabled, match: filter.match, rules};
     }
 
     /** Refresh consumers after a source filter or committed drawing changes.
@@ -94,7 +94,7 @@ export class SpatialFilterViews {
             if (rule.operator !== "intersects") return rule;
             const layer = layers.find(view => view.id === rule.layerId);
             if (!layer || path.has(layer.key)) return [rule.layerId, null];
-            const drawingMatches = layer.polygons && layer.filter.rules.map(condition => condition.matchingIds);
+            const drawingMatches = layer.filter.matchingIds;
             return [rule.layerId, layer.selection, layer.polygons, drawingMatches, layer.filter.enabled, layer.filter.match,
                 inputs(layer.filter, new Set(path).add(layer.key))];
         });

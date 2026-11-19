@@ -274,10 +274,12 @@ def result_boundary(
             if payload["operation"] == "vector.intersection.v1":
                 headers = {"Authorization": f"Bearer {payload['inputs']['spatialRead']}"}
                 async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app), base_url="http://app:8000") as client:
-                    path = "/api/vector-sampling/spatial-comparison"
-                    target, boundary = (await client.get(path, headers=headers)).json()
+                    path = "/api/vector-sampling/spatial-read"
+                    inputs = (await client.get(path, headers=headers)).json()
+                    target = inputs["target"]
+                    boundary, = inputs["boundaries"].values()
                     assert target["readLease"] in authority.leases and boundary["uploadOwner"]
-                    assert (await client.put(path, headers=headers, json=[1])).status_code == 204
+                    assert (await client.put(path, headers=headers, json={"ids": [1], "total": 2})).status_code == 204
                 authority.jobs_outcome = "comparison"
             else:
                 assert payload["inputs"] == {

@@ -1367,10 +1367,9 @@ async function initializeCatalog(
         const captured = await spatialViews.bind(key, candidate);
         if (captured.enabled && captured.rules.some(rule => rule.operator === "intersects")) {
             const original = await spatialViews.drawing(target, EMPTY_VECTOR_FILTER);
-            for (const rule of captured.rules.filter(rule => rule.operator === "intersects")) {
-                const positions = await applySpatialFilter("drawings", {target: original, source: rule.source});
-                rule.matchingIds = positions.map(index => target.polygons[index].id);
-            }
+            const properties = target.polygons.map(({name, note}) => ({name, note}));
+            const positions = await applySpatialFilter("drawings", {target: original, filter: captured, properties});
+            captured.matchingIds = positions.map(index => target.polygons[index].id);
         }
         if (drawingFilterAttempts.get(key) !== attempt || !annotations.filterTarget(key)) return null;
         annotations.filterTarget(key).apply(captured);

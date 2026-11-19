@@ -17,7 +17,6 @@ from eolab_app.attribute_filter import (
     validate_filter as validate_attribute_filter,
 )
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.feature_predicate import IntersectsLayer
 from eolab_app.vector.models import CatalogVectorRequest
 from eolab_app.calculated_fields import CalculatedField
 from eolab_app.vector.styles import calculated_field_expressions, vector_expression_ecql
@@ -87,27 +86,25 @@ def validate_filter(candidate: VectorFilter, fields: Mapping[str, str]) -> Vecto
 
 def filter_ecql(
     candidate: VectorFilter, calculated_fields: tuple[CalculatedField, ...] = (),
-    spatial_ranges: Mapping[str, str] | None = None,
+    spatial_ranges: str | None = None,
 ) -> str:
     """Compile validated literal rules into server-owned ECQL.
 
     Args:
         candidate: Active, Catalog-validated filter.
         calculated_fields: Source-validated definitions used by the view's rules.
-        spatial_ranges: Server-generated original feature ID ranges per spatial condition.
+        spatial_ranges: Final original feature ID ranges for a spatially filtered view.
 
     Returns:
         A bounded ECQL expression; user text is always a quoted literal.
     """
+    if candidate.intersections:
+        if spatial_ranges is None:
+            raise VectorConflictError("The polygon filter is unavailable. Reapply it.")
+        return f"(eolabFeatureInRanges('{spatial_ranges}') = true)"
     expressions = []
     calculated = calculated_field_expressions(calculated_fields)
     for rule in candidate.rules:
-        if isinstance(rule, IntersectsLayer):
-            if spatial_ranges is None:
-                raise VectorConflictError("The polygon filter is unavailable. Reapply it.")
-            ranges = spatial_ranges[str(rule.layerId)]
-            expressions.append(f"(eolabFeatureInRanges('{ranges}') = true)")
-            continue
         field = '"' + rule.field.replace('"', '""') + '"'
         if rule.field in calculated:
             field = vector_expression_ecql(calculated[rule.field])
@@ -160,28 +157,27 @@ def _node(name: str, *children: ET.Element, text: str | None = None) -> ET.Eleme
 
 def filter_ogc(
     candidate: VectorFilter, calculated_fields: tuple[CalculatedField, ...] = (),
-    spatial_ranges: Mapping[str, str] | None = None,
+    spatial_ranges: str | None = None,
 ) -> ET.Element:
     """Compile the same validated rules into an OGC predicate tree.
 
     Args:
         candidate: Active, Catalog-validated filter.
         calculated_fields: Source-validated definitions used by the view's rules.
-        spatial_ranges: Server-generated original feature ID ranges per spatial condition.
+        spatial_ranges: Final original feature ID ranges for a spatially filtered view.
 
     Returns:
         Detached predicate root for an SLD Filter element.
     """
+    if candidate.intersections:
+        if spatial_ranges is None:
+            raise VectorConflictError("The polygon filter is unavailable. Reapply it.")
+        test = _node("Function", _node("Literal", text=spatial_ranges))
+        test.set("name", "eolabFeatureInRanges")
+        return _node("PropertyIsEqualTo", test, _node("Literal", text="true"))
     expressions = []
     calculated = calculated_field_expressions(calculated_fields)
     for rule in candidate.rules:
-        if isinstance(rule, IntersectsLayer):
-            if spatial_ranges is None:
-                raise VectorConflictError("The polygon filter is unavailable. Reapply it.")
-            test = _node("Function", _node("Literal", text=spatial_ranges[str(rule.layerId)]))
-            test.set("name", "eolabFeatureInRanges")
-            expressions.append(_node("PropertyIsEqualTo", test, _node("Literal", text="true")))
-            continue
         field = (
             deepcopy(calculated[rule.field])
             if rule.field in calculated
@@ -210,7 +206,7 @@ def filter_vector_sld(
     document: bytes,
     candidate: VectorFilter,
     calculated_fields: tuple[CalculatedField, ...] = (),
-    spatial_ranges: Mapping[str, str] | None = None,
+    spatial_ranges: str | None = None,
 ) -> bytes:
     """Restrict every geometry and label rule without changing class ranges.
 

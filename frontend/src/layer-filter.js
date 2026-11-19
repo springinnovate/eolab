@@ -4,7 +4,7 @@
  * @return {Object} Field conditions and stable polygon-view IDs.
  */
 export function viewFilter(filter) {
-    return {...filter, rules: filter.rules.map(rule => rule.operator === "intersects"
+    return {enabled: filter.enabled, match: filter.match, rules: filter.rules.map(rule => rule.operator === "intersects"
         ? {operator: "intersects", layerId: rule.layerId} : rule)};
 }
 
