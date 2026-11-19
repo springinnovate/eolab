@@ -7,6 +7,7 @@ import {
 } from "../charts/series-chart.js";
 
 import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { VectorPlotStatistics } from "./plot-statistics.js";
 
 export const FEATURE_PROFILE_TITLE_NONE = "__eolab_no_title__";
 export const FEATURE_PROFILE_TITLE_LAYER = "__eolab_layer_title__";
@@ -274,6 +275,8 @@ export class VectorFeatureProfileController {
      * Publishes current-feature map navigation intent through composition.
      * @param {(index:number)=>void} configuration.onSelectFeature Select a result from the current sample.
      * @param {()=>void} configuration.onCompareFeatures Open the across-feature comparison.
+     * @param {import("./plot-statistics.js").DescribeStatisticsSource} [configuration.describeStatisticsSource]
+     * Look up the original layer and schema for whole-layer benchmarks.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
     constructor({
@@ -283,6 +286,7 @@ export class VectorFeatureProfileController {
         onSelectFeature,
         onCompareFeatures,
         onFeatureZoom,
+        describeStatisticsSource = () => null,
         documentContext = document,
     }) {
         if (typeof onVisibilityChange !== "function") {
@@ -349,6 +353,7 @@ export class VectorFeatureProfileController {
         this.currentNavigation = null;
         this.settingsBySource = new Map();
         this.plotPanel = new VectorPlotPanel(documentContext, "vector-feature-profile", () => this.render());
+        this.statistics = new VectorPlotStatistics(documentContext, "vector-feature-profile", describeStatisticsSource);
         this.chooser = new VectorPlotFields(documentContext, "vector-feature-profile", names => {
             const settings = this.#currentSettings();
             if (settings) { settings.selectedFields = names; this.render(); }
@@ -438,6 +443,7 @@ export class VectorFeatureProfileController {
      */
     close({ moveFocus = false } = {}) {
         this.modeActive = false;
+        this.statistics.update([], []);
         this.plotPanel.closePicker(false);
         this.onVisibilityChange(false, moveFocus);
     }
@@ -512,6 +518,7 @@ export class VectorFeatureProfileController {
         this.zoomFeatureButton.disabled = this.currentObservation === null;
         this.#renderNavigation();
         const settings = this.#currentSettings();
+        this.statistics.update(this.modeActive && this.currentObservation ? [this.currentObservation] : [], settings?.selectedFields ?? []);
         if (this.currentObservation === null || settings === null) {
             this.#renderPresentation(null);
             this.titleField.replaceChildren();
@@ -722,6 +729,7 @@ export class VectorFeatureProfileController {
         this.abort.abort();
         this.plotPanel.destroy();
         this.chooser.destroy();
+        this.statistics.destroy();
         this.document.removeEventListener("keydown", this.onKeydown);
         this.onPresentationChange(null);
         this.onVisibilityChange(false, false);

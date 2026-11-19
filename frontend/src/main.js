@@ -2044,6 +2044,7 @@ async function initializeCatalog(
             });
     }
     const vectorTimeSeries = new VectorTimeSeriesController({
+        describeStatisticsSource: describeVectorStatisticsSource,
         onOpenFeature: index => {
             if (index !== null) vectorFeatureInspector.showResult(index);
             openFeaturePlot();
@@ -2058,6 +2059,7 @@ async function initializeCatalog(
         onNavigateSelection: direction => vectorFeatureInspector.navigateSelection(direction),
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({
+        describeStatisticsSource: describeVectorStatisticsSource,
         onCompareFeatures: openFeatureComparison,
         onSelectFeature: index => vectorFeatureInspector.showResult(index),
         onVisibilityChange: (visible, moveFocus) => {
@@ -2079,6 +2081,17 @@ async function initializeCatalog(
     function openFeatureComparison() {
         vectorFeatureProfile.close();
         vectorTimeSeries.open();
+    }
+    /**
+     * Find the original layer and numeric fields behind an inspected vector view.
+     * @param {string} sourceId Retained vector view identity from an observation.
+     * @return {ReturnType<import("./vector/plot-statistics.js").DescribeStatisticsSource>} Path-free source and fields, or null.
+     */
+    function describeVectorStatisticsSource(sourceId) {
+        const record = mapLayerController.getRecord(sourceId);
+        if (record?.adapter !== vectorMapLayerAdapter) return null;
+        const { selection, numericFields } = record.adapter.describeSource(record);
+        return selection ? { selection, fields: numericFields } : null;
     }
     /**
      * Supply the same top-first published vector targets to click and hover queries.
