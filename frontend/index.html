@@ -528,6 +528,25 @@
                     </details>
                     </div>
                     <p id="annotation-storage-status" class="map-layer-action-status" role="status" hidden></p>
+                    <details id="map-polygon-groups" class="annotation-layer-tools map-polygon-groups" hidden>
+                      <summary>Polygon groups</summary>
+                      <button type="button" class="secondary-button" data-new-group>New polygon group</button>
+                      <div data-group-list></div>
+                      <form class="polygon-group-editor" data-group-editor aria-labelledby="polygon-group-editor-title" hidden>
+                        <p id="polygon-group-editor-title">New polygon group</p>
+                        <label>Group name <input name="groupName" required maxlength="80"></label>
+                        <fieldset>
+                          <legend>Layers in this group</legend>
+                          <div data-member-choices></div>
+                        </fieldset>
+                        <p data-group-error role="alert" hidden></p>
+                        <div class="polygon-group-actions">
+                          <button type="button" class="secondary-button" data-cancel-group>Cancel</button>
+                          <button type="submit" class="secondary-button">Save group</button>
+                        </div>
+                      </form>
+                      <p class="map-layer-action-status" data-group-status role="status"></p>
+                    </details>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map contents controls">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map contents" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map contents" disabled>Hide all</button>

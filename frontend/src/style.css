@@ -532,6 +532,16 @@ h5 {
 .map-layer-source-actions > .secondary-button,
 .map-layer-source-actions .annotation-layer-tools > summary { min-height: 24px; padding: 2px 5px; font-weight: 400; }
 
+.map-polygon-groups { margin: 0 0 6px; overflow-wrap: anywhere; }
+.map-polygon-groups > button, .map-polygon-groups details { margin-top: 6px; }
+.map-polygon-groups ul { margin: 4px 0; padding-inline-start: 1.5rem; }
+.polygon-group-editor:not([hidden]) { display: grid; gap: 6px; margin-top: 6px; }
+.polygon-group-editor > p { margin: 0; }
+.polygon-group-editor fieldset { min-width: 0; margin: 0; }
+.polygon-group-editor label { display: block; }
+.polygon-group-editor input[name="groupName"] { display: block; width: 100%; box-sizing: border-box; }
+.polygon-group-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+
 .upload-polygons-dialog {
   width: min(28rem, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);

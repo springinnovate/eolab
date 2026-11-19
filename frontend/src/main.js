@@ -74,6 +74,7 @@ import { addMapCoordinateGuide } from "./map-coordinate-guide.js";
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
 import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
+import { MapPolygonGroups } from "./map-layers/polygon-groups.js";
 import { OnMapLegend } from "./map-layers/on-map-legend.js";
 import { LeafletLayerSet } from "./map-layers/leaflet-layer-set.js";
 import { CompositeMapPlanClient } from "./map-layers/composite-api.js";
@@ -887,6 +888,7 @@ async function initializeCatalog(
     let vectorFieldCalculator = null;
     let vectorSampling = null;
     let summarySampling = null;
+    let polygonGroups = null;
     let selectingMapClick = false;
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
@@ -969,6 +971,7 @@ async function initializeCatalog(
             vectorFieldCalculator?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
+            polygonGroups?.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
             models?.refreshMapLayers();
             if (!layers.some((layer) =>
                 layer.capabilities?.statistics && layer.visible
@@ -1657,7 +1660,7 @@ async function initializeCatalog(
         /** Supply original-source choices and current map areas independently of rendering.
          * @param {Object} [options] Additional input choices requested by model setup.
          * @param {boolean} [options.includeDrawnPolygons=false] Include detached, filtered snapshots of committed polygon layers.
-         * @return {Object} Independent raster, temporal dataset, vector, polygon layer, selected area and visible map bounds.
+         * @return {Object} Original raster and vector choices, polygon groups, drawings, area and map bounds.
          */
         getContext: ({includeDrawnPolygons = false} = {}) => {
             const viewport = leafletMap.getBounds();
@@ -1669,6 +1672,7 @@ async function initializeCatalog(
                 vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, sourceOrigin: target.sourceOrigin, filter: target.filter, fields: target.fields,
                     scalarFields: target.scalarFields, numericFields: target.numericFields,
                     selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
+                polygonGroups: polygonGroups?.snapshot() ?? [],
                 drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({
                     key: target.key, label: target.label, total: target.polygons.length,
                     polygons: annotationSummaryPolygons(target.polygons, target.filter),
@@ -1719,6 +1723,13 @@ async function initializeCatalog(
         onViewLabel: label => mapInspection.setToolContext("models", { source: label, scope: "" }),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
     });
+    if (!isSharedViewer && editableMapSlug === null) {
+        polygonGroups = new MapPolygonGroups(document.querySelector("#map-polygon-groups"), {
+            storage: new SavedMapViewLocalStorage(undefined, "eolab.polygon-groups.v1"),
+            onChange: () => models.refreshMapLayers(),
+        });
+        polygonGroups.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
+    }
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
     models.start();
     mapLayerController.onGroupAction = async id => {

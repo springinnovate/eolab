@@ -107,6 +107,8 @@ In **Map contents**, select **Download** on the raster you want. The panel opens
 
 In **Data tools**, choose **Raster clip**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
 
+To clip to several polygon layers, open **Map contents → Polygon groups → New polygon group**. Name the group and select its layers. In Raster clip, choose the group under **Analysis area**. The clip uses the combined area of the features selected by each layer's filter, including layers hidden on the map.
+
 <details>
 <summary>See the finished biomass clip and GeoTIFF download</summary>
 

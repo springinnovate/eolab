@@ -557,12 +557,12 @@ def test_saved_model_input_endpoint_preserves_ownership_and_expiry() -> None:
         assert client.get(path).status_code == 410
 
 
-@pytest.mark.parametrize("kind", ["selectedArea", "catalogSelection"])
-def test_clip_recipe_binds_only_existing_clip_inputs(kind: str) -> None:
-    """Installed clip YAML translates explicit areas without summary parameters.
+@pytest.mark.parametrize("kind", ["selectedArea", "catalogSelection", "polygonGroup"])
+def test_clip_recipe_records_explicit_area_inputs(kind: str) -> None:
+    """Record each explicit Raster clip area in the execution request and run.
 
     Args:
-        kind: Supported box or filtered-vector area.
+        kind: Supported box, filtered polygon layer or polygon group area.
     """
     from eolab_app.processing.clip_models import ClipJobRequest
     from eolab_app.processing.model_run_contracts import ModelInvocation
@@ -582,21 +582,39 @@ def test_clip_recipe_binds_only_existing_clip_inputs(kind: str) -> None:
         "definitionSha256": definition.digest,
     }
     body["parameters"] = {}
+    selection = {
+        "collectionId": "eolab-mounted-vectors",
+        "itemId": "countries",
+        "assetKey": "data",
+        "layerName": "countries",
+        "filter": {"enabled": True, "match": "all", "rules": []},
+    }
     if kind == "catalogSelection":
+        body["inputs"]["area"] = {"kind": kind, "selection": selection}
+    elif kind == "polygonGroup":
         body["inputs"]["area"] = {
             "kind": kind,
-            "selection": {
-                "collectionId": "eolab-mounted-vectors",
-                "itemId": "countries",
-                "assetKey": "data",
-                "layerName": "countries",
-                "filter": {"enabled": True, "match": "all", "rules": []},
-            },
+            "name": "AOI layers",
+            "members": [
+                {"label": "Countries", "selection": selection},
+                {
+                    "label": "Watersheds",
+                    "selection": {**selection, "itemId": "watersheds"},
+                },
+            ],
         }
     request, invocation = build_model_calculation_request(
         ModelRunRequest.model_validate(body), registry
     )
     assert isinstance(request, ClipJobRequest)
+    if kind == "polygonGroup":
+        from eolab_app.processing.model_operations import get_model_operation
+
+        selections = get_model_operation("raster.clip.v1").vector_selections(request)
+        assert [
+            source.model_dump(mode="json", by_alias=True)
+            for source in selections.values()
+        ] == [member["selection"] for member in body["inputs"]["area"]["members"]]
     assert invocation.parameters == {} and invocation.inputs == body["inputs"]
     assert (
         ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
@@ -609,6 +627,7 @@ def test_clip_recipe_binds_only_existing_clip_inputs(kind: str) -> None:
     [
         {"kind": "wholeRaster"},
         {"kind": "polygonArea", "reference": {"id": "a" * 32, "checksum": "b" * 64}},
+        {"kind": "polygonGroup", "name": "No members", "members": []},
     ],
 )
 def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None:
