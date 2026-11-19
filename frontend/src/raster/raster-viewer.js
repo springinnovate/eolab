@@ -145,6 +145,8 @@ function canRetryRasterStatistics(error) {
 
 /**
  * @typedef {Object} RasterViewer
+ * @property {(enabled:boolean)=>void} setPixelPickingEnabled Enable or hide transient pixel values.
+ * @property {(enabled:boolean)=>void} setSamplingBoxPointerEnabled Enable or clear box previews and first-sample guidance.
  * @property {() => void} clear Remove all retained raster interactions.
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
@@ -153,7 +155,7 @@ function canRetryRasterStatistics(error) {
  * showSource Retain an authorized original raster through the same controls.
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
- * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void}) => boolean} exploreAt Select
+ * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void,histogram?:boolean}) => boolean} exploreAt Select
  * one validated, in-bounds map window and request its histogram when analysis
  * is active.
  * @property {(enabled:boolean) => void} setFirstSampleHintEnabled Allow the first-sample hint and preview while browsing the map.
@@ -367,6 +369,7 @@ export function initializeRasterViewer(
     let mapDragging = false;
     let pixelPickerEnabled = true;
     let pointerInspectionEnabled = true;
+    let samplingBoxPointerEnabled = true;
     let firstSampleHintEnabled = true;
     let hasPlacedSamplingBox = false;
     let rasterCursorPosition = null;
@@ -1829,11 +1832,11 @@ export function initializeRasterViewer(
         return area;
     }
 
-    /** Return whether ordinary map browsing can offer a first sample from a visible raster.
+    /** Return whether box sampling can offer a first sample from a visible raster.
      * @return {boolean} True until a box is placed, except while drawing or using another sample area or tool.
      */
     function canOfferFirstSample() {
-        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && !pendingVectorSelection &&
+        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && samplingBoxPointerEnabled && !pendingVectorSelection &&
             initialPolygonSamplingArea() === null && activeRasterItem?.capabilities?.statistics !== false &&
             mapLayers.getRecord(activeLayerKey)?.entry.visible === true;
     }
@@ -3713,14 +3716,16 @@ export function initializeRasterViewer(
      * @param {Object} [options] Composition-owned selection notification.
      * @param {function(Object|null):void} [options.onSelected] Called synchronously
      * with the committed sampling area only when the box is accepted.
+     * @param {boolean} [options.histogram] Explicitly request or suppress box placement;
+     * omitted callers retain the existing automatic histogram behavior.
      * @return {boolean} Whether raster coverage makes the histogram workspace
      * relevant, including guidance when the requested box cannot be selected.
      */
-    function exploreAt(position, { onSelected = () => {} } = {}) {
+    function exploreAt(position, { onSelected = () => {}, histogram } = {}) {
         if (!canUseRasterMapInteractions() && rasterPointSampleParticipants().length === 0) {
             return false;
         }
-        if (vectorSelection && (bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling)?.id === vectorSelection.id) {
+        if (histogram === undefined && vectorSelection && (bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling)?.id === vectorSelection.id) {
             onSelected(getSelectedArea());
             return true;
         }
@@ -3732,7 +3737,7 @@ export function initializeRasterViewer(
             pointSamplesController.clear();
             return false;
         }
-        const openHistogram = shouldOpenRasterHistogram(point);
+        const openHistogram = histogram ?? shouldOpenRasterHistogram(point);
         if (openHistogram) {
             if (rasterAnalysis.selectedPolygonSampling !== null) {
                 restoreWholeRasterStatistics();
@@ -4061,6 +4066,25 @@ export function initializeRasterViewer(
     function setPointerInspectionEnabled(enabled) {
         pointerInspectionEnabled = enabled;
         if (!enabled) handleMapMouseLeave();
+        updateFirstSampleHint();
+    }
+
+    /** Enable or hide raster pixel sampling for the selected pointer action.
+     * @param {boolean} enabled Whether pointer movement should pick raster values.
+     * @return {void}
+     */
+    function setPixelPickingEnabled(enabled) {
+        if (enabled) showPixelPicker();
+        else hidePixelPicker();
+    }
+
+    /** Enable box previews and first-sample guidance independently of pixel picking.
+     * @param {boolean} enabled Whether pointer movement should preview a sampling box.
+     * @return {void}
+     */
+    function setSamplingBoxPointerEnabled(enabled) {
+        samplingBoxPointerEnabled = enabled;
+        if (!enabled) rasterSampleWindowController.clearPreview();
         updateFirstSampleHint();
     }
 
@@ -4465,7 +4489,7 @@ export function initializeRasterViewer(
             return;
         }
         const overMapControl = mapEvent.originalEvent?.target?.closest?.(".leaflet-control");
-        if (!overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
+        if (samplingBoxPointerEnabled && !overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
             (canOfferFirstSample() && shouldOpenRasterHistogram(point)))) {
             rasterSampleWindowController.previewAt(mapEvent.latlng);
         } else {
@@ -5145,6 +5169,8 @@ export function initializeRasterViewer(
         stage,
         syncVisibleLayers,
         setPointerInspectionEnabled,
+        setPixelPickingEnabled,
+        setSamplingBoxPointerEnabled,
         setFirstSampleHintEnabled,
         exploreAt,
         openStyle,

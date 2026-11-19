@@ -48,6 +48,7 @@ from eolab_app.vector.parcel_models import (
 )
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
+from eolab_app.vector.lasso import LassoSelectionResult
 from eolab_app.vector.spatial_read import SpatialReads, worker_layer
 from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.source_files import (
@@ -368,6 +369,7 @@ class VectorSamplingService:
     async def compare_layers(
         self, target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,
         drawing_properties: tuple[dict[str, str], ...] = (),
+        *, required_area: SummaryPolygon | None = None,
     ) -> FeatureMatches:
         """Queue one read of the original target and all filtered polygon sources.
 
@@ -376,6 +378,8 @@ class VectorSamplingService:
             boundaries: Authorized polygon views keyed by their map-layer ID.
             predicate: Field and spatial conditions on the target.
             drawing_properties: Name and note in target order for drawing filters.
+            required_area: Additional validated WGS84 polygon every match must
+                intersect, independently of the target's field-condition grouping.
 
         Returns:
             Matching original IDs and the total target feature count.
@@ -389,12 +393,45 @@ class VectorSamplingService:
             if isinstance(layer, ResolvedCatalogSelection) and layer.upload_owner:
                 await asyncio.to_thread(self._uploads.prepare_source_read, layer.path)
         inputs = {"target": worker_layer(target), "boundaries": {key: worker_layer(layer) for key, layer in boundaries.items()},
-                  "filter": predicate.model_dump(mode="json", by_alias=True), "drawingProperties": drawing_properties}
+                  "filter": predicate.model_dump(mode="json", by_alias=True), "drawingProperties": drawing_properties,
+                  "requiredArea": required_area.model_dump(mode="json") if required_area is not None else None}
         with self.spatial_reads.hold(inputs) as (token, read):
             await self._comparison_executor(token)
             if read.result is None:
                 raise VectorConflictError("The polygon intersection reader returned no result.")
             return read.result
+
+    async def lasso(
+        self,
+        selection: VectorSelection,
+        polygon: SummaryPolygon,
+        source_owner: str | VectorSourceOwners | None = None,
+    ) -> LassoSelectionResult:
+        """Select whole original features touching a user-drawn polygon.
+
+        Args:
+            selection: Catalog, upload or result identity with its applied filter.
+            polygon: Validated closed WGS84 outline captured by the map tool.
+            source_owner: Browser credentials for every private referenced source.
+
+        Returns:
+            Exact matching IDs and count, with optional complete display geometry.
+            Display limits never alter membership or make the count approximate.
+
+        Raises:
+            SelectionUnavailableError: If the source identity or access is invalid.
+            VectorConflictError: If the bounded original-source comparison fails.
+            asyncio.CancelledError: After native work has stopped using its sources.
+        """
+        from eolab_app.vector.lasso import read_lasso_highlights
+
+        async with self.open_selection(selection, source_owner) as target:
+            matches = await self.compare_layers(target, {}, VectorFilter(), required_area=polygon)
+            feature_ids = tuple(sorted(matches.ids))
+            geometry = await read_lasso_highlights(target, feature_ids)
+            return LassoSelectionResult(
+                matched=len(feature_ids), featureIds=feature_ids, geometry=geometry
+            )
 
     @asynccontextmanager
     async def _open_original(

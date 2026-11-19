@@ -113,6 +113,7 @@ def _compare_originals(
 def match_features(
     target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,
     drawing_properties: tuple[dict[str, str], ...] = (), *, limits: VectorReadLimits | None = VectorReadLimits(),
+    required_area: BaseGeometry | None = None,
 ) -> FeatureMatches:
     """Index each selected polygon view once and evaluate every condition in one pass over the target.
 
@@ -122,6 +123,8 @@ def match_features(
         predicate: Field and intersection conditions to evaluate together.
         drawing_properties: Name and note for each target drawing, in the same order.
         limits: Interactive read budgets or None for a retained calculation.
+        required_area: Optional validated WGS84 area every selected feature must
+            intersect, independently of Match all or Match any field conditions.
 
     Returns:
         Selected native feature IDs (zero-based positions for drawings) and total features read.
@@ -135,7 +138,7 @@ def match_features(
     try:
         for key, layer in boundaries.items():
             polygons = []
-            with closing(_features(layer, limits, deadline)) as features:
+            with closing(iter_original_features(layer, limits, deadline)) as features:
                 for _, _, geometry in features:
                     if geometry is None:
                         continue
@@ -145,9 +148,11 @@ def match_features(
             indexes[key] = STRtree(polygons)
         ids = set()
         total = 0
-        with closing(_features(target, limits, deadline)) as features:
+        with closing(iter_original_features(target, limits, deadline)) as features:
             for fid, properties, geometry in features:
                 total += 1
+                if required_area is not None and (geometry is None or not geometry.intersects(required_area)):
+                    continue
                 spatial = {key: geometry is not None and index.query(geometry, predicate="intersects").size > 0
                            for key, index in indexes.items()}
                 if matches_filter(predicate, drawing_properties[fid] if drawing_properties else properties, spatial):
@@ -157,7 +162,7 @@ def match_features(
         raise GeometryValidationError("The layer geometries could not be compared in WGS84.") from error
 
 
-def _features(
+def iter_original_features(
     layer: IntersectionLayer, limits: VectorReadLimits | None, deadline: float | None,
 ) -> Generator[tuple[int, Mapping[str, Any], BaseGeometry | None], None, None]:
     """Open the target's original point, line or polygon features with their IDs.

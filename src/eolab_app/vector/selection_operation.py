@@ -267,6 +267,7 @@ async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: Comparis
     from eolab_app.catalog_selection import VectorFilter
     from eolab_app.vector.spatial_read import SPATIAL_READ_URL
     from eolab_app.polygon_areas import SummaryPolygon
+    from shapely.geometry import shape
 
     async def read_layer(layer: dict[str, Any]) -> "IntersectionLayer":
         """Open a bound file source or recover the committed drawings sent for this read."""
@@ -283,6 +284,8 @@ async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: Comparis
     with _limit_memory():
         target = await read_layer(data["target"])
         boundaries = {key: await read_layer(source) for key, source in data["boundaries"].items()}
-        matches = match_features(target, boundaries, VectorFilter.model_validate(data["filter"]), data["drawingProperties"])
+        required_area = shape(data["requiredArea"]) if data["requiredArea"] is not None else None
+        matches = match_features(target, boundaries, VectorFilter.model_validate(data["filter"]), data["drawingProperties"],
+                                 required_area=required_area)
     delivered = await client.put(SPATIAL_READ_URL, headers=headers, json=matches.model_dump(mode="json"))
     delivered.raise_for_status()

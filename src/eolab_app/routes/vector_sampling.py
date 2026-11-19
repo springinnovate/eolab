@@ -23,6 +23,7 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
+from eolab_app.vector.lasso import LassoSelectionRequest, LassoSelectionResult
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.parcel_models import (
@@ -226,6 +227,37 @@ def create_vector_sampling_router(
             )
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Vector zoom cancelled") from error
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
+        except SourceFileError as error:
+            raise HTTPException(error.status, str(error)) from error
+
+    @router.post("/lasso", response_model=LassoSelectionResult)
+    async def lasso(
+        payload: LassoSelectionRequest, request: Request, response: Response
+    ) -> LassoSelectionResult:
+        """Select original features intersecting the drawn polygon, without WMS.
+
+        Args:
+            payload: Path-free filtered target and validated WGS84 lasso.
+            request: Browser ownership and disconnect observer.
+            response: Renews the selected private source's browser cookie.
+
+        Returns:
+            Exact matching IDs and count, plus optional whole-feature highlights.
+
+        Raises:
+            HTTPException: For invalid ownership, unavailable sources or failed reads.
+        """
+        source_owner = read_source_owner(payload.selection, request, response)
+        try:
+            return await run_until_http_disconnect(
+                request, service.lasso(payload.selection, payload.polygon, source_owner)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Lasso selection cancelled") from error
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
         except SelectionUnavailableError as error:
