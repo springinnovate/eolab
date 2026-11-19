@@ -191,14 +191,16 @@ class VectorStyleService:
 
         Returns:
             Server-computed open-ended ranges, counts, extent, completeness,
-            and advertised class-count limits.
+            and advertised class-count limits. A read with nulls and no finite
+            values reports empty ranges and null bounds.
 
         Raises:
             VectorFeatureError: If the Catalog Item, source, or bounded reader
                 cannot safely satisfy the request.
             VectorConflictError: If the field is non-numeric, metadata is
-                stale, or no finite numeric values are available.
+                stale, or the bounded read finds no finite values or nulls.
         """
+
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
         return await self.classify_layer_numeric(
@@ -227,11 +229,12 @@ class VectorStyleService:
             class_count: Requested number of classes.
 
         Returns:
-            Validated numeric classification summary.
+            Numeric ranges and counts. If the bounded read finds nulls without
+            finite values, the ranges are empty and both observed bounds are null.
 
         Raises:
-            VectorConflictError: If the field, source, or finite values cannot
-                satisfy the graduated-style contract.
+            VectorConflictError: If the numeric field or source is unavailable,
+                or the bounded read finds neither finite numbers nor nulls.
         """
         field_type = layer.fields.get(field)
         if field_type is None or not _numeric_field_type(field_type):
@@ -245,15 +248,14 @@ class VectorStyleService:
             self._field_reader.read_numbers,
             "Numeric classification",
         )
-        if not numeric_read.values:
+        values = numeric_read.values
+        if not values and numeric_read.null_count == 0:
             raise VectorConflictError(
                 "Numeric classification unavailable: this field has no finite "
                 "numeric values in the bounded read."
             )
-        classes = _classify_numeric_values(
-            numeric_read.values,
-            method,
-            class_count,
+        classes = (
+            _classify_numeric_values(values, method, class_count) if values else ()
         )
         return VectorNumericClassificationSummary(
             field=field,
@@ -262,9 +264,9 @@ class VectorStyleService:
             requestedClassCount=class_count,
             actualClassCount=len(classes),
             classes=classes,
-            observedMinimum=min(numeric_read.values),
-            observedMaximum=max(numeric_read.values),
-            numericValueCount=len(numeric_read.values),
+            observedMinimum=min(values, default=None),
+            observedMaximum=max(values, default=None),
+            numericValueCount=len(values),
             scannedFeatureCount=numeric_read.scanned_feature_count,
             featureCount=layer.feature_count,
             nullCount=numeric_read.null_count,
@@ -431,20 +433,12 @@ class VectorStyleService:
                     )
             if style.graduated is not None:
                 graduated = style.graduated
-                classification = await self.classify_layer_numeric(
+                await self.classify_layer_numeric(
                     layer,
                     graduated.field,
                     graduated.method,
                     graduated.class_count,
                 )
-                if (
-                    graduated.missing_color is not None
-                    and classification.null_count == 0
-                ):
-                    raise VectorConflictError(
-                        "Style unavailable: this numeric field has no missing "
-                        "values to style."
-                    )
             try:
                 prepared = await self._styler.prepare_style(
                     layer.resource_name,
