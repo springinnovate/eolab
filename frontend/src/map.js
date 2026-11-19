@@ -153,8 +153,8 @@ function addFineMapZoom(leaflet, map) {
 
 /**
  * Create the application map and basemap without repeated world copies.
- * Hold Shift while zooming for smaller steps. Hide Leaflet branding while
- * retaining active layers' attribution credits.
+ * Hold Shift while zooming for smaller steps. Fit layers between the workspace
+ * panels and retain active layers' attribution credits.
  *
  * @param {Object} leaflet Leaflet namespace.
  * @param {Object} appGlobalConfiguration Browser-safe application settings.
@@ -181,6 +181,24 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapR
     );
 
     leafletMap.attributionControl.setPrefix(false);
+    const fitBounds = leafletMap.fitBounds;
+    /** Fit a layer in the unobstructed map area while retaining the caller's extra padding.
+     * @param {import("leaflet").LatLngBoundsExpression} bounds Geographic bounds to show.
+     * @param {import("leaflet").FitBoundsOptions} [options] Leaflet zoom, animation and padding options.
+     * @return {import("leaflet").Map} The map after requesting the fitted view.
+     */
+    leafletMap.fitBounds = function (bounds, options = {}) {
+        const container = this.getContainer();
+        const canvas = container.getBoundingClientRect();
+        const controls = container.querySelector(".leaflet-control-container").getBoundingClientRect();
+        return fitBounds.call(this, bounds, {
+            ...options,
+            paddingTopLeft: leaflet.point(options.paddingTopLeft ?? options.padding ?? [0, 0])
+                .add([controls.left - canvas.left, controls.top - canvas.top]),
+            paddingBottomRight: leaflet.point(options.paddingBottomRight ?? options.padding ?? [0, 0])
+                .add([canvas.right - controls.right, canvas.bottom - controls.bottom]),
+        });
+    };
     addFineMapZoom(leaflet, leafletMap);
     onBasemapReady(addBasemapControl(leaflet, leafletMap, appGlobalConfiguration.basemap, SINGLE_WORLD_BOUNDS));
 

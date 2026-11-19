@@ -3,6 +3,7 @@ import { labeledRasterSource } from "../raster-source.js";
 import { samplingBoxFormula } from "../sampling-box-statistics.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
+const BOX_SELECTION = "eolab.processing.exact-box-selection";
 const CLIENT = /^raster-series:(0|[1-9][0-9]{0,15})$/;
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
@@ -108,6 +109,32 @@ export class CalculationSessionStorage {
      * @throws {TypeError} If the caller identity is unsupported.
      */
     forClient(client) { return new CalculationSessionStorage(this.storage, client); }
+    /** Save the ordered selection once for an exact comparison that mixes previews and jobs.
+     * @param {{key:string,source:Object,reread:boolean}[]} sources Map views with path-free references and their preview-read choices.
+     * @return {string} Identifier to attach to the jobs that belong to this comparison.
+     * @throws {Error} If the browser cannot store the selection.
+     */
+    saveBoxSelection(sources) {
+        const id = crypto.randomUUID();
+        this.storage.setItem(BOX_SELECTION, JSON.stringify({id, sources}));
+        return id;
+    }
+    /** Read only the selection belonging to a recovered exact job.
+     * @param {string} id Selection identifier from the job's tab recovery record.
+     * @return {{key:string,label:string,source:Object,reread:boolean}[]|null} Ordered map views, or null if storage is missing or invalid.
+     */
+    readBoxSelection(id) {
+        try {
+            const record = JSON.parse(this.storage.getItem(BOX_SELECTION));
+            if (record?.id !== id) return null;
+            return record.sources.map(({key, source, reread}) => {
+                if (typeof key !== "string" || !key || key.length > 2048 || typeof reread !== "boolean") throw new TypeError("Invalid saved raster view.");
+                return {key, label: source.label, source: labeledRasterSource(source, source.label), reread};
+            });
+        } catch { return null; }
+    }
+    /** Forget the selection when its comparison is replaced or cancelled. @return {void} */
+    clearBoxSelection() { this.storage.removeItem(BOX_SELECTION); }
     /** List retained calculations without assuming a maximum raster count.
      * Only this component's current per-caller keys are considered.
      * Invalid records are ignored.
@@ -148,8 +175,7 @@ export class CalculationSessionStorage {
                 const previews = presentation.previewFormulas;
                 if (!Array.isArray(previews) || previews.length > 5 || typeof presentation.exactBox !== "boolean" ||
                     previews.some(formula => !Number.isSafeInteger(formula?.id) || formula.id < 1 ||
-                        typeof formula.label !== "string" || formula.label.length > 80 ||
-                        (formula.unit != null && typeof formula.unit !== "string")) ||
+                        typeof formula.label !== "string" || formula.label.length > 80) ||
                     new Set(previews.map(formula => formula.id)).size !== previews.length) return null;
                 const labels = new Set(value.intent.calculations.map(formula => formula.label));
                 for (const formula of previews) {

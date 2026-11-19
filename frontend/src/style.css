@@ -96,14 +96,9 @@ select:hover:not(:disabled) {
 
 #map {
   position: absolute;
-  inset: var(--workspace-edge) calc(var(--workspace-edge) + var(--inspection-space)) var(--workspace-edge)
-    calc(
-      var(--active-workspace-width) + var(--workspace-edge) +
-        var(--workspace-gap)
-    );
+  inset: var(--workspace-edge);
   min-width: 0;
   background: var(--surface-1);
-  transition: left 220ms ease, right 220ms ease;
 }
 
 .leaflet-container {
@@ -1196,7 +1191,7 @@ h5 {
 .on-map-legend {
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--surface-2);
   color: var(--text-1);
   border: 1px solid var(--border-1);
   border-radius: 6px;
@@ -1213,7 +1208,7 @@ h5 {
 .on-map-legend .on-map-legend-heading { font-weight: 700; color: var(--text-1); }
 .on-map-legend button:focus-visible, .on-map-legend summary:focus-visible { outline: 2px solid var(--brand); }
 .on-map-legend summary { cursor: pointer; color: var(--brand); margin: 4px 0 6px; }
-.on-map-legend-entries { column-gap: 16px; }
+.on-map-legend-entries { column-width: 200px; column-gap: 16px; }
 .on-map-legend-layer { break-inside: avoid; padding-bottom: 10px; overflow-wrap: anywhere; }
 .on-map-legend-layer > strong { display: block; margin-top: 4px; }
 .on-map-legend-layer--fixed { display: flex; align-items: center; gap: 4px; padding-bottom: 4px; }
@@ -2494,7 +2489,7 @@ div.chart-tooltip {
   bottom: 20px;
   border: 1px solid var(--border-1);
   border-radius: 999px;
-  background: rgb(255 255 255 / 92%);
+  background: var(--surface-2);
   padding: 7px 11px;
   color: var(--text-2);
   box-shadow: var(--elevation-control);
@@ -2512,7 +2507,7 @@ div.chart-tooltip {
   pointer-events: none;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
-  background: rgb(255 255 255 / 94%);
+  background: var(--surface-2);
   padding: 10px 11px;
   box-shadow: var(--elevation-panel);
 }
@@ -2607,7 +2602,7 @@ div.chart-tooltip {
   bottom: 58px;
   border: 1px solid var(--border-1);
   border-radius: 999px;
-  background: rgb(255 255 255 / 94%);
+  background: var(--surface-2);
   padding: 7px 11px;
   color: var(--text-2);
   box-shadow: var(--elevation-control);
@@ -2714,8 +2709,54 @@ div.chart-tooltip {
 }
 
 #app.is-control-panel-collapsed #map {
-  left: var(--workspace-edge);
   --map-controls-top-clearance: calc(var(--panel-toggle-size) + var(--workspace-gap));
+}
+
+/* The map extends under the workspace. Its Leaflet controls stay in the exposed area. */
+#map .leaflet-control-container {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+}
+@media (min-width: 1200px) {
+  #app:not(.is-control-panel-collapsed):is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace) #map {
+    --map-controls-left: calc(var(--active-workspace-width) + var(--workspace-gap));
+  }
+  #map {
+    --map-controls-max-width: calc(100vw - 2 * var(--workspace-edge) - var(--map-controls-left, 0px) - var(--inspection-space) - 20px);
+  }
+  #map .leaflet-control-container {
+    left: var(--map-controls-left, 0px);
+    right: var(--inspection-space);
+  }
+  #map > #raster-first-sample-hint {
+    left: calc((100% + var(--map-controls-left, 0px) - var(--inspection-space)) / 2);
+    max-width: var(--map-controls-max-width);
+  }
+}
+
+/* One activity state drives the visual surfaces, including native top-layer popovers. */
+#app {
+  --panel-enter-delay: 50ms;
+  --panel-fade-in: 150ms;
+  --panel-exit-delay: 750ms;
+  --panel-fade-out: 1000ms;
+  --panel-idle-opacity: 40%;
+}
+#app[data-panels-active="false"]:not([data-panel-fade-disabled]) {
+  --panel-opacity: var(--panel-idle-opacity);
+  --panel-fade: opacity var(--panel-fade-out) ease-in-out var(--panel-exit-delay);
+}
+#app[data-panels-active="true"]:not([data-panel-fade-disabled]),
+#app:not([data-panel-fade-disabled]) .is-panel-active {
+  --panel-opacity: 1;
+  --panel-fade: opacity var(--panel-fade-in) ease-out var(--panel-enter-delay);
+}
+#app :where([data-map-panel], [popover]:popover-open, .leaflet-control:not(.leaflet-control-attribution),
+            .map-feature-hover-card, #map > #raster-first-sample-hint) {
+  opacity: var(--panel-opacity, 1);
+  transition: var(--panel-fade, none);
 }
 
 .control-panel {
@@ -2735,9 +2776,8 @@ div.chart-tooltip {
   pointer-events: auto;
   border: 1px solid var(--border-1);
   border-radius: 8px;
-  background: rgb(255 255 255 / 98%);
+  background: var(--surface-2);
   box-shadow: var(--elevation-panel);
-  transition: width 220ms ease;
 }
 
 .panel-heading { min-width: 0; }
@@ -2780,10 +2820,6 @@ div.chart-tooltip {
 }
 
 @media (min-width: 1200px) {
-  #app:not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #map {
-    left: var(--workspace-edge);
-  }
-
   #app:not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #control-panel {
     max-height: calc(100dvh - 2 * var(--workspace-edge));
   }
@@ -4036,9 +4072,11 @@ article.raster-histogram-summary {
   flex-direction: column;
   gap: 6px;
   width: min(var(--inspection-width), var(--map-tools-available-width));
-  transition: width 220ms ease;
   padding-bottom: 6px;
   pointer-events: none;
+}
+#app :is(.control-panel, .map-tool-openers) {
+  transition: width 220ms ease, var(--panel-fade, opacity 0s);
 }
 .map-tools-header {
   grid-template-columns: auto minmax(0, 1fr);
@@ -4360,6 +4398,7 @@ article.raster-histogram-summary {
 #annotations-panel,
 #models-panel,
 #planning-panel,
+#settings-panel,
 #raster-clips-panel,
 #layer-style-editor,
 #vector-filter-panel,
@@ -4392,6 +4431,7 @@ article.raster-histogram-summary {
 #annotations-panel[hidden],
 #models-panel[hidden],
 #planning-panel[hidden],
+#settings-panel[hidden],
 #raster-clips-panel[hidden],
 #layer-style-editor[hidden],
 #vector-filter-panel[hidden],
@@ -4406,6 +4446,7 @@ article.raster-histogram-summary {
 #annotations-panel:not([data-map-inspection-active="true"]),
 #models-panel:not([data-map-inspection-active="true"]),
 #planning-panel:not([data-map-inspection-active="true"]),
+#settings-panel:not([data-map-inspection-active="true"]),
 #raster-clips-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),
 #vector-filter-panel:not([data-map-inspection-active="true"]),
@@ -4413,6 +4454,26 @@ article.raster-histogram-summary {
 #vector-time-series:not([data-map-inspection-active="true"]),
 #vector-feature-profile:not([data-map-inspection-active="true"]) {
   display: none;
+}
+
+.panel-fade-toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+#settings-panel > p { margin: 4px 0 12px; color: var(--text-2); font-size: var(--font-size-support); }
+#panel-fade-options { min-width: 0; margin: 0 0 14px; padding: 0; border: 0; }
+.panel-fade-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6rem 1.5rem;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-2);
+}
+.panel-fade-setting > label { grid-column: 1 / -1; }
+.panel-fade-setting > input { width: 100%; min-width: 0; margin: 0; }
+.panel-fade-setting > input[type="number"] { padding: 3px 5px; font-variant-numeric: tabular-nums; }
+.panel-fade-setting > span { color: var(--text-2); font-size: var(--font-size-support); }
+.panel-fade-setting > input[aria-invalid="true"] { outline: 2px solid var(--status-danger); }
+@media (pointer: coarse) {
+  .panel-fade-toggle, .panel-fade-setting > input, #restore-panel-fade-defaults { min-height: 44px; }
 }
 
 #vector-feature-inspector {
@@ -5216,9 +5277,6 @@ summary:hover > .raster-disclosure-chevron {
     align-self: flex-end;
     max-inline-size: min(100%, calc(var(--map-tools-available-width) - var(--left-panel-tab-width) - 6px));
   }
-  #map, #app.is-control-panel-collapsed #map {
-    inset: 0;
-  }
   #app:not(.is-control-panel-collapsed):not(:is(.is-expanded-catalog-workspace, .is-expanded-map-layers-workspace)) #map {
     --map-controls-top-clearance: calc(var(--workspace-card-height, 0px) + var(--workspace-edge) + var(--tools-clearance) + var(--workspace-gap));
   }
@@ -5575,7 +5633,7 @@ summary:hover > .raster-disclosure-chevron {
 .map-feature-hover-card {
     position: absolute; z-index: 850; pointer-events: none;
     padding: 0.3rem 0.5rem; border: 1px solid #777; border-radius: 4px;
-    background: rgb(255 255 255 / 95%); color: #222;
+    background: var(--surface-2); color: #222;
     font-size: 0.8rem; line-height: 1.35; white-space: pre-line;
     max-width: min(18rem, calc(100% - 8px)); overflow-wrap: anywhere;
 }

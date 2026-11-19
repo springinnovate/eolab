@@ -58,7 +58,8 @@ def build_raster_composite_sld(
 
     Args:
         layer_name: Current workspace-qualified GeoServer raster layer.
-        assignments: Authorized gradient stops and optional value, color and opacity.
+        assignments: Authorized quantity, color and opacity for every gradient
+            stop, plus any exact-value override.
         opacity: Whole-layer opacity from zero through one.
 
     Returns:
@@ -72,7 +73,7 @@ def build_raster_composite_sld(
         {
             "quantity": assignments[stop],
             "color": assignments[f"c{stop}"],
-            "opacity": assignments.get(f"a{stop}", "1"),
+            "opacity": assignments[f"a{stop}"],
             "label": stop,
         }
         for stop in ("min", "med", "max")

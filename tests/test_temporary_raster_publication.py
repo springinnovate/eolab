@@ -28,7 +28,7 @@ from eolab_app.source_files import SourceFileError
 from test_raster_source_access import FileAuthority, PRIVATE, write_source
 from test_composite_map import _tile_url
 
-ENV = "min:0;med:8;max:16;cmin:#000000;cmed:#888888;cmax:#ffffff"
+ENV = "min:0;med:8;max:16;cmin:#000000;cmed:#888888;cmax:#ffffff;amin:1;amed:1;amax:1"
 
 
 class OutputGeoServer:

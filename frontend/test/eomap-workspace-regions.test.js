@@ -267,7 +267,7 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
         STYLESHEET,
         /\.tool-tab\s*\{[^}]*text-overflow:\s*ellipsis/s
     );
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#models-panel,\s*#planning-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#models-panel,\s*#planning-panel,\s*#settings-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 
@@ -517,7 +517,7 @@ test("workspace overflow shares one native action list", () => {
     const actions = requireElementRange("workspace-tool-actions");
     assert.match(actions.source, /popover="auto"/);
     assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
-    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
+    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend", "open-settings"]) {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }

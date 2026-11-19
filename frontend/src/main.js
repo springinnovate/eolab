@@ -52,6 +52,7 @@ import {
 } from "./catalog-result-presentation.js";
 import { createCatalogResultView } from "./catalog-result-view.js";
 import { EomapLayoutController } from "./eomap-layout-controller.js";
+import { bindPanelFadeSettings } from "./panel-fade-settings.js";
 import { MapInspectionController } from "./map-inspection-controller.js";
 import {
     applyCatalogSystemState,
@@ -1926,6 +1927,7 @@ async function initializeCatalog(
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);
             annotations?.inspectAt(event.latlng);
+            mapInspection.keepVisibleClickResultReadable();
         } finally {
             selectingMapClick = false;
         }
@@ -2604,6 +2606,8 @@ async function startApplication() {
     }
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
+    bindPanelFadeSettings(document.querySelector("#app"),
+        new SavedMapViewLocalStorage(undefined, "eolab.panel-fading.v1"));
     if (!isSharedViewer) initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     layoutController = new EomapLayoutController({
@@ -2623,6 +2627,8 @@ async function startApplication() {
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
+    layoutController.registerPanelActivitySource(document.querySelector("#map-inspection"),
+        listener => mapInspection.subscribeClickResultActivity(listener));
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,

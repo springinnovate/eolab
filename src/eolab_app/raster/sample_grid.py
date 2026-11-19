@@ -253,6 +253,7 @@ def read_bounded_overview(
     *,
     maximum_dimension: int = SAMPLE_GRID_MAX_OVERVIEW_DIMENSION,
     prefer_finest: bool = False,
+    required_resampling: Resampling | None = None,
     maximum_decoded_bytes: int | None = None,
 ) -> numpy.ma.MaskedArray | None:
     """Read an embedded level that fits the requested grid and tile budgets.
@@ -266,6 +267,9 @@ def read_bounded_overview(
         cancellation_requested: Check for an obsolete read before and after I/O.
         maximum_dimension: Maximum intermediate width and height.
         prefer_finest: Try the finest admissible overview first for denser coverage.
+        required_resampling: Required overview construction method, if any. The
+            band declaration takes precedence over the source-wide declaration.
+            A level with neither declaration cannot satisfy a required method.
         maximum_decoded_bytes: Optional tighter total tile budget for this read.
 
     Returns:
@@ -283,6 +287,7 @@ def read_bounded_overview(
     if maximum_decoded_bytes is not None:
         byte_limit = min(byte_limit, maximum_decoded_bytes)
     for index in levels if prefer_finest else reversed(levels):
+        require_active_raster_read(cancellation_requested)
         # GDAL reports rounded factors. Use the stored level's grid and prevent
         # RasterIO from silently selecting a different level for this window.
         with rasterio.open(
@@ -319,6 +324,16 @@ def read_bounded_overview(
                 or tile_bytes * tile_count > byte_limit
             ):
                 continue
+            if required_resampling is not None:
+                method = level.tags(1).get("RESAMPLING")
+                if method is None:
+                    method = dataset.tags(ns="IMAGE_STRUCTURE").get(
+                        "OVERVIEW_RESAMPLING"
+                    )
+                if method is None:
+                    method = dataset.tags(ns="rio_overview").get("resampling", "")
+                if method.lower() != required_resampling.name:
+                    continue
             require_active_raster_read(cancellation_requested)
             values = level.read(
                 1, window=window, out_shape=(height, width),

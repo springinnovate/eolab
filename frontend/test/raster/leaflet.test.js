@@ -69,7 +69,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       leaflet,
       "/geoserver/eolab/wms",
       { layerName: "eolab:test", bbox: [-10, -5, 20, 15] },
-      "min:0;med:50;max:100;cmin:#000000;cmed:#888888;cmax:#ffffff",
+      "min:0;med:50;max:100;cmin:#000000;cmed:#888888;cmax:#ffffff;amin:1;amed:1;amax:1",
       () => {
         tileErrorCount += 1;
       },
@@ -81,7 +81,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
     options: {
       layers: "eolab:test",
       styles: "dynamic-raster",
-      env: "min:0;med:50;max:100;cmin:#000000;cmed:#888888;cmax:#ffffff",
+      env: "min:0;med:50;max:100;cmin:#000000;cmed:#888888;cmax:#ffffff;amin:1;amed:1;amax:1",
       format: "image/png",
       transparent: true,
       tiled: true,
