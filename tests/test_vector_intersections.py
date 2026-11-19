@@ -26,8 +26,13 @@ from eolab_app.vector.parcels import read_parcel_rows
 
 
 def _write_layer(
-    path: Path, features: list[tuple[BaseGeometry | None, str]], crs: str = "EPSG:4326",
-    predicate: VectorFilter | None = None, geometry_type: str = "Unknown",
+    path: Path,
+    features: list[tuple[BaseGeometry | None, str]],
+    crs: str = "EPSG:4326",
+    predicate: VectorFilter | None = None,
+    geometry_type: str = "Unknown",
+    *,
+    spatial_index: bool = True,
 ) -> ResolvedCatalogSelection:
     """Create a real GeoPackage selection with original geometries and one field.
 
@@ -37,18 +42,35 @@ def _write_layer(
         crs: Coordinate system of the feature coordinates.
         predicate: Filter applied to the test view.
         geometry_type: Declared native layer geometry, including mixed test layers.
+        spatial_index: Whether the original layer has a native GeoPackage index.
 
     Returns:
         Selection bound to its original GeoPackage and field schema.
     """
-    with fiona.open(path, "w", driver="GPKG", layer="features", crs=crs,
-                    schema={"geometry": geometry_type, "properties": {"group": "str"}}) as layer:
+    with fiona.open(
+        path,
+        "w",
+        driver="GPKG",
+        layer="features",
+        crs=crs,
+        schema={"geometry": geometry_type, "properties": {"group": "str"}},
+        SPATIAL_INDEX="YES" if spatial_index else "NO",
+    ) as layer:
         for geometry, group in features:
-            layer.write({"geometry": mapping(geometry) if geometry is not None else None,
-                         "properties": {"group": group}})
-    return resolve_vector_file_selection(path, UploadedSelection(
-        uploadId=UUID(int=1), layerName="features", filter=predicate or VectorFilter(),
-    ))
+            layer.write(
+                {
+                    "geometry": mapping(geometry) if geometry is not None else None,
+                    "properties": {"group": group},
+                }
+            )
+    return resolve_vector_file_selection(
+        path,
+        UploadedSelection(
+            uploadId=UUID(int=1),
+            layerName="features",
+            filter=predicate or VectorFilter(),
+        ),
+    )
 
 
 def _spatial_rule() -> VectorFilter:

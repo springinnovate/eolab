@@ -9,9 +9,12 @@ from fastapi.testclient import TestClient
 import httpx2
 import pytest
 from pydantic import ValidationError
+from pyproj import Transformer
+from shapely import transform
 from shapely.geometry import LineString, Point, box, mapping, shape
 
 from eolab_app.attribute_filter import VectorFilter
+from eolab_app.bounded_vector import VectorReadLimits
 from eolab_app.feature_intersection import match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
@@ -24,6 +27,65 @@ from eolab_app.vector_uploads import VectorUploadStore
 from tests.test_vector_intersections import _write_layer
 from tests.test_vector_publication import StaticCatalog
 from tests.test_vector_uploads import BASE, HEADERS, write_layer
+
+
+@pytest.mark.parametrize(
+    ("crs", "spatial_index", "limits"),
+    [
+        ("EPSG:4326", True, VectorReadLimits(features=5)),
+        ("EPSG:3857", True, VectorReadLimits(features=5)),
+        ("EPSG:6933", True, VectorReadLimits(features=5)),
+        ("EPSG:6933", False, VectorReadLimits()),
+    ],
+)
+def test_lasso_reads_only_candidates_when_the_source_index_is_usable(
+    tmp_path: Path, crs: str, spatial_index: bool, limits: VectorReadLimits
+) -> None:
+    """Nearby candidates fit the read budget and are checked against the exact outline.
+
+    Args:
+        tmp_path: Directory for the original indexed or unindexed GeoPackage.
+        crs: Native coordinate system of the original features.
+        spatial_index: Whether to create the GeoPackage's spatial index.
+        limits: Feature read budget for this case.
+    """
+    project = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform
+    features = [
+        *((Point(-20, latitude), "forest") for latitude in range(5)),
+        (Point(1, 1), "forest"),
+        (LineString([(0, 0), (0, -1)]), "study"),
+        (Point(3, 3), "forest"),
+        (box(-1, -1, 5, 5), "study"),
+        (Point(1, 1), "urban"),
+    ]
+    predicate = VectorFilter.model_validate(
+        {
+            "match": "any",
+            "rules": [
+                {"field": "group", "operator": "eq", "value": "forest"},
+                {"field": "group", "operator": "eq", "value": "study"},
+            ],
+        }
+    )
+    target = _write_layer(
+        tmp_path / "targets.gpkg",
+        [
+            (transform(geometry, project, interleaved=False), group)
+            for geometry, group in features
+        ],
+        crs=crs,
+        predicate=predicate,
+        spatial_index=spatial_index,
+    )
+    outline = SummaryPolygon(coordinates=(((0, 0), (4, 0), (0, 4), (0, 0)),))
+    matches = match_features(
+        target,
+        {},
+        VectorFilter(),
+        limits=limits,
+        required_area=shape(outline.model_dump()),
+    )
+    assert matches.ids == {6, 7, 9}
 
 
 def test_lasso_uses_exact_geometry_and_keeps_whole_filtered_features(
@@ -140,6 +202,29 @@ def test_highlight_budget_does_not_change_membership(
     lasso._read_highlights(Writer(), target, ids, lasso.VectorReadLimits())
     assert ids == (1,)
     assert result == [None]
+
+
+def test_lasso_highlight_reads_the_matching_feature_by_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A late feature must still get its whole highlight under a one-feature budget.
+
+    Args:
+        tmp_path: Directory for the original GeoPackage.
+        monkeypatch: Limit the highlight reader to one original geometry.
+    """
+    original = box(10, 10, 12, 12)
+    target = _write_layer(
+        tmp_path / "targets.gpkg",
+        [(box(0, 0, 1, 1), "earlier"), (original, "selected")],
+    )
+    monkeypatch.setattr(lasso, "VectorReadLimits", lambda: VectorReadLimits(features=1))
+
+    highlights = asyncio.run(read_lasso_highlights(target, (2,)))
+
+    assert highlights is not None
+    assert [feature["id"] for feature in highlights["features"]] == [2]
+    assert shape(highlights["features"][0]["geometry"]).equals(original)
 
 
 def test_private_lasso_uses_original_source_jobs_without_geoserver(
