@@ -1,15 +1,22 @@
-"""Bounded geometry-free OGR batch field reads for vector styling."""
+"""Read and count vector attributes for styling without loading geometry."""
 
 from collections.abc import Callable, Mapping
-from time import monotonic
-from eolab_app.vector.filters import VectorFilter, VectorFilterCount, matches_filter
+from contextlib import closing
 from dataclasses import dataclass
 from math import isfinite
+from pathlib import Path
+import sqlite3
 from threading import Event
+from time import monotonic
 from typing import Any
 
-from eolab_app.vector_fields import VectorFieldMissingError, visit_vector_fields
 from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.filters import (
+    VectorFilter,
+    VectorFilterCount,
+    VectorFilterRule,
+    matches_filter,
+)
 from eolab_app.vector.models import (
     ResolvedVectorSource,
     VECTOR_CATEGORY_TEXT_LIMIT,
@@ -17,7 +24,7 @@ from eolab_app.vector.models import (
     VectorCategoryScalar,
     VectorNumericRead,
 )
-
+from eolab_app.vector_fields import VectorFieldMissingError, visit_vector_fields
 
 _UNSUPPORTED = object()
 
@@ -36,7 +43,7 @@ class _FieldReadResult:
 
 
 class OgrVectorFieldReader:
-    """Read bounded scalar properties from exact mounted vector layers."""
+    """Read bounded scalar properties and count matches in mounted vector layers."""
 
     def read_categories(
         self,
@@ -161,24 +168,67 @@ class OgrVectorFieldReader:
         return _FieldReadResult(values=tuple(values), complete=complete)
 
     def count_filter(
-        self, source: ResolvedVectorSource, candidate: VectorFilter,
-        feature_limit: int, cancel_event: Event,
+        self,
+        source: ResolvedVectorSource,
+        candidate: VectorFilter,
+        feature_limit: int,
+        cancel_event: Event,
     ) -> VectorFilterCount:
-        """Count an entire filtered view without retaining feature data.
+        """Count matching and total features in the original vector layer.
+
+        A single equality test on a GeoPackage text column can aggregate inside
+        SQLite. Other predicates use the bounded OGR attribute scan. Both
+        approaches share the same 20-second deadline.
 
         Args:
-            source: Exact Catalog-derived mounted source.
-            candidate: Validated scalar predicate.
-            feature_limit: Maximum rows visited, plus one exhaustion probe.
-            cancel_event: Cooperative cancellation checked per row.
+            source: Authorized original mounted source.
+            candidate: Schema-validated scalar predicate.
+            feature_limit: Maximum rows visited by the OGR scan, plus one
+                exhaustion probe.
+            cancel_event: Signal to stop the scan or interrupt the SQLite query.
 
         Returns:
-            Exact matched/total counts only when the bounded read is complete.
+            Exact matching and total counts, or an incomplete result if
+            cancelled or out of time or row budget.
+
+        Raises:
+            VectorConflictError: If a spatial condition requires a separate
+                reader, or if the original source or field cannot be read.
+            ValueError: If the row budget is not positive.
         """
         if candidate.intersections:
-            raise VectorConflictError("Use the layer intersection filter to count these features.")
-        total = matched = 0
+            raise VectorConflictError(
+                "Use the layer intersection filter to count these features."
+            )
         deadline = monotonic() + 20
+        rule = candidate.rules[0] if len(candidate.rules) == 1 else None
+        if (
+            feature_limit > 0
+            and candidate.enabled
+            and isinstance(rule, VectorFilterRule)
+            and rule.operator == "eq"
+            and isinstance(rule.value, str)
+            and source.source_kind == "mounted"
+            and source.source_format == "geopackage"
+            and source.source_path is not None
+            and source.layer_name is not None
+            and all(
+                field.definition.name != rule.field
+                for field in source.calculated_fields
+            )
+        ):
+            result = _count_geopackage_text_matches(
+                source.source_path,
+                source.layer_name,
+                rule.field,
+                rule.value,
+                cancel_event,
+                deadline,
+            )
+            if result is not None:
+                return result
+
+        total = matched = 0
 
         def visit(properties: Mapping[str, Any]) -> None:
             """Accumulate counts and enforce the time budget.
@@ -196,10 +246,11 @@ class OgrVectorFieldReader:
                 cancel_event.set()
 
         complete = self._visit_properties(
-            source, candidate.fields,
-            feature_limit, cancel_event, visit,
+            source, candidate.fields, feature_limit, cancel_event, visit
         )
-        return VectorFilterCount(matched=matched, total=total, complete=True) if complete else VectorFilterCount()
+        if complete:
+            return VectorFilterCount(matched=matched, total=total, complete=True)
+        return VectorFilterCount()
 
     def _visit_properties(
         self,
@@ -260,6 +311,80 @@ class OgrVectorFieldReader:
                 "Field summary unavailable: the current vector source "
                 "could not be read safely."
             ) from error
+
+
+def _count_geopackage_text_matches(
+    path: Path,
+    layer_name: str,
+    field_name: str,
+    value: str,
+    cancel_event: Event,
+    deadline: float,
+) -> VectorFilterCount | None:
+    """Count one original text column's exact matches with a read-only query.
+
+    Args:
+        path: Authorized original GeoPackage file.
+        layer_name: Exact layer name from the source descriptor.
+        field_name: Attribute name accepted by filter validation.
+        value: Case-sensitive text value to match.
+        cancel_event: Signal to interrupt SQLite while it scans.
+        deadline: Monotonic time at which the query must stop.
+
+    Returns:
+        Exact counts, an incomplete result on cancellation or deadline expiry,
+        or None when the layer or column needs the OGR scan.
+
+    Raises:
+        VectorConflictError: If SQLite cannot read the GeoPackage.
+    """
+
+    def should_stop_query() -> bool:
+        """Interrupt the database query when its caller cancels or time expires.
+
+        Returns:
+            Whether SQLite should interrupt the current statement.
+        """
+        return cancel_event.is_set() or monotonic() >= deadline
+
+    if should_stop_query():
+        return VectorFilterCount()
+
+    try:
+        with closing(
+            sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=0)
+        ) as database:
+            database.set_progress_handler(should_stop_query, 4096)
+            column = database.execute(
+                "SELECT columns.type FROM pragma_table_list(?) AS tables "
+                "JOIN pragma_table_info(tables.name, 'main') AS columns "
+                "WHERE tables.schema = 'main' AND tables.type = 'table' "
+                "AND columns.name = ?",
+                (layer_name, field_name),
+            ).fetchone()
+            if column is None or column[0].partition("(")[0].strip().upper() != "TEXT":
+                return None
+
+            table_identifier = '"' + layer_name.replace('"', '""') + '"'
+            column_identifier = '"' + field_name.replace('"', '""') + '"'
+            # OGR converts string columns to text ending at the first NUL.
+            total, matched = database.execute(
+                "SELECT COUNT(*), COUNT(*) FILTER (WHERE "
+                f"substr(CAST(original.{column_identifier} AS TEXT), 1) "
+                "COLLATE BINARY = ?) "
+                f"FROM main.{table_identifier} AS original",
+                (value,),
+            ).fetchone()
+    except (sqlite3.Error, OSError, ValueError) as error:
+        if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+            return VectorFilterCount()
+        raise VectorConflictError(
+            "Field summary unavailable: the current vector source could not be read safely."
+        ) from error
+
+    if should_stop_query():
+        return VectorFilterCount()
+    return VectorFilterCount(matched=matched, total=total, complete=True)
 
 
 def _bounded_category_value(value: Any) -> VectorCategoryScalar | object:
