@@ -2359,6 +2359,7 @@ div.chart-tooltip {
   box-shadow: inset 3px 0 0 var(--brand);
 }
 
+.map-selection-footprint,
 .catalog-footprint.is-selected {
   fill: var(--brand);
   fill-opacity: 0.16;
@@ -5425,7 +5426,8 @@ summary:hover > .raster-disclosure-chevron {
     .leaflet-pane path.is-calculating { fill-opacity: 0.15; }
 }
 
-.histogram-bar-height-scale {
+.histogram-bar-height-scale,
+.raster-series-switch {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5435,14 +5437,14 @@ summary:hover > .raster-disclosure-chevron {
   font-size: var(--font-size-ui);
 }
 
-.histogram-bar-height-scale .secondary-button {
+:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker) > .secondary-button {
   margin: 0;
   min-height: 24px;
   padding: 2px 7px;
   font-size: inherit;
 }
 
-.histogram-bar-height-scale .secondary-button[aria-pressed="true"] {
+:is(.histogram-bar-height-scale, .raster-series-switch, .raster-series-picker) > .secondary-button[aria-pressed="true"] {
   background: var(--brand-hover);
   color: var(--surface-2);
 }

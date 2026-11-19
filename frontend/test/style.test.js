@@ -48,4 +48,8 @@ test("map overlays and inspection surfaces retain contrast contracts", () => {
     /\.catalog-footprint\.is-selected\s*\{[^}]*fill:[^}]*stroke:/s,
   );
   assert.match(STYLESHEET, /\.raster-histogram-bar\.is-hovered/);
+  const rasterStyles = readFileSync(new URL("../src/raster/series.css", import.meta.url), "utf8");
+  const resultSurface = rasterStyles.match(/\.raster-series-field\s*\{([^}]*)\}/)?.[1] ?? "";
+  assert.match(resultSurface, /background:\s*var\(--surface-2\)/);
+  assert.doesNotMatch(resultSurface, /--(?:surface|text|border|brand|focus-ring)[\w-]*\s*:/);
 });

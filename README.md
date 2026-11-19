@@ -54,12 +54,12 @@ For a categorical raster, point at a cell to read its class and code. The chart 
 
 ### Calculate statistics for an area
 
-In **Raster statistics**, choose one or more rasters and a sampling box, selected polygons, or each raster’s full extent. Hidden layers are available too. View results as values, plots, or a table and download them as CSV.
+Open **Raster statistics** to see a value for one raster or a plot for a stack. The raster name or count opens the layer choices, including hidden rasters. The area name opens choices for a sampling box, selected polygons, or each raster’s full extent. **Values** shows the underlying numbers, and **Download CSV** exports them.
 
 <details>
 <summary>Example formulas, thresholds, and exact statistics</summary>
 
-Choose a built-in statistic or write a formula. For example, `mean(a)` gives the average valid value, `areaha(a > 10)` gives hectares above 10 in the raster’s units, and `pixelValue(a)` reads the last point you clicked. EOLab evaluates up to five formulas for each selected raster. Large sampling boxes can show an **Estimated** mean, standard deviation, or percentage above a threshold. Choose **Calculate exact statistics** to use the original pixels.
+Open **Choose statistics** to add a built-in measure or write a formula. For example, `mean(a)` gives the average valid value, `areaha(a > 10)` gives hectares above 10 in the raster’s units, and `pixelValue(a)` reads the last point you clicked. EOLab evaluates up to five formulas for each selected raster. Large sampling boxes can show an **Estimated** mean, standard deviation, or percentage above a threshold. Choose **Calculate exact** to use the original pixels.
 
 </details>
 
