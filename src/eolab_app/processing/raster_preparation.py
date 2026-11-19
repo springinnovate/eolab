@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from math import ceil, floor
+from math import ceil, floor, isclose, tau
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
@@ -227,6 +227,78 @@ def _write_masked_source_vrt(source: rasterio.io.DatasetReader, path: Path) -> N
     tree.write(path)
 
 
+def _wrap_longitude_source(
+    source: rasterio.io.DatasetReader, masked_path: Path
+) -> Path:
+    """Place noncanonical longitude columns on the warp's continuous source grid.
+
+    GDAL's explicit-grid warp can address negative longitudes even when the
+    source stores its western cells above 180 degrees. Reference the original
+    bands at whole-period offsets so GDAL can read neighboring cells across the
+    source seam before resampling. The virtual columns copy no raster data.
+
+    Args:
+        source: Original raster with the admitted affine grid and CRS.
+        masked_path: Attempt-owned VRT exposing the numeric band and its alpha.
+
+    Returns:
+        The masked VRT or a periodic VRT on the same pixel lattice. Geographic
+        grids whose columns divide a longitude period can be shifted exactly.
+
+    Raises:
+        OSError: If the virtual grid cannot be written in the attempt directory.
+    """
+    affine = source.transform
+    if not source.crs.is_geographic or affine.b or affine.d or not affine.a:
+        return masked_path
+    period = tau / source.crs.units_factor[1]
+    left, _, right, _ = source.bounds
+    if left >= -period / 2 and right <= period / 2:
+        return masked_path
+    pixels_per_period = period / abs(affine.a)
+    columns = round(pixels_per_period)
+    if columns < source.width or not isclose(
+        pixels_per_period, columns, rel_tol=0, abs_tol=1e-6
+    ):
+        return masked_path
+
+    center_period = floor((left + right) / (2 * period) + 0.5)
+    longitude_origin = affine.c - center_period * period - columns * affine.a
+    virtual_transform = Affine(affine.a, 0, longitude_origin, 0, affine.e, affine.f)
+    root = ElementTree.Element(
+        "VRTDataset",
+        rasterXSize=str(2 * columns + source.width),
+        rasterYSize=str(source.height),
+    )
+    ElementTree.SubElement(root, "SRS").text = source.crs.to_wkt()
+    ElementTree.SubElement(root, "GeoTransform").text = ",".join(
+        str(value) for value in virtual_transform.to_gdal()
+    )
+    dimensions = {"yOff": "0", "xSize": str(source.width), "ySize": str(source.height)}
+    for number, dtype in ((1, "Float64"), (2, "Byte")):
+        band = ElementTree.SubElement(
+            root, "VRTRasterBand", band=str(number), dataType=dtype
+        )
+        if number == 1:
+            ElementTree.SubElement(band, "NoDataValue").text = "nan"
+        else:
+            ElementTree.SubElement(band, "ColorInterp").text = "Alpha"
+        for copy in range(3):
+            reference = ElementTree.SubElement(band, "SimpleSource")
+            ElementTree.SubElement(
+                reference, "SourceFilename", relativeToVRT="1"
+            ).text = masked_path.name
+            ElementTree.SubElement(reference, "SourceBand").text = str(number)
+            ElementTree.SubElement(reference, "SrcRect", xOff="0", **dimensions)
+            ElementTree.SubElement(
+                reference, "DstRect", xOff=str(copy * columns), **dimensions
+            )
+    wrapped_path = masked_path.with_name(f"{masked_path.stem}-wrapped.vrt")
+    ElementTree.ElementTree(root).write(wrapped_path)
+    return wrapped_path
+
+
+
 @contextmanager
 def prepare_raster_stack(
     inputs: Mapping[str, tuple[Path, Resampling]],
@@ -286,7 +358,9 @@ def prepare_raster_stack(
             with rasterio.open(path) as source:
                 _write_masked_source_vrt(source, vrt_path)
                 with (
-                    rasterio.open(vrt_path) as masked_source,
+                    rasterio.open(
+                        _wrap_longitude_source(source, vrt_path)
+                    ) as masked_source,
                     WarpedVRT(
                         masked_source,
                         crs=grid.crs,

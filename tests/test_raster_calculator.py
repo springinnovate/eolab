@@ -218,6 +218,77 @@ def test_projected_box_refines_edges_at_output_cell_size() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("east", "expected"),
+    [(-2, [356, 357]), (4, [356, 357, 358, 359, 0, 1, 2, 3])],
+)
+def test_match_grid_reads_wrapped_longitudes(
+    tmp_path: Path, east: int, expected: list[int]
+) -> None:
+    """Find western cell values on a global raster that starts at Greenwich."""
+    source = write_source(
+        tmp_path / "source.tif",
+        np.arange(360, dtype="int16").reshape(1, 360),
+        transform=from_origin(0, 1, 1, 1),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(west=-4, south=0, east=east, north=1),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == len(expected)
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert output.transform == from_origin(-4, 1, 1, 1)
+        np.testing.assert_array_equal(output.read(1), [expected])
+
+
+@pytest.mark.parametrize("method", ["bilinear", "mean"])
+def test_warp_uses_native_neighbours_across_greenwich(
+    tmp_path: Path, method: str
+) -> None:
+    """Interpolate with native source values on both sides of the longitude seam."""
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(np.arange(360, dtype="int16"), (2, 1)),
+        transform=from_origin(0, 2, 1, 1),
+    )
+    reference = write_source(
+        tmp_path / "reference.tif",
+        np.zeros((2, 1), dtype="uint8"),
+        transform=from_origin(-0.5, 2, 1, 1),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput.model_validate(
+            {
+                "layers": [
+                    {"alias": "a", "source": SOURCE, "resampling": method},
+                    {"alias": "b", "source": SOURCE, "resampling": "nearest"},
+                ],
+                "expression": "a",
+                "grid": {"kind": "match", "alias": "b"},
+            }
+        ),
+        selectedBounds=Wgs84Bounds(west=-0.5, south=0, east=0.5, north=2),
+    )
+    sources = RasterCalculatorSources({"a": source, "b": reference}, None)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        np.testing.assert_array_equal(output.read(1), [[179.5], [179.5]])
+
+
 def test_custom_grid_accepts_equivalent_crs_in_published_tiff(tmp_path: Path) -> None:
     """Publish a NAD83 grid after GDAL normalizes its stored CRS definition."""
     source = write_source(
