@@ -135,6 +135,8 @@ test("two measurements share positions, retain exact cells, and zoom to the chos
   assert.deepEqual(rows.map(row=>row.children.slice(1).map(cell=>cell.children[0].textContent)),
     [["0","8.2"],["No value","9.1"],["42.654321987","No value"]]);
   rows[2].children[1].children[0].dispatchEvent(new Event("click"));
+  assert.equal(rows[2].getAttribute("aria-current"),"true");
+  assert.equal(rows[2].children[1].children[0].getAttribute("aria-pressed"),"true");
   zoom.dispatchEvent(new Event("click"));
   assert.equal(zoomRequests.at(-1),sample[2].focus);
   controller.setSample({state:"ready",message:"New click",observations:[{...sample[0],properties:{year:2031,runoff_mm:3,temp_c:8}}]});

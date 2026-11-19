@@ -420,6 +420,7 @@ test("context validates its presentation boundary and vector identities clear wi
     h.controller.setVectorTimeSeriesIdentity({ label: "Temperature", title: "Climate zones · Temperature" });
     assert.equal(h.doc.querySelector("#map-inspection-context").textContent,
         "Climate zones · Temperature · Across sampled vector features");
+    assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true, "the vector panel already identifies the plotted features");
     assert.equal(h.doc.activeElement, h.map);
     h.controller.setVectorTimeSeriesIdentity(null);
     assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);

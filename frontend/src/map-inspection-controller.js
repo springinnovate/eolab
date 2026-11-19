@@ -881,8 +881,7 @@ export class MapInspectionController {
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
-        this.dockContext.hidden = !this.dockContext.textContent ||
-            !["raster-clips", "time-series", "feature-profile"].includes(this.activeTool);
+        this.dockContext.hidden = !this.dockContext.textContent || this.activeTool !== "raster-clips";
         const expandWasFocused = this.document.activeElement === this.expandButton;
         this.toolbar.hidden = this.minimized;
         this.expandButton.hidden = !this.minimized;

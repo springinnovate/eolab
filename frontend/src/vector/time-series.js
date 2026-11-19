@@ -312,6 +312,7 @@ export class VectorTimeSeriesController {
         this.extraPlots.replaceChildren();
         this.tableBody.replaceChildren();
         this.tableHead.replaceChildren();
+        this.tableRows = new Map();
         this.table.hidden = true;
         this.pointElements = [];
         this.selection.hidden = true;
@@ -373,7 +374,8 @@ export class VectorTimeSeriesController {
             chart.removeAttribute("hidden");
             const handles = renderOrdinalSeriesChart({
                 documentContext:this.document,chart,points:plot.points,chartType:this.settings.chartType,
-                width:this.plotPanel.width || undefined,height:this.settings.yFields.length > 1 ? 215 : 250,
+                width:this.plotPanel.width || undefined,height:this.settings.yFields.length > 1 ? 188 : 218,
+                fitXAxisLabels:true,
                 xScale,xReverse:xScale === "numeric" && this.settings.direction === "descending",
                 xAxisLabel:xLabel,yAxisLabel:"Value",ariaLabel:plot.field + " by " + xLabel,
                 pointAccessibleLabel:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
@@ -423,6 +425,12 @@ export class VectorTimeSeriesController {
         this.selection.hidden = false;
         this.zoomFeatureButton.hidden = false;
         this.zoomFeatureButton.disabled = false;
+        for (const [sourceIndex, {row, cells}] of this.tableRows) {
+            row.setAttribute("aria-current", String(sourceIndex === index));
+            for (const [name, button] of cells) {
+                button.setAttribute("aria-pressed", String(sourceIndex === index && name === field));
+            }
+        }
         for (const {circle,point} of this.pointElements) {
             const chosen = point.sourceIndex === index;
             if (chosen) circle.classList.add("is-selected");
@@ -447,6 +455,8 @@ export class VectorTimeSeriesController {
         }
         for (const row of rows) {
             const tr = this.document.createElement("tr");
+            const cells = new Map();
+            this.tableRows.set(row.sourceIndex, {row: tr, cells});
             const id = this.document.createElement("th");
             id.setAttribute("scope","row");
             const identity = this.document.createElement("small");
@@ -461,6 +471,8 @@ export class VectorTimeSeriesController {
                 button.type = "button";
                 button.classList.add("summary-text-button");
                 button.textContent = Number.isFinite(y) ? String(y) : "No value";
+                button.setAttribute("aria-pressed", "false");
+                cells.set(field, button);
                 button.setAttribute("aria-label",this.#identity(row.observation,row.sourceIndex,field,row.xLabel));
                 button.addEventListener("click",() => this.#select(row.sourceIndex,field));
                 cell.append(button);

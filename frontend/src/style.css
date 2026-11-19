@@ -566,6 +566,9 @@ h5 {
   pointer-events: auto;
 }
 
+.summary-text-button { padding: 4px; border: 0; background: transparent; color: var(--brand); cursor: pointer; font: inherit; }
+@media (pointer: coarse) { .summary-text-button { min-height: 44px; min-width: 44px; } }
+
 .secondary-button.is-danger {
   border-color: var(--status-danger);
   color: var(--status-danger);
@@ -4605,7 +4608,7 @@ article.raster-histogram-summary {
 .vector-plot-modes .summary-text-button { min-height: 28px; padding: 2px 8px; }
 .vector-plot-modes [aria-pressed="true"] { color: var(--text-1); box-shadow: inset 0 -2px var(--brand); }
 .vector-plot-heading h2 { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 1.03rem; }
-.vector-plot-context { margin: 2px 0 5px; }
+.vector-plot-context { margin: 2px 0 5px; font-size: var(--font-size-support); }
 .vector-plot-context button { overflow-wrap: anywhere; text-align: left; }
 .vector-plot-context button::after { content: " ▾"; }
 .vector-plot-picker { display: grid; gap: 5px; margin: 0 0 6px; padding: 8px; border: 1px solid var(--border-1); border-radius: var(--radius-small); background: var(--surface-2); font-size: var(--font-size-ui); }
@@ -4618,7 +4621,7 @@ article.raster-histogram-summary {
 .vector-plot-figure h3 { margin: 6px 9px 0; font-size: var(--font-size-ui); overflow-wrap: anywhere; }
 #vector-time-series-extra-charts .vector-plot-figure { margin-top: 6px; }
 .vector-time-series-chart { display: block; width: 100%; height: auto; }
-.vector-plot-value { fill: var(--text-1); font: 600 11px var(--font-ui, sans-serif); pointer-events: none; paint-order: stroke; stroke: var(--surface-2); stroke-width: 2px; }
+.vector-plot-value { fill: var(--text-1); font: 600 11px var(--font-sans); pointer-events: none; paint-order: stroke; stroke: var(--surface-2); stroke-width: 2px; }
 .vector-time-series-chart[hidden] { display: none; }
 .vector-time-series-status, .vector-plot-missing { margin: 5px 0; color: var(--text-2); font-size: var(--font-size-ui); }
 .vector-plot-missing { padding: 0 8px; }
@@ -4687,6 +4690,8 @@ article.raster-histogram-summary {
 .vector-feature-profile-field > :last-child { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .vector-time-series-table small { display: block; color: var(--text-2); font-weight: normal; }
 .vector-time-series-table td { font-variant-numeric: tabular-nums; }
+.vector-time-series-table tr[aria-current="true"], .vector-time-series-table tr:has([aria-pressed="true"]) { background: var(--surface-selected); }
+.vector-time-series-table button[aria-pressed="true"] { text-decoration: underline; }
 .vector-time-series-table .summary-text-button { padding: 0; text-align: inherit; }
 
 .map-histogram-toolbar {

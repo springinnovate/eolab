@@ -502,6 +502,7 @@ export class VectorFeatureProfileController {
     render() {
         this.chart.replaceChildren();
         this.pointElements = [];
+        this.fieldCells = new Map();
         this.figure.hidden = true;
         this.chart.setAttribute("hidden", "");
         this.tableBody.replaceChildren();
@@ -558,7 +559,8 @@ export class VectorFeatureProfileController {
             chart: this.chart,
             points: profile.points,
             width: this.plotPanel.width || undefined,
-            height: 250,
+            height: 218,
+            fitXAxisLabels: true,
             chartType: settings.chartType,
             xScale: profile.xScale,
             xReverse: profile.xScale === "numeric" && settings.direction === "descending",
@@ -594,7 +596,10 @@ export class VectorFeatureProfileController {
         const value = this.currentObservation.properties[field];
         this.selectionText.textContent = field + " · " + (Number.isFinite(value) ? String(value) : "No value");
         this.selection.hidden = false;
-        for (const {circle, point} of this.pointElements ?? []) {
+        for (const [name, button] of this.fieldCells) {
+            button.setAttribute("aria-pressed", String(name === field));
+        }
+        for (const {circle, point} of this.pointElements) {
             const selected = point.fieldName === field;
             if (selected) circle.classList.add("is-selected");
             else circle.classList.remove("is-selected");
@@ -647,8 +652,7 @@ export class VectorFeatureProfileController {
             return;
         }
         this.heading.textContent = presentation.heading;
-        this.plotPanel.featureButton.textContent = this.currentObservation.featureId === null
-            ? "Feature " + this.currentNavigation.position : String(this.currentObservation.featureId);
+        this.plotPanel.featureButton.textContent = vectorFeatureLabel(this.currentObservation, this.currentNavigation.position - 1);
         this.features.value = String(this.currentNavigation.position - 1);
         this.context.textContent = presentation.context;
         this.context.hidden = false;
@@ -691,6 +695,8 @@ export class VectorFeatureProfileController {
             button.type = "button";
             button.classList.add("summary-text-button");
             button.textContent = point.fieldName;
+            button.setAttribute("aria-pressed", "false");
+            this.fieldCells.set(point.fieldName, button);
             button.addEventListener("click", () => this.#selectField(point.fieldName));
             field.append(button);
             const value = this.document.createElement("td");
