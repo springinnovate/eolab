@@ -151,8 +151,8 @@ The **Planning API** lets participants save private scenarios with one intervent
 
 ### Draw, upload, and share
 
-- **Sketch a boundary.** Choose **Map contents → Draw polygon**, draw the outline, add notes, and save. You can also import existing outlines from GeoJSON or download your drawings in that format.
-- **Bring a project boundary.** Under **Your uploads**, add a GeoPackage containing one polygon layer to keep its attributes. Filter it to a country, watershed, or project group and use that selection for statistics or a model.
+- **Sketch a boundary.** Choose **Map contents → Draw polygon**, draw the outline, add notes, and save. Use **Download** on the layer card to keep a GeoJSON copy.
+- **Bring a project boundary.** Under **Your uploads**, add a GeoPackage containing one polygon layer to keep its attributes. Convert GeoJSON boundaries to GeoPackage before uploading. Filter the layer to a country, watershed, or project group and use that selection for statistics or a model.
 - **Reshape a copy.** In **Map contents**, duplicate a GeoPackage polygon layer, choose **Edit geometry**, then click a polygon. Drag its vertices, click an edge to insert one, or hover or focus a vertex and press **Delete**. **Save changes** keeps the edited layer in your browser’s private uploads. Each save uses a file slot for seven days.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
 - **Publish a map.** Choose **Publish map**, give the map a title and link name, and select **Create map link**. The link opens the same layers, styles, order, and starting view. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
@@ -160,7 +160,7 @@ The **Planning API** lets participants save private scenarios with one intervent
 <details>
 <summary>Which files stay private, what expires, and what a download includes</summary>
 
-Drawings stay on this device until you share their layer or save them through Planning. A linked tool or published map gives others read access to the saved drawing. Only the browser that created it can edit its polygons. GeoJSON imports accept simple WGS84 polygons without holes, including names and notes. A GeoJSON download includes all saved polygons in the layer, including those hidden by its filter.
+Drawings stay on this device until you share their layer or save them through Planning. A linked tool or published map gives others read access to the saved drawing. Only the browser that created it can edit its polygons. A GeoJSON download includes all saved polygons in the layer, including those hidden by its filter.
 
 If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
 

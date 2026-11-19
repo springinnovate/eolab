@@ -1,6 +1,6 @@
 /** Connect polygon drawing, editing and local storage to the map's layer list. */
 import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
-import { readAnnotationGeoJSONFile, exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
+import { exportAnnotationGeoJSON, readAnnotationCollection } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
 import { AnnotationMapEditor } from "./map-editor.js";
@@ -79,19 +79,8 @@ export class AnnotationController {
         this.undoButton = document.querySelector("#undo-annotation-delete");
         this.retryButton = document.querySelector("#retry-annotation-save");
         this.drawButton = document.querySelector("#draw-private-polygon");
-        this.importButton = document.querySelector("#import-annotation-geojson");
-        this.importInput = document.querySelector("#annotation-geojson-file");
         this.fileStatus = document.querySelector("#annotation-file-status");
-        this.importing = false;
         this.drawButton.addEventListener("click", () => this.drawPrivatePolygon());
-        this.importButton.addEventListener("click", () => {
-            this.importInput.value = "";
-            this.importInput.click();
-        });
-        this.importInput.addEventListener("change", () => {
-            const file = this.importInput.files[0];
-            if (file) void this.importGeoJSONFile(file);
-        });
         this.undoButton.addEventListener("click", () => this.perform(() => this.undoPolygonDeletion()));
         this.retryButton.addEventListener("click", () => this.retrySaving());
         this.beforeUnload = event => { if (this.hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ""; } };
@@ -132,7 +121,7 @@ export class AnnotationController {
      * Load errors appear beside the disabled drawing controls and in the polygon editor.
      * Opening an unsupported document leaves its stored drawings intact.
      * Recovered filters are identified on their layers until the user applies a filter or reloads.
-     * Creating drawing layers and importing files remain disabled until loading succeeds.
+     * Drawing stays disabled until loading succeeds.
      * Linked sources refresh clean views; pending local edits retain their original revision.
      * @param {Object} [options] Startup presentation policy.
      * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them off the shared map.
@@ -151,7 +140,6 @@ export class AnnotationController {
             this.loaded = true;
             this.storageStatus.hidden = true;
             this.drawButton.disabled = false;
-            this.importButton.disabled = false;
             this.dirty = this.model.layers.some(layer => layer.drawingSource?.pending);
             this.status.textContent = this.model.layers.map(layer => this.drawingSaveProblem(layer)).filter(Boolean).join(" ");
             this.retryButton.hidden = !this.status.textContent;
@@ -199,10 +187,10 @@ export class AnnotationController {
      */
     async restoreSharedContribution(name, collection, { localId = null, replacePolygons = false } = {}) {
         if (!this.loaded) throw new Error(this.status.textContent);
-        const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
+        const { polygons } = readAnnotationCollection(collection);
         const existing = this.model.layers.find(layer => layer.id === localId);
-        const layer = existing ?? this.model.importLayer({ ...imported, name });
-        if (existing && replacePolygons) layer.polygons = imported.polygons;
+        const layer = existing ?? this.model.addLayerFromPolygons({ name, polygons });
+        if (existing && replacePolygons) layer.polygons = polygons;
         layer.name = name;
         if (!this.layers.has(layer.id)) this.attachLayer(layer);
         else this.refreshLayer(layer.id);
@@ -270,8 +258,8 @@ export class AnnotationController {
         const signature = JSON.stringify(data.collections);
         const changed = signature !== previous?.signature;
         const polygons = changed ? data.collections.flatMap(collection => {
-            const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
-            return imported.polygons.map((polygon, index) => ({ ...polygon, id: collection.features[index].id,
+            const { polygons } = readAnnotationCollection(collection);
+            return polygons.map((polygon, index) => ({ ...polygon, id: collection.features[index].id,
                 contributor: collection.features[index].properties.contributor,
                 contributorId: collection.features[index].properties.contributorId }));
         }) : previous.polygons;
@@ -314,36 +302,6 @@ export class AnnotationController {
             for (const [longitude, latitude] of polygon.vertices) bounds.extend([latitude, longitude]);
         }
         if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
-    }
-
-    /**
-     * Import a local GeoJSON file as one new layer after validating the whole file.
-     * File errors appear in the annotation panel without changing the map. Persistence errors use the existing save/retry controls.
-     * @param {File} file File chosen in the annotation panel.
-     * @return {Promise<void>} Completion with a visible success or error message.
-     */
-    async importGeoJSONFile(file) {
-        if (this.importing || !this.loaded) return;
-        this.importing = true;
-        this.importButton.disabled = true;
-        this.fileStatus.textContent = "Reading GeoJSON…";
-        this.fileStatus.classList.remove("is-error");
-        try {
-            const imported = await readAnnotationGeoJSONFile(file);
-            const layer = this.model.importLayer(imported);
-            this.attachLayer(layer);
-            this.panel.showLayer(`local:annotation:${layer.id}`);
-            await this.save();
-            this.fileStatus.textContent = `Imported ${layer.polygons.length} ${layer.polygons.length === 1 ? "polygon" : "polygons"} into “${layer.name}”.`;
-        } catch (error) {
-            this.fileStatus.textContent = `Cannot import GeoJSON: ${error.message}`;
-            this.fileStatus.classList.add("is-error");
-            this.panel.show();
-        } finally {
-            this.importing = false;
-            this.importButton.disabled = false;
-            this.importInput.value = "";
-        }
     }
 
     /**

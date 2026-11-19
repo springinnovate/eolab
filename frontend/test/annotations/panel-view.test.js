@@ -89,7 +89,7 @@ test("removal selects another editor or closes the empty panel without retaining
 test("empty startup stays closed but a failed polygon action can open its neutral panel", () => {
     const { document, view, events } = setup();
     assert.deepEqual(events, []);
-    document.querySelector("#annotation-file-status").textContent = "Cannot import GeoJSON: invalid polygon";
+    document.querySelector("#annotation-file-status").textContent = "Cannot export GeoJSON: invalid polygon";
     view.show();
     assert.deepEqual(events, ["open"]);
     assert.equal(view.title.textContent, "Polygons");

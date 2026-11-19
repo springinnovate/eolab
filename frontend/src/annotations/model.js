@@ -169,21 +169,21 @@ export class AnnotationModel {
     }
 
     /**
-     * Add a validated GeoJSON import as a new layer with fresh local IDs.
-     * Check collection capacity before changing existing data; importing never overwrites a layer.
-     * @param {import("./geojson.js").ImportedAnnotationLayer} imported Validated file contents.
+     * Add saved polygons from a shared layer as an editable device layer with fresh local IDs.
+     * Check device capacity before adding the layer.
+     * @param {{name:string,polygons:Omit<AnnotationPolygon,"id">[]}} contents Validated layer name and polygons.
      * @return {AnnotationLayer} Newly added layer using default appearance and no filter.
      * @throws {Error} If editing is in progress or the layer/document limit would be exceeded.
      */
-    importLayer(imported) {
-        if (this.draft) throw new Error("Save or cancel the current polygon before importing.");
+    addLayerFromPolygons({ name, polygons }) {
+        if (this.draft) throw new Error("Save or cancel the current polygon before opening another layer.");
         if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} polygon layers.`);
-        const layer = { id: this.newId(), name: imported.name, position: 0, visible: true, opacity: 1,
+        const layer = { id: this.newId(), name, position: 0, visible: true, opacity: 1,
             style: { ...DEFAULT_ANNOTATION_STYLE }, filter: structuredClone(EMPTY_VECTOR_FILTER),
-            polygons: imported.polygons.map(polygon => ({ ...structuredClone(polygon), id: this.newId() })) };
+            polygons: polygons.map(polygon => ({ ...structuredClone(polygon), id: this.newId() })) };
         const document = { version: 1, layers: [layer, ...this.layers] };
         if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
-            throw new Error("Import would exceed the 8 MiB polygon storage limit. Export and remove an existing layer first.");
+            throw new Error("Opening this layer would exceed the 8 MiB polygon storage limit. Export and remove an existing layer first.");
         }
         this.layers.unshift(layer);
         return layer;

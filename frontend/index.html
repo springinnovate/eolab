@@ -512,13 +512,6 @@
                     <button class="secondary-button" id="upload-polygons" type="button">Your uploads</button>
                     <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a private polygon saved on this device" disabled>Draw polygon</button>
                     <details class="annotation-layer-tools">
-                      <summary>Import polygons</summary>
-                      <div class="annotation-layer-actions" role="group" aria-label="Import polygons">
-                      <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON…</button>
-                      <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import polygons from a GeoJSON file" hidden>
-                      </div>
-                    </details>
-                    <details class="annotation-layer-tools">
                       <summary>Shared layers</summary>
                       <div class="annotation-layer-actions" role="group" aria-label="Shared layers">
                       <button class="secondary-button" id="create-shared-annotation-layer" type="button">Create shared layer…</button>
@@ -1034,7 +1027,6 @@
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
               <p>Local layers stay on this device until you save them through Planning. Those linked drawings and live shared layers are included in map links; other local drawings are not. Anyone with the link can read the latest saved polygons, but the link does not grant editing permission. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its saved polygons. Choose Download on the layer card to keep a GeoJSON copy.</p>
-              <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
