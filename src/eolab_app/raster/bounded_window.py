@@ -8,6 +8,7 @@ from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
 
+from eolab_app.projected_boundary import Position, tessellate_projected_ring
 from eolab_app.sampling_box import (
     Wgs84SamplingBox,
     sampling_box_bounds,
@@ -20,6 +21,7 @@ from eolab_app.raster.temporal import TemporalRasterDataset
 BOUNDED_WGS84_DENSIFY_POINTS = 21
 BOUNDED_SOURCE_WINDOW_PADDING_PIXELS = 1
 SAMPLING_BOX_MAXIMUM_ERROR_PIXELS = 0.01
+POLYGON_BOUNDARY_MAXIMUM_ERROR_PIXELS = 0.001
 
 
 class NoRasterBoundsOverlapError(ValueError):
@@ -399,6 +401,57 @@ def _densify_polygon_rings(
     return tuple(densified)
 
 
+def _refine_polygon_rings(
+    rings: tuple[tuple[Position, ...], ...],
+    source_crs: CRS | str,
+    target_crs: CRS | str,
+    pixel_size: tuple[float, float],
+    maximum_coordinates: int | None,
+    coordinate_transform: Callable[..., tuple[list[float], list[float]]],
+) -> tuple[tuple[Position, ...], ...]:
+    """Subdivide straight edges to the polygon tolerance in destination pixels.
+
+    Args:
+        rings: Closed polygon rings in the source CRS.
+        source_crs: Coordinate system of the original edges.
+        target_crs: Coordinate system in which the polygons will be rasterized.
+        pixel_size: Positive target X and Y pixel sizes.
+        maximum_coordinates: Capacity for derived positions, or None for unlimited work.
+        coordinate_transform: Batch CRS transformation.
+
+    Returns:
+        Rings with source positions added where the projected edges curve.
+
+    Raises:
+        ValueError: If projection, convergence, or coordinate capacity fails.
+    """
+    x_size, y_size = pixel_size
+
+    def project_pixels(positions: tuple[Position, ...]) -> tuple[Position, ...]:
+        """Transform source positions to target pixel units for chord tests."""
+        x, y = coordinate_transform(
+            source_crs,
+            target_crs,
+            [point[0] for point in positions],
+            [point[1] for point in positions],
+        )
+        return tuple((a / x_size, b / y_size) for a, b in zip(x, y, strict=True))
+
+    refined = []
+    remaining_coordinates = maximum_coordinates
+    for ring in rings:
+        boundary = tessellate_projected_ring(
+            ring,
+            project_pixels,
+            maximum_error_pixels=POLYGON_BOUNDARY_MAXIMUM_ERROR_PIXELS,
+            maximum_coordinates=remaining_coordinates,
+        )
+        refined.append(boundary)
+        if remaining_coordinates is not None:
+            remaining_coordinates -= len(boundary)
+    return tuple(refined)
+
+
 def _source_window_for_projected_geometries(
     dataset: RasterDataset,
     projected_geometries: tuple[dict[str, object], ...],
@@ -503,6 +556,8 @@ def project_polygons_to_crs(
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+    *,
+    pixel_size: tuple[float, float] | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Densify and project polygons without depending on raster coverage.
 
@@ -513,6 +568,9 @@ def project_polygons_to_crs(
         maximum_coordinates: Transformed-coordinate ceiling, or None for
             caller-supervised unlimited geometry.
         coordinate_transform: Injectable transformation between coordinate systems.
+        pixel_size: Positive X/Y sizes to refine edges to one thousandth of a
+            target pixel. Equal CRSs retain the original edges. When omitted,
+            use the bounded source-window reader's fixed edge subdivision.
 
     Returns:
         Separate polygon mappings in the requested CRS, preserving holes and
@@ -530,7 +588,24 @@ def project_polygons_to_crs(
         rings = _polygon_rings(geometry)
         geometry_ring_groups.append((str(geometry["type"]), rings))
         all_rings.extend(rings)
-    densified_rings = _densify_polygon_rings(tuple(all_rings), maximum_coordinates)
+    if pixel_size is None:
+        densified_rings = _densify_polygon_rings(tuple(all_rings), maximum_coordinates)
+    elif CRS.from_user_input(source_crs) == CRS.from_user_input(target_crs):
+        if (
+            maximum_coordinates is not None
+            and sum(map(len, all_rings)) > maximum_coordinates
+        ):
+            raise ValueError("Selection exceeds the transformed-geometry limit")
+        return geometries
+    else:
+        densified_rings = _refine_polygon_rings(
+            tuple(all_rings),
+            source_crs,
+            target_crs,
+            pixel_size,
+            maximum_coordinates,
+            coordinate_transform,
+        )
     x = [point[0] for ring in densified_rings for point in ring]
     y = [point[1] for ring in densified_rings for point in ring]
     projected_x, projected_y = coordinate_transform(

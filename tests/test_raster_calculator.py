@@ -4,11 +4,14 @@ import json
 from pathlib import Path
 
 import numpy as np
+from pyproj import Transformer
 import pytest
 import rasterio
 from rasterio.crs import CRS
+from rasterio.features import geometry_mask
 from rasterio.transform import from_bounds, from_origin
 from rasterio.warp import transform_bounds
+from shapely.geometry import box, mapping
 
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.models import ProcessingError
@@ -16,6 +19,7 @@ from eolab_app.processing.raster_calculator import (
     RasterCalculatorSources,
     calculate_raster,
     plan_calculator_grid,
+    project_calculator_area,
 )
 from eolab_app.processing.raster_calculator_models import (
     CustomRasterGrid,
@@ -149,6 +153,69 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     assert provenance["inputs"]["calculation"]["expression"] == "max(0, b - a)"
     assert str(a) not in json.dumps(provenance)
     assert not list(tmp_path.glob("aligned-*"))
+
+
+def test_match_grid_preserves_native_polygon_edges(tmp_path: Path) -> None:
+    """Publish exactly the cells inside a polygon already on the matching grid."""
+    crs = "EPSG:32610"
+    extent = (350_000, 4_250_000, 650_000, 4_550_000)
+    source = write_source(
+        tmp_path / "source.tif",
+        np.ones((340, 340), dtype="uint8"),
+        transform=from_origin(330_000, 4_570_000, 1000, 1000),
+        crs=crs,
+    )
+    area = write_selection(tmp_path / "area.gpkg", [mapping(box(*extent))], crs=crs)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == 90_000
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert tuple(output.bounds) == extent
+        np.testing.assert_array_equal(output.read(1), np.ones((300, 300)))
+
+
+def test_projected_box_refines_edges_at_output_cell_size() -> None:
+    """Compare a 30 m boundary tile against inverse-projected cell centers."""
+    crs = CRS.from_epsg(32610)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(kind="custom", crs="EPSG:32610", pixelSize=(30, 30)),
+        ),
+        selectedBounds=Wgs84Bounds(west=-126, south=38, east=-118, north=45),
+    )
+    grid = from_origin(570_300, 4_207_350, 30, 30)
+    rows, columns = np.indices((80, 80), dtype="float64") + 0.5
+    xs, ys = grid.c + columns * grid.a, grid.f + rows * grid.e
+    longitudes, latitudes = Transformer.from_crs(
+        "EPSG:32610", "EPSG:4326", always_xy=True
+    ).transform(xs, ys)
+    inside = (
+        (-126 <= longitudes)
+        & (longitudes <= -118)
+        & (38 <= latitudes)
+        & (latitudes <= 45)
+    )
+    projected = project_calculator_area(request, None, None, crs, (30, 30))
+    np.testing.assert_array_equal(
+        geometry_mask(projected, (80, 80), grid, invert=True), inside
+    )
 
 
 def test_custom_grid_accepts_equivalent_crs_in_published_tiff(tmp_path: Path) -> None:

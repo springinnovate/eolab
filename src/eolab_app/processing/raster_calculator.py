@@ -260,7 +260,7 @@ def project_calculator_area(
         polygon_area: Retained committed geometry for an owned drawing.
         vector: Authorized original selection for a catalog or private vector.
         crs: Output CRS independent of the raster sources' coverage.
-        pixel_size: X/Y cell sizes for refining the geodesic box edges.
+        pixel_size: X/Y cell sizes for refining projected edges.
     Returns:
         Projected polygons with interior rings for calculating bounds and masking.
     Raises:
@@ -268,7 +268,7 @@ def project_calculator_area(
     """
     try:
         if vector is not None:
-            return read_preparation_polygons(vector, crs)
+            return read_preparation_polygons(vector, crs, pixel_size=pixel_size)
         if request.samplingBox is not None:
             return (project_preparation_box(request.samplingBox, crs, pixel_size),)
         if polygon_area is not None:
@@ -276,7 +276,9 @@ def project_calculator_area(
         else:
             decimals = cast(Wgs84Bounds, request.selectedBounds).canonical_tuple()
             geometries = (mapping(box(*decimals)),)
-        return project_polygons_to_crs("EPSG:4326", crs, geometries, None)
+        return project_polygons_to_crs(
+            "EPSG:4326", crs, geometries, None, pixel_size=pixel_size
+        )
     except SelectionUnavailableError as error:
         raise ProcessingError("selection_unavailable", error.detail, 409) from error
     except (ValueError, rasterio.errors.RasterioError) as error:

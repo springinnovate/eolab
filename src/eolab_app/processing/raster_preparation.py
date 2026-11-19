@@ -88,27 +88,44 @@ def calculate_raster_grid(
 
 
 def read_preparation_polygons(
-    selection: ResolvedCatalogSelection, crs: CRS
+    selection: ResolvedCatalogSelection,
+    crs: CRS,
+    *,
+    pixel_size: tuple[float, float] | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Read selected polygons from the original vector in the calculation CRS.
 
     Args:
         selection: Authorized original vector and exact feature predicate.
         crs: Output CRS independent of raster coverage.
+        pixel_size: Positive X/Y sizes for projecting native edges to cell
+            accuracy. Omit to use the existing WGS84 polygon stream.
     Returns:
         Projected polygons to use within this calculation.
     Raises:
         ValueError: If no polygons match or coordinates cannot be projected.
         SelectionUnavailableError: If the original vector cannot be read.
     """
-    with polygon_features(selection, limits=None) as features:
-        polygons = tuple(
-            projected
-            for geometry in features
-            for projected in project_polygons_to_crs(
-                "EPSG:4326", crs, (geometry,), None
+
+    def project_native_polygon(
+        source_crs: CRS, geometry: dict[str, object]
+    ) -> dict[str, object]:
+        """Project one selected polygon directly from its original CRS."""
+        return project_polygons_to_crs(
+            source_crs, crs, (geometry,), None, pixel_size=pixel_size
+        )[0]
+
+    projector = project_native_polygon if pixel_size is not None else None
+    with polygon_features(
+        selection, limits=None, project_geometry=projector
+    ) as features:
+        if projector is not None:
+            polygons = tuple(features)
+        else:
+            polygons = tuple(
+                project_polygons_to_crs("EPSG:4326", crs, (geometry,), None)[0]
+                for geometry in features
             )
-        )
     if not polygons:
         raise ValueError("The vector selection contains no polygons.")
     return polygons
