@@ -303,10 +303,10 @@ def test_contributor_colors_are_shared_owned_and_persistent(
     assert first.get(path).json()["contributors"] == rejoined["contributors"]
 
 
-def test_concurrent_joins_assign_distinct_colors_and_old_rows_have_stable_fallback(
+def test_concurrent_joins_and_upgrade_preserve_each_contributors_color(
     store: AnnotationSessionStore,
 ) -> None:
-    """Serialize palette assignment and keep pre-color memberships readable without data loss.
+    """Keep assigned, custom and previously inferred colors through upgrade and restart.
 
     Args:
         store: Empty disposable PostgreSQL store.
@@ -324,15 +324,52 @@ def test_concurrent_joins_assign_distinct_colors_and_old_rows_have_stable_fallba
         )
     people = store.get_session_snapshot(session_id, "creator")["contributors"]
     assert len({p["color"] for p in people}) == 5
+    store.update_contributor_color(session_id, "creator", "#123456")
     with store.transaction(write=True) as cursor:
         cursor.execute(
+            "ALTER TABLE shared_annotation_layers.contributors ALTER COLUMN color DROP NOT NULL"
+        )
+        cursor.executemany(
+            "UPDATE shared_annotation_layers.contributors SET id=%s, color=NULL WHERE session_id=%s AND browser_hash=%s",
+            [
+                ("ffffffff-ffff-ffff-ffff-ffffffffffff", session_id, "member-0"),
+                ("01234567-89ab-cdef-0123-456789abcdef", session_id, "member-1"),
+            ],
+        )
+    store.save_shared_layer(
+        session_id,
+        "member-0",
+        session_id,
+        ShareLayer(revision=0, collection=collection()),
+    )
+    store.initialize_and_clean_join_attempts()
+    with store.transaction() as cursor:
+        cursor.execute(
+            "SELECT name, color FROM shared_annotation_layers.contributors WHERE session_id=%s",
+            (session_id,),
+        )
+        stored = {row["name"]: row["color"] for row in cursor.fetchall()}
+    assert stored["Member 0"] == "#F63E02"
+    assert stored["Member 1"] == "#DB00B6"
+    assert stored["Creator"] == "#123456"
+    snapshot = store.get_session_snapshot(session_id, "creator")
+    assert {
+        person["name"]: person["color"] for person in snapshot["contributors"]
+    } == stored
+    assert snapshot["layers"][0]["revision"] == 1
+    exported = store.export_session_geojson(session_id, "creator")["features"][0]
+    assert exported["properties"]["contributorColor"] == "#F63E02"
+    assert exported["properties"]["layerId"] == str(session_id)
+    with (
+        pytest.raises(psycopg.errors.NotNullViolation),
+        psycopg.connect(store.conninfo) as connection,
+    ):
+        connection.execute(
             "UPDATE shared_annotation_layers.contributors SET color=NULL WHERE session_id=%s",
             (session_id,),
         )
-    before = store.get_session_snapshot(session_id, "creator")["contributors"]
     store.initialize_and_clean_join_attempts()
-    assert store.get_session_snapshot(session_id, "creator")["contributors"] == before
-    assert all(p["color"].startswith("#") for p in before)
+    assert store.get_session_snapshot(session_id, "creator") == snapshot
 
 
 @pytest.fixture

@@ -50,6 +50,7 @@ AREAS = [
             "filter": {"rules": [{"field": "name", "operator": "eq", "value": "A"}]},
         }
     },
+    {"wholeRaster": True},
 ]
 
 
@@ -62,7 +63,7 @@ def test_clip_submission_preserves_canonical_hashes_and_stored_inputs(
 
     Args:
         source: Public catalog, temporal or private raster input.
-        area: Public rectangle, sampling box or catalog vector area.
+        area: Explicit whole raster, rectangle, sampling box or catalog vector area.
     """
     operation = get_model_operation("raster.clip.v1")
     original = ClipInputs(**source, **area)
@@ -94,6 +95,8 @@ def test_clip_submission_preserves_canonical_hashes_and_stored_inputs(
         assert queued.model_dump(mode="json", by_alias=True) == expected_spec
         plan = operation.queue(request, {})
         assert plan.specification == expected_spec
+        if area.get("wholeRaster"):
+            assert plan.summary["area"] == {"kind": "wholeRaster", "bounds": None}
         assert plan.work_key == expected_work
         restored = operation.parse_specification(plan.specification)
         assert restored.model_dump(mode="json", by_alias=True) == expected_spec

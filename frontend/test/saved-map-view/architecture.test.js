@@ -6,7 +6,6 @@ const SAVED_MAP_MODULES = [
   "catalog-client.js",
   "controller.js",
   "dom-view.js",
-  "fragment-codec.js",
   "leaflet-viewport.js",
   "local-storage.js",
   "model.js",
@@ -57,10 +56,6 @@ test("composition alone assembles the saved map coordinator", async () => {
     new URL("../../src/saved-map-view/controller.js", import.meta.url),
     "utf8",
   );
-  const codec = await readFile(
-    new URL("../../src/saved-map-view/fragment-codec.js", import.meta.url),
-    "utf8",
-  );
   const localStorage = await readFile(
     new URL("../../src/saved-map-view/local-storage.js", import.meta.url),
     "utf8",
@@ -72,8 +67,6 @@ test("composition alone assembles the saved map coordinator", async () => {
   assert.doesNotMatch(controller, /fetch\(/);
   assert.doesNotMatch(controller, /localStorage|sessionStorage/);
   assert.doesNotMatch(controller, /layerName|styleName|sourceUri|href/);
-  assert.doesNotMatch(codec, /^import\s/m);
-  assert.doesNotMatch(codec, /fetch\(|localStorage|sessionStorage/);
   assert.match(localStorage, /globalThis\.localStorage/);
   assert.doesNotMatch(localStorage, /parseSavedMapView|createSavedMapView/);
 });

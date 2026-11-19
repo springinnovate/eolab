@@ -64,6 +64,10 @@ def serialize_retained_metadata(value: dict[str, object] | None) -> Jsonb | None
     return Jsonb(value)
 
 
+class UnsupportedProcessingSchemaError(RuntimeError):
+    """Stop worker startup so an operator can migrate an incompatible Processing database."""
+
+
 class PostgresJobStore:
     """Own Processing transactions and a bounded, process-local connection pool.
 
@@ -152,14 +156,47 @@ class PostgresJobStore:
             ) from error
 
     def migrate(self) -> None:
-        """Idempotently install the owned schema under the processing mutex.
+        """Install a fresh Processing schema, or verify an existing layout without DDL.
+
+        Fresh installations store version 22 directly. Existing installations of
+        the same layout may have all 22 historical markers. The structure is checked
+        as well because distinct historical Habitat layouts shared marker 22.
 
         Raises:
-            ProcessingError: If the database cannot apply the schema.
+            UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
+            ProcessingError: If the database is temporarily unavailable.
         """
-        sql = files("eolab_app.processing").joinpath("schema.sql").read_text()
+        resources = files("eolab_app.processing")
         with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute(sql)
+            cursor.execute("SELECT to_regnamespace('processing') AS namespace")
+            if cursor.fetchone()["namespace"] is None:
+                cursor.execute(resources.joinpath("schema.sql").read_text())
+                return
+            try:
+                cursor.execute(
+                    "SELECT version FROM processing.schema_version ORDER BY version"
+                )
+                versions = [row["version"] for row in cursor.fetchall()]
+                cursor.execute(resources.joinpath("schema_check.sql").read_text())
+                cursor.nextset()  # The first SELECT binds the stored fields without reading rows.
+                mismatch = cursor.fetchone()
+            except (
+                psycopg.errors.UndefinedTable,
+                psycopg.errors.UndefinedColumn,
+            ) as error:
+                raise UnsupportedProcessingSchemaError(
+                    f"The installed Processing schema is unsupported. {error.diag.message_primary}."
+                ) from error
+            if mismatch is not None:
+                raise UnsupportedProcessingSchemaError(
+                    "The installed Processing schema is unsupported. "
+                    f"Check {mismatch['problem']} before starting this worker."
+                )
+            if versions not in ([22], list(range(1, 23))):
+                raise UnsupportedProcessingSchemaError(
+                    "The installed Processing schema has an unsupported version history. "
+                    "This worker requires the current version 22 layout."
+                )
 
     def interrupt_unfinished_jobs_on_restart(self) -> int:
         """Discard pending work before the restarted worker consumes new jobs.
@@ -167,7 +204,7 @@ class PostgresJobStore:
         Call once at worker startup, after stopping the previous worker and its
         native processes. Queued, running and cancelling jobs become interrupted;
         completed results and cached values are unchanged. Keep attempt files and
-        reservations until the worker's normal cleanup removes them. Existing
+        recorded file sizes until normal cleanup removes the files. Existing
         job notifications tell browsers to read the interrupted status.
 
         Returns:
@@ -176,6 +213,7 @@ class PostgresJobStore:
         Raises:
             ProcessingError: If PostgreSQL cannot update the jobs.
         """
+
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,"
@@ -596,7 +634,6 @@ class PostgresJobStore:
                             job_id,
                             self.limits.result_ttl_seconds,
                             Jsonb(expected.specification),
-                            expected.reserved_bytes,
                             Jsonb(expected.summary),
                             expected.operation,
                             expected.work_key,
@@ -638,7 +675,7 @@ class PostgresJobStore:
                 if new_jobs:
                     cursor.executemany(
                         "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds,result_ttl_seconds,input_uploads) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,0,%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:
@@ -676,7 +713,6 @@ class PostgresJobStore:
 
         Returns:
             Updated running job without reserving disk or returning it to the queue.
-            Historical reservation fields remain readable but are not admission limits.
 
         Raises:
             ProcessingError: If ownership was lost, cancellation won or storage failed.
@@ -693,7 +729,7 @@ class PostgresJobStore:
                 )
             cursor.execute(
                 "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),"
-                "reserved_bytes=0,required_disk_bytes=0,progress=%s,updated_at=clock_timestamp() "
+                "progress=%s,updated_at=clock_timestamp() "
                 "WHERE id=%s RETURNING *",
                 (
                     Jsonb(prepared.specification),
@@ -1120,8 +1156,7 @@ class PostgresJobStore:
             if not row:
                 return None
             cursor.execute(
-                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',deadline_at=NULL,"
-                "execution_memory_bytes=0,reserved_bytes=0,required_disk_bytes=0,"
+                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',"
                 "started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
                 (
                     uuid4().hex,
@@ -1144,7 +1179,7 @@ class PostgresJobStore:
             progress: Bounded, owner-defined progress fields.
 
         Returns:
-            False after cancellation, lost lease, or deadline expiration.
+            False after cancellation or loss of the attempt or its lease.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -1177,8 +1212,7 @@ class PostgresJobStore:
             identifier: Running job.
             attempt: Execution fencing token.
             artifact: Atomically published immutable result, or None on failure.
-                Manifest-backed results replace the working reservation with their
-                exact retained byte count, including every file and the inventory.
+                Manifest-backed results record the retained bytes of every file and the inventory.
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
                 input hash. Stored only if this attempt becomes ready.
@@ -1187,8 +1221,7 @@ class PostgresJobStore:
             True only if the still-current attempt reached the requested state.
 
         Raises:
-            ProcessingError: If retained files exceed the admitted reservation or
-                durable storage is unavailable.
+            ProcessingError: If durable storage is unavailable.
             ValidationError: If the supplied manifest violates its storage contract.
         """
         with self._transaction(acquire_lock=True) as cursor:
@@ -1431,8 +1464,8 @@ class PostgresJobStore:
         cleanup acknowledgements do not prune.
 
         Returns:
-            At most 100 rows with no active transfer or dependent job; budgets remain reserved
-            until the worker confirms filesystem cleanup.
+            At most 100 jobs whose files have no active transfer or dependent job.
+            Their byte counts are cleared after the worker removes the files.
 
         Raises:
             ProcessingError: If the database cannot update expiration or read jobs.

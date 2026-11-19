@@ -496,12 +496,13 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
 
 @pytest.mark.parametrize("change_source", [None, "private_values"])
 def test_downstream_http_captures_sources_and_publishes_owned_files(
-    downstream_boundary: Any, change_source: str | None
+    downstream_boundary: Any, store: PostgresJobStore, change_source: str | None
 ) -> None:
     """A model run captures catalog or published input identities and owns its outputs.
 
     Args:
         downstream_boundary: Real API, database, source and native worker composition.
+        store: Disposable job store recording published file sizes and expiry.
         change_source: A private values raster or the original catalog values.
     """
     client, worker, request, items, sources = downstream_boundary
@@ -579,10 +580,32 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
     exported = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
     RunDocument.model_validate(parse_yaml(exported.content, run=True))
     assert str(sources.rasters["dem"]) not in exported.text
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    stored = store.get(identifier, owner)
+    directory = worker.artifacts.root / "results" / stored["attempt_id"]
+    assert stored["reserved_bytes"] == sum(
+        file.stat().st_size for file in directory.iterdir()
+    )
+    with psycopg.connect(store.conninfo) as connection:
+        # A completed pre-upgrade run still owns the same files and result handle.
+        connection.execute(
+            "UPDATE processing.jobs SET spec=jsonb_set(spec,'{calculation,reservedBytes}','0') WHERE id=%s",
+            (stored["job_id"],),
+        )
+    assert client.get(f"/api/processing/jobs/{identifier}").json() == ready
     url = ready["result"]["url"]
-    assert client.get(url).status_code == 200
+    downloaded = client.get(url)
+    assert hashlib.sha256(downloaded.content).hexdigest() == ready["result"]["sha256"]
     client.cookies.clear()
     assert client.get(url).status_code == 404
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+            (stored["job_id"],),
+        )
+    client.portal.call(worker.cleanup)
+    assert not directory.exists()
+    assert store.get(identifier, owner)["reserved_bytes"] == 0
 
 
 @pytest.fixture
@@ -870,7 +893,7 @@ def test_model_rename_rejects_unowned_or_invalid_edits(
         other = store.submit(
             owner,
             uuid4().hex,
-            PreparedJobPlan({}, {}, 0, operation="test.unrelated.v1"),
+            PreparedJobPlan({}, {}, operation="test.unrelated.v1"),
             "unrelated",
         )
         identifier = other["id"]
@@ -1038,7 +1061,7 @@ def test_model_owner_idempotency_pagination_and_cancel(
         unrelated = store.submit(
             owner,
             uuid4().hex,
-            PreparedJobPlan({}, {}, 0, operation="test.unrelated.v1"),
+            PreparedJobPlan({}, {}, operation="test.unrelated.v1"),
             str(index),
         )
         store.cancel(unrelated["id"], owner)
@@ -1307,7 +1330,6 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
             PreparedJobPlan(
                 {},
                 {},
-                0,
                 operation="test.v1",
                 retained_metadata={"oversized": "x" * (192 * 1024)},
             ),

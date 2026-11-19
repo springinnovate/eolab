@@ -44,6 +44,26 @@ export const WHOLE_RASTER_SAMPLING_AREA = Object.freeze({
     kind: "wholeRaster"
 });
 
+/** Capture the visible rectangle within the single geographic map world.
+ * @param {{west:number,south:number,east:number,north:number}|null} bounds Visible WGS 84 map bounds.
+ * @return {{kind:"selectedArea",selectedBounds:RasterSelectedBounds}} Independent rectangle, excluding blank map margins.
+ * @throws {Error} If the map has no visible geographic area.
+ */
+export function captureMapViewportArea(bounds) {
+    if (!bounds || ![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite)) {
+        throw new Error("The visible map extent is unavailable. Move the map or choose another area.");
+    }
+    if (bounds.west === bounds.east || bounds.south === bounds.north) {
+        throw new Error("The map has no visible area. Make room for the map, or choose another area.");
+    }
+    const selectedBounds = {west: Math.max(-180, bounds.west), south: Math.max(-90, bounds.south),
+        east: Math.min(180, bounds.east), north: Math.min(90, bounds.north)};
+    if (selectedBounds.west >= selectedBounds.east || selectedBounds.south >= selectedBounds.north) {
+        throw new Error("Move the map inside the world bounds, or choose another area.");
+    }
+    return {kind: "selectedArea", selectedBounds};
+}
+
 /**
  * Validate and freeze a whole-raster, rectangular, geodesic-box or polygon area.
  *

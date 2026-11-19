@@ -825,34 +825,6 @@ test("retained custom names reach histograms and paired axes without new calcula
     h.destroy();
 });
 
-test("download intents preserve distinct 1D and 2D boxes without waiting for statistics", async () => {
-    const downloads = [];
-    const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
-        onDownloadRequested: (item, area) => downloads.push({ item, area }),
-    });
-    await h.viewer.show(createRasterItem("download-x"));
-    await h.viewer.show(createRasterItem("download-y"));
-    await flushPromises();
-    assert.equal(h.viewer.getSelectedArea(), null);
-    h.viewer.exploreAt({ lng: 78, lat: 22 });
-    const oneD = h.viewer.getSelectedArea();
-    assert.ok(Object.isFrozen(oneD.samplingBox));
-    h.controlsView.handlers.onDownloadHistogram(h.layerStackView.activeKey);
-    assert.deepEqual(downloads.at(-1).area, oneD);
-    h.controlsView.handlers.onBivariateModeChange("bivariate");
-    h.viewer.exploreAt({ lng: 80, lat: 24 });
-    const twoD = h.viewer.getSelectedArea();
-    assert.notDeepEqual(twoD, oneD);
-    h.controlsView.handlers.onDownloadPairedHistogram("x");
-    h.controlsView.handlers.onDownloadPairedHistogram("y");
-    assert.deepEqual(downloads.at(-1).area, twoD);
-    assert.deepEqual(downloads.at(-2).area, twoD);
-    assert.notEqual(downloads.at(-1).item.id, downloads.at(-2).item.id);
-    h.controlsView.handlers.onBivariateModeChange("overlay");
-    assert.deepEqual(h.viewer.getSelectedArea(), oneD);
-    h.destroy();
-});
-
 test("calculation entry points emit source identities and committed areas without reading histogram results", async () => {
     const calculations = [], areas = [], committed = [];
     const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
@@ -1743,10 +1715,9 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
 test("another Catalog raster view copies appearance and keeps histogram actions tied to that view", async () => {
     let catalog;
     const item = createRasterItem("two-views");
-    const calculations = [], downloads = [];
+    const calculations = [];
     const h = visibleLayerFixture(undefined, {}, {
         onCalculateRequested: (...args) => calculations.push(args),
-        onDownloadRequested: (...args) => downloads.push(args),
     }, {restoreRemovedLayer: (snapshot, isCurrent) =>
         catalog.restoreRemovedLayer(snapshot, async () => item, isCurrent)});
     catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
@@ -1770,9 +1741,7 @@ test("another Catalog raster view copies appearance and keeps histogram actions 
         editCategoricalAppearance(h, copiedKey, changed);
         assert.deepEqual(original.adapter.exportSavedState(original), appearance);
         h.controlsView.handlers.onCalculateHistogram(copiedKey);
-        h.controlsView.handlers.onDownloadHistogram(copiedKey);
         assert.deepEqual(calculations[0], [item, null, "Forest only", copiedKey]);
-        assert.deepEqual(downloads[0], [item, null, "Forest only"]);
         h.mapLayers.removeKey(original.entry.key);
         assert.equal(h.mapLayers.findLayerKey(item), copiedKey);
         assert.equal(h.mapLayers.getRecord(copiedKey), copied);
@@ -2950,7 +2919,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
             return area.kind === "polygonArea" ? {...pairedStatistics(), scope: "polygonArea", polygonArea} : pairedStatistics();
         },
     }, {
-        onDownloadRequested: (...args) => handoffs.push(args),
         onCalculateRequested: (...args) => handoffs.push(args),
     });
     t.after(() => h.destroy());
@@ -2961,7 +2929,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
     assert.equal(h.controlsView.pairedAreaActionsAvailable, false);
     const firstKey = h.mapLayers.retainedRecords[0].entry.key;
     h.controlsView.handlers.onCalculateHistogram(firstKey);
-    h.controlsView.handlers.onDownloadHistogram(firstKey);
     assert.deepEqual(handoffs, []);
     h.viewer.setVectorSelection({polygonArea, label: "Maui study area"});
     await flushPromises();
@@ -2973,7 +2940,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
         assert.equal(canCalculate, false);
         assert.deepEqual(h.viewer.getSelectedArea(key, "1d"), selectedArea);
         h.controlsView.handlers.onCalculateHistogram(key);
-        h.controlsView.handlers.onDownloadHistogram(key);
     }
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
@@ -2981,7 +2947,6 @@ test("a drawing masks both histogram modes and keeps area handoffs unavailable",
     assert.deepEqual(h.viewer.getSelectedArea(null, "2d"), selectedArea);
     assert.equal(h.controlsView.pairedAreaActionsAvailable, false);
     h.controlsView.handlers.onCalculatePairedHistogram("x");
-    h.controlsView.handlers.onDownloadPairedHistogram("x");
     assert.deepEqual(handoffs, []);
 
     const requestCount = areas.length + pairedAreas.length;

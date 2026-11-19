@@ -118,7 +118,6 @@ def build_downstream_submission(
         operation=queued.operation,
         specification=queued.model_dump(mode="json", by_alias=True),
         summary={},
-        reserved_bytes=0,
     )
 
 
@@ -205,7 +204,6 @@ async def prepare_downstream(
         operation=result.operation,
         specification=result.model_dump(mode="json", by_alias=True),
         summary={},
-        reserved_bytes=result.reservedBytes,
     )
 
 

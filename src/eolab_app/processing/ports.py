@@ -224,7 +224,7 @@ class JobStore(Protocol):
         Args:
             owner: Current session hash.
             request_key: Client idempotency key.
-            expected: Validated inputs, reservation, optional work key and labels.
+            expected: Validated inputs, optional work key and labels.
             request_hash: Stable input identity required for direct submissions.
 
         Returns:
@@ -233,6 +233,7 @@ class JobStore(Protocol):
         Raises:
             ProcessingError: If the request identity conflicts or job storage is unavailable.
         """
+
         ...
 
     def submit_batch(

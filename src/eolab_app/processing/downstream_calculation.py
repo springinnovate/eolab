@@ -169,7 +169,6 @@ def plan_downstream(
         inputs=request,
         grid=grid,
         watershedSelection=sources.network.selection,
-        reservedBytes=0,
     )
 
 

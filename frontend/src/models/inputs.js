@@ -4,6 +4,8 @@ import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
 import { getModelInputHandler } from "./input-handlers.js";
 import { rasterSourceReference } from "../raster-source.js";
+import { captureMapViewportArea as modelViewportArea } from "../selected-area.js";
+export { modelViewportArea };
 
 /** @typedef {{key:string,label:string,polygons:Array<{type:"Polygon",coordinates:number[][][]}>,total:number}} DrawnPolygonLayer */
 
@@ -105,27 +107,6 @@ export function modelAreaInput(area) {
     if (value.kind === "catalogSelection") return {kind: value.kind, selection: value.catalogSelection};
     if (value.kind === "polygonArea") return {kind: value.kind, reference: value.polygonArea};
     return structuredClone(value);
-}
-
-/** Capture the visible part of the map within the canonical geographic world.
- * Blank margins outside the single map world are excluded from the rectangle.
- * @param {{west:number,south:number,east:number,north:number}|null} bounds Visible WGS 84 map bounds.
- * @return {Object} Independent, validated model area.
- * @throws {Error} If the viewport has no valid geographic rectangle.
- */
-export function modelViewportArea(bounds) {
-    if (!bounds || ![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite)) {
-        throw new Error("The visible map extent is unavailable. Move the map or choose a vector layer.");
-    }
-    if (bounds.west === bounds.east || bounds.south === bounds.north) {
-        throw new Error("The map has no visible area. Make room for the map, or choose a vector layer.");
-    }
-    const selectedBounds = {west: Math.max(-180, bounds.west), south: Math.max(-90, bounds.south),
-        east: Math.min(180, bounds.east), north: Math.min(90, bounds.north)};
-    if (selectedBounds.west >= selectedBounds.east || selectedBounds.south >= selectedBounds.north) {
-        throw new Error("Move the map inside the world bounds, or choose another analysis area.");
-    }
-    return modelAreaInput({kind: "selectedArea", selectedBounds});
 }
 
 /** Check whether an area is accepted by one declared input type.

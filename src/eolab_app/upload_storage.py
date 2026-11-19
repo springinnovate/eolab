@@ -16,10 +16,17 @@ import re
 import shutil
 from tempfile import TemporaryDirectory
 from threading import RLock
-from typing import BinaryIO, Literal, TypeVar
+from typing import Any, BinaryIO, Literal, TypeVar
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, BaseModel, Field, ValidationError, computed_field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    computed_field,
+)
 
 from eolab_app.source_files import finish_source_task
 
@@ -44,15 +51,10 @@ class UploadError(Exception):
         self.status = status
 
 
-class UploadRecord(BaseModel):
-    """Identify an immutable uploaded original and its fixed deletion date.
-
-    Existing GeoPackage records have no kind field and retain their original
-    creation time. The default identifies those records without reopening data.
-    """
+class StoredUploadFile(BaseModel):
+    """Describe an original file for quota accounting and expiry independently of its format."""
 
     id: UUID
-    kind: UploadKind = "vector"
     name: str
     size_bytes: int = Field(ge=0)
     created_at: AwareDatetime
@@ -62,6 +64,33 @@ class UploadRecord(BaseModel):
     def expires_at(self) -> datetime:
         """Return the upload's seven-day authorization deadline."""
         return self.created_at + UPLOAD_LIFETIME
+
+
+class UploadRecord(StoredUploadFile):
+    """Identify a published original and the format its admission worker accepted."""
+
+    kind: UploadKind
+
+
+_METADATA_OBJECT = TypeAdapter(dict[str, Any])
+
+
+def read_stored_upload(content: bytes) -> StoredUploadFile:
+    """Read published metadata, retaining only the expiry identity for an untyped file.
+
+    Args:
+        content: Persisted metadata for an original file.
+
+    Returns:
+        A published record, or its quota and expiry identity if the kind is absent.
+
+    Raises:
+        ValidationError: If the metadata is malformed or other required fields are invalid.
+    """
+    fields = _METADATA_OBJECT.validate_json(content)
+    if "kind" in fields:
+        return UploadRecord.model_validate(fields)
+    return StoredUploadFile.model_validate(fields)
 
 
 class UploadSummary(BaseModel):
@@ -80,7 +109,7 @@ class RetainedUpload(BaseModel):
     """Keep quota ownership when a hard-linked original is no longer published."""
 
     owner: str = Field(pattern=r"^[a-f0-9]{64}$")
-    upload: UploadRecord
+    upload: StoredUploadFile
 
 
 @dataclass
@@ -212,14 +241,14 @@ class UploadStorage:
             raise UploadError(503, "Upload storage could not be cleaned safely.")
         shutil.rmtree(directory)
 
-    def _read_record(self, directory: Path) -> UploadRecord:
+    def _read_record(self, directory: Path) -> StoredUploadFile:
         """Read admitted metadata without opening or revalidating its dataset.
 
         Args:
             directory: Confined directory holding an admitted original.
 
         Returns:
-            Common metadata, retaining existing upload dates and IDs.
+            Published metadata, or just the recorded identity and expiry of an untyped original.
 
         Raises:
             UploadError: If metadata leaves its upload directory.
@@ -229,7 +258,7 @@ class UploadStorage:
         metadata = (directory / "metadata.json").resolve(strict=True)
         if metadata.parent != directory.resolve():
             raise UploadError(404, "This upload is not available to this browser.")
-        return UploadRecord.model_validate_json(metadata.read_bytes())
+        return read_stored_upload(metadata.read_bytes())
 
     def _usage(self) -> StorageUsage:
         """Read metadata and file sizes, counting hard-linked bytes only once.
@@ -288,7 +317,9 @@ class UploadStorage:
                     pass
                 identifier = str(record.id) if record else directory.name
                 usage.files.setdefault(owner, set()).add(identifier)
-                if record and not directory.name.startswith("."):
+                if isinstance(record, UploadRecord) and not directory.name.startswith(
+                    "."
+                ):
                     if record.expires_at > datetime.now(timezone.utc):
                         usage.uploads.setdefault(owner, []).append(record)
                 for path in directory.rglob("*"):
@@ -620,8 +651,10 @@ class UploadStorage:
                         404, "This upload is not available to this browser."
                     )
                 metadata = self._read_record(directory)
-                if metadata.kind != kind or metadata.expires_at <= datetime.now(
-                    timezone.utc
+                if (
+                    not isinstance(metadata, UploadRecord)
+                    or metadata.kind != kind
+                    or metadata.expires_at <= datetime.now(timezone.utc)
                 ):
                     raise UploadError(
                         404, "This upload is not available to this browser."
@@ -690,8 +723,10 @@ class UploadStorage:
                     if directory.parent.name.startswith("."):
                         continue
                     record = self._read_record(directory)
-                    return record.kind == kind and record.expires_at > datetime.now(
-                        timezone.utc
+                    return (
+                        isinstance(record, UploadRecord)
+                        and record.kind == kind
+                        and record.expires_at > datetime.now(timezone.utc)
                     )
                 return False
         except (OSError, ValidationError) as error:
@@ -772,6 +807,10 @@ class UploadStorage:
                     )
                 owner = original.parent.parent.name
                 record = self._read_record(original.parent)
+                if not isinstance(record, UploadRecord):
+                    raise UploadError(
+                        404, "This upload is not available to this browser."
+                    )
                 _, authorized = self.get_upload_source(owner, record.id, record.kind)
                 if authorized != original:
                     raise UploadError(

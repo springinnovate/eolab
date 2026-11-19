@@ -442,7 +442,9 @@ def test_saved_model_settings_reach_downstream_execution(
         tmp_path / "sources", pit_fill_search_limit=17
     )
     planned = plan_downstream(sources, request)
-    saved = DownstreamPlan.model_validate_json(planned.model_dump_json(by_alias=True))
+    serialized = planned.model_dump_json(by_alias=True)
+    assert "reservedBytes" not in json.loads(serialized)
+    saved = DownstreamPlan.model_validate_json(serialized)
     assert saved.inputs.settings.pit_fill_search_limit == 17
     runner = Mock(side_effect=RuntimeError("observed saved plan"))
     monkeypatch.setattr(

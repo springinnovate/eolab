@@ -95,7 +95,8 @@ export class RasterClipsView {
             }));
             this.sourceSignature = signature;
         }
-        e.source.value = String(state.sources.findIndex(item => source && rasterSourceKey(item) === rasterSourceKey(source)));
+        e.source.value = String(state.sources.findIndex(item =>
+            source && item.label === source.label && rasterSourceKey(item) === rasterSourceKey(source)));
         const locked = !!state.pending || state.submitting;
         e.source.disabled = locked || state.sources.length === 0;
         e["edit-area"].disabled = locked;
