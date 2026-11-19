@@ -81,7 +81,7 @@ def _read_highlights(
     feature_ids: tuple[int, ...],
     limits: VectorReadLimits,
 ) -> None:
-    """Read whole matched features through the same original-source iterator.
+    """Read whole matched features directly by native ID for the map highlight.
 
     Args:
         writer: Supervised parent waiting for the optional display result.
@@ -95,18 +95,20 @@ def _read_highlights(
     from shapely import get_num_coordinates
     from shapely.geometry import mapping
 
-    selected = frozenset(feature_ids)
     features: list[dict[str, Any]] = []
     coordinates = 0
     size = 64
     try:
         with _limit_memory(limits.memory_bytes):
             with closing(
-                iter_original_features(target, limits, monotonic() + limits.seconds)
+                iter_original_features(
+                    target,
+                    limits,
+                    monotonic() + limits.seconds,
+                    feature_ids=feature_ids,
+                )
             ) as originals:
                 for feature_id, _properties, geometry in originals:
-                    if feature_id not in selected:
-                        continue
                     coordinates += int(get_num_coordinates(geometry))
                     if coordinates > MAX_DISPLAY_COORDINATES:
                         writer.put(None)
