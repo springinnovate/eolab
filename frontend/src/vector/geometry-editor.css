@@ -1,0 +1,78 @@
+.vector-geometry-editor {
+    position: absolute;
+    z-index: 1100;
+    top: 0.75rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(32rem, calc(100% - 8rem));
+    max-height: calc(100% - 1.5rem);
+    overflow: auto;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid #b7c6ca;
+    border-radius: 0.4rem;
+    background: white;
+    color: #21363d;
+    box-shadow: 0 2px 8px #0003;
+    font: 0.85rem/1.4 system-ui, sans-serif;
+    cursor: default;
+}
+
+.vector-geometry-editor strong { overflow-wrap: anywhere; }
+.vector-geometry-editor p { margin: 0.35rem 0; }
+.vector-geometry-editor [hidden], .vector-geometry-editor[hidden] { display: none; }
+.vector-geometry-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.vector-geometry-actions button { min-height: 2rem; padding: 0.25rem 0.6rem; }
+.vector-geometry-error { color: #a51e19; }
+.vector-geometry-error:empty { display: none; }
+
+.vector-geometry-handle {
+    display: grid;
+    place-items: center;
+    cursor: grab;
+    touch-action: none;
+}
+
+.vector-geometry-handle::before {
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+    border: 2px solid #00756e;
+    background: white;
+    content: "";
+}
+
+.vector-geometry-handle:hover::before,
+.vector-geometry-handle[aria-pressed="true"]::before {
+    background: #00756e;
+    border-color: white;
+    box-shadow: 0 0 0 1px #00756e;
+}
+
+.vector-geometry-insert {
+    display: grid;
+    place-items: center;
+    border: 2px solid #00756e;
+    border-radius: 50%;
+    background: white;
+    color: #005f59;
+    font: bold 0.9rem/1 system-ui, sans-serif;
+    pointer-events: none;
+}
+
+@media (max-width: 560px) {
+    .vector-geometry-editor {
+        top: 3.5rem;
+        width: calc(100% - 2rem);
+        max-height: calc(100% - 4.5rem);
+    }
+}
+
+@media (pointer: coarse) {
+    .vector-geometry-actions button,
+    .vector-geometry-editor select { min-height: 44px; }
+    .vector-geometry-handle::after {
+        content: "";
+        position: absolute;
+        inset: -7px;
+    }
+}

@@ -4767,6 +4767,8 @@ article.raster-histogram-summary {
   width: 224px;
 }
 .is-editing-map-layer #raster-sampling-tool { visibility: hidden; }
+.is-editing-vector-geometry #control-panel,
+.is-editing-vector-geometry #open-panel { visibility: hidden; }
 #raster-sampling-tool:has(> .raster-sampling-disclosure:not([open])) {
   display: grid;
   align-self: flex-end;

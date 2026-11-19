@@ -115,6 +115,8 @@ import { VectorFilterControls } from "./vector/filter-controls.js";
 import { VectorFieldCalculator } from "./vector/field-calculator.js";
 import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
+import { PolygonGeometryEditor } from "./vector/geometry-editor.js";
+import "./vector/geometry-editor.css";
 import { UploadsDialog } from "./uploads/dialog.js";
 import { getUpload, getRasterUpload } from "./uploads/api.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
@@ -877,6 +879,8 @@ async function initializeCatalog(
     let mapInteractionTools = null;
     let vectorFilterControls = null;
     let refreshSpatialFilters = null;
+    let polygonGeometryEditor = null;
+    let drawingEditing = false;
     let vectorFieldCalculator = null;
     let vectorSampling = null;
     let summarySampling = null;
@@ -948,6 +952,9 @@ async function initializeCatalog(
             rasterClips?.syncLayerDownloads(calculationLayers);
             refreshCatalogMapAction();
             mapInteractionTools?.refresh();
+            if (polygonGeometryEditor?.key && !layers.some(layer => layer.key === polygonGeometryEditor.key)) {
+                polygonGeometryEditor.close();
+            }
             annotations?.observeLayerOrder(layers);
             refreshSpatialFilters?.();
             rasterSeries?.updateAvailableRasters(calculationLayers, temporalDatasets(layers));
@@ -1171,12 +1178,82 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => rasterVisualization.setFirstSampleHintEnabled(tool === null));
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
-        onFilterChange: () => mapLayerController.render(),
+        onFilterChange: record => {
+            if (mapLayerController.getRecord(record.entry.key) === record) mapLayerController.render();
+        },
         leaflet: L,
         leafletMap,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    /**
+     * Give edit gestures to the current layer editor and restore the chosen tool on exit.
+     * @param {boolean} editing Whether a drawing or a vector draft has the map.
+     * @return {void}
+     */
+    function setLayerEditingMode(editing) {
+        mapFeatureHover?.setEnabled(!editing);
+        mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
+        document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
+        rasterVisualization.setPointerInspectionEnabled(!editing);
+        mapInteractionTools?.setEditing(editing);
+        onLayoutChange();
+    }
+    polygonGeometryEditor = new PolygonGeometryEditor({leaflet: L, map: leafletMap,
+        onEditingChange: (editing, key) => {
+            document.querySelector("main").classList.toggle("is-editing-vector-geometry", editing);
+            setLayerEditingMode(editing);
+            if (!editing && mapLayerController.getRecord(key)) mapLayerController.render({key, action: "edit-geometry"});
+        },
+    });
+    /**
+     * Prepare and install the admitted copy at the original view key.
+     * @param {Object} previous Retained vector that started the edit.
+     * @param {import("./uploads/api.js").VectorUpload} upload Newly admitted private source.
+     * @param {AbortSignal} signal Cancellation when the editor or retained view closes.
+     * @return {Promise<void>} Completion when the existing row shows the saved copy.
+     * @throws {Error} If the source cannot be shown or the retained view has changed.
+     * @throws {DOMException} If the editor closes before attachment.
+     */
+    async function showEditedVector(previous, upload, signal) {
+        const key = previous.entry.key;
+        const source = {...upload, kind: "upload"};
+        const publication = await vectorMapLayerAdapter.publish(source);
+        signal.throwIfAborted();
+        if (mapLayerController.getRecord(key) !== previous) throw new Error("The saved file is in Your uploads.");
+        const {label, visible, opacity, customName} = previous.entry;
+        const staged = mapLayerController.stageLocal({
+            key, label, visible, opacity, customName, sourceName: upload.name, upload: source,
+            publication, isCustom: true, isDuplicate: true, canAddView: true,
+        }, vectorMapLayerAdapter, previous);
+        try {
+            await vectorMapLayerAdapter.prepareGeometryReplacement(staged.record, previous, signal);
+            if (!mapLayerController.replaceStagedLayer(previous, staged)) throw new Error("The saved file is in Your uploads.");
+        } finally {
+            if (mapLayerController.getRecord(key) !== staged.record) vectorMapLayerAdapter.discardStaged(staged.record);
+        }
+        mapLayerStackView.announceStatus(`Saved changes to ${label}.`);
+    }
+    mapLayerController.onEditGeometry = key => {
+        const record = mapLayerController.getRecord(key);
+        if (record?.adapter !== vectorMapLayerAdapter || !vectorMapLayerAdapter.canEditGeometry(record)) return;
+        if (drawingEditing || polygonGeometryEditor.key) {
+            mapLayerStackView.setStatus("Finish or cancel the current polygon edit first.");
+            return;
+        }
+        if (!record.entry.visible) {
+            mapLayerStackView.setStatus("Show the layer on the map before editing its geometry.");
+            return;
+        }
+        const {selection} = vectorMapLayerAdapter.describeSource(record);
+        const filter = vectorMapLayerAdapter.exportFilterState(record);
+        polygonGeometryEditor.open({
+            key, label: record.entry.label, source: {...selection, filter},
+            isCurrent: () => mapLayerController.getRecord(key) === record &&
+                JSON.stringify(vectorMapLayerAdapter.exportFilterState(record)) === JSON.stringify(filter),
+            showSavedCopy: (upload, signal) => showEditedVector(record, upload, signal),
+        });
+    };
     vectorFieldCalculator = new VectorFieldCalculator({document, getTarget: key => {
         const record = mapLayerController.getRecord(key);
         if (!record || record.adapter !== vectorMapLayerAdapter || !record.entry.isCustom) return null;
@@ -1334,6 +1411,7 @@ async function initializeCatalog(
         const record = mapLayerController.addLocal({
             key, label: upload.name, sourceName: upload.name, customName: layer.customName,
             upload, publication, visible: false, opacity: layer.opacity, canAddView: true, isCustom: layer.isCustom ?? true,
+            isDuplicate: layer.isDuplicate,
         }, vectorMapLayerAdapter);
         /** Check that asynchronous restoration still owns this map layer. @return {boolean} */
         const stillRetained = () => isCurrent() && mapLayerController.getRecord(key) === record;
@@ -1848,6 +1926,7 @@ async function initializeCatalog(
             if (!record.adapter.describeSource(record).source.uploadId) return null;
             return {
                 uploadId: record.adapter.describeSource(record).source.uploadId,
+                ...(record.isDuplicate ? {isDuplicate: true} : {}),
                 visible: record.entry.visible, opacity: record.entry.opacity,
                 customName: record.entry.customName ?? [...record.entry.label].slice(0, 160).join(""),
                 style: record.adapter.exportSavedState(record),
@@ -2127,17 +2206,19 @@ async function initializeCatalog(
             onShare: id => annotationSessions.shareLayer(id),
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
             onRenameContributor: id => annotationSessions.editContributorName(id),
-            requestEditing: id => annotationSessions.requestDrawing(id),
+            requestEditing: id => {
+                if (polygonGeometryEditor.key) {
+                    mapLayerStackView.setStatus("Finish or cancel the current polygon edit first.");
+                    return false;
+                }
+                return annotationSessions.requestDrawing(id);
+            },
             onCommittedChange: () => { annotationSessions?.committedLayersChanged(); refreshSpatialFilters?.(); vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); savedMapViewController?.scheduleRemember(); },
             onFilter: key => vectorFilterControls.open(key),
             onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
-                mapFeatureHover?.setEnabled(!editing);
-                mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
-                document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
-                rasterVisualization.setPointerInspectionEnabled(!editing);
-                mapInteractionTools?.setEditing(editing);
-                onLayoutChange();
+                drawingEditing = editing;
+                setLayerEditingMode(editing);
             },
         });
         annotationSessions = new AnnotationSessionsController({
