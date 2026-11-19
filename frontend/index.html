@@ -836,19 +836,19 @@
             <header class="raster-series-bar">
               <h2>Raster statistics</h2>
               <div class="raster-series-switch" role="group" aria-label="Result view">
-                <button id="raster-series-result-button" type="button" aria-pressed="true">Result</button>
-                <button id="raster-series-values-button" type="button" aria-pressed="false">Values</button>
+                <button id="raster-series-result-button" class="secondary-button" type="button" aria-pressed="true">Result</button>
+                <button id="raster-series-values-button" class="secondary-button" type="button" aria-pressed="false">Values</button>
               </div>
             </header>
             <div class="raster-series-field">
               <h3 id="raster-series-measure">Mean</h3>
               <div class="raster-series-context">
-                <button id="raster-series-source-button" type="button" aria-expanded="false" aria-controls="raster-series-data-inputs"><span id="raster-series-source-summary">Choose rasters</span></button>
+                <button id="raster-series-source-button" class="summary-text-button" type="button" aria-expanded="false" aria-controls="raster-series-data-inputs"><span id="raster-series-source-summary">Choose rasters</span></button>
                 <span aria-hidden="true">·</span>
-                <button id="raster-series-open-area" type="button" aria-expanded="false" aria-controls="raster-series-area-picker"><span id="raster-series-area-summary">Sample area</span></button>
+                <button id="raster-series-open-area" class="summary-text-button" type="button" aria-expanded="false" aria-controls="raster-series-area-picker"><span id="raster-series-area-summary">Sample area</span></button>
               </div>
               <div id="raster-series-data-inputs" class="raster-series-picker" hidden>
-                <div class="raster-series-picker-heading"><strong>Rasters</strong><button id="raster-series-sources-done" type="button">Done</button></div>
+                <div class="raster-series-picker-heading"><strong>Rasters</strong><button id="raster-series-sources-done" class="summary-text-button" type="button">Done</button></div>
                 <div id="raster-series-sources" aria-label="Raster sources"></div>
                 <div id="raster-series-temporal" class="temporal-period" hidden>
                   <p id="raster-series-temporal-title"></p>
@@ -859,10 +859,10 @@
                 </div>
               </div>
               <div id="raster-series-area-picker" class="raster-series-picker" role="group" aria-label="Choose sample area" hidden>
-                <button id="raster-series-pick-selection" type="button">Sampling box</button>
-                <button id="raster-series-pick-vector" type="button">Selected polygons</button>
-                <button id="raster-series-pick-whole" type="button">Whole raster</button>
-                <button id="raster-series-adjust-area" type="button" aria-controls="raster-sampling-tool">Adjust area on map…</button>
+                <button id="raster-series-pick-selection" class="secondary-button" type="button">Sampling box</button>
+                <button id="raster-series-pick-vector" class="secondary-button" type="button">Selected polygons</button>
+                <button id="raster-series-pick-whole" class="secondary-button" type="button">Whole raster</button>
+                <button id="raster-series-adjust-area" class="summary-text-button" type="button" aria-controls="raster-sampling-tool">Adjust area on map…</button>
               </div>
               <button id="raster-series-use-current-filter" class="secondary-button" type="button" hidden>Use current polygon filter</button>
               <p id="raster-series-chart-note" hidden></p>
@@ -899,10 +899,10 @@
               <div class="raster-series-run-controls">
                 <p id="raster-series-status" role="status" aria-live="polite"></p>
                 <div id="raster-series-run-actions" class="raster-series-actions">
-                  <button id="raster-series-exact-statistics" type="button" hidden>Calculate exact</button>
-                  <button id="raster-series-retry" type="button" hidden>Retry failed rasters</button>
-                  <button id="raster-series-cancel" type="button" hidden>Cancel</button>
-                  <button id="raster-series-recover" type="button" hidden>Recover / retry</button>
+                  <button id="raster-series-exact-statistics" class="summary-text-button" type="button" hidden>Calculate exact</button>
+                  <button id="raster-series-retry" class="summary-text-button" type="button" hidden>Retry failed rasters</button>
+                  <button id="raster-series-cancel" class="summary-text-button" type="button" hidden>Cancel</button>
+                  <button id="raster-series-recover" class="summary-text-button" type="button" hidden>Recover / retry</button>
                 </div>
               </div>
               <label id="raster-series-measure-choice" hidden>Show statistic <select id="raster-series-selected-statistic"></select></label>

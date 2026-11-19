@@ -7,7 +7,7 @@ import { createChartTooltip } from "../charts/chart-presentation.js";
 // assigns each active formula one of these five styles and reuses a freed style
 // when a formula is removed; a growing formula ID is not a palette index.
 export const STATISTIC_STYLES = Object.freeze([
-    { color: "#76d6b1", dash: "none", marker: "circle", symbol: "●" },
+    { color: "#0072b2", dash: "none", marker: "circle", symbol: "●" },
     { color: "#d55e00", dash: "7 3", marker: "square", symbol: "■" },
     { color: "#009e73", dash: "2 3", marker: "diamond", symbol: "◆" },
     { color: "#b34a91", dash: "9 3 2 3", marker: "triangle", symbol: "▲" },

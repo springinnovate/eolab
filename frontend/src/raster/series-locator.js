@@ -2,7 +2,7 @@
 import { samplingBoxBounds, tessellateSamplingBox } from "../sampling-box.js";
 import { vectorSelectionsEqual } from "../selected-area.js";
 
-const outlineStyle = {color: "#f6ffdf", weight: 2, fillColor: "#168574", fillOpacity: 0.24, interactive: false};
+const outlineStyle = {className: "map-selection-footprint", interactive: false};
 
 /** Convert an admitted two- or three-dimensional geographic extent into Leaflet corners.
  * An east longitude beyond 180 keeps a dateline-crossing footprint contiguous on the thumbnail.
@@ -109,7 +109,8 @@ export class RasterResultLocator {
             this.map = L.map(this.container, {zoomControl: false, dragging: false, keyboard: false, touchZoom: false,
                 doubleClickZoom: false, scrollWheelZoom: false, boxZoom: false, zoomAnimation: false, fadeAnimation: false});
             this.map.attributionControl.setPrefix(false);
-            L.tileLayer(this.background.url, {attribution: this.background.attribution, maxNativeZoom: 17, maxZoom: 22}).addTo(this.map);
+            L.tileLayer(this.background.url, {className: "eolab-basemap", attribution: this.background.attribution,
+                maxNativeZoom: 17, maxZoom: 22}).addTo(this.map);
         }
         this.map.invalidateSize({pan: false});
         this.layer?.remove();

@@ -260,8 +260,9 @@ test("the single result locator uses the source extent and only outlines the mat
     const h = controlsFixture(), rectangles = [], drawn = [];
     const map = {attributionControl: {setPrefix() {}}, invalidateSize() {}, fitBounds() {}};
     const layer = {addTo() { return this; }, remove() {}, getBounds() { return {isValid: () => true}; }};
-    const leaflet = {map: () => map, tileLayer: () => layer,
-        rectangle(corners) { rectangles.push(corners); return layer; },
+    let tileStyle, extentStyle;
+    const leaflet = {map: () => map, tileLayer(url, options) { tileStyle = options; return layer; },
+        rectangle(corners, options) { rectangles.push(corners); extentStyle = options; return layer; },
         geoJSON(geometry) { drawn.push(geometry); return layer; }};
     const locator = new RasterResultLocator(h.document, leaflet, {url: "", attribution: ""});
     const frame = h.document.createElement("div");
@@ -272,6 +273,8 @@ test("the single result locator uses the source extent and only outlines the mat
     Object.assign(h.state.rows[0], {state: "value", value: 8, rawValue: "8"});
     h.draw();
     assert.deepEqual(rectangles, [[[-15, 170], [15, 190]]], "3-D extent across the dateline");
+    assert.equal(tileStyle.className, "eolab-basemap");
+    assert.equal(extentStyle.className, "map-selection-footprint");
     const reference = {id: "a", sha256: "b"};
     h.state.area.area = {kind: "polygonArea", polygonArea: reference};
     h.draw();
