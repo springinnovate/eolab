@@ -514,7 +514,11 @@ class VectorNumericClass(BaseModel):
 
 
 class VectorNumericClassificationSummary(BaseModel):
-    """Browser-safe bounded classification of one authoritative field."""
+    """Numeric ranges and missing-value counts from a bounded attribute read.
+
+    When the read finds nulls and no finite values, there are zero classes
+    and both observed bounds are null.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -529,19 +533,18 @@ class VectorNumericClassificationSummary(BaseModel):
     )
     actual_class_count: int = Field(
         alias="actualClassCount",
-        ge=1,
+        ge=0,
         le=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
         strict=True,
     )
     classes: tuple[VectorNumericClass, ...] = Field(
-        min_length=1,
         max_length=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
     )
-    observed_minimum: float = Field(alias="observedMinimum", strict=True)
-    observed_maximum: float = Field(alias="observedMaximum", strict=True)
+    observed_minimum: float | None = Field(alias="observedMinimum", strict=True)
+    observed_maximum: float | None = Field(alias="observedMaximum", strict=True)
     numeric_value_count: int = Field(
         alias="numericValueCount",
-        ge=1,
+        ge=0,
         le=VECTOR_FIELD_FEATURE_LIMIT,
         strict=True,
     )
@@ -577,7 +580,7 @@ class VectorNumericClassificationSummary(BaseModel):
 
     @model_validator(mode="after")
     def require_consistent_classes(self) -> "VectorNumericClassificationSummary":
-        """Require complete adjacent class coverage and consistent counts.
+        """Require adjacent classes and a numeric extent when values were found.
 
         Returns:
             Validated numeric classification summary.
@@ -588,6 +591,20 @@ class VectorNumericClassificationSummary(BaseModel):
         """
         if len(self.classes) != self.actual_class_count:
             raise ValueError("Actual numeric class count is inconsistent")
+        if self.numeric_value_count == 0:
+            if (
+                self.classes
+                or self.observed_minimum is not None
+                or self.observed_maximum is not None
+                or self.null_count == 0
+            ):
+                raise ValueError(
+                    "A missing-only classification requires null values and "
+                    "empty ranges and bounds"
+                )
+            return self
+        if not self.classes:
+            raise ValueError("Numeric class counts must cover every numeric value")
         if self.classes[0].minimum is not None:
             raise ValueError("First numeric class must be lower-open")
         if self.classes[-1].maximum is not None:
@@ -601,7 +618,11 @@ class VectorNumericClassificationSummary(BaseModel):
             self.numeric_value_count
         ):
             raise ValueError("Numeric class counts must cover every numeric value")
-        if self.observed_minimum > self.observed_maximum:
+        if (
+            self.observed_minimum is None
+            or self.observed_maximum is None
+            or self.observed_minimum > self.observed_maximum
+        ):
             raise ValueError("Observed numeric extent is invalid")
         return self
 
@@ -720,14 +741,17 @@ class VectorCategoryRule(BaseModel):
 
 
 class VectorCategoricalStyle(BaseModel):
-    """Validated bounded category rules for one authoritative field."""
+    """Category and fallback colors for one authoritative field.
+
+    A field with no discovered values can use just the missing or Other color.
+    With no configured colors, the style draws no feature symbols.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     field: str = Field(min_length=1, max_length=256, strict=True)
     limit: int = Field(ge=1, le=VECTOR_CATEGORY_MAXIMUM_LIMIT, strict=True)
     rules: tuple[VectorCategoryRule, ...] = Field(
-        min_length=1,
         max_length=VECTOR_CATEGORY_MAXIMUM_LIMIT,
     )
     other_color: str | None = Field(
@@ -867,7 +891,11 @@ class VectorGraduatedRule(BaseModel):
 
 
 class VectorGraduatedStyle(BaseModel):
-    """Validated graduated classification for one numeric Catalog field."""
+    """Numeric range and missing-value colors for one numeric attribute.
+
+    An empty range list draws only features with the configured missing color.
+    With no missing color, the style draws no feature symbols.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -881,7 +909,6 @@ class VectorGraduatedStyle(BaseModel):
     )
     palette: VectorSequentialPalette
     rules: tuple[VectorGraduatedRule, ...] = Field(
-        min_length=1,
         max_length=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
     )
     missing_color: str | None = Field(
@@ -924,7 +951,7 @@ class VectorGraduatedStyle(BaseModel):
 
     @model_validator(mode="after")
     def require_complete_adjacent_rules(self) -> "VectorGraduatedStyle":
-        """Require bounded rule count and complete adjacent numeric coverage.
+        """Require populated ranges to be bounded in count and cover all values.
 
         Returns:
             Validated graduated style.
@@ -933,6 +960,8 @@ class VectorGraduatedStyle(BaseModel):
             ValueError: If rules exceed the request, leave an outer gap, or
                 contain non-adjacent internal boundaries.
         """
+        if not self.rules:
+            return self
         if len(self.rules) > self.class_count:
             raise ValueError("Graduated rules cannot exceed requested classes")
         if self.rules[0].minimum is not None:

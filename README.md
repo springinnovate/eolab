@@ -31,10 +31,14 @@ Search the **Catalog** by place name, filename, keyword, author, paper title, or
 
 In **Map contents**, show, hide, rename, or reorder layers. The first layer draws on top. Duplicate a layer to try a second style or filter and keep both views. Copy a style between compatible layers, and use the legend to show readers what the colors mean.
 
+With `EOLAB_MAPTILER_API_KEY` configured in [the environment](.env.example), enter a country, city, or street address in **Find a place** and choose a match to zoom there. The × hides the panel in this browser. To reopen it, choose **Map display → Show place search** in the map tools menu.
+
 The panels fade together so you can see the map beneath them. Hover over a panel or move keyboard focus into it to bring all panels back to full opacity. When you click the map to inspect a histogram or feature, the visible result stays readable as you pan or sample another spot. Close it, minimize it, or switch tools to let it fade again. Open **Settings** at the bottom of the map tools menu to turn fading off or adjust the delays, fade durations, and idle opacity. EOLab remembers your choices in this browser.
 
 <details>
 <summary>Color scales, category names, and vector labels</summary>
+
+For a vector layer, choose **Categories** or **Numeric ranges** and select an attribute. Under **No value**, turn on **Style separately** to pick a color for features with a missing value. That color has its own legend entry, even when the entire field is missing. A value of `0` uses its category or range color.
 
 Use a color range for continuous measurements such as rainfall, named colors for land-cover classes, or symbols and labels for vector features. A percentile stretch makes differences visible when a few extreme values dominate the range. Turn on **Style one value separately** to give a value its own color and opacity. For example, set a flood depth of `0` to 0% opacity to show the map underneath. Use **Add color range** to style a range including its endpoints. Enter only **Through** to style everything at or below `1`, or only **From** to color everything at or above `100` magenta. The exact value takes priority, followed by the first matching range. Other values use the gradient. You can import category names and colors from CSV. [See the style editor.](docs/images/eolab-dynamic-styling.jpg)
 
@@ -69,7 +73,11 @@ For a calculation you want to follow in **Runs**, use **Data tools → Raster su
 
 ### Plot attributes and summarize polygons
 
-In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Each comparison field has its own scale and shares the same X axis. Switch between **Plot** and **Values** to read exact measurements, including missing values. Click another place to update the open plot, or select a measurement and choose **Zoom to feature**. **Plot options** contains the chart style, order, and axis or title field.
+In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Line, scatter, and bar comparisons give each field its own scale and share the same X axis. In either plot, choose **Stacked bars** under **Plot options** to put the checked fields into one horizontal bar per feature. Stack fields that use the same units. Switch between **Plot** and **Values** to read exact measurements, including missing values. **Plot options** contains the chart style, order, and axis or title field.
+
+Select a mark in a comparison plot to highlight its feature and zoom to it while keeping the plot open. You can also select a measurement in **Values** and choose **Zoom to feature**. Click another place on the map to update the open plot.
+
+In **Compare features**, use **Previous selection** and **Next selection** to revisit earlier map clicks, including after a click that cleared the plot. If you go back and select a different set of features, the forward history clears.
 
 ![One feature selected on a South American map with 25 fields plotted in a line chart.](docs/images/eolab-series-one-feature.jpg)
 
@@ -100,6 +108,8 @@ Ordinary period statistics weight available observations equally. Gaps remain mi
 In **Map contents**, select **Download** on the raster you want. The panel opens beside that layer. Choose **Visible map area** to use the view captured when you opened the panel, **Entire raster** to export the full extent, or a sampling box or selected polygons. Select **Prepare GeoTIFF**, then **Download GeoTIFF** when it is ready. Select the same layer’s **Download** again to close the panel while preparation continues.
 
 In **Data tools**, choose **Raster clip**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
+
+To clip to several polygon layers, open **Map contents → Polygon groups → New polygon group**. Name the group and select its layers. In Raster clip, choose the group under **Analysis area**. The clip uses the combined area of the features selected by each layer's filter, including layers hidden on the map.
 
 <details>
 <summary>See the finished biomass clip and GeoTIFF download</summary>
@@ -143,6 +153,7 @@ The **Planning API** lets participants save private scenarios with one intervent
 
 - **Sketch a boundary.** Choose **Map contents → Draw polygon**, draw the outline, add notes, and save. You can also import existing outlines from GeoJSON or download your drawings in that format.
 - **Bring a project boundary.** Under **Your uploads**, add a GeoPackage containing one polygon layer to keep its attributes. Filter it to a country, watershed, or project group and use that selection for statistics or a model.
+- **Reshape a copy.** In **Map contents**, duplicate a GeoPackage polygon layer, choose **Edit geometry**, then click a polygon. Drag its vertices, click an edge to insert one, or hover or focus a vertex and press **Delete**. **Save changes** keeps the edited layer in your browser’s private uploads. Each save uses a file slot for seven days.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
 - **Publish a map.** Choose **Publish map**, give the map a title and link name, and select **Create map link**. The link opens the same layers, styles, order, and starting view. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
 
@@ -153,7 +164,7 @@ Drawings stay on this device until you share their layer or save them through Pl
 
 If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
 
-The server stores private uploads for seven days. GeoPackages and reference masks share a five-file allowance per browser. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
+The server stores private uploads for seven days. The default per-browser limits are 100 files and 500 MiB total across GeoPackages and reference masks. **Your uploads** shows the limits for your deployment. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
 
 </details>
 
@@ -164,6 +175,8 @@ Follow progress in **Runs** while you work. Choose **Cancel run** to stop a calc
 ## Deploy EOLab
 
 Start with Docker Compose and a folder on the Docker host containing a georeferenced GeoTIFF or a GeoPackage with a map layer. Set `EOLAB_SCAN_MOUNT_PATH` to the folder’s absolute path. EOLab mounts it read-only. Set the database password, separate GeoServer admin and master passwords, and the Jobs token using the formats in [.env.example](.env.example).
+
+To adjust the upload allowance per browser, set `EOLAB_UPLOAD_OWNER_MAX_FILES` for the file count and `EOLAB_UPLOAD_OWNER_MAX_BYTES` for the total storage in bytes.
 
 ### On your computer
 

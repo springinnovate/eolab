@@ -19,17 +19,22 @@ export function formatDownloadBytes(bytes) {
     return `${(bytes / divisor).toFixed(1)} ${unit}`;
 }
 
-/** Describe a public plan/job area. @param {Object|null} area Bounds or polygon selection summary. @return {string} Explicit geographic description. */
+/** Describe a public plan or run area.
+ * @param {Object|null} area Bounds, whole raster or selected polygon area with optional prepared bounds.
+ * @return {string} Explicit geographic description for the clip.
+ */
 export function describeClipArea(area) {
     if (!area) return "No sampling area selected. Choose a box or vector layer.";
     if (area.kind === "wholeRaster") return "Whole raster";
     if (area.kind === "samplingBox") return `Sampling box · ${area.samplingBox.sideLengthKm} × ${area.samplingBox.sideLengthKm} km · center ${area.samplingBox.center.latitude.toFixed(4)}°, ${area.samplingBox.center.longitude.toFixed(4)}°`;
     if (area.kind === "polygonArea") return "Shared layer polygons";
     if (area.kind === "catalogSelection" && !Array.isArray(area.bounds)) return "Selected vector features; geographic bounds appear after preparation.";
+    if (area.kind === "polygonGroup" && !Array.isArray(area.bounds)) return "Combined polygon area";
     const values = area.selectedBounds
         ? [area.selectedBounds.west, area.selectedBounds.south, area.selectedBounds.east, area.selectedBounds.north]
         : area.bounds;
-    const label = area.kind === "polygons" ? "Shared layer polygons" : area.kind === "catalogSelection" ? "Selected vector features" : "Box";
+    const label = area.kind === "polygons" ? "Shared layer polygons" : area.kind === "catalogSelection" ? "Selected vector features" :
+        area.kind === "polygonGroup" ? "Combined polygon area" : "Box";
     return `${label} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
 }
 

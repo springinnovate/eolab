@@ -275,6 +275,70 @@ async function vectorRenderingError(response, action) {
 }
 
 /**
+ * Submit a same-origin polygon edit request through the vector source boundary.
+ * @param {"feature"|"save"} action Exact feature read or private snapshot save.
+ * @param {Object} body Path-free source, click or draft edits.
+ * @param {AbortSignal} signal Cancellation owned by this edit session.
+ * @return {Promise<Object>} Successful read or private-upload metadata.
+ * @throws {Error} If the source, native read, or save is unavailable.
+ * @throws {DOMException} If the request is aborted.
+ */
+async function requestPolygonEdit(action, body, signal) {
+    const response = await fetch(`/api/vector-edits/${action}`, {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal,
+        headers: {
+            Accept: "application/json", "Content-Type": "application/json",
+            "X-EOLab-Uploads": "1", "X-EOLab-Processing": "1",
+        },
+        body: JSON.stringify(body),
+    });
+    if (!response.ok) throw await vectorRenderingError(response, action === "save" ? "save" : "feature read");
+    return response.json();
+}
+
+/**
+ * Find polygons at a click or read every original vertex of a chosen polygon.
+ * @param {Object} source Original vector identity and applied filter.
+ * @param {{point:[number,number]}|{featureId:string}} target Longitude and latitude or native ID.
+ * @param {AbortSignal} signal Cancellation of an obsolete read.
+ * @return {Promise<{featureIds:string[],feature:{featureId:string,parts:[number,number][][][]}|null}>}
+ * Overlapping feature choices and, for a single match, editable open rings.
+ * @throws {Error} If the API is unavailable or returns invalid geometry.
+ * @throws {DOMException} If the request is cancelled.
+ */
+export async function readPolygonEdit(source, target, signal) {
+    const result = await requestPolygonEdit("feature", {source, target}, signal);
+    const validId = value => typeof value === "string" && /^-?(0|[1-9][0-9]{0,18})$/.test(value);
+    const positions = result.feature?.parts;
+    const position = point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
+    if (!Array.isArray(result.featureIds) || !result.featureIds.every(validId) || !(
+        result.feature === null || (validId(result.feature?.featureId) && Array.isArray(positions) &&
+            positions.length && positions.every(part => Array.isArray(part) && part.length &&
+                part.every(ring => Array.isArray(ring) && ring.length >= 3 && ring.every(position))))
+    )) throw new Error("The server returned an invalid polygon. Choose it again.");
+    return result;
+}
+
+/**
+ * Commit one polygon draft as a new immutable private GeoPackage.
+ * @param {{source:Object,featureId:string,saveId:string,name:string,parts:(number|[number,number])[][][]}} draft
+ * Original feature, a retry ID, and its ordered retained or replaced vertices.
+ * @param {AbortSignal} signal Cancellation of an obsolete save.
+ * @return {Promise<import("../uploads/api.js").VectorUpload>} Published private source metadata.
+ * @throws {Error} If the draft cannot be admitted or the response is invalid.
+ * @throws {DOMException} If the request is cancelled.
+ */
+export async function savePolygonEdit(draft, signal) {
+    const result = await requestPolygonEdit("save", draft, signal);
+    if (result?.kind !== "vector" || typeof result.id !== "string" || typeof result.name !== "string" ||
+        typeof result.layer_name !== "string" || !["Polygon", "MultiPolygon"].includes(result.geometry_type) ||
+        !result.fields || Array.isArray(result.fields) || typeof result.fields !== "object") {
+        throw new Error("The server returned an invalid saved layer. Try showing it from Your uploads.");
+    }
+    return result;
+}
+
+/**
  * Send an opaque source identity to its vector rendering endpoint.
  *
  * @param {VectorSource} source Catalog Item, admitted upload or owned run result.

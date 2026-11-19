@@ -175,7 +175,7 @@ test("run-result polygon pickers and Models retain the native layer, formulas an
         main.indexOf("/** Open the existing rule editor inside setup"));
     const modelOptions = new Function("getPolygonTargets", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", `
         const leafletMap = {getBounds: () => ({getWest: () => -1, getSouth: () => -1, getEast: () => 1, getNorth: () => 1})};
-        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "";
+        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "", polygonGroups = null;
         return {${modelOptionsSource}};
     `)(getPolygonTargets, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER);
     const requests = [];

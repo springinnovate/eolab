@@ -14,7 +14,9 @@ import { VectorTimeSeriesController } from "../../src/vector/time-series.js";
  * evaluates existing initialization code rather than copying the callbacks.
  * @return {{inspector:Object,profile:VectorFeatureProfileController,
  * series:VectorTimeSeriesController,documentContext:FakeRasterControlDocument,
- * status:Object,zooms:Object[]}} Composed consumers and their presentation outputs.
+ * status:Object,mapActions:({highlight:number}|{zoom:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"]})[],
+ * selectionDirections:("previous"|"next")[]}}
+ * Composed consumers and their presentation outputs.
  */
 function composition() {
   const source = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
@@ -25,7 +27,10 @@ function composition() {
   documentContext.addEventListener = events.addEventListener.bind(events);
   documentContext.removeEventListener = events.removeEventListener.bind(events);
   const status = {};
-  const zooms = [];
+  const mapActions = [];
+  const selectionDirections = [];
+  const comparison = documentContext.querySelector("#vector-time-series");
+  comparison.hidden = true;
   const dependencies = {
     VectorTimeSeriesController: function (options) {
       return new VectorTimeSeriesController({...options, documentContext});
@@ -33,16 +38,23 @@ function composition() {
     VectorFeatureProfileController: function (options) {
       return new VectorFeatureProfileController({...options, documentContext});
     },
-    VectorFeatureInspectorController: function (options) { return options; },
+    VectorFeatureInspectorController: function (options) {
+      return {
+        ...options,
+        showResult: index => mapActions.push({highlight: index}),
+        navigateSelection: direction => selectionDirections.push(direction),
+      };
+    },
     mapInspection: {
       setVectorTimeSeriesIdentity() {},
       setVectorFeatureProfileIdentity() {},
       hideVectorFeatureProfile() {},
-      hideVectorTimeSeries() {},
+      showVectorTimeSeries() { comparison.hidden = false; },
+      hideVectorTimeSeries() { comparison.hidden = true; },
       setClickResult(kind, result) { status[kind] = result; },
       setFeatureResultCount(count, options) { status.count = {count, ...options}; },
     },
-    zoomInspectedVectorFeature: focus => { zooms.push(focus); return true; },
+    zoomInspectedVectorFeature: focus => { mapActions.push({zoom: focus}); return true; },
     L: {},
     leafletMap: {},
     appGlobalConfiguration: {wmsUrl: "/wms"},
@@ -51,7 +63,7 @@ function composition() {
     `let vectorFeatureInspector;\n${source.slice(start, end)}\n` +
     "return {inspector: vectorFeatureInspector, profile: vectorFeatureProfile, series: vectorTimeSeries};"
   )(...Object.values(dependencies));
-  return {...controllers, documentContext, status, zooms};
+  return {...controllers, documentContext, status, mapActions, selectionDirections};
 }
 
 /**
@@ -74,7 +86,7 @@ function observation(id) {
 }
 
 test("inspection composition delivers distinct observations to both chart consumers", t => {
-  const {inspector, profile, series, documentContext, status, zooms} = composition();
+  const {inspector, profile, series, documentContext, status, mapActions} = composition();
   t.after(() => { profile.destroy(); series.destroy(); });
   const observations = Object.freeze([observation(1), observation(9)]);
   inspector.onSampleChange(Object.freeze({
@@ -99,9 +111,15 @@ test("inspection composition delivers distinct observations to both chart consum
   assert.deepEqual(status.feature, {state: "ready", message: "2 features returned across 1 layer · Ready"});
   assert.deepEqual(status.count, {count: 2, loading: false});
   documentContext.querySelector("#zoom-vector-feature-profile-feature").dispatchEvent(new Event("click"));
-  assert.deepEqual(zooms, [{ center: [20, 10], bounds: [20, 10, 20, 10] }]);
+  assert.deepEqual(mapActions, [{zoom: { center: [20, 10], bounds: [20, 10, 20, 10] }}]);
   assert.deepEqual(observations[1].properties, { R1999: 9, R2000: 10 });
   assert.equal(Object.isFrozen(observations[1].properties), true);
+
+  series.open();
+  const chart = documentContext.querySelector("#vector-time-series-chart");
+  chart.querySelectorAll(".series-chart-point")[0].dispatchEvent(new Event("click"));
+  assert.deepEqual(mapActions.slice(1), [{highlight: 0}, {zoom: observations[0].focus}]);
+  assert.equal(documentContext.querySelector("#vector-time-series").hidden, false);
 });
 
 test("a new inspection replaces the prior chart and communicates partial results", t => {
@@ -124,4 +142,34 @@ test("a new inspection replaces the prior chart and communicates partial results
   assert.equal(series.observations.length, 0);
   assert.equal(documentContext.querySelector("#vector-time-series-table-body").children.length, 0);
   assert.deepEqual(status.feature, {state: "invalidated", message: "Source removed"});
+});
+
+test("comparison history controls request the adjacent selection through composition", t => {
+  const {inspector, profile, series, documentContext, status, mapActions, selectionDirections} = composition();
+  t.after(() => { profile.destroy(); series.destroy(); });
+  series.open();
+  const previous = documentContext.querySelector("#vector-time-series-previous-selection");
+  const next = documentContext.querySelector("#vector-time-series-next-selection");
+  assert.equal(previous.disabled, true);
+  assert.equal(next.disabled, true);
+
+  inspector.onSampleChange({state: "empty", message: "No features", observations: []});
+  inspector.onSelectionNavigationChange({canPrevious: true, canNext: false});
+  previous.dispatchEvent(new Event("click"));
+  assert.deepEqual(selectionDirections, ["previous"]);
+
+  const position = {lng: 21, lat: 11};
+  const restoredObservations = [observation(1), observation(9)];
+  inspector.onSampleChange({state: "ready", message: "Ready", observations: restoredObservations, position});
+  inspector.onSelectionNavigationChange({canPrevious: false, canNext: true});
+  assert.deepEqual(status.feature.position, position);
+  assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
+    .children.map(row => row.children[1].children[0].textContent), ["1", "9"]);
+  const chart = documentContext.querySelector("#vector-time-series-chart");
+  chart.querySelectorAll(".series-chart-point")[1].dispatchEvent(new Event("click"));
+  assert.deepEqual(mapActions, [{highlight: 1}, {zoom: restoredObservations[1].focus}]);
+  assert.equal(mapActions[1].zoom, restoredObservations[1].focus);
+  assert.equal(documentContext.querySelector("#vector-time-series").hidden, false);
+  next.dispatchEvent(new Event("click"));
+  assert.deepEqual(selectionDirections, ["previous", "next"]);
 });

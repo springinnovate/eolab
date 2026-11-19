@@ -6,7 +6,7 @@ links keep accepted calculations and active readers alive after access expires.
 """
 
 import asyncio
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -31,6 +31,9 @@ from pydantic import (
 from eolab_app.source_files import finish_source_task
 
 UploadKind = Literal["vector", "raster"]
+UploadWriter = Callable[[Path, int], Awaitable[None]]
+"""Write a new, closed file at the provided staging path within its byte budget."""
+
 UPLOAD_LIFETIME = timedelta(days=7)
 UPLOAD_QUEUE_CAPACITY = 32
 UPLOAD_QUEUE_WAIT_SECONDS = 30
@@ -94,11 +97,15 @@ def read_stored_upload(content: bytes) -> StoredUploadFile:
 
 
 class UploadSummary(BaseModel):
-    """Describe visible originals and occupied upload storage for one browser."""
+    """Describe available originals and quota usage for one browser.
+
+    All formats share the configured file allowance. Pending uploads and
+    originals retained by calculations count toward usage.
+    """
 
     uploads: list[UploadRecord]
     used_files: int
-    max_files: Literal[5] = 5
+    max_files: int
     used_bytes: int
     max_bytes: int
     max_file_bytes: int
@@ -186,6 +193,8 @@ class UploadStorage:
         max_bytes: int = 100 * 1024**2,
         owner_max_bytes: int = 500 * 1024**2,
         global_max_bytes: int = 10 * 1024**3,
+        *,
+        owner_max_files: int = 100,
     ) -> None:
         """Configure the sole API writer without touching storage.
 
@@ -194,11 +203,14 @@ class UploadStorage:
             max_bytes: Maximum original bytes in one new upload.
             owner_max_bytes: Maximum stored bytes charged to one browser.
             global_max_bytes: Maximum stored bytes across all browser owners.
+            owner_max_files: Maximum occupied slots per browser across formats,
+                including pending uploads and retained originals.
         """
         self.root = root
         self.max_bytes = max_bytes
         self.owner_max_bytes = owner_max_bytes
         self.global_max_bytes = global_max_bytes
+        self.owner_max_files = owner_max_files
         self._admission = asyncio.Lock()
         self._waiting_uploads = 0
         self._disk_lock = RLock()
@@ -386,6 +398,7 @@ class UploadStorage:
                 return UploadSummary(
                     uploads=uploads,
                     used_files=used_files,
+                    max_files=self.owner_max_files,
                     used_bytes=usage.bytes.get(owner, 0),
                     max_bytes=self.owner_max_bytes,
                     max_file_bytes=self.max_bytes,
@@ -459,24 +472,25 @@ class UploadStorage:
         self,
         owner: str,
         kind: UploadKind,
-        chunks: AsyncIterable[bytes],
+        chunks: AsyncIterable[bytes] | UploadWriter,
         *,
         max_bytes: int | None = None,
     ) -> AsyncIterator[PendingUpload]:
-        """Stream one original while holding the shared admission slot and budgets.
+        """Stage one new original while holding the shared admission slot and budgets.
 
         Args:
             owner: Hash from the validated browser identity boundary.
             kind: Format family selecting the internal original filename.
-            chunks: Request body fragments; the full file is never buffered.
+            chunks: Request body fragments or a native writer. A writer receives
+                an unused path and the bytes available for its closed output.
             max_bytes: Optional stricter format-specific original byte limit.
 
         Yields:
             Staged original for bounded format inspection and publish().
 
         Raises:
-            UploadError: If five files or a byte budget is exhausted, admission's
-                queue is full or times out, or the incoming body exceeds 120 seconds.
+            UploadError: If the file allowance or a byte budget is exhausted, the
+                admission queue is full or times out, or the body exceeds 120 seconds.
             OSError: If staging fails.
             asyncio.CancelledError: After pending writes and cleanup finish.
         """
@@ -484,11 +498,11 @@ class UploadStorage:
             temporary: TemporaryDirectory[str] | None = None
             output: BinaryIO | None = None
 
-            def prepare_staging() -> tuple[Path, Path, BinaryIO]:
-                """Reserve a staging directory and open its original for streaming.
+            def prepare_staging() -> tuple[Path, Path, int]:
+                """Reserve a staging directory and establish its write allowance.
 
                 Returns:
-                    Staging directory, original path and unbuffered output handle.
+                    Staging directory, original path and available bytes.
 
                 Raises:
                     UploadError: If expiry cleanup or file-slot admission fails.
@@ -498,10 +512,12 @@ class UploadStorage:
                 with self._disk_lock:
                     self.sweep_expired()
                     usage = self._usage()
-                    if len(usage.files.get(owner, set())) >= 5:
+                    if len(usage.files.get(owner, set())) >= self.owner_max_files:
                         raise UploadError(
                             409,
-                            "You have 5 uploaded files. Delete an uploaded file in Your uploads before uploading another. Files in use count until the calculation stops.",
+                            f"This browser has reached its upload limit ({self.owner_max_files}). "
+                            "Delete a file in Your uploads before uploading another. "
+                            "Files in use count until the calculation stops.",
                         )
                     owner_path = self.root / owner
                     owner_path.mkdir(parents=True, exist_ok=True)
@@ -510,19 +526,37 @@ class UploadStorage:
                     source = directory / (
                         "source.gpkg" if kind == "vector" else "source.tif"
                     )
+                    limit = min(
+                        self.max_bytes,
+                        max_bytes if max_bytes is not None else self.max_bytes,
+                    )
                     self._incoming_usage = None
-                    output = source.open("wb", buffering=0)
-                    return directory, source, output
+                    if callable(chunks):
+                        limit = min(
+                            limit,
+                            self.owner_max_bytes - usage.bytes.get(owner, 0),
+                            self.global_max_bytes - sum(usage.bytes.values()),
+                        )
+                    else:
+                        output = source.open("wb", buffering=0)
+                    return directory, source, limit
 
             try:
-                directory, source, output = await finish_upload_disk_operation(
+                directory, source, limit = await finish_upload_disk_operation(
                     prepare_staging
                 )
-                limit = (
-                    min(self.max_bytes, max_bytes)
-                    if max_bytes is not None
-                    else self.max_bytes
-                )
+                if callable(chunks):
+                    if limit <= 0:
+                        raise UploadError(
+                            413,
+                            "Upload storage is full. Free space in Your uploads, then try again.",
+                        )
+                    await chunks(source, limit)
+                    size, digest = await finish_upload_disk_operation(
+                        lambda: self._inspect_staged_file(source, limit)
+                    )
+                    yield PendingUpload(owner, kind, directory, source, size, digest)
+                    return
                 size = 0
                 checksum = hashlib.sha256()
                 try:
@@ -568,6 +602,29 @@ class UploadStorage:
                         self._incoming_usage = None
 
                 await finish_upload_disk_operation(cleanup_staging)
+
+    @staticmethod
+    def _inspect_staged_file(source: Path, limit: int) -> tuple[int, str]:
+        """Return the size and checksum of a newly generated staging file.
+
+        Args:
+            source: Closed file produced by the trusted format writer.
+            limit: Maximum bytes authorized for this admission.
+
+        Returns:
+            File size and SHA-256 digest.
+
+        Raises:
+            UploadError: If the writer's file exceeds its allowance.
+            OSError: If the staged result is unreadable.
+        """
+        with source.open("rb") as generated:
+            size = source.stat().st_size
+            if size > limit:
+                raise UploadError(
+                    413, "The edited file exceeds the available upload storage."
+                )
+            return size, hashlib.file_digest(generated, "sha256").hexdigest()
 
     def _write_chunk(self, output: BinaryIO, owner: str, chunk: bytes) -> None:
         """Charge and write one body chunk while other storage changes are excluded.

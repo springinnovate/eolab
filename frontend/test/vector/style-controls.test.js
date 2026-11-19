@@ -498,7 +498,8 @@ test("vector category controls preserve colors as the bounded limit changes", as
         fixture.controls.categoryList.children[0].children[0].value,
         "#123456",
     );
-    assert.equal(fixture.controls.categoryList.children.length, 5);
+    assert.equal(fixture.controls.categoryList.children.length, 4);
+    assert.equal(fixture.documentContext.querySelector("#vector-no-value-count").textContent, "1 feature");
     await settleStyle(fixture);
 
     assert.equal(fixture.applied[0].categorical.field, "name");
@@ -533,7 +534,8 @@ test("same-layer refresh preserves an in-flight category discovery", async () =>
     finishSummary(summary);
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    assert.equal(fixture.controls.categoryList.children.length, 5);
+    assert.equal(fixture.controls.categoryList.children.length, 4);
+    assert.equal(fixture.documentContext.querySelector("#vector-no-value-count").textContent, "1 feature");
     assert.equal(fixture.clock.pendingCount(), 1);
     fixture.controls.destroy();
 });
@@ -545,6 +547,102 @@ for (const mode of ["categories", "graduated"]) {
     const summaryProperty = category ? "categorySummary" : "graduatedSummary";
     const fieldProperty = category ? "categoryField" : "graduatedField";
     const statusProperty = category ? "categoryStatus" : "graduatedStatus";
+
+    test(`${mode} applies and reopens a separate style for an all-null field`, async () => {
+        const fixture = styleFixture();
+        const target = fixture.target("polygon", csvPolygonStyle());
+        const wireResult = category
+            ? { ...await target.summarize("name"), values: [],
+                observedDistinctCount: 0, distinctCount: 0 }
+            : { ...await target.classify("value", "percentile-interval", 5), classes: [],
+                actualClassCount: 0, numericValueCount: 0, observedMinimum: null, observedMaximum: null };
+        wireResult.nullCount = wireResult.featureCount;
+        target[operation] = (...args) => api(
+            { collection: "vectors", id: "measurements" }, ...args,
+            async () => new Response(JSON.stringify(wireResult)),
+        );
+        fixture.controls.show(target);
+        fixture.controls.mode.value = mode;
+        fixture.controls.mode.dispatchEvent(new Event("change"));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await settleStyle(fixture);
+
+        const styleKey = category ? "categorical" : "graduated";
+        assert.equal(fixture.applied.length, 1);
+        assert.deepEqual(fixture.applied[0][styleKey].rules, []);
+        assert.equal(fixture.applied[0][styleKey].missingColor, "#d1d5db");
+        assert.match(fixture.controls[statusProperty].textContent, /Every feature has no value/);
+        const enabled = fixture.documentContext.querySelector("#vector-no-value-separate");
+        const color = fixture.documentContext.querySelector("#vector-no-value-color");
+        assert.equal(enabled.checked, true);
+        color.value = "#a05732";
+        color.dispatchEvent(new Event("input"));
+        await settleStyle(fixture);
+        assert.equal(fixture.applied.at(-1)[styleKey].missingColor, "#a05732");
+
+        fixture.controls.hide();
+        fixture.controls.show({ ...target, style: fixture.applied.at(-1) });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(enabled.checked, true);
+        assert.equal(color.value, "#a05732");
+
+        enabled.checked = false;
+        enabled.dispatchEvent(new Event("change"));
+        await settleStyle(fixture);
+        assert.deepEqual(fixture.applied.at(-1)[styleKey].rules, []);
+        assert.equal(fixture.applied.at(-1)[styleKey].missingColor, null);
+        fixture.controls.destroy();
+    });
+
+    test(`${mode} retains edits made before discovery and styles zero independently`, async () => {
+        const fixture = styleFixture();
+        const color = "#08519c";
+        const zero = { value: { kind: "number", value: 0 }, color };
+        const range = { minimum: null, maximum: null, color };
+        const target = fixture.target("polygon", {
+            ...csvPolygonStyle(),
+            ...(category ? { categorical: { field: "value", limit: 20, rules: [zero] } }
+                : { graduated: { field: "value", method: "percentile-interval",
+                    classCount: 5, palette: "blues", rules: [range] } }),
+        });
+        const wireResult = category
+            ? { ...await target.summarize("value"), values: [{ value: zero.value, count: 2 }],
+                observedDistinctCount: 1, distinctCount: null }
+            : { ...await target.classify("value", "percentile-interval", 5),
+                classes: [{ minimum: null, maximum: null, count: 2 }], actualClassCount: 1,
+                numericValueCount: 2, observedMinimum: 0, observedMaximum: 0 };
+        Object.assign(wireResult, { complete: false, scannedFeatureCount: 2, nullCount: 0 });
+        let finishDiscovery;
+        target[operation] = (...args) => api(
+            { collection: "vectors", id: "measurements" }, ...args,
+            () => new Promise(resolve => { finishDiscovery = resolve; }),
+        );
+        fixture.controls.show(target);
+        const checkbox = fixture.documentContext.querySelector("#vector-no-value-separate");
+        const swatch = fixture.documentContext.querySelector("#vector-no-value-color");
+        assert.equal(checkbox.checked, false);
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event("change"));
+        swatch.value = "#a05732";
+        swatch.dispatchEvent(new Event("input"));
+        assert.equal(fixture.clock.pendingCount(), 0);
+        finishDiscovery(new Response(JSON.stringify(wireResult)));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await settleStyle(fixture);
+
+        assert.match(fixture.documentContext.querySelector("#vector-no-value-count").textContent, /^0 in scanned features$/);
+        assert.equal(fixture.applied.length, 1);
+        const classified = fixture.applied[0][category ? "categorical" : "graduated"];
+        assert.equal(classified.missingColor, "#a05732");
+        assert.equal(classified.rules.length, 1);
+        if (category) {
+            assert.deepEqual(classified.rules[0].value, zero.value);
+            assert.equal(classified.rules[0].color, color);
+        } else {
+            assert.deepEqual(classified.rules[0], { ...range, color: "#6baed6" });
+        }
+        fixture.controls.destroy();
+    });
 
     test(`${mode} controls consume frozen API results and surface boundary errors`, async () => {
         const fixture = styleFixture();
@@ -654,7 +752,8 @@ test("graduated controls classify, palette, and optionally style missing values"
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.equal(fixture.controls.graduatedField.value, "value");
-    assert.equal(fixture.controls.graduatedList.children.length, 4);
+    assert.equal(fixture.controls.graduatedList.children.length, 3);
+    assert.equal(fixture.documentContext.querySelector("#vector-no-value-count").textContent, "1 feature");
     const firstBoundary = fixture.controls.graduatedList.children[0].children[1].children[1];
     const secondBoundary = fixture.controls.graduatedList.children[1].children[1].children[1];
     firstBoundary.value = "0.75";
@@ -669,11 +768,11 @@ test("graduated controls classify, palette, and optionally style missing values"
     );
     fixture.controls.graduatedPalette.value = "viridis";
     fixture.controls.graduatedPalette.dispatchEvent(new Event("change"));
-    const missing = fixture.controls.graduatedList.children[3];
-    missing.children[0].checked = true;
-    missing.children[0].dispatchEvent(new Event("change"));
-    missing.children[1].value = "#abcdef";
-    missing.children[1].dispatchEvent(new Event("input"));
+    const separate = fixture.documentContext.querySelector("#vector-no-value-separate");
+    assert.equal(separate.checked, true);
+    const missingColor = fixture.documentContext.querySelector("#vector-no-value-color");
+    missingColor.value = "#abcdef";
+    missingColor.dispatchEvent(new Event("input"));
     await settleStyle(fixture);
 
     assert.deepEqual(fixture.applied[0].graduated, {

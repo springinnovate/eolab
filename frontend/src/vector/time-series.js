@@ -2,6 +2,7 @@
 
 import {
     renderOrdinalSeriesChart,
+    renderStackedSeriesChart,
 } from "../charts/series-chart.js";
 import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
@@ -18,6 +19,7 @@ const NATURAL_TEXT = new Intl.Collator("en", {
  * @property {string} xField Layer-label sentinel or inspected attribute name.
  * @property {string[]} yFields Numeric fields in display order.
  * @property {"ascending"|"descending"} direction Sort direction.
+ * @property {"line"|"scatter"|"bar"|"stacked"} [chartType] Choose feature rows or X coordinates.
  */
 
 /**
@@ -100,14 +102,15 @@ function vectorTimeSeriesXScale(points) {
  * @property {string} xLabel Exact display value of the X coordinate.
  */
 
+/** @typedef {{field:string,points:(ComparisonRow & {yValue:number|null})[],finiteCount:number}} ComparisonPlot */
+
 /**
  * Order every inspected feature once for the values table and all comparison plots.
- * Missing X values sort last and stay in the table. Missing numeric measurements retain
- * their X slot in every plot. Equal X values retain the inspection order.
+ * Missing X values sort last and stay in the table and stacked chart. Missing
+ * measurements keep their slots, and equal X values retain the inspection order.
  * @param {ReadonlyArray<VectorInspectionObservation>} observations Features from the map click.
  * @param {VectorTimeSeriesSettings} settings Selected axes and sort direction.
- * @return {{rows:ComparisonRow[], xScale:"numeric"|"ordinal", plots:{field:string,
- * points:(ComparisonRow & {yValue:number|null})[], finiteCount:number}[]}} Aligned plots and table rows.
+ * @return {{rows:ComparisonRow[],xScale:"numeric"|"ordinal",plots:ComparisonPlot[]}} Aligned plots and table rows.
  */
 export function buildVectorFeatureComparison(observations, settings) {
     const rows = observations.map((observation, sourceIndex) => {
@@ -122,7 +125,7 @@ export function buildVectorFeatureComparison(observations, settings) {
         const order = xScale === "numeric" ? left.xValue - right.xValue : NATURAL_TEXT.compare(left.xLabel, right.xLabel);
         return (settings.direction === "ascending" ? order : -order) || left.sourceIndex - right.sourceIndex;
     });
-    const positions = rows.filter(row => row.xValue !== null);
+    const positions = settings.chartType === "stacked" ? rows : rows.filter(row => row.xValue !== null);
     const plots = settings.yFields.map(field => {
         const points = positions.map(row => {
             const value = row.observation.properties[field];
@@ -159,13 +162,15 @@ export class VectorTimeSeriesController {
      * @param {Object} configuration Browser composition callbacks.
      * @param {(visible:boolean,moveFocus:boolean)=>void} configuration.onVisibilityChange Show or close the dock view.
      * @param {(identity:{label:string,title:string}|null)=>void} configuration.onPresentationChange Update the dock tab.
-     * @param {(focus:VectorInspectionObservation["focus"])=>boolean} configuration.onFeatureZoom Zoom to the selected source feature.
+     * @param {(focus:VectorInspectionObservation["focus"],index:number)=>boolean} configuration.onFeatureZoom
+     * Highlight the inspected result at this index and return whether the map could fit its bounds.
      * @param {(index:number|null)=>void} configuration.onOpenFeature Open a single feature, or the inspector's current one.
+     * @param {(direction:"previous"|"next")=>void} configuration.onNavigateSelection Request the adjacent map selection.
      * @param {Document} [configuration.documentContext=document] Owning document.
-     * @throws {TypeError} If visibility, dock identity, or zoom callbacks are missing.
+     * @throws {TypeError} If visibility, dock identity, zoom, or selection navigation callbacks are missing.
      */
-    constructor({onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, documentContext = document}) {
-        for (const [name, callback] of Object.entries({onVisibilityChange, onPresentationChange, onFeatureZoom})) {
+    constructor({onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, onNavigateSelection, documentContext = document}) {
+        for (const [name, callback] of Object.entries({onVisibilityChange, onPresentationChange, onFeatureZoom, onNavigateSelection})) {
             if (typeof callback !== "function") throw new TypeError(name + " must be a function.");
         }
         this.document = documentContext;
@@ -177,9 +182,11 @@ export class VectorTimeSeriesController {
         this.heading = element("heading");
         this.context = element("context");
         this.xField = element("x");
+        this.xFieldLabel = element("x-label");
         this.direction = element("direction");
         this.chartType = element("chart-type");
         this.chart = element("chart");
+        this.legend = element("legend");
         this.chartTitle = element("chart-title");
         this.firstPlot = element("first");
         this.extraPlots = element("extra-charts");
@@ -192,6 +199,8 @@ export class VectorTimeSeriesController {
         this.zoomFeatureButton = documentContext.querySelector("#zoom-vector-time-series-feature");
         this.featureList = element("feature-list");
         this.openFeature = element("one");
+        this.previousSelection = element("previous-selection");
+        this.nextSelection = element("next-selection");
         this.plotPanel = new VectorPlotPanel(documentContext, "vector-time-series", () => this.render());
         this.fields = new VectorPlotFields(documentContext, "vector-time-series", names => {
             this.settings.yFields = names;
@@ -207,6 +216,18 @@ export class VectorTimeSeriesController {
         this.failedLayers = 0;
         this.abort = new AbortController();
         const listen = {signal: this.abort.signal};
+        this.setSelectionNavigation({canPrevious: false, canNext: false});
+        for (const [direction, button, opposite] of [
+            ["previous", this.previousSelection, this.nextSelection],
+            ["next", this.nextSelection, this.previousSelection],
+        ]) {
+            button.addEventListener("click", () => {
+                if (button.disabled) return;
+                const wasFocused = documentContext.activeElement === button;
+                onNavigateSelection(direction);
+                if (wasFocused && button.disabled && !opposite.disabled) opposite.focus();
+            }, listen);
+        }
         documentContext.querySelector("#close-vector-time-series").addEventListener("click", () => this.close({moveFocus:true}), listen);
         for (const [control, setting] of [[this.xField,"xField"],[this.direction,"direction"],[this.chartType,"chartType"]]) {
             control.addEventListener("change", () => { this.settings[setting] = control.value; this.render(); }, listen);
@@ -217,10 +238,7 @@ export class VectorTimeSeriesController {
             this.plotPanel.closePicker();
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
-            if (this.selected && !onFeatureZoom(this.observations[this.selected.index].focus)) {
-                this.zoomFeatureButton.disabled = true;
-                this.status.textContent = "Feature location is unavailable. The map has not moved.";
-            }
+            if (this.selected) this.#zoomToFeature(this.selected.index);
         }, listen);
         documentContext.addEventListener("keydown", event => {
             if (event.key !== "Escape" || this.panel.hidden || !this.panel.contains(documentContext.activeElement)) return;
@@ -246,6 +264,16 @@ export class VectorTimeSeriesController {
     close({moveFocus = false} = {}) {
         this.plotPanel.closePicker(false);
         this.onVisibilityChange(false, moveFocus);
+    }
+
+    /**
+     * Enable each history button when another completed map selection is available.
+     * @param {Readonly<{canPrevious:boolean,canNext:boolean}>} navigation Available directions.
+     * @return {void}
+     */
+    setSelectionNavigation({canPrevious, canNext}) {
+        this.previousSelection.disabled = !canPrevious;
+        this.nextSelection.disabled = !canNext;
     }
 
     /**
@@ -277,7 +305,7 @@ export class VectorTimeSeriesController {
         this.render();
     }
 
-    /** Rebuild picker options, aligned charts, and one exact-values row per feature. @return {void} */
+    /** Rebuild picker options, the selected chart style, and exact values for each feature. @return {void} */
     render() {
         const {xFields,numericFields} = summarizeVectorTimeSeriesFields(this.observations);
         const {xField,yFields,direction,chartType} = this.settings;
@@ -286,6 +314,7 @@ export class VectorTimeSeriesController {
         if (!choices.has(xField)) choices.set(xField, xField + " (unavailable)");
         this.xField.replaceChildren(...[...choices].map(([value,label]) => this.#option(value,label)));
         this.xField.value = xField;
+        this.xFieldLabel.textContent = chartType === "stacked" ? "Feature labels" : "X axis";
         this.direction.value = direction;
         this.chartType.value = chartType;
         this.fields.update(new Map(numericFields.map(field =>
@@ -307,7 +336,9 @@ export class VectorTimeSeriesController {
         this.onPresentationChange(identity ? {label:identity.label,title:identity.title} : null);
         this.chart.replaceChildren();
         this.chart.setAttribute("hidden","");
-        this.firstPlot.replaceChildren(this.chartTitle, this.chart);
+        this.legend.hidden = true;
+        this.chartTitle.hidden = chartType === "stacked";
+        this.firstPlot.replaceChildren(this.chartTitle, this.legend, this.chart);
         this.firstPlot.hidden = true;
         this.extraPlots.replaceChildren();
         this.tableBody.replaceChildren();
@@ -326,7 +357,11 @@ export class VectorTimeSeriesController {
         } else {
             const {rows,plots,xScale} = buildVectorFeatureComparison(this.observations,this.settings);
             const xLabel = choices.get(xField);
-            for (const [index,plot] of plots.entries()) this.#drawField(plot,index,xLabel,xScale,count);
+            if (chartType === "stacked") {
+                this.#drawStackedComparison(plots);
+            } else {
+                for (const [index,plot] of plots.entries()) this.#drawField(plot,index,xLabel,xScale,count);
+            }
             this.#renderTable(rows,yFields,xLabel);
         }
         if (this.failedLayers) this.status.textContent += (this.status.textContent ? " " : "") +
@@ -349,7 +384,7 @@ export class VectorTimeSeriesController {
 
     /**
      * Draw one field with its own numeric scale and the shared ordered X positions.
-     * @param {{field:string,points:(ComparisonRow & {yValue:number|null})[],finiteCount:number}} plot Field and readings.
+     * @param {ComparisonPlot} plot Field and readings.
      * @param {number} index Plot position.
      * @param {string} xLabel Horizontal field name.
      * @param {"numeric"|"ordinal"} xScale Horizontal spacing.
@@ -380,7 +415,7 @@ export class VectorTimeSeriesController {
                 xAxisLabel:xLabel,yAxisLabel:"Value",ariaLabel:plot.field + " by " + xLabel,
                 pointAccessibleLabel:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
                 pointTooltip:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
-                onPointSelect:p => this.#select(p.sourceIndex,plot.field),
+                onPointSelect: point => this.#selectAndZoomToFeature(point.sourceIndex, plot.field),
             });
             labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
             this.pointElements.push(...handles.pointElements);
@@ -393,6 +428,42 @@ export class VectorTimeSeriesController {
                 missing + (missing === 1 ? " feature lacks" : " features lack") + " an X value or a numeric " + plot.field + " value.";
             figure.append(note);
         }
+    }
+
+    /**
+     * Draw one stack per inspected feature, including separate rows for tied labels.
+     * @param {ComparisonPlot[]} plots Selected measurements aligned to the same ordered features.
+     * @return {void}
+     */
+    #drawStackedComparison(plots) {
+        const rows = plots[0].points;
+        const readingCount = plots.reduce((count, plot) => count + plot.finiteCount, 0);
+        if (readingCount === 0) {
+            this.status.textContent = "The selected fields have no numeric values on these features.";
+            return;
+        }
+        const labelCounts = new Map();
+        for (const row of rows) labelCounts.set(row.xLabel, (labelCounts.get(row.xLabel) ?? 0) + 1);
+        const rowLabels = rows.map(row => {
+            if (row.xValue === null) return `Feature ${row.sourceIndex + 1}`;
+            return labelCounts.get(row.xLabel) > 1 ? `${row.sourceIndex + 1} · ${row.xLabel}` : row.xLabel;
+        });
+        this.firstPlot.hidden = false;
+        this.pointElements = renderStackedSeriesChart({
+            documentContext: this.document,
+            chart: this.chart,
+            legend: this.legend,
+            width: this.plotPanel.width || undefined,
+            series: plots.map(plot => ({id: plot.field, label: plot.field, points: plot.points})),
+            rowLabels,
+            valueAxisLabel: "Value",
+            ariaLabel: "Numeric fields stacked by feature",
+            describePoint: (point, field) => this.#identity(point.observation, point.sourceIndex, field, point.xLabel),
+            onPointSelect: (point, field) => this.#selectAndZoomToFeature(point.sourceIndex, field),
+        }).pointElements;
+        const missing = rows.length * plots.length - readingCount;
+        if (missing) this.status.textContent = missing === 1 ? "One field value is missing. See Values." :
+            `${missing} field values are missing. See Values.`;
     }
 
     /**
@@ -437,6 +508,29 @@ export class VectorTimeSeriesController {
             else circle.classList.remove("is-selected");
             circle.setAttribute("aria-pressed",String(chosen));
         }
+    }
+
+    /**
+     * Select the plotted reading, highlight its feature, and zoom to it.
+     * @param {number} index Feature position in the current inspection sample.
+     * @param {string} field Measurement represented by the activated mark.
+     * @return {void}
+     */
+    #selectAndZoomToFeature(index, field) {
+        this.#select(index, field);
+        this.#zoomToFeature(index);
+    }
+
+    /**
+     * Highlight the selected feature on the map and fit its bounds.
+     * Report unavailable bounds beside the selected reading.
+     * @param {number} index Position in the current inspection sample.
+     * @return {void}
+     */
+    #zoomToFeature(index) {
+        if (this.onFeatureZoom(this.observations[index].focus, index)) return;
+        this.zoomFeatureButton.disabled = true;
+        this.selectionText.textContent += " · Feature location is unavailable.";
     }
 
     /**

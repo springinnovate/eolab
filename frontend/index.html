@@ -42,6 +42,24 @@
           </div>
           <p data-timeline="status" role="status" hidden></p>
         </section>
+        <section id="map-place-search" class="map-place-search" popover="manual" aria-labelledby="map-place-search-heading" hidden>
+          <header>
+            <h2 id="map-place-search-heading">Find a place</h2>
+            <button class="map-panel-toggle map-panel-collapse" type="button"
+              aria-label="Hide place search" title="Hide place search"><span aria-hidden="true">×</span></button>
+          </header>
+          <form role="search" aria-labelledby="map-place-search-heading">
+            <label class="visually-hidden" for="map-place-query">Place name or street address</label>
+            <input id="map-place-query" type="search" placeholder="Country, city, or address" maxlength="200" autocomplete="off">
+            <button class="secondary-button" type="submit">Search</button>
+          </form>
+          <p class="map-place-search-status" role="status" aria-atomic="true"></p>
+          <ul class="map-place-search-results" aria-label="Matching places" hidden></ul>
+          <p class="map-place-search-credit">
+            © <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noopener">MapTiler</a>
+            · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+          </p>
+        </section>
       </div>
       <section
         class="control-panel"
@@ -510,6 +528,25 @@
                     </details>
                     </div>
                     <p id="annotation-storage-status" class="map-layer-action-status" role="status" hidden></p>
+                    <details id="map-polygon-groups" class="annotation-layer-tools map-polygon-groups" hidden>
+                      <summary>Polygon groups</summary>
+                      <button type="button" class="secondary-button" data-new-group>New polygon group</button>
+                      <div data-group-list></div>
+                      <form class="polygon-group-editor" data-group-editor aria-labelledby="polygon-group-editor-title" hidden>
+                        <p id="polygon-group-editor-title">New polygon group</p>
+                        <label>Group name <input name="groupName" required maxlength="80"></label>
+                        <fieldset>
+                          <legend>Layers in this group</legend>
+                          <div data-member-choices></div>
+                        </fieldset>
+                        <p data-group-error role="alert" hidden></p>
+                        <div class="polygon-group-actions">
+                          <button type="button" class="secondary-button" data-cancel-group>Cancel</button>
+                          <button type="submit" class="secondary-button">Save group</button>
+                        </div>
+                      </form>
+                      <p class="map-layer-action-status" data-group-status role="status"></p>
+                    </details>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map contents controls">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map contents" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map contents" disabled>Hide all</button>
@@ -744,6 +781,8 @@
         </div>
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Map display</strong>
+          <button id="toggle-place-search" class="workspace-tool-action" type="button"
+            aria-controls="map-place-search" aria-expanded="false" hidden>Show place search</button>
           <button id="toggle-map-legend" class="workspace-tool-action" type="button" aria-pressed="true">Hide legend</button>
           <button id="open-settings" class="workspace-tool-action" type="button" aria-controls="settings-panel">Settings</button>
         </div>
@@ -1120,8 +1159,18 @@
               <div id="vector-time-series-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
               <p id="vector-time-series-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
+            <div class="vector-selection-history" role="group" aria-label="Selection history">
+              <button id="vector-time-series-previous-selection" class="secondary-button" type="button"
+                aria-controls="vector-time-series-plots vector-time-series-values" disabled><span aria-hidden="true">←</span> Previous selection</button>
+              <button id="vector-time-series-next-selection" class="secondary-button" type="button"
+                aria-controls="vector-time-series-plots vector-time-series-values" disabled>Next selection <span aria-hidden="true">→</span></button>
+            </div>
             <div id="vector-time-series-plots" class="vector-plot-results">
-              <div class="vector-plot-figure" id="vector-time-series-first"><h3 id="vector-time-series-chart-title"></h3><svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg></div>
+              <div class="vector-plot-figure" id="vector-time-series-first">
+                <h3 id="vector-time-series-chart-title"></h3>
+                <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+              </div>
               <div id="vector-time-series-extra-charts"></div>
             </div>
             <div id="vector-time-series-values" hidden>
@@ -1141,12 +1190,12 @@
                 <summary>Plot options</summary>
                 <div class="vector-plot-options-grid">
                   <label for="vector-time-series-chart-type">Chart style
-                    <select id="vector-time-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option></select>
+                    <select id="vector-time-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option><option value="stacked">Stacked bars</option></select>
                   </label>
                   <label for="vector-time-series-direction">Order
                     <select id="vector-time-series-direction"><option value="ascending">Ascending</option><option value="descending">Descending</option></select>
                   </label>
-                  <label for="vector-time-series-x">X axis<select id="vector-time-series-x"></select></label>
+                  <label for="vector-time-series-x"><span id="vector-time-series-x-label">X axis</span><select id="vector-time-series-x"></select></label>
                 </div>
               </details>
               <button id="zoom-vector-time-series-feature" class="summary-text-button vector-plot-zoom" type="button"
@@ -1201,6 +1250,7 @@
             <div id="vector-feature-profile-plots" class="vector-plot-results">
               <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
                 <h3 id="vector-feature-profile-chart-title" hidden></h3>
+                <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
                 <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
               </div>
             </div>
@@ -1221,7 +1271,7 @@
                 <summary>Plot options</summary>
                 <div class="vector-plot-options-grid">
                   <label for="vector-feature-profile-chart-type">Chart style
-                    <select id="vector-feature-profile-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option></select>
+                    <select id="vector-feature-profile-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar" selected>Bars</option><option value="stacked">Stacked bars</option></select>
                   </label>
                   <label for="vector-feature-profile-direction">Order
                     <select id="vector-feature-profile-direction"><option value="ascending">Ascending</option><option value="descending">Descending</option></select>
@@ -1436,11 +1486,27 @@
           </label>
           <fieldset id="vector-category-fields" class="vector-category-controls" hidden>
             <legend>Categories</legend>
+            <label class="vector-style-attribute" for="vector-category-field">
+              <span>Attribute field</span>
+              <select id="vector-category-field"></select>
+            </label>
+            <div id="vector-category-no-value-slot" hidden>
+              <div id="vector-no-value-style" class="vector-no-value-style"
+                role="group" aria-labelledby="vector-no-value-heading">
+                <div class="vector-no-value-heading">
+                  <h4 id="vector-no-value-heading">No value</h4>
+                  <span id="vector-no-value-count" role="status"></span>
+                </div>
+                <div class="vector-no-value-inputs">
+                  <label for="vector-no-value-separate">
+                    <input id="vector-no-value-separate" type="checkbox" />
+                    <span>Style separately</span>
+                  </label>
+                  <input id="vector-no-value-color" type="color" aria-label="No value color" disabled />
+                </div>
+              </div>
+            </div>
             <div class="vector-category-options">
-              <label for="vector-category-field">
-                <span>Attribute field</span>
-                <select id="vector-category-field"></select>
-              </label>
               <label for="vector-category-limit">
                 <span>Values to style</span>
                 <input id="vector-category-limit" type="number"
@@ -1472,11 +1538,12 @@
           </fieldset>
           <fieldset id="vector-graduated-fields" class="vector-graduated-controls" hidden>
             <legend>Numeric ranges</legend>
+            <label class="vector-style-attribute" for="vector-graduated-field">
+              <span>Attribute field</span>
+              <select id="vector-graduated-field"></select>
+            </label>
+            <div id="vector-graduated-no-value-slot" hidden></div>
             <div class="vector-graduated-options">
-              <label for="vector-graduated-field">
-                <span>Color by</span>
-                <select id="vector-graduated-field"></select>
-              </label>
               <label for="vector-graduated-method">
                 <span>Method</span>
                 <select id="vector-graduated-method">

@@ -32,6 +32,34 @@ from eolab_app.raster.source_models import (
 OPERATION_VERSION = "raster.clip.v1"
 
 
+class ClipPolygonGroupMember(BaseModel):
+    """Identify an original polygon layer and the features selected for this run.
+
+    Attributes:
+        label: Map layer name to show in run inputs and source errors.
+        selection: Path-free original source identity and captured filter.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    label: Annotated[str, Field(min_length=1)]
+    selection: VectorSelection
+
+
+class ClipPolygonGroup(BaseModel):
+    """Clip to the combined footprint of the captured polygon layers.
+
+    Attributes:
+        kind: The literal string `"polygonGroup"` identifies the area choice.
+        name: Group name displayed in the model setup and run history.
+        members: Original source selections recorded when the run is submitted.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["polygonGroup"]
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    members: Annotated[tuple[ClipPolygonGroupMember, ...], Field(min_length=1)]
+
+
 class ClipInputs(BaseModel):
     """A raster or temporal observation and an explicit geographic clip area.
 
@@ -39,7 +67,7 @@ class ClipInputs(BaseModel):
     Temporal observations and private run files use their exact nested ``source``
     references.
     Choose the entire native grid explicitly, a geodesic sampling box, a
-    geographic rectangle, or features from a Catalog vector or private upload.
+    geographic rectangle, a polygon layer, or the combined area of a polygon group.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -56,6 +84,9 @@ class ClipInputs(BaseModel):
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
     catalogSelection: VectorSelection | None = None
+    polygonGroup: ClipPolygonGroup | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     wholeRaster: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -98,6 +129,7 @@ class ClipInputs(BaseModel):
                     request.selectedBounds,
                     request.samplingBox,
                     request.catalogSelection,
+                    request.polygonGroup,
                     request.wholeRaster,
                 )
             )
@@ -126,17 +158,27 @@ class UnpreparedClip(BaseModel):
 
 
 class ClipArea(BaseModel):
-    """Retain an explicit whole grid, rectangle, geodesic box or vector predicate for a native clip.
+    """Retain the grid or selected area for a native clip.
 
     Geodesic boxes keep their center and kilometer side length; their bounds are
-    only the geographic envelope. Workers derive polygon rings for their own grid."""
+    only the geographic envelope. Group members retain their original source
+    selections. Resolved source paths are available only during worker execution.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "samplingBox", "catalogSelection", "wholeRaster"]
+    kind: Literal[
+        "bounds", "samplingBox", "catalogSelection", "polygonGroup", "wholeRaster"
+    ]
     bounds: tuple[float, float, float, float] | None
     samplingBox: Wgs84SamplingBox | None = None
     catalogSelection: VectorSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
+    polygonGroup: ClipPolygonGroup | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    resolvedGroup: tuple[ResolvedCatalogSelection, ...] = Field(
+        default=(), exclude=True
+    )
 
     @model_validator(mode="after")
     def require_area_contract(self) -> "ClipArea":
@@ -148,6 +190,20 @@ class ClipArea(BaseModel):
         Raises:
             ValueError: For inconsistent vector or box inputs.
         """
+        if self.kind == "polygonGroup":
+            if (
+                self.polygonGroup is None
+                or self.catalogSelection is not None
+                or self.resolved is not None
+                or self.samplingBox is not None
+            ):
+                raise ValueError("A combined clip requires a polygon group")
+            if self.resolvedGroup and tuple(
+                source.selection for source in self.resolvedGroup
+            ) != tuple(member.selection for member in self.polygonGroup.members):
+                raise ValueError("Resolved sources do not match the polygon group")
+        elif self.polygonGroup is not None or self.resolvedGroup:
+            raise ValueError("Only a polygon group area may carry group members")
         if self.kind == "wholeRaster":
             if any(
                 value is not None
@@ -273,7 +329,9 @@ class ClipSpec(BaseModel):
 class ClipAreaSummary(BaseModel):
     """Browser-safe area description without copying geometry into every poll."""
 
-    kind: Literal["bounds", "samplingBox", "catalogSelection", "wholeRaster"]
+    kind: Literal[
+        "bounds", "samplingBox", "catalogSelection", "polygonGroup", "wholeRaster"
+    ]
     bounds: tuple[float, float, float, float] | None
     samplingBox: Wgs84SamplingBox | None = Field(
         default=None, exclude_if=lambda value: value is None

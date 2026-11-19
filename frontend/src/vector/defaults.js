@@ -86,14 +86,15 @@ export function defaultVectorLabelPlacement(geometryKind) {
  * @param {Object} initial Validated publication's default symbol style.
  * @param {Awaited<ReturnType<typeof import("./api.js").classifyVectorNumbers>>|null}
  * [classification=null] Frozen API result for the selected default numeric field,
- * using VECTOR_NUMERIC_DEFAULTS method and class count; null keeps one symbol.
+ * using VECTOR_NUMERIC_DEFAULTS method and class count. Null or a summary
+ * without ranges keeps the single-color symbol.
  * @return {Object} Complete normalized initial style with labels off and optional numeric ranges.
  * @throws {TypeError|RangeError} If the initial symbol style is invalid.
  */
 export function deriveDefaultVectorStyle(initial, classification = null) {
     const style = normalizeVectorStyle(initial);
     let graduated = null;
-    if (classification !== null) {
+    if (classification !== null && classification.actualClassCount !== 0) {
         const colors = sequentialPaletteColors(
             VECTOR_NUMERIC_DEFAULTS.palette, classification.actualClassCount,
         );

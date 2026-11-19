@@ -436,6 +436,24 @@ test("vector calculators stay visible beside duplication and Catalog actions do 
   assert.throws(() => actionControl(sharedView.list.children[0], "field-calculator"));
 });
 
+test("Edit geometry opens only on an eligible vector copy in an editable map", () => {
+  const view = new MapLayerStackView(new FakeLayerStackDocument());
+  const opened = [];
+  view.bind({onEditGeometry: key => opened.push(key)});
+  const copy = {...LAYERS[0], datasetKind: "vector", isCustom: true, canEditGeometry: true};
+  const original = {...LAYERS[1], datasetKind: "vector", isCustom: false};
+  view.render([copy, original], copy.key);
+  const control = actionControl(view.list.children[0], "edit-geometry");
+  assert.equal(control.textContent, "Edit geometry");
+  assert.match(control.getAttribute("aria-label"), /Edit geometry/);
+  control.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [copy.key]);
+  assert.throws(() => actionControl(view.list.children[1], "edit-geometry"), /expected one edit-geometry/);
+  const sharedView = new MapLayerStackView(new FakeLayerStackDocument(), {allowRemoval: false});
+  sharedView.render([copy], copy.key);
+  assert.throws(() => actionControl(sharedView.list.children[0], "edit-geometry"), /expected one edit-geometry/);
+});
+
 test("calculator help debounces hover but opens immediately for focus and touch", t => {
   t.mock.timers.enable({apis: ["setTimeout"]});
   const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);

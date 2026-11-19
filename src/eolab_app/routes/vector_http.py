@@ -8,8 +8,18 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
+from eolab_app.catalog_selection import (
+    ArtifactVectorSelection,
+    DrawingSelection,
+    UploadedVectorFilterRequest,
+    VectorSelection,
+    VectorSourceOwners,
+    referenced_layers,
+)
+from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.vector_uploads import VectorUploadError
 from eolab_app.source_files import SourceFileError
+from eolab_app.vector.filters import CatalogVectorFilterRequest
 
 from eolab_app.vector.errors import (
     VectorAssetError,
@@ -22,6 +32,56 @@ from eolab_app.vector.errors import (
     VectorRequestError,
     VectorUpstreamError,
 )
+
+
+def read_vector_source_owners(
+    payload: CatalogVectorFilterRequest | VectorSelection | UploadedVectorFilterRequest,
+    request: Request,
+    response: Response,
+    *,
+    read_artifact_owner: Callable[[Request, Response], str] | None,
+) -> str | VectorSourceOwners | None:
+    """Read the browser identity required by the original vector and its filter sources.
+
+    Args:
+        payload: Validated source request and its applied predicate.
+        request: Same-origin request carrying the browser's private cookies.
+        response: Response renewing the cookies for the required private sources.
+        read_artifact_owner: Processing browser identity for run results and drawings.
+
+    Returns:
+        Both credentials for spatial filters, a single private owner, or None for Catalog.
+
+    Raises:
+        HTTPException: If an applicable ownership boundary cannot authorize the request.
+    """
+    if payload.filter.intersections:
+        sources = (payload, *referenced_layers(payload.filter))
+        upload = (
+            get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads")
+            if any(
+                isinstance(source, UploadedVectorFilterRequest) for source in sources
+            )
+            else None
+        )
+        processing = None
+        if any(
+            isinstance(source, (ArtifactVectorSelection, DrawingSelection))
+            for source in sources
+        ):
+            if read_artifact_owner is None:
+                raise HTTPException(404, "This polygon layer is unavailable.")
+            processing = read_artifact_owner(request, response)
+        return VectorSourceOwners(upload, processing)
+    if isinstance(payload, ArtifactVectorSelection):
+        if read_artifact_owner is None:
+            raise HTTPException(404, "This vector result is unavailable.")
+        return read_artifact_owner(request, response)
+    if isinstance(payload, UploadedVectorFilterRequest):
+        return get_browser_owner_hash(
+            request, response, mutation_header="X-EOLab-Uploads"
+        )
+    return None
 
 
 class PrivateVectorRoute(APIRoute):
