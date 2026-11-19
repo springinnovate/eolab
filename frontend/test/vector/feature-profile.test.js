@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
+import { createFakeResizeObservers } from "../../test-support/raster/fakes.js";
 import {
   buildVectorFeatureProfile,
   numericFeatureFields,
@@ -32,9 +33,11 @@ function observation(overrides = {}) {
   });
 }
 
-/** Build a feature-profile controller with a minimal document and visibility spy. */
-function fixture() {
-  const documentContext = new FakeRasterControlDocument();
+/** Build a feature-profile controller and capture its map and presentation callbacks.
+ * @param {FakeRasterControlDocument} [documentContext] Test document with optional browser layout support.
+ * @return {Object} Controller, controls, and recorded callback arguments.
+ */
+function fixture(documentContext = new FakeRasterControlDocument()) {
   const events = new EventTarget();
   documentContext.addEventListener = events.addEventListener.bind(events);
   documentContext.removeEventListener = events.removeEventListener.bind(events);
@@ -354,6 +357,35 @@ test("removing a focused missing field never focuses a filtered-out neighbor", (
   assert.equal(list.children.length, 1);
   assert.equal(list.children[0].hidden, true);
   assert.ok(h.documentContext.activeElement === search);
+});
+
+test("dock resizes redraw the profile at the latest width after layout", () => {
+  const documentContext = new FakeRasterControlDocument();
+  const { ResizeObserver, instances } = createFakeResizeObservers();
+  const frames = new Map();
+  let serial = 0;
+  Object.assign(documentContext.defaultView, {
+    ResizeObserver,
+    requestAnimationFrame: callback => { frames.set(++serial, callback); return serial; },
+    cancelAnimationFrame: id => frames.delete(id),
+  });
+  const {controller} = fixture(documentContext);
+  controller.setCurrentObservation(observation());
+  controller.open();
+  const chart = documentContext.querySelector("#vector-feature-profile-chart");
+  const initial = chart.getAttribute("viewBox");
+  instances[0].resize(300);
+  instances[0].resize(380);
+  assert.equal(chart.getAttribute("viewBox"), initial, "measuring the plot must not resize it within the same layout notification");
+  assert.equal(frames.size, 1);
+  const [id, paint] = [...frames][0];
+  frames.delete(id);
+  paint();
+  assert.equal(chart.getAttribute("viewBox").split(" ")[2], "380");
+  instances[0].resize(400);
+  controller.destroy();
+  assert.equal(frames.size, 0);
+  assert.ok(instances[0].disconnected);
 });
 
 test("controller plots suggested fields and updates from partial search actions", () => {

@@ -43,16 +43,25 @@ export class VectorPlotPanel {
         this.valuesButton.addEventListener("click", () => this.showValues(true), listen);
         this.showValues(false);
         this.width = 0;
-        const Observer = documentContext.defaultView?.ResizeObserver;
-        if (Observer) {
-            this.observer = new Observer(([entry]) => {
+        const view = documentContext.defaultView;
+        if (view?.ResizeObserver) {
+            let frame = null;
+            const observer = new view.ResizeObserver(([entry]) => {
                 const width = Math.round(entry.contentRect.width);
-                if (width > 0 && width !== this.width) {
-                    this.width = width;
+                if (width <= 0 || width === this.width) return;
+                this.width = width;
+                // A redraw also changes the observed plot's height. Let the current layout finish first.
+                if (frame !== null) return;
+                frame = view.requestAnimationFrame(() => {
+                    frame = null;
                     redraw();
-                }
+                });
             });
-            this.observer.observe(this.plot);
+            observer.observe(this.plot);
+            this.abort.signal.addEventListener("abort", () => {
+                observer.disconnect();
+                if (frame !== null) view.cancelAnimationFrame(frame);
+            }, {once: true});
         }
     }
 
@@ -86,7 +95,6 @@ export class VectorPlotPanel {
     /** Release panel controls and size observation. @return {void} */
     destroy() {
         this.abort.abort();
-        this.observer?.disconnect();
     }
 }
 
