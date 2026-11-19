@@ -19,7 +19,7 @@ function controller() {
         controls: new Map(), clearedFilterLayerIds: new Set(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" }, storageStatus: { textContent: "", hidden: true },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
-        retryButton: { hidden: true }, drawButton: { disabled: true }, importButton: { disabled: true },
+        retryButton: { hidden: true }, drawButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
         document: { createElement() { return { remove() {} }; } },
     });
@@ -72,7 +72,7 @@ test("shared viewer keeps private layers stored but never attaches or exposes th
     await annotations.load({ attachSavedLayers: false });
     assert.deepEqual(attached, []);
     assert.deepEqual(annotations.summaryTargets(), []);
-    await annotations.restoreSharedContribution("Included shared layer", { type: "FeatureCollection", features: [] });
+    await annotations.restoreSharedContribution("Included shared layer", { type: "FeatureCollection", name: "Included shared layer", features: [] });
     assert.equal(attached.length, 1);
     assert.equal(annotations.model.layer(privateLayer.id).name, "Private notes");
     assert.equal(annotations.sharableLayers().some(layer => layer.id === privateLayer.id), true, "private data is retained during saves");
@@ -217,7 +217,6 @@ test("a missing layer position preserves the entire stored document and explains
     await annotations.load();
     assert.equal(annotations.loaded, false);
     assert.equal(annotations.drawButton.disabled, true);
-    assert.equal(annotations.importButton.disabled, true);
     assert.equal(annotations.storageStatus.hidden, false);
     assert.match(annotations.storageStatus.textContent, /position in Map contents/);
     assert.match(annotations.storageStatus.textContent, /stored on this device/);
@@ -561,7 +560,6 @@ test("startup retains storage failure in the closed editor and clears it after a
     await annotations.load();
     assert.equal(annotations.panel.open, false);
     assert.equal(annotations.loaded, false);
-    assert.equal(annotations.importButton.disabled, true);
     assert.equal(annotations.drawButton.disabled, true);
     assert.equal(annotations.status.textContent, "Cannot open saved polygons: Cannot open database");
     await assert.rejects(annotations.saveForSharing(), /Cannot open database/);
@@ -570,7 +568,6 @@ test("startup retains storage failure in the closed editor and clears it after a
     assert.equal(annotations.panel.open, false);
     assert.equal(annotations.status.textContent, "");
     assert.equal(annotations.loaded, true);
-    assert.equal(annotations.importButton.disabled, false);
     assert.equal(annotations.drawButton.disabled, false);
 });
 
@@ -600,9 +597,9 @@ test("invalid saved drawings stay in the closed editor without overwriting store
         await annotations.load({ attachSavedLayers });
         assert.equal(annotations.panel.open, false);
         assert.equal(annotations.loaded, false);
-        assert.equal(annotations.importButton.disabled, true);
+        assert.equal(annotations.drawButton.disabled, true);
         assert.match(annotations.status.textContent, /invalid polygon/);
-        await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", features: [] }),
+        await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", name: "Shared layer", features: [] }),
             /Cannot open saved polygons: Saved polygons contain an invalid polygon/);
         await annotations.save();
         assert.equal(writes, 0);
@@ -624,7 +621,7 @@ test("recovered filter notices belong to their layers and clear when a filter is
         await annotations.load({ attachSavedLayers });
         assert.equal(annotations.loaded, true);
         assert.equal(annotations.panel.open, false);
-        assert.equal(annotations.importButton.disabled, false);
+        assert.equal(annotations.drawButton.disabled, false);
         assert.equal(annotations.status.textContent, "");
         assert.deepEqual([...annotations.clearedFilterLayerIds], [affected.id]);
         assert.deepEqual(annotations.model.layer(unchanged.id), unchanged);
@@ -879,7 +876,7 @@ test("restoring a shared contribution exposes it only after successful device sa
     const events = []; let release;
     annotations.onCommittedChange = () => events.push(["saved", annotations.sharableLayers().map(layer => layer.id)]);
     annotations.storage.save = () => new Promise(resolve => { release = resolve; });
-    const collection = { type: "FeatureCollection", features: [] };
+    const collection = { type: "FeatureCollection", name: "Shared", features: [] };
     const restoring = annotations.restoreSharedContribution("Shared", collection);
     assert.deepEqual(events, []);
     assert.deepEqual(annotations.sharableLayers(), []);

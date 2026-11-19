@@ -693,7 +693,9 @@ test("shared layer creation and joining live in Map contents without a session t
     assert.match(layers.source, /id="join-shared-annotation-layer"/);
     assert.doesNotMatch(layers.source, /id="open-annotations"/);
     assert.doesNotMatch(MARKUP, /id="create-annotation-layer"/);
-    assert.match(layers.source, /id="import-annotation-geojson"/);
+    assert.match(layers.source, /id="upload-polygons"[^>]*>Your uploads<\/button>/);
+    assert.match(layers.source, /id="draw-private-polygon"[^>]*>Draw polygon<\/button>/);
+    assert.doesNotMatch(layers.source, /Import polygons|id="(?:import-annotation-geojson|annotation-geojson-file)"/);
     assert.ok(annotations.start > inspection.start && annotations.end < inspection.end);
     for (const id of ["annotation-save-status", "annotation-panel-content"]) {
         assert.match(annotations.source, new RegExp(`id="${id}"`));

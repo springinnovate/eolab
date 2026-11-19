@@ -1,5 +1,5 @@
 /** Translate linked drawing contents without copying local view settings into the source. */
-import { exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
+import { exportAnnotationGeoJSON, readAnnotationCollection } from "./geojson.js";
 import { counterclockwisePolygonRing } from "./geometry.js";
 import { readAnnotationLayers, DEFAULT_ANNOTATION_STYLE } from "./model.js";
 
@@ -27,10 +27,10 @@ export function serializeDrawingContent(collection) {
  * @throws {Error} If server geometry or original polygon identities violate the drawing contract.
  */
 export function readDrawingView(record, localId) {
-    const imported = parseAnnotationGeoJSON(JSON.stringify(record.collection));
-    const layer = {id: localId, name: imported.name, position: 0, visible: true, opacity: 1,
+    const { name, polygons } = readAnnotationCollection(record.collection);
+    const layer = {id: localId, name, position: 0, visible: true, opacity: 1,
         style: {...DEFAULT_ANNOTATION_STYLE}, filter: {enabled: false, match: "all", rules: []},
-        polygons: imported.polygons.map((polygon, index) => ({...polygon, id: record.collection.features[index].id})),
-        drawingSource: {id: record.id, revision: record.revision, canEdit: record.canEdit, pending: false, sourceName: imported.name}};
+        polygons: polygons.map((polygon, index) => ({...polygon, id: record.collection.features[index].id})),
+        drawingSource: {id: record.id, revision: record.revision, canEdit: record.canEdit, pending: false, sourceName: name}};
     return readAnnotationLayers({version: 1, layers: [layer]})[0];
 }

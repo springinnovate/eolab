@@ -42,7 +42,7 @@ function fixture() {
         savedDrawingContents: new Map(), creatingDrawingSources: new Map(), unavailableDrawingSources: new Set(),
         drawingSaveErrors: new Map(), deviceSaveError: null,
         savedSharingLayers: [], dirty: false, pendingSave: false, savePromise: null, saving: false,
-        status: {textContent: ""}, storageStatus: {hidden: true}, retryButton: {hidden: true}, drawButton: {}, importButton: {},
+        status: {textContent: ""}, storageStatus: {hidden: true}, retryButton: {hidden: true}, drawButton: {},
         panel: {show() {}}, clearedFilterLayerIds: new Set(), restoredLayers: new WeakMap(),
         storage: {async save(document) { saved.push(structuredClone(document)); }},
         refreshLayer() {}, updateEditor() {},
@@ -196,7 +196,7 @@ test("unrelated conflicts do not block local sharing or restoring a removed draw
     await h.controller.restoreRemovedLayer(snapshot, () => true);
     assert.equal(h.controller.model.layer(h.other.id).drawingSource.id, OTHER_SOURCE);
     await h.controller.saveForSharing();
-    const id = await h.controller.restoreSharedContribution("Separate shared layer", {type: "FeatureCollection", features: []});
+    const id = await h.controller.restoreSharedContribution("Separate shared layer", {type: "FeatureCollection", name: "Separate shared layer", features: []});
     assert.ok(h.controller.sharableLayers().some(layer => layer.id === id));
     assert.equal(h.layer.polygons[0].note, "Retain conflicting A");
     assert.equal(h.layer.drawingSource.pending, true);

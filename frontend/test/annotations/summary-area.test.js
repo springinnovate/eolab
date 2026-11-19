@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ANNOTATION_FIELDS, annotationSummaryTarget, annotationSummaryPolygons } from "../../src/annotations/summary-area.js";
 import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers } from "../../src/annotations/model.js";
-import { parseAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { VectorSamplingController } from "../../src/vector/sampling.js";
 import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
@@ -41,10 +40,7 @@ test("summary, map and selection identity use the same case-sensitive annotation
 
 test("summary snapshots exclude drafts, styles and text that does not change membership", () => {
     const model = new AnnotationModel();
-    const imported = parseAnnotationGeoJSON(JSON.stringify({ type: "FeatureCollection", name: "Study areas",
-        features: layer().polygons.map(polygon => ({ type: "Feature", properties: { name: polygon.name, note: polygon.note },
-            geometry: { type: "Polygon", coordinates: [[...polygon.vertices, polygon.vertices[0]]] } })) }));
-    const value = model.importLayer(imported);
+    const value = model.addLayerFromPolygons(layer());
     const before = annotationSummaryTarget("layer", value);
     model.beginPolygon(value.id, value.polygons[0].id);
     model.draft.polygon.vertices[0] = [-1, 0];
