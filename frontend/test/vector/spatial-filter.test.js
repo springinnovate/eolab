@@ -63,6 +63,25 @@ test("a hidden duplicate follows its own filter and keeps its identity across re
     await assert.rejects(views.bind("parcels", original.filter), /refer back/);
 });
 
+test("redrawing an applied drawing filter reuses the comparison until a layer changes", async t => {
+    const source = {id: copyId, key: "boundary", selection: {uploadId: copyId}, filter: all};
+    const drawing = {id: firstId, key: "drawing", drawingSource: {id: firstId, revision: 1}};
+    const layers = [drawing, source];
+    const views = new SpatialFilterViews({layers: () => layers});
+    const filter = await views.bind(drawing.key, {...all, rules: [condition(copyId)]}, layers);
+    const update = t.mock.fn();
+    const targets = [{key: drawing.key, filter: {...filter, matchingIds: ["west"]}, update}];
+    views.trackSources(drawing.key, filter, layers);
+    views.follow(targets);
+    assert.equal(update.mock.callCount(), 0);
+    drawing.drawingSource.revision++;
+    views.follow(targets);
+    assert.equal(update.mock.callCount(), 1);
+    source.filter = filtered("south");
+    views.follow(targets);
+    assert.equal(update.mock.callCount(), 2);
+});
+
 test("an active device-only boundary renews even when the map has not changed", async t => {
     t.mock.timers.enable({apis: ["Date", "setTimeout"], now: new Date("2026-01-01")});
     const layer = {id: copyId, key: "local", polygons: [{id: "local-polygon"}], filter: all};

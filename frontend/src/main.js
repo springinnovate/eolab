@@ -1355,23 +1355,28 @@ async function initializeCatalog(
     /** Apply field and spatial conditions to committed drawings without disturbing the editing draft.
      * @param {string} key Drawing view to filter.
      * @param {Object} candidate Rule builder state.
+     * @param {()=>boolean} [current] Whether a source change that triggered this refresh is still current.
      * @return {Promise<Object|null>} Applied rules, or null after replacement or removal.
      * @throws {Error} If the polygon source cannot be read.
      */
-    async function applyDrawingFilter(key, candidate) {
+    async function applyDrawingFilter(key, candidate, current) {
         const attempt = Symbol();
         drawingFilterAttempts.set(key, attempt);
-        const target = spatialPolygonLayers().find(view => view.key === key);
+        const layers = spatialPolygonLayers();
+        const target = layers.find(view => view.key === key);
         if (!target) return null;
-        const captured = await spatialViews.bind(key, candidate);
-        if (captured.enabled && captured.rules.some(rule => rule.operator === "intersects")) {
+        const captured = await spatialViews.bind(key, candidate, layers);
+        const spatial = captured.enabled && captured.rules.some(rule => rule.operator === "intersects");
+        if (spatial) {
             const original = await spatialViews.drawing(target, EMPTY_VECTOR_FILTER);
             const properties = target.polygons.map(({name, note}) => ({name, note}));
             const positions = await applySpatialFilter("drawings", {target: original, filter: captured, properties});
             captured.matchingIds = positions.map(index => target.polygons[index].id);
         }
-        if (drawingFilterAttempts.get(key) !== attempt || !annotations.filterTarget(key)) return null;
-        annotations.filterTarget(key).apply(captured);
+        const editor = annotations.filterTarget(key);
+        if (!editor || drawingFilterAttempts.get(key) !== attempt || (current && !current())) return null;
+        if (spatial && !current) spatialViews.trackSources(key, captured, layers);
+        editor.apply(captured);
         return captured;
     }
     let modelFilterControls = null;
@@ -1593,12 +1598,16 @@ async function initializeCatalog(
             const filter = record.requestedSpatialFilter ?? drawing?.filter ?? record.adapter.exportFilterState(record);
             return [{key, filter, update: async (requested, current) => {
                 try {
-                    const captured = await spatialViews.bind(key, requested);
-                    if (!current() || !mapLayerController.getRecord(key)) return;
-                    if (!drawing && !record.spatialFilterError && JSON.stringify(record.adapter.exportFilterState(record)) === JSON.stringify(captured)) return;
-                    delete record.spatialFilterError;
-                    if (drawing) await applyDrawingFilter(key, captured);
-                    else await record.adapter.applyFilterState(record, captured);
+                    if (drawing) {
+                        delete record.spatialFilterError;
+                        await applyDrawingFilter(key, requested, current);
+                    } else {
+                        const captured = await spatialViews.bind(key, requested);
+                        if (!current() || !mapLayerController.getRecord(key)) return;
+                        if (!record.spatialFilterError && JSON.stringify(record.adapter.exportFilterState(record)) === JSON.stringify(captured)) return;
+                        delete record.spatialFilterError;
+                        await record.adapter.applyFilterState(record, captured);
+                    }
                     if (current()) delete record.requestedSpatialFilter;
                 } catch (error) {
                     if (!current() || !mapLayerController.getRecord(key)) return;
