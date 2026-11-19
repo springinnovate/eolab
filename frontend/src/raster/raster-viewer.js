@@ -146,7 +146,7 @@ function canRetryRasterStatistics(error) {
 /**
  * @typedef {Object} RasterViewer
  * @property {(enabled:boolean)=>void} setPixelPickingEnabled Enable or hide transient pixel values.
- * @property {(enabled:boolean)=>void} setSamplingBoxPointerEnabled Enable or clear sampling-box pointer previews.
+ * @property {(enabled:boolean)=>void} setSamplingBoxPointerEnabled Enable or clear box previews and first-sample guidance.
  * @property {() => void} clear Remove all retained raster interactions.
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
@@ -1832,11 +1832,11 @@ export function initializeRasterViewer(
         return area;
     }
 
-    /** Return whether ordinary map browsing can offer a first sample from a visible raster.
+    /** Return whether box sampling can offer a first sample from a visible raster.
      * @return {boolean} True until a box is placed, except while drawing or using another sample area or tool.
      */
     function canOfferFirstSample() {
-        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && !pendingVectorSelection &&
+        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && samplingBoxPointerEnabled && !pendingVectorSelection &&
             initialPolygonSamplingArea() === null && activeRasterItem?.capabilities?.statistics !== false &&
             mapLayers.getRecord(activeLayerKey)?.entry.visible === true;
     }
@@ -4078,13 +4078,14 @@ export function initializeRasterViewer(
         else hidePixelPicker();
     }
 
-    /** Enable the raster sampling-box preview independently of pixel picking.
+    /** Enable box previews and first-sample guidance independently of pixel picking.
      * @param {boolean} enabled Whether pointer movement should preview a sampling box.
      * @return {void}
      */
     function setSamplingBoxPointerEnabled(enabled) {
         samplingBoxPointerEnabled = enabled;
         if (!enabled) rasterSampleWindowController.clearPreview();
+        updateFirstSampleHint();
     }
 
     /** Offer the first sample when the map returns from a foreground tool to ordinary browsing.

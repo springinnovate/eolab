@@ -3931,6 +3931,11 @@ test("first sample previews the clicked footprint without opening a histogram or
         const key = h.mapLayers.retainedRecords[0].entry.key;
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(hover(-20), undefined);
+        h.viewer.setSamplingBoxPointerEnabled(false);
+        assert.equal(h.controlsView.firstSampleHintVisible, false, "Pixel picking must not invite histogram-box placement");
+        assert.equal(hover(2), undefined);
+        h.viewer.setSamplingBoxPointerEnabled(true);
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(h.viewer.exploreAt({lng: -20, lat: 0}), false);
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         const beforeHover = reads.length;
