@@ -233,6 +233,113 @@ def test_projected_box_refines_edges_at_output_cell_size() -> None:
     )
 
 
+def test_native_polygon_preserves_both_sides_of_the_dateline(tmp_path: Path) -> None:
+    """Publish the same cell membership as testing centers in the native polygon."""
+    source = write_source(
+        tmp_path / "source.tif",
+        np.ones((10, 3600), dtype="uint8"),
+        transform=from_origin(-180, 71, 0.1, 0.1),
+    )
+    native_bounds = (-1_520_000, 1_510_000, -1_510_000, 1_520_000)
+    area = write_selection(
+        tmp_path / "arctic.gpkg", [mapping(box(*native_bounds))], crs="EPSG:3413"
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        longitudes = output.transform.c + columns * output.transform.a
+        latitudes = output.transform.f + rows * output.transform.e
+        x, y = Transformer.from_crs("EPSG:4326", "EPSG:3413", always_xy=True).transform(
+            longitudes, latitudes
+        )
+        west, south, east, north = native_bounds
+        inside = (west < x) & (x < east) & (south < y) & (y < north)
+        assert result.valid_pixels == inside.sum() == 2
+        assert set(longitudes[inside].round(2)) == {-179.95, 179.95}
+        np.testing.assert_array_equal(output.read(1), np.where(inside, 1, np.nan))
+
+
+@pytest.mark.parametrize("area_kind", ["bounds", "samplingBox"])
+def test_calculator_reports_a_cut_inside_the_output_projection(
+    tmp_path: Path, area_kind: str
+) -> None:
+    """Reject a small box across the Pacific Mercator cut before making a world grid."""
+    source = write_source(
+        tmp_path / "source.tif",
+        np.ones((1, 360), dtype="uint8"),
+        transform=from_origin(-180, 1, 1, 1),
+    )
+    area = (
+        {
+            "selectedBounds": {
+                "west": -30.49,
+                "south": 0.02,
+                "east": -29.51,
+                "north": 0.98,
+            }
+        }
+        if area_kind == "bounds"
+        else {
+            "samplingBox": {
+                "center": {"longitude": -30, "latitude": 0.5},
+                "sideLengthKm": 100,
+            }
+        }
+    )
+    request = RasterCalculatorRequest.model_validate(
+        {
+            "calculation": {
+                "layers": [{"alias": "a", "source": SOURCE, "resampling": "nearest"}],
+                "expression": "a",
+                "grid": {
+                    "kind": "custom",
+                    "crs": "EPSG:3832",
+                    "pixelSize": (55659.74539663678, 111319.49079327357),
+                },
+            },
+            **area,
+        }
+    )
+    with pytest.raises(ProcessingError, match="crosses a cut in the output projection"):
+        plan_calculator_grid(
+            RasterCalculatorSources({"a": source}, None),
+            QueuedRasterCalculator(request=request, polygonArea=None),
+        )
+    assert not (tmp_path / "result.tif").exists()
+    if area_kind == "bounds":
+        # A polygon wholly on either branch still has a valid, compact grid.
+        for shift in (-1, 1):
+            adjacent = request.model_copy(
+                update={
+                    "selectedBounds": Wgs84Bounds(
+                        west=-30.49 + shift, south=0.02, east=-29.51 + shift, north=0.98
+                    )
+                }
+            )
+            sources = RasterCalculatorSources({"a": source}, None)
+            spec = plan_calculator_grid(
+                sources, QueuedRasterCalculator(request=adjacent, polygonArea=None)
+            )
+            attempt = tmp_path / str(shift)
+            attempt.mkdir()
+            result = calculate_raster(sources, spec, attempt, RasterAggregateLimits())
+            assert result.valid_pixels == 2
+
+
 @pytest.mark.parametrize(
     ("east", "expected"),
     [(-2, [356, 357]), (4, [356, 357, 358, 359, 0, 1, 2, 3])],

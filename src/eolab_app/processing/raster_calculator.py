@@ -53,7 +53,7 @@ from eolab_app.processing.raster_preparation import (
     read_preparation_polygons,
     read_warped_tile,
 )
-from eolab_app.raster.bounded_window import project_polygons_to_crs
+from eolab_app.raster.bounded_window import ProjectionSeamError, project_polygons_to_crs
 from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference
 
@@ -275,7 +275,11 @@ def project_calculator_area(
         if vector is not None:
             return read_preparation_polygons(vector, crs, pixel_size=pixel_size)
         if request.samplingBox is not None:
-            return (project_preparation_box(request.samplingBox, crs, pixel_size),)
+            return (
+                project_preparation_box(
+                    request.samplingBox, crs, pixel_size, seam_aware=True
+                ),
+            )
         if polygon_area is not None:
             geometries = polygon_area.geometries
         else:
@@ -286,6 +290,12 @@ def project_calculator_area(
         )
     except SelectionUnavailableError as error:
         raise ProcessingError("selection_unavailable", error.detail, 409) from error
+    except ProjectionSeamError as error:
+        raise ProcessingError(
+            "invalid_calculator_area",
+            "The selected area crosses a cut in the output projection. "
+            "Choose another projection or run each side separately.",
+        ) from error
     except (ValueError, rasterio.errors.RasterioError) as error:
         raise ProcessingError(
             "invalid_calculator_area",

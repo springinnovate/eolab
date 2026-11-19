@@ -16,7 +16,7 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
-from rasterio.warp import transform
+from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
 
 from eolab_app.bounded_vector import PolygonRasterizer, polygon_features
@@ -24,7 +24,10 @@ from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.raster_mask import temporary_polygon_mask
-from eolab_app.raster.bounded_window import project_polygons_to_crs
+from eolab_app.raster.bounded_window import (
+    grid_boundary_projection,
+    project_polygons_to_crs,
+)
 from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
 
 
@@ -133,7 +136,11 @@ def read_preparation_polygons(
 
 
 def project_preparation_box(
-    box: Wgs84SamplingBox, crs: CRS, pixel_size: tuple[float, float]
+    box: Wgs84SamplingBox,
+    crs: CRS,
+    pixel_size: tuple[float, float],
+    *,
+    seam_aware: bool = False,
 ) -> dict[str, object]:
     """Project a geodesic sampling box at the output grid's pixel accuracy.
 
@@ -141,27 +148,38 @@ def project_preparation_box(
         box: Captured geographic center and box dimensions.
         crs: Output coordinate system.
         pixel_size: Positive output X/Y cell sizes in the output CRS.
+        seam_aware: Split geographic seams and reject cuts in projected grids.
     Returns:
-        A polygon in the output coordinate system.
+        A polygon or antimeridian-split multipolygon in the output CRS.
     Raises:
         ValueError: If the box cannot be projected.
     """
+
+    project_boundary = (
+        grid_boundary_projection("EPSG:4326", crs) if seam_aware else None
+    )
 
     def project_pixels(
         positions: tuple[tuple[float, float], ...],
     ) -> tuple[tuple[float, float], ...]:
         """Return output-grid pixel positions for edge refinement."""
-        x, y = transform(
-            "EPSG:4326",
-            crs,
-            [point[0] for point in positions],
-            [point[1] for point in positions],
-        )
-        return tuple(
-            (a / pixel_size[0], b / pixel_size[1]) for a, b in zip(x, y, strict=True)
-        )
+        if project_boundary is None:
+            x, y = transform(
+                "EPSG:4326",
+                crs,
+                [point[0] for point in positions],
+                [point[1] for point in positions],
+            )
+            projected = zip(x, y, strict=True)
+        else:
+            projected = project_boundary(positions)
+        return tuple((a / pixel_size[0], b / pixel_size[1]) for a, b in projected)
 
     ring = tessellate_sampling_box(box, project_pixels)
+    if seam_aware and crs.is_geographic:
+        return transform_geom(
+            "EPSG:4326", crs, {"type": "Polygon", "coordinates": [ring]}
+        )
     x, y = transform(
         "EPSG:4326", crs, [point[0] for point in ring], [point[1] for point in ring]
     )

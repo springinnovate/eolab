@@ -2,13 +2,20 @@
 
 import math
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from typing import cast
 
+from pyproj import Transformer
+from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
-from rasterio.warp import transform
+from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
 
-from eolab_app.projected_boundary import Position, tessellate_projected_ring
+from eolab_app.projected_boundary import (
+    Position,
+    ProjectPositions,
+    tessellate_projected_ring,
+)
 from eolab_app.sampling_box import (
     Wgs84SamplingBox,
     sampling_box_bounds,
@@ -26,6 +33,77 @@ POLYGON_BOUNDARY_MAXIMUM_ERROR_PIXELS = 0.001
 
 class NoRasterBoundsOverlapError(ValueError):
     """Raised when a selected WGS 84 area misses a raster source grid."""
+
+
+class ProjectionSeamError(ValueError):
+    """A ring crosses a cut that cannot be represented as one projected polygon."""
+
+
+@lru_cache(maxsize=8)
+def _grid_transformer(source: CRS, target: CRS, *, unwrap: bool) -> Transformer:
+    """Return the reusable PROJ operation for this CRS pair and longitude mode."""
+    try:
+        return Transformer.from_crs(
+            source.to_wkt(), target.to_wkt(), always_xy=True, force_over=unwrap
+        )
+    except ProjError as error:
+        raise ValueError("Selection could not be projected") from error
+
+
+def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions:
+    """Return a projector for probing one connected boundary ring.
+
+    Geographic targets use continuous longitudes for edge refinement. Their
+    final geometry can then be split at the antimeridian by GDAL. For projected
+    targets, PROJ's normal and unwrapped operations identify changes in the
+    longitude normalization along a ring. A chord across such a cut could
+    rasterize the complement of the intended area.
+
+    Args:
+        source: CRS in which the original boundary edges are defined.
+        target: CRS of the calculation grid.
+
+    Returns:
+        Batch callback returning target positions for one ring. Use a separate
+        callback for each ring so disconnected regions can use different branches.
+
+    Raises:
+        ValueError: If a coordinate operation cannot be created or evaluated.
+        ProjectionSeamError: From the callback if a projected ring crosses a cut.
+    """
+    source_crs = CRS.from_user_input(source)
+    unwrapped = _grid_transformer(source_crs, target, unwrap=True)
+    normalized = (
+        None
+        if target.is_geographic
+        else _grid_transformer(source_crs, target, unwrap=False)
+    )
+    wrapped_branch: bool | None = None
+
+    def project(positions: tuple[Position, ...]) -> tuple[Position, ...]:
+        """Project boundary probes and check the ring's longitude branch."""
+        nonlocal wrapped_branch
+        xs, ys = zip(*positions, strict=True)
+        try:
+            if normalized is None:
+                x, y = unwrapped.transform(xs, ys, errcheck=True)
+                return tuple(zip(x, y, strict=True))
+            x, y = normalized.transform(xs, ys, errcheck=True)
+            over_x, over_y = unwrapped.transform(xs, ys)
+        except ProjError as error:
+            raise ValueError("Selection could not be projected") from error
+        for a, b, c, d in zip(x, y, over_x, over_y, strict=True):
+            wrapped = not (
+                math.isclose(a, c, rel_tol=1e-12, abs_tol=1e-9)
+                and math.isclose(b, d, rel_tol=1e-12, abs_tol=1e-9)
+            )
+            if wrapped_branch is None:
+                wrapped_branch = wrapped
+            elif wrapped_branch != wrapped:
+                raise ProjectionSeamError("Selection crosses a cut in the projection")
+        return tuple(zip(x, y, strict=True))
+
+    return project
 
 
 def get_longitude_wrap_width(dataset: RasterDataset) -> float | None:
@@ -404,10 +482,9 @@ def _densify_polygon_rings(
 def _refine_polygon_rings(
     rings: tuple[tuple[Position, ...], ...],
     source_crs: CRS | str,
-    target_crs: CRS | str,
+    target_crs: CRS,
     pixel_size: tuple[float, float],
     maximum_coordinates: int | None,
-    coordinate_transform: Callable[..., tuple[list[float], list[float]]],
 ) -> tuple[tuple[Position, ...], ...]:
     """Subdivide straight edges to the polygon tolerance in destination pixels.
 
@@ -417,7 +494,6 @@ def _refine_polygon_rings(
         target_crs: Coordinate system in which the polygons will be rasterized.
         pixel_size: Positive target X and Y pixel sizes.
         maximum_coordinates: Capacity for derived positions, or None for unlimited work.
-        coordinate_transform: Batch CRS transformation.
 
     Returns:
         Rings with source positions added where the projected edges curve.
@@ -427,19 +503,15 @@ def _refine_polygon_rings(
     """
     x_size, y_size = pixel_size
 
-    def project_pixels(positions: tuple[Position, ...]) -> tuple[Position, ...]:
-        """Transform source positions to target pixel units for chord tests."""
-        x, y = coordinate_transform(
-            source_crs,
-            target_crs,
-            [point[0] for point in positions],
-            [point[1] for point in positions],
-        )
-        return tuple((a / x_size, b / y_size) for a, b in zip(x, y, strict=True))
-
     refined = []
     remaining_coordinates = maximum_coordinates
     for ring in rings:
+        project = grid_boundary_projection(source_crs, target_crs)
+
+        def project_pixels(positions: tuple[Position, ...]) -> tuple[Position, ...]:
+            """Transform this ring's probes to target pixels for chord tests."""
+            return tuple((x / x_size, y / y_size) for x, y in project(positions))
+
         boundary = tessellate_projected_ring(
             ring,
             project_pixels,
@@ -567,10 +639,10 @@ def project_polygons_to_crs(
         geometries: Validated Polygon or MultiPolygon mappings in source_crs.
         maximum_coordinates: Transformed-coordinate ceiling, or None for
             caller-supervised unlimited geometry.
-        coordinate_transform: Injectable transformation between coordinate systems.
+        coordinate_transform: Batch transformation for final projected coordinates.
         pixel_size: Positive X/Y sizes to refine edges to one thousandth of a
-            target pixel. Equal CRSs retain the original edges. When omitted,
-            use the bounded source-window reader's fixed edge subdivision.
+            target pixel. Geographic targets split at the antimeridian. Equal
+            CRSs retain the original geometry. Omit it for fixed subdivision.
 
     Returns:
         Separate polygon mappings in the requested CRS, preserving holes and
@@ -578,6 +650,7 @@ def project_polygons_to_crs(
 
     Raises:
         ValueError: If coordinates cannot be projected or exceed the ceiling.
+        ProjectionSeamError: If a ring crosses a cut in a projected output grid.
         TypeError: If the geometry violates the polygon input contract.
     """
     geometry_ring_groups: list[
@@ -588,9 +661,11 @@ def project_polygons_to_crs(
         rings = _polygon_rings(geometry)
         geometry_ring_groups.append((str(geometry["type"]), rings))
         all_rings.extend(rings)
+    target = CRS.from_user_input(target_crs)
+    split_at_dateline = pixel_size is not None and target.is_geographic
     if pixel_size is None:
         densified_rings = _densify_polygon_rings(tuple(all_rings), maximum_coordinates)
-    elif CRS.from_user_input(source_crs) == CRS.from_user_input(target_crs):
+    elif CRS.from_user_input(source_crs) == target:
         if (
             maximum_coordinates is not None
             and sum(map(len, all_rings)) > maximum_coordinates
@@ -601,34 +676,30 @@ def project_polygons_to_crs(
         densified_rings = _refine_polygon_rings(
             tuple(all_rings),
             source_crs,
-            target_crs,
+            target,
             pixel_size,
             maximum_coordinates,
-            coordinate_transform,
         )
-    x = [point[0] for ring in densified_rings for point in ring]
-    y = [point[1] for ring in densified_rings for point in ring]
-    projected_x, projected_y = coordinate_transform(
-        source_crs,
-        target_crs,
-        x,
-        y,
-    )
-    projected_positions = tuple(zip(projected_x, projected_y, strict=True))
-    if not all(
-        math.isfinite(ordinate)
-        for position in projected_positions
-        for ordinate in position
-    ):
-        raise ValueError("Selection could not be projected")
-
-    projected_rings: list[tuple[tuple[float, float], ...]] = []
-    position_index = 0
-    for ring in densified_rings:
-        projected_rings.append(
-            projected_positions[position_index : position_index + len(ring)]
-        )
-        position_index += len(ring)
+    projected_rings = densified_rings
+    if not split_at_dateline:
+        x = [point[0] for ring in densified_rings for point in ring]
+        y = [point[1] for ring in densified_rings for point in ring]
+        projected_x, projected_y = coordinate_transform(source_crs, target, x, y)
+        projected_positions = tuple(zip(projected_x, projected_y, strict=True))
+        if not all(
+            math.isfinite(ordinate)
+            for position in projected_positions
+            for ordinate in position
+        ):
+            raise ValueError("Selection could not be projected")
+        position_index = 0
+        rings = []
+        for ring in densified_rings:
+            rings.append(
+                projected_positions[position_index : position_index + len(ring)]
+            )
+            position_index += len(ring)
+        projected_rings = tuple(rings)
 
     projected_geometries: list[dict[str, object]] = []
     ring_index = 0
@@ -654,6 +725,8 @@ def project_polygons_to_crs(
             }
         )
 
+    if split_at_dateline:
+        return tuple(transform_geom(source_crs, target, projected_geometries))
     return tuple(projected_geometries)
 
 
