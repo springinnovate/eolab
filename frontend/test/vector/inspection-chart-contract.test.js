@@ -14,7 +14,8 @@ import { VectorTimeSeriesController } from "../../src/vector/time-series.js";
  * evaluates existing initialization code rather than copying the callbacks.
  * @return {{inspector:Object,profile:VectorFeatureProfileController,
  * series:VectorTimeSeriesController,documentContext:FakeRasterControlDocument,
- * status:Object,zooms:Object[]}} Composed consumers and their presentation outputs.
+ * status:Object,mapActions:({highlight:number}|{zoom:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"]})[]}}
+ * Composed consumers and their presentation outputs.
  */
 function composition() {
   const source = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
@@ -25,7 +26,9 @@ function composition() {
   documentContext.addEventListener = events.addEventListener.bind(events);
   documentContext.removeEventListener = events.removeEventListener.bind(events);
   const status = {};
-  const zooms = [];
+  const mapActions = [];
+  const comparison = documentContext.querySelector("#vector-time-series");
+  comparison.hidden = true;
   const dependencies = {
     VectorTimeSeriesController: function (options) {
       return new VectorTimeSeriesController({...options, documentContext});
@@ -33,16 +36,19 @@ function composition() {
     VectorFeatureProfileController: function (options) {
       return new VectorFeatureProfileController({...options, documentContext});
     },
-    VectorFeatureInspectorController: function (options) { return options; },
+    VectorFeatureInspectorController: function (options) {
+      return {...options, showResult: index => mapActions.push({highlight: index})};
+    },
     mapInspection: {
       setVectorTimeSeriesIdentity() {},
       setVectorFeatureProfileIdentity() {},
       hideVectorFeatureProfile() {},
-      hideVectorTimeSeries() {},
+      showVectorTimeSeries() { comparison.hidden = false; },
+      hideVectorTimeSeries() { comparison.hidden = true; },
       setClickResult(kind, result) { status[kind] = result; },
       setFeatureResultCount(count, options) { status.count = {count, ...options}; },
     },
-    zoomInspectedVectorFeature: focus => { zooms.push(focus); return true; },
+    zoomInspectedVectorFeature: focus => { mapActions.push({zoom: focus}); return true; },
     L: {},
     leafletMap: {},
     appGlobalConfiguration: {wmsUrl: "/wms"},
@@ -51,7 +57,7 @@ function composition() {
     `let vectorFeatureInspector;\n${source.slice(start, end)}\n` +
     "return {inspector: vectorFeatureInspector, profile: vectorFeatureProfile, series: vectorTimeSeries};"
   )(...Object.values(dependencies));
-  return {...controllers, documentContext, status, zooms};
+  return {...controllers, documentContext, status, mapActions};
 }
 
 /**
@@ -74,7 +80,7 @@ function observation(id) {
 }
 
 test("inspection composition delivers distinct observations to both chart consumers", t => {
-  const {inspector, profile, series, documentContext, status, zooms} = composition();
+  const {inspector, profile, series, documentContext, status, mapActions} = composition();
   t.after(() => { profile.destroy(); series.destroy(); });
   const observations = Object.freeze([observation(1), observation(9)]);
   inspector.onSampleChange(Object.freeze({
@@ -99,9 +105,15 @@ test("inspection composition delivers distinct observations to both chart consum
   assert.deepEqual(status.feature, {state: "ready", message: "2 features returned across 1 layer · Ready"});
   assert.deepEqual(status.count, {count: 2, loading: false});
   documentContext.querySelector("#zoom-vector-feature-profile-feature").dispatchEvent(new Event("click"));
-  assert.deepEqual(zooms, [{ center: [20, 10], bounds: [20, 10, 20, 10] }]);
+  assert.deepEqual(mapActions, [{zoom: { center: [20, 10], bounds: [20, 10, 20, 10] }}]);
   assert.deepEqual(observations[1].properties, { R1999: 9, R2000: 10 });
   assert.equal(Object.isFrozen(observations[1].properties), true);
+
+  series.open();
+  const chart = documentContext.querySelector("#vector-time-series-chart");
+  chart.querySelectorAll(".series-chart-point")[0].dispatchEvent(new Event("click"));
+  assert.deepEqual(mapActions.slice(1), [{highlight: 0}, {zoom: observations[0].focus}]);
+  assert.equal(documentContext.querySelector("#vector-time-series").hidden, false);
 });
 
 test("a new inspection replaces the prior chart and communicates partial results", t => {

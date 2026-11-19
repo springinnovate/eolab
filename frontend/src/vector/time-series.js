@@ -159,7 +159,8 @@ export class VectorTimeSeriesController {
      * @param {Object} configuration Browser composition callbacks.
      * @param {(visible:boolean,moveFocus:boolean)=>void} configuration.onVisibilityChange Show or close the dock view.
      * @param {(identity:{label:string,title:string}|null)=>void} configuration.onPresentationChange Update the dock tab.
-     * @param {(focus:VectorInspectionObservation["focus"])=>boolean} configuration.onFeatureZoom Zoom to the selected source feature.
+     * @param {(focus:VectorInspectionObservation["focus"],index:number)=>boolean} configuration.onFeatureZoom
+     * Highlight the inspected result at this index and return whether the map could fit its bounds.
      * @param {(index:number|null)=>void} configuration.onOpenFeature Open a single feature, or the inspector's current one.
      * @param {Document} [configuration.documentContext=document] Owning document.
      * @throws {TypeError} If visibility, dock identity, or zoom callbacks are missing.
@@ -217,10 +218,7 @@ export class VectorTimeSeriesController {
             this.plotPanel.closePicker();
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
-            if (this.selected && !onFeatureZoom(this.observations[this.selected.index].focus)) {
-                this.zoomFeatureButton.disabled = true;
-                this.status.textContent = "Feature location is unavailable. The map has not moved.";
-            }
+            if (this.selected) this.#zoomToFeature(this.selected.index);
         }, listen);
         documentContext.addEventListener("keydown", event => {
             if (event.key !== "Escape" || this.panel.hidden || !this.panel.contains(documentContext.activeElement)) return;
@@ -380,7 +378,10 @@ export class VectorTimeSeriesController {
                 xAxisLabel:xLabel,yAxisLabel:"Value",ariaLabel:plot.field + " by " + xLabel,
                 pointAccessibleLabel:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
                 pointTooltip:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
-                onPointSelect:p => this.#select(p.sourceIndex,plot.field),
+                onPointSelect: point => {
+                    this.#select(point.sourceIndex, plot.field);
+                    this.#zoomToFeature(point.sourceIndex);
+                },
             });
             labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
             this.pointElements.push(...handles.pointElements);
@@ -437,6 +438,18 @@ export class VectorTimeSeriesController {
             else circle.classList.remove("is-selected");
             circle.setAttribute("aria-pressed",String(chosen));
         }
+    }
+
+    /**
+     * Highlight the selected feature on the map and fit its bounds.
+     * Report unavailable bounds beside the selected reading.
+     * @param {number} index Position in the current inspection sample.
+     * @return {void}
+     */
+    #zoomToFeature(index) {
+        if (this.onFeatureZoom(this.observations[index].focus, index)) return;
+        this.zoomFeatureButton.disabled = true;
+        this.selectionText.textContent += " · Feature location is unavailable.";
     }
 
     /**
