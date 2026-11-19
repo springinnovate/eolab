@@ -1,5 +1,6 @@
 /** Bind spatial conditions to the selected map view and its currently applied filter. */
-import { EMPTY_VECTOR_FILTER, viewFilter, waitingForPolygonLayer } from "./filter.js";
+import { EMPTY_VECTOR_FILTER } from "./filter.js";
+import { viewFilter, waitingForPolygonLayer } from "../selected-area.js";
 
 
 /** Send an authorized original-source intersection request.

@@ -2,7 +2,7 @@ import {
     createCuratedMetadataView, catalogAssetReference, createCatalogReferenceLink,
     catalogReferenceIdentity, createCatalogDisclosure,
 } from "./catalog-curated-metadata.js";
-import { rasterSamplingAreaBounds } from "./selected-area.js";
+import { viewFilter, waitingForPolygonLayer, rasterSamplingAreaBounds } from "./selected-area.js";
 import { MapFeatureHover } from "./map-feature-hover.js";
 import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
 import { getFeatureInfoViewport } from "./vector/feature-info-viewport.js";
@@ -109,7 +109,7 @@ import {
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
 import { VectorFieldCalculator } from "./vector/field-calculator.js";
-import { EMPTY_VECTOR_FILTER, vectorFilterSummary, viewFilter, waitingForPolygonLayer } from "./vector/filter.js";
+import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { UploadsDialog } from "./uploads/dialog.js";
 import { getUpload, getRasterUpload } from "./uploads/api.js";
