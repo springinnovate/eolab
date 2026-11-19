@@ -112,14 +112,14 @@ class _FieldStatistics:
 def read_vector_layer_statistics(
     source: ResolvedCatalogSelection,
     fields: tuple[str, ...],
-    cancel_event: Event,
 ) -> tuple[VectorFieldStatistics, ...]:
     """Read the requested numeric fields in one geometry-free scan of the layer.
+
+    The supervised worker owns cancellation and the execution deadline.
 
     Args:
         source: Authorized original source and compiled calculated fields.
         fields: Distinct authoritative fields in requested order.
-        cancel_event: Cooperative stop signal supplied by vector sampling.
 
     Returns:
         One complete summary per requested field in the requested order.
@@ -145,7 +145,7 @@ def read_vector_layer_statistics(
             source.selection.layerName,
             fields,
             None,
-            cancel_event,
+            Event(),
             visit,
             calculated_fields=source.calculated_fields,
         )

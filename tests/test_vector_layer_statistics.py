@@ -1,9 +1,15 @@
 """Verify complete-layer benchmarks through the native and HTTP boundaries."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+import json
+import os
 from pathlib import Path
-from threading import Event
+import subprocess
+import sys
+from typing import Any, Never
+from unittest.mock import Mock
 
 import fiona
 import pytest
@@ -11,7 +17,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog_selection_support import FixtureCatalog
-from eolab_app.catalog_selection import ResolvedCatalogSelection
+from eolab_app.attribute_filter import VectorFilter
+from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.source_files import (
@@ -19,14 +26,18 @@ from eolab_app.source_files import (
     ResolvedSourceFile,
     SourceFileError,
 )
-from eolab_app.vector import sampling
 from eolab_app.vector.field_statistics import (
     VectorFieldStatistics,
     VectorLayerStatisticsRequest,
+    read_vector_layer_statistics,
 )
+from eolab_app.vector.field_statistics_jobs import LayerStatisticsJobs
 from eolab_app.vector.models import ResolvedVectorSource
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector_uploads import VectorUploadStore
+from eolab_jobs.client import JobsClient
+from test_outline_jobs import outline_case
 from tests.test_vector_uploads import HEADERS, write_layer
 
 
@@ -35,6 +46,79 @@ class _LeasedVectorFile(ResolvedSourceFile):
     """Published vector file with the lease token protecting a native read."""
 
     lease_id: str
+
+
+def native_fixture_executor(
+    catalog: FixtureCatalog, uploads: VectorUploadStore | None = None
+) -> Callable[
+    [VectorLayerStatisticsRequest, str | None, str | None],
+    Awaitable[tuple[VectorFieldStatistics, ...]],
+]:
+    """Read real Catalog or upload data in HTTP tests with a local Jobs substitute.
+
+    Args:
+        catalog: Authoritative fixture source, also used by the application.
+        uploads: Private upload store when a fixture uses an upload.
+
+    Returns:
+        A coroutine that resolves the same original file and runs the native scan.
+    """
+
+    async def execute(
+        request: VectorLayerStatisticsRequest,
+        upload_owner: str | None,
+        read_lease: str | None,
+    ) -> tuple[VectorFieldStatistics, ...]:
+        """Read the authorized native source and return full field summaries."""
+        assert read_lease is None
+        source = await resolve_selection(
+            catalog, catalog, request.source, uploads, upload_owner
+        )
+        return read_vector_layer_statistics(source, request.fields)
+
+    return execute
+
+
+def test_registered_job_reads_every_feature(
+    outline_case: tuple[CatalogSelection, dict[str, Any], str], tmp_path: Path
+) -> None:
+    """Measure whole-layer values through the real installed Jobs entry point.
+
+    Args:
+        outline_case: Real native polygons and HTTP Catalog authorization.
+        tmp_path: Fixture source mount supplied to the child.
+    """
+    selection, _, url = outline_case
+    whole_layer = selection.model_copy(update={"filter": VectorFilter()})
+    command = (
+        "from pathlib import Path; from eolab_app.vector import selection_operation as op; "
+        f"op.CATALOG_URL={url!r}; op.SCAN_MOUNT=Path({str(tmp_path)!r}); "
+        "from job_service.runner import main; main()"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=Path(__file__).parents[1] / "services/jobs",
+        input=json.dumps(
+            {
+                "operation": "vector.layer-statistics.v1",
+                "inputs": {
+                    "request": {
+                        "source": whole_layer.model_dump(mode="json", by_alias=True),
+                        "fields": ["selected"],
+                    },
+                },
+            }
+        ).encode(),
+        env={**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+        capture_output=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    reply = json.loads(result.stdout)
+    assert reply["ok"], reply
+    assert reply["value"]["summaries"] == [
+        {"field": "selected", "count": 2, "mean": 1.5, "minimum": 1, "maximum": 2}
+    ]
 
 
 @pytest.fixture
@@ -98,7 +182,13 @@ def test_layer_statistics_read_all_original_features(catalog: FixtureCatalog) ->
     """
     app = FastAPI()
     app.include_router(
-        create_vector_sampling_router(VectorSamplingService(catalog, catalog))
+        create_vector_sampling_router(
+            VectorSamplingService(
+                catalog,
+                catalog,
+                layer_statistics_executor=native_fixture_executor(catalog),
+            )
+        )
     )
     source = {
         "collectionId": "eolab-mounted-vectors",
@@ -171,7 +261,12 @@ def test_layer_statistics_require_the_upload_owner(
     app.include_router(create_vector_uploads_router(uploads))
     app.include_router(
         create_vector_sampling_router(
-            VectorSamplingService(catalog, catalog, uploads=uploads)
+            VectorSamplingService(
+                catalog,
+                catalog,
+                uploads=uploads,
+                layer_statistics_executor=native_fixture_executor(catalog, uploads),
+            )
         )
     )
     with TestClient(app, base_url="https://testserver") as owner:
@@ -201,17 +296,17 @@ def test_layer_statistics_require_the_upload_owner(
 
 
 def test_cancelled_result_read_retains_lease_until_native_exit(
-    catalog: FixtureCatalog, monkeypatch: pytest.MonkeyPatch
+    catalog: FixtureCatalog,
 ) -> None:
     """Reauthorize an owned result and retain its lease through cancellation.
 
     Args:
         catalog: Supplies the original GeoPackage for the published result.
-        monkeypatch: Suspend the native reader to model cancellation during a read.
     """
-    reading = Event()
-    stopped = Event()
-    allow_exit = Event()
+    reading = asyncio.Event()
+    stopped = asyncio.Event()
+    allow_exit = asyncio.Event()
+    lease = "d" * 32
     released: list[str] = []
 
     async def acquire(owner: str, job_id: str, artifact_id: str) -> _LeasedVectorFile:
@@ -224,7 +319,7 @@ def test_cancelled_result_read_retains_lease_until_native_exit(
             size=path.stat().st_size,
             sha256="c" * 64,
             media_type="application/geopackage+sqlite3",
-            lease_id="lease",
+            lease_id=lease,
         )
 
     async def release(lease_id: str) -> bool:
@@ -238,22 +333,40 @@ def test_cancelled_result_read_retains_lease_until_native_exit(
 
     async def renew(lease_id: str) -> bool:
         """Keep the lease valid until the test cancels the read."""
-        return lease_id == "lease"
+        return lease_id == lease
 
-    def read(
-        source: ResolvedCatalogSelection, fields: tuple[str, ...], stop: Event
-    ) -> tuple[VectorFieldStatistics, ...]:
-        """Wait for the cancellation signal and delay native exit briefly."""
-        assert source.read_lease == "lease"
-        assert fields == ("Total ES",)
+    async def run_job(
+        submission: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        delete_on_completion: bool,
+        require_terminal_cleanup: bool,
+    ) -> Never:
+        """Model a Jobs client awaiting native exit after cancellation."""
+        assert submission["operation"] == "vector.layer-statistics.v1"
+        assert submission["inputs"]["readLease"] == lease
+        assert submission["inputs"]["request"]["fields"] == ["Total ES"]
+        assert submission["executionTimeoutSeconds"] == 20
+        assert submission["queueTimeoutSeconds"] == 30
+        assert timeout_seconds == 60
+        assert delete_on_completion and require_terminal_cleanup
         reading.set()
-        assert stop.wait(5)
-        stopped.set()
-        assert allow_exit.wait(5)
-        return ()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            stopped.set()
+            await allow_exit.wait()
+            raise
 
     files = LeasedSourceFiles(acquire, release, check, renew)
-    service = VectorSamplingService(catalog, catalog, artifact_files=lambda: files)
+    job_client = Mock(spec=JobsClient)
+    job_client.run.side_effect = run_job
+    service = VectorSamplingService(
+        catalog,
+        catalog,
+        artifact_files=lambda: files,
+        layer_statistics_executor=LayerStatisticsJobs(job_client),
+    )
     request = VectorLayerStatisticsRequest.model_validate(
         {
             "source": {
@@ -266,7 +379,6 @@ def test_cancelled_result_read_retains_lease_until_native_exit(
             "fields": ["Total ES"],
         }
     )
-    monkeypatch.setattr(sampling, "read_vector_layer_statistics", read)
 
     async def cancel_read() -> None:
         """Check source ownership, then cancel an active original-source read."""
@@ -275,9 +387,9 @@ def test_cancelled_result_read_retains_lease_until_native_exit(
         assert not reading.is_set()
         task = asyncio.create_task(service.layer_statistics(request, "owner"))
         try:
-            assert await asyncio.to_thread(reading.wait, 5)
+            await asyncio.wait_for(reading.wait(), 5)
             task.cancel()
-            assert await asyncio.to_thread(stopped.wait, 5)
+            await asyncio.wait_for(stopped.wait(), 5)
             assert not task.done()
             assert released == []
         finally:
@@ -286,4 +398,4 @@ def test_cancelled_result_read_retains_lease_until_native_exit(
                 await task
 
     asyncio.run(cancel_read())
-    assert released == ["lease"]
+    assert released == [lease]
