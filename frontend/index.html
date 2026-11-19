@@ -1805,6 +1805,29 @@
         </div>
       </form>
     </dialog>
+    <section id="raster-download-sheet" popover="manual" role="dialog" aria-labelledby="raster-download-title raster-download-source">
+      <div class="raster-download-scroll">
+        <header class="raster-download-heading">
+          <div><h2 id="raster-download-title">Download raster</h2><strong id="raster-download-source"></strong></div>
+          <button id="raster-download-close" type="button" class="analysis-panel-action" aria-label="Close raster download">&times;</button>
+        </header>
+        <fieldset id="raster-download-areas">
+          <legend>Area to download</legend>
+          <label><input type="radio" name="raster-download-area" value="viewport"><span>Visible map area<small>The view when you opened Download</small></span></label>
+          <label><input type="radio" name="raster-download-area" value="whole"><span>Entire raster<small>Full extent at the original resolution</small></span></label>
+          <label><input type="radio" name="raster-download-area" value="box"><span>Sampling box<small></small></span></label>
+          <label><input type="radio" name="raster-download-area" value="polygons"><span>Selected polygons<small></small></span></label>
+        </fieldset>
+        <p id="raster-download-file"></p>
+        <p id="raster-download-status" role="status" aria-live="polite"></p>
+      </div>
+      <footer class="raster-download-footer">
+        <button id="raster-download-cancel" class="secondary-button" type="button" hidden>Cancel download</button>
+        <button id="raster-download-new" class="secondary-button" type="button" hidden>Prepare another</button>
+        <button id="raster-download-prepare" class="primary-button" type="button">Prepare GeoTIFF</button>
+        <a id="raster-download-file-link" class="primary-button" download hidden>Download GeoTIFF</a>
+      </footer>
+    </section>
     <script type="module" src="/src/main.js"></script>
 
   </body>

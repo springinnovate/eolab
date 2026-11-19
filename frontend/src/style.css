@@ -5396,6 +5396,51 @@ summary:hover > .raster-disclosure-chevron {
 .download-job .secondary-button { display: inline-block; margin: 0.25rem 0.35rem 0 0; text-decoration: none; }
 .download-job progress { width: 100%; }
 #raster-clips-message:empty, #raster-clips-job-message:empty { display: none; }
+
+#raster-download-sheet {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  max-width: none;
+  overflow: visible;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-panel);
+  font: inherit;
+}
+#raster-download-sheet:popover-open { display: flex; flex-direction: column; }
+#raster-download-sheet[data-side="right"]::before {
+  content: ""; position: absolute; left: -6px; top: calc(var(--download-arrow-y) - 6px);
+  width: 10px; height: 10px; transform: rotate(45deg); background: var(--surface-2);
+  border: solid var(--border-2); border-width: 0 0 1px 1px; pointer-events: none;
+}
+.raster-download-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
+.raster-download-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.raster-download-heading h2 { margin: 0 0 3px; font-size: 1rem; }
+#raster-download-source, #raster-download-file, #raster-download-status { overflow-wrap: anywhere; }
+#raster-download-source { color: var(--text-2); font-size: .85rem; }
+#raster-download-areas { display: grid; gap: 5px; margin: 12px 0; padding: 0; border: 0; min-width: 0; }
+#raster-download-areas legend { margin-bottom: 5px; padding: 0; font-weight: 600; }
+#raster-download-areas label { display: flex; align-items: baseline; gap: 7px; padding: 6px 8px; border: 1px solid var(--border-2); border-radius: var(--radius); cursor: pointer; }
+#raster-download-areas label:has(:checked) { background: var(--surface-selected); border-color: var(--brand); }
+#raster-download-areas label:has(:disabled) { color: var(--text-2); cursor: default; }
+#raster-download-areas input { margin: 0; accent-color: var(--brand); }
+#raster-download-areas small { display: block; color: var(--text-2); overflow-wrap: anywhere; }
+#raster-download-file, #raster-download-status { margin: 8px 0 0; font-size: .85rem; }
+#raster-download-status:empty, #raster-download-sheet [hidden] { display: none; }
+.raster-download-footer { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 6px; padding: 7px 12px; border-top: 1px solid var(--border-2); }
+.raster-download-footer:not(:has(:not([hidden]))) { display: none; }
+.raster-download-footer .primary-button { padding: 6px 10px; color: var(--surface-2); background: var(--brand); border: 1px solid var(--brand); border-radius: var(--radius); font: inherit; text-decoration: none; cursor: pointer; }
+.raster-download-footer button:disabled { opacity: .65; cursor: default; }
+.raster-layer-row:has([data-layer-action="download"][aria-expanded="true"]) { box-shadow: inset 3px 0 var(--brand); }
+[data-layer-action="download"][aria-expanded="true"] { border-color: var(--brand); }
+@media (pointer: coarse) {
+  #raster-download-sheet :is(button,a,label) { min-height: 44px; }
+}
 /* Summary controls, saved results and passive activity on the sampling rectangle. */
 .calculation-functions { padding-left: 1.25rem; font-size: 0.85rem; line-height: 1.5; }
 .calculation-functions li { margin: 0.55rem 0; }

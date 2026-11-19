@@ -50,7 +50,9 @@ def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
             "grid": data["grid"],
             "area": {
                 "kind": spec.area.kind,
-                "bounds": list(spec.area.bounds),
+                "bounds": (
+                    list(spec.area.bounds) if spec.area.bounds is not None else None
+                ),
                 **(
                     {"samplingBox": spec.area.samplingBox.model_dump(mode="json")}
                     if spec.area.samplingBox
