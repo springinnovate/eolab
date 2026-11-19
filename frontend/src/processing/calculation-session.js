@@ -148,8 +148,7 @@ export class CalculationSessionStorage {
                 const previews = presentation.previewFormulas;
                 if (!Array.isArray(previews) || previews.length > 5 || typeof presentation.exactBox !== "boolean" ||
                     previews.some(formula => !Number.isSafeInteger(formula?.id) || formula.id < 1 ||
-                        typeof formula.label !== "string" || formula.label.length > 80 ||
-                        (formula.unit != null && typeof formula.unit !== "string")) ||
+                        typeof formula.label !== "string" || formula.label.length > 80) ||
                     new Set(previews.map(formula => formula.id)).size !== previews.length) return null;
                 const labels = new Set(value.intent.calculations.map(formula => formula.label));
                 for (const formula of previews) {

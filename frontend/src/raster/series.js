@@ -62,6 +62,8 @@ function boxStatisticLabel(label, statistic, method) {
 }
 
 /** Resolve the displayed scalar, its calculation method, and its owning job.
+ * Exact box presets use the preset's percentage unit or the source band's stored unit.
+ * Custom formulas keep the unit assigned by Processing to their result row.
  * @param {Object|undefined} result Captured measurements for one original source.
  * @param {Object} formula Current named statistic, including its preset identity.
  * @return {{row:Object|undefined,label:string,method:string|null,error:string,job:Object|null}} Value for both the plot and export.
@@ -83,7 +85,7 @@ function seriesValue(result, formula) {
                 state: sample?.value != null ? "ok" : method === "exact" ? "no_valid_data" : "error"}};
     }
     if (result.exactBox && row) {
-        const unit = result.previewUnits?.get(formula.expression) ?? definition.unit ?? row.unit;
+        const unit = definition.unit ?? result.job.grid?.storedUnit;
         return {label: boxStatisticLabel(label, definition.label, "exact"), method: "exact",
             row: {...row, unit}, job: result.job, error: ""};
     }

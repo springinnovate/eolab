@@ -113,10 +113,7 @@ export class RasterSeriesCalculations {
             this.temporalModel = intent.model;
             for (const [index, client] of retained) {
                 const saved = client.snapshot.unfinishedCalculation;
-                const previewUnits = new Map((saved.context.presentation.previewFormulas ?? [])
-                    .filter(formula => formula.unit != null)
-                    .map(formula => [samplingBoxFormula(formula.preview).expression, formula.unit]));
-                this.pending.set(index, {key: saved.context.presentation.key, calculationInputs: saved.calculation, previewUnits,
+                this.pending.set(index, {key: saved.context.presentation.key, calculationInputs: saved.calculation,
                     submitted: true, phase: "recovering", message: "Recovering calculation…"});
             }
             this.requestBoxPreviews();
@@ -400,10 +397,7 @@ export class RasterSeriesCalculations {
                 if (this.exactBox && result?.boxPreview && jobFormulas.every(formula => formula.preview)) continue;
                 const index = this.sources.map(source => source.key).sort().indexOf(source.key);
                 const client = this.getOrCreateRasterExecutor(index);
-                const sampleRows = this.exactBox && this.previousResults?.get(source.key)?.boxPreview?.rows;
-                const previewUnits = sampleRows ? new Map([...sampleRows].map(([expression, row]) => [expression, row.unit])) : undefined;
                 const request = { key: source.key, calculationInputs: calculationIntent({ ...firstCalculationInputs, source: this.getRasterReference(source) }),
-                    previewUnits,
                     submitted: true, previousJobId: client.snapshot.completedJob?.jobId,
                     phase: "submitting", message: "Submitting calculation…" };
                 this.pending.set(index, request);
@@ -412,8 +406,8 @@ export class RasterSeriesCalculations {
             for (const [client, request] of additions) {
                 if (version !== this.version) return;
                 const presentation = {key: request.key, names: jobFormulas.map(formula => formula.label)};
-                const previewFormulas = this.formulas.filter(formula => formula.preview).map(({id, label, preview, expression}) =>
-                    ({id, label, preview, unit: request.previewUnits?.get(expression)}));
+                const previewFormulas = this.formulas.filter(formula => formula.preview).map(({id, label, preview}) =>
+                    ({id, label, preview}));
                 if (previewFormulas.length) Object.assign(presentation, {previewFormulas, exactBox: this.exactBox});
                 client.submit(request.calculationInputs, {automatic: false, presentation});
             }
@@ -509,7 +503,7 @@ export class RasterSeriesCalculations {
                 }
                 this.updateSeriesProgress(); return;
             }
-            this.results.set(request.key, { ...this.results.get(request.key), exactBox: this.exactBox, previewUnits: request.previewUnits,
+            this.results.set(request.key, { ...this.results.get(request.key), exactBox: this.exactBox,
                 job: state.completedJob, calculationInputs: request.calculationInputs });
             this.pending.delete(index);
         } else if (state.recoverable) {
