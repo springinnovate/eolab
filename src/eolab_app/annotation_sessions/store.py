@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .models import AnnotationCollection, SessionError, ShareLayer
-from .colors import choose_contributor_color, get_contributor_color
+from .colors import DEFAULT_CONTRIBUTOR_COLORS, choose_contributor_color
 
 # Stable, application-chosen identifier for a PostgreSQL advisory transaction lock.
 # The number is a lock name, not a limit, session ID or credential. All annotation
@@ -100,7 +100,7 @@ class AnnotationSessionStore:
             ) from error
 
     def initialize_and_clean_join_attempts(self) -> None:
-        """Create shared-layer tables and remove old join-attempt counters.
+        """Prepare shared-layer storage, preserve contributor shades and expire old join attempts.
 
         Raises:
             SessionError: If the database cannot be reached or updated.
@@ -111,9 +111,50 @@ class AnnotationSessionStore:
                 .joinpath("schema.sql")
                 .read_text()
             )
+            self._require_stored_colors(cursor)
             cursor.execute(
                 "DELETE FROM shared_annotation_layers.join_attempts WHERE started_at < now() - interval '1 hour'"
             )
+
+    @staticmethod
+    def _require_stored_colors(cursor: psycopg.Cursor) -> None:
+        """Store the previously displayed shades once when upgrading a nullable color column.
+
+        Args:
+            cursor: Schema initialization transaction holding the annotation write lock.
+
+        Raises:
+            psycopg.Error: If the update or constraint fails. Both changes roll back together.
+        """
+        cursor.execute(
+            "SELECT attnotnull FROM pg_attribute WHERE "
+            "attrelid='shared_annotation_layers.contributors'::regclass "
+            "AND attname='color' AND NOT attisdropped"
+        )
+        column = cursor.fetchone()
+        if column and column["attnotnull"]:
+            return
+        if column is None:
+            cursor.execute(
+                "ALTER TABLE shared_annotation_layers.contributors "
+                "ADD COLUMN color text CHECK (color ~ '^#[0-9A-Fa-f]{6}$')"
+            )
+        cursor.execute(
+            "SELECT id FROM shared_annotation_layers.contributors WHERE color IS NULL"
+        )
+        member_ids = [row["id"] for row in cursor.fetchall()]
+        if member_ids:
+            palette = DEFAULT_CONTRIBUTOR_COLORS
+            shades = [palette[member_id.int % len(palette)] for member_id in member_ids]
+            cursor.execute(
+                "UPDATE shared_annotation_layers.contributors AS c SET color=previous.shade "
+                "FROM unnest(%s::uuid[], %s::text[]) AS previous(id, shade) "
+                "WHERE c.id=previous.id AND c.color IS NULL",
+                (member_ids, shades),
+            )
+        cursor.execute(
+            "ALTER TABLE shared_annotation_layers.contributors ALTER COLUMN color SET NOT NULL"
+        )
 
     def list_sessions(self, browser: str) -> list[dict[str, Any]]:
         """Find active shared layers this browser has joined, excluding deleted layers.
@@ -146,7 +187,7 @@ class AnnotationSessionStore:
         """
         with self.transaction() as cursor:
             cursor.execute(
-                '''SELECT s.id, s.name, s.join_code AS "joinCode",
+                """SELECT s.id, s.name, s.join_code AS "joinCode",
                           s.deleted_at AS "deletedAt",
                           count(DISTINCT c.id) AS "contributorCount",
                           coalesce(sum(jsonb_array_length(l.collection->'features')), 0)
@@ -154,7 +195,7 @@ class AnnotationSessionStore:
                    FROM shared_annotation_layers.sessions s
                    LEFT JOIN shared_annotation_layers.contributors c ON c.session_id=s.id
                    LEFT JOIN shared_annotation_layers.layers l ON l.contributor_id=c.id
-                   GROUP BY s.id ORDER BY s.deleted_at NULLS FIRST, lower(s.name), s.id'''
+                   GROUP BY s.id ORDER BY s.deleted_at NULLS FIRST, lower(s.name), s.id"""
             )
             return cursor.fetchall()
 
@@ -348,13 +389,10 @@ class AnnotationSessionStore:
                     "This shared layer has reached its limit of 64 contributors.",
                 )
             cursor.execute(
-                "SELECT id,color FROM shared_annotation_layers.contributors WHERE session_id=%s",
+                "SELECT color FROM shared_annotation_layers.contributors WHERE session_id=%s",
                 (session["id"],),
             )
-            color = choose_contributor_color(
-                get_contributor_color(row["id"], row["color"])
-                for row in cursor.fetchall()
-            )
+            color = choose_contributor_color(row["color"] for row in cursor.fetchall())
             cursor.execute(
                 "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name,color) VALUES(%s,%s,%s,%s,%s)",
                 (uuid4(), session["id"], browser, name, color),
@@ -486,8 +524,6 @@ class AnnotationSessionStore:
                 (session_id,),
             )
             result["contributors"] = cursor.fetchall()
-            for person in result["contributors"]:
-                person["color"] = get_contributor_color(person["id"], person["color"])
             cursor.execute(
                 'SELECT l.contributor_id AS "contributorId",l.local_id AS "layerId",l.revision,l.updated_at AS "updatedAt",l.collection->>\'name\' AS name,jsonb_array_length(l.collection->\'features\') AS "polygonCount" FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,l.local_id',
                 (session_id,),
@@ -676,9 +712,7 @@ class AnnotationSessionStore:
                         {
                             "contributor": row["name"],
                             "contributorId": str(row["id"]),
-                            "contributorColor": get_contributor_color(
-                                row["id"], row["color"]
-                            ),
+                            "contributorColor": row["color"],
                             "layer": collection["name"],
                             "layerId": str(row["local_id"]),
                             "sessionId": str(session_id),

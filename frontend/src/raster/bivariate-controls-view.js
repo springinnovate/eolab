@@ -357,12 +357,11 @@ export class BivariateRasterControlsView {
         this.boundSwap = this.#handleSwap.bind(this);
         this.boundRetry = this.#handleRetry.bind(this);
         this.boundRangeToggle = () => this.#renderThresholdMarkers();
-        this.downloadButtons = ["x", "y"].flatMap(axis => [
-            { axis, calculate: true, button: requireRasterControl(documentContext, `#calculate-bivariate-${axis}`),
-                onClick: () => this.handlers?.onCalculatePairedHistogram?.(axis) }, {
-            axis, button: requireRasterControl(documentContext, `#download-bivariate-${axis}`),
-            onClick: () => this.handlers?.onDownloadPairedHistogram?.(axis),
-        }]);
+        this.calculationButtons = ["x", "y"].map(axis => ({
+            axis,
+            button: requireRasterControl(documentContext, `#calculate-bivariate-${axis}`),
+            onClick: () => this.handlers?.onCalculatePairedHistogram?.(axis),
+        }));
     }
 
     /** Populate the eight shared palette definitions exactly once. @return {void} */
@@ -388,7 +387,7 @@ export class BivariateRasterControlsView {
      */
     bind(handlers) {
         this.handlers = handlers;
-        for (const { button, onClick } of this.downloadButtons) button.addEventListener("click", onClick);
+        for (const { button, onClick } of this.calculationButtons) button.addEventListener("click", onClick);
         this.mode.addEventListener("change", this.boundModeChange);
         this.palette.addEventListener("change", this.boundPaletteChange);
         this.swapButton.addEventListener("click", this.boundSwap);
@@ -405,7 +404,7 @@ export class BivariateRasterControlsView {
     /** Remove every direct listener installed by {@link bind}. @return {void} */
     unbind() {
         this.axisControls?.dispose();
-        for (const { button, onClick } of this.downloadButtons) button.removeEventListener("click", onClick);
+        for (const { button, onClick } of this.calculationButtons) button.removeEventListener("click", onClick);
         this.mode.removeEventListener("change", this.boundModeChange);
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.swapButton.removeEventListener("click", this.boundSwap);
@@ -496,10 +495,10 @@ export class BivariateRasterControlsView {
         this.statisticsHeading.title = this.statisticsHeading.textContent;
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
-        for (const { axis, button, calculate } of this.downloadButtons) {
+        for (const { axis, button } of this.calculationButtons) {
             button.hidden = state[`${axis}Item`].capabilities?.calculations === false;
-            button.textContent = calculate ? `Calculator · ${axis.toUpperCase()}` : `Download ${axis.toUpperCase()} clip`;
-            button.setAttribute("aria-label", `${calculate ? "Raster calculator of" : "Download clip of"} ${axis.toUpperCase()}: ${state[`${axis}Label`]}`);
+            button.textContent = `Calculator · ${axis.toUpperCase()}`;
+            button.setAttribute("aria-label", `Raster calculator of ${axis.toUpperCase()}: ${state[`${axis}Label`]}`);
         }
         this.rangeControls.x.label.textContent = state.xLabel;
         this.rangeControls.y.label.textContent = state.yLabel;
@@ -515,7 +514,7 @@ export class BivariateRasterControlsView {
      * @return {void}
      */
     setAreaActionsAvailable(available) {
-        for (const {button} of this.downloadButtons) {
+        for (const {button} of this.calculationButtons) {
             button.disabled = !available;
             button.title = available ? "" : "Choose a sampling box, Catalog layer or uploaded polygon layer.";
         }

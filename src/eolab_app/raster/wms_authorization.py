@@ -15,16 +15,16 @@ from eolab_app.rendering.errors import PublishedLayerRequestError
 from eolab_app.calculated_fields import CalculatedField
 
 RASTER_WMS_STYLE_NAME = "dynamic-raster"
-_STYLE_ENVIRONMENT_KEYS = frozenset(
-    {"min", "med", "max", "cmin", "cmed", "cmax"}
+_STYLE_OPACITY_KEYS = ("amin", "amed", "amax")
+_GRADIENT_KEYS = frozenset(
+    ("min", "med", "max", "cmin", "cmed", "cmax", *_STYLE_OPACITY_KEYS)
 )
 _STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-_STYLE_OPACITY_KEYS = frozenset({"amin", "amed", "amax"})
 _EXACT_VALUE_KEYS = frozenset({"vexact", "cexact", "aexact"})
 _STYLE_ENVIRONMENT_ERROR = (
-    "env must define ordered finite min, med, and max values plus cmin, "
-    "cmed, and cmax six-digit hex colors, optionally followed by amin, "
-    "amed, and amax finite opacities from 0 through 1"
+    "env requires ordered finite min, med, and max values, six-digit hex "
+    "colors for cmin, cmed, and cmax, and opacities from 0 through 1 "
+    "for amin, amed, and amax"
 )
 
 
@@ -72,7 +72,8 @@ def parse_raster_style_environment(
     """Read the continuous gradient and ordered color overrides for a WMS request.
 
     Args:
-        environment: Untrusted WMS ``env`` query value.
+        environment: WMS ``env`` with a threshold, color and opacity for each
+            gradient stop and optional exact-value and inclusive range overrides.
 
     Returns:
         Gradient assignments and validated overrides ordered by matching priority.
@@ -90,11 +91,9 @@ def parse_raster_style_environment(
         assignments[name] = value
     range_text = assignments.pop("ranges", None)
     range_length = len(";ranges:") + len(range_text) if range_text is not None else 0
-    if len(environment) - range_length > 384 or len(assignments) not in (6, 9, 12):
-        raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
-    if assignments.keys() - _EXACT_VALUE_KEYS not in (
-        _STYLE_ENVIRONMENT_KEYS,
-        _STYLE_ENVIRONMENT_KEYS | _STYLE_OPACITY_KEYS,
+    if (
+        len(environment) - range_length > 384
+        or assignments.keys() - _EXACT_VALUE_KEYS != _GRADIENT_KEYS
     ):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     overrides = []
@@ -116,7 +115,7 @@ def parse_raster_style_environment(
             float(assignments[name]) for name in ("min", "med", "max")
         )
         opacities = tuple(
-            float(assignments.get(name, "1")) for name in _STYLE_OPACITY_KEYS
+            float(assignments[name]) for name in _STYLE_OPACITY_KEYS
         )
     except ValueError as error:
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR) from error
@@ -141,8 +140,8 @@ def validate_raster_style_environment(environment: str) -> None:
 
     Raises:
         PublishedLayerRequestError: If the value does not contain exactly the
-            six threshold/color assignments, with either all three bounded
-            opacity assignments or none, or contains an invalid override.
+            three thresholds, three colors and three bounded opacities, or
+            contains an invalid exact-value or range override.
     """
     parse_raster_style_environment(environment)
 

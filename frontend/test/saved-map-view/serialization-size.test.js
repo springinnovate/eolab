@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createNamedMapFixture } from "../../test-support/named-map.js";
 import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
 import {
   createSavedMapView,
@@ -65,13 +66,14 @@ test("oversized remembering preserves the last valid map and later saves recover
   const previous = serializeSavedMapView(initial);
   let remembered = previous;
   let writes = 0;
-  let scheduled;
-  let error;
+  let scheduled, publicationError;
+  const publication = createNamedMapFixture();
   const mapLayers = { retainedRecords: [] };
   const controller = new SavedMapViewController({
+    ...publication.author,
     view: {
-      bind() {}, setBusy() {},
-      showError(value) { error = value; },
+      bind() {}, setBusy() {}, showPublicationForm() {}, setPublicationBusy() {},
+      showPublicationError(message) { publicationError = message; },
     },
     viewport: { snapshot: () => initial.viewport },
     mapLayers, catalogVisualization: {}, catalogItems: {},
@@ -108,8 +110,10 @@ test("oversized remembering preserves the last valid map and later saves recover
   assert.equal(writes, 0);
   assert.equal(remembered, previous);
   assert.deepEqual(parseSavedMapView(remembered), initial);
-  await controller.copyMapLink();
-  assert.match(error.message, /512 KiB.*Remove some layers/);
+  await controller.openPublicationDialog();
+  await controller.publishMap({ title: "Wetlands", slug: "wetlands", subtitle: "" });
+  assert.match(publicationError, /512 KiB/);
+  assert.equal(publication.record.view, null);
 
   showMap(initial);
   controller.scheduleRemember();

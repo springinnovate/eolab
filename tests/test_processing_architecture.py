@@ -292,7 +292,7 @@ def test_processing_schema_is_independent_of_catalog_storage() -> None:
     """Keep Processing tables in their own schema without pgSTAC dependencies."""
     sql = Path("src/eolab_app/processing/schema.sql").read_text()
     assert "pgstac." not in sql.lower()
-    assert "CREATE SCHEMA IF NOT EXISTS processing" in sql
+    assert "CREATE SCHEMA processing" in sql
 
 
 def test_spawned_worker_entry_does_not_import_application_composition() -> None:

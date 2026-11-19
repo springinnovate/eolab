@@ -243,7 +243,7 @@ def test_metadata_planning_and_execution_without_grid_recheck(
         patch.setattr(kernel, "read_native_raster_block", forbidden)
         make_spec(path, ["sum(a)"], target_chunk_pixels=4194304)
         spec = make_spec(path, ["sum(a)"], target_chunk_pixels=target_chunk_pixels)
-    prepared = prepare_aggregate_job(spec, LIMITS)
+    prepared = prepare_aggregate_job(spec)
     assert prepared.specification == spec.model_dump(mode="json", by_alias=True)
     stored_plan = AggregateSpec.model_validate(prepared.specification)
 

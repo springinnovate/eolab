@@ -175,7 +175,6 @@ def build_habitat_input_preparation_submission(
         specification=queued.model_dump(mode="json", by_alias=True),
         summary=captured,
         retained_metadata={"inputs": captured},
-        reserved_bytes=0,
     )
 
 
@@ -199,7 +198,6 @@ async def prepare_habitat_input_preparation(
         specification=spec.model_dump(mode="json", by_alias=True),
         summary=captured,
         retained_metadata={"inputs": captured},
-        reserved_bytes=0,
     )
 
 

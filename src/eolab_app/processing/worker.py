@@ -620,8 +620,9 @@ class ProcessingWorker:
 
         Raises:
             ProcessingError: If storage state cannot be read safely.
-            OSError: If filesystem cleanup failed; reservations are then retained.
+            OSError: If removing the files fails. Their recorded sizes are retained.
         """
+
         for row in await asyncio.to_thread(self.jobs.cleanup_candidates):
             if row["attempt_id"]:
                 await asyncio.to_thread(self.artifacts.remove, row["attempt_id"])

@@ -54,12 +54,12 @@ For a categorical raster, point at a cell to read its class and code. The chart 
 
 ### Calculate statistics for an area
 
-In **Raster statistics**, choose one or more rasters and a sampling box, selected polygons, or each raster’s full extent. Hidden layers are available too. View results as values, plots, or a table and download them as CSV.
+Open **Raster statistics** to see a value for one raster or a plot for a stack. The raster name or count opens the layer choices, including hidden rasters. The area name opens choices for a sampling box, selected polygons, or each raster’s full extent. **Values** shows the underlying numbers, and **Download CSV** exports them.
 
 <details>
 <summary>Example formulas, thresholds, and exact statistics</summary>
 
-Choose a built-in statistic or write a formula. For example, `mean(a)` gives the average valid value, `areaha(a > 10)` gives hectares above 10 in the raster’s units, and `pixelValue(a)` reads the last point you clicked. EOLab evaluates up to five formulas for each selected raster. Large sampling boxes can show an **Estimated** mean, standard deviation, or percentage above a threshold. Choose **Calculate exact statistics** to use the original pixels.
+Open **Choose statistics** to add a built-in measure or write a formula. For example, `mean(a)` gives the average valid value, `areaha(a > 10)` gives hectares above 10 in the raster’s units, and `pixelValue(a)` reads the last point you clicked. EOLab evaluates up to five formulas for each selected raster. Large sampling boxes can show an **Estimated** mean, standard deviation, or percentage above a threshold. Choose **Calculate exact** to use the original pixels.
 
 </details>
 
@@ -92,6 +92,8 @@ Find a dataset with `type:temporal`. In **Map contents**, choose a variable, mon
 Ordinary period statistics weight available observations equally. Gaps remain missing, so check observation counts before comparing periods.
 
 ### Clip and download a raster
+
+In **Map contents**, select **Download** on the raster you want. The panel opens beside that layer. Choose **Visible map area** to use the view captured when you opened the panel, **Entire raster** to export the full extent, or a sampling box or selected polygons. Select **Prepare GeoTIFF**, then **Download GeoTIFF** when it is ready. Select the same layer’s **Download** again to close the panel while preparation continues.
 
 In **Data tools**, choose **Raster clip**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
 
@@ -134,12 +136,14 @@ The **Planning API** lets participants save private scenarios with one intervent
 - **Sketch a boundary.** Choose **Map contents → Draw polygon**, draw the outline, add notes, and save. You can also import existing outlines from GeoJSON or download your drawings in that format.
 - **Bring a project boundary.** Under **Your uploads**, add a GeoPackage containing one polygon layer to keep its attributes. Filter it to a country, watershed, or project group and use that selection for statistics or a model.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
-- **Publish a map.** Choose **Publish map**, give the map a title and link name, and select **Create map link**. The link opens the same layers, styles, order, and starting view. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
+- **Publish a map.** Choose **Publish map**, give the map a title and link name, and select **Create map link**. The link opens the same layers, styles, order, and starting view. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
 
 <details>
 <summary>Which files stay private, what expires, and what a download includes</summary>
 
 Drawings stay on this device until you share their layer or save them through Planning. A linked tool or published map gives others read access to the saved drawing. Only the browser that created it can edit its polygons. GeoJSON imports accept simple WGS84 polygons without holes, including names and notes. A GeoJSON download includes all saved polygons in the layer, including those hidden by its filter.
+
+If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
 
 The server stores private uploads for seven days. GeoPackages and reference masks share a five-file allowance per browser. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
 

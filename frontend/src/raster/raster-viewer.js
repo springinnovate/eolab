@@ -210,8 +210,6 @@ function canRetryRasterStatistics(error) {
  * Report the presented area and an in-flight polygon choice or removed area to composition.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
- * @property {(item:Object,area:Readonly<Object>|null,label:string)=>void} [onDownloadRequested]
- * Notify composition of a raster, its explicit selected area and originating view name.
  * @property {(item:Object,area:Readonly<Object>|null,label:string,key:string)=>void} [onCalculateRequested]
  * Calculate the original raster with its explicit area and originating view name/key.
  * @property {(selectedKeys:string[]|null)=>void}
@@ -276,7 +274,6 @@ export function initializeRasterViewer(
         onHistogramChange = () => {},
         onSamplingAreaChange = () => {},
         onSamplingMethodChange = () => {},
-        onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @param {string} _label View name. @return {void} */ (_item, _area, _label) => {},
         onLayersChange = /**
          * Ignore layer snapshots when no application observer is supplied.
          * Accepts no parameters; callback arguments are intentionally unused.
@@ -1748,29 +1745,6 @@ export function initializeRasterViewer(
         const pair = getBivariatePairCandidates();
         const area = getSelectedArea(null, "2d");
         if (pair && area?.kind !== "polygonArea") onCalculateRequested(pair[`${axis}Candidate`].item, area, pair[`${axis}Candidate`].label, pair[`${axis}Candidate`].key);
-    }
-
-    /** Open the clip dialog for a histogram whose area can be carried over.
-     * @param {string} key Histogram session.
-     * @return {void}
-     */
-    function downloadHistogram(key) {
-        if (pendingVectorSelection) return;
-        const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
-        const area = getSelectedArea(key, "1d");
-        if (session?.item && area?.kind !== "polygonArea") onDownloadRequested(session.item, area,
-            mapLayers.getRecord(key)?.entry.label ?? getRasterDisplayName(session.item));
-    }
-
-    /** Open the clip dialog for a paired axis whose area can be carried over.
-     * @param {"x"|"y"} axis Histogram axis.
-     * @return {void}
-     */
-    function downloadPairedHistogram(axis) {
-        if (pendingVectorSelection) return;
-        const pair = getBivariatePairCandidates();
-        const area = getSelectedArea(null, "2d");
-        if (pair && area?.kind !== "polygonArea") onDownloadRequested(pair[`${axis}Candidate`].item, area, pair[`${axis}Candidate`].label);
     }
 
     /**
@@ -5092,10 +5066,8 @@ export function initializeRasterViewer(
         },
         onSelectHistogram: handleSelectLayerHistogram,
         onStyleHistogram: onStyleRequested,
-        onDownloadHistogram: downloadHistogram,
         onCalculateHistogram: calculateHistogram,
         onCalculatePairedHistogram: calculatePairedHistogram,
-        onDownloadPairedHistogram: downloadPairedHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,

@@ -42,7 +42,7 @@ function fixture() {
         savedDrawingContents: new Map(), creatingDrawingSources: new Map(), unavailableDrawingSources: new Set(),
         drawingSaveErrors: new Map(), deviceSaveError: null,
         savedSharingLayers: [], dirty: false, pendingSave: false, savePromise: null, saving: false,
-        status: {textContent: ""}, retryButton: {hidden: true}, drawButton: {}, importButton: {},
+        status: {textContent: ""}, storageStatus: {hidden: true}, retryButton: {hidden: true}, drawButton: {}, importButton: {},
         panel: {show() {}}, clearedFilterLayerIds: new Set(), restoredLayers: new WeakMap(),
         storage: {async save(document) { saved.push(structuredClone(document)); }},
         refreshLayer() {}, updateEditor() {},

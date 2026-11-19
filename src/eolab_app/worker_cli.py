@@ -14,7 +14,9 @@ def main() -> None:
 
     Raises:
         ValueError: If worker configuration or source paths are invalid.
+        UnsupportedProcessingSchemaError: If the Processing database needs an operator migration.
     """
+
     import asyncio
     from contextlib import suppress
     import logging

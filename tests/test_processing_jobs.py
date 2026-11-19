@@ -19,7 +19,10 @@ import pytest
 import rasterio
 
 from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.job_store import (
+    PostgresJobStore,
+    UnsupportedProcessingSchemaError,
+)
 from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import (
     Artifact,
@@ -270,17 +273,19 @@ def test_requested_statuses_are_complete_owned_and_independent_of_history(
     )
 
 
+@pytest.mark.parametrize("whole", [False, True])
 def test_real_clip_worker_download_ranges_ownership_and_idempotency(
-    boundary: Any, tmp_path: Path
+    boundary: Any, tmp_path: Path, whole: bool
 ) -> None:
     """Exercise a complete native clip via PostgreSQL and real HTTP file delivery.
 
     Args:
         boundary: Real feature-boundary fixture.
         tmp_path: Download validation storage.
+        whole: Request the full native grid instead of the fixture rectangle.
     """
     client, worker, source, artifacts, app = boundary
-    plan = clip_inputs(client)
+    plan = {**SOURCE, "wholeRaster": True} if whole else clip_inputs(client)
     assert (
         client.post(
             "/api/processing/raster-clips", content=b"x" * 20000, headers=HEADERS
@@ -327,6 +332,11 @@ def test_real_clip_worker_download_ranges_ownership_and_idempotency(
     with rasterio.open(downloaded) as raster:
         assert raster.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
         assert raster.read(1, masked=True).count() == ready["result"]["validPixels"]
+        if whole:
+            assert ready["area"] == {"kind": "wholeRaster", "bounds": None}
+            with rasterio.open(source) as original:
+                assert raster.transform == original.transform
+                assert numpy.array_equal(raster.read(1), original.read(1))
     with TestClient(app, base_url="https://testserver") as stranger:
         assert stranger.get(url).status_code == 404
         assert stranger.get(f"/api/processing/jobs/{identifier}").status_code == 404
@@ -475,14 +485,7 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
             "UPDATE processing.jobs SET lease_until=now()-interval '1 minute' WHERE id=%s",
             (lost["id"],),
         )
-    # A lost heartbeat and even historical deadline metadata cannot release a
-    # slot while its native child could still run.
-    assert store.claim_next_job() is None
-    with psycopg.connect(store.conninfo) as connection:
-        connection.execute(
-            "UPDATE processing.jobs SET deadline_at=now()-interval '1 minute' WHERE id=%s",
-            (lost["id"],),
-        )
+    # A lost heartbeat cannot release a slot while its native child could still run.
     assert store.claim_next_job() is None
     assert store.get(lost["id"], "owner")["status"] == "running"
     # Startup performs recovery only after the previous container has stopped.
@@ -501,13 +504,13 @@ def test_job_store_admits_operation_data_without_raster_fields(
     prepared = PreparedJobPlan(
         specification={"operation": "test.summary.v1", "fields": ["year"]},
         summary={"operation": "test.summary.v1", "label": "Year summary"},
-        reserved_bytes=4096,
+        operation="test.summary.v1",
     )
     submitted_job = store.submit(
         "owner", "summary-request", prepared, "fixture-input-hash"
     )
     assert submitted_job["spec"] == prepared.summary
-    assert submitted_job["reserved_bytes"] == 4096
+    assert submitted_job["reserved_bytes"] == 0
     assert store.get(submitted_job["id"], "owner")["spec"] == prepared.summary
     assert store.list_owned("owner")[0]["spec"] == prepared.summary
     assert (
@@ -680,7 +683,9 @@ def test_clip_retry_rejects_changed_inputs(boundary: Any) -> None:
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("incompatible", [False, True])
 def test_worker_composition_requires_only_catalog_and_processing_configuration(
+    incompatible: bool,
     tmp_path: Path,
     store: PostgresJobStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -688,6 +693,7 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     """Import prepared Catalog selections before reset and cleanup without web/rendering initialization.
 
     Args:
+        incompatible: Give the worker a partial schema and check that startup stops.
         tmp_path: Independent source and artifact roots.
         store: Real migrated processing database.
         monkeypatch: Supply only the worker's validated dependencies.
@@ -751,7 +757,9 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     pending = store.submit(
         "owner",
         "before-restart",
-        PreparedJobPlan({"operation": "test.v1"}, {"label": "Test"}, 4096),
+        PreparedJobPlan(
+            {"operation": "test.v1"}, {"label": "Test"}, operation="test.v1"
+        ),
         "a" * 64,
     )
 
@@ -811,6 +819,37 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.setattr(composition, "create_app", unexpected)
     monkeypatch.setattr(composition, "GeoServerRasterPublisher", unexpected)
     monkeypatch.setattr(composition, "serve_processing", consume)
+    if incompatible:
+        with psycopg.connect(store.conninfo, autocommit=True) as db:
+            db.execute("DROP INDEX processing.habitat_preparation_selections_selection")
+            try:
+
+                async def unexpected_retry(delay: float) -> None:
+                    """Fail if startup retries the partial database layout.
+
+                    Args:
+                        delay: Requested retry interval in seconds.
+                    """
+                    pytest.fail(
+                        f"Incompatible schemas should stop startup, retried in {delay}"
+                    )
+
+                monkeypatch.setattr(asyncio, "sleep", unexpected_retry)
+                with pytest.raises(
+                    UnsupportedProcessingSchemaError,
+                    match="Habitat selection hash index",
+                ):
+                    asyncio.run(composition.run_processing_worker())
+                assert not composed_workers and resets == 0
+                assert db.execute(
+                    "SELECT status FROM processing.jobs WHERE id=%s",
+                    (pending["job_id"],),
+                ).fetchone() == ("queued",)
+            finally:
+                db.execute(
+                    "CREATE INDEX habitat_preparation_selections_selection ON processing.habitat_preparation_selections USING hash (selection)"
+                )
+        return
     asyncio.run(composition.run_processing_worker())
     assert len(composed_workers) == 2
     assert composed_workers[0].native is not composed_workers[1].native
@@ -898,7 +937,9 @@ def test_worker_restart_interrupts_unfinished_jobs(
         store: Disposable real PostgreSQL adapter.
         status: Unfinished state retained from the stopped worker.
     """
-    prepared = PreparedJobPlan({"operation": "test.v1"}, {"label": "Test"}, 4096)
+    prepared = PreparedJobPlan(
+        {"operation": "test.v1"}, {"label": "Test"}, operation="test.v1"
+    )
     completed = store.submit("owner", "completed-request", prepared, "a" * 64)
     claimed = store.claim_next_job()
     assert claimed["id"] == completed["id"]
@@ -927,9 +968,7 @@ def test_worker_restart_interrupts_unfinished_jobs(
         store.find_request("other-owner", "unfinished-request")["status"]
         == expected_status
     )
-    # Claimed jobs no longer reserve bytes, but still retain files for cleanup.
-    # Queued historical plans can carry estimates until their first claim.
-    assert interrupted["reserved_bytes"] == (4096 if status == "queued" else 0)
+    assert interrupted["reserved_bytes"] == 0
     assert pending["id"] in {row["id"] for row in store.cleanup_candidates()}
     if status != "queued":
         assert not store.heartbeat(pending["id"], pending["attempt_id"], {})

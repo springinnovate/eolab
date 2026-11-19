@@ -459,7 +459,7 @@ def test_worker_reuses_results_after_authorization(
     store.get_cached_calculation_results.return_value = {}
     store.heartbeat.return_value = True
     store.finish.return_value = True
-    prepared = prepare_aggregate_job(calculation_plan, limits)
+    prepared = prepare_aggregate_job(calculation_plan)
     now = datetime.now(timezone.utc)
     row = {
         "id": "a" * 32,
@@ -467,7 +467,6 @@ def test_worker_reuses_results_after_authorization(
         "status": "running",
         "attempt_id": "b" * 32,
         "spec": prepared.specification,
-        "reserved_bytes": prepared.reserved_bytes,
         "created_at": now,
         "updated_at": now,
     }
@@ -627,7 +626,6 @@ def test_cache_hit_skips_planning_and_pins_values(
     forbidden.assert_not_called()
     retained = AggregateSpec.model_validate(row["spec"])
     assert retained.cachedRows[0].value == "42"
-    assert row["reserved_bytes"] == 0
     # The prepared copy retains values even after cache eviction.
     store.get_cached_calculation_results.return_value = {}
     assert retained.cachedRows[0].value == "42"

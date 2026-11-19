@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 import hashlib
 from io import FileIO
+import json
 from pathlib import Path
 from threading import Event
 from typing import Any, IO
@@ -209,6 +210,17 @@ def test_annotation_identity_is_reused_and_uploads_remain_private(
         assert metadata.headers["X-Content-Type-Options"] == "nosniff"
         assert str(tmp_path) not in metadata.text
         assert memberships.owner not in metadata.text and cookie not in metadata.text
+        untyped = owner.post(
+            BASE, params={"name": "Untyped"}, headers=HEADERS, content=body
+        ).json()["id"]
+        metadata_path = store.root / memberships.owner / untyped / "metadata.json"
+        fields = json.loads(metadata_path.read_bytes())
+        del fields["kind"]
+        metadata_path.write_text(json.dumps(fields))
+        assert [upload["id"] for upload in owner.get(BASE).json()] == [identifier]
+        assert owner.get(f"{BASE}/{untyped}").status_code == 404
+        assert other.delete(f"{BASE}/{untyped}", headers=HEADERS).status_code == 404
+        assert owner.delete(f"{BASE}/{untyped}", headers=HEADERS).status_code == 204
         assert other.get(BASE).json() == []
         unknown = owner.get(f"{BASE}/{uuid4()}")
         denied_read = other.get(f"{BASE}/{identifier}")

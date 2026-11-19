@@ -28,15 +28,15 @@ from test_processing_jobs import boundary, store, clip_inputs, HEADERS
 from test_processing_calculations import request_body, ENDPOINT
 
 
-def test_concurrent_subscribers_share_one_claim_and_reservation(
+def test_concurrent_subscribers_share_one_claim_and_published_result(
     store: PostgresJobStore,
 ) -> None:
-    """Twelve simultaneous callers reserve and execute one computation.
+    """Twelve simultaneous callers share one computation and its published bytes.
 
     Args:
         store: Disposable PostgreSQL adapter.
     """
-    plan = PreparedJobPlan({"input": "same"}, {}, 1024, work_key="same")
+    plan = PreparedJobPlan({"input": "same"}, {}, operation="test.v1", work_key="same")
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=12) as clients:
         jobs = list(
@@ -50,7 +50,7 @@ def test_concurrent_subscribers_share_one_claim_and_reservation(
     with psycopg.connect(store.conninfo) as connection:
         assert connection.execute(
             "SELECT count(*),sum(reserved_bytes) FROM processing.jobs"
-        ).fetchone() == (1, 1024)
+        ).fetchone() == (1, 0)
     claimed = store.claim_next_job()
     assert store.claim_next_job() is None
     assert store.finish(
@@ -74,7 +74,7 @@ def test_only_last_cancellation_stops_shared_work(
         store: Disposable PostgreSQL adapter.
         running: Cancel before or after the worker claims execution.
     """
-    plan = PreparedJobPlan({}, {}, 1024, work_key="same")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="same")
     first = store.submit("first", "one", plan, "hash")
     second = store.submit("second", "two", plan, "hash")
     claimed = store.claim_next_job() if running else None
@@ -293,28 +293,19 @@ def test_polygon_inputs_are_authorized_before_joining(
         ).fetchone() == (1,)
 
 
-def test_upgrade_preserves_existing_owner_handles(store: PostgresJobStore) -> None:
-    """Move old owner fields into subscriptions without changing public IDs or ready files.
+def test_restart_preserves_existing_owner_handles(store: PostgresJobStore) -> None:
+    """Preserve public subscriber IDs and ready files during startup and queue recovery.
 
     Args:
-        store: Disposable PostgreSQL rebuilt to the previous ownership layout.
+        store: Current disposable PostgreSQL database with a ready and queued computation.
     """
-    plan = PreparedJobPlan({}, {}, 1024)
+    plan = PreparedJobPlan({}, {}, operation="test.v1")
     one = store.submit("first", "one", plan, "hash")
     claimed = store.claim_next_job()
     store.finish(
         claimed["id"], claimed["attempt_id"], Artifact(1, "0" * 64, "test.csv")
     )
     two = store.submit("second", "two", plan, "other-hash")
-    with psycopg.connect(store.conninfo) as connection:
-        connection.execute("DROP VIEW processing.subscribed_jobs")
-        connection.execute(
-            "ALTER TABLE processing.jobs ADD COLUMN owner text, ADD COLUMN request_key text, ADD COLUMN request_hash text"
-        )
-        connection.execute(
-            "UPDATE processing.jobs j SET owner=s.owner,request_key=s.request_key,request_hash=s.request_hash FROM processing.job_subscribers s WHERE s.job_id=j.id"
-        )
-        connection.execute("DROP TABLE processing.job_subscribers")
     store.migrate()
     store.migrate()
     assert store.get(one["id"], "first")["status"] == "ready"
@@ -330,7 +321,7 @@ def test_shared_progress_notifies_each_subscriber(store: PostgresJobStore) -> No
     Args:
         store: Disposable PostgreSQL including real committed notification triggers.
     """
-    plan = PreparedJobPlan({}, {}, 1024, work_key="same")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="same")
     store.submit("first", "one", plan, "hash")
     store.submit("second", "two", plan, "hash")
 
@@ -374,7 +365,7 @@ def test_shared_failure_and_restart_allow_fresh_work(
         store: Disposable PostgreSQL adapter.
         ending: A failed native operation or deployment interrupting execution.
     """
-    plan = PreparedJobPlan({}, {}, 1024, work_key="same")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="same")
     one = store.submit("first", "one", plan, "hash")
     two = store.submit("second", "two", plan, "hash")
     claimed = store.claim_next_job()
@@ -406,7 +397,7 @@ def test_cancellation_racing_a_new_subscriber_keeps_new_work_live(
     Args:
         store: Disposable PostgreSQL adapter.
     """
-    plan = PreparedJobPlan({}, {}, 1024, work_key="same")
+    plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="same")
     one = store.submit("first", "one", plan, "hash")
     with ThreadPoolExecutor(max_workers=2) as clients:
         cancelled = clients.submit(store.cancel, one["id"], "first")
