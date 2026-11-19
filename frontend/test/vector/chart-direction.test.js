@@ -132,7 +132,7 @@ for (const chartType of ["line", "scatter", "bar"]) {
             documentContext,
             onVisibilityChange() {},
             onPresentationChange() {},
-            onFeatureZoom: focus => { zoomed.push(focus); return true; },
+            onFeatureZoom: (focus, index) => { zoomed.push({ focus, index }); return true; },
         });
         const samples = [
             observation({ depth: 8, score: -7, site: "Beta" }, "middle"),
@@ -162,13 +162,19 @@ for (const chartType of ["line", "scatter", "bar"]) {
         const points = chart.querySelectorAll(".series-chart-point");
         points[0].dispatchEvent(new Event("click"));
         assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Depth observations · deep/);
+        assert.deepEqual(zoomed, [{ focus: samples[1].focus, index: 1 }]);
         const enter = new Event("keydown", { cancelable: true });
         Object.defineProperty(enter, "key", { value: "Enter" });
         points[2].dispatchEvent(enter);
         assert.equal(enter.defaultPrevented, true);
         assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Depth observations · shallow/);
+        assert.deepEqual(zoomed[1], { focus: samples[2].focus, index: 2 });
         documentContext.querySelector("#zoom-vector-time-series-feature").dispatchEvent(new Event("click"));
-        assert.deepEqual(zoomed, [samples[2].focus]);
+        assert.deepEqual(zoomed, [
+            { focus: samples[1].focus, index: 1 },
+            { focus: samples[2].focus, index: 2 },
+            { focus: samples[2].focus, index: 2 },
+        ]);
 
         change(documentContext, "#vector-time-series-x", "site");
         assertSpacing(positions(chart), 1 / 2);
