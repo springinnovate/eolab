@@ -97,11 +97,15 @@ def read_stored_upload(content: bytes) -> StoredUploadFile:
 
 
 class UploadSummary(BaseModel):
-    """Describe visible originals and occupied upload storage for one browser."""
+    """Describe available originals and quota usage for one browser.
+
+    All formats share the configured file allowance. Pending uploads and
+    originals retained by calculations count toward usage.
+    """
 
     uploads: list[UploadRecord]
     used_files: int
-    max_files: Literal[5] = 5
+    max_files: int
     used_bytes: int
     max_bytes: int
     max_file_bytes: int
@@ -189,6 +193,8 @@ class UploadStorage:
         max_bytes: int = 100 * 1024**2,
         owner_max_bytes: int = 500 * 1024**2,
         global_max_bytes: int = 10 * 1024**3,
+        *,
+        owner_max_files: int = 100,
     ) -> None:
         """Configure the sole API writer without touching storage.
 
@@ -197,11 +203,14 @@ class UploadStorage:
             max_bytes: Maximum original bytes in one new upload.
             owner_max_bytes: Maximum stored bytes charged to one browser.
             global_max_bytes: Maximum stored bytes across all browser owners.
+            owner_max_files: Maximum occupied slots per browser across formats,
+                including pending uploads and retained originals.
         """
         self.root = root
         self.max_bytes = max_bytes
         self.owner_max_bytes = owner_max_bytes
         self.global_max_bytes = global_max_bytes
+        self.owner_max_files = owner_max_files
         self._admission = asyncio.Lock()
         self._waiting_uploads = 0
         self._disk_lock = RLock()
@@ -389,6 +398,7 @@ class UploadStorage:
                 return UploadSummary(
                     uploads=uploads,
                     used_files=used_files,
+                    max_files=self.owner_max_files,
                     used_bytes=usage.bytes.get(owner, 0),
                     max_bytes=self.owner_max_bytes,
                     max_file_bytes=self.max_bytes,
@@ -479,8 +489,8 @@ class UploadStorage:
             Staged original for bounded format inspection and publish().
 
         Raises:
-            UploadError: If five files or a byte budget is exhausted, admission's
-                queue is full or times out, or the incoming body exceeds 120 seconds.
+            UploadError: If the file allowance or a byte budget is exhausted, the
+                admission queue is full or times out, or the body exceeds 120 seconds.
             OSError: If staging fails.
             asyncio.CancelledError: After pending writes and cleanup finish.
         """
@@ -502,10 +512,12 @@ class UploadStorage:
                 with self._disk_lock:
                     self.sweep_expired()
                     usage = self._usage()
-                    if len(usage.files.get(owner, set())) >= 5:
+                    if len(usage.files.get(owner, set())) >= self.owner_max_files:
                         raise UploadError(
                             409,
-                            "You have 5 uploaded files. Delete an uploaded file in Your uploads before uploading another. Files in use count until the calculation stops.",
+                            f"This browser has reached its upload limit ({self.owner_max_files}). "
+                            "Delete a file in Your uploads before uploading another. "
+                            "Files in use count until the calculation stops.",
                         )
                     owner_path = self.root / owner
                     owner_path.mkdir(parents=True, exist_ok=True)

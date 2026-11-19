@@ -121,7 +121,7 @@ def test_binary_mask_is_private_immutable_and_visible_in_shared_inventory(
         assert path.read_bytes() == body
         summary = client.get("/api/uploads").json()
         assert summary["used_files"] == 1
-        assert summary["max_files"] == 5
+        assert summary["max_files"] == 100
         assert summary["uploads"][0]["expires_at"] == record["expires_at"]
         client.cookies.clear()
         unavailable = client.get(f"/api/raster-uploads/{record['id']}")
@@ -176,7 +176,7 @@ def test_compressed_mask_is_checked_against_decoded_size(tmp_path: Path) -> None
         assert client.get("/api/uploads").json()["used_files"] == 0
 
 
-def test_polygons_and_rasters_share_five_slots_and_deletion_frees_one(
+def test_polygons_and_rasters_share_slots_and_deletion_frees_one(
     tmp_path: Path,
 ) -> None:
     """Enforce one allowance across both real HTTP adapters and permit replacement.
@@ -188,7 +188,7 @@ def test_polygons_and_rasters_share_five_slots_and_deletion_frees_one(
     polygon = write_layer(tmp_path / "polygons.gpkg")
     raster = mask_bytes(tmp_path / "mask.tif")
     with upload_client(storage) as client:
-        for index in range(4):
+        for index in range(99):
             response = client.post(
                 "/api/vector-uploads",
                 params={"name": f"Polygons {index}"},
@@ -205,17 +205,19 @@ def test_polygons_and_rasters_share_five_slots_and_deletion_frees_one(
         assert accepted.status_code == 201, accepted.text
         rejected = client.post(
             "/api/vector-uploads",
-            params={"name": "Sixth file"},
+            params={"name": "Extra polygons"},
             headers=HEADERS,
             content=polygon,
         )
         assert rejected.status_code == 409, rejected.text
-        assert client.get("/api/uploads").json()["used_files"] == 5
+        assert "upload limit (100)" in rejected.json()["detail"]
+        summary = client.get("/api/uploads").json()
+        assert summary["used_files"] == summary["max_files"] == 100
         removed = client.delete(
             f"/api/raster-uploads/{accepted.json()['id']}", headers=HEADERS
         )
         assert removed.status_code == 204
-        assert client.get("/api/uploads").json()["used_files"] == 4
+        assert client.get("/api/uploads").json()["used_files"] == 99
         replacement = client.post(
             "/api/raster-uploads",
             params={"name": "Replacement"},
