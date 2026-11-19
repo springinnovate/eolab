@@ -445,9 +445,9 @@ export class VectorFeatureProfileController {
     /**
      * Replace the current immutable feature observation.
      *
-     * Settings are initialized once per source and reused for later features
-     * from the same vector layer. An active mode temporarily hides for a null
-     * observation and reopens when a later feature becomes current.
+     * Each source starts with bars and reuses its settings for later features
+     * from that layer. An active plot temporarily hides when the observation
+     * is null and reopens when a later feature becomes current.
      *
      * @param {VectorInspectionObservation|null} observation Immutable inspector result or null.
      * @param {Object|null} [navigation=null] Inspector-owned result position.
@@ -471,7 +471,7 @@ export class VectorFeatureProfileController {
                 selectedFields: suggestFeatureProfileFields(observation),
                 titleField: suggestFeatureProfileTitle(observation),
                 direction: "ascending",
-                chartType: "line",
+                chartType: "bar",
             });
         }
         if (observation !== null && this.modeActive && this.panel.hidden) {
