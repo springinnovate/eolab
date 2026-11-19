@@ -12,7 +12,6 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
-from threading import Event
 from typing import TYPE_CHECKING, Any, Protocol
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
@@ -35,7 +34,6 @@ from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
 from eolab_app.vector.field_statistics import (
     VectorFieldStatistics,
     VectorLayerStatisticsRequest,
-    read_vector_layer_statistics,
 )
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
@@ -66,8 +64,6 @@ from eolab_app.source_files import (
 
 if TYPE_CHECKING:
     from eolab_app.feature_intersection import IntersectionLayer
-
-_LAYER_STATISTICS_TIMEOUT_SECONDS = 20
 
 
 class VectorSelectionExecutor(Protocol):
@@ -172,6 +168,10 @@ class VectorSamplingService:
         selection_executor: VectorSelectionExecutor | None = None,
         extent_executor: VectorSelectionExecutor | None = None,
         parcel_executor: VectorParcelExecutor | None = None,
+        layer_statistics_executor: Callable[
+            [VectorLayerStatisticsRequest, str | None, str | None],
+            Awaitable[tuple[VectorFieldStatistics, ...]],
+        ] | None = None,
         uploads: VectorUploadStore | None = None,
         artifact_files: Callable[[], LeasedSourceFiles] | None = None,
         read_drawing: Callable[[str, DrawingReference], Awaitable[tuple[SummaryPolygon, ...]]] | None = None,
@@ -192,6 +192,7 @@ class VectorSamplingService:
                 the consumer does not offer filtered map zoom.
             parcel_executor: Jobs adapter for Catalog parcel ID validation,
                 membership lookups and page reads; omit for consumers without them.
+            layer_statistics_executor: Jobs adapter for complete-layer attribute statistics.
             uploads: Original browser-owned GeoPackages and their admission metadata.
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
@@ -205,11 +206,11 @@ class VectorSamplingService:
         self._uploads = uploads
         self._extent_executor = extent_executor
         self._parcel_executor = parcel_executor
+        self._layer_statistics_executor = layer_statistics_executor
         self._artifact_files = artifact_files
         self._read_drawing = read_drawing
         self.spatial_reads = SpatialReads()
         self._comparison_executor = comparison_executor
-        self._statistics_slots = asyncio.Semaphore(2)
 
     async def layer_statistics(
         self,
@@ -218,9 +219,8 @@ class VectorSamplingService:
     ) -> tuple[VectorFieldStatistics, ...]:
         """Read whole-layer benchmarks while the original source is authorized.
 
-        Two reads may run at once. The interactive deadline includes waiting
-        for a reader. A stopped read holds its slot and any source lease until
-        its native work exits.
+        Jobs schedules the read and owns its execution budget. A result-file
+        lease stays open until Jobs confirms that native work has stopped.
 
         Args:
             request: Unfiltered source identity and selected numeric fields.
@@ -232,28 +232,18 @@ class VectorSamplingService:
         Raises:
             SelectionUnavailableError: If the original source cannot be resolved.
             SourceFileError: If the private result is unavailable or its lease is lost.
+            VectorUploadError: If the upload is unavailable or inaccessible to Jobs.
             VectorConflictError: If reading fails or exceeds the deadline.
             asyncio.CancelledError: After a cancelled native read finishes.
         """
-        stop = Event()
-        try:
-            async with asyncio.timeout(_LAYER_STATISTICS_TIMEOUT_SECONDS):
-                async with (
-                    self._statistics_slots,
-                    self._open_original(request.source, source_owner) as source,
-                ):
-                    task = asyncio.create_task(
-                        asyncio.to_thread(
-                            read_vector_layer_statistics, source, request.fields, stop
-                        )
-                    )
-                    try:
-                        return await asyncio.shield(task)
-                    finally:
-                        stop.set()
-                        await finish_source_task(task)
-        except TimeoutError as error:
-            raise VectorConflictError("Reading the whole layer took too long.") from error
+        if self._layer_statistics_executor is None:
+            raise VectorConflictError("Layer statistics are unavailable.")
+        async with self._open_original(request.source, source_owner) as source:
+            if source.upload_owner is not None:
+                await asyncio.to_thread(self._uploads.prepare_source_read, source.path)
+            return await self._layer_statistics_executor(
+                request, source.upload_owner, source.read_lease
+            )
 
     async def validate_parcel_ids(
         self, request: ParcelIdRequest
