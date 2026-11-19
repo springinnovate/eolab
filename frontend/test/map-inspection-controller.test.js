@@ -475,7 +475,8 @@ test("map-click summaries retain the chosen panel and expose unseen peer results
     h.controller.setClickResult("histogram", {state: "loading"});
     h.controller.keepVisibleClickResultReadable();
     assert.deepEqual(activity, [false, true], "consecutive samples keep the same result readable");
-    h.controller.setClickResult("feature", {state: "ready", message: "3 features returned"});
+    h.controller.setClickResult("feature", {state: "ready", message: "3 features returned", position: {lat: 22, lng: 78}});
+    assert.equal(h.doc.querySelector("#map-click-context").textContent, "Point · 22.0000, 78.0000");
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(h.doc.activeElement, h.map);
     assert.equal(h.doc.querySelector("#map-inspection-tab-feature").getAttribute("data-unread"), "true");

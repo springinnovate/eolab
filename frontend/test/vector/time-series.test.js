@@ -80,6 +80,7 @@ function fixture() {
       documentContext.querySelector("#vector-time-series").hidden = !visible;
     },
     onPresentationChange: (identity) => presentations.push(identity),
+    onNavigateSelection() {},
     onFeatureZoom: (featureFocus) => {
       zoomRequests.push(featureFocus);
       return true;

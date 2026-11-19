@@ -20,6 +20,8 @@ test("vector time-series controls and accessible outputs are present", () => {
     "vector-time-series",
     "vector-time-series-heading",
     "vector-time-series-context",
+    "vector-time-series-previous-selection",
+    "vector-time-series-next-selection",
     "close-vector-time-series",
     "vector-time-series-x",
     "vector-time-series-fields-picker",
@@ -59,6 +61,9 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<select id="vector-time-series-chart-type">.*<option value="bar" selected>Bars<\/option>/);
   assert.match(MARKUP, />Compare features<\/button>/);
   assert.match(MARKUP, />Compare features<\/h2>/);
+  assert.match(MARKUP, /aria-label="Selection history"/);
+  assert.match(MARKUP, /<\/span> Previous selection<\/button>/);
+  assert.match(MARKUP, /disabled>Next selection <span aria-hidden="true">→<\/span>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="group"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);

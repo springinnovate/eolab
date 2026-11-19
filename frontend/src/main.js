@@ -1976,6 +1976,7 @@ async function initializeCatalog(
         onPresentationChange: (identity) =>
             mapInspection.setVectorTimeSeriesIdentity(identity),
         onFeatureZoom: zoomInspectedVectorFeature,
+        onNavigateSelection: direction => vectorFeatureInspector.navigateSelection(direction),
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({
         onCompareFeatures: openFeatureComparison,
@@ -2055,6 +2056,7 @@ async function initializeCatalog(
             mapInspection.setClickResult("feature", {
                 state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
                 message,
+                ...(sample.position ? { position: sample.position } : {}),
             });
             if (sample.state === "loading" || sample.state === "ready") {
                 mapInspection.setFeatureResultCount(
@@ -2063,6 +2065,7 @@ async function initializeCatalog(
                 );
             }
         },
+        onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
         onCurrentObservationChange: (observation, navigation) =>
             vectorFeatureProfile.setCurrentObservation(observation, navigation),
         onFeatureProfileRequested: openFeaturePlot,
