@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS shared_annotation_layers.contributors (
     session_id uuid NOT NULL REFERENCES shared_annotation_layers.sessions ON DELETE CASCADE,
     browser_hash text NOT NULL,
     name text NOT NULL,
+    color text NOT NULL CHECK (color ~ '^#[0-9A-Fa-f]{6}$'),
     UNIQUE(session_id, browser_hash)
 );
 CREATE TABLE IF NOT EXISTS shared_annotation_layers.layers (
@@ -23,8 +24,6 @@ CREATE TABLE IF NOT EXISTS shared_annotation_layers.layers (
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(contributor_id, local_id)
 );
-ALTER TABLE shared_annotation_layers.contributors
-    ADD COLUMN IF NOT EXISTS color text CHECK (color ~ '^#[0-9A-Fa-f]{6}$');
 CREATE TABLE IF NOT EXISTS shared_annotation_layers.join_attempts (
     browser_hash text PRIMARY KEY,
     started_at timestamptz NOT NULL DEFAULT now(),
