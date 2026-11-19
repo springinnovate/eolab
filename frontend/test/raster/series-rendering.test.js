@@ -258,7 +258,8 @@ test("result presentation counts requested positions, including waiting, failed 
 
 test("the single result locator uses the source extent and only outlines the matching polygon selection", () => {
     const h = controlsFixture(), rectangles = [], drawn = [];
-    const map = {attributionControl: {setPrefix() {}}, invalidateSize() {}, fitBounds() {}};
+    const credits = h.document.createElement("div");
+    const map = {attributionControl: {setPrefix() {}, getContainer: () => credits}, invalidateSize() {}, fitBounds() {}};
     const layer = {addTo() { return this; }, remove() {}, getBounds() { return {isValid: () => true}; }};
     let tileStyle, extentStyle;
     const leaflet = {map: () => map, tileLayer(url, options) { tileStyle = options; return layer; },
@@ -267,6 +268,7 @@ test("the single result locator uses the source extent and only outlines the mat
     const locator = new RasterResultLocator(h.document, leaflet, {url: "", attribution: ""});
     const frame = h.document.createElement("div");
     frame.append(locator.figure);
+    locator.container.append(credits);
     h.view.locator = locator;
     h.state.area.area = {kind: "wholeRaster"};
     h.state.resultBounds = [170, -15, 0, -170, 15, 100];
@@ -275,6 +277,7 @@ test("the single result locator uses the source extent and only outlines the mat
     assert.deepEqual(rectangles, [[[-15, 170], [15, 190]]], "3-D extent across the dateline");
     assert.equal(tileStyle.className, "eolab-basemap");
     assert.equal(extentStyle.className, "map-selection-footprint");
+    assert.ok(frame.children[1] === credits, "the original map credits sit below the thumbnail");
     const reference = {id: "a", sha256: "b"};
     h.state.area.area = {kind: "polygonArea", polygonArea: reference};
     h.draw();

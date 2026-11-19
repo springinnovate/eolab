@@ -109,6 +109,7 @@ export class RasterResultLocator {
             this.map = L.map(this.container, {zoomControl: false, dragging: false, keyboard: false, touchZoom: false,
                 doubleClickZoom: false, scrollWheelZoom: false, boxZoom: false, zoomAnimation: false, fadeAnimation: false});
             this.map.attributionControl.setPrefix(false);
+            this.figure.parentElement.append(this.map.attributionControl.getContainer());
             L.tileLayer(this.background.url, {className: "eolab-basemap", attribution: this.background.attribution,
                 maxNativeZoom: 17, maxZoom: 22}).addTo(this.map);
         }
