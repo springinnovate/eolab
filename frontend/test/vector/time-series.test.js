@@ -80,6 +80,7 @@ function fixture() {
       documentContext.querySelector("#vector-time-series").hidden = !visible;
     },
     onPresentationChange: (identity) => presentations.push(identity),
+    onNavigateSelection() {},
     onFeatureZoom: (featureFocus) => {
       zoomRequests.push(featureFocus);
       return true;
@@ -159,6 +160,51 @@ function checkField(doc, name, checked) {
   input.checked = checked;
   input.dispatchEvent(new Event("change"));
 }
+
+test("comparison stacks fields on separate feature rows while retaining exact feature selection", () => {
+  const {controller, documentContext: doc, zoomRequests} = fixture();
+  const sample = observations().map((observation, index) => ({
+    ...observation, featureId: "same-id", properties: {
+      year: [2025, 2018, 2018, null][index],
+      areaForest: [9, 3, 0, 3.25][index],
+      areaWetland: [-6, 2, null, 4][index],
+    },
+  }));
+  controller.setSample({state: "ready", message: "Ready", observations: sample});
+  doc.querySelector("#vector-time-series-field-search").value = "area";
+  doc.querySelector("#vector-time-series-select-matching").dispatchEvent(new Event("click"));
+  const xField = doc.querySelector("#vector-time-series-x");
+  xField.value = "year";
+  xField.dispatchEvent(new Event("change"));
+  const chartType = doc.querySelector("#vector-time-series-chart-type");
+  chartType.value = "stacked";
+  chartType.dispatchEvent(new Event("change"));
+
+  const chart = doc.querySelector("#vector-time-series-chart");
+  const legend = doc.querySelector("#vector-time-series-legend");
+  const segments = chart.querySelectorAll(".series-chart-bar");
+  assert.deepEqual(legend.children.map(item => item.textContent), ["areaForest", "areaWetland"]);
+  assert.deepEqual(segments.map(mark => mark.getAttribute("data-point-index")), ["0", "0", "2", "2", "3", "3"]);
+  assert.equal(doc.querySelector("#vector-time-series-extra-charts").children.length, 0);
+  assert.equal(doc.querySelector("#vector-time-series-x-label").textContent, "Feature labels");
+  assert.match(doc.querySelector("#vector-time-series-status").textContent, /One field value is missing/);
+  assert.match(segments.at(-2).getAttribute("aria-label"), /areaForest = 3.25$/);
+  segments.at(-2).dispatchEvent(new Event("click"));
+  doc.querySelector("#zoom-vector-time-series-feature").dispatchEvent(new Event("click"));
+  assert.equal(zoomRequests.at(-1), sample[3].focus);
+
+  doc.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
+  const rows = doc.querySelector("#vector-time-series-table-body").children;
+  assert.deepEqual(rows.map(row => row.children.slice(1).map(cell => cell.children[0].textContent)),
+    [["3", "2"], ["0", "No value"], ["9", "-6"], ["3.25", "4"]]);
+  checkField(doc, "areaForest", false);
+  assert.deepEqual(legend.children.map(item => item.textContent), ["areaWetland"]);
+  chartType.value = "scatter";
+  chartType.dispatchEvent(new Event("change"));
+  assert.equal(legend.hidden, true);
+  assert.equal(doc.querySelector("#vector-time-series-x-label").textContent, "X axis");
+  controller.destroy();
+});
 
 test("every returned feature has a table row and retains its own plotted position", () => {
   const sample = observations();

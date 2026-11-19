@@ -115,6 +115,7 @@ test("private upload references preserve appearance without accepting data or cr
   const duplicate = structuredClone(candidate);
   duplicate.layers.push(structuredClone(duplicate.layers[0]));
   duplicate.layers[1].customName = "Another wetlands view";
+  duplicate.layers[1].isDuplicate = true;
   duplicate.layers[1].style.definition.fillColor = "#abcdef";
   assert.deepEqual(parseSavedMapView(JSON.stringify(duplicate)), duplicate);
   const invalidId = structuredClone(candidate);
@@ -125,6 +126,9 @@ test("private upload references preserve appearance without accepting data or cr
   assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /cannot have polygon filters/);
   delete raster.layers[0].filter;
   assert.deepEqual(parseSavedMapView(JSON.stringify(raster)), raster);
+  raster.layers[0].isDuplicate = true;
+  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /duplicated vector view/);
+  delete raster.layers[0].isDuplicate;
   raster.layers[0].calculatedFields = [{version: 1, name: "Weight", expression: "2", numericText: false}];
   assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /require a vector style/);
 });

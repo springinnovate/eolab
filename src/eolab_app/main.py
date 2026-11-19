@@ -168,6 +168,7 @@ from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.parcel_jobs import ParcelJobs
 from eolab_jobs.client import JobsClient
+from eolab_app.routes.vector_edits import create_vector_edit_router
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.routes.spatial_filters import create_spatial_filter_router
 from eolab_app.vector.styling import VectorStyleService
@@ -267,6 +268,7 @@ def create_app(
         app_global_configuration.upload_max_bytes,
         app_global_configuration.upload_owner_max_bytes,
         app_global_configuration.upload_global_max_bytes,
+        owner_max_files=app_global_configuration.upload_owner_max_files,
     )
     vector_uploads = VectorUploadStore(
         app_global_configuration.vector_upload_data_path,
@@ -877,6 +879,15 @@ def create_app(
         create_vector_sampling_router(
             vector_selection_reader,
             read_artifact_owner=lambda request, response: get_processing_session_owner_hash(
+                request, response, processing_session_ttl
+            ),
+        )
+    )
+    application.include_router(
+        create_vector_edit_router(
+            vector_selection_reader.open_selection,
+            vector_uploads,
+            lambda request, response: get_processing_session_owner_hash(
                 request, response, processing_session_ttl
             ),
         )

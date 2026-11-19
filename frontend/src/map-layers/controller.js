@@ -74,6 +74,7 @@ function normalizeCustomLayerName(value) {
  * @property {string} key Stable layer identity.
  * @property {string} label Display name before removal.
  * @property {boolean} isCustom Whether the captured layer has Custom layer presentation.
+ * @property {boolean} [isDuplicate] This view was created by duplicating another layer.
  * @property {string|null} [customName] Map-specific layer name, or null for its source name.
  * @property {number} index Previous top-first drawing position.
  * @property {boolean} visible Previous visibility.
@@ -150,6 +151,7 @@ export class MapLayerController {
             onStyle: (key) => this.onStyle?.(key),
             onFilter: (key) => this.onFilter?.(key),
             onCalculateFields: (key) => this.onCalculateFields?.(key),
+            onEditGeometry: (key) => this.onEditGeometry?.(key),
             onDownload: (key) => this.onDownload?.(key),
             onCalculate: (key) => this.onCalculate?.(key),
             onZoom: (key) => {
@@ -185,7 +187,7 @@ export class MapLayerController {
      * createState, createLayer and snapshot, plus optional lifecycle callbacks.
      * Providing sourceName enables the standard name editor, preserving custom names
      * when the owner later updates its source name.
-     * @param {{key:string,label:string,isCustom?:boolean,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object,canAddView?:boolean}} source Local presentation and optional publication; canAddView opts into independent restoration of the same source. isCustom defaults to true for owner-created layers; temporal Catalog owners explicitly supply false.
+     * @param {{key:string,label:string,isCustom?:boolean,isDuplicate?:boolean,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object,canAddView?:boolean}} source Local presentation and optional publication; canAddView opts into independent restoration of the same source. isCustom defaults to true for owner-created layers; temporal Catalog owners explicitly supply false.
      * @param {Object} adapter Owner's rendering and presentation methods.
      * @return {Object} Retained record.
      * @throws {Error} If the identity is duplicated or construction fails.
@@ -213,11 +215,13 @@ export class MapLayerController {
     /** Prepare a local layer for the ordinary staged commit without exposing its map card or controls.
      * @param {Parameters<MapLayerController["addLocal"]>[0]} source Owner's local identity and presentation.
      * @param {Object} adapter Owner's rendering and lifecycle methods; added runs only at commit.
+     * @param {Object|null} [previous=null] Retained record whose source will be replaced, if any.
      * @return {{key:string,record:Object,layer:Object}} Detached view for commitStaged or restoreStagedLayer.
      * @throws {Error} If the identity is retained, the controller closed, or construction fails.
      */
-    stageLocal(source, adapter) {
-        if (this.destroyed || this.records.has(source.key)) {
+    stageLocal(source, adapter, previous = null) {
+        if (this.destroyed || (this.records.get(source.key) ?? null) !== previous ||
+            (previous !== null && previous.adapter !== adapter)) {
             throw new Error("Local layer cannot be added to this stack.");
         }
         const record = this.#createLocalRecord(source, adapter, new MapLayerStack(), 1);
@@ -240,7 +244,7 @@ export class MapLayerController {
     #createLocalRecord(source, adapter, stack, retentionOrder) {
         const {entry} = stack.addLocal(source.key, source.label, retentionOrder);
         const record = {entry, adapter, publication: source.publication ?? null, state: null, error: null,
-            canAddView: source.canAddView === true};
+            canAddView: source.canAddView === true, isDuplicate: source.isDuplicate === true};
         try {
             entry.isCustom = source.isCustom ?? true;
             if (source.sourceName !== undefined) {
@@ -877,6 +881,7 @@ export class MapLayerController {
         const {entry, adapter} = record;
         return {
             key, label: entry.label, customName: entry.customName ?? null, isCustom: entry.isCustom,
+            ...(record.isDuplicate ? {isDuplicate: true} : {}),
             index: this.stack.entries.findIndex(candidate => candidate.key === key),
             visible: entry.visible, opacity: entry.opacity,
             ...(entry.legendIncluded === false ? {legendIncluded: false} : {}),
@@ -889,7 +894,7 @@ export class MapLayerController {
         };
     }
 
-    /** Restore a captured layer through its original owner, including its kind, field display and legend inclusion.
+    /** Restore a captured layer and its duplicate status and presentation through its original owner.
      * @param {RemovedMapLayer} snapshot Captured presentation and source identity.
      * @param {()=>boolean} isCurrent Whether restoration still belongs to the current action.
      * @return {Promise<void>} Completion after owner restoration.
@@ -901,6 +906,7 @@ export class MapLayerController {
             const record = this.#requireRecord(snapshot.key);
             record.entry.legendIncluded = snapshot.legendIncluded !== false;
             record.entry.isCustom = snapshot.isCustom;
+            record.isDuplicate = snapshot.isDuplicate === true;
             if (snapshot.fieldFormats) record.fieldFormats = snapshot.fieldFormats;
             this.render();
         }
@@ -923,6 +929,7 @@ export class MapLayerController {
             const snapshot = this.captureLayerSnapshot(key);
             snapshot.key = `local:view:${globalThis.crypto.randomUUID()}`;
             snapshot.isCustom = true;
+            snapshot.isDuplicate = true;
             await this.restoreLayerSnapshot(snapshot, isCurrent);
             if (!isCurrent()) return null;
             this.view.announceStatus?.(`Created a copy of ${snapshot.label}.`);
@@ -1051,6 +1058,28 @@ export class MapLayerController {
             this.render();
             throw error;
         }
+    }
+
+    /** Swap in a prepared source while retaining the view's map position and field display.
+     * @param {Object} previous Record still owned by the caller.
+     * @param {ReturnType<MapLayerController["stageLocal"]>} staged Detached replacement from the same adapter.
+     * @return {boolean} True when attached, false if the view was superseded.
+     * @throws {Error} If the replacement does not belong to this adapter or cannot be displayed.
+     */
+    replaceStagedLayer(previous, {key, record, layer}) {
+        if (this.destroyed || this.records.get(key) !== previous) return false;
+        if (previous.adapter !== record.adapter) throw new Error("The layer source belongs to a different adapter.");
+        const {entry} = previous;
+        this.leafletLayers.replace(key, layer);
+        entry.item = null;
+        entry.sourceName = record.entry.sourceName;
+        record.entry = entry;
+        if (previous.fieldFormats) record.fieldFormats = previous.fieldFormats;
+        this.records.set(key, record);
+        previous.adapter.removed?.(previous);
+        record.adapter.added?.(record, {fitToBounds: false});
+        this.render();
+        return true;
     }
 
     /**

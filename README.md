@@ -71,7 +71,9 @@ For a calculation you want to follow in **Runs**, use **Data tools → Raster su
 
 ### Plot attributes and summarize polygons
 
-In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Each comparison field has its own scale and shares the same X axis. Switch between **Plot** and **Values** to read exact measurements, including missing values. Click another place to update the open plot, or select a measurement and choose **Zoom to feature**. **Plot options** contains the chart style, order, and axis or title field.
+In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Line, scatter, and bar comparisons give each field its own scale and share the same X axis. In either plot, choose **Stacked bars** under **Plot options** to put the checked fields into one horizontal bar per feature. Stack fields that use the same units. Switch between **Plot** and **Values** to read exact measurements, including missing values. Click another place to update the open plot, or select a measurement and choose **Zoom to feature**. **Plot options** contains the chart style, order, and axis or title field.
+
+In **Compare features**, use **Previous selection** and **Next selection** to revisit earlier map clicks, including after a click that cleared the plot. If you go back and select a different set of features, the forward history clears.
 
 ![One feature selected on a South American map with 25 fields plotted in a line chart.](docs/images/eolab-series-one-feature.jpg)
 
@@ -145,6 +147,7 @@ The **Planning API** lets participants save private scenarios with one intervent
 
 - **Sketch a boundary.** Choose **Map contents → Draw polygon**, draw the outline, add notes, and save. You can also import existing outlines from GeoJSON or download your drawings in that format.
 - **Bring a project boundary.** Under **Your uploads**, add a GeoPackage containing one polygon layer to keep its attributes. Filter it to a country, watershed, or project group and use that selection for statistics or a model.
+- **Reshape a copy.** In **Map contents**, duplicate a GeoPackage polygon layer, choose **Edit geometry**, then click a polygon. Drag its vertices, click an edge to insert one, or hover or focus a vertex and press **Delete**. **Save changes** keeps the edited layer in your browser’s private uploads. Each save uses a file slot for seven days.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
 - **Publish a map.** Choose **Publish map**, give the map a title and link name, and select **Create map link**. The link opens the same layers, styles, order, and starting view. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
 
@@ -155,7 +158,7 @@ Drawings stay on this device until you share their layer or save them through Pl
 
 If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
 
-The server stores private uploads for seven days. GeoPackages and reference masks share a five-file allowance per browser. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
+The server stores private uploads for seven days. The default per-browser limits are 100 files and 500 MiB total across GeoPackages and reference masks. **Your uploads** shows the limits for your deployment. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
 
 </details>
 
@@ -166,6 +169,8 @@ Follow progress in **Runs** while you work. Choose **Cancel run** to stop a calc
 ## Deploy EOLab
 
 Start with Docker Compose and a folder on the Docker host containing a georeferenced GeoTIFF or a GeoPackage with a map layer. Set `EOLAB_SCAN_MOUNT_PATH` to the folder’s absolute path. EOLab mounts it read-only. Set the database password, separate GeoServer admin and master passwords, and the Jobs token using the formats in [.env.example](.env.example).
+
+To adjust the upload allowance per browser, set `EOLAB_UPLOAD_OWNER_MAX_FILES` for the file count and `EOLAB_UPLOAD_OWNER_MAX_BYTES` for the total storage in bytes.
 
 ### On your computer
 

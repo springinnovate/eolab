@@ -1,4 +1,4 @@
-/** One-shot feature inspection for visible published vector layers. */
+/** Feature inspection and selection history for visible published vector layers. */
 
 import { getFeatureInfoViewport } from "./feature-info-viewport.js";
 import { DEFAULT_FIELD_FORMATS } from "../feature-field-formats.js";
@@ -21,6 +21,22 @@ const TIME_SERIES_AVAILABLE_HELP =
 const TIME_SERIES_UNAVAILABLE_HELP =
     "Click a location with at least two features to compare their fields.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
+const MAX_SELECTION_HISTORY_ENTRIES = 20;
+
+/**
+ * @typedef {Readonly<{lng:number,lat:number}>} InspectionPosition The sampled map point.
+ */
+
+/**
+ * @typedef {{feature:Object,target:import("./feature-info.js").VectorFeatureInspectionTarget,
+ * inspectionPosition:InspectionPosition}} InspectedVectorFeature A bounded feature-info result.
+ */
+
+/**
+ * @typedef {{identity:string|null,results:InspectedVectorFeature[],position:InspectionPosition,
+ * resultIndex:number,state:"ready"|"empty",message:string,failedLayers:number}} FeatureSelection
+ * A completed inspection with its last highlighted feature.
+ */
 
 /**
  * Format elapsed inspection time without implying unavailable precision.
@@ -193,6 +209,12 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null, formats
 
 /** Own vector-inspection requests, results, and map highlight. */
 export class VectorFeatureInspectorController {
+    /** @type {FeatureSelection[]} */
+    #selectionHistory = [];
+    #selectionHistoryIndex = -1;
+    /** @type {InspectionPosition|null} */
+    #inspectionPosition = null;
+
     /**
      * Connect map clicks to feature results, navigation and map highlights.
      *
@@ -204,8 +226,11 @@ export class VectorFeatureInspectorController {
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
      * Requests presentation changes without knowing the presentation owner.
-     * @param {(sample:Readonly<Object>)=>void} configuration.onSampleChange
+     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>)=>void} configuration.onSampleChange
      * Publishes immutable bounded observations through application composition.
+     * @param {(navigation:Readonly<{canPrevious:boolean,canNext:boolean}>)=>void}
+     * configuration.onSelectionNavigationChange Publishes available directions
+     * between completed map selections.
      * @param {(observation:Readonly<Object>|null,navigation:Readonly<Object>|null)=>void}
      * configuration.onCurrentObservationChange Publishes the current paged
      * result and its immutable position within the inspector-owned result set.
@@ -236,6 +261,7 @@ export class VectorFeatureInspectorController {
         wmsUrl,
         onInspectionChange,
         onSampleChange,
+        onSelectionNavigationChange,
         onCurrentObservationChange,
         onFeatureProfileRequested,
         onTimeSeriesRequested,
@@ -258,6 +284,9 @@ export class VectorFeatureInspectorController {
         }
         if (typeof onSampleChange !== "function") {
             throw new TypeError("onSampleChange must be a function.");
+        }
+        if (typeof onSelectionNavigationChange !== "function") {
+            throw new TypeError("onSelectionNavigationChange must be a function.");
         }
         if (typeof onCurrentObservationChange !== "function") {
             throw new TypeError("onCurrentObservationChange must be a function.");
@@ -284,6 +313,7 @@ export class VectorFeatureInspectorController {
         this.wmsUrl = wmsUrl;
         this.onInspectionChange = onInspectionChange;
         this.onSampleChange = onSampleChange;
+        this.onSelectionNavigationChange = onSelectionNavigationChange;
         this.onCurrentObservationChange = onCurrentObservationChange;
         this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
@@ -434,7 +464,8 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Close orphaned results after the last visible vector leaves the map.
+     * Clear results and history if the visible vector sources change.
+     * Close the inspector after the last visible vector leaves.
      * Refresh display names without repeating feature queries or discarding results.
      *
      * @return {void}
@@ -451,9 +482,8 @@ export class VectorFeatureInspectorController {
             this.sampleTargetSignature !== null &&
             signature !== this.sampleTargetSignature
         ) {
-            this.requestGeneration += 1;
-            this.abortController?.abort();
-            this.abortController = null;
+            this.#cancelInspection();
+            this.#clearSelectionHistory();
             this.clearResults();
             this.sampleTargetSignature = null;
             this.status.textContent = available
@@ -513,17 +543,17 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Hide inspection, cancel work, clear results, and optionally focus the map.
+     * Hide inspection, cancel work, clear results and history, and optionally focus the map.
      *
      * @param {Object} [options] Close options.
      * @param {boolean} [options.moveFocus=false] Restore focus to the map.
      * @return {void}
      */
     close({ moveFocus = false } = {}) {
-        this.requestGeneration += 1;
-        this.abortController?.abort();
-        this.abortController = null;
+        this.#cancelInspection();
+        this.#clearSelectionHistory();
         this.clearResults();
+        this.#publishSelectionNavigation();
         this.status.textContent = "Click the map to inspect visible vector features.";
         this.onInspectionChange(false);
         if (moveFocus) this.mapContainer.focus();
@@ -540,20 +570,20 @@ export class VectorFeatureInspectorController {
         if (visibleTargets.length === 0) {
             return false;
         }
-        this.abortController?.abort();
-        this.abortController = null;
-        const generation = ++this.requestGeneration;
+        const generation = this.#cancelInspection();
+        const position = Object.freeze({ lng: event.latlng.lng, lat: event.latlng.lat });
+        this.#inspectionPosition = position;
         this.sampleTargetSignature = this.#targetSignature(visibleTargets);
         this.clearResults();
         const targets = visibleTargets.filter((target) =>
-            vectorBoundsContainPosition(target.bbox, event.latlng)
+            vectorBoundsContainPosition(target.bbox, position)
         );
         if (targets.length === 0) {
             const message = "No vector feature was found at that location.";
             this.status.textContent =
                 "Click the map to inspect visible vector features.";
             if (!this.panel.hidden) this.onInspectionChange(false);
-            this.#publishSample("empty", [], message);
+            this.#finishSelection("empty", message);
             return true;
         }
         const abortController = new AbortController();
@@ -592,10 +622,7 @@ export class VectorFeatureInspectorController {
                 results = features.map((feature) => ({
                     feature: this.featureWithGeographicGeometry(feature),
                     target,
-                    inspectionPosition: Object.freeze({
-                        lng: event.latlng.lng,
-                        lat: event.latlng.lat,
-                    }),
+                    inspectionPosition: position,
                 }));
             } catch (error) {
                 failure = error;
@@ -670,7 +697,7 @@ export class VectorFeatureInspectorController {
             this.status.textContent = `${this.results.length} feature` +
                 `${this.results.length === 1 ? "" : "s"} found in ${duration}` +
                 `${failureSummary}.`;
-            this.#publishSample("ready", this.results, this.status.textContent, failureResults.length);
+            this.#finishSelection("ready", this.status.textContent, failureResults.length);
             return;
         }
         const failure = failureResults[0]?.failure;
@@ -685,7 +712,130 @@ export class VectorFeatureInspectorController {
                 "Click the map to inspect visible vector features.";
             if (!this.panel.hidden) this.onInspectionChange(false);
         }
-        this.#publishSample("empty", [], message, failureResults.length);
+        this.#finishSelection("empty", message, failureResults.length);
+    }
+
+    /**
+     * Cancel the active feature request and supersede any responses still in flight.
+     * @return {number} Generation used to accept results from the next inspection.
+     */
+    #cancelInspection() {
+        this.requestGeneration += 1;
+        this.abortController?.abort();
+        this.abortController = null;
+        return this.requestGeneration;
+    }
+
+    /**
+     * Release saved selections when their inspection context ends.
+     * @return {void}
+     */
+    #clearSelectionHistory() {
+        this.#selectionHistory = [];
+        this.#selectionHistoryIndex = -1;
+        this.#inspectionPosition = null;
+    }
+
+    /**
+     * Identify the returned feature set independently of layer and feature order.
+     * @param {InspectedVectorFeature[]} results Features from one completed inspection.
+     * @return {string|null} Source and feature IDs, or null if a feature has no ID.
+     */
+    #identifyFeatureSelection(results) {
+        const ids = [];
+        for (const { feature, target } of results) {
+            const id = feature.id;
+            if (typeof id !== "number" && !(typeof id === "string" && id.length)) return null;
+            ids.push(JSON.stringify([target.sourceId, id]));
+        }
+        return JSON.stringify(ids.sort());
+    }
+
+    /**
+     * Save a completed result and publish it to the current plots and inspector.
+     * A different selection drops forward entries. An unsuccessful read with no
+     * features leaves the prior selections available.
+     *
+     * @param {"ready"|"empty"} state Completed result state.
+     * @param {string} message Status for the completed inspection.
+     * @param {number} [failedLayers=0] Layers whose reads failed.
+     * @return {void}
+     */
+    #finishSelection(state, message, failedLayers = 0) {
+        if (state === "ready" || failedLayers === 0) {
+            const identity = this.#identifyFeatureSelection(this.results);
+            const selection = {
+                identity, results: this.results, resultIndex: this.resultIndex,
+                position: this.#inspectionPosition, state, message, failedLayers,
+            };
+            const current = this.#selectionHistory[this.#selectionHistoryIndex];
+            if (identity !== null && identity === current?.identity) {
+                this.#selectionHistory[this.#selectionHistoryIndex] = selection;
+            } else {
+                this.#selectionHistory.splice(this.#selectionHistoryIndex + 1, this.#selectionHistory.length, selection);
+                if (this.#selectionHistory.length > MAX_SELECTION_HISTORY_ENTRIES) this.#selectionHistory.shift();
+                this.#selectionHistoryIndex = this.#selectionHistory.length - 1;
+            }
+        }
+        this.#publishSample(state, this.results, message, failedLayers);
+    }
+
+    /**
+     * Locate an adjacent saved selection. If a click is unfinished or failed,
+     * going back restores the last displayed completed selection.
+     *
+     * @param {"previous"|"next"} direction History direction.
+     * @return {number} Index of the destination, or -1 if unavailable.
+     */
+    #adjacentSelectionIndex(direction) {
+        const index = this.#selectionHistoryIndex;
+        const displayingSavedSelection = this.#selectionHistory[index]?.results === this.results;
+        if (direction === "previous") return displayingSavedSelection ? index - 1 : index;
+        return displayingSavedSelection && index + 1 < this.#selectionHistory.length ? index + 1 : -1;
+    }
+
+    /**
+     * Tell composition which directions currently lead to a saved selection.
+     * @return {void}
+     */
+    #publishSelectionNavigation() {
+        this.onSelectionNavigationChange(Object.freeze({
+            canPrevious: this.#adjacentSelectionIndex("previous") >= 0,
+            canNext: this.#adjacentSelectionIndex("next") >= 0,
+        }));
+    }
+
+    /**
+     * Restore the features, location and active highlight from one adjacent
+     * selection. Supersede unfinished inspection without moving the map.
+     *
+     * @param {"previous"|"next"} direction History direction.
+     * @return {void}
+     * @throws {TypeError} If direction is invalid.
+     */
+    navigateSelection(direction) {
+        if (direction !== "previous" && direction !== "next") {
+            throw new TypeError("Selection navigation direction must be previous or next.");
+        }
+        const index = this.#adjacentSelectionIndex(direction);
+        const selection = this.#selectionHistory[index];
+        if (!selection) return;
+
+        this.#cancelInspection();
+        this.#selectionHistoryIndex = index;
+        this.#inspectionPosition = selection.position;
+        if (selection.state === "ready") {
+            this.results = selection.results;
+            this.#refreshResultNames(this.visibleTargets());
+            this.showResult(selection.resultIndex);
+            this.#updateTimeSeriesAction(this.results.length);
+        } else {
+            this.clearResults();
+            this.results = selection.results;
+        }
+        this.status.textContent = selection.message;
+        this.onInspectionChange(selection.state === "ready");
+        this.#publishSample(selection.state, selection.results, selection.message, selection.failedLayers);
     }
 
     /**
@@ -707,22 +857,22 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Return a stable set identity independent of drawing order and styling.
+     * Return a stable source and publication identity independent of drawing order and styling.
      *
      * @param {import("./feature-info.js").VectorFeatureInspectionTarget[]} targets Visible vector targets.
      * @return {string} Stable visible-publication signature.
      */
     #targetSignature(targets) {
-        return targets.map((target) => target.publication.layerName)
-            .sort()
-            .join("\u0000");
+        return JSON.stringify(targets.map(({ sourceId, publication }) =>
+            JSON.stringify([sourceId, publication.layerName])
+        ).sort());
     }
 
     /**
-     * Publish one frozen inspection sample through application composition.
+     * Publish the frozen inspection sample and available history directions through composition.
      *
      * @param {"loading"|"ready"|"empty"|"invalidated"} state Sample state.
-     * @param {Object[]} results Inspector-owned feature results.
+     * @param {InspectedVectorFeature[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
      * @param {number} [failedLayers=0] Completed layers whose inspection failed.
      * @return {void}
@@ -731,8 +881,9 @@ export class VectorFeatureInspectorController {
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
         );
-        this.lastSample = Object.freeze({ state, observations, message, failedLayers });
+        this.lastSample = Object.freeze({ state, observations, message, failedLayers, position: this.#inspectionPosition });
         this.onSampleChange(this.lastSample);
+        this.#publishSelectionNavigation();
     }
 
     /**
@@ -779,6 +930,8 @@ export class VectorFeatureInspectorController {
             return;
         }
         this.resultIndex = Math.min(this.results.length - 1, Math.max(0, index));
+        const selection = this.#selectionHistory[this.#selectionHistoryIndex];
+        if (selection?.results === this.results) selection.resultIndex = this.resultIndex;
         const { feature, target } = this.results[this.resultIndex];
         const observation = vectorInspectionObservation(
             this.results[this.resultIndex]

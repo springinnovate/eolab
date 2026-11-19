@@ -55,7 +55,8 @@ export class MapInspectionController {
         this.document.defaultView?.addEventListener?.("resize", this.onToolActionsLayout);
         this.clickContext = documentContext.querySelector("#map-click-context");
         this.featureStatus = documentContext.querySelector("#map-click-feature-status");
-        this.clickLabel = "";
+        /** @type {{lng:number,lat:number}|null} Most recent map click. */
+        this.clickPosition = null;
         this.clickResults = ["histogram", "feature"].map(name => ({
             name, button: documentContext.querySelector(name === "feature" ? "#map-inspection-tab-feature" : "#map-click-histogram"),
             snapshot: null, unread: false,
@@ -436,7 +437,7 @@ export class MapInspectionController {
      */
     beginMapClick(position) {
         this.hasClick = true;
-        this.clickLabel = `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}`;
+        this.clickPosition = { lng: position.lng, lat: position.lat };
         for (const entry of this.clickResults) {
             entry.snapshot = null;
             entry.unread = false;
@@ -476,8 +477,10 @@ export class MapInspectionController {
 
     /** Present an owning analysis stream's current, already stale-checked status.
      * @param {"histogram"|"feature"} name Result stream.
-     * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message?:string}|null} snapshot
-     * Feature snapshots include their status message. A null snapshot clears the result for this click.
+     * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message?:string,
+     * position?:Readonly<{lng:number,lat:number}>}|null} snapshot Feature snapshots
+     * include their status and can describe a previously inspected point. A null
+     * snapshot clears the result for this click.
      * @return {void}
      * @throws {TypeError} For an invalid stream or presentation snapshot.
      */
@@ -500,10 +503,11 @@ export class MapInspectionController {
 
     /** Update the result buttons and the Features status in the shared header.
      * Histogram cards display progress and failures for their own layers.
+     * @param {string} featureClickLabel Formatted point for the displayed feature results.
      * @return {void}
      */
-    #renderResultNavigation() {
-        this.clickContext.textContent = this.clickLabel;
+    #renderResultNavigation(featureClickLabel) {
+        this.clickContext.textContent = featureClickLabel;
         for (const entry of this.clickResults) {
             const {name, button, snapshot} = entry;
             const tool = this.#tool(name);
@@ -867,6 +871,7 @@ export class MapInspectionController {
      * Show the active tool in the header chooser and fit its available peer views on the tab strip.
      * Raster destinations retain their existing open actions. Passive results update labels
      * without moving keyboard focus or changing the chosen foreground tool.
+     * Feature context follows the displayed inspection, including when it predates the latest click.
      *
      * @return {void}
      */
@@ -877,8 +882,11 @@ export class MapInspectionController {
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
         this.toolName.textContent = tool?.label ?? "Choose a tool";
         this.mapToolsButton.setAttribute("aria-label", tool ? `${tool.label}, choose a map tool` : "Choose a tool");
+        const featureResult = this.clickResults.find(entry => entry.name === "feature");
+        const position = featureResult.snapshot?.position ?? this.clickPosition;
+        const featureClickLabel = position ? `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : "";
         const context = tool?.context ?? (this.activeTool === "feature"
-            ? { source: "Visible vector layers", scope: this.clickLabel }
+            ? { source: "Visible vector layers", scope: featureClickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
         this.dockContext.hidden = !this.dockContext.textContent || this.activeTool !== "raster-clips";
@@ -898,10 +906,10 @@ export class MapInspectionController {
             panel.setAttribute("aria-labelledby", tab.id);
         }
         const active = this.minimized ? null : this.activeTool;
-        this.#renderResultNavigation();
+        this.#renderResultNavigation(featureClickLabel);
         const contexts = new Map(this.tools.map(({ tab, context, name }) => [
             tab, [context?.source, context?.scope].filter(Boolean).join(" · ") ||
-                (name === "feature" ? this.clickLabel : ""),
+                (name === "feature" ? featureClickLabel : ""),
         ]));
         const previous = this.activationOrder.at(-2);
         const loneToolTitle = tool && !tool.resultTab && !this.hasClick && this.#openTools().length === 1

@@ -120,6 +120,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
   };
   const inspectionChanges = [];
   const sampleChanges = [];
+  const selectionNavigation = [];
   const currentObservationChanges = [];
   const currentNavigationChanges = [];
   let featureProfileRequests = 0;
@@ -137,6 +138,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
       documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
     },
     onSampleChange: (sample) => sampleChanges.push(sample),
+    onSelectionNavigationChange: (navigation) => selectionNavigation.push(navigation),
     onCurrentObservationChange: (observation, navigation) => {
       currentObservationChanges.push(observation);
       currentNavigationChanges.push(navigation);
@@ -163,6 +165,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
     removedLayers,
     inspectionChanges,
     sampleChanges,
+    selectionNavigation,
     currentObservationChanges,
     currentNavigationChanges,
     get featureProfileRequests() { return featureProfileRequests; },
@@ -724,13 +727,15 @@ test("an empty click clears and closes a previous feature result", async () => {
     geometry: { type: "Point", coordinates: [1, 2] },
     properties: { name: "Previous" },
   }];
-  const h = createFixture(async () => ({
-    ok: true,
-    json: async () => ({ type: "FeatureCollection", features }),
-  }));
+  let reads = 0;
+  const h = createFixture(async () => {
+    reads += 1;
+    return { ok: true, json: async () => ({ type: "FeatureCollection", features }) };
+  });
   await h.controller.inspect(inspectionEvent(2, 3));
+  const previousObservations = h.sampleChanges.at(-1).observations;
   features = [];
-  await h.controller.inspect(inspectionEvent(4, 5));
+  await h.controller.inspect(inspectionEvent(4, 5, 6, 7));
   assert.deepEqual(h.inspectionChanges, [true, true, false]);
   assert.equal(
     h.documentContext.querySelector("#vector-feature-inspector").hidden,
@@ -742,6 +747,21 @@ test("an empty click clears and closes a previous feature result", async () => {
   );
   assert.equal(h.removedLayers.length, 1);
   assert.equal(h.sampleChanges.at(-1).state, "empty");
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
+
+  h.controller.navigateSelection("previous");
+  assert.deepEqual(h.sampleChanges.at(-1).observations, previousObservations);
+  assert.deepEqual(h.sampleChanges.at(-1).position, { lng: 5, lat: 5 });
+  assert.equal(h.documentContext.querySelector("#vector-feature-result").hidden, false);
+  assert.deepEqual(h.highlights.at(-1).feature.geometry.coordinates, [1, 2]);
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: false, canNext: true });
+
+  h.controller.navigateSelection("next");
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+  assert.deepEqual(h.sampleChanges.at(-1).position, { lng: 6, lat: 7 });
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
+  assert.equal(h.removedLayers.length, 2);
+  assert.equal(reads, 2, "browsing saved results does not inspect again");
 });
 
 test("an actionable inspection failure still opens the inspector", async () => {
@@ -761,6 +781,82 @@ test("an actionable inspection failure still opens the inspector", async () => {
     "GeoServer is warming up. Inspection finished in under 0.1 s.",
   );
   assert.equal(h.sampleChanges.at(-1).state, "empty");
+});
+
+test("selection history restores the highlighted feature and drops only the replaced forward entries", async () => {
+  let ids = [1, 2];
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({
+      type: "FeatureCollection",
+      features: ids.map(id => ({
+        type: "Feature", id: `parcels.${id}`, geometry: null, properties: { rank: id },
+      })),
+    }),
+  }));
+  await h.controller.inspect(inspectionEvent(2, 3));
+  h.controller.navigateResult("next");
+  ids = [3];
+  await h.controller.inspect(inspectionEvent(4, 5));
+  ids = [4];
+  await h.controller.inspect(inspectionEvent(6, 7));
+
+  h.controller.navigateSelection("previous");
+  assert.deepEqual(h.sampleChanges.at(-1).observations.map(o => o.properties.rank), [3]);
+  h.controller.navigateSelection("previous");
+  assert.deepEqual(h.sampleChanges.at(-1).observations.map(o => o.properties.rank), [1, 2]);
+  assert.equal(h.wmsHighlights.at(-1).options.featureid, "parcels.2");
+  assert.equal(h.currentNavigationChanges.at(-1).position, 2);
+
+  ids = [2, 1];
+  await h.controller.inspect(inspectionEvent(3, 4));
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: false, canNext: true });
+  h.controller.navigateSelection("next");
+  assert.deepEqual(h.sampleChanges.at(-1).observations.map(o => o.properties.rank), [3]);
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: true });
+
+  h.controller.navigateSelection("previous");
+  ids = [5, 6];
+  await h.controller.inspect(inspectionEvent(8, 9));
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
+  h.controller.navigateSelection("previous");
+  assert.deepEqual(h.sampleChanges.at(-1).observations.map(o => o.properties.rank), [2, 1]);
+  h.controller.navigateSelection("next");
+  assert.deepEqual(h.sampleChanges.at(-1).observations.map(o => o.properties.rank), [5, 6]);
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
+});
+
+test("returning to a completed selection supersedes pending reads and skips failed reads", async () => {
+  let finishPending, pendingSignal;
+  const h = createFixture(async (_url, { body, signal }) => {
+    if (body.get("x") === "2") {
+      pendingSignal = signal;
+      return new Promise(resolve => { finishPending = resolve; });
+    }
+    if (body.get("x") === "3") return { ok: false, status: 503, json: async () => ({}) };
+    return {
+      ok: true,
+      json: async () => ({ type: "FeatureCollection", features: [{
+        type: "Feature", id: "parcels.1", geometry: null, properties: { rank: 7 },
+      }] }),
+    };
+  });
+  await h.controller.inspect(inspectionEvent(1, 1));
+  const pending = h.controller.inspect(inspectionEvent(2, 2));
+  assert.equal(h.sampleChanges.at(-1).state, "loading");
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
+  h.controller.navigateSelection("previous");
+  assert.equal(pendingSignal.aborted, true);
+  finishPending({ ok: true, json: async () => ({ type: "FeatureCollection", features: [] }) });
+  assert.equal(await pending, false);
+  assert.equal(h.sampleChanges.at(-1).observations[0].properties.rank, 7);
+
+  await h.controller.inspect(inspectionEvent(3, 3));
+  assert.equal(h.sampleChanges.at(-1).failedLayers, 1);
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
+  h.controller.navigateSelection("previous");
+  assert.equal(h.sampleChanges.at(-1).observations[0].properties.rank, 7);
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: false, canNext: false });
 });
 
 test("inspector skips targets outside their authoritative Catalog bounds", async () => {
@@ -907,6 +1003,9 @@ test("changing the visible vector set invalidates results but retains inspection
     }),
   }));
   await h.controller.inspect(inspectionEvent(2, 3));
+  await h.controller.inspect(inspectionEvent(4, 5, 6, 7));
+  h.controller.navigateSelection("previous");
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: false, canNext: true });
   h.targets.push({
     sourceId: "catalog|habitats",
     label: "Habitats",
@@ -925,6 +1024,9 @@ test("changing the visible vector set invalidates results but retains inspection
     h.documentContext.querySelector("#vector-feature-status").textContent,
     "Visible vector layers changed. Click the map to sample again.",
   );
+  assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+  assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: false, canNext: false });
+  h.controller.navigateSelection("next");
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
   assert.equal(
     h.documentContext.querySelector("#vector-feature-inspector").hidden,

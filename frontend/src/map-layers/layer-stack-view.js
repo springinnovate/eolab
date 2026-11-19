@@ -45,6 +45,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
  * @property {boolean} [canCalculateFields] Owner supports view-owned numeric fields.
+ * @property {boolean} [canEditGeometry] Owner supports editing vertices in this duplicate.
  * @property {boolean} [canInfo] Omit the details action when false.
  * @property {boolean} [canAddView] Offer an independent view of the same source.
  * @property {boolean} [addingView] The requested additional view is being prepared.
@@ -81,6 +82,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
  * @property {(key: string) => void} [onCalculateFields] Open the vector field calculator through composition.
+ * @property {(key: string) => void} [onEditGeometry] Open the selected layer's polygon editor.
  * @property {(key: string) => void} [onDownload] Review a raster clip through composition.
  * @property {(key: string) => void} [onCalculate] Open raster summarization through composition.
  * @property {(key: string) => void} [onAddView] Add an independent view of the same source.
@@ -707,6 +709,12 @@ export class MapLayerStackView {
             );
             addView.disabled = layer.addingView === true;
             layerActions.append(addView);
+        }
+        if (this.allowRemoval && layer.canEditGeometry) {
+            layerActions.append(this.#button(
+                "Edit geometry", `Edit geometry: ${accessibleName}`, layer.key,
+                "edit-geometry", () => this.handlers?.onEditGeometry?.(layer.key), focusTargets,
+            ));
         }
         if (this.allowRemoval && layer.datasetKind === "vector") {
             const enabled = layer.isCustom && layer.canCalculateFields;

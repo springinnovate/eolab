@@ -240,7 +240,7 @@ async def admit(
 
 
 def test_shared_slots_and_private_http_summary(tmp_path: Path) -> None:
-    """Count mixed original formats once and isolate private browser summaries.
+    """Count private mixed uploads and keep originals when the allowance falls.
 
     Args:
         tmp_path: Disposable shared upload volume.
@@ -253,10 +253,11 @@ def test_shared_slots_and_private_http_summary(tmp_path: Path) -> None:
         assert empty.headers["Cache-Control"] == "private, no-store"
         assert empty.headers["X-Content-Type-Options"] == "nosniff"
         owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
-        for index in range(5):
+        for index in range(100):
             asyncio.run(admit(storage, owner, "raster" if index % 2 else "vector"))
         summary = client.get("/api/uploads").json()
-        assert summary["used_files"] == summary["max_files"] == 5
+        assert summary["used_files"] == summary["max_files"] == 100
+        assert len(summary["uploads"]) == 100
         assert summary["retained_files"] == 0
         assert {record["kind"] for record in summary["uploads"]} == {"vector", "raster"}
         assert all(
@@ -267,7 +268,7 @@ def test_shared_slots_and_private_http_summary(tmp_path: Path) -> None:
         )
         assert owner not in json.dumps(summary)
         assert str(tmp_path) not in json.dumps(summary)
-        with pytest.raises(UploadError, match="5 uploaded files") as full:
+        with pytest.raises(UploadError, match=r"upload limit \(100\)") as full:
             asyncio.run(admit(storage, owner, "raster"))
         assert full.value.status == 409
     with TestClient(app, base_url="https://testserver") as another:
@@ -275,21 +276,33 @@ def test_shared_slots_and_private_http_summary(tmp_path: Path) -> None:
     first = storage.summary(owner).uploads[0]
     storage.delete(owner, first.id)
     asyncio.run(admit(storage, owner, "raster"))
-    assert storage.summary(owner).used_files == 5
+    assert storage.summary(owner).used_files == 100
+
+    restarted = UploadStorage(tmp_path, owner_max_files=99)
+    summary = restarted.summary(owner)
+    assert summary.max_files == 99
+    assert summary.used_files == len(summary.uploads) == 100
+    with pytest.raises(UploadError, match=r"upload limit \(99\)") as full:
+        asyncio.run(admit(restarted, owner))
+    assert full.value.status == 409
 
 
-def test_queued_upload_rechecks_the_last_file_slot(tmp_path: Path) -> None:
+@pytest.mark.parametrize("max_files", [2, 100])
+def test_queued_upload_rechecks_the_last_file_slot(
+    tmp_path: Path, max_files: int
+) -> None:
     """Recheck the file quota after waiting, before consuming the next body.
 
     Args:
         tmp_path: Disposable shared upload volume.
+        max_files: The browser's configured file allowance.
     """
-    storage = UploadStorage(tmp_path)
+    storage = UploadStorage(tmp_path, owner_max_files=max_files)
     owner = "a" * 64
 
     async def exercise() -> None:
-        """Hold the fifth upload's body while a second format requests admission."""
-        for _ in range(4):
+        """Hold the last allowed upload's body while a second format requests admission."""
+        for _ in range(max_files - 1):
             await admit(storage, owner)
         entered, release = asyncio.Event(), asyncio.Event()
         consumed = False
@@ -298,7 +311,7 @@ def test_queued_upload_rechecks_the_last_file_slot(tmp_path: Path) -> None:
             """Yield a first fragment, then pause the unfinished body.
 
             Yields:
-                The two fragments of the fifth original.
+                The two fragments of the last allowed original.
             """
             yield b"first"
             entered.set()
@@ -315,41 +328,42 @@ def test_queued_upload_rechecks_the_last_file_slot(tmp_path: Path) -> None:
             consumed = True
             yield b"unwanted"
 
-        async def upload_fifth() -> None:
-            """Publish the fifth original after its held stream finishes."""
+        async def fill_last_slot() -> None:
+            """Publish the last allowed original after its held stream finishes."""
             async with storage.stage(owner, "raster", slow_body()) as pending:
                 storage.publish(
                     pending,
                     UploadRecord(
                         id=uuid4(),
                         kind="raster",
-                        name="Fifth",
+                        name="Last available slot",
                         size_bytes=pending.size_bytes,
                         created_at=datetime.now(timezone.utc),
                     ),
                 )
 
-        task = asyncio.create_task(upload_fifth())
+        task = asyncio.create_task(fill_last_slot())
         await entered.wait()
-        assert storage.summary(owner).used_files == 5
-        assert storage.summary(owner).retained_files == 0
+        summary = storage.summary(owner)
+        assert summary.used_files == summary.max_files == max_files
+        assert summary.retained_files == 0
 
-        async def upload_sixth() -> None:
-            """Wait for the fifth file, then reject without consuming another body."""
+        async def upload_over_limit() -> None:
+            """Wait for the last slot to fill, then reject without consuming the body."""
             async with storage.stage(owner, "vector", unwanted_body()):
-                pytest.fail("A sixth upload exceeded the browser's file quota")
+                pytest.fail("An upload over the file limit acquired a slot")
 
-        queued = asyncio.create_task(upload_sixth())
+        queued = asyncio.create_task(upload_over_limit())
         await asyncio.sleep(0)
         assert not queued.done()
         assert not consumed
         release.set()
         await task
-        with pytest.raises(UploadError, match="5 uploaded files") as full:
+        with pytest.raises(UploadError, match=rf"upload limit \({max_files}\)") as full:
             await queued
         assert full.value.status == 409
         assert not consumed
-        assert storage.summary(owner).used_files == 5
+        assert storage.summary(owner).used_files == max_files
 
     asyncio.run(exercise())
 

@@ -134,6 +134,8 @@ class MapUploadLayer(MapStyledLayer):
     """One raster or polygon upload view, without access credentials or data.
 
     Opening this reference still requires the browser that owns the upload.
+    The optional isDuplicate marker records access to the geometry editor in
+    a duplicated vector view. Ownership is enforced by the upload API.
     """
 
     uploadId: Annotated[
@@ -143,19 +145,28 @@ class MapUploadLayer(MapStyledLayer):
         ),
     ]
     style: Annotated[MapRasterStyle | MapVectorStyle, Field(discriminator="kind")]
+    isDuplicate: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_upload_style(self) -> Self:
-        """Keep vector predicates out of uploaded raster views.
+        """Restrict vector predicates and edit provenance to vector upload views.
 
         Returns:
             This view with an appearance matching its uploaded source type.
 
         Raises:
-            ValueError: If a raster view contains a vector filter.
+            ValueError: If an upload contains a mismatched filter or duplicate marker.
         """
         if isinstance(self.style, MapRasterStyle) and "filter" in self.model_fields_set:
             raise ValueError("Raster uploads do not support vector filters.")
+        if "isDuplicate" in self.model_fields_set and (
+            self.isDuplicate is not True or isinstance(self.style, MapRasterStyle)
+        ):
+            raise ValueError(
+                "Only a duplicated vector view can have the duplicate marker."
+            )
         return self
 
 

@@ -278,7 +278,9 @@ def test_private_upload_reference_contract() -> None:
         }
     ]
     second_view = deepcopy(candidate["view"]["layers"][0])
-    second_view.update(customName="All wetlands", visible=True, opacity=0.8)
+    second_view.update(
+        customName="All wetlands", visible=True, opacity=0.8, isDuplicate=True
+    )
     second_view["style"]["definition"]["fillColor"] = "#ABCDEF"
     del second_view["filter"]
     candidate["view"]["layers"].append(second_view)
