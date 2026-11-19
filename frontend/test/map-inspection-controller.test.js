@@ -1013,7 +1013,7 @@ test("vector time series is an independent retained map-side panel", () => {
     assert.equal(h.doc.activeElement, h.map);
     assert.deepEqual(h.calls, ["show", "hide"]);
     h.controller.setVectorTimeSeriesIdentity(null);
-    assert.equal(h.timeSeriesTab.textContent, "Field across features");
+    assert.equal(h.timeSeriesTab.textContent, "Compare features");
 });
 
 test("feature details collapse without closing retained series state", () => {

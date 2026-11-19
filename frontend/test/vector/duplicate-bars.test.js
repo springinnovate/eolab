@@ -53,7 +53,7 @@ function acrossFeatures(rows) {
     onFeatureZoom: focus => { zooms.push(focus); return true; },
   });
   controller.setSample({ state: "ready", observations, message: "" });
-  for (const [id, value] of [["x", "visit"], ["y", "score"], ["chart-type", "bar"]]) {
+  for (const [id, value] of [["x", "visit"], ["chart-type", "bar"]]) {
     const control = documentContext.querySelector(`#vector-time-series-${id}`);
     control.value = value;
     control.dispatchEvent(new Event("change"));
@@ -76,20 +76,20 @@ for (const values of [[2, 8], [-2, -9], [-4, 6], [0, 8]]) {
       assertSeparateBars(bars);
       assert.equal(rectangle(bars[0]).width, 27, "duplicate observations split the existing group");
       assert.equal(rectangle(bars[2]).width, 54, "a unique observation keeps its original width");
-      assert.match(f.documentContext.querySelector("#vector-time-series-status").textContent, /3 of 3/);
+      assert.equal(f.documentContext.querySelector("#vector-time-series-status").textContent, "");
       for (const [index, bar] of bars.entries()) {
-        assert.match(bar.getAttribute("aria-label"), new RegExp(`Feature: ${rows[index].id}`));
+        assert.match(bar.getAttribute("aria-label"), new RegExp(`Measurements · ${rows[index].id}`));
         const event = new Event("keydown", { cancelable: true });
         Object.defineProperty(event, "key", { value: "Enter" });
         bar.dispatchEvent(event);
         const selection = f.documentContext.querySelector("#vector-time-series-selection-text").textContent;
-        assert.ok(selection.includes(`Feature: ${rows[index].id}`));
-        assert.ok(selection.includes(`Y: ${rows[index].y}`));
+        assert.ok(selection.includes(`Measurements · ${rows[index].id}`));
+        assert.ok(selection.includes(`score = ${rows[index].y}`));
         f.documentContext.querySelector("#zoom-vector-time-series-feature").dispatchEvent(new Event("click"));
         assert.deepEqual(f.zooms.at(-1), f.observations[index].focus);
       }
       const table = f.documentContext.querySelector("#vector-time-series-table-body");
-      assert.deepEqual(table.children.map(row => row.children.at(-1).textContent), rows.map(row => String(row.y)));
+      assert.deepEqual(table.children.map(row => row.children.at(-1).children[0].textContent), rows.map(row => String(row.y)));
       f.controller.destroy();
     }
   });

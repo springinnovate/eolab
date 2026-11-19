@@ -746,10 +746,10 @@
                 aria-selected="false" tabindex="-1" hidden>Download raster clip</button>
               <button id="map-inspection-tab-time-series" class="tool-tab"
                 type="button" role="tab" aria-controls="vector-time-series"
-                aria-selected="false" tabindex="-1" hidden>Field across features</button>
+                aria-selected="false" tabindex="-1" hidden>Compare features</button>
               <button id="map-inspection-tab-feature-profile" class="tool-tab"
                 type="button" role="tab" aria-controls="vector-feature-profile"
-                aria-selected="false" tabindex="-1" hidden>Fields from feature</button>
+                aria-selected="false" tabindex="-1" hidden>One feature</button>
               <button id="map-inspection-tab-filter" class="tool-tab"
                 type="button" role="tab" aria-controls="vector-filter-panel"
                 aria-selected="false" tabindex="-1" hidden>Filter</button>
@@ -1021,16 +1021,16 @@
                 <span class="immediate-action-help">
                   <button id="open-vector-feature-profile" class="secondary-button"
                     type="button" aria-controls="vector-feature-profile"
-                    aria-describedby="vector-feature-profile-action-help" disabled>Plot fields from this feature</button>
+                    aria-describedby="vector-feature-profile-action-help" disabled>Plot this feature</button>
                   <span id="vector-feature-profile-action-help" class="immediate-action-tooltip"
-                    role="tooltip">Plot several numeric fields from this feature, such as R2000–R2024.</span>
+                    role="tooltip">Plot the numeric fields on this feature.</span>
                 </span>
                 <span class="immediate-action-help">
                   <button id="open-vector-time-series" class="secondary-button"
                     type="button" aria-controls="vector-time-series"
-                    aria-describedby="vector-time-series-action-help" disabled>Plot one field across features</button>
+                    aria-describedby="vector-time-series-action-help" disabled>Compare features</button>
                   <span id="vector-time-series-action-help" class="immediate-action-tooltip"
-                    role="tooltip">Select at least two features at this location to plot one field across them.</span>
+                    role="tooltip">Click a location with at least two features to compare their fields.</span>
                 </span>
               </div>
               <p id="vector-feature-status" class="vector-feature-status" role="status">
@@ -1061,151 +1061,155 @@
           <section id="vector-time-series" role="tabpanel"
             aria-labelledby="map-inspection-tab-time-series" hidden>
             <header class="vector-time-series-header">
-              <div class="vector-series-heading">
-                <h2 id="vector-time-series-heading">Field across features</h2>
-                <p id="vector-time-series-context" class="vector-series-context"
-                  hidden></p>
+              <div class="vector-plot-modes" role="group" aria-label="What to plot">
+                <button id="vector-time-series-one" class="summary-text-button" type="button" aria-pressed="false">One feature</button>
+                <button id="vector-time-series-compare" class="summary-text-button" type="button" aria-pressed="true">Compare features</button>
               </div>
               <button id="close-vector-time-series" class="analysis-panel-action analysis-panel-close"
-                type="button" aria-label="Close vector series">×</button>
+                type="button" aria-label="Close feature comparison">×</button>
             </header>
-            <div class="vector-time-series-controls">
-              <label for="vector-time-series-x">
-                <span>X axis</span>
-                <select id="vector-time-series-x"></select>
-              </label>
-              <label for="vector-time-series-y">
-                <span>Y axis</span>
-                <select id="vector-time-series-y"></select>
-              </label>
-              <label for="vector-time-series-direction">
-                <span>Order</span>
-                <select id="vector-time-series-direction">
-                  <option value="ascending">Ascending</option>
-                  <option value="descending">Descending</option>
-                </select>
-              </label>
-              <label for="vector-time-series-chart-type">
-                <span>Chart</span>
-                <select id="vector-time-series-chart-type">
-                  <option value="line">Line</option>
-                  <option value="scatter">Scatter</option>
-                  <option value="bar">Bar</option>
-                </select>
-              </label>
-            </div>
-            <p id="vector-time-series-status" class="vector-time-series-status"
-              role="status" aria-live="polite" aria-atomic="true"></p>
-            <svg id="vector-time-series-chart" class="vector-time-series-chart"
-              role="img" preserveAspectRatio="xMinYMin meet" hidden></svg>
-            <div id="vector-time-series-selection" class="vector-time-series-selection"
-              hidden>
-              <p>
-                <strong>Selected point</strong>
-                <span id="vector-time-series-selection-text" role="status"
-                  aria-live="polite" aria-atomic="true"></span>
-              </p>
-              <button id="zoom-vector-time-series-feature" class="secondary-button"
-                type="button" aria-controls="map" disabled>Zoom to feature</button>
-            </div>
-            <details id="vector-time-series-table" class="vector-time-series-table" hidden>
-              <summary>Chart data</summary>
-              <div class="vector-time-series-table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Layer</th>
-                      <th scope="col">Feature</th>
-                      <th scope="col">X</th>
-                      <th scope="col">Y</th>
-                    </tr>
-                  </thead>
-                  <tbody id="vector-time-series-table-body"></tbody>
-                </table>
+            <div class="vector-plot-heading">
+              <h2 id="vector-time-series-heading">Compare features</h2>
+              <div class="vector-plot-switch" role="group" aria-label="Result view">
+                <button id="vector-time-series-plot-button" class="secondary-button" type="button" aria-pressed="true">Plot</button>
+                <button id="vector-time-series-values-button" class="secondary-button" type="button" aria-pressed="false">Values</button>
               </div>
-            </details>
+            </div>
+            <div class="vector-plot-context">
+              <button id="vector-time-series-features-button" class="summary-text-button" type="button" aria-controls="vector-time-series-features-picker" aria-expanded="false">Features</button>
+              <button id="vector-time-series-fields-button" class="summary-text-button" type="button" aria-controls="vector-time-series-fields-picker" aria-expanded="false">Choose fields</button>
+            </div>
+            <div id="vector-time-series-features-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
+                <button id="vector-time-series-features-done" class="summary-text-button" type="button">Done</button></div>
+              <p id="vector-time-series-context" class="vector-series-context" hidden></p>
+              <label for="vector-time-series-feature-list">Inspect feature</label>
+              <select id="vector-time-series-feature-list"></select>
+            </div>
+            <div id="vector-time-series-fields-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Choose fields</strong>
+                <button id="vector-time-series-fields-done" class="summary-text-button" type="button">Done</button></div>
+              <label for="vector-time-series-field-search">Find fields</label>
+              <input id="vector-time-series-field-search" type="search" autocomplete="off">
+              <div class="vector-feature-profile-field-actions">
+                <button id="vector-time-series-select-matching" class="summary-text-button" type="button">Select matching</button>
+                <button id="vector-time-series-clear-fields" class="summary-text-button" type="button">Clear selection</button>
+              </div>
+              <div id="vector-time-series-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
+              <p id="vector-time-series-field-empty" class="vector-series-context" hidden>No matching fields.</p>
+            </div>
+            <div id="vector-time-series-plots" class="vector-plot-results">
+              <div class="vector-plot-figure" id="vector-time-series-first"><h3 id="vector-time-series-chart-title"></h3><svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg></div>
+              <div id="vector-time-series-extra-charts"></div>
+            </div>
+            <div id="vector-time-series-values" hidden>
+              <div id="vector-time-series-table" class="vector-time-series-table" hidden>
+                <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
+                  <thead><tr id="vector-time-series-table-head"></tr></thead>
+                  <tbody id="vector-time-series-table-body"></tbody>
+                </table></div>
+              </div>
+            </div>
+            <p id="vector-time-series-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
+            <div id="vector-time-series-selection" class="vector-time-series-selection" hidden>
+              <span id="vector-time-series-selection-text" role="status"></span>
+            </div>
+            <div class="vector-plot-footer">
+              <details class="vector-plot-options">
+                <summary>Plot options</summary>
+                <div class="vector-plot-options-grid">
+                  <label for="vector-time-series-chart-type">Chart style
+                    <select id="vector-time-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bars</option></select>
+                  </label>
+                  <label for="vector-time-series-direction">Order
+                    <select id="vector-time-series-direction"><option value="ascending">Ascending</option><option value="descending">Descending</option></select>
+                  </label>
+                  <label for="vector-time-series-x">X axis<select id="vector-time-series-x"></select></label>
+                </div>
+              </details>
+              <button id="zoom-vector-time-series-feature" class="summary-text-button vector-plot-zoom" type="button"
+                aria-controls="map" disabled>Zoom to feature</button>
+            </div>
           </section>
           <section id="vector-feature-profile" role="tabpanel"
             aria-labelledby="map-inspection-tab-feature-profile" hidden>
             <header class="vector-time-series-header">
-              <div class="vector-series-heading">
-                <h2 id="vector-feature-profile-heading">Fields from feature</h2>
-                <p id="vector-feature-profile-context" class="vector-series-context"
-                  hidden></p>
+              <div class="vector-plot-modes" role="group" aria-label="What to plot">
+                <button id="vector-feature-profile-one" class="summary-text-button" type="button" aria-pressed="true">One feature</button>
+                <button id="vector-feature-profile-compare" class="summary-text-button" type="button" aria-pressed="false">Compare features</button>
               </div>
               <button id="close-vector-feature-profile" class="analysis-panel-action analysis-panel-close"
-                type="button" aria-label="Close feature-field plot">×</button>
+                type="button" aria-label="Close feature plot">×</button>
             </header>
-            <nav class="vector-feature-navigation vector-feature-profile-navigation"
-              aria-label="Features in this inspection">
-              <button id="previous-vector-feature-profile" class="secondary-button"
-                type="button" disabled>Previous</button>
-              <span id="vector-feature-profile-position" role="status"
-                aria-live="polite" aria-atomic="true"></span>
-              <button id="next-vector-feature-profile" class="secondary-button"
-                type="button" disabled>Next</button>
-              <button id="zoom-vector-feature-profile-feature"
-                class="secondary-button" type="button" aria-controls="map"
-                disabled>Zoom to feature</button>
-            </nav>
-            <div class="vector-feature-profile-controls">
-              <label for="vector-feature-profile-title-field">
-                <span>Title field</span>
-                <select id="vector-feature-profile-title-field"></select>
-              </label>
-              <label for="vector-feature-profile-direction">
-                <span>Order</span>
-                <select id="vector-feature-profile-direction">
-                  <option value="ascending">Ascending</option>
-                  <option value="descending">Descending</option>
-                </select>
-              </label>
-              <label for="vector-feature-profile-chart-type">
-                <span>Chart</span>
-                <select id="vector-feature-profile-chart-type">
-                  <option value="line">Line</option>
-                  <option value="scatter">Scatter</option>
-                  <option value="bar">Bar</option>
-                </select>
-              </label>
+            <div class="vector-plot-heading">
+              <h2 id="vector-feature-profile-heading">One feature</h2>
+              <div class="vector-plot-switch" role="group" aria-label="Result view">
+                <button id="vector-feature-profile-plot-button" class="secondary-button" type="button" aria-pressed="true">Plot</button>
+                <button id="vector-feature-profile-values-button" class="secondary-button" type="button" aria-pressed="false">Values</button>
+              </div>
             </div>
-            <div class="vector-feature-profile-fields">
-              <label for="vector-feature-profile-field-search">
-                <span>Find fields</span>
-                <input id="vector-feature-profile-field-search" type="search"
-                  autocomplete="off" placeholder="For example, R">
-              </label>
+            <div class="vector-plot-context">
+              <button id="vector-feature-profile-features-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-features-picker" aria-expanded="false">Feature</button>
+              <button id="vector-feature-profile-fields-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-fields-picker" aria-expanded="false">Choose fields</button>
+            </div>
+            <div id="vector-feature-profile-features-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
+                <button id="vector-feature-profile-features-done" class="summary-text-button" type="button">Done</button></div>
+              <p id="vector-feature-profile-context" class="vector-series-context" hidden></p>
+              <label for="vector-feature-profile-feature-list">Show feature</label>
+              <select id="vector-feature-profile-feature-list"></select>
+              <nav class="vector-feature-navigation vector-feature-profile-navigation" aria-label="Features in this inspection">
+                <button id="previous-vector-feature-profile" class="secondary-button" type="button" disabled>Previous</button>
+                <span id="vector-feature-profile-position" role="status"></span>
+                <button id="next-vector-feature-profile" class="secondary-button" type="button" disabled>Next</button>
+              </nav>
+            </div>
+            <div id="vector-feature-profile-fields-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Choose fields</strong>
+                <button id="vector-feature-profile-fields-done" class="summary-text-button" type="button">Done</button></div>
+              <label for="vector-feature-profile-field-search">Find fields</label>
+              <input id="vector-feature-profile-field-search" type="search" autocomplete="off">
               <div class="vector-feature-profile-field-actions">
-                <button id="vector-feature-profile-select-matching"
-                  class="secondary-button" type="button">Select matching</button>
-                <button id="vector-feature-profile-clear-fields"
-                  class="secondary-button" type="button">Clear</button>
+                <button id="vector-feature-profile-select-matching" class="summary-text-button" type="button">Select matching</button>
+                <button id="vector-feature-profile-clear-fields" class="summary-text-button" type="button">Clear selection</button>
               </div>
-              <div id="vector-feature-profile-field-list"
-                class="vector-feature-profile-field-list" role="group"
-                aria-label="Numeric fields to plot"></div>
+              <div id="vector-feature-profile-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
+              <p id="vector-feature-profile-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
-            <h3 id="vector-feature-profile-chart-title"
-              class="vector-feature-profile-chart-title" hidden></h3>
-            <p id="vector-feature-profile-status" class="vector-time-series-status"
-              role="status" aria-live="polite" aria-atomic="true"></p>
-            <svg id="vector-feature-profile-chart" class="vector-time-series-chart"
-              role="img" preserveAspectRatio="xMinYMin meet" hidden></svg>
-            <details id="vector-feature-profile-table" class="vector-time-series-table" hidden>
-              <summary>Chart data</summary>
-              <div class="vector-time-series-table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Field</th>
-                      <th scope="col">X</th>
-                      <th scope="col">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody id="vector-feature-profile-table-body"></tbody>
-                </table>
+            <div id="vector-feature-profile-plots" class="vector-plot-results">
+              <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
+                <h3 id="vector-feature-profile-chart-title" hidden></h3>
+                <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
               </div>
-            </details>
+            </div>
+            <div id="vector-feature-profile-values" hidden>
+              <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
+                <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
+                  <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
+                  <tbody id="vector-feature-profile-table-body"></tbody>
+                </table></div>
+              </div>
+            </div>
+            <p id="vector-feature-profile-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
+            <div id="vector-feature-profile-selection" class="vector-time-series-selection" hidden>
+              <span id="vector-feature-profile-selection-text" role="status"></span>
+            </div>
+            <div class="vector-plot-footer">
+              <details class="vector-plot-options">
+                <summary>Plot options</summary>
+                <div class="vector-plot-options-grid">
+                  <label for="vector-feature-profile-chart-type">Chart style
+                    <select id="vector-feature-profile-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bars</option></select>
+                  </label>
+                  <label for="vector-feature-profile-direction">Order
+                    <select id="vector-feature-profile-direction"><option value="ascending">Ascending</option><option value="descending">Descending</option></select>
+                  </label>
+                  <label for="vector-feature-profile-title-field">Feature title<select id="vector-feature-profile-title-field"></select></label>
+                </div>
+              </details>
+              <button id="zoom-vector-feature-profile-feature" class="summary-text-button vector-plot-zoom" type="button"
+                aria-controls="map" disabled>Zoom to feature</button>
+            </div>
           </section>
           <section id="map-histogram-panel" role="tabpanel"
             aria-labelledby="map-click-histogram" hidden>

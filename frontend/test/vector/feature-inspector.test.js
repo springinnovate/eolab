@@ -435,7 +435,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   );
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-action-help").textContent,
-    "Plot one numeric field across all features found at this location.",
+    "Compare numeric fields across the features at this location.",
   );
   h.documentContext.querySelector("#open-vector-time-series")
     .dispatchEvent(new Event("click"));
@@ -626,7 +626,7 @@ test("one feature explains why plotting across features is unavailable", async (
   );
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-action-help").textContent,
-    "Select at least two features at this location to plot one field across them.",
+    "Click a location with at least two features to compare their fields.",
   );
 });
 

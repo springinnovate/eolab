@@ -90,16 +90,40 @@ test("field discovery chooses repeated numeric names and a conventional title", 
     label: "Feature · Northern corridor",
     title: "Fields from Northern corridor · Layer: corridors.shp · " +
       "Feature ID: corridors.1",
-    heading: "Fields from feature",
-    context: "Northern corridor · Layer: corridors.shp · Feature ID: corridors.1",
+    heading: "Northern corridor",
+    context: "corridors.shp · Feature ID: corridors.1",
   });
   assert.equal(
     vectorFeatureProfilePresentation(observation({
       featureId: "corridors.2",
       properties: { node_nm: "", R2000: 2 },
     })).context,
-    "corridors.2 · Layer: corridors.shp · Feature ID: corridors.2",
+    "corridors.shp · Feature ID: corridors.2",
   );
+});
+
+test("one-feature pickers open above the result and exact values follow the inspected feature", () => {
+  const {controller,documentContext:doc}=fixture();
+  const first=observation({properties:{name:"Site A",flow:0.123456789}});
+  const next=observation({featureId:"other",properties:{name:"Site B",flow:0}});
+  controller.setFeatureChoices([first,next]);
+  controller.setCurrentObservation(first);
+  const trigger=doc.querySelector("#vector-feature-profile-fields-button");
+  trigger.dispatchEvent(new Event("click"));
+  assert.equal(trigger.getAttribute("aria-expanded"),"true");
+  assert.equal(doc.activeElement,doc.querySelector("#vector-feature-profile-field-search"));
+  doc.querySelector("#vector-feature-profile-fields-done").dispatchEvent(new Event("click"));
+  assert.equal(doc.activeElement,trigger);
+  doc.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
+  const table=doc.querySelector("#vector-feature-profile-table-body");
+  assert.equal(table.children[0].children[2].textContent,"0.123456789");
+  controller.setCurrentObservation(next,{position:2,total:2,canPrevious:true,canNext:false});
+  assert.equal(doc.querySelector("#vector-feature-profile-heading").textContent,"Site B");
+  assert.equal(doc.querySelector("#vector-feature-profile-values").hidden,false);
+  assert.equal(table.children[0].children[2].textContent,"0");
+  table.children[0].children[0].children[0].dispatchEvent(new Event("click"));
+  assert.equal(doc.querySelector("#vector-feature-profile-selection-text").textContent,"flow · 0");
+  controller.destroy();
 });
 
 test("profile points use field-name numbers and preserve missing-value gaps", () => {
@@ -178,7 +202,7 @@ test("CO2 fields render distinct chart positions and complete axis and table lab
   assert.equal(labels.includes("Field"), true);
   assert.equal(labels.includes("Number in field name"), false);
   const rows = h.documentContext.querySelector("#vector-feature-profile-table-body").children;
-  assert.deepEqual(rows.map(row => row.children.slice(0, 2).map(cell => cell.textContent)), [
+  assert.deepEqual(rows.map(row => [row.children[0].children[0].textContent, row.children[1].textContent]), [
     ["CO2_mean", "CO2_mean"], ["CO2_total", "CO2_total"],
   ]);
   h.controller.destroy();
@@ -211,7 +235,7 @@ test("checkbox selection history does not change mixed profile chart or table or
     checkbox.dispatchEvent(new Event("change"));
   }
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
-  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["A2", "M", "Z1"]);
+  assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["A2", "M", "Z1"]);
   const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
   assert.deepEqual(chart.children.filter(element => element.getAttribute("class") === "series-chart-point")
     .map(element => element.getAttribute("aria-label")), ["A2: 2", "M: 3", "Z1: 1"]);
@@ -230,7 +254,7 @@ test("field selection, search and bulk actions retain focused checkbox controls"
   assert.ok(h.documentContext.activeElement === checkbox);
   assert.ok(list.children.every((row, index) => row === originalRows[index]));
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
-  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R1999", "R2001"]);
+  assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["R1999", "R2001"]);
 
   let createdElements = 0;
   const createElement = h.documentContext.createElement.bind(h.documentContext);
@@ -256,7 +280,7 @@ test("field selection, search and bulk actions retain focused checkbox controls"
   checkbox.dispatchEvent(new Event("change"));
   assert.ok(h.documentContext.activeElement === checkbox);
   assert.ok(list.children.every((row, index) => row === originalRows[index]));
-  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R2000"]);
+  assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["R2000"]);
 });
 
 test("retained field controls follow current feature values and source selections", () => {
@@ -276,10 +300,10 @@ test("retained field controls follow current feature values and source selection
   r2000.children[0].checked = false;
   r2000.children[0].dispatchEvent(new Event("change"));
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
-  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R2002"]);
+  assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["R2002"]);
   h.controller.setCurrentObservation(observation());
   assert.equal(r2000.children[0].checked, true);
-  assert.deepEqual(table.children.map(row => row.children[0].textContent), ["R1999", "R2000", "R2001"]);
+  assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["R1999", "R2000", "R2001"]);
 
   h.controller.setCurrentObservation(null);
   assert.equal(list.children.length, 0);
@@ -340,19 +364,14 @@ test("controller plots suggested fields and updates from partial search actions"
   assert.equal(chart.getAttribute("hidden"), null);
   assert.match(chart.getAttribute("aria-label"), /3 numeric fields/);
   assert.equal(
-    h.documentContext.querySelector("#vector-feature-profile-chart-title")
+    h.documentContext.querySelector("#vector-feature-profile-heading")
       .textContent,
     "Northern corridor",
   );
   assert.equal(
-    h.documentContext.querySelector("#vector-feature-profile-heading")
-      .textContent,
-    "Fields from feature",
-  );
-  assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-context")
       .textContent,
-    "Northern corridor · Layer: corridors.shp · Feature ID: corridors.1",
+    "corridors.shp · Feature ID: corridors.1",
   );
   assert.deepEqual(h.presentations.at(-1), {
     label: "Feature · Northern corridor",
@@ -422,7 +441,7 @@ test("feature navigation publishes intent and redraws the current observation", 
     canNext: false,
   });
   assert.equal(
-    h.documentContext.querySelector("#vector-feature-profile-chart-title").textContent,
+    h.documentContext.querySelector("#vector-feature-profile-heading").textContent,
     "Southern corridor",
   );
   assert.equal(previous.disabled, false);
@@ -493,7 +512,7 @@ test("per-source rules survive feature navigation and missing values break lines
   assert.equal(tableBody.children[0].children[2].textContent, "No value");
   assert.match(
     h.documentContext.querySelector("#vector-feature-profile-status").textContent,
-    /1 missing value is shown as a gap/,
+    /One field has no numeric value/,
   );
   const path = h.documentContext.querySelector("#vector-feature-profile-chart")
     .children.find((element) => element.getAttribute("class") === "series-chart-line");
@@ -529,7 +548,7 @@ test("active mode survives empty clicks, reopens, and ends on explicit close", (
     { visible: true, moveFocus: false },
   ]);
   assert.equal(
-    h.documentContext.querySelector("#vector-feature-profile-chart-title")
+    h.documentContext.querySelector("#vector-feature-profile-heading")
       .textContent,
     "Southern corridor",
   );

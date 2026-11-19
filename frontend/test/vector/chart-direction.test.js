@@ -97,7 +97,7 @@ for (const chartType of ["line", "scatter", "bar"]) {
         change(documentContext, "#vector-feature-profile-direction", "descending");
         assertSpacing(positions(chart), 1 / 3);
         assert.deepEqual(axisLabels(chart), ["26", "8", "2"]);
-        assert.deepEqual(table.children.map(row => row.children.map(cell => cell.textContent)), [
+        assert.deepEqual(table.children.map(row => [row.children[0].children[0].textContent, ...row.children.slice(1).map(cell => cell.textContent)]), [
             ["depth_26_cm", "26", "11"], ["depth_8_cm", "8", "-7"], ["depth_2_cm", "2", "0"],
         ]);
         assert.deepEqual(chart.querySelectorAll(".series-chart-point").map(point => point.getAttribute("cy")), ascendingY.toReversed());
@@ -110,7 +110,7 @@ for (const chartType of ["line", "scatter", "bar"]) {
         assert.equal(withGap.length, 2);
         assert.ok(withGap[0] < withGap[1]);
         assert.equal(table.children[1].children[2].textContent, "No value");
-        assert.match(documentContext.querySelector("#vector-feature-profile-status").textContent, /1 missing value is shown as a gap/);
+        assert.match(documentContext.querySelector("#vector-feature-profile-status").textContent, /One field has no numeric value/);
         if (chartType === "line") assert.doesNotMatch(chart.querySelector(".series-chart-line").getAttribute("d"), /L/);
 
         controller.setCurrentObservation(observation({ annual_CO2: 0, stored_CO2: -7, total_CO2: 11 }));
@@ -141,39 +141,42 @@ for (const chartType of ["line", "scatter", "bar"]) {
             observation({ depth: 14, score: null, site: "Delta" }, "missing"),
         ];
         controller.setSample({ state: "ready", observations: samples, message: "Ready" });
-        change(documentContext, "#vector-time-series-y", "score");
+        const find = documentContext.querySelector("#vector-time-series-field-search");
+        find.value = "score";
+        documentContext.querySelector("#vector-time-series-select-matching").dispatchEvent(new Event("click"));
         change(documentContext, "#vector-time-series-x", "depth");
         change(documentContext, "#vector-time-series-chart-type", chartType);
         const chart = documentContext.querySelector("#vector-time-series-chart");
         const table = documentContext.querySelector("#vector-time-series-table-body");
         assertSpacing(positions(chart), 3);
-        assert.deepEqual(axisLabels(chart), ["2", "8", "26"]);
+        assert.deepEqual(axisLabels(chart), ["2", "8", "14", "26"]);
 
         change(documentContext, "#vector-time-series-direction", "descending");
         assertSpacing(positions(chart), 1 / 3);
-        assert.deepEqual(axisLabels(chart), ["26", "8", "2"]);
-        assert.deepEqual(table.children.map(row => row.children.slice(1).map(cell => cell.textContent)), [
-            ["deep", "26", "11"], ["middle", "8", "-7"], ["shallow", "2", "0"],
+        assert.deepEqual(axisLabels(chart), ["26", "14", "8", "2"]);
+        assert.deepEqual(table.children.map(row => [row.children[0].children[0].textContent, row.children[0].textContent, row.children[1].children[0].textContent]), [
+            ["Depth observations · deep", "26", "11"], ["Depth observations · missing", "14", "No value"],
+            ["Depth observations · middle", "8", "-7"], ["Depth observations · shallow", "2", "0"],
         ]);
-        assert.match(documentContext.querySelector("#vector-time-series-status").textContent, /3 of 4/);
+        assert.match(documentContext.querySelector("#vector-time-series-first").children.at(-1).textContent, /1 feature lacks/);
         const points = chart.querySelectorAll(".series-chart-point");
         points[0].dispatchEvent(new Event("click"));
-        assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Feature: deep/);
+        assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Depth observations · deep/);
         const enter = new Event("keydown", { cancelable: true });
         Object.defineProperty(enter, "key", { value: "Enter" });
         points[2].dispatchEvent(enter);
         assert.equal(enter.defaultPrevented, true);
-        assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Feature: shallow/);
+        assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Depth observations · shallow/);
         documentContext.querySelector("#zoom-vector-time-series-feature").dispatchEvent(new Event("click"));
         assert.deepEqual(zoomed, [samples[2].focus]);
 
         change(documentContext, "#vector-time-series-x", "site");
-        assertSpacing(positions(chart), 1);
-        assert.deepEqual(axisLabels(chart), ["Gamma", "Beta", "Alpha"]);
-        assert.deepEqual(table.children.map(row => row.children[2].textContent), ["Gamma", "Beta", "Alpha"]);
+        assertSpacing(positions(chart), 1 / 2);
+        assert.deepEqual(axisLabels(chart), ["Gamma", "Delta", "Beta", "Alpha"]);
+        assert.deepEqual(table.children.map(row => row.children[0].textContent), ["Gamma", "Delta", "Beta", "Alpha"]);
         change(documentContext, "#vector-time-series-direction", "ascending");
-        assertSpacing(positions(chart), 1);
-        assert.deepEqual(table.children.map(row => row.children[2].textContent), ["Alpha", "Beta", "Gamma"]);
+        assertSpacing(positions(chart), 2);
+        assert.deepEqual(table.children.map(row => row.children[0].textContent), ["Alpha", "Beta", "Delta", "Gamma"]);
         change(documentContext, "#vector-time-series-x", "depth");
         assertSpacing(positions(chart), 3);
         controller.destroy();

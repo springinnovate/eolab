@@ -22,7 +22,8 @@ test("vector time-series controls and accessible outputs are present", () => {
     "vector-time-series-context",
     "close-vector-time-series",
     "vector-time-series-x",
-    "vector-time-series-y",
+    "vector-time-series-fields-picker",
+    "vector-time-series-field-list",
     "vector-time-series-direction",
     "vector-time-series-chart-type",
     "vector-time-series-status",
@@ -52,13 +53,13 @@ test("vector time-series controls and accessible outputs are present", () => {
     /id="zoom-vector-time-series-feature"[^>]+aria-controls="map"[^>]*>Zoom to feature</,
   );
   assert.match(MARKUP, /<label for="vector-time-series-x">/);
-  assert.match(MARKUP, /<label for="vector-time-series-y">/);
+  assert.match(MARKUP, /<label for="vector-time-series-field-search">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
-  assert.match(MARKUP, />Plot one field across features<\/button>/);
-  assert.match(MARKUP, />Field across features<\/h2>/);
+  assert.match(MARKUP, />Compare features<\/button>/);
+  assert.match(MARKUP, />Compare features<\/h2>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
-  assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
+  assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="group"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);
   assert.match(
     STYLESHEET,
@@ -93,7 +94,7 @@ test("feature-field plotting has searchable, accessible series controls", () => 
     "vector-feature-profile-field-list",
     "vector-feature-profile-direction",
     "vector-feature-profile-chart-type",
-    "vector-feature-profile-chart-title",
+    "vector-feature-profile-values-button",
     "vector-feature-profile-status",
     "vector-feature-profile-chart",
     "vector-feature-profile-table",
@@ -101,8 +102,8 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   ]) {
     assert.match(MARKUP, new RegExp(`id="${identifier}"`));
   }
-  assert.match(MARKUP, />Plot fields from this feature<\/button>/);
-  assert.match(MARKUP, />Fields from feature<\/h2>/);
+  assert.match(MARKUP, />Plot this feature<\/button>/);
+  assert.match(MARKUP, />One feature<\/h2>/);
   assert.match(
     MARKUP,
     /class="vector-feature-navigation vector-feature-profile-navigation"[^>]+aria-label="Features in this inspection"/,
@@ -113,11 +114,11 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   );
   assert.match(
     MARKUP,
-    />Plot several numeric fields from this feature, such as R2000–R2024\.<\/span>/,
+    />Plot the numeric fields on this feature\.<\/span>/,
   );
   assert.match(
     MARKUP,
-    />Select at least two features at this location to plot one field across them\.<\/span>/,
+    />Click a location with at least two features to compare their fields\.<\/span>/,
   );
   assert.match(
     MARKUP,

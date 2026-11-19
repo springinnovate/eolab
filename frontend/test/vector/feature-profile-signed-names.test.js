@@ -69,7 +69,7 @@ for (const fields of [
       assert.equal(model.xScale, "ordinal");
       assert.deepEqual(model.points.map(point => point.xValue), [null, null]);
       const rows = f.document.querySelector("#vector-feature-profile-table-body").children;
-      assert.deepEqual(rows.map(row => row.children.slice(0, 2).map(cell => cell.textContent)),
+      assert.deepEqual(rows.map(row => [row.children[0].children[0].textContent, row.children[1].textContent]),
         expectedFields.map(field => [field, field]));
       const chart = f.document.querySelector("#vector-feature-profile-chart");
       const labels = chart.querySelectorAll("text").map(element => element.textContent);
@@ -81,8 +81,8 @@ for (const fields of [
         expectedFields.map(field => `${field}: ${properties[field]}`));
       assert.ok(Number(markers[0].getAttribute("cx")) < Number(markers[1].getAttribute("cx")),
         "full categorical labels and their measurements must occupy distinct ordered positions");
-      assert.match(f.document.querySelector("#vector-feature-profile-context").textContent,
-        /Cold site.*Temperature sites.*site-7/);
+      assert.equal(f.document.querySelector("#vector-feature-profile-heading").textContent, "Cold site");
+      assert.match(f.document.querySelector("#vector-feature-profile-context").textContent, /Temperature sites.*site-7/);
     }
     f.controller.destroy();
   });
@@ -126,7 +126,7 @@ test("changing selected signed fields preserves labels, missing gaps and source 
   assert.deepEqual(markers.map(marker => marker.getAttribute("aria-label")),
     ["temperature_-20_C: 1", "temperature_10_C: 3"]);
   assert.ok(Number(markers[0].getAttribute("cx")) < Number(markers[1].getAttribute("cx")));
-  assert.match(f.document.querySelector("#vector-feature-profile-status").textContent, /1 missing value/);
+  assert.match(f.document.querySelector("#vector-feature-profile-status").textContent, /One field has no numeric value/);
   assert.deepEqual(properties, { "temperature_-20_C": 1, temperature_5_C: 2, temperature_10_C: 3 });
   f.controller.destroy();
 });
