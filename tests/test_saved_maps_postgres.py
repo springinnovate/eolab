@@ -404,7 +404,7 @@ def migration_record(store: SavedMapStore, slug: str) -> dict[str, Any]:
 def insert_legacy_map(
     store: SavedMapStore, slug: str = "nhi-site-condition-mapper"
 ) -> dict[str, Any]:
-    """Store a pre-upgrade map with two obsolete Catalog fingerprint fields.
+    """Store a pre-upgrade map with Catalog fingerprints and two label switches.
 
     Args:
         store: Disposable PostgreSQL store.
@@ -424,6 +424,7 @@ def insert_legacy_map(
     request["view"]["schemaVersion"] = 3
     for index, layer in enumerate(request["view"]["layers"][1:]):
         layer["sourceRevision"] = None if index == 0 else "sha256:" + "a" * 64
+    shared["appearance"].update(labels=False, notes=True)
     with store.transaction() as cursor:
         cursor.execute(
             "UPDATE saved_maps.maps SET view=%s, revision=4 WHERE slug=%s",
@@ -471,7 +472,7 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
     polygons = annotations.export_session_geojson(session, "migration-owner")
     unrelated = insert_legacy_map(store, "unrelated-map")
     preview = store.migrate_source_revisions(before["slug"])
-    assert (preview.changed_layers, preview.revision, preview.applied) == (2, 4, False)
+    assert (preview.changed_layers, preview.revision, preview.applied) == (3, 4, False)
     assert migration_record(store, before["slug"]) == before
     app = FastAPI()
     app.include_router(create_saved_maps_router(store))
@@ -482,7 +483,7 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
         result = store.migrate_source_revisions(
             before["slug"], apply=True, expected_revision=4
         )
-        assert (result.changed_layers, result.revision, result.applied) == (2, 5, True)
+        assert (result.changed_layers, result.revision, result.applied) == (3, 5, True)
         response = client.get(BASE + "/" + before["slug"])
         assert response.status_code == 200, response.text
         assert response.json()["view"]["layers"][0]["sharedAnnotation"] == invitation
@@ -491,6 +492,9 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
     expected["view"]["schemaVersion"] = 5
     for layer in expected["view"]["layers"][1:]:
         del layer["sourceRevision"]
+    appearance = expected["view"]["layers"][0]["appearance"]
+    del appearance["notes"]
+    appearance["labels"] = True
     assert migration_record(store, before["slug"]) == expected
     retry = store.migrate_source_revisions(
         before["slug"], apply=True, expected_revision=4
@@ -536,6 +540,38 @@ def test_source_revision_migration_preserves_map_and_shared_polygons(
     assert conflict.value.status == 409
 
 
+@pytest.mark.parametrize("labels,notes", [(False, False), (True, False), (True, True)])
+def test_site_condition_migration_preserves_combined_label(
+    store: SavedMapStore, labels: bool, notes: bool
+) -> None:
+    """Preserve the effective switch even when all Catalog fields are current.
+
+    Args:
+        store: Disposable database containing the protected published map.
+        labels: Old name switch.
+        notes: Old note switch.
+    """
+    before = insert_legacy_map(store)
+    view = before["view"]
+    view["layers"] = view["layers"][:1]
+    view["layers"][0]["appearance"].update(labels=labels, notes=notes)
+    with store.transaction() as cursor:
+        cursor.execute(
+            "UPDATE saved_maps.maps SET view=%s WHERE slug=%s",
+            (Jsonb(view), before["slug"]),
+        )
+    preview = store.migrate_source_revisions(before["slug"])
+    assert (preview.changed_layers, preview.applied) == (1, False)
+    assert migration_record(store, before["slug"]) == before
+    result = store.migrate_source_revisions(
+        before["slug"], apply=True, expected_revision=preview.revision
+    )
+    assert (result.revision, result.applied) == (5, True)
+    appearance = store.get_saved_map(before["slug"]).view.layers[0].appearance
+    assert appearance.labels is (labels or notes)
+    assert "notes" not in appearance.model_dump()
+
+
 @pytest.mark.parametrize("expected_revision,status", [(None, 422), (3, 409)])
 def test_source_revision_migration_requires_reviewed_revision(
     store: SavedMapStore, expected_revision: int | None, status: int
@@ -556,7 +592,9 @@ def test_source_revision_migration_requires_reviewed_revision(
     assert migration_record(store, before["slug"]) == before
 
 
-@pytest.mark.parametrize("invalid", ["missing-layers", "old-style", "shared-extra"])
+@pytest.mark.parametrize(
+    "invalid", ["missing-layers", "old-style", "shared-extra", "label-switch"]
+)
 def test_source_revision_migration_rejects_other_incompatibilities(
     store: SavedMapStore, invalid: str
 ) -> None:
@@ -575,6 +613,8 @@ def test_source_revision_migration_rejects_other_incompatibilities(
             "definition": {},
             "paletteName": "viridis",
         }
+    elif invalid == "label-switch":
+        before["view"]["layers"][0]["appearance"]["notes"] = "yes"
     else:
         before["view"]["layers"][0]["sourceRevision"] = None
     with store.transaction() as cursor:
@@ -611,7 +651,7 @@ def test_source_revision_migration_cli_and_deleted_maps(
     assert json.loads(capsys.readouterr().out) == {
         "slug": before["slug"],
         "revision": 4,
-        "changed_layers": 2,
+        "changed_layers": 3,
         "applied": False,
         "upgrades_format": True,
     }

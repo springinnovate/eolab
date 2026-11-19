@@ -451,7 +451,7 @@ test("missing named maps never fall back to private maps", async () => {
 
 test("mixed shared maps export invitations, preserve layer order and restore presentation only", async () => {
   const annotation = { sharedAnnotation: { id: "11111111-1111-4111-8111-111111111111", joinCode: "ABCDEFGH" },
-    visible: true, isCustom: true, legendIncluded: false, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
+    visible: true, isCustom: true, legendIncluded: false, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: false } };
   const catalog = { catalogItem: { collection: "vectors", id: "included" },
     visible: true, isCustom: false, legendIncluded: false, opacity: 1, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), mapLegend: { visible: false, collapsed: true }, layers: [catalog, annotation] };

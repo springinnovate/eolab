@@ -458,21 +458,21 @@ test("contributor colors update rendering and legends without changing summary g
     assert.equal(layer.polygons.length, 1); assert.throws(() => annotations.model.beginPolygon(layer.id, "peer"));
 });
 
-test("saved-map legacy label switches restore as one local preference", async () => {
+test("restoring a shared label preference saves it on this device", async () => {
     const annotations = controller();
     const layer = annotations.model.createLayer();
     const changes = [];
     annotations.mapLayers = { setVisible: (...args) => changes.push(args), setOpacity: (...args) => changes.push(args) };
     annotations.refreshLayer = () => {};
-    const appearance = { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: false, notes: true };
-    annotations.restoreMapAppearance(layer.id, { visible: true, opacity: 0.5, appearance });
-    await annotations.savePromise;
-    assert.equal(layer.style.labels, true);
-    assert.equal("notes" in layer.style, false);
-    assert.equal(appearance.labels, false, "the published map is not modified");
-    annotations.restoreMapAppearance(layer.id, { visible: true, opacity: 0.5, appearance: { ...appearance, notes: false } });
-    await annotations.savePromise;
-    assert.equal(layer.style.labels, false);
+    let document;
+    annotations.storage.save = async value => { document = value; };
+    const appearance = { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: false };
+    for (const labels of [false, true]) {
+        annotations.restoreMapAppearance(layer.id, { visible: true, opacity: 0.5, appearance: { ...appearance, labels } });
+        await annotations.savePromise;
+        assert.equal(readAnnotationLayers(document)[0].style.labels, labels);
+        assert.equal("notes" in document.layers[0].style, false);
+    }
     assert.equal(changes.length, 4);
 });
 

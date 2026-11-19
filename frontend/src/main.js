@@ -1886,8 +1886,7 @@ async function initializeCatalog(
             if (!sharedAnnotation) return null;
             const { outline, weight, fillOpacity, labels } = record.adapter.exportSavedState(record).style;
             return { sharedAnnotation, visible: record.entry.visible, opacity: record.entry.opacity,
-                // Keep saved-map v1 fields in sync with the single local label setting.
-                appearance: { outline, weight, fillOpacity, labels, notes: labels } };
+                appearance: { outline, weight, fillOpacity, labels } };
         },
         restoreAnnotation: async (layer, isCurrent) => {
             const id = await annotationSessions.openMapReference(layer.sharedAnnotation, isCurrent);

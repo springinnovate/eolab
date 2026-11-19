@@ -110,6 +110,10 @@ test("combined labels show each contributor, title and optional plain-text notes
     rendering.refresh();
     assert.equal(shape.getTooltip(), undefined);
     annotation.style.labels = true;
+    rendering.refresh();
+    label = shape.getTooltip().getContent();
+    assert.equal(label.querySelector(".annotation-polygon-name").textContent, "<b>Rich</b>: Riverbank");
+    assert.equal(label.querySelector(".annotation-polygon-note").textContent, "<script>plain text</script>");
     annotation.polygons[0].note = "   ";
     rendering.refresh();
     label = shape.getTooltip().getContent();

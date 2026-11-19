@@ -9,6 +9,6 @@
     "sharedAnnotation": {"id": "11111111-1111-4111-8111-111111111111", "joinCode": "ABCDEFGH"},
     "visible": true,
     "opacity": 0.8,
-    "appearance": {"outline": "#202020", "weight": 1, "fillOpacity": 0.25, "labels": true, "notes": false}
+    "appearance": {"outline": "#202020", "weight": 1, "fillOpacity": 0.25, "labels": false}
   }]
 }

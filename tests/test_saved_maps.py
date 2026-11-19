@@ -344,6 +344,12 @@ def test_shared_annotation_reference_contract() -> None:
         candidate["view"]["layers"][0]["sharedAnnotation"][field] = "private"
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(candidate)
+    for notes in (False, True):
+        candidate = deepcopy(request)
+        candidate["view"].update(schemaVersion=5, basemap="none")
+        candidate["view"]["layers"][0]["appearance"]["notes"] = notes
+        with pytest.raises(ValidationError, match="notes"):
+            CreateSavedMap.model_validate(candidate)
     candidate = deepcopy(request)
     candidate["view"]["layers"] *= 2
     with pytest.raises(ValidationError, match="duplicate"):

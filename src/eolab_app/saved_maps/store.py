@@ -27,7 +27,7 @@ class SourceRevisionMigration:
     Attributes:
         slug: Unchanged map URL name.
         revision: Current map revision after this operation.
-        changed_layers: Number of Catalog layers whose sourceRevision was removed.
+        changed_layers: Number of layers with obsolete Catalog or shared-label fields removed.
         applied: Whether the database was updated; false for previews and no-ops.
         upgrades_format: Whether the protected Site Condition map needs its version marker updated.
     """
@@ -178,7 +178,7 @@ class SavedMapStore:
     def migrate_source_revisions(
         self, slug: str, *, apply: bool = False, expected_revision: int | None = None
     ) -> SourceRevisionMigration:
-        """Preview or remove obsolete sourceRevision fields from one published map.
+        """Preview or remove obsolete Catalog and Site Condition label settings.
 
         Call explicitly during an upgrade, after backup and stopping old app
         writers. This command updates only the selected map after its complete
@@ -229,20 +229,30 @@ class SavedMapStore:
             layers = candidate["view"].get("layers")
             if isinstance(layers, list):
                 for layer in layers:
-                    if (
-                        isinstance(layer, dict)
-                        and "catalogItem" in layer
-                        and "sourceRevision" in layer
-                    ):
+                    if not isinstance(layer, dict):
+                        continue
+                    if "catalogItem" in layer and "sourceRevision" in layer:
                         del layer["sourceRevision"]
                         changed_layers += 1
+                    elif (
+                        slug == "nhi-site-condition-mapper"
+                        and "sharedAnnotation" in layer
+                    ):
+                        appearance = layer.get("appearance")
+                        if (
+                            isinstance(appearance, dict)
+                            and isinstance(appearance.get("labels"), bool)
+                            and isinstance(appearance.get("notes"), bool)
+                        ):
+                            notes = appearance.pop("notes")
+                            appearance["labels"] = appearance["labels"] or notes
+                            changed_layers += 1
             try:
                 SavedMap.model_validate(candidate)
             except ValidationError as error:
                 raise SavedMapError(
                     422,
-                    "This map has other incompatible fields after removing sourceRevision. "
-                    "No changes were made; inspect the saved document before upgrading.",
+                    "This map has other incompatible settings. Inspect the saved document before upgrading.",
                 ) from error
             applied = apply and (changed_layers > 0 or upgrades_format)
             if applied:

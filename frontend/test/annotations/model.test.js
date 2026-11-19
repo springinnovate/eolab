@@ -160,24 +160,18 @@ test("stored identities, appearance and drawing limits are validated", () => {
     assert.throws(() => annotations.beginPolygon(layer.id), /Save or cancel/);
 });
 
-test("legacy name and note preferences become one persistent label preference", () => {
+test("stored polygons keep one label preference and their note text", () => {
     const annotations = model();
-    annotations.createLayer();
+    const layer = annotations.createLayer();
+    triangle(annotations, layer.id).note = "Restore the floodplain";
+    layer.style.labels = false;
     const saved = annotations.document();
-    const restored = readAnnotationLayers(saved);
-    assert.equal(restored[0].style.labels, true);
-    assert.equal("notes" in restored[0].style, false);
-    for (const labels of [true, false]) {
-        for (const notes of [true, false, undefined]) {
-            Object.assign(saved.layers[0].style, { labels, notes });
-            const migrated = readAnnotationLayers(saved);
-            assert.equal(migrated[0].style.labels, labels || notes === true);
-            assert.equal("notes" in migrated[0].style, false);
-            assert.deepEqual(readAnnotationLayers({ version: 1, layers: migrated }), migrated);
-        }
-    }
-    saved.layers[0].style.notes = "yes";
-    assert.throws(() => readAnnotationLayers(saved), /style/);
+    assert.equal("notes" in saved.layers[0].style, false);
+    saved.layers[0].style.notes = true;
+    const [restored] = readAnnotationLayers(saved);
+    assert.deepEqual(restored, layer);
+    restored.style.labels = true;
+    assert.deepEqual(readAnnotationLayers({ version: 1, layers: [restored] }), [restored]);
 });
 
 test("stored contributor names must be bounded text before label rendering", () => {
