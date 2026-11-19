@@ -83,6 +83,8 @@ Use **Data tools → Vector summary** to group polygons by an attribute such as 
 
 Find a dataset with `type:temporal`. In **Map contents**, choose a variable, month, and observation time in UTC. Duplicate the layer to compare two dates or variables with different styles.
 
+Use the timeline at the bottom of the map to drag through a month or press **Play**. Choose **First observation each day** to see changes over a longer period. The arrow buttons step across available months and skip missing observations. When several time layers are visible, use **Layer** to choose which one moves. The **On map** time appears when that observation has drawn.
+
 ![Hourly rainfall over the Atlantic and Africa, with July 1, 2026 at 06:00 UTC selected.](docs/images/eolab-temporal-map.jpg)
 
 *Rainfall at 06:00 UTC on July 1, 2026. A band of rain crosses the tropical Atlantic toward West Africa. Choose another available hour to see how the pattern changes.*

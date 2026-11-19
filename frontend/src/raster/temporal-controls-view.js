@@ -1,5 +1,8 @@
 /** Compact variable and observation choices retained inside one map-layer row. */
 
+const observationDate = new Intl.DateTimeFormat(undefined, {timeZone: "UTC", year: "numeric",
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+
 /**
  * Update a select without replacing unchanged options or its focused element.
  * @param {HTMLSelectElement} select Existing choice control.
@@ -76,10 +79,16 @@ export class TemporalControlsView {
     render({variables, variable, months, month, times, time, loading, error}) {
         setChoices(this.variable, variables.map(value => ({value: value.id,
             label: `${value.label}${value.units ? ` (${value.units})` : ""}`})), variable);
-        setChoices(this.month, months.map(value => ({value, label: value})), month);
-        setChoices(this.time, times.map(value => ({value,
-            label: new Date(value).toLocaleString(undefined, {timeZone: "UTC", year: "numeric",
-                month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"})})), time);
+        if (this.months !== months || this.unavailableMonth || !months.includes(month)) {
+            this.unavailableMonth = Boolean(month && !months.includes(month));
+            setChoices(this.month, months.map(value => ({value, label: value})), month);
+            this.months = months;
+        } else this.month.value = month;
+        if (this.times !== times || this.unavailableTime || !times.includes(time)) {
+            this.unavailableTime = Boolean(time && !times.includes(time));
+            setChoices(this.time, times.map(value => ({value, label: observationDate.format(new Date(value))})), time);
+            this.times = times;
+        } else this.time.value = time;
         this.month.disabled = months.length === 0;
         this.time.disabled = times.length === 0;
         this.retry.disabled = loading;

@@ -85,6 +85,7 @@ import {
 } from "./catalog-map-actions.js";
 import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { TemporalScrubber } from "./raster/temporal-scrubber.js";
 import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
 import { loadSamplingBoxPreview } from "./raster/analysis-api.js";
@@ -896,14 +897,37 @@ async function initializeCatalog(
             leafletLayers.retryFailedTiles();
         },
     );
+    const timelineRoot = document.querySelector("#temporal-scrubber");
+    L.DomEvent.disableClickPropagation(timelineRoot);
+    L.DomEvent.disableScrollPropagation(timelineRoot);
+    const timeline = new TemporalScrubber(timelineRoot, {
+        selectTime: (key, time) => rasterVisualization.selectTemporalTime(key, time),
+        selectMonth: (key, month, edge) => rasterVisualization.selectTemporalMonth(key, month, edge),
+        prepare: async (key, time, signal) => {
+            const frame = await rasterVisualization.prepareTemporalFrame(key, time, signal);
+            if (!frame) return null;
+            await leafletLayers.prepareLayer(key, frame.descriptor, signal);
+            return frame.show;
+        },
+    });
+    leafletMap.once("unload", () => timeline.destroy());
+    /** Present tile progress and tell the timeline which publications are actually on screen.
+     * @param {import("./map-layers/tile-recovery.js").MapTileStatus} status Current viewport progress.
+     * @param {string[]} displayed Names of fully drawn layers.
+     * @return {void}
+     */
+    function presentMapStatus(status, displayed) {
+        mapRenderStatus.update(status);
+        timeline.setMapStatus(status, displayed);
+    }
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
         leafletMap,
         client: new CompositeMapPlanClient(),
-        onStatus: (status) => mapRenderStatus.update(status),
+        onStatus: presentMapStatus,
     });
     const leafletLayers = new LeafletLayerSet(leafletMap, compositeLeafletRenderer, {
-        onStatus: status => mapRenderStatus.update(status),
+        onStatus: presentMapStatus,
         onLayerStatus: (key, status) => mapLayerController.updateTileStatus(key, status),
     });
     const mapLayerController = new MapLayerController({
@@ -912,6 +936,7 @@ async function initializeCatalog(
         leafletLayers,
         onLayersChange: (layers, change) => {
             mapLegend.update(layers);
+            timeline.setLayers(layers);
             planning?.refreshMapLayers();
             if (change?.kind === "opacity") {
                 layerStyleEditor?.refresh();

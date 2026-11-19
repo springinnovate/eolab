@@ -85,6 +85,25 @@ test("Leaflet layer set owns attachment, opacity, order, and cleanup", () => {
     assert.equal(layers.get("top"), null);
 });
 
+test("preparing a date preserves other visible views of the same source, their styles and stack order", async () => {
+    const prepared = [], displayed = [];
+    const map = {attached: new Set(), removeLayer(layer) { this.attached.delete(layer); }};
+    const layers = new LeafletLayerSet(map, {clear() {}, update: stack => displayed.push(stack),
+        prepare: async (stack, signal) => prepared.push({stack, signal})});
+    const source = {layerName: "dataset:january", styleName: "temperature"};
+    const prior = {layerName: "dataset:january", styleName: "threshold"};
+    const replacement = {...source, layerName: "dataset:february"};
+    layers.add("active", createLayer(), {visible: true, opacity: 0.45});
+    layers.add("reference", createLayer(), {visible: true, opacity: 0.7});
+    layers.render([{key: "reference", visible: true, opacity: 0.7, descriptor: prior},
+        {key: "active", visible: true, opacity: 0.45, descriptor: source}]);
+    const signal = new AbortController().signal;
+    await layers.prepareLayer("active", replacement, signal);
+    assert.deepEqual(prepared, [{stack: [{...prior, opacity: 0.7}, {...replacement, opacity: 0.45}], signal}]);
+    assert.deepEqual(displayed.at(-1), [{...prior, opacity: 0.7}, {...source, opacity: 0.45}]);
+    layers.clear();
+});
+
 test("Leaflet layer set atomically isolates selected individual grids", () => {
     const map = {
         attached: new Set(),
