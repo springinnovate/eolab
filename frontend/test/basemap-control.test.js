@@ -11,6 +11,8 @@ const carto = { url: "https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x
 const geometry = { type: "FeatureCollection", features: [] };
 const maptiler = { url: "https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=test-key",
     attribution: 'MapTiler <img alt="MapTiler logo"> and OpenStreetMap', maxNativeZoom: 22 };
+const maptilerStreets = { ...maptiler,
+    url: "https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=test-key" };
 
 test("saved basemaps expose provider IDs and unavailable providers report a fallback", async () => {
     const { leaflet, leafletMap: map, calls } = createLeafletDouble();
@@ -20,8 +22,10 @@ test("saved basemaps expose provider IDs and unavailable providers report a fall
     assert.equal(calls.basemap.url, maptiler.url);
     await choose(control, "none");
     assert.equal(calls.event, "basemapchange");
-    assert.match(await control.restore("carto"), /unavailable|not configured/);
-    assert.equal(control.snapshot(), "detailed");
+    for (const id of ["carto", "maptiler-streets"]) {
+        assert.match(await control.restore(id), /unavailable|not configured/);
+        assert.equal(control.snapshot(), "detailed");
+    }
     await control.restore("none");
     assert.equal(control.snapshot(), "none");
     control.remove();
@@ -115,50 +119,60 @@ test("outlines load locally on demand, remain below overlays, and are reused", a
     control.remove();
 });
 
-test("satellite loads only when selected, preserves overlays, and removes its attribution with the background", async () => {
+test("MapTiler basemaps load only when selected, preserve overlays, and remove their attribution", async () => {
     const { leaflet, leafletMap: map, calls } = createLeafletDouble();
     const dataLayer = leaflet.geoJSON(geometry, { attribution: "Data source" }).addTo(map);
     map.setView([12, 34], 7);
     const viewport = calls.setView;
-    const control = addBasemapControl(leaflet, map, { ...configured, carto, maptiler }, bounds);
-    assert.equal(calls.layers.length, 2, "satellite tiles are not created before selection");
-    assert.deepEqual(control.root.querySelector("select").children.map(option => option.value),
-        ["detailed", "carto", "maptiler", "outlines", "none"]);
+    const control = addBasemapControl(leaflet, map, { ...configured, carto, maptiler, maptilerStreets }, bounds);
+    assert.equal(calls.layers.length, 2, "MapTiler tiles are created only on selection");
+    const options = control.root.querySelector("select").children;
+    assert.deepEqual(options.map(option => option.value),
+        ["detailed", "maptiler-streets", "carto", "maptiler", "outlines", "none"]);
+    assert.equal(options[1].textContent, "Street map");
+    for (const [id, settings] of [["maptiler", maptiler], ["maptiler-streets", maptilerStreets]]) {
+        await choose(control, id);
+        const layer = calls.layers.at(-1);
+        assert.equal(layer.data, settings.url);
+        assert.equal(layer.options.maxNativeZoom, 22);
+        assert.equal(layer.options.pane, "eolab-basemap-pane");
+        assert.deepEqual([...map.attributions.keys()], ["Data source", settings.attribution]);
+        assert.equal(control.snapshot(), id);
+        await choose(control, "none");
+        assert.deepEqual([...map.attached], [dataLayer]);
+        assert.deepEqual([...map.attributions.keys()], ["Data source"]);
+    }
+    assert.equal(await control.restore("maptiler-streets"), null);
+    assert.equal(calls.basemap.url, maptilerStreets.url);
     await choose(control, "maptiler");
-    const satellite = calls.layers.at(-1);
-    assert.equal(satellite.data, maptiler.url);
-    assert.equal(satellite.options.maxNativeZoom, 22);
-    assert.equal(satellite.options.pane, "eolab-basemap-pane");
-    assert.deepEqual([...map.attributions.keys()], ["Data source", maptiler.attribution]);
-    await choose(control, "none");
-    assert.deepEqual([...map.attached], [dataLayer]);
-    assert.deepEqual([...map.attributions.keys()], ["Data source"]);
-    await choose(control, "maptiler");
-    assert.equal(calls.layers.length, 3, "switching reuses the satellite layer");
+    assert.equal(calls.basemap.url, maptiler.url);
+    assert.equal(calls.layers.length, 4, "switching reuses both MapTiler layers");
     assert.equal(calls.setView, viewport);
     control.remove();
     assert.deepEqual([...map.attached], [dataLayer]);
     assert.deepEqual([...map.attributions.keys()], ["Data source"]);
 });
 
-test("satellite tile failures are visible only for the active background and allow switching away", async () => {
-    const { leaflet, leafletMap: map, calls } = createLeafletDouble();
-    const control = addBasemapControl(leaflet, map, { ...configured, maptiler }, bounds);
-    await choose(control, "maptiler");
-    const satellite = calls.layers.at(-1), status = control.root.children[1];
-    satellite.fire("tileerror");
-    assert.equal(status.hidden, false);
-    assert.match(status.textContent, /satellite tiles could not load/);
-    assert.doesNotMatch(status.textContent, /test-key/);
-    await choose(control, "detailed");
-    satellite.fire("tileerror");
-    assert.equal(status.hidden, true, "late errors cannot overwrite another background's status");
-    await choose(control, "maptiler");
-    assert.equal(status.hidden, true);
-    control.remove();
-    satellite.fire("tileerror");
-    assert.equal(status.hidden, true, "removal releases the error listener");
-});
+for (const [id, name] of [["maptiler", "satellite"], ["maptiler-streets", "street map"]]) {
+    test(`${name} tile failures are visible only for the active background and allow switching away`, async () => {
+        const { leaflet, leafletMap: map, calls } = createLeafletDouble();
+        const control = addBasemapControl(leaflet, map, { ...configured, maptiler, maptilerStreets }, bounds);
+        await choose(control, id);
+        const layer = calls.layers.at(-1), status = control.root.children[1];
+        layer.fire("tileerror");
+        assert.equal(status.hidden, false);
+        assert.ok(status.textContent.includes(`${name} tiles could not load`));
+        assert.doesNotMatch(status.textContent, /test-key/);
+        await choose(control, "detailed");
+        layer.fire("tileerror");
+        assert.equal(status.hidden, true, "late errors cannot overwrite another background's status");
+        await choose(control, id);
+        assert.equal(status.hidden, true);
+        control.remove();
+        layer.fire("tileerror");
+        assert.equal(status.hidden, true, "removal releases the error listener");
+    });
+}
 
 test("late outline responses cannot replace None or a removed map control", async () => {
     for (const remove of [false, true]) {

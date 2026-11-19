@@ -299,14 +299,21 @@ def test_custom_layer_name_round_trip() -> None:
     assert CreateSavedMap.model_validate(candidate).view.layers[0].customName is None
 
 
-def test_subtitle_and_basemap_contract() -> None:
-    """Store an optional subtitle and only a provider ID in saved maps."""
+@pytest.mark.parametrize("basemap_id", ["maptiler", "maptiler-streets"])
+def test_subtitle_and_basemap_contract(basemap_id: str) -> None:
+    """Store an optional subtitle and only a provider ID in saved maps.
+
+    Args:
+        basemap_id: Selected MapTiler basemap identifier.
+    """
     candidate = map_request()
     candidate["subtitle"] = "  Explore habitat  "
-    candidate["view"].update(basemap="maptiler")
+    candidate["view"].update(basemap=basemap_id)
     parsed = CreateSavedMap.model_validate(candidate)
     assert parsed.subtitle == "Explore habitat"
-    assert parsed.view.basemap == "maptiler"
+    assert parsed.view.basemap == basemap_id
+    exported = parsed.model_dump(mode="json", exclude_unset=True)
+    assert exported["view"]["basemap"] == basemap_id
     candidate["subtitle"] = ""
     assert CreateSavedMap.model_validate(candidate).subtitle == ""
     candidate["view"]["basemap"] = "https://tiles.example/secret-key"

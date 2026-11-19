@@ -194,6 +194,10 @@ test("saved map model round trips the versioned bounded contract", () => {
   assert.equal(parsed.format, "eolab-map-view");
   assert.equal(parsed.schemaVersion, 5);
   assert.equal(Object.isFrozen(parsed.layers), true);
+  for (const basemap of ["maptiler", "maptiler-streets"]) {
+    const savedWithBasemap = createSavedMapView({ ...savedMapCandidate(), basemap });
+    assert.equal(parseSavedMapView(serializeSavedMapView(savedWithBasemap)).basemap, basemap);
+  }
 });
 
 test("saved map model preserves more than two visible layers", () => {

@@ -227,6 +227,7 @@ class SavedMapView(MapDocumentPart):
 
     Catalog items, uploads, observations and drawings may appear more than once; each
     entry preserves its place in the layer order and its own appearance.
+    The basemap is stored as a provider ID such as `"maptiler-streets"`.
     Omitting mapLegend leaves the legend visible and expanded.
     """
 
@@ -235,7 +236,9 @@ class SavedMapView(MapDocumentPart):
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
-    basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"]
+    basemap: Literal[
+        "detailed", "carto", "maptiler", "maptiler-streets", "outlines", "none"
+    ]
     mapLegend: MapLegendAppearance | None = None
     layers: Annotated[
         list[

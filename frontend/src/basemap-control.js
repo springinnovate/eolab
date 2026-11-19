@@ -7,13 +7,30 @@ const OUTLINES_URL = new URL("./assets/country-outlines.geojson", import.meta.ur
 const ERROR_TILE_URL = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E";
 
 /**
+ * Browser-safe settings for one tiled map background.
+ * @typedef {Object} BasemapTileSettings
+ * @property {string} url Raster tile URL template containing the tile coordinates.
+ * @property {string} attribution HTML credits shown on the map.
+ * @property {number} [maxNativeZoom] Highest zoom with source tiles.
+ */
+
+/**
+ * The detailed background and other tile backgrounds enabled for this site.
+ * @typedef {BasemapTileSettings & {
+ *   carto?: BasemapTileSettings,
+ *   maptiler?: BasemapTileSettings,
+ *   maptilerStreets?: BasemapTileSettings
+ * }} BasemapConfiguration
+ */
+
+/**
  * Show the selected basemap in a native dropdown in the lower-right map corner.
  * The configured detailed map is selected initially. Country outlines are a
  * bundled display asset fetched only when selected; None removes the background.
  *
  * @param {Object} leaflet Leaflet namespace.
  * @param {Object} map Initialized Leaflet map.
- * @param {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} configuration Browser-safe tile settings.
+ * @param {BasemapConfiguration} configuration Browser-safe tile settings.
  * @param {number[][]} bounds Canonical single-world bounds.
  * @param {typeof fetch} [fetchAsset=globalThis.fetch] Static outline asset reader.
  * @return {Object} Leaflet control with snapshot()/restore(id) for provider IDs;
@@ -25,16 +42,34 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
     pane.style.zIndex = "150";
     pane.style.pointerEvents = "none";
 
+    const tileOptions = [
+        { id: "detailed", label: "Detailed", tiles: configuration },
+        {
+            id: "maptiler-streets", label: "Street map",
+            tiles: configuration.maptilerStreets, mapTilerName: "Street map",
+        },
+        { id: "carto", label: "Light (CARTO)", tiles: configuration.carto },
+        {
+            id: "maptiler", label: "Satellite (MapTiler)",
+            tiles: configuration.maptiler, mapTilerName: "Satellite",
+        },
+    ].filter(option => option.tiles);
+    const options = [
+        ...tileOptions,
+        { id: "outlines", label: "Country outlines" },
+        { id: "none", label: "None" },
+    ];
+
     const layers = new Map();
+    const mapTilerTileErrorHandlers = new Map();
     let activeLayer = null;
     let pending = null;
-    let satelliteLayer = null;
     let select, status;
     const control = leaflet.control({ position: "bottomright" });
 
     /**
      * Create one single-world tile background from its configured provider.
-     * @param {{url:string,attribution:string,maxNativeZoom?:number}} settings Provider settings.
+     * @param {BasemapTileSettings} settings Provider settings.
      * @return {Object} Detached Leaflet tile layer.
      */
     function tileBackground(settings) {
@@ -50,11 +85,16 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         });
     }
 
-    /** Report failed satellite tiles without exposing the provider URL or key. @return {void} */
-    function reportSatelliteError() {
-        if (activeLayer !== satelliteLayer) return;
+    /**
+     * Report failed tiles on the active MapTiler background without exposing its URL or key.
+     * @param {Object} layer Leaflet tile layer reporting a failure.
+     * @param {string} name User-facing name of that map background.
+     * @return {void}
+     */
+    function reportMapTilerTileError(layer, name) {
+        if (activeLayer !== layer) return;
         status.hidden = false;
-        status.textContent = "Some satellite tiles could not load. Choose another basemap, or select Satellite again to retry. Check the MapTiler key, allowed domains and quota if this continues.";
+        status.textContent = `Some ${name.toLowerCase()} tiles could not load. Choose another basemap, or select ${name} again to retry. Check the MapTiler key, allowed domains and quota if this continues.`;
     }
 
     /**
@@ -103,12 +143,12 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
                     }
                 }
             } else {
-                const settings = id === "carto" ? configuration.carto
-                    : id === "maptiler" ? configuration.maptiler : configuration;
-                const layer = tileBackground(settings);
-                if (id === "maptiler") {
-                    satelliteLayer = layer;
-                    layer.on("tileerror", reportSatelliteError);
+                const { tiles, mapTilerName } = tileOptions.find(option => option.id === id);
+                const layer = tileBackground(tiles);
+                if (mapTilerName) {
+                    const handleError = () => reportMapTilerTileError(layer, mapTilerName);
+                    layer.on("tileerror", handleError);
+                    mapTilerTileErrorHandlers.set(layer, handleError);
                 }
                 layers.set(id, layer);
             }
@@ -134,8 +174,8 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
      * @return {Promise<string|null>} Warning for an unavailable provider, otherwise null.
      */
     control.restore = async function restore(id) {
-        const available = ["detailed", "none", "outlines", ...(configuration.carto ? ["carto"] : []), ...(configuration.maptiler ? ["maptiler"] : [])];
-        const warning = available.includes(id) ? null : "The saved basemap is unavailable on this site; Detailed was selected instead.";
+        const available = options.some(option => option.id === id);
+        const warning = available ? null : "The saved basemap is unavailable on this site; Detailed was selected instead.";
         select.value = warning ? "detailed" : id;
         await selectBasemap(select.value);
         return warning;
@@ -157,17 +197,10 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         root.className = "eolab-basemap-control";
         select = doc.createElement("select");
         select.setAttribute("aria-label", "Basemap");
-        const options = [
-            ["detailed", "Detailed"],
-            ...(configuration.carto ? [["carto", "Light (CARTO)"]] : []),
-            ...(configuration.maptiler ? [["maptiler", "Satellite (MapTiler)"]] : []),
-            ["outlines", "Country outlines"],
-            ["none", "None"],
-        ];
-        for (const [id, text] of options) {
+        for (const { id, label } of options) {
             const option = doc.createElement("option");
             option.value = id;
-            option.textContent = text;
+            option.textContent = label;
             select.append(option);
         }
         select.value = "detailed";
@@ -191,8 +224,10 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         control.getContainer().removeEventListener("keydown", stopMapKeys);
         if (activeLayer) map.removeLayer(activeLayer);
         activeLayer = null;
-        satelliteLayer?.off("tileerror", reportSatelliteError);
-        satelliteLayer = null;
+        for (const [layer, handleError] of mapTilerTileErrorHandlers) {
+            layer.off("tileerror", handleError);
+        }
+        mapTilerTileErrorHandlers.clear();
         layers.clear();
     };
     return control.addTo(map);

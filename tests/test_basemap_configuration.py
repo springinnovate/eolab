@@ -67,12 +67,12 @@ def test_carto_key_builds_attributed_browser_tile_url(
     assert "test-key" not in repr(load_settings(version_file_path))
 
 
-def test_maptiler_key_builds_attributed_satellite_url(
+def test_maptiler_key_builds_attributed_satellite_and_streets_urls(
     configured_environment: None,
     version_file_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Publish optional satellite tiles with an encoded key and required credits.
+    """Publish both MapTiler basemaps with the same encoded key and credits.
 
     Args:
         configured_environment: Baseline application environment.
@@ -95,5 +95,12 @@ def test_maptiler_key_builds_attributed_satellite_url(
     assert "api.maptiler.com/resources/logo.svg" in satellite["attribution"]
     assert 'alt="MapTiler logo"' in satellite["attribution"]
     assert 'href="https://www.maptiler.com/"' in satellite["attribution"]
+    streets = basemap["maptilerStreets"]
+    assert streets["url"] == (
+        "https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png"
+        "?key=satellite-key%26other%3Dunsafe%2F%23"
+    )
+    assert streets["maxNativeZoom"] == 22
+    assert streets["attribution"] == satellite["attribution"]
     assert "carto-key" in basemap["carto"]["url"]
     assert "satellite-key" not in repr(load_settings(version_file_path))
