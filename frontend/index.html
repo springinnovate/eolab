@@ -42,6 +42,24 @@
           </div>
           <p data-timeline="status" role="status" hidden></p>
         </section>
+        <section id="map-place-search" class="map-place-search" popover="manual" aria-labelledby="map-place-search-heading" hidden>
+          <header>
+            <h2 id="map-place-search-heading">Find a place</h2>
+            <button class="map-panel-toggle map-panel-collapse" type="button"
+              aria-label="Hide place search" title="Hide place search"><span aria-hidden="true">×</span></button>
+          </header>
+          <form role="search" aria-labelledby="map-place-search-heading">
+            <label class="visually-hidden" for="map-place-query">Place name or street address</label>
+            <input id="map-place-query" type="search" placeholder="Country, city, or address" maxlength="200" autocomplete="off">
+            <button class="secondary-button" type="submit">Search</button>
+          </form>
+          <p class="map-place-search-status" role="status" aria-atomic="true"></p>
+          <ul class="map-place-search-results" aria-label="Matching places" hidden></ul>
+          <p class="map-place-search-credit">
+            © <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noopener">MapTiler</a>
+            · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+          </p>
+        </section>
       </div>
       <section
         class="control-panel"
@@ -744,6 +762,8 @@
         </div>
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Map display</strong>
+          <button id="toggle-place-search" class="workspace-tool-action" type="button"
+            aria-controls="map-place-search" aria-expanded="false" hidden>Show place search</button>
           <button id="toggle-map-legend" class="workspace-tool-action" type="button" aria-pressed="true">Hide legend</button>
           <button id="open-settings" class="workspace-tool-action" type="button" aria-controls="settings-panel">Settings</button>
         </div>

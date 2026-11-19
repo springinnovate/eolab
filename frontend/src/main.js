@@ -66,8 +66,10 @@ import {
     createSingleWorldMap,
     observeMapViewportSize,
     getCatalogItemMapBounds,
+    getSingleWorldMapBounds,
     formatSingleWorldPosition
 } from "./map.js";
+import { addMapPlaceSearch } from "./map-place-search.js";
 import { addMapCoordinateGuide } from "./map-coordinate-guide.js";
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
@@ -188,6 +190,7 @@ let basemapControl = null;
  * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {string[]} scanDisplayPaths User-facing directories scanned recursively.
  * @property {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} basemap Background tile settings; optional providers are present only when configured.
+ * @property {{apiKey:string}} [placeSearch] Browser-visible MapTiler credentials for submitted place searches.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
 
@@ -2911,6 +2914,16 @@ async function startApplication() {
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
+    if (appGlobalConfiguration.placeSearch) {
+        addMapPlaceSearch(L, leafletMap, {
+            panel: document.querySelector("#map-place-search"),
+            toggleButton: document.querySelector("#toggle-place-search"),
+            apiKey: appGlobalConfiguration.placeSearch.apiKey,
+            storage: new SavedMapViewLocalStorage(undefined, "eolab.place-search-visibility.v1"),
+            toMapBounds: getSingleWorldMapBounds,
+            onRestoreRequested: () => mapInspection.showToolActions(),
+        });
+    }
     layoutController.registerPanelActivitySource(document.querySelector("#map-inspection"),
         listener => mapInspection.subscribeClickResultActivity(listener));
     const refreshCatalog = await initializeCatalog(

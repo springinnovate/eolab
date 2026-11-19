@@ -13,17 +13,16 @@ export const SINGLE_WORLD_BOUNDS = [
 ];
 
 /**
- * Convert a STAC Item's 2D/3D bbox to Leaflet's latitude/longitude corners.
+ * Convert WGS 84 bounding coordinates to Leaflet's latitude/longitude corners.
  *
  * RFC 7946 section 5 orders all lower axes before all upper axes. A crossing
  * bbox (west > east) needs the full longitude span to show both sides within
  * this application's single, non-wrapping world.
  *
- * @param {Object|null} item Catalog Item with a WGS 84 bounding box.
+ * @param {unknown} bbox A possible 2D or 3D bounding box in GeoJSON axis order.
  * @return {number[][]|null} Map corners, or null for missing/invalid bounds.
  */
-export function getCatalogItemMapBounds(item) {
-    const bbox = item?.bbox;
+export function getSingleWorldMapBounds(bbox) {
     if (!Array.isArray(bbox) || ![4, 6].includes(bbox.length) ||
         !bbox.every(Number.isFinite)) return null;
     const dimensions = bbox.length / 2;
@@ -33,6 +32,15 @@ export function getCatalogItemMapBounds(item) {
         Math.abs(west) > 180 || Math.abs(east) > 180 ||
         (dimensions === 3 && bbox[2] > bbox[5])) return null;
     return [[south, west > east ? -180 : west], [north, west > east ? 180 : east]];
+}
+
+/**
+ * Convert a STAC Item's WGS 84 bounding box to corners for the single-world map.
+ * @param {{bbox?:number[]}|null} item Catalog Item with an optional bounding box.
+ * @return {number[][]|null} Map corners, or null for missing or invalid bounds.
+ */
+export function getCatalogItemMapBounds(item) {
+    return getSingleWorldMapBounds(item?.bbox);
 }
 
 /**

@@ -166,7 +166,7 @@ class Settings:
         basemap_attribution: Browser basemap attribution.
         carto_basemap_api_key: Optional browser-visible CARTO basemap key.
             Blank disables the CARTO option; use a domain-restricted basemap key.
-        maptiler_api_key: Optional browser-visible MapTiler map key.
+        maptiler_api_key: Optional browser-visible key for MapTiler tiles and place search.
             Blank disables satellite imagery; restrict the key to viewer domains.
         initial_latitude: Initial map-center latitude.
         initial_longitude: Initial map-center longitude.
@@ -430,7 +430,9 @@ class Settings:
             basemap URL and attribution strings, and numeric initial-view
             latitude, longitude, and zoom values. When configured, basemap.carto
             and basemap.maptiler contain tile URLs with browser-visible keys,
-            attribution, and native zoom limits. Internal service URLs are not exposed.
+            attribution, and native zoom limits. The optional placeSearch entry
+            provides the browser-visible MapTiler key for forward geocoding.
+            Internal service URLs are not exposed.
         """
         basemap: dict[str, object] = {
             "url": self.basemap_url,
@@ -466,7 +468,7 @@ class Settings:
                 ),
                 "maxNativeZoom": 22,
             }
-        return {
+        configuration: dict[str, object] = {
             "appTitle": self.app_title,
             "appSubtitle": self.app_subtitle,
             "appVersion": self.app_version,
@@ -481,6 +483,9 @@ class Settings:
                 "zoom": self.initial_zoom,
             },
         }
+        if self.maptiler_api_key:
+            configuration["placeSearch"] = {"apiKey": self.maptiler_api_key}
+        return configuration
 
     def scan_display_paths(self) -> tuple[str, ...]:
         """Build user-facing locations for the configured scan directories.
