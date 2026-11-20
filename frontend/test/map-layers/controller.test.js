@@ -151,6 +151,8 @@ test("a saved local source replaces the duplicate at its existing key, order and
     controller.restoreStagedLayer(copy, 1);
     controller.setLegendIncluded(copyKey, false);
     const before = controller.getRecord(copyKey);
+    const fieldFormats = Object.freeze({area_ha: Object.freeze({format: "number", unit: "ha"})});
+    before.fieldFormats = fieldFormats;
     const original = controller.getRecord(key);
     const staged = controller.stageLocal({
         key: copyKey, label: "Saved watershed", sourceName: "Saved watershed",
@@ -166,6 +168,7 @@ test("a saved local source replaces the duplicate at its existing key, order and
     assert.equal(view.layers[1].label, "Project area");
     assert.equal(view.layers[1].legendIncluded, false);
     assert.equal(controller.getRecord(copyKey).isDuplicate, true);
+    assert.deepEqual(controller.getRecord(copyKey).fieldFormats, fieldFormats);
     assert.equal(controller.replaceStagedLayer(before, staged), false);
     controller.destroy();
 });
@@ -937,6 +940,8 @@ test("Add another view restores copied presentation through its owner without re
     await controller.show(catalogItem("source"), adapter);
     const first = controller.retainedRecords[0];
     first.state.color = "blue";
+    const fieldFormats = Object.freeze({area: Object.freeze({format: "number", unit: "ha"})});
+    first.fieldFormats = fieldFormats;
     controller.renameLayer(first.entry.key, "Blue view");
     controller.setVisible(first.entry.key, false);
     controller.setOpacity(first.entry.key, 0.3);
@@ -951,11 +956,15 @@ test("Add another view restores copied presentation through its owner without re
     assert.equal(second.entry.legendIncluded, false);
     assert.equal(first.entry.isCustom, false);
     assert.equal(second.entry.isCustom, true);
+    assert.equal(second.isDuplicate, true);
     assert.equal(second.state.color, "blue");
+    assert.deepEqual(second.fieldFormats, fieldFormats);
     second.state.color = "red";
+    second.fieldFormats = Object.freeze({});
     controller.renameLayer(key, "Red view");
     controller.removeKey(key);
     assert.equal(first.state.color, "blue");
+    assert.deepEqual(first.fieldFormats, fieldFormats);
     assert.equal(first.entry.label, "Blue view");
     assert.equal(controller.removedLayer, null, "adding a view does not replace removal Undo");
     controller.destroy();
