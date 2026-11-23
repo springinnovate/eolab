@@ -74,7 +74,17 @@ def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions
     transformer = _grid_transformer(source_crs, target, unwrap=target.is_geographic)
 
     def project(positions: tuple[Position, ...]) -> tuple[Position, ...]:
-        """Project boundary probes through the target coordinate domain."""
+        """Project boundary probes through the target coordinate domain.
+
+        Args:
+            positions: Nonempty batch of source positions supplied by refinement.
+
+        Returns:
+            Target coordinates in the same order as the supplied positions.
+
+        Raises:
+            ValueError: If PROJ cannot transform a source position.
+        """
         xs, ys = zip(*positions, strict=True)
         try:
             x, y = transformer.transform(xs, ys, errcheck=True)
