@@ -13,6 +13,7 @@ from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from rasterio.transform import from_bounds, from_origin
 from rasterio.warp import transform_bounds
+from shapely import contains_xy
 from shapely.geometry import MultiPolygon, Point, Polygon, box, mapping
 
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
@@ -366,6 +367,70 @@ def test_native_polygon_preserves_both_sides_of_the_dateline(
             179.95,
         }
         np.testing.assert_array_equal(output.read(1), np.where(inside, 1, np.nan))
+
+
+@pytest.mark.parametrize("include_island", [False, True])
+def test_geographic_output_preserves_a_hole_enclosing_the_pole(
+    tmp_path: Path, include_island: bool
+) -> None:
+    """Keep a polar hole and any separate island when projecting to longitude.
+
+    Args:
+        tmp_path: Native polar vector, geographic raster and calculator output.
+        include_island: Add a separate polygon inside the other part's hole.
+    """
+    shell = box(-49001, -31013, 37001, 46003)
+    hole = box(-7111, -20101, 14999, 16003)
+    polygon = Polygon(shell.exterior.coords, [hole.exterior.coords])
+    original = (
+        MultiPolygon([polygon, box(-6000, -10000, -3000, -4000)])
+        if include_island
+        else polygon
+    )
+    assert original.is_valid
+    area = write_selection(
+        tmp_path / "polar.gpkg", [mapping(original)], crs="EPSG:3031"
+    )
+    values = np.arange(24 * 720, dtype="int16").reshape(24, 720)
+    source = write_source(
+        tmp_path / "source.tif",
+        values,
+        transform=from_origin(-180, -88.8, 0.5, 0.05),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        lon = output.transform.c + columns * output.transform.a
+        lat = output.transform.f + rows * output.transform.e
+        x, y = Transformer.from_crs(4326, 3031, always_xy=True).transform(lon, lat)
+        inside = contains_xy(original, x, y)
+        source_rows = np.floor((-88.8 - lat) / 0.05).astype(int)
+        source_columns = np.floor((lon + 180) / 0.5).astype(int)
+        assert output.shape == (13 if include_island else 12, 720)
+        assert output.crs == CRS.from_epsg(4326)
+        assert result.valid_pixels == inside.sum()
+        if include_island:
+            assert inside.sum() > 3983
+        else:
+            assert inside.sum() == 3983
+        np.testing.assert_array_equal(
+            output.read(1),
+            np.where(inside, values[source_rows, source_columns], np.nan),
+        )
 
 
 @pytest.mark.parametrize("area_kind", ["bounds", "samplingBox"])
