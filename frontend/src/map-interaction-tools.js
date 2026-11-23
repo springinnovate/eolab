@@ -132,12 +132,14 @@ export class MapInteractionTools {
         this.targetSignature = signature;
     }
 
-    /** Start a freehand stroke and capture this pointer until release or cancellation.
+    /** Capture a primary pointer press on the map to begin a freehand stroke.
+     * Leaflet controls receive their own pointer input.
      * @param {PointerEvent} event Primary pointer inside the map.
      * @return {void}
      */
     beginStroke(event) {
-        if (this.mode !== 'lasso' || this.editing || event.button !== 0 || event.isPrimary === false) return;
+        if (this.mode !== 'lasso' || this.editing || event.button !== 0 || event.isPrimary === false ||
+            event.target.closest('.leaflet-control')) return;
         const target = this.targets.find(value => value.key === this.layerSelect.value);
         if (!target) return;
         event.preventDefault(); event.stopImmediatePropagation();

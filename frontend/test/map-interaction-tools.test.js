@@ -45,9 +45,16 @@ function fixture(selectFeatures=async()=>({matched:2,featureIds:[1,3],geometry:{
 /** Return one primary pointer event in the fake map's screen coordinates.
  * @param {number} x Screen x.
  * @param {number} y Screen y.
- * @return {Object} Pointer event fields used by the component.
+ * @param {string} [ancestorSelector] Selector matching an ancestor of the hit element.
+ * @return {Pick<PointerEvent, 'clientX'|'clientY'|'pointerId'|'pointerType'|'button'|'isPrimary'|'preventDefault'|'stopImmediatePropagation'>
+ *     & {target:{closest:(selector:string)=>object|null}}} Primary pointer input for the map.
  */
-const pointer=(x,y)=>({clientX:x,clientY:y,pointerId:1,pointerType:'mouse',button:0,isPrimary:true,preventDefault(){},stopImmediatePropagation(){}});
+const pointer = (x, y, ancestorSelector) => ({
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', button: 0, isPrimary: true,
+    target: { closest(selector) { return selector === ancestorSelector ? this : null; } },
+    preventDefault() {},
+    stopImmediatePropagation() {},
+});
 const polygon={type:'Polygon',coordinates:[[[0,0],[2,0],[1,2],[0,0]]]};
 
 test('map modes coordinate through callbacks and restore panning after lasso and drawing edits',()=>{
@@ -71,7 +78,13 @@ test('release closes a freehand polygon and preserves the chosen hidden view and
     let request;
     const h=fixture(async(selection,area,signal)=>{request={selection,area,signal};return {matched:2,featureIds:[1,3],geometry:{type:'FeatureCollection',features:[]}};});
     const original=structuredClone(h.getTargets()[0].selection);
-    h.tools.setMode('lasso');h.tools.beginStroke(pointer(10,10));h.tools.moveStroke(pointer(30,10));h.tools.moveStroke(pointer(20,30));h.tools.finishStroke(pointer(10,10));
+    h.tools.setMode('lasso');
+    const closePress = pointer(10, 10, '.leaflet-control');
+    h.tools.beginStroke(closePress);
+    assert.equal(h.container.hasPointerCapture(closePress.pointerId), false,
+        'Lasso must let the Leaflet control receive the click');
+
+    h.tools.beginStroke(pointer(10,10));h.tools.moveStroke(pointer(30,10));h.tools.moveStroke(pointer(20,30));h.tools.finishStroke(pointer(10,10));
     await new Promise(setImmediate);
     assert.deepEqual(request.selection,original);assert.deepEqual(h.getTargets()[0].selection,original);
     const ring=request.area.coordinates[0];assert.deepEqual(ring[0],ring.at(-1));
