@@ -434,7 +434,9 @@ class VectorSamplingService:
             feature_ids = tuple(sorted(matches.ids))
             geometry = await read_lasso_highlights(target, feature_ids)
             return LassoSelectionResult(
-                matched=len(feature_ids), featureIds=feature_ids, geometry=geometry
+                matched=len(feature_ids),
+                featureIds=tuple(str(feature_id) for feature_id in feature_ids),
+                geometry=geometry,
             )
 
     async def read_feature_attributes(
@@ -445,7 +447,7 @@ class VectorSamplingService:
         """Authorize selected native IDs and read their original scalar attributes.
 
         Args:
-            request: Path-free filtered source and unique ordered native IDs.
+            request: Path-free filtered source and unique ordered native-ID text.
             source_owner: Browser credentials for every private referenced source.
 
         Returns:
@@ -463,7 +465,8 @@ class VectorSamplingService:
         from eolab_app.vector.feature_attributes import read_feature_attributes
 
         async with self.open_selection(request.selection, source_owner) as target:
-            return await read_feature_attributes(target, request.featureIds)
+            native_ids = tuple(int(feature_id) for feature_id in request.featureIds)
+            return await read_feature_attributes(target, native_ids)
 
     @asynccontextmanager
     async def _open_original(

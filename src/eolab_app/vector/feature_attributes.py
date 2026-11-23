@@ -37,44 +37,51 @@ FeatureAttributeValue = str | int | float | bool | None
 class FeatureAttributesRequest(BaseModel):
     """Read an exact ordered set of native IDs from a path-free filtered source.
 
-    IDs must be unique signed-64-bit integers. The request has the
-    ordinary interactive feature ceiling; a failed read never returns partial rows.
+    IDs use canonical signed-64-bit decimal strings so browser JSON cannot round
+    them. The ordinary interactive feature ceiling applies to the complete read.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     selection: VectorSelection
     featureIds: tuple[
-        Annotated[int, Field(strict=True, ge=-(2**63), le=2**63 - 1)], ...
+        Annotated[str, Field(strict=True, min_length=1, max_length=20)], ...
     ] = Field(max_length=MAX_SCANNED_FEATURES)
 
     @field_validator("featureIds")
     @classmethod
-    def require_unique_ids(cls, feature_ids: tuple[int, ...]) -> tuple[int, ...]:
-        """Reject duplicate IDs at the external request boundary.
+    def require_unique_ids(cls, feature_ids: tuple[str, ...]) -> tuple[str, ...]:
+        """Require unique canonical native IDs at the external request boundary.
 
         Args:
-            feature_ids: Validated native integer IDs in requested order.
+            feature_ids: Submitted native-ID text in requested order.
 
         Returns:
             The unchanged unique IDs.
 
         Raises:
-            ValueError: If an ID occurs more than once.
+            ValueError: If an ID is noncanonical, outside signed-64-bit range,
+                or occurs more than once.
         """
+        for value in feature_ids:
+            native_id = int(value)
+            if str(native_id) != value or not -(2**63) <= native_id < 2**63:
+                raise ValueError(
+                    "Feature IDs require canonical signed-64-bit decimal text"
+                )
         if len(set(feature_ids)) != len(feature_ids):
             raise ValueError("Select each feature ID only once")
         return feature_ids
 
 
 class FeatureAttributes(BaseModel):
-    """Native feature identity and scalar attributes, without display geometry.
+    """Native ID as decimal text and scalar attributes, without display geometry.
 
     Non-finite numbers become null. Binary and other nonscalar values are
     omitted, matching the scalar observations consumed by feature plots.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
-    id: int
+    id: str
     properties: dict[str, FeatureAttributeValue]
 
 
@@ -173,7 +180,7 @@ def _read_feature_attributes(
                             scalars[name] = value
                         elif isinstance(value, float):
                             scalars[name] = value if math.isfinite(value) else None
-                    feature = FeatureAttributes(id=feature_id, properties=scalars)
+                    feature = FeatureAttributes(id=str(feature_id), properties=scalars)
                     encoded_size += len(
                         feature.model_dump_json().encode("utf-8")
                     ) + bool(features)

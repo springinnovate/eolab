@@ -24,7 +24,7 @@ class Control extends EventTarget {
  * @param {Function} [selectFeatures] Source API supplied by composition.
  * @return {Object} Tool and observable map/control boundaries.
  */
-function fixture(selectFeatures=async()=>({matched:2,featureIds:[1,3],geometry:{type:'FeatureCollection',features:[]}})) {
+function fixture(selectFeatures=async()=>({matched:2,featureIds:['1','9007199254740993'],geometry:{type:'FeatureCollection',features:[]}})) {
     const root=new Control(),select=new Control(),status=new Control(),clear=new Control(),controls=new Control(),container=new Control();
     const buttons=['pan','pixel','box','lasso'].map(mode=>{const button=new Control();button.dataset.mapMode=mode;return button;});
     root.querySelectorAll=()=>buttons;
@@ -85,7 +85,7 @@ test('clear and source replacement cancel reads and reject a late successful res
     h.tools.setMode('lasso');
     const pending=h.tools.select(h.getTargets()[0],polygon);
     h.tools.clear();assert.equal(signal.aborted,true);
-    finish({matched:9,featureIds:[1],geometry:{type:'FeatureCollection',features:[]}});await pending;
+    finish({matched:9,featureIds:['1'],geometry:{type:'FeatureCollection',features:[]}});await pending;
     assert.equal(h.tools.highlight,null);assert.match(h.status.textContent,/Selection cleared/);
     const second=h.tools.select(h.getTargets()[0],polygon);
     const targets=structuredClone(h.getTargets());targets[0].selection.filter.rules[0].value='grass';h.setTargets(targets);h.tools.refresh();
@@ -128,12 +128,14 @@ test('losing native pointer capture cancels the draft and preserves the last com
     assert.match(h.status.textContent,/2 features selected/);
 });
 
-test('selection transport sends source identity and polygon, with both private owner headers',async t=>{
-    let request;t.mock.method(globalThis,'fetch',async(url,options)=>{request={url,options};return Response.json({matched:0,featureIds:[],geometry:null});});
+test('selection transport preserves native IDs and sends both private owner headers',async t=>{
+    const featureIds=['-9007199254740993','9007199254740993'];
+    let request;t.mock.method(globalThis,'fetch',async(url,options)=>{request={url,options};return Response.json({matched:2,featureIds,geometry:null});});
     const h=fixture(),source=h.getTargets()[0].selection,abort=new AbortController();
     const result=await selectLassoFeatures(source,polygon,abort.signal);
     assert.equal(request.url,'/api/vector-sampling/lasso');assert.deepEqual(JSON.parse(request.options.body),{selection:source,polygon});
-    assert.equal(request.options.headers['X-EOLab-Uploads'],'1');assert.equal(request.options.headers['X-EOLab-Processing'],'1');assert.equal(request.options.signal,abort.signal);assert.equal(result.matched,0);
+    assert.equal(request.options.headers['X-EOLab-Uploads'],'1');assert.equal(request.options.headers['X-EOLab-Processing'],'1');assert.equal(request.options.signal,abort.signal);assert.equal(result.matched,2);
+    assert.deepEqual(result.featureIds,featureIds);
     t.mock.method(globalThis,'fetch',async()=>Response.json({detail:[]},{status:422}));
     await assert.rejects(selectLassoFeatures(source,polygon,abort.signal),/does not cross itself/);
 });

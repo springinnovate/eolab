@@ -37,13 +37,14 @@ class LassoSelectionResult(BaseModel):
 
     Attributes:
         matched: Exact number of selected original features, including zero.
-        featureIds: Native IDs in ascending order, with each feature once.
+        featureIds: Canonical decimal native IDs in numeric ascending order,
+            with each feature once. Text preserves signed-64-bit identity in browsers.
         geometry: Attribute-free whole-feature display geometry, or None when
             it cannot fit the ordinary map read or display budget.
     """
 
     matched: int = Field(ge=0)
-    featureIds: tuple[int, ...]
+    featureIds: tuple[str, ...]
     geometry: dict[str, JsonValue] | None
 
 

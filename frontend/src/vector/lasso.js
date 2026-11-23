@@ -5,7 +5,7 @@
  * @param {Object} selection Immutable Catalog, upload or result source and predicate.
  * @param {{type:"Polygon",coordinates:number[][][]}} polygon Closed WGS84 lasso.
  * @param {AbortSignal} signal Cancels superseded drawing or source work.
- * @return {Promise<{matched:number,featureIds:number[],geometry:Object|null}>} Exact IDs and optional whole-feature highlights.
+ * @return {Promise<{matched:number,featureIds:string[],geometry:Object|null}>} Decimal-text native IDs and optional whole-feature highlights.
  * @throws {Error} If the source, polygon, ownership or bounded comparison is invalid.
  */
 export async function selectLassoFeatures(selection, polygon, signal) {

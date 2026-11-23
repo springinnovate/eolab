@@ -16,15 +16,22 @@ from catalog_selection_support import FixtureCatalog
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.bounded_vector import VectorReadLimits
 from eolab_app.calculated_fields import CalculatedField
-from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+from eolab_app.catalog_selection import (
+    CatalogSelection,
+    FeatureMatches,
+    ResolvedCatalogSelection,
+)
 from eolab_app.execution.bounded_process import ProcessDeadlineError
 from eolab_app.feature_intersection import iter_original_features
+from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.source_files import SourceFileError
-from eolab_app.vector import feature_attributes
+from eolab_app.vector import feature_attributes, lasso
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.feature_attributes import (
     FeatureAttributesRequest,
+    FeatureAttributes,
+    FeatureAttributesResult,
     read_feature_attributes,
 )
 from eolab_app.vector.models import ResolvedVectorSource
@@ -113,20 +120,25 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
         source: Three original features and their authorized Catalog service.
     """
     service, original, ids = source
+    wire_ids = tuple(str(feature_id) for feature_id in ids)
     app = FastAPI()
     app.include_router(create_vector_sampling_router(service))
     selection = original.selection.model_dump(mode="json", by_alias=True)
     with TestClient(app) as client:
         response = client.post(
             "/api/vector-sampling/features",
-            json={"selection": selection, "featureIds": [ids[2], ids[0], ids[1]]},
+            json={
+                "selection": selection,
+                "featureIds": [wire_ids[2], wire_ids[0], wire_ids[1]],
+            },
         )
         assert response.status_code == 200, response.text
+        assert response.json()["features"][0]["id"] == str(ids[2])
         assert response.json() == {
             "selection": selection,
             "features": [
                 {
-                    "id": ids[2],
+                    "id": wire_ids[2],
                     "properties": {
                         "label": "Café",
                         "x": -3.0,
@@ -136,7 +148,7 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
                     },
                 },
                 {
-                    "id": ids[0],
+                    "id": wire_ids[0],
                     "properties": {
                         "label": "First CO2",
                         "x": 1.25,
@@ -146,7 +158,7 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
                     },
                 },
                 {
-                    "id": ids[1],
+                    "id": wire_ids[1],
                     "properties": {
                         "label": "Second CO2",
                         "x": 2.5,
@@ -170,11 +182,14 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
         }
         allowed = client.post(
             "/api/vector-sampling/features",
-            json={"selection": filtered, "featureIds": [ids[2], ids[0]]},
+            json={"selection": filtered, "featureIds": [wire_ids[2], wire_ids[0]]},
         )
         assert allowed.status_code == 200, allowed.text
-        assert [row["id"] for row in allowed.json()["features"]] == [ids[2], ids[0]]
-        for requested in [list(ids), [99999]]:
+        assert [row["id"] for row in allowed.json()["features"]] == [
+            wire_ids[2],
+            wire_ids[0],
+        ]
+        for requested in [list(wire_ids), ["99999"]]:
             denied = client.post(
                 "/api/vector-sampling/features",
                 json={"selection": filtered, "featureIds": requested},
@@ -183,10 +198,14 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
         for invalid in [
             [True],
             [1.5],
-            ["1"],
-            [-(2**63) - 1],
-            [2**63],
-            [ids[0], ids[0]],
+            [1],
+            ["01"],
+            ["+1"],
+            ["-0"],
+            ["bad"],
+            [str(-(2**63) - 1)],
+            [str(2**63)],
+            [wire_ids[0], wire_ids[0]],
         ]:
             assert (
                 client.post(
@@ -205,6 +224,102 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
             ).status_code
             == 422
         )
+
+
+def test_http_round_trip_preserves_native_ids_outside_javascript_integer_range(
+    source: tuple[VectorSamplingService, ResolvedCatalogSelection, tuple[int, ...]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Carry exact native IDs through Lasso JSON and the following attribute request.
+
+    Args:
+        source: Real source authorization used by both HTTP requests.
+        monkeypatch: Supply native reader results at the source-reading boundaries.
+    """
+    service, original, _ids = source
+    native_ids = (-(2**53) - 1, 2**53 + 1)
+    wire_ids = [str(feature_id) for feature_id in native_ids]
+
+    async def compare(
+        target: ResolvedCatalogSelection,
+        boundaries: dict[str, Any],
+        predicate: VectorFilter,
+        *,
+        required_area: SummaryPolygon,
+    ) -> FeatureMatches:
+        """Supply exact native membership before browser serialization.
+
+        Args:
+            target: Authorized original source.
+            boundaries: Other polygon sources, empty for this Lasso.
+            predicate: Additional field predicate, inactive for this Lasso.
+            required_area: Validated user-drawn polygon.
+
+        Returns:
+            Two distinct native IDs outside JavaScript's exact numeric range.
+        """
+        return FeatureMatches(ids=frozenset(native_ids), total=2)
+
+    async def no_highlights(
+        target: ResolvedCatalogSelection, ids: tuple[int, ...]
+    ) -> None:
+        """Leave display geometry unavailable while exact membership remains usable.
+
+        Args:
+            target: Authorized original source.
+            ids: Unrounded native IDs passed to the optional display reader.
+        """
+        assert ids == native_ids
+
+    async def attributes(
+        target: ResolvedCatalogSelection, ids: tuple[int, ...]
+    ) -> FeatureAttributesResult:
+        """Verify the JSON round trip restored the exact IDs supplied by native reading.
+
+        Args:
+            target: Reauthorized original source.
+            ids: Native integers decoded from the validated public ID strings.
+
+        Returns:
+            Identified scalar rows for the browser response.
+        """
+        assert ids == native_ids
+        return FeatureAttributesResult(
+            selection=target.selection,
+            features=tuple(
+                FeatureAttributes(id=str(feature_id), properties={"x": index + 0.5})
+                for index, feature_id in enumerate(ids)
+            ),
+        )
+
+    monkeypatch.setattr(service, "compare_layers", compare)
+    monkeypatch.setattr(lasso, "read_lasso_highlights", no_highlights)
+    monkeypatch.setattr(feature_attributes, "read_feature_attributes", attributes)
+    app = FastAPI()
+    app.include_router(create_vector_sampling_router(service))
+    selection = original.selection.model_dump(mode="json", by_alias=True)
+    with TestClient(app) as client:
+        picked = client.post(
+            "/api/vector-sampling/lasso",
+            json={
+                "selection": selection,
+                "polygon": mapping(box(0, 0, 1, 1)),
+            },
+        )
+        assert picked.status_code == 200, picked.text
+        assert picked.json() == {"matched": 2, "featureIds": wire_ids, "geometry": None}
+        inspected = client.post(
+            "/api/vector-sampling/features",
+            json={
+                "selection": selection,
+                "featureIds": picked.json()["featureIds"],
+            },
+        )
+        assert inspected.status_code == 200, inspected.text
+        assert inspected.json()["features"] == [
+            {"id": wire_ids[0], "properties": {"x": 0.5}},
+            {"id": wire_ids[1], "properties": {"x": 1.5}},
+        ]
 
 
 def test_attribute_reader_does_not_decode_geometry(
@@ -303,7 +418,7 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
     )
     result = asyncio.run(
         service.read_feature_attributes(
-            FeatureAttributesRequest(selection=selection, featureIds=(1,))
+            FeatureAttributesRequest(selection=selection, featureIds=("1",))
         )
     )
     assert result.features[0].properties == {
@@ -386,12 +501,12 @@ def test_result_attributes_keep_ownership_expiry_and_cancellation(
         monkeypatch: Pause supervised work while observing the real lease owner.
     """
     service, authority, selection = _vector_result_sampler(tmp_path)
-    request = FeatureAttributesRequest(selection=selection, featureIds=(1,))
+    request = FeatureAttributesRequest(selection=selection, featureIds=("1",))
 
     async def exercise() -> None:
         """Read a real result, reject other owners, and cancel under its live lease."""
         result = await service.read_feature_attributes(request, "owner")
-        assert result.features[0].id == 1 and not authority.leases
+        assert result.features[0].id == "1" and not authority.leases
         with pytest.raises(SourceFileError):
             await service.read_feature_attributes(request, "other")
         authority.ready = False
