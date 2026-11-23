@@ -853,6 +853,42 @@ test("inspector validates the composition target contract at its boundary", () =
   );
 });
 
+test("suspending picking restores the completed feature set and ignores a late replacement", async () => {
+  let finishPending, pendingSignal;
+  let requests = 0;
+  /** Return one distinguishable feature for the inspector. @param {number} rank Attribute value. @return {Object} WMS response. */
+  const featureResponse = rank => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature", id: "parcels." + rank, geometry: null, properties: { rank },
+    }] }),
+  });
+  const h = createFixture(async (_url, { body, signal }) => {
+    requests += 1;
+    if (body.get("x") === "2") {
+      pendingSignal = signal;
+      return new Promise(resolve => { finishPending = resolve; });
+    }
+    return featureResponse(7);
+  });
+  await h.controller.inspect(inspectionEvent(1, 1));
+  const retained = h.sampleChanges.at(-1).observations;
+  const pending = h.controller.inspect(inspectionEvent(2, 2));
+  assert.equal(h.sampleChanges.at(-1).state, "loading");
+  h.controller.setPickingEnabled(false);
+  assert.equal(pendingSignal.aborted, true);
+  assert.equal(h.sampleChanges.at(-1).state, "ready");
+  assert.deepEqual(h.sampleChanges.at(-1).observations, retained);
+  finishPending(featureResponse(99));
+  assert.equal(await pending, false);
+  assert.deepEqual(h.sampleChanges.at(-1).observations, retained);
+  assert.equal(await h.controller.inspect(inspectionEvent(3, 3)), false);
+  assert.equal(requests, 2);
+  h.controller.setPickingEnabled(true);
+  assert.equal(await h.controller.inspect(inspectionEvent(3, 3)), true);
+  assert.equal(requests, 3);
+});
+
 test("a newer click owns presentation and closing does not disable later inspection", async () => {
   const resolvers = [];
   const h = createFixture((url, options) => new Promise((resolve, reject) => {

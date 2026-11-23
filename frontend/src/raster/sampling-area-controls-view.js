@@ -25,6 +25,8 @@ const SAMPLE_WINDOW_SLIDER_STEPS = 1000;
 /** Present map sampling choices independently of inspection-panel visibility. */
 export class RasterSamplingAreaControlsView {
     #root;
+    #samplingBoxAvailable = true;
+    #activeRasterAvailable = true;
     /** @type {boolean} Whether current spatial guidance is shown visually. */
     #sampleWindowGuidanceVisible = false;
 
@@ -200,8 +202,19 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     setActiveRasterAvailable(available) {
-        this.useMapWindowButton.disabled = !available;
+        this.#activeRasterAvailable = available;
+        this.useMapWindowButton.disabled = !available || !this.#samplingBoxAvailable;
         this.clearSampleWindowButton.disabled = !available;
+    }
+
+    /** Disable new box placement and hide its size controls while preserving the current area.
+     * @param {boolean} available Whether box placement and resizing are available to the visitor.
+     * @return {void}
+     */
+    setSamplingBoxAvailable(available) {
+        this.#samplingBoxAvailable = available;
+        this.useMapWindowButton.disabled = !available || !this.#activeRasterAvailable;
+        this.#renderSelectedControls();
     }
 
     /** Show the first sampling instruction on the map when the viewer offers a histogram.
@@ -232,7 +245,7 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     #renderSelectedControls() {
-        const boxSelected = this.isSamplingBoxSelected();
+        const boxSelected = this.#samplingBoxAvailable && this.isSamplingBoxSelected();
         const compact = boxSelected && !this.disclosure.open;
         const sliderParent = compact ? this.compactSizeControls : this.expandedSizeControls;
         if (this.rangeLabel.parentNode !== sliderParent) sliderParent.prepend(this.rangeLabel);
@@ -379,7 +392,7 @@ export class RasterSamplingAreaControlsView {
 
     /** Forward map-centered box selection. @return {void} */
     #handleUseMapWindow() {
-        if (this.useMapWindowButton.checked) {
+        if (this.useMapWindowButton.checked && !this.useMapWindowButton.disabled) {
             this.handlers.onUseMapWindow();
         }
     }

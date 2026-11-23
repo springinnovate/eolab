@@ -343,11 +343,10 @@ test("composition forwards inspection layout and CSS does not infer it from chan
 test("composition forwards compatible map areas and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*histogram: mapInteractionMode === "box",\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*if \(mapInteractionMode === "box"\) \{\s*const box = pixelPoint && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
+        /if \(rasterValues \|\| histogramBox\) \{[\s\S]*?rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*histogram: histogramBox,\s*onSelected: area => \{\s*if \(area\?\.kind === "polygonArea"\) return;\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*if \(histogramBox\) \{\s*const box = validPosition && mapInspection\.activeTool === "raster-series" && rasterSeries\.usesMapSamplingBox\s*\? rasterVisualization\.selectSamplingBox\(event\.latlng\) : null;\s*updateRasterSeriesArea\(box, box \? "Sampling box" : ""\);/
     );
-    assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
-    assert.match(COMPOSITION_SOURCE, /if \(mapInteractionMode === "pixel"\) \{\s*void vectorFeatureInspector\.inspect\(event\);\s*annotations\?\.inspectAt\(event\.latlng\);\s*\}/);
-    assert.match(COMPOSITION_SOURCE, /if \(!\["pixel", "box"\]\.includes\(mapInteractionMode\)\) return/);
+    assert.match(COMPOSITION_SOURCE, /if \(featurePicking\) \{\s*void vectorFeatureInspector\.inspect\(event\);\s*annotations\?\.inspectAt\(event\.latlng\);\s*\}/);
+    assert.match(COMPOSITION_SOURCE, /if \(!rasterValues && !featurePicking && !histogramBox\) return/);
 });
 
 test("map-layer Info can reveal Catalog through composition", () => {

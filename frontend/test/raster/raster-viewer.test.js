@@ -3906,6 +3906,16 @@ test("first sample previews the clicked footprint without opening a histogram or
         assert.equal(hover(2), undefined);
         h.viewer.setSamplingBoxPointerEnabled(true);
         assert.equal(h.controlsView.firstSampleHintVisible, true);
+        assert.ok(hover(2));
+        h.viewer.setMapInspectionAvailability({rasterValues: true, histogramBox: false});
+        assert.equal(hover(2), undefined);
+        assert.equal(h.controlsView.firstSampleHintVisible, false);
+        assert.equal(h.viewer.selectSamplingBox({lng: 2, lat: 0}), null);
+        assert.equal(h.viewer.exploreAt({lng: 2, lat: 0}, {histogram: true}), false);
+        h.controlsView.handlers.onUseMapWindow();
+        assert.equal(h.viewer.getSelectedArea(), null);
+        h.viewer.setMapInspectionAvailability({rasterValues: true, histogramBox: true});
+        assert.equal(h.controlsView.firstSampleHintVisible, true);
         assert.equal(h.viewer.exploreAt({lng: -20, lat: 0}), false);
         assert.equal(h.controlsView.firstSampleHintVisible, true);
         const beforeHover = reads.length;

@@ -1,19 +1,25 @@
 /** Present mutually exclusive map modes and capture a transient freehand selection. */
 
+/** @typedef {"pan"|"pixel"|"box"|"lasso"} MapMode */
+/** @typedef {{rasterValues:boolean,featurePicking:boolean,histogramBox:boolean}} MapPointerActions */
+/** @typedef {MapPointerActions & {lasso:boolean}} MapToolAvailability */
+
 /** Map-tool controls and lasso drawing, independent of raster and vector implementations. */
 export class MapInteractionTools {
     /**
-     * Connect the tool strip, P/Escape keys and composition-supplied source choices.
+     * Activate an allowed starting mode and connect its controls and gestures.
      * @param {Object} options Map and UI dependencies.
      * @param {Document} options.documentContext Owning document.
      * @param {Object} options.map Leaflet map used to capture geographic positions.
      * @param {Object} options.leaflet Leaflet geometry and display adapter.
      * @param {()=>Array<{key:string,label:string,selection:Object}>} options.getTargets Retained vector views, including hidden views.
-     * @param {(mode:string,enabled:boolean)=>void} options.onModeChange Composition coordinates independent tools; false suspends interaction during editing.
+     * @param {Readonly<MapToolAvailability>} options.availability Effective choices for this viewer.
+     * @param {boolean} [options.editing=false] Whether a layer editor already owns the map pointer.
+     * @param {(actions:Readonly<MapPointerActions>)=>void} options.onActionsChange Active pointer actions after mode and editing state are applied.
      * @param {(selection:Object,polygon:Object,signal:AbortSignal)=>Promise<Object>} options.selectFeatures Exact original-source selection API.
      */
-    constructor({documentContext, map, leaflet, getTargets, onModeChange, selectFeatures}) {
-        Object.assign(this, {document:documentContext, map, leaflet, getTargets, onModeChange, selectFeatures});
+    constructor({documentContext, map, leaflet, getTargets, availability, editing = false, onActionsChange, selectFeatures}) {
+        Object.assign(this, {document:documentContext, map, leaflet, getTargets, availability, onActionsChange, selectFeatures});
         this.root = documentContext.querySelector('#map-interaction-tools');
         this.buttons = [...this.root.querySelectorAll('[data-map-mode]')];
         this.controls = this.root.querySelector('#lasso-controls');
@@ -21,8 +27,9 @@ export class MapInteractionTools {
         this.status = this.root.querySelector('#map-interaction-status');
         this.clearButton = this.root.querySelector('#clear-lasso-selection');
         this.container = map.getContainer();
-        this.mode = 'pixel';
-        this.editing = false;
+        /** @type {MapMode} */
+        this.mode = this.#isModeAvailable('pixel') ? 'pixel' : 'pan';
+        this.editing = editing;
         this.generation = 0;
         this.targetSignature = null;
         this.stroke = null;
@@ -42,7 +49,7 @@ export class MapInteractionTools {
         this.listen(this.container, 'pointercancel', () => this.cancelStroke(), true);
         this.listen(this.container, 'lostpointercapture', () => this.cancelStroke(), true);
         this.listen(documentContext, 'keydown', event => {
-            if ((event.key === 'p' || event.key === 'P') && !this.editing &&
+            if ((event.key === 'p' || event.key === 'P') && !this.editing && this.#isModeAvailable('pixel') &&
                 !event.ctrlKey && !event.metaKey && !event.altKey &&
                 !event.target?.closest?.('input, textarea, select, [contenteditable]')) {
                 event.preventDefault(); this.setMode('pixel'); return;
@@ -50,14 +57,14 @@ export class MapInteractionTools {
             if (event.key !== 'Escape' || this.mode !== 'lasso' || this.editing) return;
             if (!this.stroke && !this.abort) return;
             event.preventDefault(); event.stopPropagation();
-            this.cancelStroke(); this.abort?.abort(); this.abort = null; ++this.generation;
+            this.#cancelLassoWork();
             this.status.textContent = 'Lasso cancelled. '+(this.selectionMessage || 'Drag around features to try again.');
-            this.root.setAttribute('aria-busy','false');
         });
         this.onMapMove = () => this.cancelStroke();
         map.on('movestart zoomstart', this.onMapMove);
         this.refresh();
-        this.setMode('pixel');
+        this.#activateMode(this.mode);
+        this.root.hidden = false;
     }
 
     /** Register an event released when the map closes.
@@ -72,19 +79,59 @@ export class MapInteractionTools {
         this.bindings.push(() => target.removeEventListener(name, handler, capture));
     }
 
-    /** Choose a map action without changing any source or existing layer filter.
-     * @param {"pan"|"pixel"|"box"|"lasso"} mode Requested map action.
+    /** Choose an available map action while the map is free for navigation and inspection.
+     * @param {MapMode} mode Requested map action.
      * @return {void}
      */
     setMode(mode) {
-        this.cancelStroke();
-        if (mode !== this.mode && this.abort) {
-            this.abort.abort(); this.abort = null; ++this.generation;
-            this.root.setAttribute('aria-busy','false');
+        if (this.editing || !this.#isModeAvailable(mode)) return;
+        this.#activateMode(mode);
+    }
+
+    /** Apply effective choices and return to Pan if the current mode is no longer available.
+     * @param {Readonly<MapToolAvailability>} availability Resolved inspection choices for this viewer.
+     * @return {void}
+     */
+    setAvailability(availability) {
+        this.availability = availability;
+        this.#activateMode(this.#isModeAvailable(this.mode) ? this.mode : 'pan');
+    }
+
+    /** Determine whether a mode has an enabled action.
+     * @param {string} mode Requested tool.
+     * @return {boolean} True for Pan or an enabled inspection mode.
+     */
+    #isModeAvailable(mode) {
+        switch (mode) {
+            case 'pan': return true;
+            case 'pixel': return this.availability.rasterValues || this.availability.featurePicking;
+            case 'box': return this.availability.histogramBox;
+            case 'lasso': return this.availability.lasso;
+            default: return false;
         }
+    }
+
+    /** Apply the allowed mode to the map and inform composition which actions can run.
+     * @param {MapMode} mode Available mode to present, including during drawing suspension.
+     * @return {void}
+     */
+    #activateMode(mode) {
+        if (mode !== this.mode || this.editing) this.#cancelLassoWork();
         this.mode = mode;
+        const { rasterValues, featurePicking } = this.availability;
         this.controls.hidden = mode !== 'lasso';
-        for (const button of this.buttons) button.setAttribute('aria-pressed', String(button.dataset.mapMode === mode));
+        const focused = this.document.activeElement;
+        for (const button of this.buttons) {
+            button.hidden = !this.#isModeAvailable(button.dataset.mapMode);
+            button.disabled = this.editing || button.hidden;
+            button.setAttribute('aria-pressed', String(button.dataset.mapMode === mode));
+            if (button.dataset.mapMode === 'pixel') {
+                button.textContent = rasterValues ? 'Pixel picker' : 'Feature picker';
+            }
+        }
+        if (!this.editing && this.buttons.includes(focused) && focused.hidden) {
+            this.buttons.find(button => button.dataset.mapMode === mode).focus({preventScroll:true});
+        }
         this.container.classList.toggle('is-lasso-active', mode === 'lasso' && !this.editing);
         this.container.classList.toggle('leaflet-crosshair', ['pixel','box','lasso'].includes(mode) && !this.editing);
         if (mode === 'lasso' && !this.editing) {
@@ -96,8 +143,18 @@ export class MapInteractionTools {
         }
         this.status.textContent = mode === 'lasso' ? this.selectionMessage || (this.layerSelect.value
             ? 'Drag around features; release to select. Esc cancels.' : 'Add a vector layer to the map to use Lasso.') :
-            mode === 'box' ? 'Click the map to place a histogram box.' : mode === 'pixel' ? 'Point at the map to pick pixel values; click to inspect features.' : 'Drag to move the map.';
-        this.onModeChange(mode, !this.editing);
+            mode === 'box' ? 'Click the map to place a histogram box.' : 'Drag to move the map.';
+        if (mode === 'pixel') {
+            this.status.textContent = [
+                rasterValues && 'Point at the map to pick pixel values.',
+                featurePicking && 'Click the map to inspect features.',
+            ].filter(Boolean).join(' ');
+        }
+        this.onActionsChange({
+            rasterValues: !this.editing && mode === 'pixel' && rasterValues,
+            featurePicking: !this.editing && mode === 'pixel' && featurePicking,
+            histogramBox: !this.editing && mode === 'box',
+        });
     }
 
     /** Suspend map modes while another owner edits a drawing.
@@ -106,9 +163,8 @@ export class MapInteractionTools {
      */
     setEditing(editing) {
         this.editing = editing;
-        for (const button of this.buttons) button.disabled = editing;
         this.layerSelect.disabled = editing || !this.targets.length;
-        this.setMode(this.mode);
+        this.#activateMode(this.mode);
     }
 
     /** Refresh choices and invalidate results whose original source or predicate changed.
@@ -143,7 +199,7 @@ export class MapInteractionTools {
         const target = this.targets.find(value => value.key === this.layerSelect.value);
         if (!target) return;
         event.preventDefault(); event.stopImmediatePropagation();
-        this.cancelStroke(); this.abort?.abort(); this.abort = null; ++this.generation;
+        this.#cancelLassoWork();
         this.container.setPointerCapture(event.pointerId);
         this.stroke = {pointer:event.pointerId, points:[], target:structuredClone(target), screen:null};
         this.preview?.remove();
@@ -200,12 +256,27 @@ export class MapInteractionTools {
         if (stroke) this.status.textContent = this.selectionMessage || 'Lasso cancelled. Drag around features to try again.';
     }
 
+    /** Release an unfinished Lasso gesture and supersede its read, preserving completed results.
+     * @return {void}
+     */
+    #cancelLassoWork() {
+        this.cancelStroke();
+        if (!this.abort) return;
+        ++this.generation;
+        this.abort.abort();
+        this.abort = null;
+        this.root.setAttribute('aria-busy','false');
+        this.clearButton.hidden = this.selectionMessage === null;
+    }
+
     /** Replace selected feature highlights after an exact, current source response.
      * @param {Object} target Captured view identity, label and source predicate.
      * @param {Object} polygon Closed WGS84 selection polygon.
      * @return {Promise<void>} Selection presentation completion; errors remain in the strip.
      */
     async select(target, polygon) {
+        if (this.mode !== 'lasso' || this.editing) return;
+        this.#cancelLassoWork();
         const generation = ++this.generation;
         const abort = new AbortController(); this.abort = abort;
         this.clearButton.hidden = false;
@@ -236,7 +307,7 @@ export class MapInteractionTools {
      * @return {void}
      */
     clear() {
-        ++this.generation; this.abort?.abort(); this.abort = null; this.cancelStroke();
+        this.#cancelLassoWork();
         this.highlight?.remove(); this.highlight = null; this.outline?.remove(); this.outline = null;
         this.selectionMessage = null;
         this.clearButton.hidden = true; this.root.setAttribute('aria-busy','false');
@@ -247,7 +318,8 @@ export class MapInteractionTools {
      * @return {void}
      */
     dispose() {
-        this.clear(); this.setMode('pan');
+        this.clear(); this.#activateMode('pan');
+        this.root.hidden = true;
         this.map.off('movestart zoomstart', this.onMapMove);
         for (const unbind of this.bindings) unbind();
     }

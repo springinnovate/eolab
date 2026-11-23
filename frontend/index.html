@@ -73,6 +73,7 @@
           <p>Changes won't affect visitors until you save. Shared polygon edits are saved separately.</p>
           <label>Map title<input id="published-map-edit-title" required maxlength="160"></label>
           <label>Subtitle<input id="published-map-edit-subtitle" maxlength="240"></label>
+          <fieldset id="published-map-visitor-controls" class="visitor-inspection-options" disabled></fieldset>
           <p>Fixed URL: <a id="published-map-edit-url" target="_blank" rel="noopener"></a></p>
           <div class="published-map-editor-actions">
             <button id="published-map-save" type="submit" disabled>Save changes for everyone</button>
@@ -656,7 +657,7 @@
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
-        <section id="map-interaction-tools" aria-label="Map interaction tools">
+        <section id="map-interaction-tools" aria-label="Map interaction tools" hidden>
           <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
             <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
             <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
@@ -1900,6 +1901,7 @@
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>
           <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
           <p id="publish-map-preview" class="publish-map-url"></p>
+          <fieldset id="publish-map-visitor-controls" class="visitor-inspection-options"></fieldset>
           <p>Shared layers stay live. An administrator can update or delete this published map.</p>
         </fieldset>
         <div id="publish-map-result" hidden>
@@ -1916,6 +1918,17 @@
         </div>
       </form>
     </dialog>
+    <template id="visitor-inspection-options">
+      <legend>Visitor tools</legend>
+      <label><input type="checkbox" data-visitor-control="inspectAndSelect"> Inspect and select</label>
+      <fieldset data-visitor-inspection-children>
+        <legend class="visually-hidden">Inspection tools</legend>
+        <label><input type="checkbox" data-visitor-control="rasterValues"> Pick raster values</label>
+        <label><input type="checkbox" data-visitor-control="featurePicking"> Pick features on the map</label>
+        <label><input type="checkbox" data-visitor-control="histogramBox"> Histogram box</label>
+        <label><input type="checkbox" data-visitor-control="lasso"> Lasso</label>
+      </fieldset>
+    </template>
     <section id="raster-download-sheet" popover="manual" role="dialog" aria-labelledby="raster-download-title raster-download-source">
       <div class="raster-download-scroll">
         <header class="raster-download-heading">

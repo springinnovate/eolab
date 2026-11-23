@@ -1,5 +1,43 @@
 /** DOM presentation and browser-link interaction for portable saved maps. */
 import { suggestMapLinkName } from "./api-client.js";
+import { VISITOR_CONTROLS_VERSION, visitorControlChoices } from "../visitor-controls.js";
+
+/**
+ * Read checked visitor choices including the stored values under a disabled parent.
+ * @param {HTMLFieldSetElement} fields Visitor controls in one form.
+ * @return {import("../visitor-controls.js").VisitorControls} Choices to send with the map document.
+ */
+function readVisitorControls(fields) {
+    return {
+        version: VISITOR_CONTROLS_VERSION,
+        choices: Object.fromEntries([...fields.querySelectorAll("input[data-visitor-control]")]
+            .map(input => [input.dataset.visitorControl, input.checked])),
+    };
+}
+
+/**
+ * Make child checkboxes editable when Inspect and select is checked.
+ * @param {HTMLFieldSetElement} fields Visitor controls in one form.
+ * @return {void}
+ */
+function updateVisitorChoiceInputs(fields) {
+    fields.querySelector("[data-visitor-inspection-children]").disabled =
+        !fields.querySelector('[data-visitor-control="inspectAndSelect"]').checked;
+}
+
+/**
+ * Populate a fresh visitor-controls form with saved or default choices.
+ * @param {HTMLFieldSetElement} fields Visitor controls in one form.
+ * @param {import("../visitor-controls.js").VisitorControls} [settings] Saved visitor settings.
+ * @return {void}
+ */
+function showVisitorChoices(fields, settings) {
+    const choices = visitorControlChoices(settings);
+    for (const input of fields.querySelectorAll("input[data-visitor-control]")) {
+        input.checked = choices[input.dataset.visitorControl];
+    }
+    updateVisitorChoiceInputs(fields);
+}
 
 /** Present shared-map actions without owning restoration or validation. */
 export class SavedMapViewDomView {
@@ -73,6 +111,11 @@ export class SavedMapViewDomView {
         this.publishUrl = documentContext.querySelector("#publish-map-url");
         this.publishOpen = documentContext.querySelector("#publish-map-open");
         this.publishCopy = documentContext.querySelector("#publish-map-copy");
+        this.publishVisitorControls = documentContext.querySelector("#publish-map-visitor-controls");
+        this.editVisitorControls = documentContext.querySelector("#published-map-visitor-controls");
+        const visitorFields = documentContext.querySelector("#visitor-inspection-options");
+        this.publishVisitorControls.append(visitorFields.content.cloneNode(true));
+        this.editVisitorControls.append(visitorFields.content.cloneNode(true));
         this.slugEdited = false;
     }
 
@@ -102,12 +145,15 @@ export class SavedMapViewDomView {
                 onSavePublishedMap({
                     title: this.document.querySelector("#published-map-edit-title").value,
                     subtitle: this.document.querySelector("#published-map-edit-subtitle").value,
+                    visitorControls: readVisitorControls(this.editVisitorControls),
                 });
             },
             publish: event => {
                 event.preventDefault();
-                onPublish({ title: this.publishTitle.value, subtitle: this.publishSubtitle.value, slug: this.publishSlug.value });
+                onPublish({ title: this.publishTitle.value, subtitle: this.publishSubtitle.value,
+                    slug: this.publishSlug.value, visitorControls: readVisitorControls(this.publishVisitorControls) });
             },
+            visitorChoice: event => updateVisitorChoiceInputs(event.currentTarget),
             title: () => {
                 if (!this.slugEdited) this.publishSlug.value = suggestMapLinkName(this.publishTitle.value);
                 this.updatePublicationPreview();
@@ -128,12 +174,15 @@ export class SavedMapViewDomView {
         this.publishSlug.addEventListener("input", this.handlers.slug);
         this.publishClose.addEventListener("click", this.handlers.close);
         this.publishCopy.addEventListener("click", this.handlers.copyPublished);
+        this.publishVisitorControls.addEventListener("change", this.handlers.visitorChoice);
+        this.editVisitorControls.addEventListener("change", this.handlers.visitorChoice);
         this.document.querySelector("#published-map-editor")?.addEventListener("submit", this.handlers.savePublishedMap);
     }
 
     /**
      * Display an administrative draft, including any notice about omitted layers.
-     * @param {{slug:string,title:string,subtitle:string}} saved Loaded map labels.
+     * @param {{slug:string,title:string,subtitle:string,view:{visitorControls?:import("../visitor-controls.js").VisitorControls}}}
+     * saved Loaded map labels and choices for the editor.
      * @param {boolean} complete Whether every saved layer and style restored successfully.
      * @return {void}
      */
@@ -142,6 +191,8 @@ export class SavedMapViewDomView {
         this.document.querySelector("#published-map-editor-heading").textContent = `Editing published map: ${saved.title}`;
         this.document.querySelector("#published-map-edit-title").value = saved.title;
         this.document.querySelector("#published-map-edit-subtitle").value = saved.subtitle;
+        showVisitorChoices(this.editVisitorControls, saved.view.visitorControls);
+        this.editVisitorControls.disabled = false;
         const link = this.document.querySelector("#published-map-edit-url");
         link.href = `/maps/${encodeURIComponent(saved.slug)}`;
         link.textContent = link.href;
@@ -150,7 +201,7 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Keep headings and navigation stable while a published-map save is pending.
+     * Keep form choices and navigation stable while a published-map save is pending.
      * @param {boolean} saving Whether the update is in flight.
      * @return {void}
      */
@@ -158,6 +209,7 @@ export class SavedMapViewDomView {
         for (const id of ["published-map-save", "published-map-edit-title", "published-map-edit-subtitle"]) {
             this.document.querySelector(`#${id}`).disabled = saving;
         }
+        this.editVisitorControls.disabled = saving;
         this.document.querySelector("#published-map-cancel").hidden = saving;
         this.document.querySelector("#published-map-editor").setAttribute("aria-busy", String(saving));
         if (saving) this.showPublishedMapEditStatus("Saving changes for everyone…");
@@ -173,7 +225,7 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Show a fresh publication form without modifying the map.
+     * Show a fresh publication form with the default visitor choices.
      * @param {{title:string,subtitle:string}} defaults Initial map labels.
      * @return {void}
      */
@@ -181,6 +233,7 @@ export class SavedMapViewDomView {
         this.publishTitle.value = defaults.title;
         this.publishSubtitle.value = defaults.subtitle;
         this.publishSlug.value = suggestMapLinkName(defaults.title);
+        showVisitorChoices(this.publishVisitorControls);
         this.slugEdited = false;
         this.publishStatus.textContent = "";
         this.publishFields.hidden = false;
@@ -467,6 +520,8 @@ export class SavedMapViewDomView {
             this.publishSlug.removeEventListener("input", this.handlers.slug);
             this.publishClose.removeEventListener("click", this.handlers.close);
             this.publishCopy.removeEventListener("click", this.handlers.copyPublished);
+            this.publishVisitorControls.removeEventListener("change", this.handlers.visitorChoice);
+            this.editVisitorControls.removeEventListener("change", this.handlers.visitorChoice);
             this.publishDialog.removeEventListener("cancel", this.blockCancel);
             this.document.querySelector("#published-map-editor")?.removeEventListener("submit", this.handlers.savePublishedMap);
             this.handlers = null;
