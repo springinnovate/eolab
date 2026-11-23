@@ -1138,6 +1138,7 @@
             <div class="vector-plot-context">
               <button id="vector-time-series-features-button" class="summary-text-button" type="button" aria-controls="vector-time-series-features-picker" aria-expanded="false">Features</button>
               <button id="vector-time-series-fields-button" class="summary-text-button" type="button" aria-controls="vector-time-series-fields-picker" aria-expanded="false">Choose fields</button>
+              <button id="vector-time-series-statistics-button" class="summary-text-button" type="button" aria-controls="vector-time-series-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-time-series-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
@@ -1164,21 +1165,40 @@
               <button id="vector-time-series-next-selection" class="secondary-button" type="button"
                 aria-controls="vector-time-series-plots vector-time-series-values" disabled>Next selection <span aria-hidden="true">→</span></button>
             </div>
-            <div id="vector-time-series-plots" class="vector-plot-results">
-              <div class="vector-plot-figure" id="vector-time-series-first">
-                <h3 id="vector-time-series-chart-title"></h3>
-                <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
-                <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+            <div id="vector-time-series-statistics-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Layer stats</strong>
+                <button id="vector-time-series-statistics-done" class="summary-text-button" type="button">Done</button></div>
+              <p class="vector-series-context">Across all features in each source layer.</p>
+              <div class="vector-plot-statistics-choices" role="group" aria-label="Statistics to show">
+                <label><input id="vector-time-series-statistics-mean" type="checkbox"> Mean</label>
+                <label><input id="vector-time-series-statistics-minimum" type="checkbox"> Minimum</label>
+                <label><input id="vector-time-series-statistics-maximum" type="checkbox"> Maximum</label>
               </div>
-              <div id="vector-time-series-extra-charts"></div>
             </div>
-            <div id="vector-time-series-values" hidden>
-              <div id="vector-time-series-table" class="vector-time-series-table" hidden>
-                <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
-                  <thead><tr id="vector-time-series-table-head"></tr></thead>
-                  <tbody id="vector-time-series-table-body"></tbody>
-                </table></div>
+            <div class="vector-plot-comparison">
+              <div class="vector-plot-measurements">
+                <div id="vector-time-series-plots" class="vector-plot-results">
+                  <div class="vector-plot-figure" id="vector-time-series-first">
+                    <h3 id="vector-time-series-chart-title"></h3>
+                    <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                    <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+                  </div>
+                  <div id="vector-time-series-extra-charts"></div>
+                </div>
+                <div id="vector-time-series-values" hidden>
+                  <div id="vector-time-series-table" class="vector-time-series-table" hidden>
+                    <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
+                      <thead><tr id="vector-time-series-table-head"></tr></thead>
+                      <tbody id="vector-time-series-table-body"></tbody>
+                    </table></div>
+                  </div>
+                </div>
               </div>
+              <aside id="vector-time-series-statistics" class="vector-plot-statistics" aria-labelledby="vector-time-series-statistics-heading" hidden>
+                <h3 id="vector-time-series-statistics-heading">Whole-layer statistics</h3>
+                <p id="vector-time-series-statistics-status" role="status"></p>
+                <div id="vector-time-series-statistics-results" aria-live="polite"></div>
+              </aside>
             </div>
             <p id="vector-time-series-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-time-series-selection" class="vector-time-series-selection" hidden>
@@ -1221,6 +1241,7 @@
             <div class="vector-plot-context">
               <button id="vector-feature-profile-features-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-features-picker" aria-expanded="false">Feature</button>
               <button id="vector-feature-profile-fields-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-fields-picker" aria-expanded="false">Choose fields</button>
+              <button id="vector-feature-profile-statistics-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-feature-profile-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
@@ -1246,20 +1267,39 @@
               <div id="vector-feature-profile-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
               <p id="vector-feature-profile-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
-            <div id="vector-feature-profile-plots" class="vector-plot-results">
-              <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
-                <h3 id="vector-feature-profile-chart-title" hidden></h3>
-                <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
-                <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
+            <div id="vector-feature-profile-statistics-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Layer stats</strong>
+                <button id="vector-feature-profile-statistics-done" class="summary-text-button" type="button">Done</button></div>
+              <p class="vector-series-context">Across all features in the source layer.</p>
+              <div class="vector-plot-statistics-choices" role="group" aria-label="Statistics to show">
+                <label><input id="vector-feature-profile-statistics-mean" type="checkbox"> Mean</label>
+                <label><input id="vector-feature-profile-statistics-minimum" type="checkbox"> Minimum</label>
+                <label><input id="vector-feature-profile-statistics-maximum" type="checkbox"> Maximum</label>
               </div>
             </div>
-            <div id="vector-feature-profile-values" hidden>
-              <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
-                <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
-                  <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
-                  <tbody id="vector-feature-profile-table-body"></tbody>
-                </table></div>
+            <div class="vector-plot-comparison">
+              <div class="vector-plot-measurements">
+                <div id="vector-feature-profile-plots" class="vector-plot-results">
+                  <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
+                    <h3 id="vector-feature-profile-chart-title" hidden></h3>
+                    <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                    <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
+                  </div>
+                </div>
+                <div id="vector-feature-profile-values" hidden>
+                  <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
+                    <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
+                      <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
+                      <tbody id="vector-feature-profile-table-body"></tbody>
+                    </table></div>
+                  </div>
+                </div>
               </div>
+              <aside id="vector-feature-profile-statistics" class="vector-plot-statistics" aria-labelledby="vector-feature-profile-statistics-heading" hidden>
+                <h3 id="vector-feature-profile-statistics-heading">Whole-layer statistics</h3>
+                <p id="vector-feature-profile-statistics-status" role="status"></p>
+                <div id="vector-feature-profile-statistics-results" aria-live="polite"></div>
+              </aside>
             </div>
             <p id="vector-feature-profile-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-feature-profile-selection" class="vector-time-series-selection" hidden>
