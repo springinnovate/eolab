@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { exportAnnotationGeoJSON, readAnnotationCollection } from "../../src/annotations/geojson.js";
-import { AnnotationModel, readAnnotationLayers, MAX_ANNOTATION_LAYERS,
+import { parseAnnotationGeoJSON, exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
+import { AnnotationModel, readAnnotationLayers, MAX_ANNOTATION_LAYERS, MAX_ANNOTATION_DOCUMENT_BYTES,
     MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER } from "../../src/annotations/model.js";
 import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
@@ -20,23 +20,29 @@ function model() {
     return new AnnotationModel([], () => `id-${++next}`);
 }
 
-test("file downloads preserve contributor names and colors from existing device layers", () => {
-    const annotations = model();
-    const layer = annotations.addLayerFromPolygons(readAnnotationCollection(collection()));
-    Object.assign(layer.polygons[0], { contributor: "Maria", contributorColor: "#FF006E" });
-    const [saved] = readAnnotationLayers(annotations.document());
-    const exported = exportAnnotationGeoJSON(saved, true);
-    assert.equal(exported.eolabAnnotations, 1);
-    assert.deepEqual(exported.features[0].properties, {
-        ...feature().properties, contributor: "Maria", contributorColor: "#FF006E",
-    });
-    assert.deepEqual(exportAnnotationGeoJSON(saved).features[0].properties, feature().properties);
+test("EOLab file exports preserve contributor colors as metadata, never as upload ownership", () => {
+    const document = collection();
+    document.eolabAnnotations = 1;
+    Object.assign(document.features[0].properties, { contributor: "Maria", contributorColor: "#FF006E", contributorId: "not-an-edit-credential" });
+    const imported = parseAnnotationGeoJSON(JSON.stringify(document));
+    const annotations = model(); const layer = annotations.importLayer(imported);
+    assert.equal(layer.polygons[0].contributorColor, "#FF006E");
+    assert.equal(layer.polygons[0].contributorId, undefined);
+    const exported = exportAnnotationGeoJSON(layer, true);
+    assert.equal(exported.features[0].properties.contributor, "Maria");
+    assert.deepEqual(parseAnnotationGeoJSON(JSON.stringify(exported)), imported);
+    assert.deepEqual(readAnnotationLayers(annotations.document()), annotations.layers);
+    assert.equal(exportAnnotationGeoJSON(layer).features[0].properties.contributorColor, undefined);
+    delete document.eolabAnnotations;
+    assert.equal(parseAnnotationGeoJSON(JSON.stringify(document)).polygons[0].contributorColor, undefined);
+    document.eolabAnnotations = 1; document.features[0].properties.contributorColor = "url(bad)";
+    assert.equal(parseAnnotationGeoJSON(JSON.stringify(document)).polygons[0].contributorColor, undefined);
 });
 
-test("GeoJSON export preserves names, notes and shapes of committed polygons", () => {
+test("EOLab GeoJSON preserves names, notes and shapes across import, export and device storage", () => {
     const annotations = model();
-    const contents = readAnnotationCollection(collection());
-    const layer = annotations.addLayerFromPolygons(contents);
+    const imported = parseAnnotationGeoJSON(JSON.stringify(collection()));
+    const layer = annotations.importLayer(imported);
     layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "does not match" }] };
     layer.visible = false;
     annotations.beginPolygon(layer.id);
@@ -50,14 +56,36 @@ test("GeoJSON export preserves names, notes and shapes of committed polygons", (
     assert.equal(exported.features[0].id, layer.polygons[0].id);
     assert.equal(exported.filter, undefined);
     assert.equal(exported.style, undefined);
-    assert.deepEqual(readAnnotationCollection(exported), contents);
+    assert.deepEqual(parseAnnotationGeoJSON(JSON.stringify(exported)), imported);
     assert.deepEqual(readAnnotationLayers(annotations.document()), annotations.layers);
     assert.equal(layer.visible, false, "export does not modify its source");
 });
 
+test("external optional properties use strings or defaults and never enter local records wholesale", () => {
+    const document = collection();
+    document.name = 45;
+    document.style = { color: "red" };
+    document.features[0].properties = { name: 42, title: "From title", note: {}, description: "From description", secret: "ignored" };
+    const imported = parseAnnotationGeoJSON(JSON.stringify(document), "My file");
+    assert.deepEqual(imported, { name: "My file", polygons: [{ name: "From title", note: "From description", vertices: [[0, 0], [2, 0], [1, 2]] }] });
+    for (const properties of [null, undefined, {}, { name: [], title: false, note: 4 }, { name: "   " }]) {
+        document.features[0].properties = properties;
+        const polygon = parseAnnotationGeoJSON(JSON.stringify(document)).polygons[0];
+        assert.equal(polygon.name, "Polygon 1");
+        assert.equal(polygon.note, "");
+    }
+});
+
+test("single Feature, Polygon, empty collection and UTF-8 BOM are supported", () => {
+    assert.equal(parseAnnotationGeoJSON(JSON.stringify(feature())).polygons[0].name, "Forest");
+    assert.equal(parseAnnotationGeoJSON(JSON.stringify(feature().geometry)).polygons[0].name, "Polygon 1");
+    assert.deepEqual(parseAnnotationGeoJSON('{"type":"FeatureCollection","name":"Empty","features":[]}'), { name: "Empty", polygons: [] });
+    assert.equal(parseAnnotationGeoJSON("\uFEFF" + JSON.stringify(collection())).polygons.length, 1);
+});
+
 test("export closes and orients clockwise rings without changing local geometry", () => {
     const annotations = model();
-    const layer = annotations.addLayerFromPolygons(readAnnotationCollection(collection()));
+    const layer = annotations.importLayer(parseAnnotationGeoJSON(JSON.stringify(collection())));
     layer.polygons[0].vertices.reverse();
     const before = annotations.document();
     const ring = exportAnnotationGeoJSON(layer).features[0].geometry.coordinates[0];
@@ -67,12 +95,12 @@ test("export closes and orients clockwise rings without changing local geometry"
     assert.deepEqual(annotations.document(), before);
 });
 
-test("restored contributions get independent layer and feature IDs and default presentation", () => {
+test("reimport generates independent layer and feature IDs and resets presentation", () => {
     const annotations = model();
-    const first = annotations.addLayerFromPolygons(readAnnotationCollection(collection()));
+    const first = annotations.importLayer(parseAnnotationGeoJSON(JSON.stringify(collection())));
     first.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "Forest" }] };
     first.visible = false;
-    const second = annotations.addLayerFromPolygons(readAnnotationCollection(exportAnnotationGeoJSON(first)));
+    const second = annotations.importLayer(parseAnnotationGeoJSON(JSON.stringify(exportAnnotationGeoJSON(first))));
     assert.notEqual(first.id, second.id);
     assert.notEqual(first.polygons[0].id, second.polygons[0].id);
     assert.equal(second.visible, true);
@@ -102,7 +130,7 @@ test("unsupported geometries identify the failing feature and reason", () => {
     ]) {
         const document = collection();
         document.features.push({ ...feature(), geometry });
-        assert.throws(() => readAnnotationCollection(document), error => {
+        assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), error => {
             assert.match(error.message, /^Feature 2:/);
             assert.match(error.message, message);
             return true;
@@ -110,55 +138,51 @@ test("unsupported geometries identify the failing feature and reason", () => {
     }
 });
 
-test("invalid collections, legacy CRS and invalid text produce descriptive errors", () => {
-    for (const value of [null, [], feature(), feature().geometry]) {
-        assert.throws(() => readAnnotationCollection(value), /Expected a GeoJSON FeatureCollection/);
-    }
-    assert.throws(() => readAnnotationCollection({ type: "FeatureCollection" }), /features array/);
-    assert.throws(() => readAnnotationCollection({ ...collection(), features: [null] }), /Feature 1/);
+test("invalid JSON, envelopes, legacy CRS and recognized overlong text produce descriptive errors", () => {
+    assert.throws(() => parseAnnotationGeoJSON("{"), /not valid JSON/);
+    for (const value of [null, 12, [], "Polygon"]) assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(value)), /Expected a GeoJSON/);
+    assert.throws(() => parseAnnotationGeoJSON('{"type":"FeatureCollection"}'), /features array/);
+    assert.throws(() => parseAnnotationGeoJSON('{"type":"FeatureCollection","features":[null]}'), /Feature 1/);
     for (const target of ["document", "feature", "geometry"]) {
         const document = collection();
         const object = target === "document" ? document : target === "feature" ? document.features[0] : document.features[0].geometry;
         object.crs = { type: "name", properties: { name: "EPSG:3857" } };
-        assert.throws(() => readAnnotationCollection(document), /Export GeoJSON in WGS84/);
+        assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), /Export GeoJSON in WGS84/);
     }
     const document = collection();
     document.features[0].properties.note = "a".repeat(10001);
-    assert.throws(() => readAnnotationCollection(document), /Feature 1 note exceeds the 10000-character limit/);
-    document.features[0].properties.note = 42;
-    assert.throws(() => readAnnotationCollection(document), /Feature 1 note must be text/);
+    assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), /Feature 1 note exceeds the 10000-character limit/);
     document.name = "a".repeat(161);
-    assert.throws(() => readAnnotationCollection(document), /Layer name exceeds/);
-    document.name = " ";
-    assert.throws(() => readAnnotationCollection(document), /Layer name must be nonblank text/);
+    assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), /Layer name exceeds/);
 });
 
-test("feature and vertex limits are checked before expensive geometry work", () => {
+test("document, feature and vertex limits are checked before expensive geometry work", () => {
+    assert.throws(() => parseAnnotationGeoJSON(" ".repeat(MAX_ANNOTATION_DOCUMENT_BYTES + 1)), /8 MiB/);
     const document = collection();
     document.features = Array.from({ length: MAX_POLYGONS_PER_LAYER + 1 }, () => null);
-    assert.throws(() => readAnnotationCollection(document), /at most 500/);
-    document.features = [feature()];
-    document.features[0].geometry.coordinates = [Array.from({ length: MAX_POLYGON_VERTICES + 2 }, () => [0, 0])];
-    assert.throws(() => readAnnotationCollection(document), /2000-vertex/);
+    assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), /at most 500/);
+    const geometry = { type: "Polygon", coordinates: [Array.from({ length: MAX_POLYGON_VERTICES + 2 }, () => [0, 0])] };
+    assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(geometry)), /2000-vertex/);
+
 });
 
-test("model refuses to add restored polygons during edits or beyond capacity", () => {
+test("model refuses imports during edits or beyond capacity without mutating existing annotations", () => {
     const annotations = model();
-    const contents = readAnnotationCollection(collection());
-    const layer = annotations.addLayerFromPolygons(contents);
+    const imported = parseAnnotationGeoJSON(JSON.stringify(collection()));
+    const layer = annotations.importLayer(imported);
     annotations.beginPolygon(layer.id);
-    assert.throws(() => annotations.addLayerFromPolygons(contents), /Save or cancel/);
+    assert.throws(() => annotations.importLayer(imported), /Save or cancel/);
     annotations.cancelPolygon();
     while (annotations.layers.length < MAX_ANNOTATION_LAYERS) annotations.createLayer();
     const before = annotations.document();
-    assert.throws(() => annotations.addLayerFromPolygons(contents), /32 polygon layers/);
+    assert.throws(() => annotations.importLayer(imported), /32 polygon layers/);
     assert.deepEqual(annotations.document(), before);
     const full = model();
     const existing = full.createLayer();
-    const polygon = contents.polygons[0];
+    const polygon = imported.polygons[0];
     existing.polygons = Array.from({ length: MAX_POLYGONS_PER_LAYER }, (_, i) => ({ ...polygon, id: `old-${i}`, note: "a".repeat(10000) }));
     const large = { name: "Another", polygons: existing.polygons.map(({ id, ...polygon }) => polygon) };
-    assert.throws(() => full.addLayerFromPolygons(large), /8 MiB polygon storage limit/);
+    assert.throws(() => full.importLayer(large), /8 MiB polygon storage limit/);
     assert.equal(full.layers.length, 1);
 });
 
@@ -166,6 +190,7 @@ test("notes preserve empty strings, whitespace and multiline text exactly", () =
     for (const note of ["", "   ", "\n", "  Field note\nLine two  "]) {
         const document = collection();
         document.features[0].properties.note = note;
-        assert.equal(readAnnotationCollection(document).polygons[0].note, note);
+        document.features[0].properties.description = "Must not replace an explicit note";
+        assert.equal(parseAnnotationGeoJSON(JSON.stringify(document)).polygons[0].note, note);
     }
 });

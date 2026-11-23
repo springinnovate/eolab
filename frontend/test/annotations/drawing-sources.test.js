@@ -196,7 +196,7 @@ test("unrelated conflicts do not block local sharing or restoring a removed draw
     await h.controller.restoreRemovedLayer(snapshot, () => true);
     assert.equal(h.controller.model.layer(h.other.id).drawingSource.id, OTHER_SOURCE);
     await h.controller.saveForSharing();
-    const id = await h.controller.restoreSharedContribution("Separate shared layer", {type: "FeatureCollection", name: "Separate shared layer", features: []});
+    const id = await h.controller.restoreSharedContribution("Separate shared layer", {type: "FeatureCollection", features: []});
     assert.ok(h.controller.sharableLayers().some(layer => layer.id === id));
     assert.equal(h.layer.polygons[0].note, "Retain conflicting A");
     assert.equal(h.layer.drawingSource.pending, true);

@@ -1,57 +1,79 @@
-/** Read saved annotation collections and export committed polygons as GeoJSON. */
+/** Convert annotation layers to and from ordinary GeoJSON files. */
 import { counterclockwisePolygonRing, polygonValidationMessage } from "./geometry.js";
-import { MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER,
+import { MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER, MAX_ANNOTATION_DOCUMENT_BYTES,
     MAX_ANNOTATION_NAME_LENGTH, MAX_ANNOTATION_NOTE_LENGTH } from "./model.js";
 
 /**
- * @typedef {{name:string,note:string,vertices:number[][]}} AnnotationPolygonContent
- * @typedef {{name:string,polygons:AnnotationPolygonContent[]}} AnnotationLayerContent
+ * @typedef {{name:string,note:string,vertices:number[][],contributor?:string,contributorColor?:string}} ImportedAnnotationPolygon
+ * @typedef {{name:string,polygons:ImportedAnnotationPolygon[]}} ImportedAnnotationLayer
  */
 
 /**
- * Read the saved FeatureCollection from a linked drawing or shared contribution.
- * The server bounds collection size at admission. Callers supply local or shared
- * identities separately from the polygon names, notes and coordinates returned here.
- * @param {Object} collection Decoded GeoJSON response.
- * @return {AnnotationLayerContent} Layer name and independent polygon contents for the editor.
- * @throws {Error} If the collection or its polygons violate the editor's contract.
+ * Validate an entire GeoJSON document and convert it into editable annotation polygons.
+ * Accept a FeatureCollection, Feature or Polygon. Only name/title and note/description
+ * strings are imported. EOLab exports also retain contributor labels and colors as
+ * file metadata, never as edit credentials. Other properties and feature IDs are ignored.
+ * @param {string} text JSON file contents, limited to 8 MiB.
+ * @param {string} [fallbackName="Imported polygons"] Layer name when the collection has none.
+ * @return {ImportedAnnotationLayer} Validated data with no local IDs or persistence side effects.
+ * @throws {Error} If JSON, geometry, coordinates or resource limits are invalid.
  */
-export function readAnnotationCollection(collection) {
-    if (collection?.type !== "FeatureCollection") throw new Error("Expected a GeoJSON FeatureCollection.");
-    rejectDeclaredCRS(collection, "GeoJSON");
-    const { features } = collection;
-    if (!Array.isArray(features)) throw new Error("GeoJSON FeatureCollection must contain a features array.");
-    if (features.length > MAX_POLYGONS_PER_LAYER) {
-        throw new Error(`The layer contains ${features.length} features. It can contain at most ${MAX_POLYGONS_PER_LAYER} polygons.`);
+export function parseAnnotationGeoJSON(text, fallbackName = "Imported polygons") {
+    if (new TextEncoder().encode(text).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
+        throw new Error("GeoJSON file exceeds the 8 MiB import limit.");
     }
-    const name = readAnnotationText(collection.name, MAX_ANNOTATION_NAME_LENGTH, "Layer name");
+    let document;
+    try { document = JSON.parse(text.replace(/^\uFEFF/, "")); }
+    catch { throw new Error("This file is not valid JSON. Choose a GeoJSON file."); }
+    if (!document || typeof document !== "object" || Array.isArray(document)) {
+        throw new Error("Expected a GeoJSON FeatureCollection, Feature or Polygon object.");
+    }
+    rejectDeclaredCRS(document, "GeoJSON");
+    let features;
+    if (document.type === "FeatureCollection") {
+        if (!Array.isArray(document.features)) throw new Error("GeoJSON FeatureCollection must contain a features array.");
+        features = document.features;
+    } else if (document.type === "Feature") features = [document];
+    else if (document.type === "Polygon") features = [{ type: "Feature", properties: null, geometry: document }];
+    else throw new Error(`Unsupported GeoJSON type: ${String(document.type).slice(0, 80)}. Import Polygon features only.`);
+    if (features.length > MAX_POLYGONS_PER_LAYER) {
+        throw new Error(`GeoJSON contains ${features.length} features; a shared layer supports at most ${MAX_POLYGONS_PER_LAYER} polygons.`);
+    }
+    const name = importAnnotationText([document.type === "FeatureCollection" ? document.name : null, fallbackName],
+        "Imported polygons", MAX_ANNOTATION_NAME_LENGTH, "Layer name");
     const polygons = features.map((feature, index) => {
         const context = `Feature ${index + 1}`;
         if (!feature || feature.type !== "Feature") throw new Error(`${context}: expected a GeoJSON Feature object.`);
         rejectDeclaredCRS(feature, context);
         const properties = feature.properties;
-        return {
-            name: readAnnotationText(properties?.name, MAX_ANNOTATION_NAME_LENGTH, `${context} name`),
-            note: readAnnotationText(properties?.note, MAX_ANNOTATION_NOTE_LENGTH, `${context} note`, true),
-            vertices: readPolygonVertices(feature.geometry, context),
-        };
+        const name = importAnnotationText([properties?.name, properties?.title], `Polygon ${index + 1}`,
+            MAX_ANNOTATION_NAME_LENGTH, `${context} name`);
+        const note = importAnnotationText([properties?.note, properties?.description], "",
+            MAX_ANNOTATION_NOTE_LENGTH, `${context} note`, true);
+        const polygon = { name, note, vertices: importPolygonVertices(feature.geometry, context) };
+        if (document.eolabAnnotations === 1 && typeof properties?.contributor === "string" &&
+            properties.contributor.trim() && properties.contributor.length <= MAX_ANNOTATION_NAME_LENGTH &&
+            /^#[\da-f]{6}$/i.test(properties.contributorColor)) {
+            polygon.contributor = properties.contributor;
+            polygon.contributorColor = properties.contributorColor;
+        }
+        return polygon;
     });
     return { name, polygons };
 }
 
 /**
- * Read a saved layer name, polygon name or note within the editor's text limit.
- * @param {unknown} value Saved field value.
- * @param {number} maximum Maximum supported length in UTF-16 code units.
+ * Choose recognized string text, falling back when optional properties do not match.
+ * @param {unknown[]} candidates Recognized properties in preference order.
+ * @param {string} fallback Default text when none is a nonblank string.
+ * @param {number} maximum Maximum supported character count.
  * @param {string} context Field description for errors.
- * @param {boolean} [allowBlank=false] Whether the field can be empty or whitespace only.
- * @return {string} Original text with its whitespace preserved.
- * @throws {Error} If the value is missing, has the wrong type or exceeds the limit.
+ * @param {boolean} [allowBlank=false] Preserve empty/whitespace notes instead of applying a fallback.
+ * @return {string} Original text, without HTML interpretation or whitespace changes.
+ * @throws {Error} If recognized text exceeds the annotation field limit.
  */
-function readAnnotationText(value, maximum, context, allowBlank = false) {
-    if (typeof value !== "string" || (!allowBlank && !value.trim())) {
-        throw new Error(`${context} must be ${allowBlank ? "text" : "nonblank text"}.`);
-    }
+function importAnnotationText(candidates, fallback, maximum, context, allowBlank = false) {
+    const value = candidates.find(candidate => typeof candidate === "string" && (allowBlank || candidate.trim())) ?? fallback;
     if (value.length > maximum) throw new Error(`${context} exceeds the ${maximum}-character limit.`);
     return value;
 }
@@ -76,9 +98,9 @@ function rejectDeclaredCRS(object, context) {
  * @return {number[][]} Independent two-dimensional vertices accepted by the annotation editor.
  * @throws {Error} If geometry has holes, another type, invalid coordinates or an invalid ring.
  */
-function readPolygonVertices(geometry, context) {
+function importPolygonVertices(geometry, context) {
     if (!geometry || geometry.type !== "Polygon") {
-        throw new Error(`${context}: expected Polygon geometry, found ${String(geometry?.type ?? "missing geometry").slice(0, 80)}.`);
+        throw new Error(`${context}: ${String(geometry?.type ?? "missing geometry").slice(0, 80)} is not supported. Import Polygon features only.`);
     }
     rejectDeclaredCRS(geometry, context);
     const rings = geometry.coordinates;

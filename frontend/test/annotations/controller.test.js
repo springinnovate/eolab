@@ -72,7 +72,7 @@ test("shared viewer keeps private layers stored but never attaches or exposes th
     await annotations.load({ attachSavedLayers: false });
     assert.deepEqual(attached, []);
     assert.deepEqual(annotations.summaryTargets(), []);
-    await annotations.restoreSharedContribution("Included shared layer", { type: "FeatureCollection", name: "Included shared layer", features: [] });
+    await annotations.restoreSharedContribution("Included shared layer", { type: "FeatureCollection", features: [] });
     assert.equal(attached.length, 1);
     assert.equal(annotations.model.layer(privateLayer.id).name, "Private notes");
     assert.equal(annotations.sharableLayers().some(layer => layer.id === privateLayer.id), true, "private data is retained during saves");
@@ -599,7 +599,7 @@ test("invalid saved drawings stay in the closed editor without overwriting store
         assert.equal(annotations.loaded, false);
         assert.equal(annotations.drawButton.disabled, true);
         assert.match(annotations.status.textContent, /invalid polygon/);
-        await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", name: "Shared layer", features: [] }),
+        await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", features: [] }),
             /Cannot open saved polygons: Saved polygons contain an invalid polygon/);
         await annotations.save();
         assert.equal(writes, 0);
@@ -876,7 +876,7 @@ test("restoring a shared contribution exposes it only after successful device sa
     const events = []; let release;
     annotations.onCommittedChange = () => events.push(["saved", annotations.sharableLayers().map(layer => layer.id)]);
     annotations.storage.save = () => new Promise(resolve => { release = resolve; });
-    const collection = { type: "FeatureCollection", name: "Shared", features: [] };
+    const collection = { type: "FeatureCollection", features: [] };
     const restoring = annotations.restoreSharedContribution("Shared", collection);
     assert.deepEqual(events, []);
     assert.deepEqual(annotations.sharableLayers(), []);

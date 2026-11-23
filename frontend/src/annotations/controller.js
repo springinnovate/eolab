@@ -1,6 +1,6 @@
 /** Connect polygon drawing, editing and local storage to the map's layer list. */
 import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
-import { exportAnnotationGeoJSON, readAnnotationCollection } from "./geojson.js";
+import { exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
 import { AnnotationMapEditor } from "./map-editor.js";
@@ -187,10 +187,10 @@ export class AnnotationController {
      */
     async restoreSharedContribution(name, collection, { localId = null, replacePolygons = false } = {}) {
         if (!this.loaded) throw new Error(this.status.textContent);
-        const { polygons } = readAnnotationCollection(collection);
+        const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
         const existing = this.model.layers.find(layer => layer.id === localId);
-        const layer = existing ?? this.model.addLayerFromPolygons({ name, polygons });
-        if (existing && replacePolygons) layer.polygons = polygons;
+        const layer = existing ?? this.model.importLayer({ ...imported, name });
+        if (existing && replacePolygons) layer.polygons = imported.polygons;
         layer.name = name;
         if (!this.layers.has(layer.id)) this.attachLayer(layer);
         else this.refreshLayer(layer.id);
@@ -258,8 +258,8 @@ export class AnnotationController {
         const signature = JSON.stringify(data.collections);
         const changed = signature !== previous?.signature;
         const polygons = changed ? data.collections.flatMap(collection => {
-            const { polygons } = readAnnotationCollection(collection);
-            return polygons.map((polygon, index) => ({ ...polygon, id: collection.features[index].id,
+            const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
+            return imported.polygons.map((polygon, index) => ({ ...polygon, id: collection.features[index].id,
                 contributor: collection.features[index].properties.contributor,
                 contributorId: collection.features[index].properties.contributorId }));
         }) : previous.polygons;
