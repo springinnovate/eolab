@@ -1,7 +1,8 @@
-/** Same-site publication, retrieval and administrator updates of named maps. */
+/** Same-site publication, retrieval and editing of named maps. */
 import { parseSavedMapView, MAX_SAVED_MAP_VIEW_BYTES } from "./model.js";
 
 export const MAP_LINK_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAP_EDIT_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
  * Suggest a readable URL name while leaving the creator free to edit it.
@@ -29,6 +30,18 @@ export function namedMapSlugFromPath(pathname) {
  */
 export function editableMapSlugFromPath(pathname) {
     return /^\/admin-eolab\/maps\/([^/]+)\/edit\/?$/.exec(pathname)?.[1] ?? null;
+}
+
+/**
+ * Read a private editor URL. The fragment is available to the browser without
+ * appearing in the HTTP request for the page.
+ * @param {Pick<Location, "pathname"|"hash">} location Current browser location.
+ * @return {{slug:string,token:string}|null} Private editor target and token, or null
+ * for other routes. An absent fragment yields an empty token.
+ */
+export function privateMapEditFromLocation({ pathname, hash }) {
+    const match = /^\/maps\/([^/]+)\/edit\/?$/.exec(pathname);
+    return match ? { slug: match[1], token: hash.slice(1) } : null;
 }
 
 /**
@@ -61,27 +74,37 @@ function validateLinkName(slug) {
     }
 }
 
-/** Read and create maps without contacting their catalog or annotation sources. */
+/** Read, publish and edit maps without contacting their layer sources. */
 export class SavedMapApiClient {
+    /** @type {string|null} Private credential used exclusively by editor requests. */
+    #editToken;
+
     /**
      * Configure the existing same-site API transport.
      * @param {typeof fetch} [fetchImplementation] HTTP request implementation.
+     * @param {string|null} [editToken=null] Fragment from a private editor URL.
+     * Null uses the administrator API for editor requests. An empty string is
+     * treated as a missing credential on a private editor URL.
      */
-    constructor(fetchImplementation = globalThis.fetch) {
+    constructor(fetchImplementation = globalThis.fetch, editToken = null) {
         this.fetch = (url, options) => fetchImplementation(url, options);
+        this.#editToken = editToken;
     }
 
     /**
      * Save a new named map; a taken name never overwrites another map.
      * @param {Object} candidate Publication labels and captured view.
-     * @return {Promise<Object>} Validated stored record.
+     * @return {Promise<{slug:string,title:string,subtitle:string,view:Object,editToken:string}>}
+     * Stored map and the credential for its private edit link.
      * @throws {Error} For invalid input, duplicate name, capacity or transport failure.
      */
     async create(candidate) {
         const fields = validateMapPublication(candidate);
         const view = parseSavedMapView(JSON.stringify(candidate.view));
-        return this.#request("", { method: "POST", headers: { "Content-Type": "application/json", "X-EOLab-Saved-Maps": "1" },
-            body: JSON.stringify({ ...fields, view }) }, fields.slug);
+        return this.#request("/api/saved-maps", {
+            method: "POST", headers: { "Content-Type": "application/json", "X-EOLab-Saved-Maps": "1" },
+            body: JSON.stringify({ ...fields, view }),
+        }, fields.slug, "publication");
     }
 
     /**
@@ -92,18 +115,18 @@ export class SavedMapApiClient {
      */
     async get(slug) {
         validateLinkName(slug);
-        return this.#request(`/${slug}`, { method: "GET" }, slug);
+        return this.#request(`/api/saved-maps/${slug}`, { method: "GET" }, slug);
     }
 
     /**
-     * Load a published map and its revision through administrator authentication.
+     * Load a published map and its revision with the current editor's credentials.
      * @param {string} slug Fixed map URL name.
      * @return {Promise<Object>} Validated map with a required revision.
      * @throws {Error} If unauthorized, absent, unavailable or malformed.
      */
     async getForEditing(slug) {
         validateLinkName(slug);
-        return this.#request(`/${slug}`, { method: "GET" }, slug, true);
+        return this.#requestEdit(slug, { method: "GET" });
     }
 
     /**
@@ -117,22 +140,46 @@ export class SavedMapApiClient {
         const fields = validateMapPublication({ ...candidate, slug });
         if (!Number.isSafeInteger(candidate.revision) || candidate.revision < 1) throw new Error("Reload the map before editing.");
         const view = parseSavedMapView(JSON.stringify(candidate.view));
-        return this.#request(`/${slug}`, { method: "PUT",
-            headers: { "Content-Type": "application/json", "X-EOLab-Admin": "1" },
-            body: JSON.stringify({ ...fields, view, revision: candidate.revision }) }, slug, true);
+        return this.#requestEdit(slug, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...fields, view, revision: candidate.revision }),
+        });
+    }
+
+    /**
+     * Use the editor endpoint and credential selected by the page's URL.
+     * @param {string} slug Validated map name.
+     * @param {RequestInit} options Read or revision-checked update.
+     * @return {Promise<Object>} Validated map and revision.
+     * @throws {Error} If the private token is malformed or the request fails.
+     */
+    async #requestEdit(slug, options) {
+        if (this.#editToken === null) {
+            const headers = options.method === "PUT"
+                ? { ...options.headers, "X-EOLab-Admin": "1" } : options.headers;
+            return this.#request(`/api/admin/saved-maps/${slug}`, { ...options, headers }, slug, "edit");
+        }
+        if (!MAP_EDIT_TOKEN_PATTERN.test(this.#editToken)) {
+            throw new Error("This private edit link is incomplete. Open the full link or ask a site administrator for a new one.");
+        }
+        return this.#request(`/api/saved-maps/${slug}/edit`, {
+            ...options, redirect: "error",
+            headers: { ...options.headers, Authorization: `Bearer ${this.#editToken}` },
+        }, slug, "edit");
     }
 
     /**
      * Fetch a bounded saved-map response and validate its identity and document.
-     * @param {string} suffix Validated API path suffix.
+     * @param {string} path Same-site API path.
      * @param {RequestInit} options Request method and optional JSON body.
      * @param {string} slug Expected record identity.
-     * @param {boolean} [administration=false] Use the authenticated editing API and validate its revision.
-     * @return {Promise<Object>} Canonical publication labels and view.
+     * @param {"map"|"publication"|"edit"} [responseType="map"] Whether to read
+     * an ordinary map, a newly issued private token, or its editing revision.
+     * @return {Promise<Object>} Canonical labels and view, with the requested token or revision.
      * @throws {Error} For HTTP, timeout, size, JSON or response-contract failures.
      */
-    async #request(suffix, options, slug, administration = false) {
-        const response = await this.fetch(`/api/${administration ? "admin/" : ""}saved-maps${suffix}`, {
+    async #request(path, options, slug, responseType = "map") {
+        const response = await this.fetch(path, {
             ...options, cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(15000),
         });
         if (!response.body) throw new Error("Saved-map service returned an empty response. Try again shortly.");
@@ -158,10 +205,15 @@ export class SavedMapApiClient {
         }
         const fields = validateMapPublication(record);
         if (fields.slug !== slug) throw new Error("Saved-map service returned a different map.");
-        if (administration && (!Number.isSafeInteger(record.revision) || record.revision < 1)) {
+        if (responseType === "edit" && (!Number.isSafeInteger(record.revision) || record.revision < 1)) {
             throw new Error("Saved-map service returned an invalid revision. Reload before editing.");
         }
+        if (responseType === "publication" &&
+            (typeof record.editToken !== "string" || !MAP_EDIT_TOKEN_PATTERN.test(record.editToken))) {
+            throw new Error("The map was published, but its private edit link could not be read. Ask a site administrator for a new link.");
+        }
         return { ...fields, view: parseSavedMapView(JSON.stringify(record.view)),
-            ...(administration ? { revision: record.revision } : {}) };
+            ...(responseType === "edit" ? { revision: record.revision } : {}),
+            ...(responseType === "publication" ? { editToken: record.editToken } : {}) };
     }
 }

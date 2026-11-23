@@ -111,6 +111,9 @@ export class SavedMapViewDomView {
         this.publishUrl = documentContext.querySelector("#publish-map-url");
         this.publishOpen = documentContext.querySelector("#publish-map-open");
         this.publishCopy = documentContext.querySelector("#publish-map-copy");
+        this.publishEditLink = documentContext.querySelector("#publish-map-edit-link");
+        this.publishOpenEditor = documentContext.querySelector("#publish-map-open-editor");
+        this.publishCopyEditor = documentContext.querySelector("#publish-map-copy-editor");
         this.publishVisitorControls = documentContext.querySelector("#publish-map-visitor-controls");
         this.editVisitorControls = documentContext.querySelector("#published-map-visitor-controls");
         const visitorFields = documentContext.querySelector("#visitor-inspection-options");
@@ -127,7 +130,7 @@ export class SavedMapViewDomView {
      * @param {()=>void} handlers.onReset Restore the configured initial view.
      * @param {()=>void} handlers.onUndo Restore the pre-reset view.
      * @param {(fields:Object)=>void} handlers.onPublish Save the captured map under the entered name.
-     * @param {(fields:Object)=>void} [handlers.onSavePublishedMap] Save administrator changes at the existing URL.
+     * @param {(fields:Object)=>void} [handlers.onSavePublishedMap] Save editor changes at the existing URL.
      * @param {()=>void} handlers.onShowUnavailableLayers Review saved layers whose sources could not open.
      * @param {(index:number)=>void} handlers.onRemoveUnavailableLayer Discard one retained view's saved settings, without deleting its source.
      * @return {void}
@@ -160,9 +163,20 @@ export class SavedMapViewDomView {
             },
             slug: () => { this.slugEdited = true; this.updatePublicationPreview(); },
             close: () => this.publishDialog.close(),
-            copyPublished: async () => {
-                const result = await this.copyUrl(this.publishUrl.value);
-                this.publishStatus.textContent = result.copied ? "Link copied." : "Select and copy the link above.";
+            clearPrivateLink: () => {
+                this.publishEditLink.value = "";
+                this.publishOpenEditor.removeAttribute("href");
+            },
+            copyPublicationLink: async event => {
+                const privateLink = event.currentTarget === this.publishCopyEditor;
+                const input = privateLink ? this.publishEditLink : this.publishUrl;
+                const result = await this.copyUrl(input.value);
+                if (!result.copied) {
+                    input.focus();
+                    input.select();
+                }
+                const label = privateLink ? "Private edit link" : "Public map link";
+                this.publishStatus.textContent = result.copied ? `${label} copied.` : "Copy the selected link.";
             },
         };
         this.copyButton.addEventListener("click", this.handlers.copy);
@@ -173,14 +187,16 @@ export class SavedMapViewDomView {
         this.publishTitle.addEventListener("input", this.handlers.title);
         this.publishSlug.addEventListener("input", this.handlers.slug);
         this.publishClose.addEventListener("click", this.handlers.close);
-        this.publishCopy.addEventListener("click", this.handlers.copyPublished);
+        this.publishDialog.addEventListener("close", this.handlers.clearPrivateLink);
+        this.publishCopy.addEventListener("click", this.handlers.copyPublicationLink);
+        this.publishCopyEditor.addEventListener("click", this.handlers.copyPublicationLink);
         this.publishVisitorControls.addEventListener("change", this.handlers.visitorChoice);
         this.editVisitorControls.addEventListener("change", this.handlers.visitorChoice);
         this.document.querySelector("#published-map-editor")?.addEventListener("submit", this.handlers.savePublishedMap);
     }
 
     /**
-     * Display an administrative draft, including any notice about omitted layers.
+     * Display a map draft, including any notice about omitted layers.
      * @param {{slug:string,title:string,subtitle:string,view:{visitorControls?:import("../visitor-controls.js").VisitorControls}}}
      * saved Loaded map labels and choices for the editor.
      * @param {boolean} complete Whether every saved layer and style restored successfully.
@@ -276,19 +292,24 @@ export class SavedMapViewDomView {
     showPublicationError(message) { this.publishStatus.textContent = message; }
 
     /**
-     * Offer the published URL as plain text, an open link and a copy action.
+     * Show separate public and private links with their own open and copy actions.
      * @param {string} slug Validated stored URL name.
+     * @param {string} editToken Credential issued with the new map.
      * @return {void}
      */
-    showPublishedMap(slug) {
-        const url = new URL(`/maps/${encodeURIComponent(slug)}`, this.location.href).href;
+    showPublishedMap(slug, editToken) {
+        const publicPath = `/maps/${encodeURIComponent(slug)}`;
+        const publicUrl = new URL(publicPath, this.location.href).href;
+        const editUrl = new URL(`${publicPath}/edit#${editToken}`, this.location.href).href;
         this.publishFields.hidden = true;
         this.publishSubmit.hidden = true;
         this.publishResult.hidden = false;
-        this.publishUrl.value = url;
-        this.publishOpen.href = url;
+        this.publishUrl.value = publicUrl;
+        this.publishOpen.href = publicUrl;
+        this.publishEditLink.value = editUrl;
+        this.publishOpenEditor.href = editUrl;
         this.publishClose.textContent = "Done";
-        this.publishStatus.textContent = "Shared map created. Anyone with this link can open it.";
+        this.publishStatus.textContent = "Map published.";
         this.publishUrl.focus();
         this.publishUrl.select();
     }
@@ -519,7 +540,9 @@ export class SavedMapViewDomView {
             this.publishTitle.removeEventListener("input", this.handlers.title);
             this.publishSlug.removeEventListener("input", this.handlers.slug);
             this.publishClose.removeEventListener("click", this.handlers.close);
-            this.publishCopy.removeEventListener("click", this.handlers.copyPublished);
+            this.publishDialog.removeEventListener("close", this.handlers.clearPrivateLink);
+            this.publishCopy.removeEventListener("click", this.handlers.copyPublicationLink);
+            this.publishCopyEditor.removeEventListener("click", this.handlers.copyPublicationLink);
             this.publishVisitorControls.removeEventListener("change", this.handlers.visitorChoice);
             this.editVisitorControls.removeEventListener("change", this.handlers.visitorChoice);
             this.publishDialog.removeEventListener("cancel", this.blockCancel);

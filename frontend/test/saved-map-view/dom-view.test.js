@@ -28,7 +28,10 @@ function viewFixture() {
         );
       },
       setAttribute(name, value) { attributes.set(name, value); },
-      removeAttribute(name) { attributes.delete(name); },
+      removeAttribute(name) {
+        attributes.delete(name);
+        if (name === "href") delete this.href;
+      },
       replaceChildren() { this.children = []; },
       append(child) { this.children.push(child); },
       focus() {},
@@ -70,7 +73,8 @@ function viewFixture() {
   for (const name of ["editor", "editor-heading", "edit-title", "edit-subtitle", "edit-url", "save", "cancel", "edit-status"]) {
     selectors.set(`#published-map-${name}`, element());
   }
-  for (const name of ["dialog", "form", "fields", "title", "subtitle", "slug", "preview", "status", "submit", "close", "result", "url", "open", "copy"]) {
+  for (const name of ["dialog", "form", "fields", "title", "subtitle", "slug", "preview", "status",
+    "submit", "close", "result", "url", "open", "copy", "edit-link", "open-editor", "copy-editor"]) {
     selectors.set(`#publish-map-${name}`, element());
   }
   selectors.set("#visitor-inspection-options", { content: { cloneNode: () => ({}) } });
@@ -133,7 +137,7 @@ test("published-map editing shows fixed URL, explicit save, busy state and retai
   view.unbind();
 });
 
-test("publication dialog suggests editable names, keeps errors inline and exposes the canonical link", async () => {
+test("publication dialog shows separate public and private links after a successful save", async () => {
   const { view, elements } = viewFixture();
   const el = name => elements.get(`#publish-map-${name}`);
   let submitted;
@@ -166,11 +170,26 @@ test("publication dialog suggests editable names, keeps errors inline and expose
   assert.equal(el("slug").value, "my-map");
   assert.equal(parent.checked, false);
   assert.ok(children.every(input => input.checked));
-  view.showPublishedMap("my-map");
-  assert.equal(el("open").href, "https://viewer.example/maps/my-map");
+  const editToken = "b".repeat(64);
+  const publicLink = "https://viewer.example/maps/my-map";
+  const editLink = `${publicLink}/edit#${editToken}`;
+  view.showPublishedMap("my-map", editToken);
+  assert.equal(el("open").href, publicLink);
+  assert.equal(el("url").value, publicLink);
+  assert.equal(el("open-editor").href, editLink);
+  assert.equal(el("edit-link").value, editLink);
   assert.equal(el("fields").hidden, true);
   assert.equal(el("result").hidden, false);
-  view.location.href = "https://viewer.example/maps/my-map?viewer=shared#private";
+  const copied = [];
+  view.clipboard = { async writeText(url) { copied.push(url); } };
+  el("copy").dispatch("click");
+  el("copy-editor").dispatch("click");
+  assert.deepEqual(copied, [publicLink, editLink]);
+  el("dialog").close();
+  assert.equal(el("edit-link").value, "");
+  assert.equal(el("open-editor").href, undefined);
+  view.clipboard = null;
+  view.location.href = editLink;
   assert.deepEqual(await view.copyNamedMapLink("my-map"), { copied: false, url: "https://viewer.example/maps/my-map" });
   view.unbind();
 });

@@ -1,7 +1,7 @@
 """Validate named maps and their Catalog, drawing, private and shared references."""
 
 from datetime import datetime, timezone
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, TypedDict
 from uuid import UUID
 
 from pydantic import (
@@ -26,6 +26,9 @@ from eolab_app.map_layer_documents import (
 
 MAX_VIEW_BYTES = 512 * 1024
 MAX_REQUEST_BYTES = MAX_VIEW_BYTES + 4096
+INVALID_MAP_EDIT_LINK = (
+    "This private edit link no longer works. Ask a site administrator for a new link."
+)
 Slug = Annotated[
     str,
     StringConstraints(
@@ -358,14 +361,44 @@ class CreateSavedMap(MapDocumentPart):
 
 
 class SavedMap(CreateSavedMap):
-    """Stored map with its creation time and revision for administrator updates."""
+    """Stored map with its creation time and revision for concurrent editing."""
 
     createdAt: datetime
     revision: Annotated[int, Field(ge=1, strict=True)] = 1
 
 
+class SavedMapEditToken(MapDocumentPart):
+    """Private edit credential returned only when a link is issued.
+
+    Attributes:
+        editToken: 64 lowercase hexadecimal characters for the link fragment.
+    """
+
+    editToken: str
+
+
+class PublishedSavedMap(SavedMap, SavedMapEditToken):
+    """Newly published map and the private credential for editing that map."""
+
+
+class PublishedMapSummary(TypedDict):
+    """Administrator list entry with deletion and edit-link status.
+
+    Attributes:
+        slug: Fixed public URL name.
+        title: Published map title.
+        deletedAt: When the map was hidden, or None for an active map.
+        hasEditLink: Whether a private edit link has been issued and is not revoked.
+    """
+
+    slug: str
+    title: str
+    deletedAt: datetime | None
+    hasEditLink: bool
+
+
 class UpdateSavedMap(CreateSavedMap):
-    """Replacement map configuration and the revision opened by the administrator."""
+    """Replacement map configuration and the revision opened by the editor."""
 
     revision: Annotated[int, Field(ge=1, strict=True)]
 
