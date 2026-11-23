@@ -39,7 +39,7 @@ from eolab_app.vector.sampling import VectorSamplingService
 from tests.test_raster_source_access import _vector_result_sampler
 
 
-@pytest.fixture(params=["GPKG", "ESRI Shapefile"])
+@pytest.fixture(params=["GPKG", "GPKG-wide-ids", "ESRI Shapefile"])
 def source(
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> tuple[VectorSamplingService, ResolvedCatalogSelection, tuple[int, ...]]:
@@ -52,12 +52,17 @@ def source(
     Returns:
         Source owner, authorized original, and its native IDs in original order.
     """
-    is_gpkg = request.param == "GPKG"
+    is_gpkg = request.param.startswith("GPKG")
+    ids = (
+        (-7, 2**31, 2**53 + 1)
+        if request.param == "GPKG-wide-ids"
+        else (-7, 2, 3) if is_gpkg else (0, 1, 2)
+    )
     path = tmp_path / ("features.gpkg" if is_gpkg else "features.shp")
     with fiona.open(
         path,
         "w",
-        driver=request.param,
+        driver="GPKG" if is_gpkg else "ESRI Shapefile",
         layer="features",
         crs="EPSG:3857",
         encoding="UTF-8",
@@ -88,7 +93,11 @@ def source(
             )
     if is_gpkg:
         with sqlite3.connect(path) as database:
-            database.execute("UPDATE features SET fid = -7 WHERE fid = 1")
+            for previous_id, native_id in enumerate(ids, 1):
+                database.execute(
+                    "UPDATE features SET fid = ? WHERE fid = ?",
+                    (native_id, previous_id),
+                )
     catalog = FixtureCatalog(
         ResolvedVectorSource(
             "mounted",
@@ -108,7 +117,7 @@ def source(
         calculatedFields=(CalculatedField(name="product", expression="'x' * 'y'"),),
     )
     original = asyncio.run(service.resolve_for_sampling(selection))
-    return service, original, (-7, 2, 3) if is_gpkg else (0, 1, 2)
+    return service, original, ids
 
 
 def test_http_rows_preserve_identity_values_order_and_exact_filters(
@@ -333,10 +342,12 @@ def test_attribute_reader_does_not_decode_geometry(
         monkeypatch: Instrument the real native random-access read.
     """
     _service, original, ids = source
-    get_feature = fiona.Collection.get
+    from osgeo import ogr
+
+    get_feature = ogr.Layer.GetFeature
     visited: list[int] = []
 
-    def read_without_geometry(collection: fiona.Collection, feature_id: int) -> Any:
+    def read_without_geometry(collection: ogr.Layer, feature_id: int) -> ogr.Feature:
         """Observe the native result before the consumer can discard its geometry.
 
         Args:
@@ -347,11 +358,18 @@ def test_attribute_reader_does_not_decode_geometry(
             Original record with no decoded geometry.
         """
         feature = get_feature(collection, feature_id)
-        assert feature.geometry is None
+        assert feature.GetGeometryRef() is None
         visited.append(feature_id)
         return feature
 
-    monkeypatch.setattr(fiona.Collection, "get", read_without_geometry)
+    monkeypatch.setattr(ogr.Layer, "GetFeature", read_without_geometry)
+    assert (
+        tuple(
+            row[0]
+            for row in iter_original_features(original, None, None, read_geometry=False)
+        )
+        == ids
+    )
     rows = list(
         iter_original_features(
             original,

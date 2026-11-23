@@ -199,14 +199,15 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         request = {"layerName": published.layer_name, "selection": target}
         url = "/api/vector-filters/map"
         scans = []
-        original_filter = fiona.Collection.filter
+        from osgeo import ogr
+        original_scan = ogr.Layer.__iter__
 
-        def track_scan(dataset: fiona.Collection, *args: Any, **kwargs: Any) -> Any:
+        def track_scan(dataset: ogr.Layer) -> Any:
             """Record each native feature scan performed while applying this map filter."""
-            scans.append(dataset.name)
-            return original_filter(dataset, *args, **kwargs)
+            scans.append(dataset.GetName())
+            return original_scan(dataset)
 
-        monkeypatch.setattr(fiona.Collection, "filter", track_scan)
+        monkeypatch.setattr(ogr.Layer, "__iter__", track_scan)
         result = owner.post(url, json=request, headers=HEADERS)
         assert result.status_code == 200, result.text
         assert result.json()["count"] == {"matched": 8, "total": 8, "complete": True}

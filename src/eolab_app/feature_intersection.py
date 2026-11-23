@@ -337,44 +337,116 @@ def iter_original_features(
         for index, polygon in enumerate(layer):
             yield index, {}, shape(polygon.model_dump()) if read_geometry else None
         return
-    with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"), _source_collection(
-        layer, ignore_geometry=not read_geometry
-    ) as dataset:
-        if read_geometry and not dataset.crs:
-            raise GeometryValidationError("The target layer has no coordinate reference system.")
+    from datetime import date
+    from osgeo import gdal, ogr
+    from shapely import from_wkb
+    from shapely.geometry import mapping
 
-        needs_projection = read_geometry and dataset.crs.to_epsg() != 4326
-        options = {"where": layer.where} if layer.where else {}
-        originals = (
-            dataset.filter(**options)
-            if feature_ids is None
-            else (dataset.get(fid) for fid in feature_ids)
-        )
-        for count, feature in enumerate(originals, 1):
-            if limits and count > limits.features:
-                raise GeometryValidationError("The intersection exceeded the interactive feature limit.")
-            if deadline is not None and monotonic() >= deadline:
-                raise GeometryValidationError("The intersection exceeded the interactive read time.")
-            if feature is None:
+    # GDAL's FID accessor is signed 64-bit on every platform. Fiona's C-long
+    # conversion can overflow random reads and truncate scanned IDs on Windows.
+    try:
+        with (
+            gdal.ExceptionMgr(),
+            ogr.ExceptionMgr(),
+            gdal.OpenEx(
+                str(layer.path),
+                gdal.OF_VECTOR | gdal.OF_READONLY,
+                allowed_drivers=[layer.driver],
+            ) as dataset,
+        ):
+            original = dataset.GetLayerByName(layer.selection.layerName)
+            if original is None:
                 raise SelectionUnavailableError(
-                    "A selected feature could not be read from its source."
+                    "The original vector layer is unavailable."
                 )
-            fid = int(feature.id)
-            if layer.matches is not None and fid not in layer.matches.ids:
-                continue
-            properties = dict(feature.properties)
-            properties.update(evaluate_calculated_fields(layer.calculated_fields, properties))
-            if layer.matches is None and not matches_filter(layer.selection.filter, properties):
-                continue
+            crs = original.GetSpatialRef()
+            if read_geometry and crs is None:
+                raise GeometryValidationError(
+                    "The target layer has no coordinate reference system."
+                )
+            projection = crs.ExportToWkt() if read_geometry else None
+            needs_projection = (
+                read_geometry and fiona.crs.CRS.from_wkt(projection).to_epsg() != 4326
+            )
             if not read_geometry:
-                yield fid, properties, None
-                continue
-            geometry = shape(feature.geometry) if feature.geometry is not None else None
-            if geometry is None or geometry.is_empty:
-                yield fid, properties, None
-                continue
-            if limits and get_num_coordinates(geometry) > limits.coordinates_per_feature:
-                raise GeometryValidationError("A target feature exceeds the interactive coordinate limit.")
-            if needs_projection:
-                geometry = shape(transform_geom(dataset.crs, "EPSG:4326", feature.geometry, antimeridian_cutting=False))
-            yield fid, properties, geometry
+                original.SetIgnoredFields(["OGR_GEOMETRY"])
+            if feature_ids is None and layer.where:
+                original.SetAttributeFilter(layer.where)
+            definition = original.GetLayerDefn()
+            fields = [
+                (
+                    definition.GetFieldDefn(index).GetName(),
+                    definition.GetFieldDefn(index).GetType(),
+                )
+                for index in range(definition.GetFieldCount())
+            ]
+            originals = (
+                original
+                if feature_ids is None
+                else (original.GetFeature(fid) for fid in feature_ids)
+            )
+            for count, feature in enumerate(originals, 1):
+                if limits and count > limits.features:
+                    raise GeometryValidationError(
+                        "The intersection exceeded the interactive feature limit."
+                    )
+                if deadline is not None and monotonic() >= deadline:
+                    raise GeometryValidationError(
+                        "The intersection exceeded the interactive read time."
+                    )
+                if feature is None:
+                    raise SelectionUnavailableError(
+                        "A selected feature could not be read from its source."
+                    )
+                fid = feature.GetFID()
+                if layer.matches is not None and fid not in layer.matches.ids:
+                    continue
+                properties = feature.items()
+                for name, field_type in fields:
+                    if properties[name] is None:
+                        continue
+                    if field_type == ogr.OFTDate:
+                        properties[name] = date(
+                            *feature.GetFieldAsDateTime(name)[:3]
+                        ).isoformat()
+                    elif field_type == ogr.OFTDateTime:
+                        properties[name] = feature.GetFieldAsISO8601DateTime(name)
+                    elif field_type == ogr.OFTBinary:
+                        properties[name] = bytes(feature.GetFieldAsBinary(name))
+                properties.update(
+                    evaluate_calculated_fields(layer.calculated_fields, properties)
+                )
+                if layer.matches is None and not matches_filter(
+                    layer.selection.filter, properties
+                ):
+                    continue
+                native_geometry = feature.GetGeometryRef() if read_geometry else None
+                geometry = (
+                    from_wkb(bytes(native_geometry.ExportToIsoWkb()))
+                    if native_geometry is not None
+                    else None
+                )
+                if geometry is None or geometry.is_empty:
+                    yield fid, properties, None
+                    continue
+                if (
+                    limits
+                    and get_num_coordinates(geometry) > limits.coordinates_per_feature
+                ):
+                    raise GeometryValidationError(
+                        "A target feature exceeds the interactive coordinate limit."
+                    )
+                if needs_projection:
+                    geometry = shape(
+                        transform_geom(
+                            projection,
+                            "EPSG:4326",
+                            mapping(geometry),
+                            antimeridian_cutting=False,
+                        )
+                    )
+                yield fid, properties, geometry
+    except (RuntimeError, OSError) as error:
+        raise SelectionUnavailableError(
+            "The original vector features could not be read."
+        ) from error
