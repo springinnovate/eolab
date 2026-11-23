@@ -1,4 +1,4 @@
-"""Exercise private GeoPackage admission and ownership through the real upload API."""
+"""Exercise private polygon admission and ownership through the real upload API."""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -11,8 +11,10 @@ from typing import Any, IO
 from uuid import UUID, uuid4
 
 import fiona
+from fiona.model import to_dict
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pyproj import CRS
 import pytest
 from starlette.requests import ClientDisconnect
 
@@ -93,6 +95,161 @@ def client_for(store: VectorUploadStore) -> TestClient:
     app = FastAPI()
     app.include_router(create_vector_uploads_router(store))
     return TestClient(app, base_url="https://testserver")
+
+
+@pytest.mark.parametrize("envelope", ["FeatureCollection", "Feature", "Polygon"])
+@pytest.mark.parametrize(
+    "declared_crs,elevation", [(True, False), (False, False), (False, True)]
+)
+def test_geojson_upload_preserves_geometry_and_attributes(
+    tmp_path: Path, envelope: str, declared_crs: bool, elevation: bool
+) -> None:
+    """Admit GeoJSON through the normal upload API and reopen its stored polygons.
+
+    Args:
+        tmp_path: Isolated source and private upload volume.
+        envelope: Standard GeoJSON document form sent by the browser.
+        declared_crs: Preserve an explicit projected CRS or use GeoJSON's WGS84 default.
+        elevation: Preserve third coordinates when the source supplies elevations.
+    """
+    source = tmp_path / "original.gpkg"
+    write_layer(source)
+    with fiona.open(source) as dataset:
+        feature = to_dict(next(iter(dataset)))
+    del feature["id"]
+    if not declared_crs:
+        feature["geometry"]["coordinates"] = [
+            [(x / 1000, y / 1000) for x, y in ring]
+            for ring in feature["geometry"]["coordinates"]
+        ]
+    if elevation:
+        feature["geometry"]["coordinates"] = [
+            [(*point, 12.5) for point in ring]
+            for ring in feature["geometry"]["coordinates"]
+        ]
+    feature["properties"].update({"fid": "external id", "geom": "field value"})
+    document = {
+        "type": "FeatureCollection",
+        "features": [
+            feature,
+            {
+                **feature,
+                "geometry": {
+                    "type": "MultiPolygon",
+                    "coordinates": [feature["geometry"]["coordinates"]],
+                },
+            },
+        ],
+    }
+    if envelope == "Feature":
+        document = feature
+    elif envelope == "Polygon":
+        document = feature["geometry"]
+    if declared_crs:
+        document["crs"] = {"type": "name", "properties": {"name": "EPSG:3857"}}
+    store = VectorUploadStore(tmp_path / "uploads", None)
+    with client_for(store) as client, client_for(store) as other:
+        response = client.post(
+            BASE,
+            params={"name": "Wetlands"},
+            headers={**HEADERS, "Content-Type": "application/geo+json; charset=utf-8"},
+            content=json.dumps(document).encode(),
+        )
+        assert response.status_code == 201, response.text
+        record = response.json()
+        owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+        metadata, path = store.get_upload_source(owner, UUID(record["id"]))
+        assert metadata.size_bytes == path.stat().st_size
+        assert metadata.geometry_type == "MultiPolygon"
+        assert CRS.from_wkt(metadata.crs_wkt).to_2d().to_epsg() == (
+            3857 if declared_crs else 4326
+        )
+        with fiona.open(path) as dataset:
+            assert dataset.driver == "GPKG"
+            rows = [to_dict(row) for row in dataset]
+        assert len(rows) == (2 if envelope == "FeatureCollection" else 1)
+        for row in rows:
+            assert row["geometry"]["coordinates"] == [
+                feature["geometry"]["coordinates"]
+            ]
+            assert row["properties"] == (
+                {} if envelope == "Polygon" else feature["properties"]
+            )
+        assert other.get(f"{BASE}/{record['id']}").status_code == 404
+        assert client.get(BASE).json() == [record]
+        assert sorted(p.name for p in path.parent.iterdir()) == [
+            "metadata.json",
+            "source.gpkg",
+            "values.json",
+        ]
+        retained = store.retain_source(path)
+        assert (
+            client.delete(f"{BASE}/{record['id']}", headers=HEADERS).status_code == 204
+        )
+        assert store.get_retained_source(retained).is_file()
+        store.remove_unretained_sources(set())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not JSON",
+        b'{"type":"FeatureCollection","features":[]}',
+        b'{"type":"Feature","properties":{},"geometry":null}',
+        b'{"type":"Point","coordinates":[0,0]}',
+        b'{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[0,1],[0,0]]]}},{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0,0]}}]}',
+    ],
+)
+def test_invalid_geojson_cleans_staging(tmp_path: Path, body: bytes) -> None:
+    """Reject unreadable or non-polygon GeoJSON without publishing partial data.
+
+    Args:
+        tmp_path: Isolated upload volume.
+        body: Invalid or unsupported user-selected document.
+    """
+    store = VectorUploadStore(tmp_path / "uploads", None)
+    with client_for(store) as client:
+        response = client.post(
+            BASE,
+            params={"name": "Invalid"},
+            headers={**HEADERS, "Content-Type": "application/geo+json"},
+            content=body,
+        )
+        assert response.status_code == 422, response.text
+        assert str(tmp_path) not in response.text
+        assert client.get(BASE).json() == []
+        assert not any(path.is_file() for path in store.root.rglob("*"))
+
+
+@pytest.mark.parametrize("budget", ["converted-file", "owner", "global"])
+def test_geojson_conversion_respects_storage_limits(
+    tmp_path: Path, budget: str
+) -> None:
+    """Charge the converted file and clean both files when admission exceeds a quota.
+
+    Args:
+        tmp_path: Isolated upload volume.
+        budget: Quota smaller than the converted GeoPackage, but larger than the input.
+    """
+    storage = UploadStorage(
+        tmp_path / "uploads",
+        max_bytes=4096 if budget == "converted-file" else 1024**2,
+        owner_max_bytes=4096 if budget == "owner" else 1024**2,
+        global_max_bytes=4096 if budget == "global" else 1024**2,
+    )
+    store = VectorUploadStore(storage.root, None, storage=storage)
+    with client_for(store) as client:
+        response = client.post(
+            BASE,
+            params={"name": "Too large"},
+            headers={**HEADERS, "Content-Type": "application/geo+json"},
+            content=b'{"type":"Polygon","coordinates":[[[0,0],[1,0],[0,1],[0,0]]]}',
+        )
+        assert response.status_code == (
+            503 if budget == "global" else 413
+        ), response.text
+        assert client.get(BASE).json() == []
+        assert not any(path.is_file() for path in store.root.rglob("*"))
 
 
 @pytest.mark.parametrize("geometry", ["Polygon", "MultiPolygon"])
@@ -258,20 +415,33 @@ def read_uploaded_fields(
         writer.put(error)
 
 
+@pytest.mark.parametrize("source_format", ["geopackage", "geojson"])
 def test_authorized_grant_uses_native_field_reader_and_reports_deleted_file(
     tmp_path: Path,
+    source_format: str,
 ) -> None:
     """Use the ordinary native reader without browser credentials or rendering.
 
     Args:
         tmp_path: Isolated original GeoPackage and private upload volume.
+        source_format: Accepted polygon file format sent through the upload API.
     """
     pytest.importorskip("osgeo")
     body = write_layer(tmp_path / "source.gpkg")
+    headers = HEADERS
+    if source_format == "geojson":
+        with fiona.open(tmp_path / "source.gpkg") as dataset:
+            collection = {
+                "type": "FeatureCollection",
+                "features": [to_dict(row) for row in dataset],
+                "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+            }
+        body = json.dumps(collection).encode()
+        headers = {**HEADERS, "Content-Type": "application/json"}
     store = VectorUploadStore(tmp_path / "uploads", None)
     with client_for(store) as client:
         record = client.post(
-            BASE, params={"name": "Native read"}, headers=HEADERS, content=body
+            BASE, params={"name": "Native read"}, headers=headers, content=body
         ).json()
         owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
         metadata, grant = resolve_uploaded_vector(store, owner, UUID(record["id"]))

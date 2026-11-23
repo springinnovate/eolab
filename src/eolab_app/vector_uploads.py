@@ -1,4 +1,4 @@
-"""Store immutable, browser-owned GeoPackages on the application's upload volume.
+"""Admit polygon files as immutable, browser-owned GeoPackages on the upload volume.
 
 One application process owns writes to this volume. Each upload is published by
 renaming a directory containing its original file and metadata together. Pending
@@ -9,6 +9,7 @@ retains hard links separately until its accepted calculations stop.
 import asyncio
 from collections.abc import AsyncIterable
 from datetime import datetime, timezone
+import hashlib
 import logging
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,7 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
 )
 from eolab_app.upload_storage import (
+    PendingUpload,
     UploadError,
     UploadRecord,
     UploadStorage,
@@ -69,6 +71,99 @@ class VectorUpload(UploadLayer, UploadRecord):
     """Public upload record; its opaque ID never reveals a path or browser identity."""
 
     kind: Literal["vector"] = "vector"
+
+
+def convert_geojson(
+    result: ProcessResultWriter, pending: PendingUpload, limit: int
+) -> None:
+    """Replace staged GeoJSON with a GeoPackage for the ordinary upload readers.
+
+    Args:
+        result: Pipe receiving updated staging metadata or a (status, message)
+            failure. No failure publishes either file.
+        pending: Streamed, unpublished GeoJSON in upload-owned staging storage.
+        limit: Maximum bytes allowed in the converted GeoPackage. Shared storage
+            also checks owner and global quotas before publication.
+    """
+    from osgeo import gdal, ogr
+
+    converted = pending.directory / "converted.gpkg"
+    try:
+        with (
+            gdal.ExceptionMgr(),
+            ogr.ExceptionMgr(),
+            gdal.config_options(
+                {"OGR_SQLITE_JOURNAL": "OFF", "SQLITE_TMPDIR": str(pending.directory)}
+            ),
+            gdal.OpenEx(
+                str(pending.source_path),
+                gdal.OF_VECTOR | gdal.OF_READONLY,
+                allowed_drivers=["GeoJSON"],
+            ) as source,
+        ):
+            layer = source.GetLayer(0)
+            count = 0
+            has_elevation = False
+            for feature in layer:
+                geometry = feature.GetGeometryRef()
+                if (
+                    geometry is None
+                    or geometry.IsEmpty()
+                    or ogr.GT_Flatten(geometry.GetGeometryType())
+                    not in {ogr.wkbPolygon, ogr.wkbMultiPolygon}
+                ):
+                    raise VectorUploadError(
+                        422,
+                        "GeoJSON must contain only polygons or multipolygons with geometry.",
+                    )
+                count += 1
+                has_elevation = has_elevation or geometry.Is3D()
+            if not count:
+                raise VectorUploadError(422, "The GeoJSON file contains no polygons.")
+            layer.ResetReading()
+            fields = {field.GetName().lower() for field in layer.schema}
+            fid, geometry_column = "fid", "geom"
+            while fid in fields:
+                fid += "_"
+            while geometry_column in fields:
+                geometry_column += "_"
+            options = gdal.VectorTranslateOptions(
+                options=["-unsetFid"],
+                layerName="polygons",
+                geometryType="MULTIPOLYGONZ" if has_elevation else "MULTIPOLYGON",
+                layerCreationOptions=[f"FID={fid}", f"GEOMETRY_NAME={geometry_column}"],
+            )
+            with gdal.GetDriverByName("GPKG").Create(
+                str(converted), 0, 0, 0, gdal.GDT_Unknown
+            ) as destination:
+                destination.ExecuteSQL("PRAGMA temp_store=MEMORY")
+                with destination.ExecuteSQL("PRAGMA page_size") as rows:
+                    pages = limit // rows.GetNextFeature().GetField(0)
+                if pages < 1:
+                    raise VectorUploadError(
+                        413, "The converted GeoJSON exceeds the upload file limit."
+                    )
+                with destination.ExecuteSQL(f"PRAGMA max_page_count={pages}") as rows:
+                    if rows.GetNextFeature().GetField(0) > pages:
+                        raise VectorUploadError(
+                            413, "The converted GeoJSON exceeds the upload file limit."
+                        )
+                if not gdal.VectorTranslate(destination, source, options=options):
+                    raise VectorUploadError(
+                        422, "The GeoJSON could not be converted to a polygon layer."
+                    )
+        converted.replace(pending.source_path)
+        with pending.source_path.open("rb") as stored:
+            pending.size_bytes = pending.source_path.stat().st_size
+            pending.sha256 = hashlib.file_digest(stored, "sha256").hexdigest()
+        result.put(pending)
+    except VectorUploadError as error:
+        result.put((error.status, str(error)))
+    except (RuntimeError, ValueError, OSError) as error:
+        if "disk is full" in str(error).lower():
+            result.put((413, "The converted GeoJSON exceeds the upload file limit."))
+        else:
+            result.put((422, "The file could not be read as polygon GeoJSON."))
 
 
 def inspect_geopackage(result: ProcessResultWriter, path: Path) -> None:
@@ -155,8 +250,9 @@ class VectorUploadStore:
         chunks: AsyncIterable[bytes] | UploadWriter,
         *,
         identifier: UUID | None = None,
+        source_format: Literal["geopackage", "geojson"] = "geopackage",
     ) -> VectorUpload:
-        """Admit one private GeoPackage from a stream or writer and publish it atomically.
+        """Admit a polygon file and atomically publish its immutable GeoPackage.
 
         Args:
             owner: Hash produced by the browser identity boundary.
@@ -164,9 +260,11 @@ class VectorUploadStore:
             chunks: Incoming body chunks or a writer for a new file within the
                 upload budget. The complete file is never buffered.
             identifier: Optional server-assigned ID for a retriable admission.
+            source_format: Incoming format. GeoJSON is converted before the
+                existing GeoPackage inspection and publication steps.
 
         Returns:
-            Published metadata describing the unchanged uploaded file.
+            Published metadata whose size describes the stored GeoPackage.
 
         Raises:
             VectorUploadError: For oversized or invalid files and unavailable storage.
@@ -176,6 +274,16 @@ class VectorUploadStore:
             async with self.storage.stage(
                 owner, "vector", chunks, max_bytes=self.max_bytes
             ) as pending:
+                if source_format == "geojson":
+                    file_limit = self.storage.max_bytes
+                    if self.max_bytes is not None:
+                        file_limit = min(file_limit, self.max_bytes)
+                    converted = await run_bounded_process(
+                        convert_geojson, (pending, file_limit), 60
+                    )
+                    if isinstance(converted, tuple):
+                        raise VectorUploadError(*converted)
+                    pending = converted
                 inspected = await run_bounded_process(
                     inspect_geopackage, (pending.source_path,), 60
                 )
@@ -199,7 +307,7 @@ class VectorUploadStore:
             raise VectorUploadError(error.status, str(error)) from error
         except ProcessDeadlineError as error:
             raise VectorUploadError(
-                422, "The GeoPackage could not be inspected within 60 seconds."
+                422, "The polygon file could not be prepared within 60 seconds."
             ) from error
         except OSError as error:
             LOGGER.exception("Could not store vector upload")

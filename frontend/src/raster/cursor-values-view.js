@@ -175,16 +175,17 @@ export class RasterCursorValuesView {
     }
 
     /**
-     * Expose whether the picker is available or intentionally hidden.
+     * Present the picker and its restore prompt for the current map mode.
      *
      * @param {boolean} enabled Whether pointer sampling is enabled.
+     * @param {boolean} [canRestore=true] Whether a hidden picker can resume in this mode.
      * @return {void}
      */
-    setEnabled(enabled) {
+    setEnabled(enabled, canRestore = true) {
         if (typeof enabled !== "boolean") {
             throw new TypeError("Pixel-picker enabled state must be boolean");
         }
-        this.restore.hidden = enabled;
+        this.restore.hidden = enabled || !canRestore;
         if (!enabled) this.clear();
     }
 
@@ -378,9 +379,9 @@ export class RasterCursorValuesView {
         this.root.style.top = `${Math.max(VIEWPORT_EDGE_PIXELS, top)}px`;
     }
 
-    /** Restore pointer sampling from its persistent on-map prompt. */
+    /** Restore pointer sampling when the on-map prompt is available. @return {void} */
     #handleRestoreClick() {
-        this.handlers?.onShow();
+        if (!this.restore.hidden) this.handlers?.onShow();
     }
 
     /**

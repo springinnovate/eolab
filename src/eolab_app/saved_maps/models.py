@@ -233,13 +233,35 @@ class MapLegendAppearance(MapDocumentPart):
     collapsed: bool
 
 
+class MapVisitorChoices(MapDocumentPart):
+    """Keep the publisher's inspection choices, even beneath a disabled parent.
+
+    An omitted choice in an explicit configuration is disabled. The viewer
+    resolves effective availability without changing these stored values.
+    """
+
+    inspectAndSelect: bool = False
+    rasterValues: bool = False
+    featurePicking: bool = False
+    histogramBox: bool = False
+    lasso: bool = False
+
+
+class MapVisitorControls(MapDocumentPart):
+    """Versioned visitor choices contained in a named map document."""
+
+    version: Annotated[int, Field(ge=1, le=1)]
+    choices: MapVisitorChoices
+
+
 class SavedMapView(MapDocumentPart):
-    """Portable map JSON with optional legend visibility and collapse preferences.
+    """Portable map JSON with optional legend appearance and visitor controls.
 
     Catalog items, uploads, observations and drawings may appear more than once; each
     entry preserves its place in the layer order and its own appearance.
     The basemap is stored as a provider ID such as `"maptiler-streets"`.
     Omitting mapLegend leaves the legend visible and expanded.
+    Omitting visitorControls preserves the viewer's default inspection tools.
     """
 
     format: Literal["eolab-map-view"]
@@ -251,6 +273,7 @@ class SavedMapView(MapDocumentPart):
         "detailed", "carto", "maptiler", "maptiler-streets", "outlines", "none"
     ]
     mapLegend: MapLegendAppearance | None = None
+    visitorControls: MapVisitorControls | None = None
     layers: Annotated[
         list[
             MapLayer
@@ -288,17 +311,19 @@ class SavedMapView(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_map_layers_and_size(self) -> Self:
-        """Validate layer identities, legend preferences and the saved-map size.
+        """Validate layer identities, optional map settings and the saved-map size.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If a polygon view ID or shared layer repeats, explicit legend
+            ValueError: If a polygon view ID or shared layer repeats, explicit map
                 settings are null, or the document exceeds the size limit.
         """
         if "mapLegend" in self.model_fields_set and self.mapLegend is None:
             raise ValueError("Map legend preferences must be an object when supplied.")
+        if "visitorControls" in self.model_fields_set and self.visitorControls is None:
+            raise ValueError("Visitor controls must be an object when supplied.")
         view_ids = [
             layer.filterViewId
             for layer in self.layers

@@ -165,6 +165,7 @@ from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
+from eolab_app.vector.field_statistics_jobs import LayerStatisticsJobs
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.parcel_jobs import ParcelJobs
 from eolab_jobs.client import JobsClient
@@ -312,6 +313,7 @@ def create_app(
         comparison_executor=lambda token: compare_selection_job(vector_jobs, token),
         extent_executor=ExtentJobs(vector_jobs),
         parcel_executor=ParcelJobs(vector_jobs),
+        layer_statistics_executor=LayerStatisticsJobs(vector_jobs),
         uploads=vector_uploads,
         artifact_files=lambda: source_files,
         read_drawing=read_filter_drawing,

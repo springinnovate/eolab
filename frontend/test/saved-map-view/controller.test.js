@@ -312,6 +312,7 @@ test("published drafts ignore personal autosave and only write on explicit save"
   view.setPublishedMapSaving = saving => { view.saving = saving; };
   let position = emptySavedMap(10, 20, 6).viewport;
   const loaded = { slug: "amazon", title: "Original", subtitle: "", revision: 1, view: emptySavedMap(10, 20, 6) };
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, lasso: true } };
   const controller = createController({ view, storage, editPublishedMap: true, namedMapSlug: "amazon",
     viewerVersion: "0.6.0", viewerOrigin: loaded.view.viewer.origin,
     publicationApi: {
@@ -319,10 +320,12 @@ test("published drafts ignore personal autosave and only write on explicit save"
       async update(slug, request) {
         submissions.push({ slug, request });
         if (submissions.length === 1) throw new Error("Storage unavailable");
+        if (submissions.length === 2) throw new Error("The map has changed since it was opened.");
         return { ...request, slug, revision: request.revision + 1 };
       },
     },
     applyMapHeading: (...values) => headings.push(values),
+    applyVisitorControls: () => assert.fail("The authenticated editor must keep its author tools"),
     viewport: { snapshot: () => position, restore(value) { position = value; } },
     catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
   });
@@ -333,14 +336,18 @@ test("published drafts ignore personal autosave and only write on explicit save"
   assert.equal(storage.reads, 0);
   assert.deepEqual(storage.writes, []);
   assert.equal(submissions.length, 0);
-  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited" });
+  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited", visitorControls });
   assert.match(view.editStatus, /Storage unavailable/);
   assert.equal(view.saving, false);
-  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited" });
+  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited", visitorControls });
+  assert.match(view.editStatus, /since it was opened/);
   assert.equal(submissions[1].request.revision, 1);
   assert.deepEqual(submissions[1].request.view.viewport, position);
-  await controller.savePublishedMapChanges({ title: "Changed again", subtitle: "" });
-  assert.equal(submissions[2].request.revision, 2);
+  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited", visitorControls });
+  assert.equal(submissions[2].request.revision, 1);
+  await controller.savePublishedMapChanges({ title: "Changed again", subtitle: "", visitorControls });
+  assert.equal(submissions[3].request.revision, 2);
+  assert.ok(submissions.every(({ request }) => request.view.visitorControls === visitorControls));
   assert.deepEqual(headings.at(-1), ["Changed again", ""]);
   assert.match(view.editStatus, /Saved/);
   controller.destroy();
@@ -402,25 +409,30 @@ test("publication captures once and preserves that view while correcting a dupli
   });
   await controller.openPublicationDialog();
   current = emptySavedMap(0, 0, 2).viewport;
-  await controller.publishMap({ title: "New title", subtitle: "", slug: "taken" });
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, rasterValues: true, featurePicking: true } };
+  await controller.publishMap({ title: "New title", subtitle: "", slug: "taken", visitorControls });
   assert.match(view.publicationError, /already in use/);
-  await controller.publishMap({ title: "New title", subtitle: "", slug: "new-name" });
+  await controller.publishMap({ title: "New title", subtitle: "", slug: "new-name", visitorControls });
   assert.equal(view.published, "new-name");
   assert.equal(view.publishing, false);
-  assert.equal(submissions[0].view, submissions[1].view);
+  assert.deepEqual(submissions[0].view, submissions[1].view);
+  assert.deepEqual(submissions[1].view.visitorControls, visitorControls);
   assert.deepEqual(submissions[1].view.viewport, emptySavedMap(10, 20, 6).viewport);
   assert.equal(submissions[1].view.basemap, "none");
   assert.equal(submissions[1].subtitle, "");
 });
 
 test("named URLs take precedence over private state, restore basemap and copy the original link", async () => {
-  const view = createView(), storage = createStorage("private"), loaded = [], headings = [], basemaps = [];
+  const view = createView(), storage = createStorage("private"), loaded = [], headings = [], basemaps = [], visitorChoices = [];
   let position;
   view.copyNamedMapLink = async slug => { view.namedCopy = slug; return { copied: true }; };
-  const saved = { ...emptySavedMap(10, 20, 6), basemap: "none" };
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, rasterValues: true } };
+  const saved = { ...emptySavedMap(10, 20, 6), basemap: "none", visitorControls };
   const controller = createController({ view, storage, restoreSharedMap: true, namedMapSlug: "amazon",
     publicationApi: { async get(slug) { loaded.push(slug); return { title: "Amazon", subtitle: "", view: saved }; } },
     applyMapHeading: (...values) => headings.push(values),
+    applyVisitorControls: value => visitorChoices.push(value),
+    beforeRestore: () => assert.equal(visitorChoices.at(-1), visitorControls),
     viewport: { snapshot: () => position, restore(value) { position = value; } },
     basemap: { restore: async id => { basemaps.push(id); return null; } },
     catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
@@ -434,6 +446,7 @@ test("named URLs take precedence over private state, restore basemap and copy th
   assert.deepEqual(loaded, ["amazon", "amazon"]);
   assert.deepEqual(headings, [["Amazon", ""], ["Amazon", ""]]);
   assert.deepEqual(basemaps, ["none", "none"]);
+  assert.deepEqual(visitorChoices, [visitorControls, visitorControls]);
   assert.equal(storage.reads, 0);
   assert.equal(storage.writes.length, 0);
 });

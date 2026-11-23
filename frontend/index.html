@@ -73,6 +73,7 @@
           <p>Changes won't affect visitors until you save. Shared polygon edits are saved separately.</p>
           <label>Map title<input id="published-map-edit-title" required maxlength="160"></label>
           <label>Subtitle<input id="published-map-edit-subtitle" maxlength="240"></label>
+          <fieldset id="published-map-visitor-controls" class="visitor-inspection-options" disabled></fieldset>
           <p>Fixed URL: <a id="published-map-edit-url" target="_blank" rel="noopener"></a></p>
           <div class="published-map-editor-actions">
             <button id="published-map-save" type="submit" disabled>Save changes for everyone</button>
@@ -512,13 +513,6 @@
                     <button class="secondary-button" id="upload-polygons" type="button">Your uploads</button>
                     <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a private polygon saved on this device" disabled>Draw polygon</button>
                     <details class="annotation-layer-tools">
-                      <summary>Import polygons</summary>
-                      <div class="annotation-layer-actions" role="group" aria-label="Import polygons">
-                      <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON…</button>
-                      <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import polygons from a GeoJSON file" hidden>
-                      </div>
-                    </details>
-                    <details class="annotation-layer-tools">
                       <summary>Shared layers</summary>
                       <div class="annotation-layer-actions" role="group" aria-label="Shared layers">
                       <button class="secondary-button" id="create-shared-annotation-layer" type="button">Create shared layer…</button>
@@ -656,7 +650,7 @@
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
-        <section id="map-interaction-tools" aria-label="Map interaction tools">
+        <section id="map-interaction-tools" aria-label="Map interaction tools" hidden>
           <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
             <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
             <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
@@ -1033,7 +1027,6 @@
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
               <p>Local layers stay on this device until you save them through Planning. Those linked drawings and live shared layers are included in map links; other local drawings are not. Anyone with the link can read the latest saved polygons, but the link does not grant editing permission. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its saved polygons. Choose Download on the layer card to keep a GeoJSON copy.</p>
-              <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
@@ -1138,6 +1131,7 @@
             <div class="vector-plot-context">
               <button id="vector-time-series-features-button" class="summary-text-button" type="button" aria-controls="vector-time-series-features-picker" aria-expanded="false">Features</button>
               <button id="vector-time-series-fields-button" class="summary-text-button" type="button" aria-controls="vector-time-series-fields-picker" aria-expanded="false">Choose fields</button>
+              <button id="vector-time-series-statistics-button" class="summary-text-button" type="button" aria-controls="vector-time-series-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-time-series-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
@@ -1164,21 +1158,40 @@
               <button id="vector-time-series-next-selection" class="secondary-button" type="button"
                 aria-controls="vector-time-series-plots vector-time-series-values" disabled>Next selection <span aria-hidden="true">→</span></button>
             </div>
-            <div id="vector-time-series-plots" class="vector-plot-results">
-              <div class="vector-plot-figure" id="vector-time-series-first">
-                <h3 id="vector-time-series-chart-title"></h3>
-                <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
-                <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+            <div id="vector-time-series-statistics-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Layer stats</strong>
+                <button id="vector-time-series-statistics-done" class="summary-text-button" type="button">Done</button></div>
+              <p class="vector-series-context">Across all features in each source layer.</p>
+              <div class="vector-plot-statistics-choices" role="group" aria-label="Statistics to show">
+                <label><input id="vector-time-series-statistics-mean" type="checkbox"> Mean</label>
+                <label><input id="vector-time-series-statistics-minimum" type="checkbox"> Minimum</label>
+                <label><input id="vector-time-series-statistics-maximum" type="checkbox"> Maximum</label>
               </div>
-              <div id="vector-time-series-extra-charts"></div>
             </div>
-            <div id="vector-time-series-values" hidden>
-              <div id="vector-time-series-table" class="vector-time-series-table" hidden>
-                <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
-                  <thead><tr id="vector-time-series-table-head"></tr></thead>
-                  <tbody id="vector-time-series-table-body"></tbody>
-                </table></div>
+            <div class="vector-plot-comparison">
+              <div class="vector-plot-measurements">
+                <div id="vector-time-series-plots" class="vector-plot-results">
+                  <div class="vector-plot-figure" id="vector-time-series-first">
+                    <h3 id="vector-time-series-chart-title"></h3>
+                    <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                    <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+                  </div>
+                  <div id="vector-time-series-extra-charts"></div>
+                </div>
+                <div id="vector-time-series-values" hidden>
+                  <div id="vector-time-series-table" class="vector-time-series-table" hidden>
+                    <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
+                      <thead><tr id="vector-time-series-table-head"></tr></thead>
+                      <tbody id="vector-time-series-table-body"></tbody>
+                    </table></div>
+                  </div>
+                </div>
               </div>
+              <aside id="vector-time-series-statistics" class="vector-plot-statistics" aria-labelledby="vector-time-series-statistics-heading" hidden>
+                <h3 id="vector-time-series-statistics-heading">Whole-layer statistics</h3>
+                <p id="vector-time-series-statistics-status" role="status"></p>
+                <div id="vector-time-series-statistics-results" aria-live="polite"></div>
+              </aside>
             </div>
             <p id="vector-time-series-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-time-series-selection" class="vector-time-series-selection" hidden>
@@ -1221,6 +1234,7 @@
             <div class="vector-plot-context">
               <button id="vector-feature-profile-features-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-features-picker" aria-expanded="false">Feature</button>
               <button id="vector-feature-profile-fields-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-fields-picker" aria-expanded="false">Choose fields</button>
+              <button id="vector-feature-profile-statistics-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-feature-profile-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
@@ -1246,20 +1260,39 @@
               <div id="vector-feature-profile-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
               <p id="vector-feature-profile-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
-            <div id="vector-feature-profile-plots" class="vector-plot-results">
-              <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
-                <h3 id="vector-feature-profile-chart-title" hidden></h3>
-                <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
-                <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
+            <div id="vector-feature-profile-statistics-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Layer stats</strong>
+                <button id="vector-feature-profile-statistics-done" class="summary-text-button" type="button">Done</button></div>
+              <p class="vector-series-context">Across all features in the source layer.</p>
+              <div class="vector-plot-statistics-choices" role="group" aria-label="Statistics to show">
+                <label><input id="vector-feature-profile-statistics-mean" type="checkbox"> Mean</label>
+                <label><input id="vector-feature-profile-statistics-minimum" type="checkbox"> Minimum</label>
+                <label><input id="vector-feature-profile-statistics-maximum" type="checkbox"> Maximum</label>
               </div>
             </div>
-            <div id="vector-feature-profile-values" hidden>
-              <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
-                <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
-                  <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
-                  <tbody id="vector-feature-profile-table-body"></tbody>
-                </table></div>
+            <div class="vector-plot-comparison">
+              <div class="vector-plot-measurements">
+                <div id="vector-feature-profile-plots" class="vector-plot-results">
+                  <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
+                    <h3 id="vector-feature-profile-chart-title" hidden></h3>
+                    <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                    <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
+                  </div>
+                </div>
+                <div id="vector-feature-profile-values" hidden>
+                  <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
+                    <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
+                      <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
+                      <tbody id="vector-feature-profile-table-body"></tbody>
+                    </table></div>
+                  </div>
+                </div>
               </div>
+              <aside id="vector-feature-profile-statistics" class="vector-plot-statistics" aria-labelledby="vector-feature-profile-statistics-heading" hidden>
+                <h3 id="vector-feature-profile-statistics-heading">Whole-layer statistics</h3>
+                <p id="vector-feature-profile-statistics-status" role="status"></p>
+                <div id="vector-feature-profile-statistics-results" aria-live="polite"></div>
+              </aside>
             </div>
             <p id="vector-feature-profile-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-feature-profile-selection" class="vector-time-series-selection" hidden>
@@ -1900,6 +1933,7 @@
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>
           <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
           <p id="publish-map-preview" class="publish-map-url"></p>
+          <fieldset id="publish-map-visitor-controls" class="visitor-inspection-options"></fieldset>
           <p>Shared layers stay live. An administrator can update or delete this published map.</p>
         </fieldset>
         <div id="publish-map-result" hidden>
@@ -1916,6 +1950,17 @@
         </div>
       </form>
     </dialog>
+    <template id="visitor-inspection-options">
+      <legend>Visitor tools</legend>
+      <label><input type="checkbox" data-visitor-control="inspectAndSelect"> Inspect and select</label>
+      <fieldset data-visitor-inspection-children>
+        <legend class="visually-hidden">Inspection tools</legend>
+        <label><input type="checkbox" data-visitor-control="rasterValues"> Pick raster values</label>
+        <label><input type="checkbox" data-visitor-control="featurePicking"> Pick features on the map</label>
+        <label><input type="checkbox" data-visitor-control="histogramBox"> Histogram box</label>
+        <label><input type="checkbox" data-visitor-control="lasso"> Lasso</label>
+      </fieldset>
+    </template>
     <section id="raster-download-sheet" popover="manual" role="dialog" aria-labelledby="raster-download-title raster-download-source">
       <div class="raster-download-scroll">
         <header class="raster-download-heading">
