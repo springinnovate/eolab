@@ -20,7 +20,14 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
 )
 from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.clip_models import ClipArea, ClipInputs, ClipSpec
+from eolab_app.attribute_filter import VectorFilter
+from eolab_app.processing.clip_models import (
+    ClipArea,
+    ClipInputs,
+    ClipPolygonGroup,
+    ClipPolygonGroupMember,
+    ClipSpec,
+)
 from eolab_app.processing.raster_clip import create_clip
 from catalog_selection_support import write_selection
 from raster_clip_support import LIMITS, make_spec
@@ -115,13 +122,16 @@ def test_clip_preserves_native_grid_values_zero_metadata_and_cog(
     assert not (attempt / "window.tif").exists()
 
 
+@pytest.mark.parametrize("group_sources", [False, True])
 def test_polygon_union_holes_and_nodata_free_zero_are_masked_exactly(
     tmp_path: Path,
+    group_sources: bool,
 ) -> None:
     """Mask polygon exteriors/holes while retaining valid zeros without a sentinel.
 
     Args:
         tmp_path: Isolated test storage.
+        group_sources: Read the overlapping features from separate source layers.
     """
     path = write_source(tmp_path / "zero.tif", numpy.zeros((100, 100), dtype="uint8"))
     polygon = {
@@ -136,13 +146,58 @@ def test_polygon_union_holes_and_nodata_free_zero_are_masked_exactly(
         "type": "MultiPolygon",
         "coordinates": [[[[0.5, 9.5], [0.8, 9.5], [0.8, 9.8], [0.5, 9.8], [0.5, 9.5]]]],
     }
-    selected = write_selection(tmp_path / "selected.gpkg", [polygon, overlap])
-    area = ClipArea(
-        kind="catalogSelection",
-        bounds=(0.1, 9.1, 0.9, 9.9),
-        catalogSelection=selected.selection,
-        resolved=selected,
-    )
+    if group_sources:
+        omitted = {
+            "type": "Polygon",
+            "coordinates": [
+                [[0.34, 9.34], [0.44, 9.34], [0.44, 9.44], [0.34, 9.44], [0.34, 9.34]]
+            ],
+        }
+        outside = {
+            "type": "Polygon",
+            "coordinates": [
+                [[2.0, 9.1], [2.9, 9.1], [2.9, 9.9], [2.0, 9.9], [2.0, 9.1]]
+            ],
+        }
+        sources = (
+            write_selection(tmp_path / "boundary.gpkg", [polygon]),
+            write_selection(
+                tmp_path / "overlap.gpkg",
+                [overlap, omitted],
+                values=[1, 0],
+                candidate=VectorFilter.model_validate(
+                    {
+                        "enabled": True,
+                        "match": "all",
+                        "rules": [{"field": "selected", "operator": "eq", "value": 1}],
+                    }
+                ),
+            ),
+            write_selection(tmp_path / "outside.gpkg", [outside]),
+        )
+        area = ClipArea(
+            kind="polygonGroup",
+            bounds=(0.1, 9.1, 2.9, 9.9),
+            polygonGroup=ClipPolygonGroup(
+                kind="polygonGroup",
+                name="Selected basins",
+                members=tuple(
+                    ClipPolygonGroupMember(
+                        label=source.path.stem, selection=source.selection
+                    )
+                    for source in sources
+                ),
+            ),
+            resolvedGroup=sources,
+        )
+    else:
+        selected = write_selection(tmp_path / "selected.gpkg", [polygon, overlap])
+        area = ClipArea(
+            kind="catalogSelection",
+            bounds=(0.1, 9.1, 0.9, 9.9),
+            catalogSelection=selected.selection,
+            resolved=selected,
+        )
     spec = make_spec(path, area)
     attempt = tmp_path / "attempt"
     attempt.mkdir()
@@ -160,6 +215,13 @@ def test_polygon_union_holes_and_nodata_free_zero_are_masked_exactly(
         assert result.read(1, masked=True).count() == artifact.valid_pixels
         assert numpy.all(result.read(1) == 0)
         assert 0 < artifact.valid_pixels < result.width * result.height
+    if group_sources:
+        provenance = json.loads((attempt / "provenance.json").read_text())
+        assert (
+            ClipPolygonGroup.model_validate(provenance["area"]["polygonGroup"])
+            == area.polygonGroup
+        )
+        assert str(tmp_path) not in json.dumps(provenance)
 
 
 @pytest.mark.parametrize(

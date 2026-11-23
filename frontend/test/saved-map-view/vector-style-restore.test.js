@@ -172,6 +172,31 @@ for (const { boundary, automatic, value, color } of [
   });
 }
 
+for (const mode of ["categorical", "graduated"]) {
+  test(`saved maps restore the ${mode} No value legend for an all-null field`, async () => {
+    const f = createVectorRestoreFixture(50);
+    const color = "#aa5533";
+    const classification = mode === "categorical"
+      ? { field: "score", limit: 20, rules: [], otherColor: null, missingColor: color }
+      : { ...graduatedStyle(50).graduated, rules: [], missingColor: color };
+    const style = { ...BASE_STYLE, [mode]: classification };
+    const saved = {
+      catalogItem: { collection: CATALOG_ITEM.collection, id: CATALOG_ITEM.id },
+      isCustom: true, visible: true, opacity: 1, customName: "No measurements",
+      style: { kind: "vector", definition: style },
+      calculatedFields: [], filter: { enabled: false, match: "all", rules: [] },
+    };
+    await f.openLayers([saved]);
+
+    assert.deepEqual(f.view.result, { loaded: 1, total: 1, details: [] });
+    const restored = f.records[0];
+    assert.deepEqual(JSON.parse(restored.state.layer.wmsParams.vector_style), style);
+    const legend = f.adapter.snapshot(restored).legend;
+    assert.deepEqual(legend.entries.map(({ label, color }) => [label, color]), [["No value", color]]);
+    assert.deepEqual((await f.save()).layers, [saved]);
+  });
+}
+
 test("reopening an intersection selects the hidden duplicate and exports only its view ID", async t => {
   const f = createVectorRestoreFixture(50);
   const id = "00000000-0000-4000-8000-000000000042";

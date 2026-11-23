@@ -294,5 +294,12 @@ test("pixel picker shortcuts copy, hide, and restore without owning policy", asy
   view.setEnabled(false);
   restore.dispatchEvent(new Event("click"));
   assert.equal(state.shown, 2);
+  view.setEnabled(false, false);
+  assert.equal(restore.hidden, true);
+  const suppressedShortcut = Object.assign(new Event("keydown", { cancelable: true }), { key: "P" });
+  documentContext.dispatchEvent(suppressedShortcut);
+  restore.dispatchEvent(new Event("click"));
+  assert.equal(state.shown, 2);
+  assert.equal(suppressedShortcut.defaultPrevented, false);
   view.unbind();
 });

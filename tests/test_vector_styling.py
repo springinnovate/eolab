@@ -37,7 +37,7 @@ from eolab_app.vector.styles import (
 from eolab_app.vector.styling import VectorStyleService
 from tests.test_vector_publication import StaticCatalog, assessed_geopackage_item
 from tests.test_vector_categories import assessed_category_item
-
+from tests.test_vector_numeric import assessed_numeric_item
 
 class RecordingStyler:
     """Record server-derived resource identities and validated styles."""
@@ -888,16 +888,108 @@ def test_style_service_accepts_explicit_csv_appearance_without_count_reads(
     assert len(styler.requests) == 1
 
 
+@pytest.mark.parametrize(
+    ("mode", "missing_color", "other_color"),
+    [
+        ("categorical", "#aa5533", None),
+        ("categorical", None, "#8899aa"),
+        ("categorical", None, None),
+        ("graduated", "#aa5533", None),
+        ("graduated", None, None),
+    ],
+)
+def test_style_service_applies_empty_class_lists(
+    tmp_path: Path, mode: str, missing_color: str | None, other_color: str | None
+) -> None:
+    """Publish an all-null field with its chosen color, Other, or no visible symbol.
+
+    Args:
+        tmp_path: Isolated mount for an assessed GeoPackage containing nulls.
+        mode: Categorical or graduated style on the same attribute.
+        missing_color: Separate color for true nulls, or None when disabled.
+        other_color: Optional color for values outside a categorical rule.
+    """
+    item = assessed_numeric_item(tmp_path, [None, None])
+    resolver = MountedVectorResolver(tmp_path)
+    registry = PublishedVectorRegistry()
+    registry.authorize(
+        f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
+        resolver.resolve(item),
+        "vector-point",
+    )
+    styler = RecordingStyler()
+    service = VectorStyleService(
+        StaticCatalog(item), resolver, styler, registry, OgrVectorFieldReader()
+    )
+    selected_style: dict[str, Any] = {
+        "field": "score",
+        "rules": [],
+        "missingColor": missing_color,
+    }
+    if mode == "categorical":
+        selected_style.update(limit=20, otherColor=other_color)
+    else:
+        selected_style.update(method="equal-interval", classCount=3, palette="blues")
+    request = CatalogVectorStyleRequest(
+        collectionId=item["collection"],
+        itemId=item["id"],
+        style={
+            **default_vector_style("point").model_dump(by_alias=True),
+            mode: selected_style,
+        },
+    )
+
+    applied = asyncio.run(service.apply(request))
+    assert applied.style == request.style
+    assert styler.requests == [(item["id"], request.style)]
+    root = ElementTree.fromstring(build_vector_sld("measurements", applied.style))
+    namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
+    (rule,) = root.findall(".//sld:FeatureTypeStyle/sld:Rule", namespaces)
+    assert rule.find("sld:PointSymbolizer", namespaces) is not None
+    if missing_color:
+        assert (
+            rule.findtext(
+                "ogc:Filter/ogc:PropertyIsNull/ogc:PropertyName",
+                namespaces=namespaces,
+            )
+            == "score"
+        )
+    else:
+        assert rule.find("ogc:Filter", namespaces) is None
+    color = missing_color or other_color
+    if color:
+        assert (
+            rule.findtext(".//sld:CssParameter[@name='fill']", namespaces=namespaces)
+            == color
+        )
+    else:
+        assert (
+            rule.findtext(
+                ".//sld:CssParameter[@name='fill-opacity']", namespaces=namespaces
+            )
+            == "0"
+        )
+        assert (
+            rule.findtext(
+                ".//sld:CssParameter[@name='stroke-opacity']", namespaces=namespaces
+            )
+            == "0"
+        )
+
+
 @pytest.mark.parametrize("method", ["equal-interval", "percentile-interval"])
+@pytest.mark.parametrize("missing_color", [None, "#aa5533"])
 def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
     tmp_path: Path,
     method: str,
+    missing_color: str | None,
 ) -> None:
     """Keep current-source checks while publishing valid user-entered breaks.
 
     Args:
         tmp_path: Isolated mounted scan source.
         method: Classification method used to validate the current field read.
+        missing_color: Optional color that can be set before the scan finds nulls.
     """
     item, _ = assessed_category_item(tmp_path)
     resolver = MountedVectorResolver(tmp_path)
@@ -925,6 +1017,7 @@ def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
             classCount=3,
         )
     ))
+    assert summary.null_count == 0
     colors = ("#f7fbff", "#6baed6", "#08306b")
     rules = [
         {
@@ -945,7 +1038,7 @@ def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
                 "classCount": 3,
                 "palette": "blue-yellow-red",
                 "rules": rules,
-                "missingColor": None,
+                "missingColor": missing_color,
             },
         },
     )
@@ -953,6 +1046,7 @@ def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
     applied = asyncio.run(service.apply(valid_request))
 
     assert applied.style.graduated is not None
+    assert applied.style.graduated.missing_color == missing_color
     assert styler.requests == [(item["id"], valid_request.style)]
     drifted_rules = [dict(rule) for rule in rules]
     drifted_rules[0]["maximum"] = 0.5

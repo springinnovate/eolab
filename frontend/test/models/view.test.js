@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ModelsView } from "../../src/models/view.js";
 import { describeModelProgress } from "../../src/processing/presentation.js";
 import { captureModelSubmission, createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
-import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
+import { SUMMARY_MARKUP, SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
@@ -12,7 +12,7 @@ import { model, raster, area, invocation, job, clipModel, clipResult, statistics
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Input", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete", "TemporalDataset", "TemporalVariable", "TemporalMonth", "UseTemporalMonth", "RefreshTemporal", "TemporalEdit"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Input", "Area", "Vector", "EditFilter", "Submit", "Retry", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete", "TemporalDataset", "TemporalVariable", "TemporalMonth", "UseTemporalMonth", "RefreshTemporal", "TemporalEdit"]
         .map(name => [`on${name}`, (...values) => actions.push([name, ...values])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -165,6 +165,7 @@ test("removed history entries leave the DOM while unrelated run cards retain the
 test("tool rows and run cards retain native buttons, navigation and focus", () => {
     const h = fixture(), run = job();
     Object.assign(h.state, {page: "library", runs: [run]}); h.view.render(h.state);
+    assert.doesNotMatch(SUMMARY_MARKUP, /<button\b[^>]*>\s*Refresh library\s*<\/button>/i);
     const libraryButton = h.view.elements["library-items"].children[0];
     const runCard = h.view.runCards.get(run.jobId);
     assert.equal(libraryButton.type, "button"); assert.equal(runCard.button.type, "button");

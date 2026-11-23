@@ -21,6 +21,7 @@ const LONG_LABEL_NOTE =
     "Labels may overlap to keep names visible. Centered and point labels wrap " +
     "across lines and stay anchored as you zoom.";
 const VECTOR_STYLE_DEBOUNCE_MILLISECONDS = 450;
+const DEFAULT_NO_VALUE_COLOR = "#d1d5db";
 
 /** Own vector style form state without knowing map or raster implementations. */
 export class VectorStyleControls {
@@ -57,6 +58,12 @@ export class VectorStyleControls {
         this.graduatedPalette = documentContext.querySelector("#vector-graduated-palette");
         this.graduatedStatus = documentContext.querySelector("#vector-graduated-status");
         this.graduatedList = documentContext.querySelector("#vector-graduated-list");
+        this.categoryNoValueSlot = documentContext.querySelector("#vector-category-no-value-slot");
+        this.graduatedNoValueSlot = documentContext.querySelector("#vector-graduated-no-value-slot");
+        this.noValueStyle = documentContext.querySelector("#vector-no-value-style");
+        this.noValueSeparate = documentContext.querySelector("#vector-no-value-separate");
+        this.noValueColor = documentContext.querySelector("#vector-no-value-color");
+        this.noValueCount = documentContext.querySelector("#vector-no-value-count");
         this.fillGroup = documentContext.querySelector("#vector-style-fill-group");
         this.pointGroup = documentContext.querySelector("#vector-style-point-group");
         this.fillColorControl = documentContext.querySelector("#vector-style-fill-color-control");
@@ -109,7 +116,8 @@ export class VectorStyleControls {
         this.categoryColors = new Map();
         this.categoryColorInputs = [];
         this.otherColor = "#9ca3af";
-        this.missingColor = "#d1d5db";
+        /** @type {Map<string, {separate:boolean, color:string}>} */
+        this.noValueStyles = new Map();
         this.paletteGeneration = 0;
         this.categoryLoading = false;
         this.categoryRequest = 0;
@@ -120,9 +128,6 @@ export class VectorStyleControls {
         this.graduatedRangePrefixes = [];
         this.graduatedCountOutputs = [];
         this.graduatedRuleSeed = null;
-        this.graduatedMissingEnabled = false;
-        this.graduatedMissingColor = "#d1d5db";
-        this.graduatedMissingInputs = [];
         this.target = null;
         this.generation = 0;
         this.scheduleTimeout = schedule;
@@ -180,6 +185,26 @@ export class VectorStyleControls {
             this.#renderGraduated();
             this.#recordStyleChange();
         };
+        /**
+         * Retain the chosen missing-value style for the selected field and queue a map update.
+         * @param {Event} event Checkbox change or color input from the active style mode.
+         * @return {void}
+         */
+        this.onNoValueInput = (event) => {
+            const categorical = this.mode.value === "categories";
+            const field = categorical ? this.categoryField.value : this.graduatedField.value;
+            this.noValueStyles.set(field, {
+                separate: this.noValueSeparate.checked,
+                color: this.noValueColor.value,
+            });
+            if (categorical) {
+                if (event.type === "change") this.#renderCategories();
+                else this.#synchronizeCategoryInputs();
+            } else {
+                this.noValueColor.disabled = !this.noValueSeparate.checked;
+            }
+            this.#recordStyleChange();
+        };
         this.mode.addEventListener("change", this.onModeChange);
         this.categoryField.addEventListener("change", this.onCategoryFieldChange);
         this.categoryLimit.addEventListener("input", this.onCategoryLimitInput);
@@ -188,6 +213,8 @@ export class VectorStyleControls {
         this.graduatedMethod.addEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedClassCount.addEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedPalette.addEventListener("change", this.onGraduatedPaletteChange);
+        this.noValueSeparate.addEventListener("change", this.onNoValueInput);
+        this.noValueColor.addEventListener("input", this.onNoValueInput);
         for (const input of this.symbolInputs) {
             input.addEventListener("input", this.onSymbolInput);
         }
@@ -200,6 +227,7 @@ export class VectorStyleControls {
 
     /**
      * Show controls for one composition-provided vector style target.
+     * Restore the saved No value choice and apply edits made during initial discovery.
      *
      * @param {{key:string,style:Object,fields:ReadonlyArray<{name:string,type:string}>,notice?:string,
      * summarize:(field:string)=>ReturnType<typeof import("./api.js").summarizeVectorCategories>,
@@ -295,6 +323,14 @@ export class VectorStyleControls {
         this.graduatedSummary = null;
         this.categoryColors.clear();
         this.paletteGeneration = 0;
+        this.noValueStyles.clear();
+        const classifiedStyle = categorical ?? graduated;
+        if (classifiedStyle !== null) {
+            this.noValueStyles.set(classifiedStyle.field, {
+                separate: classifiedStyle.missingColor !== null,
+                color: classifiedStyle.missingColor ?? DEFAULT_NO_VALUE_COLOR,
+            });
+        }
         if (categorical !== null) {
             this.categoryField.value = categorical.field;
             this.categoryLimit.value = String(categorical.limit);
@@ -302,12 +338,10 @@ export class VectorStyleControls {
                 this.categoryColors.set(categoryValueKey(rule.value), rule.color);
             }
             this.otherColor = categorical.otherColor ?? "#9ca3af";
-            this.missingColor = categorical.missingColor ?? "#d1d5db";
         } else {
             this.categoryField.value = this.categoryFields[0]?.name ?? "";
             this.categoryLimit.value = "20";
             this.otherColor = "#9ca3af";
-            this.missingColor = "#d1d5db";
         }
         this.graduatedField.value = graduated?.field ?? this.graduatedFields[0]?.name ?? "";
         this.graduatedMethod.value = graduated?.method ?? VECTOR_NUMERIC_DEFAULTS.method;
@@ -322,8 +356,6 @@ export class VectorStyleControls {
             classCount: graduated.classCount,
             breakValues: [...this.graduatedBreakValues],
         };
-        this.graduatedMissingEnabled = graduated?.missingColor !== null && graduated !== null;
-        this.graduatedMissingColor = graduated?.missingColor ?? "#d1d5db";
         this.status.textContent = target.notice ?? "Changes update the map automatically.";
         this.categoryStatus.textContent = "";
         this.categoryList.replaceChildren();
@@ -333,8 +365,19 @@ export class VectorStyleControls {
         this.#renderColorMode();
         this.#synchronizeLabelInputs();
         this.#renderLabelNote();
-        if (this.mode.value === "categories") void this.#loadCategories();
-        if (this.mode.value === "graduated") void this.#loadGraduated();
+        const mode = this.mode.value;
+        const generation = this.generation;
+        const revision = this.editRevision;
+        const discovery = mode === "categories" ? this.#loadCategories()
+            : mode === "graduated" ? this.#loadGraduated() : null;
+        void discovery?.then(() => {
+            if (
+                this.generation === generation && this.mode.value === mode &&
+                this.editRevision !== revision && this.debounceTimer === null
+            ) {
+                this.#scheduleStyleApply();
+            }
+        });
     }
 
     /** Hide and forget the current target. @return {void} */
@@ -372,6 +415,8 @@ export class VectorStyleControls {
         this.graduatedMethod.removeEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedClassCount.removeEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedPalette.removeEventListener("change", this.onGraduatedPaletteChange);
+        this.noValueSeparate.removeEventListener("change", this.onNoValueInput);
+        this.noValueColor.removeEventListener("input", this.onNoValueInput);
         for (const input of this.symbolInputs) {
             input.removeEventListener("input", this.onSymbolInput);
         }
@@ -596,7 +641,7 @@ export class VectorStyleControls {
         const categoryRequest = ++this.categoryRequest;
         const field = this.categoryField.value;
         this.categoryLoading = true;
-        this.categoryStatus.textContent = "Reading bounded category counts...";
+        this.categoryStatus.textContent = "Reading attribute values...";
         this.categoryColorInputs = [];
         this.categoryList.replaceChildren();
         this.#synchronizeCategoryInputs();
@@ -668,7 +713,7 @@ export class VectorStyleControls {
         const field = this.graduatedField.value;
         const method = this.graduatedMethod.value;
         this.graduatedLoading = true;
-        this.graduatedStatus.textContent = "Computing bounded numeric classes...";
+        this.graduatedStatus.textContent = "Finding numeric ranges...";
         this.graduatedBoundaryInputs = [];
         this.graduatedRangePrefixes = [];
         this.graduatedCountOutputs = [];
@@ -718,8 +763,8 @@ export class VectorStyleControls {
     /**
      * Build the complete graduated style block from current editable ranges.
      *
-     * @return {Object} Validated numeric field, method, palette, range rules,
-     * and optional missing-value presentation.
+     * @return {import("./style.js").VectorGraduatedStyle} Current range colors
+     * and separate missing color, including styles with zero ranges.
      * @throws {TypeError} If the current classification is unavailable.
      */
     #graduatedState() {
@@ -739,8 +784,7 @@ export class VectorStyleControls {
                 maximum: range.maximum,
                 color: colors[index],
             })),
-            missingColor: summary.nullCount > 0 && this.graduatedMissingEnabled
-                ? this.graduatedMissingColor : null,
+            missingColor: this.#missingColorFor(summary.field),
         };
     }
 
@@ -785,9 +829,12 @@ export class VectorStyleControls {
     /**
      * Build adjacent open-ended rules from the shared boundary controls.
      *
-     * @return {Array<{minimum:number|null,maximum:number|null}>} Complete ranges.
+     * @return {import("./style.js").VectorNumericRange[]} Complete numeric ranges,
+     * or an empty list when the selected field read found only missing values.
+     * @throws {TypeError|RangeError} If an editable break is invalid.
      */
     #graduatedRules() {
+        if (this.graduatedSummary?.actualClassCount === 0) return [];
         const breaks = this.#graduatedBreaks();
         return breaks.length === 0
             ? [{ minimum: null, maximum: null }]
@@ -839,8 +886,9 @@ export class VectorStyleControls {
      * Build categorical state from an explicit table or current discovery.
      * Imported values do not require source counts to authorize their rules.
      *
-     * @return {Object} Validated-input category field, limit, typed rules, and
-     * applicable Other and No value colors for the complete style request.
+     * @return {{field:string,limit:number,rules:ReadonlyArray<{value:import("./style.js").VectorCategoryValue,color:string,label?:string|null,opacity?:number}>,otherColor:string|null,missingColor:string|null}}
+     * Category values and fallback colors, with an empty rule list when no
+     * categories were found.
      * @throws {TypeError} If current values are unavailable or the limit is
      * invalid.
      */
@@ -848,7 +896,7 @@ export class VectorStyleControls {
         if (this.categoryTable?.field === this.categoryField.value) {
             return { field: this.categoryTable.field, limit: this.categoryTable.rules.length,
                 rules: this.categoryTable.rules.map(rule => ({ ...rule, color: this.categoryColors.get(categoryValueKey(rule.value)) })),
-                otherColor: this.otherColor, missingColor: this.missingColor };
+                otherColor: this.otherColor, missingColor: this.#missingColorFor(this.categoryTable.field) };
         }
         const summary = this.categorySummary;
         if (summary === null || summary.field !== this.categoryField.value) {
@@ -862,11 +910,6 @@ export class VectorStyleControls {
             throw new TypeError("Choose a whole-number category limit.");
         }
         const selectedValues = summary.values.slice(0, limit);
-        if (selectedValues.length === 0) {
-            throw new TypeError(
-                "This field has no bounded non-null values to style individually."
-            );
-        }
         const hasOther =
             !summary.complete ||
             summary.observedDistinctCount > selectedValues.length ||
@@ -879,7 +922,7 @@ export class VectorStyleControls {
                 color: this.categoryColors.get(categoryValueKey(value)),
             })),
             otherColor: hasOther ? this.otherColor : null,
-            missingColor: summary.nullCount > 0 ? this.missingColor : null,
+            missingColor: this.#missingColorFor(summary.field),
         };
     }
 
@@ -901,7 +944,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Apply availability, loading, and request state to category controls.
+     * Apply category control availability and show No value for the active field.
      *
      * @return {void}
      */
@@ -913,15 +956,17 @@ export class VectorStyleControls {
         this.categoryField.disabled = disabled;
         this.categoryLimit.disabled = disabled || !categorical || this.categoryTable !== null;
         this.categoryRegenerate.disabled =
-            disabled || !categorical || (this.categorySummary === null && this.categoryTable === null);
+            disabled || !categorical || (!this.categorySummary?.values.length && this.categoryTable === null);
         for (const input of this.categoryColorInputs) input.disabled = disabled;
         const field = this.categoryFields.find(entry => entry.name === this.categoryField.value) ?? null;
-        this.categoryCsv.configure(field, { otherColor: this.otherColor, missingColor: this.missingColor },
+        if (categorical) this.#renderNoValueStyle(this.categoryNoValueSlot, field?.name ?? "");
+        this.categoryCsv.configure(field, { otherColor: this.otherColor,
+            missingColor: field === null ? null : this.#missingColorFor(field.name) },
             categorical && field !== null && this.target !== null, table => this.#replaceCategoryTable(table));
     }
 
     /**
-     * Apply availability, loading, and request state to numeric controls.
+     * Apply numeric control availability and show No value for the active field.
      *
      * @return {void}
      */
@@ -937,12 +982,57 @@ export class VectorStyleControls {
         for (const input of this.graduatedBoundaryInputs) {
             input.disabled = disabled || !graduated;
         }
-        if (this.graduatedMissingInputs.length === 2) {
-            const [enabled, missingColor] = this.graduatedMissingInputs;
-            enabled.disabled = this.graduatedLoading;
-            missingColor.disabled =
-                this.graduatedLoading || !enabled.checked;
+        if (graduated) {
+            this.#renderNoValueStyle(this.graduatedNoValueSlot, this.graduatedField.value);
         }
+    }
+
+    /**
+     * Return a field's chosen No value appearance and any discovered count.
+     * New fields use a separate gray symbol when the scan finds missing values.
+     * @param {string} field Selected attribute shared by both color modes.
+     * @return {{separate:boolean,color:string,summary:{field:string,nullCount:number,complete:boolean}|null}}
+     */
+    #noValueAppearance(field) {
+        const summary = [this.categorySummary, this.graduatedSummary].find(
+            candidate => candidate?.field === field,
+        ) ?? null;
+        const draft = this.noValueStyles.get(field);
+        return {
+            separate: draft?.separate ?? ((summary?.nullCount ?? 0) > 0),
+            color: draft?.color ?? DEFAULT_NO_VALUE_COLOR,
+            summary,
+        };
+    }
+
+    /**
+     * Return the color to send for the attribute's missing-value rule.
+     * @param {string} field Selected attribute.
+     * @return {string|null} Separate color, or null when the rule is off.
+     */
+    #missingColorFor(field) {
+        const appearance = this.#noValueAppearance(field);
+        return appearance.separate ? appearance.color : null;
+    }
+
+    /**
+     * Place the same No value controls under the active mode's attribute picker.
+     * @param {HTMLDivElement} slot Placement directly below the picker.
+     * @param {string} field Eligible selected attribute, or an empty string.
+     * @return {void}
+     */
+    #renderNoValueStyle(slot, field) {
+        slot.hidden = field === "";
+        if (slot.hidden) return;
+        if (this.noValueStyle.parentElement !== slot) slot.appendChild(this.noValueStyle);
+        const { separate, color, summary } = this.#noValueAppearance(field);
+        this.noValueSeparate.checked = separate;
+        this.noValueColor.disabled = !separate;
+        if (this.noValueColor.value !== color) this.noValueColor.value = color;
+        const count = summary === null ? "" : summary.complete
+            ? `${summary.nullCount} ${summary.nullCount === 1 ? "feature" : "features"}`
+            : `${summary.nullCount} in scanned features`;
+        if (this.noValueCount.textContent !== count) this.noValueCount.textContent = count;
     }
 
     /**
@@ -994,7 +1084,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Render retained imported rules or discovered category/count rows.
+     * Render imported or discovered category rows and any Other fallback.
      *
      * @return {void}
      */
@@ -1033,23 +1123,17 @@ export class VectorStyleControls {
             const selectedCount = selectedValues.reduce(
                 (total, entry) => total + entry.count, 0
             );
+            const separatelyStyledNulls = this.#missingColorFor(summary.field) === null
+                ? 0 : summary.nullCount;
             const observedOther = Math.max(
                 0,
-                summary.scannedFeatureCount - summary.nullCount - selectedCount,
+                summary.scannedFeatureCount - separatelyStyledNulls - selectedCount,
             );
             rows.push(this.#categoryRow(
                 "Other",
                 summary.complete ? String(observedOther) : `${observedOther}+`,
                 this.otherColor,
                 (nextColor) => { this.otherColor = nextColor; },
-            ));
-        }
-        if (summary.nullCount > 0) {
-            rows.push(this.#categoryRow(
-                "No value",
-                summary.complete ? String(summary.nullCount) : `${summary.nullCount}+`,
-                this.missingColor,
-                (nextColor) => { this.missingColor = nextColor; },
             ));
         }
         this.categoryList.replaceChildren(...rows);
@@ -1059,14 +1143,14 @@ export class VectorStyleControls {
 
     /**
      * Replace the category draft atomically through the existing apply queue.
-     * Pending discovery cannot overwrite the complete imported table.
+     * Pending discovery cannot overwrite the imported table. A finished count
+     * for the same field is still available to the No value control.
      * @param {Readonly<import("./style.js").VectorCategoricalStyle>} table Validated preview.
      * @return {void}
      */
     #replaceCategoryTable(table) {
         this.categoryRequest += 1;
         this.categoryLoading = false;
-        this.categorySummary = null;
         this.categoryTable = { field: table.field, rules: table.rules.map(rule => ({ ...rule })) };
         this.categoryColors = new Map(table.rules.map(rule => [categoryValueKey(rule.value), rule.color]));
         this.categoryLimit.value = String(table.rules.length);
@@ -1076,7 +1160,7 @@ export class VectorStyleControls {
 
     /**
      * Render editable imported labels, colors and opacity in retained order.
-     * Values stay explicit typed identities; missing/other colors remain local.
+     * Values retain their type. Show Other separately from the imported values.
      * @return {void}
      */
     #renderCategoryTable() {
@@ -1109,7 +1193,6 @@ export class VectorStyleControls {
             return container;
         });
         rows.push(this.#categoryRow("Other", "", this.otherColor, color => { this.otherColor = color; }));
-        rows.push(this.#categoryRow("No value", "", this.missingColor, color => { this.missingColor = color; }));
         this.categoryList.replaceChildren(...rows);
         this.categoryStatus.textContent = `Styling ${this.categoryTable.rules.length} explicit values in table order; remaining values use Other. Change attribute to discover categories again.`;
         this.#synchronizeCategoryInputs();
@@ -1148,7 +1231,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Explain category coverage and bounded-read completeness.
+     * Explain category coverage, including a complete read of an all-null field.
      *
      * @param {number} styledCount Number of explicit value rows being styled.
      * @return {void}
@@ -1156,6 +1239,10 @@ export class VectorStyleControls {
     #renderCategoryStatus(styledCount) {
         const summary = this.categorySummary;
         if (summary === null) return;
+        if (summary.complete && summary.nullCount > 0 && summary.nullCount === summary.featureCount) {
+            this.categoryStatus.textContent = "Every feature has no value for this field.";
+            return;
+        }
         const coverage = summary.complete
             ? `${summary.observedDistinctCount} distinct values across ` +
                 `${summary.featureCount} features.`
@@ -1173,7 +1260,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Render current numeric ranges, palette swatches, and missing-value style.
+     * Render current numeric ranges and palette swatches, or explain why none are available.
      *
      * @return {void}
      */
@@ -1215,11 +1302,16 @@ export class VectorStyleControls {
                 : "—",
             colors[index],
         ));
-        this.graduatedMissingInputs = [];
-        if (summary.nullCount > 0) {
-            rows.push(this.#graduatedMissingRow(summary));
-        }
         this.graduatedList.replaceChildren(...rows);
+        if (summary.actualClassCount === 0) {
+            this.graduatedStatus.textContent = summary.complete
+                ? (summary.nullCount === summary.featureCount
+                    ? "Every feature has no value for this field."
+                    : "No numeric values were found in this field.")
+                : "No numeric values were found in the scanned features.";
+            this.#synchronizeGraduatedInputs();
+            return;
+        }
         const coverage = summary.complete
             ? `${summary.numericValueCount} numeric values across ${summary.featureCount} features.`
             : `Classified ${summary.numericValueCount} numeric values in the first ` +
@@ -1354,45 +1446,6 @@ export class VectorStyleControls {
             ? " Edit an upper bound to use exact custom ranges."
             : " Exact custom ranges will be applied; counts are hidden until ranges are regenerated.";
         this.graduatedStatus.textContent = coverage + custom;
-    }
-
-    /**
-     * Create optional styling controls for null numeric values.
-     *
-     * @param {Object} summary Current numeric classification summary.
-     * @return {HTMLLabelElement} Detached missing-value row.
-     */
-    #graduatedMissingRow(summary) {
-        const row = this.document.createElement("label");
-        row.className = "vector-category-row vector-graduated-row";
-        const enabled = this.document.createElement("input");
-        enabled.type = "checkbox";
-        enabled.checked = this.graduatedMissingEnabled;
-        enabled.setAttribute("aria-label", "Style features with no numeric value");
-        const color = this.document.createElement("input");
-        color.type = "color";
-        color.value = this.graduatedMissingColor;
-        color.disabled = this.graduatedLoading || !enabled.checked;
-        color.setAttribute("aria-label", "No value color");
-        enabled.addEventListener("change", () => {
-            this.graduatedMissingEnabled = enabled.checked;
-            color.disabled = this.graduatedLoading || !enabled.checked;
-            this.#recordStyleChange();
-        });
-        color.addEventListener("input", () => {
-            this.graduatedMissingColor = color.value;
-            this.#recordStyleChange();
-        });
-        const name = this.document.createElement("span");
-        name.className = "vector-category-name";
-        name.textContent = "No value";
-        const featureCount = this.document.createElement("span");
-        featureCount.className = "vector-category-count";
-        featureCount.textContent = summary.complete
-            ? String(summary.nullCount) : `${summary.nullCount}+`;
-        row.append(enabled, color, name, featureCount);
-        this.graduatedMissingInputs.push(enabled, color);
-        return row;
     }
 
     /**

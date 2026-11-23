@@ -9,11 +9,13 @@ from pathlib import Path
 import time
 from typing import Any, Literal
 
+from affine import Affine
 import numpy
+from numpy.typing import NDArray
 import rasterio
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from rasterio.shutil import copy as copy_raster
-from rasterio.windows import Window, transform as window_transform
+from rasterio.windows import Window, intersect, transform as window_transform, union
 
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.artifacts import write_progress as _progress
@@ -31,7 +33,7 @@ from eolab_app.processing.clip_models import (
     RasterClipLimits,
 )
 from eolab_app.raster.models import SelectedRasterArea, CatalogRasterRequest
-from eolab_app.raster.reader import RasterData, open_raster_data
+from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.raster.source_contract import (
     RASTER_VALIDITY_POLICY,
     read_native_raster_block,
@@ -40,21 +42,52 @@ from eolab_app.raster.source_contract import (
 
 
 def _select_clip_area(
-    dataset: Any, area: ClipArea, limits: RasterClipLimits
-) -> SelectedRasterArea:
-    """Locate the requested native grid and any polygon mask for the exported pixels.
+    dataset: RasterDataset, area: ClipArea
+) -> tuple[Window, tuple[SelectedRasterArea, ...]]:
+    """Locate the native clip window and the selections that contribute coverage.
 
     Args:
         dataset: Validated open native raster.
         area: Immutable whole-grid, bounds or polygon selection.
-        limits: Shared clip job lifecycle settings.
 
     Returns:
-        Native window and projected mask geometry.
+        Integral native window and one mask source per intersecting selection.
+        An entire raster uses its full window and an empty tuple of mask sources.
+
+    Raises:
+        ProcessingError: If no member overlaps the grid or a mask cannot be prepared.
     """
     if area.kind == "wholeRaster":
-        return SelectedRasterArea(Window(0, 0, dataset.width, dataset.height), ())
-    return select_area(
+        return Window(0, 0, dataset.width, dataset.height), ()
+    if area.polygonGroup is not None:
+        areas = []
+        for member, source in zip(
+            area.polygonGroup.members, area.resolvedGroup, strict=True
+        ):
+            try:
+                areas.append(
+                    select_area(
+                        dataset,
+                        "catalogSelection",
+                        area.bounds,
+                        geometries=(),
+                        max_coordinates=None,
+                        resolved=source,
+                    )
+                )
+            except ProcessingError as error:
+                if error.code != "no_overlap":
+                    raise ProcessingError(
+                        error.code,
+                        f"Could not use {member.label}. {error.detail}",
+                        error.status,
+                    ) from error
+        if not areas:
+            raise ProcessingError(
+                "no_overlap", "The polygon group does not overlap this raster."
+            )
+        return union(*(selection.source_window for selection in areas)), tuple(areas)
+    selection = select_area(
         dataset,
         area.kind,
         area.bounds,
@@ -63,17 +96,53 @@ def _select_clip_area(
         resolved=area.resolved,
         sampling_box=area.samplingBox,
     )
+    return selection.source_window, (selection,)
 
 
-def _plan_clip_grid(
-    dataset: Any, selected: SelectedRasterArea, limits: RasterClipLimits
-) -> ClipGrid:
+def _clip_mask(
+    selections: tuple[SelectedRasterArea, ...],
+    window: Window,
+    transform: Affine,
+    shape: tuple[int, int],
+) -> NDArray[numpy.bool_]:
+    """Include each pixel touched by at least one polygon on this native block.
+
+    Args:
+        selections: Prepared source windows and their original-source mask readers.
+        window: Current block window in native raster coordinates.
+        transform: Native grid coordinate transform.
+        shape: Rows and columns of the part of the block being written.
+
+    Returns:
+        Boolean block mask with overlaps included once and uncovered pixels excluded.
+
+    Raises:
+        ValueError: If a mask reader cannot read or project the source geometry.
+    """
+    affine = window_transform(window, transform)
+    included = None
+    for selection in selections:
+        if not intersect(window, selection.source_window):
+            continue
+        mask = pixels_inside_area(
+            selection.projected_geometries,
+            out_shape=shape,
+            transform=affine,
+            all_touched=True,
+        )
+        if included is None:
+            included = mask
+        else:
+            included |= mask
+    return numpy.zeros(shape, dtype=bool) if included is None else included
+
+
+def _plan_clip_grid(dataset: RasterDataset, window: Window) -> ClipGrid:
     """Describe the clip grid and count source blocks for progress.
 
     Args:
         dataset: Validated one-band native grid.
-        selected: Projected area and integral source window.
-        limits: Shared clip job lifecycle settings.
+        window: Integral native window covering the selected area.
 
     Returns:
         Native grid, source block count and estimated uncompressed output size.
@@ -81,7 +150,6 @@ def _plan_clip_grid(
     Raises:
         ProcessingError: If the source grid or selected area is invalid.
     """
-    window = selected.source_window
     width, height = int(window.width), int(window.height)
     raw_bytes = width * height * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
     block_count = count_native_raster_blocks(dataset, window)
@@ -118,9 +186,8 @@ def plan_clip(
     with rasterio.Env(GDAL_CACHEMAX=64 * 1024**2, GDAL_NUM_THREADS="2"):
         with open_raster_data(raster_data) as dataset:
             _validate_supported_raster(dataset, raster_data)
-            grid = _plan_clip_grid(
-                dataset, _select_clip_area(dataset, area, limits), limits
-            )
+            window, _ = _select_clip_area(dataset, area)
+            grid = _plan_clip_grid(dataset, window)
     return grid
 
 
@@ -154,8 +221,7 @@ def create_clip(
     ):
         with open_raster_data(raster_data) as source:
             _validate_supported_raster(source, raster_data)
-            selected = _select_clip_area(source, spec.area, limits)
-            window = selected.source_window
+            window, selections = _select_clip_area(source, spec.area)
             blocks = source_block_indexes_for_window(window, source.block_shapes[0])
             profile = dict(
                 driver="GTiff",
@@ -232,12 +298,9 @@ def create_clip(
                     )
                     values = native[local.toslices()]
                     valid = ~numpy.ma.getmaskarray(values) & numpy.isfinite(values.data)
-                    if spec.area.kind != "wholeRaster":
-                        valid &= pixels_inside_area(
-                            selected.projected_geometries,
-                            out_shape=values.shape,
-                            transform=window_transform(intersection, source.transform),
-                            all_touched=True,
+                    if selections:
+                        valid &= _clip_mask(
+                            selections, intersection, source.transform, values.shape
                         )
                     valid_count += int(numpy.count_nonzero(valid))
                     output = Window(

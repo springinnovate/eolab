@@ -25,6 +25,9 @@ from eolab_app.vector.selection_operation import (
     ComparisonInput,
     ComparisonResult,
     compare_selected_features,
+    LayerStatisticsInput,
+    LayerStatisticsResult,
+    measure_layer_statistics,
     SelectionMeasurementInput,
     SelectionMeasurementResult,
     measure_selected_features,
@@ -106,6 +109,13 @@ OPERATIONS = {
         SelectionMeasurementInput,
         SelectionMeasurementResult,
         measure_selected_features,
+    ),
+    "vector.layer-statistics.v1": InstalledOperation(
+        "vector.layer-statistics.v1",
+        "Summarize numeric fields across every original feature in a vector layer.",
+        LayerStatisticsInput,
+        LayerStatisticsResult,
+        measure_layer_statistics,
     ),
     "vector.intersection.v1": InstalledOperation(
         "vector.intersection.v1",
