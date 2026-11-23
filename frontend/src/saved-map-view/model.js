@@ -94,9 +94,11 @@ export function serializeSavedMapView(savedMapView) {
 
 /**
  * Validate and normalize the complete saved-map contract.
+ * The basemap field names a provider without including any tile settings.
  *
  * @param {unknown} candidate Untrusted parsed value.
  * @return {Readonly<Object>} Frozen canonical document.
+ * @throws {SavedMapViewValidationError} If a required setting is missing or invalid.
  */
 function validateSavedMapView(candidate) {
     requirePlainObject(candidate, "Saved map");
@@ -127,7 +129,7 @@ function validateSavedMapView(candidate) {
     const origin = validateOrigin(candidate.viewer.origin);
     const createdAt = validateTimestamp(candidate.createdAt);
     const viewport = validateViewport(candidate.viewport);
-    if (!["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
+    if (!["detailed", "carto", "maptiler", "maptiler-streets", "outlines", "none"].includes(candidate.basemap)) {
         throw new SavedMapViewValidationError("Saved basemap provider is invalid.");
     }
     if (!Array.isArray(candidate.layers)) {

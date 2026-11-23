@@ -69,12 +69,12 @@ def test_carto_key_builds_attributed_browser_tile_url(
     assert "test-key" not in repr(load_settings(version_file_path))
 
 
-def test_maptiler_key_configures_satellite_and_place_search(
+def test_maptiler_key_configures_basemaps_and_place_search(
     configured_environment: None,
     version_file_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Publish satellite settings and the same browser key for place search.
+    """Publish both MapTiler basemaps and place search using the same key.
 
     Args:
         configured_environment: Baseline application environment.
@@ -99,5 +99,12 @@ def test_maptiler_key_configures_satellite_and_place_search(
     assert "api.maptiler.com/resources/logo.svg" in satellite["attribution"]
     assert 'alt="MapTiler logo"' in satellite["attribution"]
     assert 'href="https://www.maptiler.com/"' in satellite["attribution"]
+    streets = basemap["maptilerStreets"]
+    assert streets["url"] == (
+        "https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png"
+        "?key=satellite-key%26other%3Dunsafe%2F%23"
+    )
+    assert streets["maxNativeZoom"] == 22
+    assert streets["attribution"] == satellite["attribution"]
     assert "carto-key" in basemap["carto"]["url"]
     assert "satellite-key" not in repr(load_settings(version_file_path))
