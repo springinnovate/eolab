@@ -12,6 +12,69 @@ import { validateCalculatedFields } from "../calculated-fields.js";
  */
 
 /**
+ * @typedef {({collectionId:string,itemId:string,assetKey:string}|{uploadId:string}|{kind:"runArtifact",jobId:string,artifactId:string}) & {layerName:string,calculatedFields?:ReadonlyArray<import("../calculated-fields.js").CalculatedField>}} VectorStatisticsSource
+ * Original layer identity without a map filter.
+ */
+
+/**
+ * @typedef {Object} VectorFieldStatistics
+ * @property {string} field Exact original or calculated field name.
+ * @property {number} count Number of finite numeric values in the layer.
+ * @property {number|null} mean Arithmetic mean, or null when the count is zero.
+ * @property {number|null} minimum Smallest value, or null when the count is zero.
+ * @property {number|null} maximum Largest value, or null when the count is zero.
+ */
+
+/**
+ * Read whole-layer benchmarks for the given fields in their original order.
+ * @param {VectorStatisticsSource} source Original catalog layer, upload or owned run result.
+ * @param {string[]} fields Distinct numeric fields selected for the plot.
+ * @param {AbortSignal} signal Cancel when the source or fields change.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
+ * @return {Promise<VectorFieldStatistics[]>} Complete summaries for the requested fields.
+ * @throws {Error} If a layer read fails or returns an invalid response.
+ * @throws {DOMException} If the request is aborted.
+ */
+export async function getVectorLayerStatistics(source, fields, signal, fetchImplementation = globalThis.fetch) {
+    const summaries = [];
+    const fieldsPerRequest = 32;
+    for (let offset = 0; offset < fields.length; offset += fieldsPerRequest) {
+        const batch = fields.slice(offset, offset + fieldsPerRequest);
+        const response = await fetchImplementation("/api/vector-sampling/layer-statistics", {
+            method: "POST", signal, credentials: "same-origin", cache: "no-store",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                ...("uploadId" in source ? { "X-EOLab-Uploads": "1" } : {}),
+                ...(source.kind === "runArtifact" ? { "X-EOLab-Processing": "1" } : {}),
+            },
+            body: JSON.stringify({ source: { ...source, filter: {} }, fields: batch }),
+        });
+        if (!response.ok) throw await vectorRenderingError(response, "layer statistics");
+        const result = await response.json();
+        if (!Array.isArray(result) || result.length !== batch.length ||
+            result.some((summary, index) => !validFieldStatistics(summary, batch[index]))) {
+            throw new Error("The layer statistics response was invalid.");
+        }
+        summaries.push(...result);
+    }
+    return summaries;
+}
+
+/**
+ * Check a field summary crossing the HTTP boundary.
+ * @param {unknown} summary Candidate response record.
+ * @param {string} field Expected field at this position.
+ * @return {boolean} Whether the response describes zero or more complete readings.
+ */
+function validFieldStatistics(summary, field) {
+    if (summary?.field !== field || !Number.isSafeInteger(summary.count) || summary.count < 0) return false;
+    const values = [summary.minimum, summary.mean, summary.maximum];
+    if (summary.count === 0) return values.every(value => value === null);
+    return values.every(Number.isFinite) && summary.minimum <= summary.mean && summary.mean <= summary.maximum;
+}
+
+/**
  * Read one page of prepared string values without opening the original source.
  * Private sources use the current browser's ownership cookie. Nulls are
  * excluded by the endpoint; empty strings and whitespace are preserved exactly.

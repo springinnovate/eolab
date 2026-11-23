@@ -5,6 +5,7 @@ import {
     renderStackedSeriesChart,
 } from "../charts/series-chart.js";
 import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { VectorPlotStatistics } from "./plot-statistics.js";
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
 
 export const VECTOR_TIME_SERIES_LAYER_LABEL = "__eolab_layer_label__";
@@ -166,10 +167,15 @@ export class VectorTimeSeriesController {
      * Highlight the inspected result at this index and return whether the map could fit its bounds.
      * @param {(index:number|null)=>void} configuration.onOpenFeature Open a single feature, or the inspector's current one.
      * @param {(direction:"previous"|"next")=>void} configuration.onNavigateSelection Request the adjacent map selection.
+     * @param {import("./plot-statistics.js").DescribeStatisticsSource} [configuration.describeStatisticsSource]
+     * Look up the original layer and schema for whole-layer benchmarks.
      * @param {Document} [configuration.documentContext=document] Owning document.
      * @throws {TypeError} If visibility, dock identity, zoom, or selection navigation callbacks are missing.
      */
-    constructor({onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, onNavigateSelection, documentContext = document}) {
+    constructor({
+        onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, onNavigateSelection,
+        describeStatisticsSource = () => null, documentContext = document,
+    }) {
         for (const [name, callback] of Object.entries({onVisibilityChange, onPresentationChange, onFeatureZoom, onNavigateSelection})) {
             if (typeof callback !== "function") throw new TypeError(name + " must be a function.");
         }
@@ -202,6 +208,7 @@ export class VectorTimeSeriesController {
         this.previousSelection = element("previous-selection");
         this.nextSelection = element("next-selection");
         this.plotPanel = new VectorPlotPanel(documentContext, "vector-time-series", () => this.render());
+        this.statistics = new VectorPlotStatistics(documentContext, "vector-time-series", describeStatisticsSource);
         this.fields = new VectorPlotFields(documentContext, "vector-time-series", names => {
             this.settings.yFields = names;
             this.render();
@@ -214,6 +221,7 @@ export class VectorTimeSeriesController {
         this.sampleState = "empty";
         this.sampleMessage = "Click the map to inspect vector features.";
         this.failedLayers = 0;
+        this.modeActive = false;
         this.abort = new AbortController();
         const listen = {signal: this.abort.signal};
         this.setSelectionNavigation({canPrevious: false, canNext: false});
@@ -251,6 +259,7 @@ export class VectorTimeSeriesController {
 
     /** Open the current comparison. @return {void} */
     open() {
+        this.modeActive = true;
         this.onVisibilityChange(true, false);
         this.render();
         this.document.querySelector("#vector-time-series-compare").focus();
@@ -262,6 +271,8 @@ export class VectorTimeSeriesController {
      * @return {void}
      */
     close({moveFocus = false} = {}) {
+        this.modeActive = false;
+        this.statistics.update([], []);
         this.plotPanel.closePicker(false);
         this.onVisibilityChange(false, moveFocus);
     }
@@ -326,6 +337,7 @@ export class VectorTimeSeriesController {
         const count = this.observations.length;
         this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
         const ready = this.sampleState === "ready";
+        this.statistics.update(this.modeActive && ready ? this.observations : [], yFields);
         this.openFeature.disabled = !ready || count === 0;
         this.plotPanel.featureButton.disabled = !ready || count === 0;
         this.plotPanel.fieldButton.disabled = !ready || (numericFields.length === 0 && !yFields.length);
@@ -582,6 +594,7 @@ export class VectorTimeSeriesController {
         this.abort.abort();
         this.plotPanel.destroy();
         this.fields.destroy();
+        this.statistics.destroy();
         this.onPresentationChange(null);
         this.onVisibilityChange(false, false);
     }

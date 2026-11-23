@@ -1,5 +1,6 @@
 /** Versioned, portable saved-map document validation and construction. */
 import { validateCalculatedFields } from "../calculated-fields.js";
+import { VISITOR_CONTROL_PARENTS, VISITOR_CONTROLS_VERSION } from "../visitor-controls.js";
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
 export const SAVED_MAP_VIEW_SCHEMA_VERSION = 5;
@@ -94,7 +95,7 @@ export function serializeSavedMapView(savedMapView) {
 
 /**
  * Validate and normalize the complete saved-map contract.
- * The basemap field names a provider without including any tile settings.
+ * Optional visitor choices keep their own version within saved-map version 5.
  *
  * @param {unknown} candidate Untrusted parsed value.
  * @return {Readonly<Object>} Frozen canonical document.
@@ -116,7 +117,8 @@ function validateSavedMapView(candidate) {
     requireExactKeys(
         candidate,
         ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers", "basemap",
-            ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : [])],
+            ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : []),
+            ...(Object.hasOwn(candidate, "visitorControls") ? ["visitorControls"] : [])],
         "Saved map"
     );
     requirePlainObject(candidate.viewer, "Viewer");
@@ -147,6 +149,8 @@ function validateSavedMapView(candidate) {
             throw new SavedMapViewValidationError("Map legend visibility and collapse state must be boolean.");
         }
     }
+    const visitorControls = Object.hasOwn(candidate, "visitorControls")
+        ? validateVisitorControls(candidate.visitorControls) : undefined;
     const viewIds = new Set();
     const layers = candidate.layers.map(layer => {
         requirePlainObject(layer, "Saved layer");
@@ -190,7 +194,29 @@ function validateSavedMapView(candidate) {
         basemap: candidate.basemap,
         layers: Object.freeze(layers),
         ...(candidate.mapLegend ? { mapLegend: Object.freeze({ ...candidate.mapLegend }) } : {}),
+        ...(visitorControls === undefined ? {} : { visitorControls }),
     });
+}
+
+/**
+ * Validate explicitly stored visitor choices, including choices overridden by a parent.
+ * @param {unknown} candidate Untrusted visitor settings from a saved map.
+ * @return {Readonly<import("../visitor-controls.js").VisitorControls>} Frozen version and stored choices.
+ * @throws {SavedMapViewValidationError} If the version, capabilities, or values are invalid.
+ */
+function validateVisitorControls(candidate) {
+    requirePlainObject(candidate, "Visitor controls");
+    requireExactKeys(candidate, ["version", "choices"], "Visitor controls");
+    if (candidate.version !== VISITOR_CONTROLS_VERSION) {
+        throw new SavedMapViewValidationError("This map uses a visitor controls version this viewer does not support.");
+    }
+    requirePlainObject(candidate.choices, "Visitor choices");
+    for (const [id, enabled] of Object.entries(candidate.choices)) {
+        if (!Object.hasOwn(VISITOR_CONTROL_PARENTS, id) || typeof enabled !== "boolean") {
+            throw new SavedMapViewValidationError("Visitor choices must use supported tools and true or false values.");
+        }
+    }
+    return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }) });
 }
 
 /**

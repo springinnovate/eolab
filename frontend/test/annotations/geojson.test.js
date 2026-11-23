@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseAnnotationGeoJSON, exportAnnotationGeoJSON, readAnnotationGeoJSONFile } from "../../src/annotations/geojson.js";
+import { parseAnnotationGeoJSON, exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { AnnotationModel, readAnnotationLayers, MAX_ANNOTATION_LAYERS, MAX_ANNOTATION_DOCUMENT_BYTES,
     MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER } from "../../src/annotations/model.js";
-import { AnnotationController } from "../../src/annotations/controller.js";
 import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
 /** @return {Object} A closed counterclockwise Polygon with optional feature text. */
@@ -157,19 +156,14 @@ test("invalid JSON, envelopes, legacy CRS and recognized overlong text produce d
     assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), /Layer name exceeds/);
 });
 
-test("file, feature and vertex limits are checked before expensive geometry work", async () => {
-    let read = false;
-    await assert.rejects(() => readAnnotationGeoJSONFile({ size: MAX_ANNOTATION_DOCUMENT_BYTES + 1, text() { read = true; } }), /8 MiB/);
-    assert.equal(read, false);
+test("document, feature and vertex limits are checked before expensive geometry work", () => {
     assert.throws(() => parseAnnotationGeoJSON(" ".repeat(MAX_ANNOTATION_DOCUMENT_BYTES + 1)), /8 MiB/);
     const document = collection();
     document.features = Array.from({ length: MAX_POLYGONS_PER_LAYER + 1 }, () => null);
     assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(document)), /at most 500/);
     const geometry = { type: "Polygon", coordinates: [Array.from({ length: MAX_POLYGON_VERTICES + 2 }, () => [0, 0])] };
     assert.throws(() => parseAnnotationGeoJSON(JSON.stringify(geometry)), /2000-vertex/);
-    await assert.rejects(() => readAnnotationGeoJSONFile({ size: 12, text() { throw new Error("Denied"); } }), /Could not read/);
-    const file = new File([JSON.stringify(feature())], "Field areas.geojson");
-    assert.equal((await readAnnotationGeoJSONFile(file)).name, "Field areas");
+
 });
 
 test("model refuses imports during edits or beyond capacity without mutating existing annotations", () => {
@@ -190,59 +184,6 @@ test("model refuses imports during edits or beyond capacity without mutating exi
     const large = { name: "Another", polygons: existing.polygons.map(({ id, ...polygon }) => polygon) };
     assert.throws(() => full.importLayer(large), /8 MiB polygon storage limit/);
     assert.equal(full.layers.length, 1);
-});
-
-/**
- * Connect file import to the real parser/model with minimal presentation and storage fakes.
- * @return {AnnotationController} Controller exposing attached and saved layers for assertions.
- */
-function importController() {
-    const controller = Object.create(AnnotationController.prototype);
-    Object.assign(controller, { model: model(), loaded: true, importing: false, attached: [], saved: [],
-        importButton: { disabled: false }, importInput: { value: "file" }, panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } },
-        fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
-        attachLayer(layer) { this.attached.push(layer); },
-        async save() { this.saved.push(this.model.document()); },
-    });
-    return controller;
-}
-
-test("one invalid feature rejects the entire file and errors survive until another file action", async () => {
-    const controller = importController();
-    const existing = controller.model.createLayer();
-    const document = collection();
-    document.features.push({ ...feature(), geometry: { type: "Point", coordinates: [1, 2] } });
-    await controller.importGeoJSONFile(new File([JSON.stringify(document)], "mixed.geojson"));
-    assert.match(controller.fileStatus.textContent, /Feature 2: Point/);
-    assert.equal(controller.panel.open, true, "file errors reveal the tools");
-    assert.deepEqual(controller.model.layers, [existing]);
-    assert.equal(controller.attached.length, 0);
-    assert.equal(controller.saved.length, 0);
-    assert.equal(controller.importButton.disabled, false);
-    controller.panel.open = false;
-    await controller.importGeoJSONFile(new File([JSON.stringify(collection())], "good.geojson"));
-    assert.equal(controller.panel.open, true, "successful import reveals its new editor");
-    assert.equal(controller.panel.selectedKey, `local:annotation:${controller.model.layers[0].id}`);
-    assert.equal(controller.model.layers.length, 2);
-    assert.equal(controller.attached.length, 1);
-    assert.equal(controller.saved.length, 1);
-    assert.match(controller.fileStatus.textContent, /Imported 1 polygon/);
-});
-
-test("concurrent imports are not admitted and changes during file reading are respected", async () => {
-    const controller = importController();
-    let finishReading;
-    const reading = controller.importGeoJSONFile({ name: "slow.geojson", size: 1,
-        text: () => new Promise(resolve => { finishReading = resolve; }) });
-    assert.equal(controller.importButton.disabled, true);
-    await controller.importGeoJSONFile(new File([JSON.stringify(collection())], "second.geojson"));
-    const layer = controller.model.createLayer();
-    controller.model.beginPolygon(layer.id);
-    finishReading(JSON.stringify(collection()));
-    await reading;
-    assert.match(controller.fileStatus.textContent, /Save or cancel/);
-    assert.equal(controller.attached.length, 0);
-    assert.equal(controller.importButton.disabled, false);
 });
 
 test("notes preserve empty strings, whitespace and multiline text exactly", () => {

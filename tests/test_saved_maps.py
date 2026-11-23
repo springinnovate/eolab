@@ -604,6 +604,36 @@ def test_map_legend_preferences_round_trip() -> None:
                 CreateSavedMap.model_validate(invalid)
 
 
+def test_visitor_controls_validate_and_round_trip() -> None:
+    """Keep disabled-parent children and missing choices in the stored map document."""
+    candidate = map_request()
+    candidate["view"]["visitorControls"] = {
+        "version": 1,
+        "choices": {"inspectAndSelect": False, "featurePicking": True, "lasso": True},
+    }
+    saved = CreateSavedMap.model_validate(candidate)
+    assert saved.model_dump(mode="json", exclude_unset=True) == candidate
+    assert saved.view.visitorControls is not None
+    assert saved.view.visitorControls.choices.rasterValues is False
+    for visitor_controls in (
+        None,
+        {},
+        {"version": 2, "choices": {}},
+        {"version": True, "choices": {}},
+        {"version": 1, "choices": []},
+        {"version": 1, "choices": {"lasso": "true"}},
+        {"version": 1, "choices": {"zoom": True}},
+        {"version": 1, "choices": {}, "unknown": True},
+    ):
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(
+                {
+                    **candidate,
+                    "view": {**candidate["view"], "visitorControls": visitor_controls},
+                }
+            )
+
+
 def test_versioned_raster_appearance_round_trip() -> None:
     """Preserve both raster configurations and optional category state unchanged."""
     candidate = map_request()

@@ -51,6 +51,8 @@ export class SavedMapViewController {
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
      * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
+     * @param {(settings:import("../visitor-controls.js").VisitorControls|undefined)=>void}
+     * [configuration.applyVisitorControls] Apply a validated public map's choices before restoring its layers.
      * @param {{snapshot:()=>string,restore:(id:string)=>Promise<string|null>}} [configuration.basemap] Public basemap interface.
      * @param {{snapshot:()=>{visible:boolean,collapsed:boolean},restore:(state:Object)=>void}|null} [configuration.mapLegend] Map legend presentation preferences.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
@@ -86,6 +88,7 @@ export class SavedMapViewController {
         allowPublishing = false,
         publicationDefaults = { title: "", subtitle: "" },
         applyMapHeading = () => {},
+        applyVisitorControls = () => {},
         basemap = { snapshot: () => "detailed", restore: async () => null },
         mapLegend = null,
         clock = () => new Date(),
@@ -133,6 +136,7 @@ export class SavedMapViewController {
         this.allowPublishing = allowPublishing;
         this.publicationDefaults = publicationDefaults;
         this.applyMapHeading = applyMapHeading;
+        this.applyVisitorControls = applyVisitorControls;
         this.basemap = basemap;
         this.mapLegend = mapLegend;
         this.publishingView = null;
@@ -208,15 +212,17 @@ export class SavedMapViewController {
     /**
      * Publish the captured view without replacing an existing named map.
      * A rejected name leaves the form and captured view available for correction.
-     * @param {{title:string,subtitle:string,slug:string}} fields Creator's publication labels.
+     * @param {{title:string,subtitle:string,slug:string,visitorControls:import("../visitor-controls.js").VisitorControls}} fields
+     * Creator's publication labels and visitor choices.
      * @return {Promise<void>} Completion after success or an actionable form error.
      */
-    async publishMap(fields) {
+    async publishMap({ visitorControls, ...fields }) {
         if (this.busy || this.destroyed || this.publishingView === null) return;
         this.#setBusy(true);
         this.view.setPublicationBusy(true);
         try {
-            const saved = await this.publicationApi.create({ ...fields, view: this.publishingView });
+            const view = { ...this.publishingView, visitorControls };
+            const saved = await this.publicationApi.create({ ...fields, view });
             this.publishingView = null;
             this.view.showPublishedMap(saved.slug);
         } catch (error) {
@@ -244,6 +250,7 @@ export class SavedMapViewController {
                 ? this.publicationApi.getForEditing(this.namedMapSlug)
                 : this.publicationApi.get(this.namedMapSlug));
             if (this.destroyed || generation !== this.restoreGeneration) return;
+            if (!this.editPublishedMap) this.applyVisitorControls(saved.view.visitorControls);
             this.applyMapHeading(saved.title, saved.subtitle);
             this.view.showLoading(saved.view.layers.length);
             const report = await this.#restore(saved.view, generation);
@@ -264,15 +271,16 @@ export class SavedMapViewController {
     /**
      * Capture current map settings and save the draft at its existing published URL.
      * Failures preserve the draft and revision; no shared polygon writes are performed.
-     * @param {{title:string,subtitle:string}} fields Administrator's edited headings.
+     * @param {{title:string,subtitle:string,visitorControls:import("../visitor-controls.js").VisitorControls}} fields
+     * Administrator's edited headings and visitor choices.
      * @return {Promise<void>} Completion after saved confirmation or an actionable error.
      */
-    async savePublishedMapChanges(fields) {
+    async savePublishedMapChanges({ visitorControls, ...fields }) {
         if (!this.editPublishedMap || this.editRevision === null || this.busy || this.destroyed) return;
         this.#setBusy(true);
         this.view.setPublishedMapSaving(true);
         try {
-            const view = this.#snapshotCurrentView();
+            const view = { ...this.#snapshotCurrentView(), visitorControls };
             const saved = await this.publicationApi.update(this.namedMapSlug, {
                 ...fields, view, revision: this.editRevision,
             });
