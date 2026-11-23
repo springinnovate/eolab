@@ -152,7 +152,7 @@ The **Planning API** lets participants save private scenarios with one intervent
 ### Draw, upload, and share
 
 - **Sketch a boundary.** Choose **Map contents → Draw polygon**, draw the outline, add notes, and save. Use **Download** on the layer card to keep a GeoJSON copy.
-- **Bring a project boundary.** Under **Your uploads**, add a GeoPackage containing one polygon layer to keep its attributes. Convert GeoJSON boundaries to GeoPackage before uploading. Filter the layer to a country, watershed, or project group and use that selection for statistics or a model.
+- **Bring a project boundary.** Under **Your uploads**, add a GeoJSON file or a GeoPackage containing one polygon layer to keep its attributes. Filter the layer to a country, watershed, or project group and use that selection for statistics or a model.
 - **Reshape a copy.** In **Map contents**, duplicate a GeoPackage polygon layer, choose **Edit geometry**, then click a polygon. Drag its vertices, click an edge to insert one, or hover or focus a vertex and press **Delete**. **Save changes** keeps the edited layer in your browser’s private uploads. Each save uses a file slot for seven days.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
 - **Publish a map.** Choose **Publish map**, give the map a title and link name, and select **Create map link**. The link opens the same layers, styles, order, and starting view. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
@@ -164,7 +164,7 @@ Drawings stay on this device until you share their layer or save them through Pl
 
 If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
 
-The server stores private uploads for seven days. The default per-browser limits are 100 files and 500 MiB total across GeoPackages and reference masks. **Your uploads** shows the limits for your deployment. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
+The server stores private uploads for seven days. GeoJSON polygons are stored as GeoPackages; their converted size counts toward the upload limit. Uploaded files become private dataset layers; they do not become local drawings or contributions to shared drawing sessions. The default per-browser limits are 100 files and 500 MiB total across polygon files and reference masks. **Your uploads** shows the limits for your deployment. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
 
 </details>
 
