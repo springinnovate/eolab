@@ -64,7 +64,6 @@ import {
 } from "./catalog-system-state.js";
 import {
     createSingleWorldMap,
-    observeMapViewportSize,
     getCatalogItemMapBounds,
     getSingleWorldMapBounds,
     formatSingleWorldPosition
@@ -273,14 +272,14 @@ function placeSamplingTool(map) {
 }
 
 /**
- * Create the map, coordinate guide, sampling control and viewport resize observation.
+ * Create the map and supply the floating panels that cover its canvas.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
- * @return {L.Map} The initialized Leaflet map.
+ * @return {ReturnType<typeof createSingleWorldMap>} The initialized application map.
  */
 function initializeMap(appGlobalConfiguration) {
-    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
-    observeMapViewportSize(leafletMap);
+    const panels = [document.getElementById("control-panel"), document.getElementById("map-inspection")];
+    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; }, panels);
     addMapCoordinateGuide(L, leafletMap);
     placeSamplingTool(leafletMap);
 
@@ -299,7 +298,7 @@ function initializeMap(appGlobalConfiguration) {
         );
     }
 
-    updateMapPosition({ latlng: leafletMap.getCenter() });
+    updateMapPosition({ latlng: leafletMap.visibleView.getCenter() });
     leafletMap.on("mousemove", updateMapPosition);
 
     return leafletMap;
@@ -1148,6 +1147,7 @@ async function initializeCatalog(
         controlsView: rasterControls,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
+        getMapCenter: leafletMap.visibleView.getCenter,
         leaflet: L,
         onTileError: reportMapTileError,
         onCalculateRequested: (item, area, label, key) => {
@@ -1888,7 +1888,7 @@ async function initializeCatalog(
     }
     savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
-        viewport: createSavedMapLeafletViewport(leafletMap),
+        viewport: createSavedMapLeafletViewport(leafletMap.visibleView),
         mapLayers: mapLayerController,
         catalogVisualization,
         catalogItems: catalogItemClient,

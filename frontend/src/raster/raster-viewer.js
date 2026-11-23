@@ -213,6 +213,7 @@ function canRetryRasterStatistics(error) {
  * @typedef {Object} RasterViewerConfiguration
  * @property {string} wmsUrl Browser-facing GeoServer WMS endpoint.
  * @property {Object} leafletMap Initialized Leaflet-compatible map.
+ * @property {() => {lat:number,lng:number}} [getMapCenter] Map focus for center-based sampling.
  * @property {Object} leaflet Leaflet namespace with WMS and polygon factories.
  * @property {(message: string, item: Object) => void} onTileError Reports a
  * layer-specific tile error.
@@ -286,6 +287,7 @@ export function initializeRasterViewer(
     {
         wmsUrl,
         leafletMap,
+        getMapCenter = () => leafletMap.getCenter(),
         leaflet,
         onTileError,
         onTemporalInfo = /** @param {Object} _item Temporal Catalog Item. @return {void} */ (_item) => {},
@@ -3810,7 +3812,9 @@ export function initializeRasterViewer(
         }
     }
 
-    /** Select a box at the current map center from the sampling-area control. */
+    /** Select a box at the current map focus from the sampling-area control.
+     * @return {void}
+     */
     function useMapCenterForRasterStatistics() {
         if (!canUseRasterMapInteractions()) {
             renderRasterSamplingAreaControls();
@@ -3819,7 +3823,7 @@ export function initializeRasterViewer(
         if (vectorSelection && (rasterAnalysis.selectedPolygonSampling?.id === vectorSelection.id || bivariatePolygonSampling?.id === vectorSelection.id)) {
             rasterAnalysis.selectedPolygonSampling = null; bivariatePolygonSampling = null;
         }
-        exploreAt(leafletMap.getCenter());
+        exploreAt(getMapCenter());
     }
 
     /**
@@ -5243,7 +5247,7 @@ export function initializeRasterViewer(
          * @param {{lng:number,lat:number}} [position] Clicked position, defaulting to the map center.
          * @return {Object|null} Captured samplingBox descriptor, or null near a pole/date line.
          */
-        selectSamplingBox: (position = leafletMap.getCenter()) => rasterSampleWindowController.selectAt(position) === null
+        selectSamplingBox: (position = getMapCenter()) => rasterSampleWindowController.selectAt(position) === null
             ? null : rasterSampleWindowController.selectedArea,
         selectWholeRaster: handleClearSampleWindow,
         setSamplingActivity: area => rasterSampleWindowController.setActivityArea(area),
