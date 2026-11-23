@@ -625,6 +625,78 @@ def test_global_bilinear_samples_agree_across_longitude_encodings(
         )
 
 
+@pytest.mark.parametrize("source_left", [0, -180])
+@pytest.mark.parametrize("columns", [1, 505])
+@pytest.mark.parametrize("y_size", [35000, 97517.9])
+@pytest.mark.parametrize("epsg", [4326, 4807])
+def test_bilinear_values_do_not_depend_on_aoi_width(
+    tmp_path: Path, source_left: int, columns: int, y_size: float, epsg: int
+) -> None:
+    """Keep global bilinear samples stable across source encodings and AOI widths.
+
+    Args:
+        tmp_path: Input rasters and published calculator output directory.
+        source_left: Equivalent longitude origin of the full-period source.
+        columns: Narrow or nearly full-world selection on the same output grid.
+        y_size: Output Y resolution, upsampling or downsampling the source rows.
+        epsg: Source CRS, including grads and the Paris prime meridian.
+    """
+    crs = CRS.from_epsg(epsg)
+    degrees_to_units = math.radians(1) / crs.units_factor[1]
+    values = ((np.arange(360) * 153 + 79) % 360) // 9
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(np.roll(values, -source_left), (9, 1)).astype("uint8"),
+        transform=from_origin(
+            source_left * degrees_to_units,
+            2.93 * degrees_to_units,
+            degrees_to_units,
+            0.5 * degrees_to_units,
+        ),
+        crs=crs.to_wkt(),
+    )
+    axes = from_origin(-20037508.0, 291588.7, 79235.0, y_size)
+    reference = write_source(
+        tmp_path / "reference.tif",
+        np.ones((4, 505), dtype="uint8"),
+        transform=axes,
+        crs="EPSG:3857",
+    )
+    to_geographic = Transformer.from_crs(3857, 4326, always_xy=True)
+    west, south = to_geographic.transform(axes.c, axes.f + 4 * axes.e)
+    east, north = to_geographic.transform(axes.c + columns * axes.a, axes.f)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="bilinear"),
+                RasterFormulaLayer(alias="b", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="b"),
+        ),
+        selectedBounds=Wgs84Bounds(west=west, south=south, east=east, north=north),
+    )
+    sources = RasterCalculatorSources({"a": source, "b": reference}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, cells = np.indices((4, columns), dtype="float64") + 0.5
+        lon, _ = Transformer.from_crs(3857, crs, always_xy=True).transform(
+            axes.c + cells * axes.a, axes.f + rows * axes.e
+        )
+        # Values are constant in Y; X is upsampled, so periodic 1D interpolation
+        # independently gives every cell, including the antimeridian neighbor.
+        expected = np.interp(
+            lon / degrees_to_units, np.arange(360) + 0.5, values, period=360
+        )
+        assert output.transform == axes
+        assert output.shape == (4, columns)
+        assert result.valid_pixels == 4 * columns
+        np.testing.assert_allclose(output.read(1), expected, rtol=0, atol=1e-9)
+
+
 @pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
 def test_regional_longitudes_keep_a_fractional_cell_size(
     tmp_path: Path, crs: str

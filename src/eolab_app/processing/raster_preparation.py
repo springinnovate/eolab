@@ -311,11 +311,18 @@ def _write_warped_vrt(
     masked_path: Path,
     grid: RasterGrid,
     resampling: Resampling,
+    *,
+    periodic_longitude: bool,
 ) -> Path:
     """Create a lazy GDAL warp with exact coordinates and source validity.
 
     Use one dataset-aware transformer for every source and resampling method.
     GDAL handles geographic longitude wrapping, rotated grids and alpha masks.
+    Its grid-sampled horizontal scale keeps repeated longitude periods from
+    being mistaken for a coarser source resolution when choosing the kernel.
+    Center that periodic view on the output so even a one-column scale probe
+    has a continuous neighbor. GDAL skips automatic centering for sources wider
+    than one period, so set its native CENTER_LONG option in the serialized warp.
     Convert non-degree geographic coordinates to degrees in a virtual source
     because the native longitude-centering operation requires those units.
 
@@ -324,17 +331,24 @@ def _write_warped_vrt(
         masked_path: Virtual source with the original values and validity band.
         grid: Output grid in its original CRS and pixel coordinates.
         resampling: GDAL method for reading samples from the source.
+        periodic_longitude: The source is a virtual full-period raster with
+            repeated columns on both sides for seam neighbors.
 
     Returns:
         A VRT in the attempt directory with the requested output transform.
 
     Raises:
         RasterioError: If GDAL cannot create the virtual warp.
+        OSError: If the periodic transformer options cannot be written.
     """
     from osgeo import gdal, osr
 
     path = masked_path.with_name(f"{masked_path.stem}-warped.vrt")
     warp_source_path = masked_path
+    sample_periodic_scale = periodic_longitude and resampling == Resampling.bilinear
+    warp_options = ["UNIFIED_SRC_NODATA=NO"]
+    if sample_periodic_scale:
+        warp_options.append("XSCALE=FROM_GRID_SAMPLING")
     try:
         with gdal.ExceptionMgr():
             degree = radians(1)
@@ -374,9 +388,26 @@ def _write_warped_vrt(
                 dstNodata=np.nan,
                 outputType=gdal.GDT_Float64,
                 errorThreshold=0,
-                warpOptions=["UNIFIED_SRC_NODATA=NO"],
+                warpOptions=warp_options,
             ):
                 pass
+            if sample_periodic_scale:
+                center_x, center_y = grid.transform * (grid.width / 2, grid.height / 2)
+                longitude, _ = transform(grid.crs, source.crs, [center_x], [center_y])
+                tree = ElementTree.parse(path)
+                reprojection = tree.find(".//ReprojectionTransformer")
+                if reprojection is None:
+                    raise RuntimeError("GDAL omitted the periodic source transformer")
+                options = reprojection.find("Options")
+                if options is None:
+                    options = ElementTree.SubElement(reprojection, "Options")
+                center_option = options.find("Option[@key='CENTER_LONG']")
+                if center_option is None:
+                    center_option = ElementTree.SubElement(
+                        options, "Option", key="CENTER_LONG"
+                    )
+                center_option.text = str(longitude[0] * to_degrees)
+                tree.write(path)
     except RuntimeError as error:
         raise rasterio.errors.RasterioError(
             "Could not create the aligned raster warp"
@@ -407,13 +438,21 @@ def open_warped_raster(
     with rasterio.open(path) as source:
         _write_masked_source_vrt(source, vrt_path)
         axes = source.transform
+        periodic_longitude = False
         if source.crs.is_geographic and axes.b == axes.d == 0:
             period = tau / source.crs.units_factor[1]
             span = abs(axes.a) * source.width
             if isclose(span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6):
+                periodic_longitude = True
                 vrt_path = _write_periodic_longitude_vrt(source, vrt_path, period)
         with rasterio.open(vrt_path) as masked_source:
-            warped_path = _write_warped_vrt(masked_source, vrt_path, grid, resampling)
+            warped_path = _write_warped_vrt(
+                masked_source,
+                vrt_path,
+                grid,
+                resampling,
+                periodic_longitude=periodic_longitude,
+            )
         with rasterio.open(warped_path) as warped:
             yield source, warped
 
