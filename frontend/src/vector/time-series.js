@@ -219,7 +219,7 @@ export class VectorTimeSeriesController {
         this.selected = null;
         this.pointElements = [];
         this.sampleState = "empty";
-        this.sampleMessage = "Click the map to inspect vector features.";
+        this.sampleMessage = "Use Picker or Lasso to select features to compare.";
         this.failedLayers = 0;
         this.modeActive = false;
         this.abort = new AbortController();
@@ -507,7 +507,8 @@ export class VectorTimeSeriesController {
         this.selectionText.textContent = this.#identity(observation,index,field,isOrderableValue(x) ? formatScalar(x) : "No value");
         this.selection.hidden = false;
         this.zoomFeatureButton.hidden = false;
-        this.zoomFeatureButton.disabled = false;
+        this.zoomFeatureButton.disabled = observation.focus === null;
+        this.zoomFeatureButton.title = observation.focus === null ? "Feature location is unavailable for this selection." : "";
         for (const [sourceIndex, {row, cells}] of this.tableRows) {
             row.setAttribute("aria-current", String(sourceIndex === index));
             for (const [name, button] of cells) {

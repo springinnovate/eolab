@@ -518,7 +518,8 @@ export class VectorFeatureProfileController {
         this.table.hidden = true;
         this.selection.hidden = true;
         this.status.textContent = "";
-        this.zoomFeatureButton.disabled = this.currentObservation === null;
+        this.zoomFeatureButton.disabled = this.currentObservation === null || this.currentObservation.focus === null;
+        this.zoomFeatureButton.title = this.currentObservation?.focus === null ? "Feature location is unavailable for this selection." : "";
         this.#renderNavigation();
         const settings = this.#currentSettings();
         this.statistics.update(this.modeActive && this.currentObservation ? [this.currentObservation] : [], settings?.selectedFields ?? []);

@@ -4,7 +4,7 @@ import test from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
-import { vectorInspectionObservation } from "../../src/vector/feature-inspector.js";
+import { vectorInspectionObservation, VectorFeatureInspectorController } from "../../src/vector/feature-inspector.js";
 import { VectorFeatureProfileController } from "../../src/vector/feature-profile.js";
 import { VectorTimeSeriesController } from "../../src/vector/time-series.js";
 
@@ -13,13 +13,14 @@ import { VectorTimeSeriesController } from "../../src/vector/time-series.js";
  * The inspector boundary exposes its callbacks so tests can deliver its immutable
  * results without starting map/network work. Like browser-startup.test.js, this
  * evaluates existing initialization code rather than copying the callbacks.
+ * @param {typeof fetch|null} [fetchImplementation=null] Use the real selection owner when supplied.
  * @return {{inspector:Object,profile:VectorFeatureProfileController,
  * series:VectorTimeSeriesController,documentContext:FakeRasterControlDocument,
  * status:Object,mapActions:({highlight:number}|{zoom:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"]})[],
  * selectionDirections:("previous"|"next")[]}}
  * Composed consumers and their presentation outputs.
  */
-function composition() {
+function composition(fetchImplementation = null) {
   const source = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
   const start = source.search(/const\s+vectorTimeSeries\s*=\s*new\s+VectorTimeSeriesController\s*\(/);
   const end = source.indexOf("function exploreMap(", start);
@@ -33,6 +34,7 @@ function composition() {
   const comparison = documentContext.querySelector("#vector-time-series");
   comparison.hidden = true;
   const vectorMapLayerAdapter = {
+    exportFilterState: () => ({}),
     describeSource: record => ({
       selection: {
         collectionId: "eolab-mounted-vectors", itemId: record.itemId, assetKey: "data", layerName: record.itemId,
@@ -41,11 +43,12 @@ function composition() {
     }),
   };
   const records = ["habitat", "watersheds"].map(itemId => ({
-    itemId, entry: { key: "catalog|" + itemId }, adapter: vectorMapLayerAdapter,
+    itemId, entry: { key: "catalog|" + itemId, label: itemId, visible: false }, adapter: vectorMapLayerAdapter,
   }));
   const dependencies = {
     vectorMapLayerAdapter,
-    mapLayerController: { getRecord: key => records.find(record => record.entry.key === key) },
+    mapLayerController: { retainedRecords: records, getRecord: key => records.find(record => record.entry.key === key) },
+    mapInteractionTools: {setSelectionDisplay: display => {status.display = display;}},
     VectorTimeSeriesController: function (options) {
       return new VectorTimeSeriesController({...options, documentContext});
     },
@@ -53,6 +56,7 @@ function composition() {
       return new VectorFeatureProfileController({...options, documentContext});
     },
     VectorFeatureInspectorController: function (options) {
+      if (fetchImplementation) return new VectorFeatureInspectorController({...options, documentContext, fetchImplementation});
       return {
         ...options,
         showResult: index => mapActions.push({highlight: index}),
@@ -60,6 +64,8 @@ function composition() {
       };
     },
     mapInspection: {
+      showFeatureInspector() { documentContext.querySelector("#vector-feature-inspector").hidden = false; },
+      hideFeatureInspector() { documentContext.querySelector("#vector-feature-inspector").hidden = true; },
       setVectorTimeSeriesIdentity() {},
       setVectorFeatureProfileIdentity() {},
       showVectorFeatureProfile() {},
@@ -69,9 +75,9 @@ function composition() {
       setClickResult(kind, result) { status[kind] = result; },
       setFeatureResultCount(count, options) { status.count = {count, ...options}; },
     },
-    zoomInspectedVectorFeature: focus => { mapActions.push({zoom: focus}); return true; },
+    zoomInspectedVectorFeature: focus => { if (focus === null) return false; mapActions.push({zoom: focus}); return true; },
     L: {},
-    leafletMap: {},
+    leafletMap: {getContainer: () => documentContext.querySelector("#map"), removeLayer() {}},
     appGlobalConfiguration: {wmsUrl: "/wms"},
   };
   const controllers = new Function(...Object.keys(dependencies),
@@ -124,7 +130,7 @@ test("inspection composition delivers distinct observations to both chart consum
   assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
     .children.map(row => [row.children[0].textContent, row.children[0].children[0].textContent, row.children[1].children[0].textContent]),
     [["Habitat", "Habitat · habitat.1", "1"], ["Habitat", "Habitat · habitat.9", "9"]]);
-  assert.deepEqual(status.feature, {state: "ready", message: "2 features returned across 1 layer · Ready"});
+  assert.deepEqual(status.feature, {state: "ready", message: "2 features returned across 1 layer · Ready", position: null});
   assert.deepEqual(status.count, {count: 2, loading: false});
   documentContext.querySelector("#zoom-vector-feature-profile-feature").dispatchEvent(new Event("click"));
   assert.deepEqual(mapActions, [{zoom: { center: [20, 10], bounds: [20, 10, 20, 10] }}]);
@@ -151,13 +157,13 @@ test("a new inspection replaces the prior chart and communicates partial results
   inspector.onSampleChange({state: "ready", message: "Partial results", observations: [observation(9)], failedLayers: 1});
   assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
     .children.map(row => [row.children[0].children[0].textContent, row.children[1].children[0].textContent]), [["Habitat · habitat.9", "9"]]);
-  assert.deepEqual(status.feature, {state: "error", message: "1 feature returned across 1 layer · 1 layer unavailable"});
+  assert.deepEqual(status.feature, {state: "error", message: "1 feature returned across 1 layer · 1 layer unavailable", position: null});
   assert.deepEqual(status.count, {count: 1, loading: false});
 
   inspector.onSampleChange({state: "invalidated", message: "Source removed", observations: []});
   assert.equal(series.observations.length, 0);
   assert.equal(documentContext.querySelector("#vector-time-series-table-body").children.length, 0);
-  assert.deepEqual(status.feature, {state: "invalidated", message: "Source removed"});
+  assert.deepEqual(status.feature, {state: "invalidated", message: "Source removed", position: null});
 });
 
 test("comparison history controls request the adjacent selection through composition", t => {
@@ -188,6 +194,51 @@ test("comparison history controls request the adjacent selection through composi
   assert.equal(documentContext.querySelector("#vector-time-series").hidden, false);
   next.dispatchEvent(new Event("click"));
   assert.deepEqual(selectionDirections, ["previous", "next"]);
+});
+
+test("Lasso attributes feed real scatterplots and remain available after closing Features", async t => {
+  const rows = [
+    {id: "-7", properties: {name: "First CO2", x: 1.25, y: 4}},
+    {id: "2147483648", properties: {name: "Second CO2", x: 2.5, y: null}},
+    {id: "9007199254740993", properties: {name: "Café", x: -3, y: 0.5}},
+  ];
+  const {inspector, profile, series, documentContext: doc, status, mapActions} = composition(async (url, options) => {
+    const request = JSON.parse(options.body);
+    if (url.endsWith("/lasso")) return Response.json({matched: 3, featureIds: rows.map(row => row.id), geometry: null});
+    assert.equal(url, "/api/vector-sampling/features");
+    assert.deepEqual(request.featureIds, rows.map(row => row.id));
+    return Response.json({selection: request.selection, features: rows});
+  });
+  t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
+  inspector.setPickingEnabled(false);
+  await inspector.inspectLasso(inspector.getSelectionTargets()[0],
+    {type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]]}, new AbortController().signal);
+  assert.equal(status.feature.state, "ready");
+  assert.equal(status.feature.position, null);
+  assert.equal(status.display.geometry, null);
+  doc.querySelector("#open-vector-time-series").dispatchEvent(new Event("click"));
+  series.settings = {xField: "x", yFields: ["y"], direction: "ascending", chartType: "scatter"};
+  series.render();
+  const chart = doc.querySelector("#vector-time-series-chart");
+  const marks = chart.querySelectorAll(".series-chart-point");
+  assert.equal(marks.length, 2, "The missing Y stays absent from the scatterplot");
+  assert.ok(Number(marks[0].getAttribute("cx")) < Number(marks[1].getAttribute("cx")), "Numeric X positions follow -3 then 1.25");
+  assert.ok(Number(marks[0].getAttribute("cy")) > Number(marks[1].getAttribute("cy")), "Numeric Y positions follow 0.5 then 4");
+  assert.match(marks[0].getAttribute("aria-label"), /9007199254740993/);
+  assert.match(marks[1].getAttribute("aria-label"), /-7/);
+  assert.equal(doc.querySelector("#vector-time-series-table-body").children.length, 3, "Values retain the feature with missing Y");
+  doc.querySelector("#close-vector-inspector").dispatchEvent(new Event("click"));
+  assert.equal(inspector.results.length, 3);
+  marks[0].dispatchEvent(new Event("click"));
+  assert.equal(profile.currentObservation.featureId, rows[2].id);
+  assert.deepEqual(mapActions, [], "Attribute-only observations must not invent a zoom point");
+  doc.querySelector("#vector-time-series-one").dispatchEvent(new Event("click"));
+  assert.deepEqual(profile.currentObservation.properties, rows[2].properties);
+  assert.equal(doc.querySelector("#zoom-vector-feature-profile-feature").disabled, true);
+  doc.querySelector("#clear-vector-selection").dispatchEvent(new Event("click"));
+  assert.equal(profile.currentObservation, null);
+  assert.equal(series.observations.length, 0);
+  assert.equal(status.display, null);
 });
 
 test("feature plot benchmarks follow the original layer and ignore obsolete results", async t => {

@@ -42,7 +42,11 @@ function fixture(selectFeatures=async()=>({matched:2,featureIds:['1','9007199254
     let targets=[{key:'hidden-view',label:'Filtered sites',visible:false,selection:{collectionId:'vectors',itemId:'sites',assetKey:'data',layerName:'sites',filter:{enabled:true,match:'any',rules:[{field:'kind',operator:'eq',value:'forest'}]}}}];
     const actions=[];
     const tools=new MapInteractionTools({documentContext:document,map,leaflet,getTargets:()=>targets,
-        availability,onActionsChange:active=>actions.push(active),selectFeatures});
+        availability,onActionsChange:active=>actions.push(active),onClearSelection:()=>{},
+        selectFeatures:async(target,area,signal)=>{
+            const result=await selectFeatures(target.selection,area,signal);
+            if (!signal.aborted) tools.setSelectionDisplay({polygon:area,geometry:result.geometry,count:result.matched,label:target.label});
+        }});
     return {tools,root,select,status,clear,controls,buttons,container,document,map,layers,actions,setTargets:next=>{targets=next;},getTargets:()=>targets};
 }
 
@@ -122,7 +126,7 @@ test('parent-off startup keeps Pan and blocks shortcut, toolbar, and programmati
     assert.deepEqual(h.actions.at(-1), {...actions, rasterValues:true});
     h.tools.setAvailability(resolveVisitorControls({version:1, choices:{inspectAndSelect:true, featurePicking:true}}));
     assert.equal(h.tools.mode, 'pixel');
-    assert.equal(h.buttons.find(button => button.dataset.mapMode === 'pixel').textContent, 'Feature picker');
+    assert.equal(h.buttons.find(button => button.dataset.mapMode === 'pixel').textContent, 'Picker');
     assert.deepEqual(h.actions.at(-1), {...actions, featurePicking:true});
 });
 
@@ -190,7 +194,7 @@ test('Escape cancels a stroke and pending read while retaining the previous comp
 test('counts stay exact without a highlight and zero matches clear earlier highlighted features',async()=>{
     const h=fixture(async()=>({matched:1900,featureIds:[],geometry:null}));h.tools.setMode('lasso');
     await h.tools.select(h.getTargets()[0],polygon);assert.match(h.status.textContent,/1,900 features selected/);assert.match(h.status.textContent,/highlights are unavailable/);
-    h.tools.selectFeatures=async()=>({matched:0,featureIds:[],geometry:{type:'FeatureCollection',features:[]}});
+    h.tools.selectFeatures=async()=>h.tools.setSelectionDisplay({polygon,geometry:null,count:0,label:'Filtered sites'});
     await h.tools.select(h.getTargets()[0],polygon);assert.match(h.status.textContent,/0 features selected/);
 });
 

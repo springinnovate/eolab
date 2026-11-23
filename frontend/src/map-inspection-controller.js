@@ -92,6 +92,10 @@ export class MapInspectionController {
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.settingsPanel = documentContext.querySelector("#settings-panel");
         this.openSettingsButton = documentContext.querySelector("#open-settings");
+        this.openFeaturesButton = documentContext.querySelector("#open-features");
+        /** Open the retained Features destination, including its empty guidance. @return {void} */
+        this.onOpenFeatures = () => this.showFeatureInspector();
+        this.openFeaturesButton.addEventListener("click", this.onOpenFeatures);
         this.closeSettingsButton = documentContext.querySelector("#close-settings");
         this.tools = [
             { name: "planning", label: "Planning", panel: documentContext.querySelector("#planning-panel"),
@@ -426,7 +430,6 @@ export class MapInspectionController {
      * @return {void}
      */
     showFeatureInspector(options = {}) {
-        this.#setToolLabel("feature", "Features…", "Inspecting vector features");
         this.#showTool("feature", options);
     }
 
@@ -439,6 +442,7 @@ export class MapInspectionController {
         this.hasClick = true;
         this.clickPosition = { lng: position.lng, lat: position.lat };
         for (const entry of this.clickResults) {
+            if (entry.name === "feature") continue;
             entry.snapshot = null;
             entry.unread = false;
         }
@@ -478,9 +482,9 @@ export class MapInspectionController {
     /** Present an owning analysis stream's current, already stale-checked status.
      * @param {"histogram"|"feature"} name Result stream.
      * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message?:string,
-     * position?:Readonly<{lng:number,lat:number}>}|null} snapshot Feature snapshots
-     * include their status and can describe a previously inspected point. A null
-     * snapshot clears the result for this click.
+     * position?:Readonly<{lng:number,lat:number}>|null}|null} snapshot Feature snapshots
+     * include their status and can describe a previous point or a Lasso with null
+     * position. They do not require a map click. A null snapshot clears the result.
      * @return {void}
      * @throws {TypeError} For an invalid stream or presentation snapshot.
      */
@@ -491,7 +495,7 @@ export class MapInspectionController {
         ].includes(snapshot.state) || (name === "feature" && typeof snapshot.message !== "string")))) {
             throw new TypeError("Invalid map-click result presentation.");
         }
-        if (!this.hasClick) return;
+        if (!this.hasClick && name !== "feature") return;
         const changed = JSON.stringify(entry.snapshot) !== JSON.stringify(snapshot);
         entry.snapshot = snapshot === null ? null : {...snapshot};
         if (snapshot === null || snapshot.state === "loading") entry.unread = false;
@@ -512,7 +516,7 @@ export class MapInspectionController {
             const {name, button, snapshot} = entry;
             const tool = this.#tool(name);
             const loading = snapshot?.state === "loading";
-            button.disabled = name === "feature" && tool.panel.hidden && snapshot === null;
+            button.disabled = false;
             button.setAttribute("data-unread", String(entry.unread));
             button.setAttribute("data-loading", String(loading));
             if (entry.unread) button.setAttribute("aria-description", "New results");
@@ -529,7 +533,7 @@ export class MapInspectionController {
     }
 
     /**
-     * Present the number of features returned by the current map click.
+     * Present the number of features in the inspector-owned selection.
      *
      * @param {number} resultCount Number of inspected vector features.
      * @param {Object} [options] Presentation options.
@@ -541,7 +545,6 @@ export class MapInspectionController {
         if (typeof loading !== "boolean") {
             throw new TypeError("Feature loading state must be boolean.");
         }
-        if (this.feature.hidden) return;
         if (loading && resultCount === 0) {
             this.#setToolLabel(
                 "feature", "Features…", "Inspecting vector features"
@@ -553,7 +556,7 @@ export class MapInspectionController {
                 `Features · ${resultCount}${loading ? "…" : ""}`,
                 loading
                     ? `${resultCount} ${noun} found; vector inspection continues`
-                    : `${resultCount} ${noun} at the selected map location`
+                    : `${resultCount} ${noun} selected`
             );
         }
         this.#renderDock();
@@ -566,7 +569,6 @@ export class MapInspectionController {
      */
     hideFeatureInspector() {
         this.#hideTool("feature");
-        this.#resetToolLabel("feature");
     }
 
     /**
@@ -883,10 +885,11 @@ export class MapInspectionController {
         this.toolName.textContent = tool?.label ?? "Choose a tool";
         this.mapToolsButton.setAttribute("aria-label", tool ? `${tool.label}, choose a map tool` : "Choose a tool");
         const featureResult = this.clickResults.find(entry => entry.name === "feature");
-        const position = featureResult.snapshot?.position ?? this.clickPosition;
-        const featureClickLabel = position ? `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : "";
+        const position = featureResult.snapshot && "position" in featureResult.snapshot
+            ? featureResult.snapshot.position : this.clickPosition;
+        const featureClickLabel = position ? `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : "Selected features";
         const context = tool?.context ?? (this.activeTool === "feature"
-            ? { source: "Visible vector layers", scope: featureClickLabel }
+            ? { source: "", scope: featureClickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
         this.dockContext.hidden = !this.dockContext.textContent || this.activeTool !== "raster-clips";
@@ -966,6 +969,7 @@ export class MapInspectionController {
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
         this.openSettingsButton.removeEventListener("click", this.onOpenSettings);
+        this.openFeaturesButton.removeEventListener("click", this.onOpenFeatures);
         this.closeSettingsButton.removeEventListener("click", this.onCloseSettings);
         this.collapseButton.removeEventListener("click", this.onTogglePanel);
         this.expandButton.removeEventListener("click", this.onTogglePanel);

@@ -7,6 +7,36 @@ import {
 import { validateCalculatedFields } from "../calculated-fields.js";
 
 /**
+ * Read scalar attributes of exact native IDs from their original source and predicate.
+ * No geometry, WMS publication or display eligibility is needed. Rows are complete
+ * and in request order; a missing or unauthorized feature fails the whole read.
+ * @param {Object} selection Path-free Catalog, upload or run-result selection.
+ * @param {string[]} featureIds Canonical decimal-text native IDs returned by Lasso.
+ * @param {AbortSignal} signal Cancel superseded selection reads.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
+ * @return {Promise<Array<{id:string,properties:Record<string,string|number|boolean|null>}>>} Selected rows.
+ * @throws {Error} If the source read fails or the response is incomplete or invalid.
+ * @throws {DOMException} If the request is aborted.
+ */
+export async function getSelectedVectorFeatures(selection, featureIds, signal, fetchImplementation = globalThis.fetch) {
+    const response = await fetchImplementation("/api/vector-sampling/features", {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal,
+        headers: {"Content-Type": "application/json", "X-EOLab-Uploads": "1", "X-EOLab-Processing": "1"},
+        body: JSON.stringify({selection, featureIds}),
+    });
+    if (!response.ok) throw await vectorRenderingError(response, "selected feature attributes");
+    const result = await response.json();
+    if (!Array.isArray(result.features) || result.features.length !== featureIds.length ||
+        result.features.some((row, index) => row?.id !== featureIds[index] ||
+            row.properties === null || typeof row.properties !== "object" || Array.isArray(row.properties) ||
+            Object.values(row.properties).some(value => !(value === null ||
+                typeof value === "string" || typeof value === "boolean" || Number.isFinite(value))))) {
+        throw new Error("The selected feature attributes were incomplete or invalid. Select the features again.");
+    }
+    return result.features;
+}
+
+/**
  * Path-free identity supplied by vector source selection.
  * @typedef {({collectionId:string,itemId:string}|{uploadId:string}|{kind:"runArtifact",jobId:string,artifactId:string}) & {calculatedFields?:ReadonlyArray<import("../calculated-fields.js").CalculatedField>}} VectorFieldValueSource
  */

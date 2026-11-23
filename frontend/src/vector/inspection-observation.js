@@ -7,9 +7,10 @@
  * @property {string} sourceId Layer identifier supplied by the application.
  * @property {string} layerLabel User-facing source layer or filename.
  * @property {string|number|null} featureId Source feature identifier, or null if absent.
- * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}} focus
+ * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}|null} focus
  * Feature center and optional WGS 84 bounds; full geometry is not included.
  * Without bounds the center preserves click context and must not be used for zoom.
+ * Attribute-only Lasso selections have null focus; no point is invented for a feature.
  * @property {Readonly<Record<string,string|number|boolean|null>>} properties
  * Feature attributes limited to strings, numbers, booleans and null.
  */
@@ -22,7 +23,7 @@
  * @property {string} message User-facing inspection status.
  * @property {number} failedLayers Inspected layers that returned an error.
  * @property {Readonly<{lng:number,lat:number}>|null} position
- * Map point associated with the observations, or null after invalidation.
+ * Map point associated with the observations, or null for Lasso or after invalidation.
  */
 
 /**

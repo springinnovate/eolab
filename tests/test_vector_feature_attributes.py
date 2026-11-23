@@ -22,7 +22,7 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
 )
 from eolab_app.execution.bounded_process import ProcessDeadlineError
-from eolab_app.feature_intersection import iter_original_features
+from eolab_app.feature_intersection import iter_original_features, match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.source_files import SourceFileError
@@ -133,7 +133,18 @@ def test_http_rows_preserve_identity_values_order_and_exact_filters(
     app = FastAPI()
     app.include_router(create_vector_sampling_router(service))
     selection = original.selection.model_dump(mode="json", by_alias=True)
+    matches = match_features(
+        original, {}, VectorFilter(), required_area=box(-1, -1, 1, 1)
+    )
+    selected_ids = [str(feature_id) for feature_id in sorted(matches.ids)]
+    assert selected_ids == list(wire_ids)
     with TestClient(app) as client:
+        round_trip = client.post(
+            "/api/vector-sampling/features",
+            json={"selection": selection, "featureIds": selected_ids},
+        )
+        assert round_trip.status_code == 200, round_trip.text
+        assert [row["id"] for row in round_trip.json()["features"]] == list(wire_ids)
         response = client.post(
             "/api/vector-sampling/features",
             json={

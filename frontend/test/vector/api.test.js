@@ -9,6 +9,7 @@ import {
     getVectorFieldValues,
     getVectorFilterExtent,
     getVectorLayerStatistics,
+    getSelectedVectorFeatures,
     publishVector,
     styleVector,
     summarizeVectorCategories,
@@ -19,6 +20,32 @@ import {
 const VECTOR_ITEM = Object.freeze({
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
+});
+
+test("selected attributes preserve exact IDs, missing values and private ownership", async () => {
+    const selection = {uploadId: "a".repeat(32), layerName: "sites", filter: {}};
+    const featureIds = ["-7", "9007199254740993"];
+    const features = [{id: featureIds[0], properties: {x: -3, y: null, name: "CO2"}},
+        {id: featureIds[1], properties: {x: 1.25, y: 4, name: "Café"}}];
+    const signal = new AbortController().signal;
+    assert.deepEqual(await getSelectedVectorFeatures(selection, featureIds, signal, async (url, options) => {
+        assert.equal(url, "/api/vector-sampling/features");
+        assert.deepEqual(JSON.parse(options.body), {selection, featureIds});
+        assert.equal(options.signal, signal);
+        assert.equal(options.credentials, "same-origin");
+        assert.equal(options.cache, "no-store");
+        assert.equal(options.headers["X-EOLab-Uploads"], "1");
+        assert.equal(options.headers["X-EOLab-Processing"], "1");
+        return Response.json({selection, features});
+    }), features);
+    for (const invalid of [[], features.slice(1), [...features].reverse(),
+        [features[0], {...features[1], id: Number(featureIds[1])}],
+        [features[0], {...features[1], properties: {x: []}}]]) {
+        await assert.rejects(getSelectedVectorFeatures(selection, featureIds, signal,
+            async () => Response.json({features: invalid})), /incomplete or invalid/);
+    }
+    await assert.rejects(getSelectedVectorFeatures(selection, featureIds, signal,
+        async () => Response.json({detail: "This result has expired."}, {status: 410})), /expired/);
 });
 
 test("layer benchmarks use the artifact owner and bound each request without truncating fields", async () => {
