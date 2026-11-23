@@ -5,6 +5,7 @@ import {
     renderStackedSeriesChart,
 } from "../charts/series-chart.js";
 import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { VectorPlotStatistics } from "./plot-statistics.js";
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
 
 export const VECTOR_TIME_SERIES_LAYER_LABEL = "__eolab_layer_label__";
@@ -162,13 +163,19 @@ export class VectorTimeSeriesController {
      * @param {Object} configuration Browser composition callbacks.
      * @param {(visible:boolean,moveFocus:boolean)=>void} configuration.onVisibilityChange Show or close the dock view.
      * @param {(identity:{label:string,title:string}|null)=>void} configuration.onPresentationChange Update the dock tab.
-     * @param {(focus:VectorInspectionObservation["focus"])=>boolean} configuration.onFeatureZoom Zoom to the selected source feature.
+     * @param {(focus:VectorInspectionObservation["focus"],index:number)=>boolean} configuration.onFeatureZoom
+     * Highlight the inspected result at this index and return whether the map could fit its bounds.
      * @param {(index:number|null)=>void} configuration.onOpenFeature Open a single feature, or the inspector's current one.
      * @param {(direction:"previous"|"next")=>void} configuration.onNavigateSelection Request the adjacent map selection.
+     * @param {import("./plot-statistics.js").DescribeStatisticsSource} [configuration.describeStatisticsSource]
+     * Look up the original layer and schema for whole-layer benchmarks.
      * @param {Document} [configuration.documentContext=document] Owning document.
      * @throws {TypeError} If visibility, dock identity, zoom, or selection navigation callbacks are missing.
      */
-    constructor({onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, onNavigateSelection, documentContext = document}) {
+    constructor({
+        onVisibilityChange, onPresentationChange, onFeatureZoom, onOpenFeature, onNavigateSelection,
+        describeStatisticsSource = () => null, documentContext = document,
+    }) {
         for (const [name, callback] of Object.entries({onVisibilityChange, onPresentationChange, onFeatureZoom, onNavigateSelection})) {
             if (typeof callback !== "function") throw new TypeError(name + " must be a function.");
         }
@@ -201,6 +208,7 @@ export class VectorTimeSeriesController {
         this.previousSelection = element("previous-selection");
         this.nextSelection = element("next-selection");
         this.plotPanel = new VectorPlotPanel(documentContext, "vector-time-series", () => this.render());
+        this.statistics = new VectorPlotStatistics(documentContext, "vector-time-series", describeStatisticsSource);
         this.fields = new VectorPlotFields(documentContext, "vector-time-series", names => {
             this.settings.yFields = names;
             this.render();
@@ -213,6 +221,7 @@ export class VectorTimeSeriesController {
         this.sampleState = "empty";
         this.sampleMessage = "Click the map to inspect vector features.";
         this.failedLayers = 0;
+        this.modeActive = false;
         this.abort = new AbortController();
         const listen = {signal: this.abort.signal};
         this.setSelectionNavigation({canPrevious: false, canNext: false});
@@ -237,10 +246,7 @@ export class VectorTimeSeriesController {
             this.plotPanel.closePicker();
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
-            if (this.selected && !onFeatureZoom(this.observations[this.selected.index].focus)) {
-                this.zoomFeatureButton.disabled = true;
-                this.status.textContent = "Feature location is unavailable. The map has not moved.";
-            }
+            if (this.selected) this.#zoomToFeature(this.selected.index);
         }, listen);
         documentContext.addEventListener("keydown", event => {
             if (event.key !== "Escape" || this.panel.hidden || !this.panel.contains(documentContext.activeElement)) return;
@@ -253,6 +259,7 @@ export class VectorTimeSeriesController {
 
     /** Open the current comparison. @return {void} */
     open() {
+        this.modeActive = true;
         this.onVisibilityChange(true, false);
         this.render();
         this.document.querySelector("#vector-time-series-compare").focus();
@@ -264,6 +271,8 @@ export class VectorTimeSeriesController {
      * @return {void}
      */
     close({moveFocus = false} = {}) {
+        this.modeActive = false;
+        this.statistics.update([], []);
         this.plotPanel.closePicker(false);
         this.onVisibilityChange(false, moveFocus);
     }
@@ -328,6 +337,7 @@ export class VectorTimeSeriesController {
         const count = this.observations.length;
         this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
         const ready = this.sampleState === "ready";
+        this.statistics.update(this.modeActive && ready ? this.observations : [], yFields);
         this.openFeature.disabled = !ready || count === 0;
         this.plotPanel.featureButton.disabled = !ready || count === 0;
         this.plotPanel.fieldButton.disabled = !ready || (numericFields.length === 0 && !yFields.length);
@@ -417,7 +427,7 @@ export class VectorTimeSeriesController {
                 xAxisLabel:xLabel,yAxisLabel:"Value",ariaLabel:plot.field + " by " + xLabel,
                 pointAccessibleLabel:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
                 pointTooltip:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
-                onPointSelect:p => this.#select(p.sourceIndex,plot.field),
+                onPointSelect: point => this.#selectAndZoomToFeature(point.sourceIndex, plot.field),
             });
             labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
             this.pointElements.push(...handles.pointElements);
@@ -461,7 +471,7 @@ export class VectorTimeSeriesController {
             valueAxisLabel: "Value",
             ariaLabel: "Numeric fields stacked by feature",
             describePoint: (point, field) => this.#identity(point.observation, point.sourceIndex, field, point.xLabel),
-            onPointSelect: (point, field) => this.#select(point.sourceIndex, field),
+            onPointSelect: (point, field) => this.#selectAndZoomToFeature(point.sourceIndex, field),
         }).pointElements;
         const missing = rows.length * plots.length - readingCount;
         if (missing) this.status.textContent = missing === 1 ? "One field value is missing. See Values." :
@@ -513,6 +523,29 @@ export class VectorTimeSeriesController {
     }
 
     /**
+     * Select the plotted reading, highlight its feature, and zoom to it.
+     * @param {number} index Feature position in the current inspection sample.
+     * @param {string} field Measurement represented by the activated mark.
+     * @return {void}
+     */
+    #selectAndZoomToFeature(index, field) {
+        this.#select(index, field);
+        this.#zoomToFeature(index);
+    }
+
+    /**
+     * Highlight the selected feature on the map and fit its bounds.
+     * Report unavailable bounds beside the selected reading.
+     * @param {number} index Position in the current inspection sample.
+     * @return {void}
+     */
+    #zoomToFeature(index) {
+        if (this.onFeatureZoom(this.observations[index].focus, index)) return;
+        this.zoomFeatureButton.disabled = true;
+        this.selectionText.textContent += " · Feature location is unavailable.";
+    }
+
+    /**
      * Show each inspected feature once, including missing X or Y readings. Value buttons select the exact original feature.
      * @param {ComparisonRow[]} rows Ordered features.
      * @param {string[]} fields Selected measurement columns.
@@ -561,6 +594,7 @@ export class VectorTimeSeriesController {
         this.abort.abort();
         this.plotPanel.destroy();
         this.fields.destroy();
+        this.statistics.destroy();
         this.onPresentationChange(null);
         this.onVisibilityChange(false, false);
     }

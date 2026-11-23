@@ -145,6 +145,8 @@ def build_vector_sld(
         UTF-8 XML for GeoServer's inline WMS style. Categorical
         Other rules use an explicit complement so feature picking can combine
         geometry and label rules without changing category membership.
+        A classified style with every feature color turned off uses a fully
+        transparent geometry rule and retains any configured labels.
 
     Raises:
         ValueError: If fixed labels lack geometry or calculated expressions exceed
@@ -249,6 +251,8 @@ def build_vector_sld(
             )
     else:
         _append_symbol_rule(feature_type_style, style, opacity_multiplier)
+    if len(feature_type_style) == 0:
+        _append_symbol_rule(feature_type_style, style, 0.0)
     if style.label is not None:
         label_feature_type_style = feature_type_style
         if style.categorical is not None or style.graduated is not None:
@@ -505,9 +509,9 @@ def _append_category_fallback_filter(
         categorical: Validated nonempty categories and fallback settings.
 
     Returns:
-        None. Appends an ordinary OGC filter in place. Missing values belong to
-        Other only when there is no separate missing-value color. Explicit
-        categories remain excluded even when their opacity is zero.
+        None. Appends a filter for values that use Other. It includes missing
+        values when the No value color is off and excludes every explicit
+        category, including transparent ones. An Other-only style is unfiltered.
     """
     predicates = [
         deepcopy(existing[0])
@@ -515,6 +519,8 @@ def _append_category_fallback_filter(
             f"{{{SLD_NAMESPACE}}}Rule/{{{OGC_NAMESPACE}}}Filter"
         )
     ]
+    if not predicates:
+        return
     filter_element = ElementTree.SubElement(rule, f"{{{OGC_NAMESPACE}}}Filter")
     parent = filter_element
     if categorical.missing_color is None:

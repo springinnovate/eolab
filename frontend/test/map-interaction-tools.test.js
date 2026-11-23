@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MapInteractionTools } from '../src/map-interaction-tools.js';
 import { selectLassoFeatures } from '../src/vector/lasso.js';
+import { resolveVisitorControls } from '../src/visitor-controls.js';
 
 /** Minimal native-event control used by the production map-tool component. */
 class Control extends EventTarget {
@@ -22,9 +23,11 @@ class Control extends EventTarget {
 
 /** Build independent map, controls and source choices around the real tool component.
  * @param {Function} [selectFeatures] Source API supplied by composition.
+ * @param {import('../src/map-interaction-tools.js').MapToolAvailability} [availability] Effective visitor choices.
  * @return {Object} Tool and observable map/control boundaries.
  */
-function fixture(selectFeatures=async()=>({matched:2,featureIds:[1,3],geometry:{type:'FeatureCollection',features:[]}})) {
+function fixture(selectFeatures=async()=>({matched:2,featureIds:[1,3],geometry:{type:'FeatureCollection',features:[]}}),
+    availability=resolveVisitorControls()) {
     const root=new Control(),select=new Control(),status=new Control(),clear=new Control(),controls=new Control(),container=new Control();
     const buttons=['pan','pixel','box','lasso'].map(mode=>{const button=new Control();button.dataset.mapMode=mode;return button;});
     root.querySelectorAll=()=>buttons;
@@ -37,26 +40,34 @@ function fixture(selectFeatures=async()=>({matched:2,featureIds:[1,3],geometry:{
     const layer=()=>({addTo(){layers.push(this);return this;},remove(){this.removed=true;},setLatLngs(points){this.points=points;}});
     const leaflet={polyline:()=>layer(),geoJSON:(geometry)=>Object.assign(layer(),{geometry}),circleMarker:()=>layer()};
     let targets=[{key:'hidden-view',label:'Filtered sites',visible:false,selection:{collectionId:'vectors',itemId:'sites',assetKey:'data',layerName:'sites',filter:{enabled:true,match:'any',rules:[{field:'kind',operator:'eq',value:'forest'}]}}}];
-    const modes=[];
-    const tools=new MapInteractionTools({documentContext:document,map,leaflet,getTargets:()=>targets,onModeChange:(...mode)=>modes.push(mode),selectFeatures});
-    return {tools,root,select,status,clear,controls,buttons,container,document,map,layers,modes,setTargets:next=>{targets=next;},getTargets:()=>targets};
+    const actions=[];
+    const tools=new MapInteractionTools({documentContext:document,map,leaflet,getTargets:()=>targets,
+        availability,onActionsChange:active=>actions.push(active),selectFeatures});
+    return {tools,root,select,status,clear,controls,buttons,container,document,map,layers,actions,setTargets:next=>{targets=next;},getTargets:()=>targets};
 }
 
 /** Return one primary pointer event in the fake map's screen coordinates.
  * @param {number} x Screen x.
  * @param {number} y Screen y.
- * @return {Object} Pointer event fields used by the component.
+ * @param {string} [ancestorSelector] Selector matching an ancestor of the hit element.
+ * @return {Pick<PointerEvent, 'clientX'|'clientY'|'pointerId'|'pointerType'|'button'|'isPrimary'|'preventDefault'|'stopImmediatePropagation'>
+ *     & {target:{closest:(selector:string)=>object|null}}} Primary pointer input for the map.
  */
-const pointer=(x,y)=>({clientX:x,clientY:y,pointerId:1,pointerType:'mouse',button:0,isPrimary:true,preventDefault(){},stopImmediatePropagation(){}});
+const pointer = (x, y, ancestorSelector) => ({
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', button: 0, isPrimary: true,
+    target: { closest(selector) { return selector === ancestorSelector ? this : null; } },
+    preventDefault() {},
+    stopImmediatePropagation() {},
+});
 const polygon={type:'Polygon',coordinates:[[[0,0],[2,0],[1,2],[0,0]]]};
 
 test('map modes coordinate through callbacks and restore panning after lasso and drawing edits',()=>{
     const h=fixture();
     assert.equal(h.tools.mode,'pixel');assert.equal(h.controls.hidden,true);
     h.tools.setMode('lasso');assert.equal(h.map.dragEnabled,false);assert.equal(h.controls.hidden,false);
-    assert.deepEqual(h.modes.at(-1),['lasso',true]);
+    assert.deepEqual(h.actions.at(-1),{rasterValues:false,featurePicking:false,histogramBox:false});
     h.tools.setEditing(true);assert.ok(h.buttons.every(button=>button.disabled));assert.equal(h.map.dragEnabled,true);
-    assert.deepEqual(h.modes.at(-1),['lasso',false]);
+    assert.deepEqual(h.actions.at(-1),{rasterValues:false,featurePicking:false,histogramBox:false});
     h.tools.setEditing(false);assert.equal(h.map.dragEnabled,false);
     h.tools.setMode('pan');assert.equal(h.map.dragEnabled,true);
     h.tools.setMode('lasso');
@@ -64,6 +75,7 @@ test('map modes coordinate through callbacks and restore panning after lasso and
     h.document.dispatchEvent(showPixels);
     assert.equal(h.tools.mode,'pixel','The existing P shortcut must return to pixel inspection');
     assert.equal(h.map.dragEnabled,true);
+    assert.deepEqual(h.actions.at(-1),{rasterValues:true,featurePicking:true,histogramBox:false});
     h.tools.dispose();
 });
 
@@ -71,12 +83,81 @@ test('release closes a freehand polygon and preserves the chosen hidden view and
     let request;
     const h=fixture(async(selection,area,signal)=>{request={selection,area,signal};return {matched:2,featureIds:[1,3],geometry:{type:'FeatureCollection',features:[]}};});
     const original=structuredClone(h.getTargets()[0].selection);
-    h.tools.setMode('lasso');h.tools.beginStroke(pointer(10,10));h.tools.moveStroke(pointer(30,10));h.tools.moveStroke(pointer(20,30));h.tools.finishStroke(pointer(10,10));
+    h.tools.setMode('lasso');
+    const closePress = pointer(10, 10, '.leaflet-control');
+    h.tools.beginStroke(closePress);
+    assert.equal(h.container.hasPointerCapture(closePress.pointerId), false,
+        'Lasso must let the Leaflet control receive the click');
+
+    h.tools.beginStroke(pointer(10,10));h.tools.moveStroke(pointer(30,10));h.tools.moveStroke(pointer(20,30));h.tools.finishStroke(pointer(10,10));
     await new Promise(setImmediate);
     assert.deepEqual(request.selection,original);assert.deepEqual(h.getTargets()[0].selection,original);
     const ring=request.area.coordinates[0];assert.deepEqual(ring[0],ring.at(-1));
     assert.equal(request.area.type,'Polygon');assert.match(h.status.textContent,/2 features selected in Filtered sites/);
     assert.ok(h.tools.highlight);assert.equal(h.root.attributes['aria-busy'],'false');
+});
+
+test('parent-off startup keeps Pan and blocks shortcut, toolbar, and programmatic mode requests', () => {
+    const choices = {inspectAndSelect:false, rasterValues:true, histogramBox:true, lasso:true};
+    const h = fixture(undefined, resolveVisitorControls({version:1, choices}));
+    const actions = {rasterValues:false, featurePicking:false, histogramBox:false};
+    assert.equal(h.tools.mode, 'pan');
+    assert.deepEqual(h.actions, [actions]);
+    assert.equal(h.map.dragEnabled, true);
+    assert.deepEqual(h.buttons.filter(button => !button.hidden).map(button => button.dataset.mapMode), ['pan']);
+    for (const button of h.buttons.filter(button => button.hidden)) {
+        button.dispatchEvent(new Event('click'));
+        h.tools.setMode(button.dataset.mapMode);
+    }
+    const key = Object.assign(new Event('keydown', {cancelable:true}), {key:'P'});
+    h.document.dispatchEvent(key);
+    assert.equal(key.defaultPrevented, false);
+    assert.equal(h.tools.mode, 'pan');
+    assert.deepEqual(h.actions, [actions]);
+
+    h.tools.setAvailability(resolveVisitorControls({version:1, choices:{...choices, inspectAndSelect:true}}));
+    assert.equal(h.tools.mode, 'pan');
+    h.document.dispatchEvent(key);
+    assert.equal(h.tools.mode, 'pixel');
+    assert.deepEqual(h.actions.at(-1), {...actions, rasterValues:true});
+    h.tools.setAvailability(resolveVisitorControls({version:1, choices:{inspectAndSelect:true, featurePicking:true}}));
+    assert.equal(h.tools.mode, 'pixel');
+    assert.equal(h.buttons.find(button => button.dataset.mapMode === 'pixel').textContent, 'Feature picker');
+    assert.deepEqual(h.actions.at(-1), {...actions, featurePicking:true});
+});
+
+test('disabling Lasso releases captured pointers and rejects late replacements of the completed result', async () => {
+    const h = fixture();
+    h.tools.setMode('lasso');
+    await h.tools.select(h.getTargets()[0], polygon);
+    const previous = h.tools.highlight;
+    const previousOutline = h.tools.outline;
+    const none = resolveVisitorControls({version:1, choices:{}});
+    h.tools.beginStroke(pointer(10,10));
+    assert.equal(h.container.hasPointerCapture(1), true);
+    h.tools.setAvailability(none);
+    assert.equal(h.container.hasPointerCapture(1), false);
+    assert.equal(h.tools.mode, 'pan');
+    assert.equal(h.map.dragEnabled, true);
+
+    h.tools.setAvailability(resolveVisitorControls());
+    h.tools.setMode('lasso');
+    let finish, signal;
+    h.tools.selectFeatures = (_source, _polygon, abort) => {
+        signal = abort;
+        return new Promise(resolve => { finish = resolve; });
+    };
+    const pending = h.tools.select(h.getTargets()[0], polygon);
+    h.tools.setAvailability(none);
+    assert.equal(signal.aborted, true);
+    assert.equal(h.root.attributes['aria-busy'], 'false');
+    finish({matched:99, geometry:null});
+    await pending;
+    assert.equal(h.tools.outline, previousOutline);
+    assert.equal(h.tools.highlight, previous);
+    h.tools.setAvailability(resolveVisitorControls());
+    h.tools.setMode('lasso');
+    assert.match(h.status.textContent, /2 features selected/);
 });
 
 test('clear and source replacement cancel reads and reject a late successful response',async()=>{

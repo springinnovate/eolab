@@ -97,20 +97,39 @@ def test_collapsed_percentile_range_has_one_complete_class(
     assert summary.classes[0].count == len(values)
 
 
-def test_missing_numeric_default_is_unavailable(tmp_path: Path) -> None:
-    """Return an actionable classification failure for an all-null field.
+@pytest.mark.parametrize(
+    ("values", "numeric_count"),
+    [
+        ([None, None, None], 0),
+        ([0.0, None, None], 1),
+    ],
+)
+def test_numeric_summary_counts_zero_separately_from_null(
+    tmp_path: Path,
+    values: list[float | None],
+    numeric_count: int,
+) -> None:
+    """Report missing values even when they are the field's only values.
 
     Args:
         tmp_path: Isolated mounted source root.
-
-    Returns:
-        None.
+        values: Values in the numeric field, including true nulls.
+        numeric_count: Number of observed numeric zeros.
     """
-    item = assessed_numeric_item(tmp_path, [None] * 3)
-    with pytest.raises(VectorConflictError, match="no finite numeric values"):
-        asyncio.run(category_service(item, tmp_path).classify_numeric(
+    item = assessed_numeric_item(tmp_path, values)
+    summary = asyncio.run(
+        category_service(item, tmp_path).classify_numeric(
             numeric_request(item, "score", "percentile-interval", 5)
-        ))
+        )
+    )
+
+    assert summary.complete
+    assert summary.numeric_value_count == numeric_count
+    assert summary.null_count == len(values) - numeric_count
+    assert summary.actual_class_count == len(summary.classes) == numeric_count
+    assert [entry.count for entry in summary.classes] == [1] * numeric_count
+    expected_extent = 0.0 if numeric_count else None
+    assert summary.observed_minimum == summary.observed_maximum == expected_extent
 
 
 def numeric_request(

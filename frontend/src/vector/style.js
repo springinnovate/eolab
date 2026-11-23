@@ -13,6 +13,26 @@ export { CATEGORY_MAXIMUM_LIMIT };
  * @typedef {{kind:"boolean"|"integer"|"number"|"string",value:boolean|number|string}} VectorCategoryValue
  * @typedef {{value:VectorCategoryValue,color:string,label:string|null,opacity:number}} VectorCategoryRule
  * @typedef {{field:string,limit:number,rules:ReadonlyArray<VectorCategoryRule>,otherColor:string|null,missingColor:string|null}} VectorCategoricalStyle
+ * @typedef {{minimum:number|null,maximum:number|null}} VectorNumericRange
+ * @typedef {{field:string,method:string,classCount:number,palette:string,rules:ReadonlyArray<VectorNumericRange & {color:string}>,missingColor:string|null}} VectorGraduatedStyle
+ * @typedef {object} VectorNumericClassification
+ * @property {string} field Selected attribute name.
+ * @property {string} fieldType Authoritative numeric field type.
+ * @property {string} method Classification method.
+ * @property {number} requestedClassCount Maximum number of ranges requested.
+ * @property {number} actualClassCount Number of ranges returned.
+ * @property {ReadonlyArray<Readonly<VectorNumericRange & {count:number}>>} classes Ranges and observed counts.
+ * @property {number|null} observedMinimum Smallest finite value, or null when only missing values can be styled.
+ * @property {number|null} observedMaximum Largest finite value, or null when only missing values can be styled.
+ * @property {number} numericValueCount Number of finite values read.
+ * @property {number} scannedFeatureCount Number of features read.
+ * @property {number} featureCount Number of features in the source.
+ * @property {number} nullCount Number of actual nulls read.
+ * @property {number} unsupportedValueCount Number of other values excluded from classification.
+ * @property {boolean} complete Whether the scan covered every feature.
+ * @property {number} defaultClassCount Default requested range count.
+ * @property {number} minimumClassCount Smallest permitted requested range count.
+ * @property {number} maximumClassCount Largest permitted requested range count.
  */
 const CLASSIFICATION_METHODS = new Set(["equal-interval", "quantile", "percentile-interval"]);
 const SEQUENTIAL_PALETTE_NAMES = new Set(["blues", "viridis", "yellow-red", "purples", "blue-yellow-red"]);
@@ -280,7 +300,8 @@ export function normalizeVectorCategorySummary(candidate) {
  * Validate one bounded numeric-classification response from the vector boundary.
  *
  * @param {unknown} candidate Untrusted response-shaped value.
- * @return {Object} Frozen normalized numeric classification.
+ * @return {Readonly<VectorNumericClassification>} Frozen classification. A scan
+ * with nulls and no finite numbers has empty classes and null observed bounds.
  * @throws {TypeError|RangeError} If the response contract is invalid.
  */
 export function normalizeVectorNumericClassification(candidate) {
@@ -301,7 +322,7 @@ export function normalizeVectorNumericClassification(candidate) {
     );
     const actualClassCount = boundedInteger(
         candidate.actualClassCount,
-        1,
+        0,
         requestedClassCount,
         "Actual class count",
     );
@@ -312,16 +333,25 @@ export function normalizeVectorNumericClassification(candidate) {
         normalizeNumericRange(classification, true)
     );
     requireAdjacentOpenRanges(classes, "Numeric classes");
-    const observedMinimum = finiteNumber(candidate.observedMinimum, "Observed minimum");
-    const observedMaximum = finiteNumber(candidate.observedMaximum, "Observed maximum");
-    if (observedMinimum > observedMaximum) {
-        throw new RangeError("Observed numeric minimum cannot exceed its maximum.");
-    }
     const numericValueCount = boundedInteger(
-        candidate.numericValueCount, 1, 100000, "Numeric value count"
+        candidate.numericValueCount, 0, 100000, "Numeric value count"
     );
+    const nullCount = boundedInteger(candidate.nullCount, 0, 100000, "Null count");
     if (classes.reduce((total, classification) => total + classification.count, 0) !== numericValueCount) {
         throw new RangeError("Numeric class counts must cover every numeric value.");
+    }
+    if (numericValueCount === 0 && (
+        nullCount === 0 || actualClassCount !== 0 ||
+        candidate.observedMinimum !== null || candidate.observedMaximum !== null
+    )) {
+        throw new RangeError("A missing-only classification requires null values and empty ranges and bounds.");
+    }
+    const observedMinimum = numericValueCount === 0
+        ? null : finiteNumber(candidate.observedMinimum, "Observed minimum");
+    const observedMaximum = numericValueCount === 0
+        ? null : finiteNumber(candidate.observedMaximum, "Observed maximum");
+    if (observedMinimum !== null && observedMinimum > observedMaximum) {
+        throw new RangeError("Observed numeric minimum cannot exceed its maximum.");
     }
     const scannedFeatureCount = boundedInteger(
         candidate.scannedFeatureCount, 1, 100000, "Scanned feature count"
@@ -360,7 +390,7 @@ export function normalizeVectorNumericClassification(candidate) {
         numericValueCount,
         scannedFeatureCount,
         featureCount,
-        nullCount: boundedInteger(candidate.nullCount, 0, 100000, "Null count"),
+        nullCount,
         unsupportedValueCount: boundedInteger(
             candidate.unsupportedValueCount, 0, 100000, "Unsupported value count"
         ),
@@ -375,12 +405,13 @@ export function normalizeVectorNumericClassification(candidate) {
  * Select ordered colors for one supported numeric palette.
  *
  * @param {string} palette Supported palette identity.
- * @param {number} classCount Effective class count from the server.
- * @return {ReadonlyArray<string>} Frozen low-to-high color sequence.
+ * @param {number} classCount Effective class count, including zero for an empty range list.
+ * @return {ReadonlyArray<string>} Frozen low-to-high colors, one per class.
+ * @throws {TypeError|RangeError} If the palette or class count is invalid.
  */
 export function sequentialPaletteColors(palette, classCount) {
     const name = option(palette, SEQUENTIAL_PALETTE_NAMES, "Sequential palette");
-    const count = boundedInteger(classCount, 1, NUMERIC_MAXIMUM_CLASS_COUNT, "Class count");
+    const count = boundedInteger(classCount, 0, NUMERIC_MAXIMUM_CLASS_COUNT, "Class count");
     const colors = SEQUENTIAL_PALETTES[name];
     if (count === 1) return Object.freeze([colors[4]]);
     return Object.freeze(Array.from({ length: count }, (_unused, index) =>
@@ -523,7 +554,9 @@ function vectorLegendSymbol(style, classColor = null, categoryOpacity = 1) {
  * Validate an optional graduated numeric style block.
  *
  * @param {unknown} candidate Candidate graduated state or null.
- * @return {Object|null} Frozen normalized graduated state.
+ * @return {Readonly<VectorGraduatedStyle>|null} Frozen graduated state. An
+ * empty range list draws only the configured No value symbol, if enabled.
+ * @throws {TypeError|RangeError} If the field, ranges or colors are invalid.
  */
 function normalizeVectorGraduated(candidate) {
     if (candidate === undefined || candidate === null) return null;
@@ -539,7 +572,7 @@ function normalizeVectorGraduated(candidate) {
         "Class count",
     );
     const palette = option(candidate.palette, SEQUENTIAL_PALETTE_NAMES, "Sequential palette");
-    if (!Array.isArray(candidate.rules) || candidate.rules.length < 1 || candidate.rules.length > classCount) {
+    if (!Array.isArray(candidate.rules) || candidate.rules.length > classCount) {
         throw new RangeError("Graduated rules must fit the selected class count.");
     }
     const rules = candidate.rules.map((rule) => {
@@ -584,13 +617,15 @@ function normalizeNumericRange(candidate, includeCount) {
 }
 
 /**
- * Require first/last open bounds and exact adjacency between numeric ranges.
+ * Require open ends and exact adjacency for a populated list of numeric ranges.
  *
  * @param {ReadonlyArray<{minimum:number|null,maximum:number|null}>} ranges Numeric ranges.
  * @param {string} label User-facing contract label.
  * @return {void}
+ * @throws {RangeError} If a populated list has closed ends or internal gaps.
  */
 function requireAdjacentOpenRanges(ranges, label) {
+    if (ranges.length === 0) return;
     if (ranges[0].minimum !== null || ranges.at(-1).maximum !== null) {
         throw new RangeError(`${label} must cover all numeric values.`);
     }
@@ -649,7 +684,8 @@ function color(value, label) {
  * @param {unknown} candidate Candidate category state or null.
  * Old rules without legend labels or opacity retain their value labels and
  * opaque category multiplier. Labels are presentation only; values match the
- * selected authoritative attribute with their explicit type.
+ * selected authoritative attribute with their explicit type. An empty rule
+ * list uses just the configured fallback and missing colors.
  * @return {Readonly<VectorCategoricalStyle>|null} Frozen normalized categorical state.
  * @throws {TypeError|RangeError} If field, rules, values or appearance are invalid.
  */
@@ -662,8 +698,8 @@ export function normalizeVectorCategorical(candidate) {
     const limit = boundedInteger(
         candidate.limit, 1, CATEGORY_MAXIMUM_LIMIT, "Category limit"
     );
-    if (!Array.isArray(candidate.rules) || candidate.rules.length < 1) {
-        throw new TypeError("Categorical style requires at least one rule.");
+    if (!Array.isArray(candidate.rules)) {
+        throw new TypeError("Categorical rules must be an array.");
     }
     if (candidate.rules.length > limit) {
         throw new RangeError("Category rules exceed the selected limit.");

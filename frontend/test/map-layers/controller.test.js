@@ -1268,6 +1268,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
         "refreshCatalogMapAction", "annotations", "rasterSeries", "rasterVisualization", "vectorFeatureInspector",
         "vectorFilterControls", "vectorFieldCalculator", "vectorSampling", "summarySampling", "models", "mapInspection",
         "temporalDatasets", "planning", "timeline", "refreshSpatialFilters", "mapInteractionTools", "rasterClips", "polygonGeometryEditor",
+        "polygonGroups", "getPolygonTargets",
         `let rasterClickSelected = true; return ({${source.slice(start, end)}}).onLayersChange;`)(
         { update: layers => calls.push(["legend", layers]) }, { refresh: () => calls.push(["style"]) },
         { hide: () => calls.push(["hover"]) }, { scheduleRemember: () => { if (controller) saved.push(controller.snapshots()); } },
@@ -1281,6 +1282,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
         { setLayers: layers => timelineLayers.push(layers) },
         () => calls.push(["spatial-filters"]), { refresh: () => calls.push(["map-tools"]) },
         { syncLayerDownloads: () => calls.push(["downloads"]) }, edit,
+        { updateLayers: () => calls.push(["polygon-groups"]) }, () => [],
     );
     const map = createMap();
     controller = new MapLayerController({ leafletMap: map, view, onLayersChange: observer,
@@ -1302,7 +1304,7 @@ test("opacity updates preserve rows and send rendering, owner persistence and co
     assert.equal(controller.getLeafletLayer(key).opacity, 0.75);
     calls.length = 0;
     controller.setVisible(key, false);
-    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "models", "planning", "downloads", "spatial-filters", "map-tools"]) {
+    for (const name of ["catalog", "annotations-order", "series", "raster-analysis", "vector-analysis", "filter", "fields", "sampling", "summary", "polygon-groups", "models", "planning", "downloads", "spatial-filters", "map-tools"]) {
         assert.ok(calls.some(([called]) => called === name), `${name} still receives general layer changes`);
     }
     edit.key = key;

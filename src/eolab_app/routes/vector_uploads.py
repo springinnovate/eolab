@@ -1,4 +1,4 @@
-"""Accept private GeoPackages using the browser identity shared with annotations."""
+"""Accept private polygon files using the browser identity shared with annotations."""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -18,7 +18,7 @@ from eolab_app.vector_field_values import VectorFieldValuePage, VectorFieldValue
 def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
     """Expose private upload access and clean interrupted writes at startup.
 
-    POST accepts the raw GeoPackage body and a display name query parameter. Both
+    POST accepts raw GeoPackage or GeoJSON and a display name query parameter. Both
     mutations require X-EOLab-Uploads: 1. The browser cookie is the access credential;
     it is never returned in metadata. There is no public catalog registration.
 
@@ -96,7 +96,13 @@ def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
                 "content": {
                     "application/geopackage+sqlite3": {
                         "schema": {"type": "string", "format": "binary"}
-                    }
+                    },
+                    "application/geo+json": {
+                        "schema": {"type": "string", "format": "binary"}
+                    },
+                    "application/json": {
+                        "schema": {"type": "string", "format": "binary"}
+                    },
                 },
             }
         },
@@ -106,10 +112,11 @@ def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
         browser: Browser,
         name: Annotated[str, Query(min_length=1, max_length=200, pattern=r"\S")],
     ) -> VectorUpload:
-        """Store one immutable polygon GeoPackage from the streamed request body.
+        """Store streamed GeoPackage or GeoJSON as an immutable polygon GeoPackage.
 
         Args:
-            request: Raw GeoPackage body; no multipart envelope is used.
+            request: Raw file body. GeoJSON uses application/geo+json or
+                application/json; no multipart envelope is used.
             browser: Identity from the validated private cookie.
             name: User-facing label, never interpreted as a filesystem path.
 
@@ -119,7 +126,19 @@ def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
         Raises:
             VectorUploadError: If admission or storage fails.
         """
-        return await store.create(browser, name, request.stream())
+        media_type = (
+            request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        )
+        return await store.create(
+            browser,
+            name,
+            request.stream(),
+            source_format=(
+                "geojson"
+                if media_type in {"application/geo+json", "application/json"}
+                else "geopackage"
+            ),
+        )
 
     @router.get("/{identifier}/field-values", response_model=VectorFieldValuePage)
     def field_values(

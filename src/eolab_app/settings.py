@@ -166,7 +166,7 @@ class Settings:
         basemap_attribution: Browser basemap attribution.
         carto_basemap_api_key: Optional browser-visible CARTO basemap key.
             Blank disables the CARTO option; use a domain-restricted basemap key.
-        maptiler_api_key: Optional browser-visible MapTiler map key.
+        maptiler_api_key: Optional browser-visible key for MapTiler tiles and place search.
             Blank disables satellite imagery; restrict the key to viewer domains.
         initial_latitude: Initial map-center latitude.
         initial_longitude: Initial map-center longitude.
@@ -428,9 +428,11 @@ class Settings:
             Browser configuration containing application identity strings,
             the browser-facing catalog and WMS URLs, user-facing scan paths,
             basemap URL and attribution strings, and numeric initial-view
-            latitude, longitude, and zoom values. When configured, basemap.carto
-            and basemap.maptiler contain tile URLs with browser-visible keys,
-            attribution, and native zoom limits. Internal service URLs are not exposed.
+            latitude, longitude, and zoom values. Configured optional basemaps
+            include a tile URL with a browser-visible key, attribution, and
+            native zoom limits. The satellite (basemap.maptiler) and street map
+            (basemap.maptilerStreets) use the same MapTiler key as the optional
+            placeSearch configuration for forward geocoding.
         """
         basemap: dict[str, object] = {
             "url": self.basemap_url,
@@ -450,23 +452,33 @@ class Settings:
                 "maxNativeZoom": 20,
             }
         if self.maptiler_api_key:
+            maptiler_key = quote(self.maptiler_api_key, safe="")
+            maptiler_attribution = (
+                '<a href="https://www.maptiler.com/">'
+                '<img src="https://api.maptiler.com/resources/logo.svg" '
+                'alt="MapTiler logo" width="88" height="22" '
+                'class="eolab-maptiler-logo"></a> '
+                '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> '
+                '&copy; <a href="https://www.openstreetmap.org/copyright">'
+                "OpenStreetMap contributors</a>"
+            )
             basemap["maptiler"] = {
                 "url": (
                     "https://api.maptiler.com/tiles/satellite-v2/"
-                    "{z}/{x}/{y}.jpg?key=" + quote(self.maptiler_api_key, safe="")
+                    "{z}/{x}/{y}.jpg?key=" + maptiler_key
                 ),
-                "attribution": (
-                    '<a href="https://www.maptiler.com/">'
-                    '<img src="https://api.maptiler.com/resources/logo.svg" '
-                    'alt="MapTiler logo" width="88" height="22" '
-                    'class="eolab-maptiler-logo"></a> '
-                    '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> '
-                    '&copy; <a href="https://www.openstreetmap.org/copyright">'
-                    "OpenStreetMap contributors</a>"
-                ),
+                "attribution": maptiler_attribution,
                 "maxNativeZoom": 22,
             }
-        return {
+            basemap["maptilerStreets"] = {
+                "url": (
+                    "https://api.maptiler.com/maps/streets-v4/256/"
+                    "{z}/{x}/{y}.png?key=" + maptiler_key
+                ),
+                "attribution": maptiler_attribution,
+                "maxNativeZoom": 22,
+            }
+        configuration: dict[str, object] = {
             "appTitle": self.app_title,
             "appSubtitle": self.app_subtitle,
             "appVersion": self.app_version,
@@ -481,6 +493,9 @@ class Settings:
                 "zoom": self.initial_zoom,
             },
         }
+        if self.maptiler_api_key:
+            configuration["placeSearch"] = {"apiKey": self.maptiler_api_key}
+        return configuration
 
     def scan_display_paths(self) -> tuple[str, ...]:
         """Build user-facing locations for the configured scan directories.

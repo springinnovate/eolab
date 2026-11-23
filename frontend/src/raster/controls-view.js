@@ -477,6 +477,14 @@ export class RasterControlsView {
         this.#histogramView.setActiveRasterAvailable(isVisible);
     }
 
+    /** Make box placement and size controls available independently of other histogram actions.
+     * @param {boolean} available Whether this viewer may place or resize a box.
+     * @return {void}
+     */
+    setSamplingBoxAvailable(available) {
+        this.#samplingAreaView.setSamplingBoxAvailable(available);
+    }
+
     /**
      * Set whether ordinary single-raster appearance editing is available.
      *

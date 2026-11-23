@@ -1,4 +1,4 @@
-"""Verify the public basemap configuration and optional tile providers."""
+"""Verify the public configuration for optional tile and place-search providers."""
 
 from pathlib import Path
 
@@ -33,7 +33,9 @@ def test_unconfigured_optional_basemap_is_absent(
         monkeypatch.setenv(variable, key)
     response = TestClient(create_app(version_file_path)).get("/api/config")
     assert response.status_code == 200
-    assert response.json()["basemap"] == {
+    configuration = response.json()
+    assert "placeSearch" not in configuration
+    assert configuration["basemap"] == {
         "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
         "attribution": "&copy; OpenStreetMap contributors",
     }
@@ -67,12 +69,12 @@ def test_carto_key_builds_attributed_browser_tile_url(
     assert "test-key" not in repr(load_settings(version_file_path))
 
 
-def test_maptiler_key_builds_attributed_satellite_url(
+def test_maptiler_key_configures_basemaps_and_place_search(
     configured_environment: None,
     version_file_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Publish optional satellite tiles with an encoded key and required credits.
+    """Publish both MapTiler basemaps and place search using the same key.
 
     Args:
         configured_environment: Baseline application environment.
@@ -83,7 +85,9 @@ def test_maptiler_key_builds_attributed_satellite_url(
     monkeypatch.setenv("CARTO_BASEMAP_API_KEY", "carto-key")
     response = TestClient(create_app(version_file_path)).get("/api/config")
     assert response.status_code == 200
-    basemap = response.json()["basemap"]
+    configuration = response.json()
+    assert configuration["placeSearch"] == {"apiKey": "satellite-key&other=unsafe/#"}
+    basemap = configuration["basemap"]
     satellite = basemap["maptiler"]
     assert satellite["url"] == (
         "https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg"
@@ -95,5 +99,12 @@ def test_maptiler_key_builds_attributed_satellite_url(
     assert "api.maptiler.com/resources/logo.svg" in satellite["attribution"]
     assert 'alt="MapTiler logo"' in satellite["attribution"]
     assert 'href="https://www.maptiler.com/"' in satellite["attribution"]
+    streets = basemap["maptilerStreets"]
+    assert streets["url"] == (
+        "https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png"
+        "?key=satellite-key%26other%3Dunsafe%2F%23"
+    )
+    assert streets["maxNativeZoom"] == 22
+    assert streets["attribution"] == satellite["attribution"]
     assert "carto-key" in basemap["carto"]["url"]
     assert "satellite-key" not in repr(load_settings(version_file_path))

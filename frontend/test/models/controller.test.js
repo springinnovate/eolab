@@ -48,6 +48,42 @@ function fixture(overrides = {}, viewOverride = null) {
     return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers, tabContext};
 }
 
+test("Raster clip captures every polygon group member and its own filter", async t => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => [clipModel, model]}, view);
+    t.after(() => h.controller.destroy());
+    const north = {key: "view:north", label: "North basin", visible: false, selection};
+    const south = {key: "view:south", label: "South basin", visible: true, selection: {
+        ...selection, filter: {...selection.filter, rules: [{...selection.filter.rules[0], value: "South"}]},
+    }};
+    const group = {id: "combined", name: "River basins", members: [north, south].map(({key, label}) => ({key, label}))};
+    h.context.polygonGroups = [group];
+    h.context.vectors = [north, south];
+    await h.controller.open();
+    h.controller.chooseModel(model);
+    assert.equal(view.setup.inputs.area.source.children.some(option => option.label === "Polygon groups"), false);
+    h.controller.chooseModel(clipModel);
+    const controls = view.setup.inputs.area;
+    assert.equal(controls.source.children.some(option => option.label === "Polygon groups"), true);
+    controls.source.value = "polygonGroup:combined";
+    controls.source.dispatchEvent(new Event("change"));
+    assert.equal(controls.areaDescription.textContent, "River basins · 2 polygon layers · Combined area");
+    assert.equal(view.setup.run.disabled, false);
+
+    h.context.vectors = [south];
+    h.controller.refreshMapLayers();
+    assert.match(controls.areaDescription.textContent, /North basin/);
+    assert.equal(view.setup.run.disabled, true);
+
+    h.context.vectors = [north, south];
+    h.controller.refreshMapLayers();
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs.area, {
+        kind: "polygonGroup", name: "River basins",
+        members: [north, south].map(({label, selection}) => ({label, selection})),
+    });
+});
+
 test("Models navigation retains an unfinished setup and focuses actual model and run names", async t => {
     const saved = job({status: "cancelled"});
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);

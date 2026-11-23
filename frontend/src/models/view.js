@@ -32,6 +32,10 @@ export function describeModelArea(area) {
         return `Box · W ${b.west}°, S ${b.south}°, E ${b.east}°, N ${b.north}°`;
     }
     if (area.kind === "catalogSelection") return `${area.selection.layerName} · ${describeModelFilter(area.selection.filter)}`;
+    if (area.kind === "polygonGroup") {
+        const count = area.members.length;
+        return `${area.name} · ${count} polygon ${count === 1 ? "layer" : "layers"} · Combined area`;
+    }
     return "Saved polygon selection";
 }
 
@@ -60,7 +64,7 @@ export class ModelsView {
         this.getSetupIntegration = getSetupIntegration;
         this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["page", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
-            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
+            "library-items", "library-status", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
         this.tabStrip = new ToolTabStrip(documentContext, "models");
@@ -93,7 +97,7 @@ export class ModelsView {
         this.handlers = handlers;
         this.listeners = [[this.openers[0], "click", handlers.onOpen], [this.openers[1], "click", () => { handlers.onPage("runs"); handlers.onOpen(); }],
             [this.elements.close, "click", handlers.onClose], [this.elements.query, "input", () => handlers.onQuery(this.elements.query.value)],
-            [this.elements.refresh, "click", handlers.onRefresh], [this.elements["refresh-runs"], "click", handlers.onRefreshRuns],
+            [this.elements["refresh-runs"], "click", handlers.onRefreshRuns],
             [this.elements.more, "click", handlers.onMore], [this.elements.recover, "click", handlers.onRetry],
             ...Object.entries(this.navigation).map(([page, node]) => [node, "click", () => handlers.onPage(page)])];
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
@@ -365,6 +369,10 @@ export class ModelsView {
         }
         areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: `${source.label} · Polygons`,
             group: source.sourceOrigin === "upload" ? "Your uploads" : source.sourceOrigin === "runArtifact" ? "Completed runs" : "Catalog layers"})));
+        if (input.type === "clip_area") {
+            areaChoices.push(...value.polygonGroups.map(group => ({value: `polygonGroup:${group.id}`,
+                label: group.name, group: "Polygon groups"})));
+        }
         if (references || input.type === "summary_area") {
             areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
@@ -377,6 +385,7 @@ export class ModelsView {
         }
         let selected = value.areaMode;
         if (drawn) selected = drawnLayer ? `drawn:${drawnLayer.key}` : "";
+        else if (value.areaMode === "polygonGroup") selected = `polygonGroup:${value.polygonGroupId}`;
         else if (value.areaMode === "vector") selected = value.vectorKey ? `vector:${value.vectorKey}` : "";
         else if (value.areaMode === "raster") selected = value.maskRaster ? `raster:${modelSourceKey(value.maskRaster)}` : "";
         this.options(controls.source, areaChoices, selected);
@@ -743,7 +752,6 @@ export class ModelsView {
             }));
         }
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
-        this.elements.refresh.disabled = state.loading;
         this.renderSetup(state); this.renderRun(state);
         const retainedRuns = new Set(state.runs.map(job => job.jobId));
         for (const [id, card] of this.runCards) {

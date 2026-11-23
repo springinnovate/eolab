@@ -28,10 +28,9 @@ function parseVectorCategoryValue(text, kind, row) {
 
 /**
  * Import a complete vector category table for one selected Catalog field.
- * The shared CSV parser reads the rows, then vector-style validation checks their
- * values, colors and opacity. The caller reads the file and decides when to preview
- * or apply the style. Source attributes are not changed, and invalid rows reject
- * the whole table.
+ * The CSV must have at least one category row. Vector-style validation checks
+ * each row's value, color and opacity. The caller reads the file and decides
+ * when to preview or apply the style. Invalid rows reject the whole table.
  * @param {string} text UTF-8 decoded CSV contents.
  * @param {{name:string,type:string}} field Selected authoritative attribute.
  * @param {{otherColor:string|null,missingColor:string|null}} fallback Retained fallback appearance.
@@ -42,6 +41,7 @@ export function parseCategoricalVectorCsv(text, field, fallback) {
     const kind = vectorCategoricalFieldKind(field.type);
     if (kind === null) throw new TypeError("Choose a supported categorical attribute field before importing.");
     const { columns, data } = readCategoryCsvTable(text, CATEGORY_MAXIMUM_LIMIT);
+    if (data.length === 0) throw new Error("CSV table must contain at least one rule.");
     const rules = data.map(record => {
         const cells = categoryCsvCells(record, columns);
         const opacityText = cells.opacity?.trim() ?? "";
@@ -52,7 +52,7 @@ export function parseCategoricalVectorCsv(text, field, fallback) {
             color: cells.color.trim(), opacity: opacityText === "" ? 1 : Number(opacityText) };
     });
     try {
-        return normalizeVectorCategorical({ field: field.name, limit: Math.max(1, rules.length), rules, ...fallback });
+        return normalizeVectorCategorical({ field: field.name, limit: rules.length, rules, ...fallback });
     } catch (error) {
         const category = /^Category (\d+) (value|label|color|opacity)\b\s*(.*)$/.exec(error.message);
         if (category) {

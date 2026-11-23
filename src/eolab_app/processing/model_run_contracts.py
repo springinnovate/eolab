@@ -22,6 +22,7 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.clip_models import (
     ClipGrid,
+    ClipPolygonGroup,
 )
 from eolab_app.processing.model_definitions import (
     ModelSchema,
@@ -166,9 +167,10 @@ SummaryArea = Annotated[
 ]
 
 
-# Raster clips require an explicit box or vector predicate.
+# Raster clips accept an explicit box, polygon layer or polygon group.
 ClipModelArea = Annotated[
-    BoundsArea | SamplingBoxArea | SelectionArea, Field(discriminator="kind")
+    BoundsArea | SamplingBoxArea | SelectionArea | ClipPolygonGroup,
+    Field(discriminator="kind"),
 ]
 
 

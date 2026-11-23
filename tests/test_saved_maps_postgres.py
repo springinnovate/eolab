@@ -77,6 +77,10 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
         },
         "name": {"displayName": "Site name"},
     }
+    request["view"]["visitorControls"] = {
+        "version": 1,
+        "choices": {"inspectAndSelect": False, "rasterValues": True, "lasso": True},
+    }
     with TestClient(app, headers=HEADERS) as client:
         response = client.post(BASE, json=request)
         assert response.status_code == 201, response.text
@@ -133,6 +137,10 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     }
     changes["view"]["basemap"] = "none"
     changes["view"]["viewport"]["zoom"] = 7
+    changes["view"]["visitorControls"] = {
+        "version": 1,
+        "choices": {"inspectAndSelect": True, "featurePicking": True},
+    }
     # An in-memory draft has no effect on the public record.
     assert client.get(BASE + "/amazon-priorities").json() == loaded
     saved = client.put(url, json=changes)
@@ -143,6 +151,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     assert saved["revision"] == 2
     assert saved["view"]["layers"] == loaded["view"]["layers"]
     assert saved["view"]["basemap"] == "none"
+    assert saved["view"]["visitorControls"] == changes["view"]["visitorControls"]
     assert saved["subtitle"] == "Updated subtitle"
     assert client.put(url, json=changes).status_code == 409
     assert (
