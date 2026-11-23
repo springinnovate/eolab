@@ -1,4 +1,4 @@
-"""HTTP routes for original-source vector selections, bounds and display outlines."""
+"""HTTP routes for original-source vector selections, attributes and map geometry."""
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from typing import Any
@@ -24,6 +24,10 @@ from eolab_app.catalog_selection import (
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.extent_operation import FeatureExtent
 from eolab_app.vector.lasso import LassoSelectionRequest, LassoSelectionResult
+from eolab_app.vector.feature_attributes import (
+    FeatureAttributesRequest,
+    FeatureAttributesResult,
+)
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.parcel_models import (
@@ -42,7 +46,7 @@ def create_vector_sampling_router(
     """Create selection routes that cancel source reads when the client disconnects.
 
     Args:
-        service: Authorizes vector sources and counts their matching features.
+        service: Authorizes vector sources and reads their original features.
         read_artifact_owner: Composition-supplied Processing session authority.
 
     Returns:
@@ -232,6 +236,34 @@ def create_vector_sampling_router(
             raise HTTPException(409, error.detail) from error
         except SourceFileError as error:
             raise HTTPException(error.status, str(error)) from error
+
+    @router.post("/features", response_model=FeatureAttributesResult)
+    async def feature_attributes(
+        payload: FeatureAttributesRequest, request: Request, response: Response
+    ) -> FeatureAttributesResult:
+        """Read identified feature attributes independently of map display geometry.
+
+        Args:
+            payload: Path-free filtered source and unique native feature IDs.
+            request: Browser ownership and HTTP disconnect observer.
+            response: Renews credentials for private sources used by the selection.
+
+        Returns:
+            Complete ordered scalar rows with the original source descriptor.
+
+        Raises:
+            HTTPException: If access is invalid, the source or bounded read is
+                unavailable, or the browser disconnects before completion.
+        """
+        source_owner = read_source_owner(payload.selection, request, response)
+        try:
+            return await run_until_http_disconnect(
+                request, service.read_feature_attributes(payload, source_owner)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Feature attribute reading cancelled") from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
 
     @router.post("/outline")
     async def outline(

@@ -15,7 +15,7 @@ from shapely.geometry import LineString, Point, box, mapping, shape
 
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.bounded_vector import VectorReadLimits
-from eolab_app.feature_intersection import match_features
+from eolab_app.feature_intersection import iter_original_features, match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
@@ -207,7 +207,7 @@ def test_highlight_budget_does_not_change_membership(
 def test_lasso_highlight_reads_the_matching_feature_by_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A late feature must still get its whole highlight under a one-feature budget.
+    """Read a late feature's highlight and attributes under a one-feature budget.
 
     Args:
         tmp_path: Directory for the original GeoPackage.
@@ -225,13 +225,23 @@ def test_lasso_highlight_reads_the_matching_feature_by_id(
     assert highlights is not None
     assert [feature["id"] for feature in highlights["features"]] == [2]
     assert shape(highlights["features"][0]["geometry"]).equals(original)
+    attributes = list(
+        iter_original_features(
+            target,
+            VectorReadLimits(features=1, coordinates_per_feature=1),
+            None,
+            feature_ids=(2,),
+            read_geometry=False,
+        )
+    )
+    assert attributes == [(2, {"group": "selected"}, None)]
 
 
 def test_private_lasso_uses_original_source_jobs_without_geoserver(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The real upload, source authority, Jobs operation and HTTP route share exact membership.
+    """Read exact Lasso membership and attributes through the real owned-source APIs.
 
     Args:
         tmp_path: Private browser upload and worker mount directory.
@@ -288,6 +298,34 @@ def test_private_lasso_uses_original_source_jobs_without_geoserver(
         assert value["geometry"]["features"][0]["geometry"]["type"] == "Polygon"
         assert len(value["geometry"]["features"][0]["geometry"]["coordinates"]) == 2
         assert "source_path" not in response.text
+        attributes = owner.post(
+            "/api/vector-sampling/features",
+            json={"selection": selection, "featureIds": value["featureIds"]},
+            headers=HEADERS,
+        )
+        assert attributes.status_code == 200, attributes.text
+        assert attributes.json()["features"] == [
+            {
+                "id": value["featureIds"][0],
+                "properties": {"label": "Café wetlands", "count": 7, "weight": 2.5},
+            }
+        ]
+        assert attributes.json()["selection"]["uploadId"] == identifier
+        assert attributes.headers["Cache-Control"] == "private, no-store"
+        assert "geometry" not in attributes.json()["features"][0]
+        attribute_request = {"selection": selection, "featureIds": value["featureIds"]}
+        assert other.post(
+            "/api/vector-sampling/features", json=attribute_request, headers=HEADERS
+        ).status_code == 404
+        assert owner.post(
+            "/api/vector-sampling/features", json=attribute_request
+        ).status_code == 403
+        empty = owner.post(
+            "/api/vector-sampling/features",
+            json={"selection": selection, "featureIds": []},
+            headers=HEADERS,
+        )
+        assert empty.status_code == 200 and empty.json()["features"] == []
         assert (
             other.post(
                 "/api/vector-sampling/lasso", json=body, headers=HEADERS
@@ -303,6 +341,9 @@ def test_private_lasso_uses_original_source_jobs_without_geoserver(
             == 422
         )
         assert owner.delete(f"{BASE}/{identifier}", headers=HEADERS).status_code == 204
+        assert owner.post(
+            "/api/vector-sampling/features", json=attribute_request, headers=HEADERS
+        ).status_code == 404
         assert (
             owner.post(
                 "/api/vector-sampling/lasso", json=body, headers=HEADERS

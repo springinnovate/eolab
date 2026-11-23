@@ -23,6 +23,7 @@ from eolab_app.feature_intersection import bind_intersections, match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.vector.display_feature_ids import display_feature_ranges
 from eolab_app.vector.parcels import read_parcel_rows
+from eolab_app.vector.feature_attributes import read_feature_attributes
 
 
 def _write_layer(
@@ -137,6 +138,8 @@ def test_mixed_filter_counts_and_pages_original_features(tmp_path: Path, match: 
     assert display_feature_ranges(bound, bound.matches.ids) == ("1" if match == "all" else "1:4")
     page = read_parcel_rows(bound, "group", ("group",), 0, 10)
     assert [row.properties["group"] for row in page.rows] == expected
+    attributes = asyncio.run(read_feature_attributes(bound, tuple(sorted(bound.matches.ids))))
+    assert [feature.properties["group"] for feature in attributes.features] == expected
 
 
 def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

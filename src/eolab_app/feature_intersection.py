@@ -311,6 +311,7 @@ def iter_original_features(
     deadline: float | None,
     *,
     feature_ids: Iterable[int] | None = None,
+    read_geometry: bool = True,
 ) -> Generator[tuple[int, Mapping[str, Any], BaseGeometry | None], None, None]:
     """Open the target's original point, line or polygon features with their IDs.
 
@@ -320,23 +321,29 @@ def iter_original_features(
         deadline: Monotonic deadline shared with the polygon read, or None.
         feature_ids: Optional native IDs to read directly from a file. The
             layer's exact field and bound spatial filters still apply.
+        read_geometry: Whether to decode and project original geometry. False
+            reads attributes only, without requiring a CRS or coordinate budget.
 
     Yields:
-        Selected native IDs, properties and optional WGS84 geometry while the dataset remains open.
+        Selected native IDs, properties and optional WGS84 geometry while the
+        dataset remains open. Geometry is None when read_geometry is False.
 
     Raises:
-        GeometryValidationError: If the source has no CRS or exceeds a read budget.
+        GeometryValidationError: If requested geometry has no CRS, or the read
+            exceeds its feature, elapsed-time, or applicable coordinate budget.
         SelectionUnavailableError: If the dataset or a requested original feature cannot be read.
     """
     if not isinstance(layer, ResolvedCatalogSelection):
         for index, polygon in enumerate(layer):
-            yield index, {}, shape(polygon.model_dump())
+            yield index, {}, shape(polygon.model_dump()) if read_geometry else None
         return
-    with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"), _source_collection(layer) as dataset:
-        if not dataset.crs:
+    with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"), _source_collection(
+        layer, ignore_geometry=not read_geometry
+    ) as dataset:
+        if read_geometry and not dataset.crs:
             raise GeometryValidationError("The target layer has no coordinate reference system.")
 
-        needs_projection = dataset.crs.to_epsg() != 4326
+        needs_projection = read_geometry and dataset.crs.to_epsg() != 4326
         options = {"where": layer.where} if layer.where else {}
         originals = (
             dataset.filter(**options)
@@ -358,6 +365,9 @@ def iter_original_features(
             properties = dict(feature.properties)
             properties.update(evaluate_calculated_fields(layer.calculated_fields, properties))
             if layer.matches is None and not matches_filter(layer.selection.filter, properties):
+                continue
+            if not read_geometry:
+                yield fid, properties, None
                 continue
             geometry = shape(feature.geometry) if feature.geometry is not None else None
             if geometry is None or geometry.is_empty:
