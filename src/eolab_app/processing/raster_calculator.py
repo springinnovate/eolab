@@ -45,7 +45,6 @@ from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_operations import bind_area_arguments
 from eolab_app.processing.raster_output import write_float64_cog
 from eolab_app.processing.raster_preparation import (
-    AlignedRaster,
     RasterGrid,
     calculate_raster_grid,
     open_warped_raster,
@@ -380,7 +379,7 @@ def plan_calculator_grid(
 
 
 def write_calculator_tiles(
-    rasters: Mapping[str, AlignedRaster],
+    rasters: Mapping[str, rasterio.io.DatasetReader],
     polygon_mask: rasterio.io.DatasetReader | None,
     spec: RasterCalculatorSpec,
     directory: Path,
@@ -513,7 +512,7 @@ def calculate_raster(
     }
     write_progress(directory, "preparing_rasters", 0, len(inputs), unit="rasters")
     encodings: dict[str, dict[str, str | None]] = {}
-    rasters: dict[str, AlignedRaster] = {}
+    rasters: dict[str, rasterio.io.DatasetReader] = {}
     with (
         TemporaryDirectory(prefix="warp-", dir=directory) as temporary,
         ExitStack() as readers,

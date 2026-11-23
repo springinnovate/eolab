@@ -16,7 +16,6 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.transform import array_bounds
-from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
 
@@ -30,8 +29,6 @@ from eolab_app.raster.bounded_window import (
     project_polygons_to_crs,
 )
 from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
-
-AlignedRaster = rasterio.io.DatasetReader | WarpedVRT
 
 
 @dataclass(frozen=True)
@@ -306,20 +303,21 @@ def _write_periodic_longitude_vrt(
     return wrapped_path
 
 
-def _warp_regional_longitudes(
+def _write_warped_vrt(
     source: rasterio.io.DatasetReader,
     masked_path: Path,
     grid: RasterGrid,
     resampling: Resampling,
 ) -> Path:
-    """Create a lazy warp that normalizes longitudes around the source region.
+    """Create a lazy GDAL warp with exact coordinates and source validity.
 
-    GDAL's dataset-aware transformer derives a center longitude from the
-    geographic source. Use that native path for a regional layer so its original
-    pixel size and entire footprint are retained, even when it spans a seam.
+    Use one dataset-aware transformer for every source and resampling method.
+    GDAL handles geographic longitude wrapping, rotated grids and alpha masks.
+    Convert non-degree geographic coordinates to degrees in a virtual source
+    because the native longitude-centering operation requires those units.
 
     Args:
-        source: Original geographic source supplying the angular units.
+        source: Open virtual source supplying its CRS and affine transform.
         masked_path: Virtual source with the original values and validity band.
         grid: Output grid in its original CRS and pixel coordinates.
         resampling: GDAL method for reading samples from the source.
@@ -332,11 +330,14 @@ def _warp_regional_longitudes(
     """
     from osgeo import gdal, osr
 
-    path = masked_path.with_name(f"{masked_path.stem}-regional.vrt")
+    path = masked_path.with_name(f"{masked_path.stem}-warped.vrt")
+    warp_source_path = masked_path
     try:
         with gdal.ExceptionMgr():
             degree = radians(1)
-            to_degrees = source.crs.units_factor[1] / degree
+            to_degrees = (
+                source.crs.units_factor[1] / degree if source.crs.is_geographic else 1
+            )
             if not isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12):
                 # The native longitude-centering transformer expects degrees.
                 # Change only the coordinate units of the virtual source.
@@ -355,10 +356,10 @@ def _warp_regional_longitudes(
                     ],
                 ):
                     pass
-                masked_path = degree_path
+                warp_source_path = degree_path
             with gdal.Warp(
                 str(path),
-                str(masked_path),
+                str(warp_source_path),
                 format="VRT",
                 outputBounds=array_bounds(grid.height, grid.width, grid.transform),
                 xRes=grid.transform.a,
@@ -375,7 +376,7 @@ def _warp_regional_longitudes(
                 pass
     except RuntimeError as error:
         raise rasterio.errors.RasterioError(
-            "Could not create the regional longitude warp"
+            "Could not create the aligned raster warp"
         ) from error
     return path
 
@@ -383,7 +384,7 @@ def _warp_regional_longitudes(
 @contextmanager
 def open_warped_raster(
     path: Path, resampling: Resampling, grid: RasterGrid, vrt_path: Path
-) -> Iterator[tuple[rasterio.io.DatasetReader, AlignedRaster]]:
+) -> Iterator[tuple[rasterio.io.DatasetReader, rasterio.io.DatasetReader]]:
     """Open the original metadata and a lazy, validity-aware warp on a common grid.
 
     Args:
@@ -403,42 +404,21 @@ def open_warped_raster(
     with rasterio.open(path) as source:
         _write_masked_source_vrt(source, vrt_path)
         axes = source.transform
-        if source.crs.is_geographic:
+        if source.crs.is_geographic and axes.b == axes.d == 0:
             period = tau / source.crs.units_factor[1]
-            left, _, right, _ = source.bounds
-            left, right = sorted((left, right))
-            span = right - left
-            if axes.b == axes.d == 0 and isclose(
-                span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6
-            ):
+            span = abs(axes.a) * source.width
+            if isclose(span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6):
                 vrt_path = _write_periodic_longitude_vrt(source, vrt_path, period)
-            elif span < period and (left < -period / 2 or right > period / 2):
-                with rasterio.open(
-                    _warp_regional_longitudes(source, vrt_path, grid, resampling)
-                ) as warped:
-                    yield source, warped
-                return
-        with (
-            rasterio.open(vrt_path) as masked_source,
-            WarpedVRT(
-                masked_source,
-                crs=grid.crs,
-                transform=grid.transform,
-                width=grid.width,
-                height=grid.height,
-                resampling=resampling,
-                dtype="float64",
-                src_alpha=2,
-                src_nodata=np.nan,
-                nodata=np.nan,
-                UNIFIED_SRC_NODATA="NO",
-            ) as warped,
-        ):
+        with rasterio.open(vrt_path) as masked_source:
+            warped_path = _write_warped_vrt(masked_source, vrt_path, grid, resampling)
+        with rasterio.open(warped_path) as warped:
             yield source, warped
 
 
 def read_warped_tile(
-    raster: AlignedRaster, window: Window, inside: NDArray[np.bool_] | None
+    raster: rasterio.io.DatasetReader,
+    window: Window,
+    inside: NDArray[np.bool_] | None,
 ) -> NDArray[np.float64]:
     """Return aligned Float64 samples with NaN for invalid or excluded cells.
 
