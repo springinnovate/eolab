@@ -73,6 +73,18 @@ test("additive Catalog restore preserves existing map, strict settings and detac
   assert.throws(() => f.controller.exportLayer("removed"), /available layer/);
 });
 
+test("saved vector views of one source restore and export independent inspector formats", async () => {
+  const f = additiveCatalogFixture();
+  const primary = {...f.definition, fieldFormats: {Scaled: {displayName: "Habitat area", format: "number", decimals: 1, unit: "ha"},
+    name: {displayName: "Site name"}}};
+  const comparison = {...f.definition, fieldFormats: {Scaled: {displayName: "Annual cost", format: "currency", currency: "USD"}}};
+  const results = await f.controller.restoreLayers([primary, comparison], () => true);
+  assert.ok(results.every(({error}) => error === null));
+  assert.notEqual(results[0].key, results[1].key);
+  assert.deepEqual(f.controller.exportLayer(results[0].key).fieldFormats, primary.fieldFormats);
+  assert.deepEqual(f.controller.exportLayer(results[1].key).fieldFormats, comparison.fieldFormats);
+});
+
 /** Build an ordinary linked drawing view with distinct local display settings.
  * @param {string} [customName] Local view name.
  * @return {Object} Portable source reference and appearance.
@@ -1577,12 +1589,14 @@ test("shared map links exclude private local annotation contents", async () => {
   assert.deepEqual(copied.layers, []);
 });
 
-test("upload references survive autosave and links with their appearance and map order", async () => {
+test("upload references survive autosave and links with their field formats, appearance and map order", async () => {
   const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
     visible: false, isCustom: true, opacity: 0.4, legendIncluded: false,
     style: { kind: "vector", definition: { fillColor: "#123456" } },
     filter: { enabled: true, match: "all", rules: [{ field: "label", operator: "eq", value: "Café wetlands" }] } };
-  const record = { entry: { item: null, isCustom: true, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
+  const fieldFormats = {wetland_area: {displayName: "Wetland area", format: "number", decimals: 2, unit: "ha"},
+    name: {displayName: "Site name"}};
+  const record = { fieldFormats, entry: { item: null, isCustom: true, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
   const storage = createStorage(), view = createView(), timers = createTimers();
   const saved = emptySavedMap(10, 20, 6);
   const publication = createNamedMapFixture();
@@ -1594,26 +1608,27 @@ test("upload references survive autosave and links with their appearance and map
   });
   controller.scheduleRemember();
   timers.runOnly();
-  assert.deepEqual(JSON.parse(storage.serialized).layers, [upload]);
+  assert.deepEqual(JSON.parse(storage.serialized).layers, [{...upload, fieldFormats}]);
   const linked = await publication.publish(controller);
-  assert.deepEqual(linked.layers, [upload]);
+  assert.deepEqual(linked.layers, [{...upload, fieldFormats}]);
   controller.destroy();
 
   const restoredView = createView(), records = [], restored = [], order = [];
   const restarted = createController({ view: restoredView, storage,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { restore() {} }, catalogVisualization: { clear() {} },
-    mapLayers: { retainedRecords: records, commitStaged() {},
+    mapLayers: { retainedRecords: records, commitStaged() {}, getRecord: key => records.find(record => record.entry.key === key),
       setCustomLayer(key, value) { assert.equal(key, record.entry.key); record.entry.isCustom = value; },
       setLegendIncluded(key, included) { assert.equal(key, record.entry.key); assert.equal(included, false); },
       restoreOrder(keys) { order.push(keys); } },
     restoreUpload: async (layer, isCurrent) => {
-      assert.equal(isCurrent(), true); restored.push(layer); records.push(record); return record.entry.key;
+      assert.equal(isCurrent(), true); restored.push(layer); records.push({entry: {...record.entry}}); return record.entry.key;
     },
     setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
   });
   await restarted.restoreStartupView();
-  assert.deepEqual(restored, [upload]);
+  assert.deepEqual(restored, [{...upload, fieldFormats}]);
+  assert.deepEqual(records[0].fieldFormats, fieldFormats);
   assert.deepEqual(order, [[record.entry.key]]);
   assert.equal(restoredView.result, null, "successful private restoration stays quiet");
   restarted.destroy();
