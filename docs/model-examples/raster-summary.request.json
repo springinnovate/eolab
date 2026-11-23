@@ -3,7 +3,7 @@
   "model": {
     "id": "raster-summary",
     "version": "1.1.0",
-    "definitionSha256": "32225ab0e74571dc6281441eb9fceb12135acfb897b04cdd4c28a66e5fdd4e85"
+    "definitionSha256": "6e42a6eacb2a55f1bd124063ab60646fcaf3be34a3e492a503a2997e505370d5"
   },
   "inputs": {
     "raster": {

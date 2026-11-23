@@ -2,8 +2,8 @@
 schema: eolab.model/v1
 id: raster-clip
 version: "1.1.0"
-title: Raster clip
-description: Download a GeoTIFF of a raster within a sampling area or selected vector features, preserving its original resolution and values.
+title: Clip a raster to an area
+description: Create a GeoTIFF containing raster pixels within the chosen area, preserving the original grid and pixel values.
 inputs:
   raster:
     type: raster

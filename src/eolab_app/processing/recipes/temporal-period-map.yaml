@@ -1,8 +1,8 @@
 schema: eolab.model/v1
 id: temporal-period-map
 version: "1.0.0"
-title: Create a raster from a time series
-description: Calculate a statistic over observations or total precipitation for a period. Ordinary statistics give observations equal weight and retain source units without integration. Results include valid-observation counts; gaps remain missing. Precipitation totals require whole UTC hours.
+title: Map a statistic per pixel for a time period
+description: Calculate a statistic at each pixel across observations in the chosen period, such as maximum temperature during a month. Produces one statistic GeoTIFF and a second GeoTIFF counting valid observations per pixel. Total precipitation is also available for compatible precipitation-rate data.
 inputs:
   source:
     type: temporal_interval
@@ -12,7 +12,7 @@ inputs:
     label: Analysis area
   reduction:
     type: temporal_reduction
-    label: Statistic
+    label: Statistic across observations
 parameters: {}
 steps:
   - id: calculate
@@ -31,14 +31,14 @@ steps:
 outputs:
   raster:
     type: raster
-    label: Period map
+    label: Statistic per pixel for the chosen period
     source: calculate.raster
     role: result
     presentation: map
     saveEligible: true
   count:
     type: raster
-    label: Valid observation count
+    label: Valid observations per pixel
     source: calculate.count
     role: result
     presentation: map
