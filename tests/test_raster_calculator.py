@@ -372,6 +372,63 @@ def test_calculator_reports_a_cut_inside_the_output_projection(
             assert result.valid_pixels == 2
 
 
+@pytest.mark.parametrize("longitude", [135, 180])
+def test_polar_selection_distinguishes_source_and_target_cuts(
+    tmp_path: Path, longitude: int
+) -> None:
+    """Accept a continuous target footprint while still rejecting a real target cut.
+
+    Args:
+        tmp_path: Polar vector, Mercator reference and calculator output directory.
+        longitude: A source inverse cut or the actual Mercator longitude cut.
+    """
+    x, y = Transformer.from_crs(4326, 3413, always_xy=True).transform(longitude, 70)
+    native_bounds = (x - 1000, y - 1000, x + 1000, y + 1000)
+    area = write_selection(
+        tmp_path / "polar.gpkg", [mapping(box(*native_bounds))], crs="EPSG:3413"
+    )
+    center_x, center_y = Transformer.from_crs(4326, 3857, always_xy=True).transform(
+        longitude, 70
+    )
+    source = write_source(
+        tmp_path / "source.tif",
+        np.full((16, 16), 7, dtype="uint8"),
+        transform=from_origin(center_x - 4000, center_y + 4000, 500, 500),
+        crs="EPSG:3857",
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="3 * a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    queued = QueuedRasterCalculator(request=request, polygonArea=None)
+    if longitude == 180:
+        with pytest.raises(
+            ProcessingError, match="crosses a cut in the output projection"
+        ):
+            plan_calculator_grid(sources, queued)
+        return
+    plan = plan_calculator_grid(sources, queued)
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        xs, ys = Transformer.from_crs(3857, 3413, always_xy=True).transform(
+            output.transform.c + columns * output.transform.a,
+            output.transform.f + rows * output.transform.e,
+        )
+        west, south, east, north = native_bounds
+        inside = (west < xs) & (xs < east) & (south < ys) & (ys < north)
+        assert output.shape == (12, 12)
+        assert result.valid_pixels == inside.sum() == 144
+        np.testing.assert_array_equal(output.read(1), np.where(inside, 21, np.nan))
+
+
 @pytest.mark.parametrize("source_left", [0, -180])
 @pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
 @pytest.mark.parametrize(

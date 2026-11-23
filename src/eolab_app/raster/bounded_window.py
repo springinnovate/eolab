@@ -60,9 +60,10 @@ def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions
 
     Geographic targets use continuous longitudes for edge refinement. Their
     final geometry can then be split at the antimeridian by GDAL. For projected
-    targets, PROJ's normal and unwrapped operations identify changes in the
-    longitude normalization along a ring. A chord across such a cut could
-    rasterize the complement of the intended area.
+    targets, reject a longitude branch change only when unwrapping shortens
+    the target displacement. A cut in the inverse source projection instead
+    makes the unwrapped displacement longer while the normal target remains
+    continuous. A chord across a target cut could rasterize the wrong area.
 
     Args:
         source: CRS in which the original boundary edges are defined.
@@ -83,11 +84,11 @@ def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions
         if target.is_geographic
         else _grid_transformer(source_crs, target, unwrap=False)
     )
-    wrapped_branch: bool | None = None
+    previous: tuple[Position, Position, bool] | None = None
 
     def project(positions: tuple[Position, ...]) -> tuple[Position, ...]:
         """Project boundary probes and check the ring's longitude branch."""
-        nonlocal wrapped_branch
+        nonlocal previous
         xs, ys = zip(*positions, strict=True)
         try:
             if normalized is None:
@@ -98,14 +99,20 @@ def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions
         except ProjError as error:
             raise ValueError("Selection could not be projected") from error
         for a, b, c, d in zip(x, y, over_x, over_y, strict=True):
+            position, over_position = (a, b), (c, d)
             wrapped = not (
                 math.isclose(a, c, rel_tol=1e-12, abs_tol=1e-9)
                 and math.isclose(b, d, rel_tol=1e-12, abs_tol=1e-9)
             )
-            if wrapped_branch is None:
-                wrapped_branch = wrapped
-            elif wrapped_branch != wrapped:
-                raise ProjectionSeamError("Selection crosses a cut in the projection")
+            if previous is not None:
+                prior_position, prior_over_position, prior_wrapped = previous
+                if wrapped != prior_wrapped and math.dist(
+                    position, prior_position
+                ) > math.dist(over_position, prior_over_position):
+                    raise ProjectionSeamError(
+                        "Selection crosses a cut in the projection"
+                    )
+            previous = (position, over_position, wrapped)
         return tuple(zip(x, y, strict=True))
 
     return project
