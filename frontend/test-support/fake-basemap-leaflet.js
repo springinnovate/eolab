@@ -1,11 +1,50 @@
 import { FakeRasterControlDocument } from "./raster/fake-controls-document.js";
 
 /**
+ * Create a pixel point for recording calls across the Leaflet boundary.
+ * @param {number|number[]} x X coordinate or coordinate pair.
+ * @param {number} [y] Y coordinate.
+ * @return {Object} Point supporting the fixture's viewport operations.
+ */
+function point(x, y) {
+    if (Array.isArray(x)) [x, y] = x;
+    return {
+        x, y,
+        add(other) {
+            const [otherX, otherY] = Array.isArray(other) ? other : [other.x, other.y];
+            return point(x + otherX, y + otherY);
+        },
+        subtract(other) { return point(x - other.x, y - other.y); },
+        divideBy(divisor) { return point(x / divisor, y / divisor); },
+        equals(other) { return x === other.x && y === other.y; },
+    };
+}
+
+/**
+ * Create a rectangle for recording viewport size and position.
+ * @param {number[]|Object} start Top left.
+ * @param {number[]|Object} end Bottom right.
+ * @return {Object} Fixture pixel bounds.
+ */
+function bounds(start, end) {
+    const min = Array.isArray(start) ? point(start) : start;
+    const max = Array.isArray(end) ? point(end) : end;
+    return {min, max, getCenter: () => min.add(max).divideBy(2), getSize: () => max.subtract(min)};
+}
+
+/**
  * Track map backgrounds, controls, and attributions without loading network tiles.
  * @return {Object} Leaflet double, map, DOM, and captured calls.
  */
 export function createLeafletDouble() {
     const document = new FakeRasterControlDocument();
+    document.defaultView.ResizeObserver = class { observe() {} };
+    const canvas = {left: 0, top: 0, right: 1000, bottom: 600};
+    const container = {
+        ownerDocument: document,
+        getBoundingClientRect: () => canvas,
+        querySelector: () => ({getBoundingClientRect: () => canvas}),
+    };
     const calls = { map: null, setView: null, basemap: null,
         layers: [], controls: [], stoppedClicks: [], stoppedScrolls: [] };
     /** Construct a Leaflet-style handler whose subclass can delegate native hooks. */
@@ -60,6 +99,25 @@ export function createLeafletDouble() {
          * @param {Object} padding Pixel padding. @return {number} Fixture fit zoom.
          */
         getBoundsZoom(bounds, inside, padding) { calls.fit = {bounds, inside, padding, snap: this.options.zoomSnap}; return 3; },
+        /** Record the map fit request and provide a geographic fixture target.
+         * @param {Object} extent Bounds being fitted. @param {Object} options Fit padding and zoom limits.
+         * @return {{center:number[],zoom:number}} Fixture center and zoom.
+         */
+        _getBoundsCenterZoom(extent, options) {
+            calls.fitView = options;
+            return {center: [0, 0], zoom: 2};
+        },
+        fitBounds(extent, options) {
+            this._getBoundsCenterZoom(extent, options);
+            return this;
+        },
+        _getBoundsOffset(pixels) { calls.viewPixels = pixels; return point(0, 0); },
+        // The test records camera pixel geometry independently of the map projection.
+        project(center) { return Array.isArray(center) ? point(center[1], center[0]) : point(center.lng, center.lat); },
+        unproject(pixels) { return {lat: pixels.y, lng: pixels.x}; },
+        _limitZoom(zoom) { return zoom; },
+        getSize() { return point(canvas.right, canvas.bottom); },
+        once() {},
         /** @return {number} Initial fixture zoom. */
         getZoom() { return calls.setView.zoom; },
         /** Finish an active native zoom transition. @return {void} */
@@ -68,7 +126,7 @@ export function createLeafletDouble() {
         setZoom(zoom, options) { calls.setZoom = {zoom, options}; },
         attached, attributions,
         setView(center, zoom) { calls.setView = { center, zoom }; return this; },
-        getContainer() { return { ownerDocument: document }; },
+        getContainer() { return container; },
         getPane(name) { return panes.get(name); },
         createPane(name) { const pane = { style: {} }; panes.set(name, pane); return pane; },
         removeLayer(layer) {
@@ -82,6 +140,7 @@ export function createLeafletDouble() {
     };
     leafletMap.scrollWheelZoom = new WheelZoom(leafletMap);
     leafletMap.keyboard = new KeyboardZoom(leafletMap);
+    leafletMap.dragging = new Handler(leafletMap);
     /**
      * Create a background whose attachment updates only its own attribution.
      * @param {string} kind Background type.
@@ -113,7 +172,10 @@ export function createLeafletDouble() {
             leafletMap.options = {zoomSnap: 1, wheelPxPerZoomLevel: 60, ...options};
             return leafletMap;
         },
-        Map: {ScrollWheelZoom: WheelZoom, Keyboard: KeyboardZoom},
+        Map: {ScrollWheelZoom: WheelZoom, Keyboard: KeyboardZoom, Drag: Handler},
+        point,
+        bounds,
+        latLngBounds() { return {isValid: () => true}; },
         tileLayer(url, options) { return layer("tiles", url, options); },
         geoJSON(geometry, options) { return layer("outlines", geometry, options); },
         control(options) {
