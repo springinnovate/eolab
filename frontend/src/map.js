@@ -160,16 +160,205 @@ function addFineMapZoom(leaflet, map) {
 }
 
 /**
+ * Find the largest rectangle outside the open panels in canvas-relative pixels.
+ * Panel layout boxes count as covered at every opacity. Closed panels have
+ * empty layout boxes. For a fully covered canvas, return a point at its center.
+ *
+ * @param {typeof import("leaflet")} leaflet Leaflet namespace.
+ * @param {HTMLElement} container Map canvas.
+ * @param {readonly HTMLElement[]} panels Floating panels above the canvas.
+ * @return {import("leaflet").Bounds} Space available for map interaction.
+ */
+function measureUncoveredMapArea(leaflet, container, panels) {
+    const {left, top, right, bottom} = container.getBoundingClientRect();
+    let areas = [{left, top, right, bottom}];
+    for (const panel of panels) {
+        const footprint = panel.getBoundingClientRect();
+        areas = areas.flatMap(area => {
+            const coveredLeft = Math.max(area.left, footprint.left);
+            const coveredTop = Math.max(area.top, footprint.top);
+            const coveredRight = Math.min(area.right, footprint.right);
+            const coveredBottom = Math.min(area.bottom, footprint.bottom);
+            if (coveredLeft >= coveredRight || coveredTop >= coveredBottom) return [area];
+            return [
+                {...area, right: coveredLeft},
+                {...area, left: coveredRight},
+                {...area, bottom: coveredTop},
+                {...area, top: coveredBottom},
+            ].filter(rectangle => rectangle.left < rectangle.right && rectangle.top < rectangle.bottom);
+        });
+    }
+    /** @param {DOMRectReadOnly|{left:number,top:number,right:number,bottom:number}} rectangle
+     * @return {number} Area in square CSS pixels.
+     */
+    const rectangleArea = ({left, top, right, bottom}) => (right - left) * (bottom - top);
+    const centerX = (left + right) / 2;
+    const centerY = (top + bottom) / 2;
+    const uncovered = areas.reduce(
+        (largest, candidate) => rectangleArea(candidate) > rectangleArea(largest) ? candidate : largest,
+        {left: centerX, top: centerY, right: centerX, bottom: centerY},
+    );
+    const x = Math.ceil(uncovered.left - left);
+    const y = Math.ceil(uncovered.top - top);
+    return leaflet.bounds([x, y], [
+        Math.max(x, Math.floor(uncovered.right - left)),
+        Math.max(y, Math.floor(uncovered.bottom - top)),
+    ]);
+}
+
+/**
+ * Keep fitting, navigation and map-centered actions in the uncovered area.
+ * The Leaflet canvas still covers the whole map, including under the panels.
+ *
+ * @param {typeof import("leaflet")} leaflet Leaflet namespace.
+ * @param {import("leaflet").Map} map Application map, before its first view.
+ * @param {readonly HTMLElement[]} panels Floating panels above the canvas.
+ * @return {MapVisibleView} Geographic view centered in the uncovered area.
+ */
+function bindMapNavigation(leaflet, map, panels) {
+    const container = map.getContainer();
+    let area = measureUncoveredMapArea(leaflet, container, panels);
+    const zero = leaflet.point(0, 0);
+    const getBoundsOffset = map._getBoundsOffset;
+    /** Apply Leaflet 1.9.4's boundary rules to the uncovered rectangle.
+     * @param {import("leaflet").Bounds} pixels Projected canvas bounds.
+     * @param {import("leaflet").LatLngBounds} bounds Geographic limits.
+     * @param {number} [zoom] Zoom of the projected canvas.
+     * @return {import("leaflet").Point} Offset that brings the view inside the limits.
+     */
+    map._getBoundsOffset = function (pixels, bounds, zoom) {
+        return getBoundsOffset.call(this, leaflet.bounds(
+            pixels.min.add(area.min),
+            pixels.min.add(area.max),
+        ), bounds, zoom);
+    };
+
+    /** Keep the actual projected pixels inside bounds after navigation or layout changes.
+     * @param {import("leaflet").LatLngBoundsExpression} bounds Geographic limits.
+     * @param {import("leaflet").PanOptions} [options] Pan options.
+     * @return {import("leaflet").Map} This map.
+     */
+    map.panInsideBounds = function (bounds, options) {
+        const offset = this._limitOffset(zero, leaflet.latLngBounds(bounds)).round();
+        if (offset.equals(zero)) return this;
+        this._enforcingBounds = true;
+        try {
+            return this.panBy(offset, {animate: false, ...options});
+        } finally {
+            this._enforcingBounds = false;
+        }
+    };
+
+    const BoundedDrag = leaflet.Map.Drag.extend({
+        /** Limit the pending drag with the same rule used for inertial and keyboard panning.
+         * @return {void}
+         */
+        _onPreDragLimit() {
+            const pane = map._getMapPanePos();
+            const proposed = pane.subtract(this._draggable._newPos);
+            this._draggable._newPos = pane.subtract(map._limitOffset(proposed, map.options.maxBounds));
+        },
+    });
+    map.dragging.disable();
+    map.addHandler("dragging", BoundedDrag);
+
+    /** Read the clear area's canonical geographic center.
+     * @return {import("leaflet").LatLng} Center point of the uncovered map.
+     */
+    const getCenter = () => map.containerPointToLatLng(area.getCenter());
+
+    /** Put a geographic location at the uncovered map's center, subject to the world bounds.
+     * @param {import("leaflet").LatLngExpression} center Geographic focus.
+     * @param {number} zoom Requested zoom.
+     * @param {import("leaflet").ZoomPanOptions} [options] View transition options.
+     * @return {import("leaflet").Map} This map.
+     */
+    function setView(center, zoom, options) {
+        area = measureUncoveredMapArea(leaflet, container, panels);
+        const halfCanvas = map.getSize().divideBy(2);
+        const shift = halfCanvas.subtract(area.getCenter());
+        if (shift.equals(zero)) return map.setView(center, zoom, options);
+
+        zoom = map._limitZoom(zoom);
+        const target = map.project(center, zoom).add(shift);
+        const limit = map._getBoundsOffset(leaflet.bounds(
+            target.subtract(halfCanvas), target.add(halfCanvas),
+        ), map.options.maxBounds, zoom);
+        const bounded = target.add(limit);
+        const canvasCenter = map.unproject(bounded, zoom);
+        if (Math.abs(map.project(canvasCenter, zoom).y - bounded.y) <= 1) {
+            return map.setView(canvasCenter, zoom, options);
+        }
+        // On short, exposed strips the canvas center can be beyond Mercator's
+        // latitude limit. Move the remaining distance in pixels.
+        map.setView(canvasCenter, zoom, {...options, animate: false, reset: true});
+        return map.panBy(bounded.subtract(map.getPixelBounds().getCenter()), {animate: false});
+    }
+
+    const setZoom = map.setZoom;
+    /** Zoom buttons and centered shortcuts keep the clear area's focus in place.
+     * @param {number} zoom Requested zoom.
+     * @param {import("leaflet").ZoomOptions} [options] Zoom transition options.
+     * @return {import("leaflet").Map} This map.
+     */
+    map.setZoom = function (zoom, options) {
+        if (!this._loaded) return setZoom.call(this, zoom, options);
+        return setView(getCenter(), zoom, {zoom: options});
+    };
+
+    /** Fit geographic bounds into the clear space, including the caller's margins.
+     * @param {import("leaflet").LatLngBoundsExpression} bounds Geographic extent to fit.
+     * @param {import("leaflet").FitBoundsOptions} [options] Margins, zoom limit and transition options.
+     * @return {import("leaflet").Map} This map.
+     * @throws {Error} If the supplied bounds are invalid.
+     */
+    map.fitBounds = function (bounds, options = {}) {
+        const extent = leaflet.latLngBounds(bounds);
+        if (!extent.isValid()) throw new Error("Bounds are not valid.");
+        area = measureUncoveredMapArea(leaflet, container, panels);
+        const size = area.getSize();
+        const inset = this.getSize().subtract(size).divideBy(2);
+        const start = leaflet.point(options.paddingTopLeft ?? options.padding ?? [0, 0]);
+        const end = leaflet.point(options.paddingBottomRight ?? options.padding ?? [0, 0]);
+        const total = start.add(end);
+        // Leave some map for the target when the requested margins would fill a narrow strip.
+        const scaleX = total.x >= size.x && total.x > 0 ? size.x / (2 * total.x) : 1;
+        const scaleY = total.y >= size.y && total.y > 0 ? size.y / (2 * total.y) : 1;
+        const target = this._getBoundsCenterZoom(extent, {
+            ...options,
+            paddingTopLeft: inset.add([start.x * scaleX, start.y * scaleY]),
+            paddingBottomRight: inset.add([end.x * scaleX, end.y * scaleY]),
+        });
+        return setView(target.center, target.zoom, options);
+    };
+
+    observeMapViewportSize(map, panels, () => {
+        area = measureUncoveredMapArea(leaflet, container, panels);
+        map.panInsideBounds(map.options.maxBounds);
+    });
+    return {getCenter, getZoom: () => map.getZoom(), setView};
+}
+
+/**
+ * @typedef {Object} MapVisibleView
+ * @property {() => import("leaflet").LatLng} getCenter Geographic focus in the unobstructed area.
+ * @property {() => number} getZoom Current map zoom.
+ * @property {(center: import("leaflet").LatLngExpression, zoom: number, options?: import("leaflet").ZoomPanOptions) => import("leaflet").Map} setView
+ * Restore the geographic focus and zoom with the current panels.
+ */
+
+/**
  * Create the application map and basemap without repeated world copies.
  * Hold Shift while zooming for smaller steps. Fit layers between the workspace
  * panels and retain active layers' attribution credits.
  *
- * @param {Object} leaflet Leaflet namespace.
+ * @param {typeof import("leaflet")} leaflet Leaflet namespace.
  * @param {Object} appGlobalConfiguration Browser-safe application settings.
  * @param {(control:Object)=>void} [onBasemapReady] Receive the basemap's public selection interface.
- * @return {Object} Initialized Leaflet-compatible map.
+ * @param {readonly HTMLElement[]} [panels=[]] Workspace panels whose layout boxes cover the map.
+ * @return {import("leaflet").Map & {visibleView: MapVisibleView}} Initialized application map.
  */
-export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapReady = () => {}) {
+export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapReady = () => {}, panels = []) {
     const leafletMap = leaflet.map("map", {
         zoomControl: false,
         minZoom: 0,
@@ -180,7 +369,9 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapR
         updateWhenIdle: true,
         updateWhenZooming: false,
         wheelDebounceTime: 120,
-    }).setView(
+    });
+    leafletMap.visibleView = bindMapNavigation(leaflet, leafletMap, panels);
+    leafletMap.visibleView.setView(
         [
             appGlobalConfiguration.initialView.latitude,
             appGlobalConfiguration.initialView.longitude
@@ -189,24 +380,6 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapR
     );
 
     leafletMap.attributionControl.setPrefix(false);
-    const fitBounds = leafletMap.fitBounds;
-    /** Fit a layer in the unobstructed map area while retaining the caller's extra padding.
-     * @param {import("leaflet").LatLngBoundsExpression} bounds Geographic bounds to show.
-     * @param {import("leaflet").FitBoundsOptions} [options] Leaflet zoom, animation and padding options.
-     * @return {import("leaflet").Map} The map after requesting the fitted view.
-     */
-    leafletMap.fitBounds = function (bounds, options = {}) {
-        const container = this.getContainer();
-        const canvas = container.getBoundingClientRect();
-        const controls = container.querySelector(".leaflet-control-container").getBoundingClientRect();
-        return fitBounds.call(this, bounds, {
-            ...options,
-            paddingTopLeft: leaflet.point(options.paddingTopLeft ?? options.padding ?? [0, 0])
-                .add([controls.left - canvas.left, controls.top - canvas.top]),
-            paddingBottomRight: leaflet.point(options.paddingBottomRight ?? options.padding ?? [0, 0])
-                .add([canvas.right - controls.right, canvas.bottom - controls.bottom]),
-        });
-    };
     addFineMapZoom(leaflet, leafletMap);
     onBasemapReady(addBasemapControl(leaflet, leafletMap, appGlobalConfiguration.basemap, SINGLE_WORLD_BOUNDS));
 
@@ -214,13 +387,14 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapR
 }
 
 /**
- * Keep Leaflet's pixel coordinates aligned when a sidebar resizes the map.
- * ResizeObserver covers CSS transitions and panel changes without knowing which
- * tool caused them. Removing the map releases the observer and pending frame.
- * @param {Object} map Initialized Leaflet map.
+ * Update the map after its canvas or the floating panels change size.
+ * Removing the map releases the observer and pending frame.
+ * @param {import("leaflet").Map} map Leaflet map.
+ * @param {readonly HTMLElement[]} [panels=[]] Panels whose layout changes affect the clear area.
+ * @param {() => void} [onResize] Update navigation after Leaflet reads the new canvas size.
  * @return {void}
  */
-export function observeMapViewportSize(map) {
+export function observeMapViewportSize(map, panels = [], onResize = () => {}) {
     const container = map.getContainer();
     const view = container.ownerDocument.defaultView;
     let frame = null;
@@ -229,9 +403,11 @@ export function observeMapViewportSize(map) {
         frame = view.requestAnimationFrame(() => {
             frame = null;
             map.invalidateSize({animate: false, debounceMoveend: true});
+            onResize();
         });
     });
     observer.observe(container);
+    for (const panel of panels) observer.observe(panel, {box: "border-box"});
     map.once("unload", () => {
         observer.disconnect();
         if (frame !== null) view.cancelAnimationFrame(frame);

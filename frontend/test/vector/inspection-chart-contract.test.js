@@ -39,13 +39,15 @@ function composition(fetchImplementation = null) {
       selection: {
         collectionId: "eolab-mounted-vectors", itemId: record.itemId, assetKey: "data", layerName: record.itemId,
       },
-      numericFields: [{ name: "R1999" }, { name: "R2000" }],
+      fields: ["name", "x", "y", "R1999", "R2000"].map(name => ({name})),
+      numericFields: ["x", "y", "R1999", "R2000"].map(name => ({name})),
     }),
   };
   const records = ["habitat", "watersheds"].map(itemId => ({
     itemId, entry: { key: "catalog|" + itemId, label: itemId, visible: false }, adapter: vectorMapLayerAdapter,
   }));
   const dependencies = {
+    savedMapViewController: {scheduleRemember() {status.remembered = true;}},
     vectorMapLayerAdapter,
     mapLayerController: { retainedRecords: records, getRecord: key => records.find(record => record.entry.key === key) },
     mapInteractionTools: {setSelectionDisplay: display => {status.display = display;}},
@@ -216,12 +218,25 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(status.feature.state, "ready");
   assert.equal(status.feature.position, null);
   assert.equal(status.display.geometry, null);
+  assert.equal(doc.querySelector("#vector-feature-field-display").hidden, false,
+    "A hidden source still supplies editable field display settings");
+  const fieldImport = doc.querySelector("#import-vector-field-formats");
+  fieldImport.files = [new Blob(["field,display_name,format,decimals,unit,currency\nx,Area,number,1,ha,\n"])];
+  fieldImport.dispatchEvent(new Event("change"));
+  await nextTurn();
+  doc.querySelector("#apply-vector-field-formats").dispatchEvent(new Event("click"));
+  assert.equal(status.remembered, true);
+  assert.ok(doc.querySelector("#vector-feature-attributes").children.some(element => element.textContent === "Area"));
+  const formattedArea = new Intl.NumberFormat(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1}).format(1.25) + " ha";
+  assert.ok(doc.querySelector("#vector-feature-attributes").children.some(element => element.textContent === formattedArea));
   doc.querySelector("#open-vector-time-series").dispatchEvent(new Event("click"));
   series.settings = {xField: "x", yFields: ["y"], direction: "ascending", chartType: "scatter"};
   series.render();
   const chart = doc.querySelector("#vector-time-series-chart");
   const marks = chart.querySelectorAll(".series-chart-point");
   assert.equal(marks.length, 2, "The missing Y stays absent from the scatterplot");
+  assert.deepEqual(series.observations.map(observation => observation.properties.x), [1.25, 2.5, -3],
+    "Inspector formatting preserves the original values used by plots");
   assert.ok(Number(marks[0].getAttribute("cx")) < Number(marks[1].getAttribute("cx")), "Numeric X positions follow -3 then 1.25");
   assert.ok(Number(marks[0].getAttribute("cy")) > Number(marks[1].getAttribute("cy")), "Numeric Y positions follow 0.5 then 4");
   assert.match(marks[0].getAttribute("aria-label"), /9007199254740993/);

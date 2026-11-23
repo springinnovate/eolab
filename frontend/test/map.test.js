@@ -182,3 +182,31 @@ test("fit bounds retain whole-level snapping and disabling wheel discards queued
   assert.equal(map.scrollWheelZoom._startTime, null);
   assert.equal(calls.wheelDetached, true);
 });
+
+test("fit and pan limits reserve the complete footprints of faded panels", () => {
+  const { leaflet, calls } = createLeafletDouble();
+  const workspace = {left: 0, top: 0, right: 350, bottom: 600};
+  const inspection = {left: 900, top: 0, right: 1000, bottom: 600};
+  const map = createSingleWorldMap(leaflet, {
+    basemap: {url: "https://tiles.example/{z}/{x}/{y}.png", attribution: "Example"},
+    initialView: {latitude: 0, longitude: 0, zoom: 2},
+  }, undefined, [
+    {style: {opacity: "0.4"}, getBoundingClientRect: () => workspace},
+    {style: {opacity: "0"}, getBoundingClientRect: () => inspection},
+  ]);
+  const options = {paddingTopLeft: [10, 20], paddingBottomRight: [30, 40], maxZoom: 9};
+  map.fitBounds(SINGLE_WORLD_BOUNDS, options);
+
+  assert.equal(calls.fitView.maxZoom, 9);
+  assert.ok(calls.fitView.paddingTopLeft.equals(leaflet.point(235, 20)));
+  assert.ok(calls.fitView.paddingBottomRight.equals(leaflet.point(255, 40)));
+  // The 550 px clear area is centered on the fitted location.
+  assert.ok(calls.viewPixels.min.equals(leaflet.point(-275, -300)));
+  assert.ok(calls.viewPixels.max.equals(leaflet.point(275, 300)));
+  assert.deepEqual(calls.setView.center, {lat: 0, lng: -125});
+
+  inspection.right = inspection.left;
+  map.fitBounds(SINGLE_WORLD_BOUNDS, options);
+  assert.ok(calls.fitView.paddingTopLeft.equals(leaflet.point(185, 20)));
+  assert.ok(calls.fitView.paddingBottomRight.equals(leaflet.point(205, 40)));
+});

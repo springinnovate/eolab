@@ -1,5 +1,6 @@
 /** Versioned, portable saved-map document validation and construction. */
 import { validateCalculatedFields } from "../calculated-fields.js";
+import { validateFeatureFieldFormats } from "../feature-field-formats.js";
 import { VISITOR_CONTROL_PARENTS, VISITOR_CONTROLS_VERSION } from "../visitor-controls.js";
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
@@ -309,7 +310,8 @@ function validateLayer(candidate) {
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filterViewId") ? ["filterViewId"] : []),
-            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : [])],
+            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : []),
+            ...(!isTemporal && Object.hasOwn(candidate, "fieldFormats") ? ["fieldFormats"] : [])],
         "Saved layer"
     );
     let customName;
@@ -374,6 +376,9 @@ function validateLayer(candidate) {
     if ((isArtifact || Object.hasOwn(candidate, "calculatedFields")) && candidate.style.kind !== "vector") {
         throw new SavedMapViewValidationError("Calculated fields and vector run results require a vector style.");
     }
+    if (Object.hasOwn(candidate, "fieldFormats") && candidate.style.kind !== "vector") {
+        throw new SavedMapViewValidationError("Field formats require a vector layer.");
+    }
     if (isUpload && candidate.style.kind === "raster" && Object.hasOwn(candidate, "filter")) {
         throw new SavedMapViewValidationError("Uploaded raster layers cannot have polygon filters.");
     }
@@ -399,6 +404,7 @@ function validateLayer(candidate) {
         style: structuredClone(candidate.style),
         ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
         ...(Object.hasOwn(candidate, "calculatedFields") ? {calculatedFields: validateCalculatedFields(candidate.calculatedFields)} : {}),
+        ...(Object.hasOwn(candidate, "fieldFormats") ? {fieldFormats: validateFeatureFieldFormats(candidate.fieldFormats)} : {}),
     });
 }
 

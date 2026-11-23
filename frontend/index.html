@@ -1109,6 +1109,29 @@
                   <button id="zoom-inspected-vector-feature" class="secondary-button"
                     type="button" aria-controls="map" disabled>Zoom to feature</button>
                 </nav>
+                <details id="vector-feature-field-display" class="vector-field-display" hidden>
+                  <summary>Field display</summary>
+                  <p>Keep <code>field</code> unchanged and enter a friendly label in <code>display_name</code>. Leave the name blank to use the source field name. Names apply to this layer in your map view.</p>
+                  <p>For numeric fields, use <code>number</code> with a unit such as <code>ha</code>, or <code>currency</code> with a code such as <code>USD</code>. Set <code>decimals</code> to control the displayed decimal places. Leave number settings blank for text fields or default display. Save the file as CSV UTF-8.</p>
+                  <div class="vector-field-display-actions">
+                    <button id="download-vector-field-template" class="secondary-button" type="button">Download template</button>
+                    <label for="import-vector-field-formats">Import field formats</label>
+                    <input id="import-vector-field-formats" type="file" accept=".csv,text/csv">
+                  </div>
+                  <p id="vector-field-format-status" role="status"></p>
+                  <div id="vector-field-format-preview" class="vector-field-display-preview" role="region"
+                    aria-labelledby="vector-field-format-caption" tabindex="0" hidden>
+                    <table>
+                      <caption id="vector-field-format-caption">Preview for this feature</caption>
+                      <thead><tr><th scope="col">Source field</th><th scope="col">Current name</th><th scope="col">Preview name</th><th scope="col">Current value</th><th scope="col">Preview value</th></tr></thead>
+                      <tbody id="vector-field-format-rows"></tbody>
+                    </table>
+                  </div>
+                  <div id="vector-field-format-actions" class="vector-field-display-actions" hidden>
+                    <button id="apply-vector-field-formats" class="secondary-button" type="button">Apply formats</button>
+                    <button id="cancel-vector-field-formats" class="secondary-button" type="button">Cancel</button>
+                  </div>
+                </details>
                 <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
               </article>
             </div>

@@ -64,7 +64,6 @@ import {
 } from "./catalog-system-state.js";
 import {
     createSingleWorldMap,
-    observeMapViewportSize,
     getCatalogItemMapBounds,
     getSingleWorldMapBounds,
     formatSingleWorldPosition
@@ -273,14 +272,14 @@ function placeSamplingTool(map) {
 }
 
 /**
- * Create the map, coordinate guide, sampling control and viewport resize observation.
+ * Create the map and supply the floating panels that cover its canvas.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
- * @return {L.Map} The initialized Leaflet map.
+ * @return {ReturnType<typeof createSingleWorldMap>} The initialized application map.
  */
 function initializeMap(appGlobalConfiguration) {
-    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
-    observeMapViewportSize(leafletMap);
+    const panels = [document.getElementById("control-panel"), document.getElementById("map-inspection")];
+    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; }, panels);
     addMapCoordinateGuide(L, leafletMap);
     placeSamplingTool(leafletMap);
 
@@ -299,7 +298,7 @@ function initializeMap(appGlobalConfiguration) {
         );
     }
 
-    updateMapPosition({ latlng: leafletMap.getCenter() });
+    updateMapPosition({ latlng: leafletMap.visibleView.getCenter() });
     leafletMap.on("mousemove", updateMapPosition);
 
     return leafletMap;
@@ -1152,6 +1151,7 @@ async function initializeCatalog(
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
+        getMapCenter: leafletMap.visibleView.getCenter,
         leaflet: L,
         onTileError: reportMapTileError,
         inspectionInitiallyEnabled: !isSharedViewer,
@@ -1892,7 +1892,7 @@ async function initializeCatalog(
     }
     savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
-        viewport: createSavedMapLeafletViewport(leafletMap),
+        viewport: createSavedMapLeafletViewport(leafletMap.visibleView),
         mapLayers: mapLayerController,
         catalogVisualization,
         catalogItems: catalogItemClient,
@@ -2167,12 +2167,36 @@ async function initializeCatalog(
                 selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
         });
     }
+    /**
+     * Provide a retained vector view's fields and remember inspector formats, including for hidden views.
+     * @param {string} key Opaque identity of the inspected map layer view.
+     * @return {import("./vector/feature-field-display.js").FeatureFieldDisplay|null} Settings for a current vector view.
+     */
+    function describeFeatureFieldDisplay(key) {
+        const record = mapLayerController.getRecord(key);
+        if (record?.adapter !== vectorMapLayerAdapter) return null;
+        const source = record.adapter.describeSource(record);
+        const fields = source.fields.map(({name}) => name);
+        const numericFields = source.numericFields.map(({name}) => name);
+        const fieldNames = new Set(fields);
+        const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
+            .filter(([field]) => fieldNames.has(field)));
+        return {fields, numericFields, formats, apply: fieldFormats => {
+            if (mapLayerController.getRecord(key) !== record) return false;
+            const currentFields = new Set(record.adapter.describeSource(record).fields.map(({name}) => name));
+            if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
+            record.fieldFormats = fieldFormats;
+            savedMapViewController.scheduleRemember();
+            return true;
+        }};
+    }
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
         getVisibleTargets: () => visibleVectorInspectionTargets(),
         getSelectionTargets: retainedVectorInspectionTargets,
         onSelectionDisplayChange: display => mapInteractionTools?.setSelectionDisplay(display),
+        getFieldDisplay: describeFeatureFieldDisplay,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
             if (visible) mapInspection.showFeatureInspector({ activate: false });
