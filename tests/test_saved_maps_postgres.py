@@ -69,7 +69,13 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
     request["view"]["layers"][0]["isCustom"] = False
     request["view"]["layers"][1]["isCustom"] = True
     request["view"]["layers"][1]["fieldFormats"] = {
-        "area_ha": {"format": "number", "decimals": 1, "unit": "ha"}
+        "area_ha": {
+            "displayName": "Habitat area",
+            "format": "number",
+            "decimals": 1,
+            "unit": "ha",
+        },
+        "name": {"displayName": "Site name"},
     }
     with TestClient(app, headers=HEADERS) as client:
         response = client.post(BASE, json=request)

@@ -7,7 +7,8 @@ import { makeFieldFormatTemplate, MAX_FIELD_FORMAT_CSV_BYTES, parseFieldFormatCs
 /**
  * Editable display settings for one inspected layer view.
  * @typedef {Object} FeatureFieldDisplay
- * @property {readonly string[]} fields Exact numeric field names.
+ * @property {readonly string[]} fields Exact non-geometry field names.
+ * @property {readonly string[]} numericFields Field names that accept numeric formatting.
  * @property {FeatureFieldFormats} formats Current field display settings.
  * @property {(formats:FeatureFieldFormats)=>boolean} apply Store the settings if this view is still current.
  */
@@ -95,7 +96,7 @@ export class VectorFeatureFieldDisplay {
     }
 
     /**
-     * Validate the entire CSV and preview against the selected feature's actual values.
+     * Validate the entire CSV and preview inspector labels and the selected feature's actual values.
      * @return {Promise<void>} Completion after preview, validation error or supersession.
      */
     async #previewImport() {
@@ -103,7 +104,7 @@ export class VectorFeatureFieldDisplay {
         this.#resetImport();
         if (!file || !this.selection) return;
         const generation = this.generation;
-        const {fields, formats, properties} = this.selection;
+        const {fields, numericFields, formats, properties} = this.selection;
         this.status.textContent = "Reading field formats…";
         try {
             if (file.size > MAX_FIELD_FORMAT_CSV_BYTES) {
@@ -114,7 +115,7 @@ export class VectorFeatureFieldDisplay {
             let text;
             try { text = new TextDecoder("utf-8", {fatal: true}).decode(bytes); }
             catch { throw new Error("Save the spreadsheet as CSV UTF-8, then try importing it again."); }
-            const proposed = parseFieldFormatCsv(text, fields);
+            const proposed = parseFieldFormatCsv(text, fields, numericFields);
             for (const name of fields) {
                 const current = Object.hasOwn(formats, name) ? formats[name] : undefined;
                 const replacement = Object.hasOwn(proposed, name) ? proposed[name] : undefined;
@@ -125,9 +126,10 @@ export class VectorFeatureFieldDisplay {
                 heading.setAttribute("scope", "row");
                 heading.textContent = name;
                 row.append(heading);
-                for (const format of [current, replacement]) {
+                for (const text of [current?.displayName ?? name, replacement?.displayName ?? name,
+                    this.formatValue(value, current), this.formatValue(value, replacement)]) {
                     const cell = this.document.createElement("td");
-                    cell.textContent = this.formatValue(value, format);
+                    cell.textContent = text;
                     row.append(cell);
                 }
                 this.rows.append(row);

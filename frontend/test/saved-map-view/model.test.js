@@ -39,7 +39,8 @@ test("version five shares drawing view definitions with the server without copyi
 test("saved maps round-trip calculated vectors and raster uploads without values or credentials", () => {
   const fields = [{version: 1, name: "Density", expression: "'Population' / 'Area km2'", numericText: false}];
   const presentation = {isCustom: true, visible: true, opacity: 1, calculatedFields: fields,
-    fieldFormats: {Density: {format: "number", decimals: 1, unit: "people/km²"}},
+    fieldFormats: {Density: {displayName: "Population density", format: "number", decimals: 1, unit: "people/km²"},
+      name: {displayName: "Site name"}},
     style: {kind: "vector", definition: {graduated: {field: "Density"}}},
     filter: {enabled: true, match: "all", rules: [{field: "Density", operator: "gt", value: 2}]}};
   const view = createSavedMapView({...savedMapCandidate(), layers: [
@@ -57,6 +58,12 @@ test("saved maps round-trip calculated vectors and raster uploads without values
     value => { value.layers[1].runArtifact.path = "private/file.gpkg"; },
     value => { value.layers[0].fieldFormats.Density.decimals = -1; },
     value => { value.layers[0].fieldFormats.Density.currency = "USD"; },
+    ...[null, "", " ", " Site name ", "line\nbreak", "tab\tname", "x".repeat(161), 123]
+      .map(displayName => value => { value.layers[0].fieldFormats.name.displayName = displayName; }),
+    value => { value.layers[0].fieldFormats.name.format = null; },
+    value => { value.layers[0].fieldFormats.name.decimals = 2; },
+    value => { value.layers[0].fieldFormats.name.unit = "ha"; },
+    value => { value.layers[0].fieldFormats.name = {}; },
     value => { value.layers[1].fieldFormats.Density.unit = null; },
     value => { value.layers[2].fieldFormats = null; },
     value => { value.layers[3].fieldFormats = {cost: {format: "currency", currency: "USD"}}; },

@@ -2109,20 +2109,22 @@ async function initializeCatalog(
             });
     }
     /**
-     * Provide the selected vector view's numeric fields and remember changes to their display.
+     * Provide the selected vector view's fields and remember inspector label and format changes.
      * @param {string} key Opaque identity of the inspected map layer view.
      * @return {import("./vector/feature-field-display.js").FeatureFieldDisplay|null} Settings for a current vector view.
      */
     function describeFeatureFieldDisplay(key) {
         const record = mapLayerController.getRecord(key);
         if (record?.adapter !== vectorMapLayerAdapter || !record.entry.visible) return null;
-        const fields = record.adapter.describeSource(record).numericFields.map(({name}) => name);
-        const numericNames = new Set(fields);
+        const source = record.adapter.describeSource(record);
+        const fields = source.fields.map(({name}) => name);
+        const numericFields = source.numericFields.map(({name}) => name);
+        const fieldNames = new Set(fields);
         const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
-            .filter(([field]) => numericNames.has(field)));
-        return {fields, formats, apply: fieldFormats => {
+            .filter(([field]) => fieldNames.has(field)));
+        return {fields, numericFields, formats, apply: fieldFormats => {
             if (mapLayerController.getRecord(key) !== record || !record.entry.visible) return false;
-            const currentFields = new Set(record.adapter.describeSource(record).numericFields.map(({name}) => name));
+            const currentFields = new Set(record.adapter.describeSource(record).fields.map(({name}) => name));
             if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
             record.fieldFormats = fieldFormats;
             savedMapViewController.scheduleRemember();

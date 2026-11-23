@@ -139,7 +139,7 @@ function vectorBoundsContainPosition(bbox, position) {
  * Format an arbitrary property for the inspector, using the layer's optional numeric display.
  *
  * @param {*} value GeoJSON property value.
- * @param {import("../feature-field-formats.js").FeatureFieldFormat} [format] Display settings for a numeric field.
+ * @param {import("../feature-field-formats.js").FeatureFieldFormat} [format] Inspector settings; a label alone preserves default display.
  * @return {string} Safe text capped at the presentation limit.
  */
 export function formatVectorFeatureAttribute(value, format) {
@@ -150,7 +150,7 @@ export function formatVectorFeatureAttribute(value, format) {
     if (typeof value === "boolean") {
         return value ? "True" : "False";
     }
-    if (format && Number.isFinite(value)) {
+    if (format?.format && Number.isFinite(value)) {
         /** @type {Intl.NumberFormatOptions} */
         const options = {};
         if (format.format === "currency") {
@@ -180,11 +180,11 @@ export function formatVectorFeatureAttribute(value, format) {
 }
 
 /**
- * Return user-facing properties while excluding geometry metadata.
+ * Return inspector labels and formatted values without changing source properties or including geometry metadata.
  *
  * @param {Object} feature Validated GeoJSON Feature.
  * @param {string|null} primaryGeometry Catalog-declared geometry field.
- * @param {import("../feature-field-formats.js").FeatureFieldFormats} [formats] Numeric display settings for this view.
+ * @param {import("../feature-field-formats.js").FeatureFieldFormats} [formats] Labels and numeric display settings for this view.
  * @return {{name:string,value:string}[]} Bounded display attributes.
  */
 export function vectorFeatureAttributes(feature, primaryGeometry = null, formats = DEFAULT_FIELD_FORMATS) {
@@ -194,10 +194,10 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null, formats
     );
     const attributes = Object.entries(feature.properties)
         .filter(([name]) => !geometryNames.has(name))
-        .map(([name, value]) => ({
-            name,
-            value: formatVectorFeatureAttribute(value, Object.hasOwn(formats, name) ? formats[name] : undefined),
-        }));
+        .map(([name, value]) => {
+            const format = Object.hasOwn(formats, name) ? formats[name] : undefined;
+            return {name: format?.displayName ?? name, value: formatVectorFeatureAttribute(value, format)};
+        });
     if (typeof feature.id === "string" || typeof feature.id === "number") {
         attributes.unshift({
             name: "Feature ID",

@@ -134,16 +134,27 @@ class MapVectorStyle(MapDocumentPart):
 
 
 class MapFeatureFieldFormat(MapDocumentPart):
-    """Set how the Feature inspector displays one numeric field in a vector view.
+    """Set a vector field's inspector label and optional numeric display.
 
     Attributes:
-        format: Number or currency display.
+        displayName: Trimmed label of at most 160 characters on one line.
+            Omit to use the original field name.
+        format: Number or currency display. Omit to keep the default value display.
         decimals: Exact decimal places, or the format's default precision when omitted.
         unit: Text to append to the formatted value.
         currency: Three-letter currency code, required for currency display.
     """
 
-    format: Literal["number", "currency"]
+    displayName: (
+        Annotated[
+            str,
+            StringConstraints(
+                min_length=1, max_length=160, pattern=r"^[^\x00-\x1f\x7f]+$"
+            ),
+        ]
+        | None
+    ) = None
+    format: Literal["number", "currency"] | None = None
     decimals: Annotated[int, Field(ge=0, le=20)] | None = None
     unit: (
         Annotated[
@@ -155,17 +166,27 @@ class MapFeatureFieldFormat(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_display_options(self) -> Self:
-        """Require a currency code for currency display and omit unused options.
+        """Validate optional labels and require a format for numeric display options.
 
         Returns:
-            This format with the options used to display the original number.
+            This field's label and options for displaying the original value.
         Raises:
-            ValueError: If an optional setting is null, a unit is blank, or the
-                currency code is missing or supplied for plain number display.
+            ValueError: If settings are empty, null, untrimmed, or combine numeric
+                display options without the required number or currency format.
         """
-        for name in self.model_fields_set & {"decimals", "unit", "currency"}:
+        for name in self.model_fields_set:
             if getattr(self, name) is None:
                 raise ValueError("Omit unused field display options.")
+        if (
+            self.displayName is not None
+            and self.displayName != self.displayName.strip()
+        ):
+            raise ValueError("A field display name must contain trimmed text.")
+        if self.format is None:
+            if self.displayName is None:
+                raise ValueError("Provide a display name or number format.")
+            if self.model_fields_set & {"decimals", "unit", "currency"}:
+                raise ValueError("Numeric display options require a number format.")
         if self.unit is not None and self.unit != self.unit.strip():
             raise ValueError("A field display unit must contain trimmed text.")
         if (self.format == "currency") != (self.currency is not None):
@@ -183,8 +204,8 @@ class MapStyledLayer(MapDocumentPart):
     When omitted, the browser uses the source owner's ordinary presentation.
     calculatedFields preserves ordered numeric definitions independently of style;
     source access and field bindings are revalidated before restoring the view.
-    fieldFormats stores Feature inspector settings by exact numeric field name
-    for vector views with custom display.
+    fieldFormats stores Feature inspector labels and formats by exact source
+    field name for vector views with custom display.
     """
 
     customName: Title | None = None

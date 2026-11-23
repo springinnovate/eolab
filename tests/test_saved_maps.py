@@ -70,8 +70,14 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
         "opacity": 1,
         "calculatedFields": fields,
         "fieldFormats": {
-            "Density": {"format": "number", "decimals": 1, "unit": "people/km²"},
+            "Density": {
+                "displayName": "Population density",
+                "format": "number",
+                "decimals": 1,
+                "unit": "people/km²",
+            },
             "Annual cost": {"format": "currency", "currency": "USD", "decimals": 0},
+            "name": {"displayName": "Site name"},
         },
         "style": {"kind": "vector", "definition": {"graduated": {"field": "Density"}}},
         "filter": {
@@ -127,6 +133,18 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
         {"cost": {"format": "currency", "currency": "$"}},
         {"cost": {"format": "number", "currency": "USD"}},
         {"cost": {"format": "currency", "currency": "USD", "example": 4000}},
+        {"name": {"displayName": None}},
+        {"name": {"displayName": ""}},
+        {"name": {"displayName": " "}},
+        {"name": {"displayName": " Site name "}},
+        {"name": {"displayName": "line\nbreak"}},
+        {"name": {"displayName": "tab\tname"}},
+        {"name": {"displayName": "x" * 161}},
+        {"name": {"displayName": 123}},
+        {"name": {"displayName": "Site name", "format": None}},
+        {"area": {"displayName": "Area", "decimals": 2}},
+        {"area": {"displayName": "Area", "unit": "ha"}},
+        {"name": {}},
     ],
 )
 def test_invalid_feature_field_formats(formats: Any) -> None:

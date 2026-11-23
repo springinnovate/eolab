@@ -38,7 +38,7 @@ test("renaming a layer updates inspected feature labels without another query", 
  * @param {Object} [options] Test clock options.
  * @param {function():number} [options.now] Monotonic test clock.
  * @param {(key:string)=>import("../../src/vector/feature-field-display.js").FeatureFieldDisplay|null}
- * [options.getFieldDisplay] Current view's numeric fields and display settings.
+ * [options.getFieldDisplay] Current view's fields and display settings.
  * @return {Object} Inspector, map, targets, and recorded UI changes.
  */
 function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = () => null } = {}) {
@@ -176,11 +176,12 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
   };
 }
 
-test("the Feature inspector previews actual values before formatting the selected view", async () => {
-  const fixtureValues = {area_ha: 1234.56, annual_cost: -18450, count: 0, missing: null, code: "001"};
+test("the Feature inspector previews names and actual values before formatting the selected view", async () => {
+  const fixtureValues = {area_ha: 1234.56, annual_cost: -18450, count: 0, missing: null, code: "001", ratio: 1.23456789};
   let reads = 0;
   let formats = {};
-  const fields = ["area_ha", "annual_cost", "count", "missing"];
+  const fields = Object.keys(fixtureValues);
+  const numericFields = fields.filter(name => name !== "code");
   const h = createFixture(async () => {
     reads += 1;
     return {ok: true, json: async () => ({type: "FeatureCollection", features: [
@@ -189,18 +190,20 @@ test("the Feature inspector previews actual values before formatting the selecte
     ]})};
   }, {getFieldDisplay: key => {
     assert.equal(key, "catalog|parcels");
-    return {fields, formats, apply: next => { formats = next; return true; }};
+    return {fields, numericFields, formats, apply: next => { formats = next; return true; }};
   }});
   const control = selector => h.documentContext.querySelector(selector);
   const attributeValues = () => control("#vector-feature-attributes").children
     .filter(element => element.tagName === "dd").map(element => element.textContent);
+  const attributeNames = () => control("#vector-feature-attributes").children
+    .filter(element => element.tagName === "dt").map(element => element.textContent);
   const file = control("#import-vector-field-formats");
   const rows = control("#vector-field-format-rows");
   const apply = control("#apply-vector-field-formats");
   const status = control("#vector-field-format-status");
   const area = new Intl.NumberFormat(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1}).format(1234.56) + " ha";
   const cost = new Intl.NumberFormat(undefined, {style: "currency", currency: "USD"}).format(-18450);
-  const input = "field,format,decimals,unit,currency\narea_ha,number,1,ha,\nannual_cost,currency,,,USD\ncount,number,0,sites,\nmissing,number,1,ha,";
+  const input = "field,display_name,format,decimals,unit,currency\narea_ha,Habitat area,number,1,ha,\nannual_cost,Annual cost,currency,,,USD\ncount,,number,0,sites,\nmissing,,number,1,ha,\ncode,<b>Site code</b>,,,,\nratio,Ratio,,,,";
   await h.controller.inspect(inspectionEvent(12, 24));
   assert.equal(control("#vector-feature-field-display").hidden, false);
   assert.ok(attributeValues().includes("1234.56"));
@@ -208,22 +211,42 @@ test("the Feature inspector previews actual values before formatting the selecte
   file.dispatchEvent(new Event("change"));
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(rows.children.map(row => row.children.map(cell => cell.textContent)), [
-    ["area_ha", "1234.56", area],
-    ["annual_cost", "-18450", cost],
-    ["count", "0", "0 sites"],
-    ["missing", "No value", "No value"],
+    ["area_ha", "area_ha", "Habitat area", "1234.56", area],
+    ["annual_cost", "annual_cost", "Annual cost", "-18450", cost],
+    ["count", "count", "count", "0", "0 sites"],
+    ["missing", "missing", "missing", "No value", "No value"],
+    ["code", "code", "<b>Site code</b>", "001", "001"],
+    ["ratio", "ratio", "Ratio", "1.23456789", "1.23456789"],
   ]);
   assert.deepEqual(formats, {});
   assert.ok(attributeValues().includes("1234.56"));
+  assert.deepEqual(attributeNames().slice(1), fields);
 
   apply.dispatchEvent(new Event("click"));
-  assert.deepEqual(attributeValues().slice(1), [area, cost, "0 sites", "No value", "001"]);
+  assert.deepEqual(attributeValues().slice(1), [area, cost, "0 sites", "No value", "001", "1.23456789"]);
+  assert.deepEqual(attributeNames().slice(1), ["Habitat area", "Annual cost", "count", "missing", "<b>Site code</b>", "Ratio"]);
   assert.equal(status.textContent, "Field formats applied.");
   assert.equal(reads, 1);
   const observed = h.currentObservationChanges.at(-1);
   assert.equal(observed.properties.area_ha, 1234.56);
   assert.equal(observed.properties.annual_cost, -18450);
   assert.equal(observed.properties.count, 0);
+  assert.deepEqual(observed.properties, fixtureValues);
+
+  file.files = [new File(["field,display_name,format,decimals,unit,currency\narea_ha,,number,1,ha,"], "reset-names.csv")];
+  file.dispatchEvent(new Event("change"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(rows.children[0].children.map(cell => cell.textContent),
+    ["area_ha", "Habitat area", "area_ha", area, area]);
+  control("#cancel-vector-field-formats").dispatchEvent(new Event("click"));
+  assert.equal(attributeNames()[1], "Habitat area");
+  file.files = [new File(["field,display_name,format,decimals,unit,currency\narea_ha,,number,1,ha,"], "reset-names.csv")];
+  file.dispatchEvent(new Event("change"));
+  await new Promise(resolve => setImmediate(resolve));
+  apply.dispatchEvent(new Event("click"));
+  assert.deepEqual(attributeNames().slice(1), fields);
+  assert.equal(attributeValues()[1], area);
+  assert.deepEqual(formats, {area_ha: {format: "number", decimals: 1, unit: "ha"}});
 
   const pending = Promise.withResolvers();
   file.files = [{size: input.length, arrayBuffer: () => pending.promise}];

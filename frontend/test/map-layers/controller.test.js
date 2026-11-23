@@ -151,7 +151,7 @@ test("a saved local source replaces the duplicate at its existing key, order and
     controller.restoreStagedLayer(copy, 1);
     controller.setLegendIncluded(copyKey, false);
     const before = controller.getRecord(copyKey);
-    const fieldFormats = Object.freeze({area_ha: Object.freeze({format: "number", unit: "ha"})});
+    const fieldFormats = Object.freeze({area_ha: Object.freeze({displayName: "Habitat area", format: "number", unit: "ha"})});
     before.fieldFormats = fieldFormats;
     const original = controller.getRecord(key);
     const staged = controller.stageLocal({
@@ -940,7 +940,7 @@ test("Add another view restores copied presentation through its owner without re
     await controller.show(catalogItem("source"), adapter);
     const first = controller.retainedRecords[0];
     first.state.color = "blue";
-    const fieldFormats = Object.freeze({area: Object.freeze({format: "number", unit: "ha"})});
+    const fieldFormats = Object.freeze({area: Object.freeze({displayName: "Habitat area", format: "number", unit: "ha"})});
     first.fieldFormats = fieldFormats;
     controller.renameLayer(first.entry.key, "Blue view");
     controller.setVisible(first.entry.key, false);

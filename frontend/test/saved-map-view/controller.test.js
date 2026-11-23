@@ -75,8 +75,9 @@ test("additive Catalog restore preserves existing map, strict settings and detac
 
 test("saved vector views of one source restore and export independent inspector formats", async () => {
   const f = additiveCatalogFixture();
-  const primary = {...f.definition, fieldFormats: {Scaled: {format: "number", decimals: 1, unit: "ha"}}};
-  const comparison = {...f.definition, fieldFormats: {Scaled: {format: "currency", currency: "USD"}}};
+  const primary = {...f.definition, fieldFormats: {Scaled: {displayName: "Habitat area", format: "number", decimals: 1, unit: "ha"},
+    name: {displayName: "Site name"}}};
+  const comparison = {...f.definition, fieldFormats: {Scaled: {displayName: "Annual cost", format: "currency", currency: "USD"}}};
   const results = await f.controller.restoreLayers([primary, comparison], () => true);
   assert.ok(results.every(({error}) => error === null));
   assert.notEqual(results[0].key, results[1].key);
@@ -1580,7 +1581,8 @@ test("upload references survive autosave and links with their field formats, app
     visible: false, isCustom: true, opacity: 0.4, legendIncluded: false,
     style: { kind: "vector", definition: { fillColor: "#123456" } },
     filter: { enabled: true, match: "all", rules: [{ field: "label", operator: "eq", value: "Café wetlands" }] } };
-  const fieldFormats = {wetland_area: {format: "number", decimals: 2, unit: "ha"}};
+  const fieldFormats = {wetland_area: {displayName: "Wetland area", format: "number", decimals: 2, unit: "ha"},
+    name: {displayName: "Site name"}};
   const record = { fieldFormats, entry: { item: null, isCustom: true, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
   const storage = createStorage(), view = createView(), timers = createTimers();
   const saved = emptySavedMap(10, 20, 6);
