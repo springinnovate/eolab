@@ -515,20 +515,37 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Hide inspection, cancel work, clear results and history, and optionally focus the map.
+     * Hide feature details while retaining the completed selection for plots and history.
+     * Cancel an unfinished replacement and restore the last completed selection.
      *
      * @param {Object} [options] Close options.
      * @param {boolean} [options.moveFocus=false] Restore focus to the map.
      * @return {void}
      */
     close({ moveFocus = false } = {}) {
+        const pending = this.abortController !== null;
+        this.#cancelInspection();
+        if (pending) {
+            if (this.#selectionHistoryIndex >= 0) this.#restoreSelection(this.#selectionHistoryIndex);
+            else {
+                this.clearResults();
+                this.#publishSample("empty", [], "Feature inspection cancelled.");
+            }
+        }
+        this.onInspectionChange(false);
+        if (moveFocus) this.mapContainer.focus();
+    }
+
+    /** Clear selected features, plots and history, and cancel any unfinished replacement.
+     * @return {void}
+     */
+    clearSelection() {
         this.#cancelInspection();
         this.#clearSelectionHistory();
         this.clearResults();
-        this.#publishSelectionNavigation();
-        this.status.textContent = "Click the map to inspect visible vector features.";
-        this.onInspectionChange(false);
-        if (moveFocus) this.mapContainer.focus();
+        this.sampleTargetSignature = null;
+        this.status.textContent = "Selection cleared. Use Picker or Lasso to select features.";
+        this.#publishSample("empty", [], this.status.textContent);
     }
 
     /** Whether the map may start another feature inspection. */
@@ -1046,6 +1063,7 @@ export class VectorFeatureInspectorController {
      * @return {void}
      */
     destroy() {
+        this.clearSelection();
         this.close();
         this.closeButton.removeEventListener("click", this.onClose);
         this.featureProfileButton.removeEventListener(

@@ -341,6 +341,11 @@ test("the inspector heading follows returned IDs and clears with the results", a
 
   h.documentContext.querySelector("#close-vector-inspector")
     .dispatchEvent(new Event("click"));
+  assert.equal(heading.textContent, "Feature inspector (FID 0)", "Closing details retains the selection used by plots");
+  assert.equal(h.controller.results.length, 3);
+  h.controller.showResult(0);
+  assert.equal(h.currentObservationChanges.at(-1).featureId, qualifiedId);
+  h.controller.clearSelection();
   assert.equal(heading.textContent, "Feature inspector");
   assert.equal(heading.title, heading.textContent);
   h.controller.destroy();
