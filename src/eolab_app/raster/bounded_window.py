@@ -41,10 +41,6 @@ class NoRasterBoundsOverlapError(ValueError):
     """Raised when a selected WGS 84 area misses a raster source grid."""
 
 
-class ProjectionSeamError(ValueError):
-    """A ring crosses a cut that cannot be represented as one projected polygon."""
-
-
 @lru_cache(maxsize=8)
 def _grid_transformer(source: CRS, target: CRS, *, unwrap: bool) -> Transformer:
     """Return the reusable PROJ operation for this CRS pair and longitude mode."""
@@ -57,63 +53,33 @@ def _grid_transformer(source: CRS, target: CRS, *, unwrap: bool) -> Transformer:
 
 
 def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions:
-    """Return a projector for probing one connected boundary ring.
+    """Return the PROJ operation used to refine a boundary in the target grid.
 
     Geographic targets use continuous longitudes for edge refinement. Their
-    final geometry can then be split at the antimeridian by GDAL. For projected
-    targets, reject a longitude branch change only when unwrapping shortens
-    the target displacement. A cut in the inverse source projection instead
-    makes the unwrapped displacement longer while the normal target remains
-    continuous. A chord across a target cut could rasterize the wrong area.
+    final geometry can then be split at the antimeridian by GDAL. Projected
+    targets use their normal coordinate domain; the boundary refinement checks
+    continuity so a cut cannot become a chord through the wrong area.
 
     Args:
         source: CRS in which the original boundary edges are defined.
         target: CRS of the calculation grid.
 
     Returns:
-        Batch callback returning target positions for one ring. Use a separate
-        callback for each ring so disconnected regions can use different branches.
+        Batch callback returning target positions for boundary accuracy tests.
 
     Raises:
         ValueError: If a coordinate operation cannot be created or evaluated.
-        ProjectionSeamError: From the callback if a projected ring crosses a cut.
     """
     source_crs = CRS.from_user_input(source)
-    unwrapped = _grid_transformer(source_crs, target, unwrap=True)
-    normalized = (
-        None
-        if target.is_geographic
-        else _grid_transformer(source_crs, target, unwrap=False)
-    )
-    previous: tuple[Position, Position, bool] | None = None
+    transformer = _grid_transformer(source_crs, target, unwrap=target.is_geographic)
 
     def project(positions: tuple[Position, ...]) -> tuple[Position, ...]:
-        """Project boundary probes and check the ring's longitude branch."""
-        nonlocal previous
+        """Project boundary probes through the target coordinate domain."""
         xs, ys = zip(*positions, strict=True)
         try:
-            if normalized is None:
-                x, y = unwrapped.transform(xs, ys, errcheck=True)
-                return tuple(zip(x, y, strict=True))
-            x, y = normalized.transform(xs, ys, errcheck=True)
-            over_x, over_y = unwrapped.transform(xs, ys)
+            x, y = transformer.transform(xs, ys, errcheck=True)
         except ProjError as error:
             raise ValueError("Selection could not be projected") from error
-        for a, b, c, d in zip(x, y, over_x, over_y, strict=True):
-            position, over_position = (a, b), (c, d)
-            wrapped = not (
-                math.isclose(a, c, rel_tol=1e-12, abs_tol=1e-9)
-                and math.isclose(b, d, rel_tol=1e-12, abs_tol=1e-9)
-            )
-            if previous is not None:
-                prior_position, prior_over_position, prior_wrapped = previous
-                if wrapped != prior_wrapped and math.dist(
-                    position, prior_position
-                ) > math.dist(over_position, prior_over_position):
-                    raise ProjectionSeamError(
-                        "Selection crosses a cut in the projection"
-                    )
-            previous = (position, over_position, wrapped)
         return tuple(zip(x, y, strict=True))
 
     return project
@@ -530,6 +496,7 @@ def _refine_polygon_rings(
             project_pixels,
             maximum_error_pixels=POLYGON_BOUNDARY_MAXIMUM_ERROR_PIXELS,
             maximum_coordinates=remaining_coordinates,
+            check_continuity=target_crs.is_projected,
         )
         refined.append(boundary)
         if remaining_coordinates is not None:
@@ -737,7 +704,7 @@ def project_polygons_to_crs(
 
     Raises:
         ValueError: If coordinates cannot be projected or exceed the ceiling.
-        ProjectionSeamError: If a ring crosses a cut in a projected output grid.
+        BoundaryConvergenceError: If a projected boundary cannot meet the accuracy.
         TypeError: If the geometry violates the polygon input contract.
     """
     geometry_ring_groups: list[

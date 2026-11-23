@@ -160,12 +160,14 @@ def interpolate_great_circle(
 class SamplingBoxCoordinateLimitError(ValueError):
     """A box's projected boundary needs more coordinates than its caller permits."""
 
+
 def tessellate_sampling_box(
     box: Wgs84SamplingBox,
     project_positions: BoxProjection,
     *,
     maximum_error_pixels: float = 0.25,
     maximum_coordinates: int | None = None,
+    check_continuity: bool = False,
 ) -> tuple[GeographicPosition, ...]:
     """Approximate box edges to the requested accuracy on a caller's pixel grid.
 
@@ -187,6 +189,8 @@ def tessellate_sampling_box(
         maximum_error_pixels: Positive finite maximum tested chord deviation.
         maximum_coordinates: Caller-owned capacity for unique transformed
             positions, including accuracy probes. None permits unlimited work.
+        check_continuity: Require continuous target coordinates as well as
+            bounded chord error, rejecting cuts inside a projected grid.
 
     Returns:
         Closed longitude/latitude ring approximating the four great-circle arcs.
@@ -204,6 +208,7 @@ def tessellate_sampling_box(
             maximum_error_pixels=maximum_error_pixels,
             maximum_coordinates=maximum_coordinates,
             interpolate=interpolate_great_circle,
+            check_continuity=check_continuity,
         )
     except BoundaryCoordinateLimitError as error:
         raise SamplingBoxCoordinateLimitError(

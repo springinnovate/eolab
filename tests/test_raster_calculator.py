@@ -500,28 +500,50 @@ def test_calculator_reports_a_cut_inside_the_output_projection(
             assert result.valid_pixels == 2
 
 
-@pytest.mark.parametrize("longitude", [135, 180])
+@pytest.mark.parametrize(
+    "polar_epsg,longitude,latitude,half_width,pixel_size",
+    [
+        (3413, 135, 70, 1000, (500, 500)),
+        (3413, 180, 70, 1000, (500, 500)),
+        (3031, 180, -70, 10, (100187.45, 1000)),
+    ],
+)
 def test_polar_selection_distinguishes_source_and_target_cuts(
-    tmp_path: Path, longitude: int
+    tmp_path: Path,
+    polar_epsg: int,
+    longitude: int,
+    latitude: int,
+    half_width: int,
+    pixel_size: tuple[float, float],
 ) -> None:
     """Accept a continuous target footprint while still rejecting a real target cut.
 
     Args:
         tmp_path: Polar vector, Mercator reference and calculator output directory.
+        polar_epsg: Native polar projection, including a coincident inverse cut.
         longitude: A source inverse cut or the actual Mercator longitude cut.
+        latitude: Center of the selection in the appropriate hemisphere.
+        half_width: Native selection half-width in meters.
+        pixel_size: Output cell sizes, including a wide anisotropic grid.
     """
-    x, y = Transformer.from_crs(4326, 3413, always_xy=True).transform(longitude, 70)
-    native_bounds = (x - 1000, y - 1000, x + 1000, y + 1000)
+    x, y = Transformer.from_crs(4326, polar_epsg, always_xy=True).transform(
+        longitude, latitude
+    )
+    if polar_epsg == 3031:
+        x = 0
+    native_bounds = (x - half_width, y - 1000, x + half_width, y + 1000)
     area = write_selection(
-        tmp_path / "polar.gpkg", [mapping(box(*native_bounds))], crs="EPSG:3413"
+        tmp_path / "polar.gpkg",
+        [mapping(box(*native_bounds))],
+        crs=f"EPSG:{polar_epsg}",
     )
     center_x, center_y = Transformer.from_crs(4326, 3857, always_xy=True).transform(
-        longitude, 70
+        longitude, latitude
     )
     source = write_source(
         tmp_path / "source.tif",
         np.full((16, 16), 7, dtype="uint8"),
-        transform=from_origin(center_x - 4000, center_y + 4000, 500, 500),
+        transform=from_origin(center_x - 4000, center_y + 4000, *pixel_size),
         crs="EPSG:3857",
     )
     request = RasterCalculatorRequest(

@@ -16,6 +16,10 @@ class BoundaryCoordinateLimitError(ValueError):
     """The projected boundary needs more coordinates than the caller permits."""
 
 
+class BoundaryConvergenceError(ValueError):
+    """Floating-point subdivision cannot meet the boundary accuracy."""
+
+
 def _interpolate_segment(start: Position, end: Position, fraction: float) -> Position:
     """Locate a fraction of a straight edge in its original coordinate system."""
     if fraction == 0:
@@ -56,6 +60,7 @@ def tessellate_projected_ring(
     maximum_error_pixels: float,
     maximum_coordinates: int | None = None,
     interpolate: InterpolatePosition = _interpolate_segment,
+    check_continuity: bool = False,
 ) -> tuple[Position, ...]:
     """Add source positions until the projected ring meets the chord tolerance.
 
@@ -72,13 +77,17 @@ def tessellate_projected_ring(
         maximum_coordinates: Capacity for unique source positions, including
             probes, or None for caller-supervised unlimited work.
         interpolate: Locate a position on an original edge by fraction.
+        check_continuity: Compare probes with the same fractional positions on
+            the target chord. Use when the target must be continuous; a jump
+            along a straight line can otherwise pass the chord-distance test.
 
     Returns:
         Closed ring in the source CRS including the accepted interior probes.
 
     Raises:
         BoundaryCoordinateLimitError: If accuracy needs more coordinates than allowed.
-        ValueError: If projection is nonfinite or subdivision does not converge.
+        BoundaryConvergenceError: If subdivision does not converge.
+        ValueError: If projection is nonfinite or the tolerance is invalid.
     """
     if not math.isfinite(maximum_error_pixels) or maximum_error_pixels <= 0:
         raise ValueError("Boundary accuracy must be a positive finite pixel value")
@@ -120,8 +129,18 @@ def tessellate_projected_ring(
         for (edge, start, stop), positions in zip(pending, probes, strict=True):
             first, last = projected[positions[0]], projected[positions[-1]]
             error = max(
-                _distance_to_segment(projected[point], first, last)
-                for point in positions[1:-1]
+                (
+                    math.dist(
+                        projected[point],
+                        tuple(
+                            a + (b - a) * step / 4
+                            for a, b in zip(first, last, strict=True)
+                        ),
+                    )
+                    if check_continuity
+                    else _distance_to_segment(projected[point], first, last)
+                )
+                for step, point in enumerate(positions[1:-1], start=1)
             )
             if error <= maximum_error_pixels:
                 accepted.extend(
@@ -131,7 +150,7 @@ def tessellate_projected_ring(
                 continue
             middle = (start + stop) / 2
             if middle == start or middle == stop:
-                raise ValueError("Boundary accuracy did not converge")
+                raise BoundaryConvergenceError("Boundary accuracy did not converge")
             next_pending.extend(((edge, start, middle), (edge, middle, stop)))
         pending = next_pending
     return (ring[0], *(point for _, _, point in sorted(accepted)))

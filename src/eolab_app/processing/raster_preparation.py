@@ -176,7 +176,9 @@ def project_preparation_box(
             projected = project_boundary(positions)
         return tuple((a / pixel_size[0], b / pixel_size[1]) for a, b in projected)
 
-    ring = tessellate_sampling_box(box, project_pixels)
+    ring = tessellate_sampling_box(
+        box, project_pixels, check_continuity=seam_aware and crs.is_projected
+    )
     if seam_aware and crs.is_geographic:
         return project_geographic_polygons(
             "EPSG:4326", crs, ({"type": "Polygon", "coordinates": [ring]},)
