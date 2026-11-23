@@ -290,6 +290,8 @@ def run_suite(image: str, *, inject_failure: bool = False) -> int:
             "OPENBLAS_NUM_THREADS=1",
             "--env",
             "OMP_NUM_THREADS=2",
+            "--env",
+            "NUMBA_CACHE_DIR=/tmp/eolab-numba-cache",
             "--cap-drop",
             "ALL",
             "--security-opt",
