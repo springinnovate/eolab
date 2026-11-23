@@ -218,6 +218,8 @@ def polygon_records(
     filter, projection, cancellation and per-feature work limits. The caller
     owns validation of the selected attributes' domain meaning. A supervised
     caller can supply its own finite time budget; ordinary reads keep the default.
+    Custom projectors receive valid original topology before they transform or
+    merge polygon parts. Their output is validated after native projection.
     Filtered GeoPackages scan attributes first and fetch geometry by the native
     feature ID only for matches. Other drivers keep sequential geometry reads;
     GeoPackage's indexed feature lookup avoids making those reads quadratic.
@@ -245,6 +247,7 @@ def polygon_records(
         GeometryValidationError: If a requested field is missing or geometry/work limits fail.
         SelectionUnavailableError: If a source component cannot be read.
     """
+
     if timeout_seconds is not None and (
         type(timeout_seconds) not in (int, float)
         or not math.isfinite(timeout_seconds)
@@ -342,6 +345,10 @@ def polygon_records(
                     _validate_native_polygon_coordinates(
                         raw, max_feature_coordinates, validate_wgs84_bounds=False
                     )
+                    if project is not None and not shape(raw).is_valid:
+                        raise GeometryValidationError(
+                            "Sampling requires valid polygons; repair the source first"
+                        )
                     geometry = (
                         project(raw)
                         if project is not None

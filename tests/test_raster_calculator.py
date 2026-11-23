@@ -13,7 +13,7 @@ from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from rasterio.transform import from_bounds, from_origin
 from rasterio.warp import transform_bounds
-from shapely.geometry import box, mapping
+from shapely.geometry import MultiPolygon, Point, Polygon, box, mapping
 
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.models import ProcessingError
@@ -202,6 +202,69 @@ def test_match_grid_preserves_native_polygon_edges(tmp_path: Path) -> None:
     with rasterio.open(tmp_path / "result.tif") as output:
         assert tuple(output.bounds) == extent
         np.testing.assert_array_equal(output.read(1), np.ones((300, 300)))
+
+
+@pytest.mark.parametrize("single_feature", [False, True])
+def test_projected_dateline_parts_preserve_polygon_holes(
+    tmp_path: Path, single_feature: bool
+) -> None:
+    """Keep the same area when dateline parts meet on a continuous output grid.
+
+    Args:
+        tmp_path: Original catalog polygon, raster and calculator output directory.
+        single_feature: Store the parts in one MultiPolygon or as two features.
+    """
+    west = Polygon(
+        box(179.41, 0.24, 180, 1.03).exterior.coords,
+        [box(179.54, 0.43, 179.80, 0.62).exterior.coords],
+    )
+    east = Polygon(
+        box(-180, 0.24, -179.43, 1.03).exterior.coords,
+        [box(-179.82, 0.47, -179.61, 0.65).exterior.coords],
+    )
+    original = MultiPolygon([west, east])
+    assert original.is_valid
+    area = write_selection(
+        tmp_path / "area.gpkg",
+        [mapping(original)] if single_feature else [mapping(west), mapping(east)],
+    )
+    source = write_source(
+        tmp_path / "source.tif",
+        np.ones((2, 360), dtype="uint8"),
+        transform=from_origin(-180, 2, 1, 1),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(
+                kind="custom", crs="EPSG:32660", pixelSize=(9500, 7900)
+            ),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        lon, lat = Transformer.from_crs(32660, 4326, always_xy=True).transform(
+            output.transform.c + columns * output.transform.a,
+            output.transform.f + rows * output.transform.e,
+        )
+        inside = np.array(
+            [
+                original.contains(Point(x, y))
+                for x, y in zip(lon.ravel(), lat.ravel(), strict=True)
+            ]
+        ).reshape(output.shape)
+        assert output.shape == (12, 15)
+        assert result.valid_pixels == inside.sum() == 130
+        np.testing.assert_array_equal(output.read(1), np.where(inside, 1, np.nan))
 
 
 def test_projected_box_refines_edges_at_output_cell_size() -> None:

@@ -13,7 +13,9 @@ from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
+from shapely import union_all
 from shapely.affinity import scale
+from shapely.errors import GEOSException
 from shapely.geometry import mapping, shape
 
 from eolab_app.projected_boundary import (
@@ -716,7 +718,9 @@ def project_polygons_to_crs(
 
     Returns:
         Separate polygon mappings in the requested CRS, preserving holes and
-        all geometry outside any particular source raster's footprint.
+        all geometry outside any particular source raster's footprint. Refined
+        multipart polygons are unioned in projected targets so parts that meet
+        after projection form a valid area.
 
     Raises:
         ValueError: If coordinates cannot be projected or exceed the ceiling.
@@ -788,12 +792,22 @@ def project_polygons_to_crs(
             polygon_rings = projected_rings[ring_index : ring_index + ring_count]
             ring_index += ring_count
             polygons.append(polygon_rings)
-        projected_geometries.append(
-            {
-                "type": geometry_type,
-                "coordinates": polygons[0] if geometry_type == "Polygon" else polygons,
-            }
-        )
+        projected_geometry = {
+            "type": geometry_type,
+            "coordinates": polygons[0] if geometry_type == "Polygon" else polygons,
+        }
+        if (
+            pixel_size is not None
+            and target.is_projected
+            and geometry_type == "MultiPolygon"
+        ):
+            try:
+                projected_geometry = mapping(union_all(shape(projected_geometry).geoms))
+            except GEOSException as error:
+                raise ValueError(
+                    "Projected polygon parts could not be joined"
+                ) from error
+        projected_geometries.append(projected_geometry)
 
     if split_at_dateline:
         return project_geographic_polygons(
