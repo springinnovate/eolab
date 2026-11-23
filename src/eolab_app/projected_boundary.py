@@ -61,6 +61,8 @@ def tessellate_projected_ring(
 
     Test each chord at quarter, midpoint and three-quarter positions. Project
     probes in batches, then bisect segments that exceed the pixel tolerance.
+    Retain the accepted probes so a later longitude-wrapping transform can
+    distinguish a long continuous edge from a short crossing of its seam.
 
     Args:
         ring: Closed ring in its original coordinate system.
@@ -72,7 +74,7 @@ def tessellate_projected_ring(
         interpolate: Locate a position on an original edge by fraction.
 
     Returns:
-        Closed ring in the source CRS with additional edge positions.
+        Closed ring in the source CRS including the accepted interior probes.
 
     Raises:
         BoundaryCoordinateLimitError: If accuracy needs more coordinates than allowed.
@@ -122,7 +124,10 @@ def tessellate_projected_ring(
                 for point in positions[1:-1]
             )
             if error <= maximum_error_pixels:
-                accepted.append((edge, stop, positions[-1]))
+                accepted.extend(
+                    (edge, start + (stop - start) * step / 4, position)
+                    for step, position in enumerate(positions[1:], start=1)
+                )
                 continue
             middle = (start + stop) / 2
             if middle == start or middle == stop:

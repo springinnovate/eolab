@@ -752,6 +752,66 @@ def test_warp_uses_native_neighbours_across_greenwich(
         np.testing.assert_array_equal(output.read(1), [[179.5], [179.5]])
 
 
+@pytest.mark.parametrize("epsg", [4269, 4979])
+@pytest.mark.parametrize("area_kind", ["bounds", "mercator"])
+def test_geographic_projection_preserves_wide_bounds(
+    tmp_path: Path, epsg: int, area_kind: str
+) -> None:
+    """Keep a wide nonwrapping selection instead of its narrow dateline complement.
+
+    Args:
+        tmp_path: Source raster and calculator output directory.
+        epsg: Geographic target distinct from the source's two-dimensional WGS84.
+        area_kind: WGS84 bounds or the same straight-edged area in Web Mercator.
+    """
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(np.arange(1, 361, dtype="int16"), (8, 1)),
+        transform=from_origin(-180, 4, 1, 1),
+    )
+    selected_bounds = Wgs84Bounds(west=-179, south=-1.99, east=179, north=2.99)
+    area = (
+        None
+        if area_kind == "bounds"
+        else write_selection(
+            tmp_path / "area.gpkg",
+            [
+                mapping(
+                    box(
+                        *transform_bounds(
+                            "EPSG:4326", "EPSG:3857", *selected_bounds.canonical_tuple()
+                        )
+                    )
+                )
+            ],
+            crs="EPSG:3857",
+        )
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(kind="custom", crs=f"EPSG:{epsg}", pixelSize=(1, 1)),
+        ),
+        selectedBounds=selected_bounds if area is None else None,
+        catalogSelection=area.selection if area is not None else None,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    assert result.valid_pixels == 1790
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert output.transform == from_origin(-179, 3, 1, 1)
+        assert output.crs == CRS.from_epsg(epsg)
+        np.testing.assert_array_equal(
+            output.read(1), np.tile(np.arange(2, 360), (5, 1))
+        )
+
+
 def test_custom_grid_accepts_equivalent_crs_in_published_tiff(tmp_path: Path) -> None:
     """Publish a NAD83 grid after GDAL normalizes its stored CRS definition."""
     source = write_source(
