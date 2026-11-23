@@ -16,7 +16,7 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.transform import array_bounds
-from rasterio.warp import transform, transform_geom
+from rasterio.warp import transform
 from rasterio.windows import Window
 
 from eolab_app.bounded_vector import PolygonRasterizer, polygon_features
@@ -26,6 +26,7 @@ from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.raster.bounded_window import (
     grid_boundary_projection,
+    project_geographic_polygons,
     project_polygons_to_crs,
 )
 from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
@@ -177,9 +178,9 @@ def project_preparation_box(
 
     ring = tessellate_sampling_box(box, project_pixels)
     if seam_aware and crs.is_geographic:
-        return transform_geom(
-            "EPSG:4326", crs, {"type": "Polygon", "coordinates": [ring]}
-        )
+        return project_geographic_polygons(
+            "EPSG:4326", crs, ({"type": "Polygon", "coordinates": [ring]},)
+        )[0]
     x, y = transform(
         "EPSG:4326", crs, [point[0] for point in ring], [point[1] for point in ring]
     )

@@ -5,11 +5,16 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import cast
 
+from fiona.errors import TransformError
+from fiona.model import to_dict
+from fiona.transform import transform_geom
 from pyproj import Transformer
 from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
-from rasterio.warp import transform, transform_geom
+from rasterio.warp import transform
 from rasterio.windows import Window
+from shapely.affinity import scale
+from shapely.geometry import mapping, shape
 
 from eolab_app.projected_boundary import (
     Position,
@@ -622,6 +627,64 @@ def project_wgs84_polygons(
     )
 
 
+def project_geographic_polygons(
+    source_crs: CRS | str,
+    target_crs: CRS,
+    geometries: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    """Project polygons through GDAL's degree-based dateline splitter.
+
+    Restore the geographic target's angular units after splitting. The temporary
+    degree CRS retains its datum and prime meridian; source edges must already
+    be refined to the caller's accuracy before this final transformation.
+
+    Args:
+        source_crs: Coordinate system of the refined source polygons.
+        target_crs: Geographic output coordinate system, in any angular unit.
+        geometries: Refined polygons, including their holes.
+
+    Returns:
+        Polygon mappings in target_crs, split at its longitude boundary.
+
+    Raises:
+        ValueError: If GDAL cannot transform or split the polygons.
+    """
+    from osgeo import osr
+
+    to_degrees = target_crs.units_factor[1] / math.radians(1)
+    uses_degrees = math.isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12)
+    target_wkt = target_crs.to_wkt()
+    try:
+        if not uses_degrees:
+            with osr.ExceptionMgr():
+                degrees = osr.SpatialReference(wkt=target_wkt)
+                degrees.SetAngularUnits("degree", math.radians(1))
+                target_wkt = degrees.ExportToWkt()
+        projected = transform_geom(
+            CRS.from_user_input(source_crs).to_wkt(),
+            target_wkt,
+            geometries,
+            antimeridian_cutting=True,
+        )
+    except (RuntimeError, TransformError) as error:
+        raise ValueError("Selection could not be projected") from error
+    return tuple(
+        (
+            to_dict(geometry)
+            if uses_degrees
+            else mapping(
+                scale(
+                    shape(geometry),
+                    xfact=1 / to_degrees,
+                    yfact=1 / to_degrees,
+                    origin=(0, 0),
+                )
+            )
+        )
+        for geometry in projected
+    )
+
+
 def project_polygons_to_crs(
     source_crs: CRS | str,
     target_crs: CRS | str,
@@ -726,7 +789,9 @@ def project_polygons_to_crs(
         )
 
     if split_at_dateline:
-        return tuple(transform_geom(source_crs, target, projected_geometries))
+        return project_geographic_polygons(
+            source_crs, target, tuple(projected_geometries)
+        )
     return tuple(projected_geometries)
 
 

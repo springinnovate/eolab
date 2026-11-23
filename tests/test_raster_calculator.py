@@ -1,11 +1,12 @@
 """Check raster calculator values, source alignment, and output masks with real TIFFs."""
 
 import json
+import math
 from pathlib import Path
 
 from affine import Affine
 import numpy as np
-from pyproj import Transformer
+from pyproj import CRS as ProjCRS, Transformer
 import pytest
 import rasterio
 from rasterio.crs import CRS
@@ -234,12 +235,38 @@ def test_projected_box_refines_edges_at_output_cell_size() -> None:
     )
 
 
-def test_native_polygon_preserves_both_sides_of_the_dateline(tmp_path: Path) -> None:
-    """Publish the same cell membership as testing centers in the native polygon."""
+@pytest.mark.parametrize("angular_unit", ["degree", "grad"])
+def test_native_polygon_preserves_both_sides_of_the_dateline(
+    tmp_path: Path, angular_unit: str
+) -> None:
+    """Publish native polygon membership on geographic grids with different units.
+
+    Args:
+        tmp_path: Native vector, reference raster and calculator output directory.
+        angular_unit: Geographic reference grid's coordinate unit.
+    """
+    crs = CRS.from_epsg(4326)
+    if angular_unit == "grad":
+        definition = ProjCRS.from_epsg(4326).to_json_dict()
+        del definition["id"]
+        for axis in definition["coordinate_system"]["axis"]:
+            axis["unit"] = {
+                "type": "AngularUnit",
+                "name": "grad",
+                "conversion_factor": math.pi / 200,
+            }
+        crs = CRS.from_wkt(ProjCRS.from_json_dict(definition).to_wkt())
+    degrees_to_units = math.radians(1) / crs.units_factor[1]
     source = write_source(
         tmp_path / "source.tif",
         np.ones((10, 3600), dtype="uint8"),
-        transform=from_origin(-180, 71, 0.1, 0.1),
+        transform=from_origin(
+            -180 * degrees_to_units,
+            71 * degrees_to_units,
+            0.1 * degrees_to_units,
+            0.1 * degrees_to_units,
+        ),
+        crs=crs.to_wkt(),
     )
     native_bounds = (-1_520_000, 1_510_000, -1_510_000, 1_520_000)
     area = write_selection(
@@ -262,15 +289,19 @@ def test_native_polygon_preserves_both_sides_of_the_dateline(tmp_path: Path) -> 
     result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
     with rasterio.open(tmp_path / "result.tif") as output:
         rows, columns = np.indices(output.shape, dtype="float64") + 0.5
-        longitudes = output.transform.c + columns * output.transform.a
-        latitudes = output.transform.f + rows * output.transform.e
-        x, y = Transformer.from_crs("EPSG:4326", "EPSG:3413", always_xy=True).transform(
-            longitudes, latitudes
+        horizontal = output.transform.c + columns * output.transform.a
+        vertical = output.transform.f + rows * output.transform.e
+        assert output.crs == crs
+        x, y = Transformer.from_crs(crs, "EPSG:3413", always_xy=True).transform(
+            horizontal, vertical
         )
         west, south, east, north = native_bounds
         inside = (west < x) & (x < east) & (south < y) & (y < north)
         assert result.valid_pixels == inside.sum() == 2
-        assert set(longitudes[inside].round(2)) == {-179.95, 179.95}
+        assert set((horizontal[inside] / degrees_to_units).round(2)) == {
+            -179.95,
+            179.95,
+        }
         np.testing.assert_array_equal(output.read(1), np.where(inside, 1, np.nan))
 
 
