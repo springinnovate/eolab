@@ -403,11 +403,14 @@ def open_warped_raster(
     with rasterio.open(path) as source:
         _write_masked_source_vrt(source, vrt_path)
         axes = source.transform
-        if source.crs.is_geographic and axes.b == axes.d == 0 and axes.a != 0:
+        if source.crs.is_geographic:
             period = tau / source.crs.units_factor[1]
             left, _, right, _ = source.bounds
-            span = abs(axes.a) * source.width
-            if isclose(span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6):
+            left, right = sorted((left, right))
+            span = right - left
+            if axes.b == axes.d == 0 and isclose(
+                span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6
+            ):
                 vrt_path = _write_periodic_longitude_vrt(source, vrt_path, period)
             elif span < period and (left < -period / 2 or right > period / 2):
                 with rasterio.open(

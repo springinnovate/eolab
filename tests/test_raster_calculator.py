@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from affine import Affine
 import numpy as np
 from pyproj import Transformer
 import pytest
@@ -417,6 +418,87 @@ def test_regional_longitudes_keep_a_fractional_cell_size(
         np.testing.assert_array_equal(
             output.read(1), [[100, 101, 102], [100, 101, 102]]
         )
+
+
+@pytest.mark.parametrize(
+    "crs,pixel_size", [("EPSG:4326", (0.05, 0.08)), ("EPSG:3857", (8000, 8000))]
+)
+@pytest.mark.parametrize(
+    "axes,extent,shape",
+    [
+        (
+            Affine(0.137, 0.038, -0.63, 0.064, -0.21, 1.36),
+            (-0.55, 0.32, 0.53, 1.27),
+            (6, 9),
+        ),
+        (Affine(-1, 0, -178, 0, -1, 2), (-179.99, 1.01, -178.01, 1.99), (4, 4)),
+    ],
+    ids=["rotated", "west-going"],
+)
+def test_regional_wrap_preserves_affine_samples(
+    tmp_path: Path,
+    crs: str,
+    pixel_size: tuple[float, float],
+    axes: Affine,
+    extent: tuple[float, float, float, float],
+    shape: tuple[int, int],
+) -> None:
+    """Read rotated and reversed longitude grids at independently located centers.
+
+    Args:
+        tmp_path: Original source and calculator output directory.
+        crs: Geographic or projected output coordinate system.
+        pixel_size: Output X/Y spacing in that coordinate system.
+        axes: Canonical source transform before shifting it one full turn.
+        extent: Selected geographic bounds inside the original coverage.
+        shape: Source rows and columns.
+    """
+    values = np.arange(np.prod(shape), dtype="int16").reshape(shape)
+    values[1, 3] = -9999
+    shifted = Affine(axes.a, axes.b, axes.c + 360, axes.d, axes.e, axes.f)
+    source = write_source(
+        tmp_path / "source.tif", values, nodata=-9999, transform=shifted
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(kind="custom", crs=crs, pixelSize=pixel_size),
+        ),
+        selectedBounds=Wgs84Bounds.model_validate(
+            dict(zip(("west", "south", "east", "north"), extent, strict=True))
+        ),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        lon, lat = Transformer.from_crs(crs, "EPSG:4326", always_xy=True).transform(
+            output.transform.c + columns * output.transform.a,
+            output.transform.f + rows * output.transform.e,
+        )
+        source_columns, source_rows = ~axes * (lon, lat)
+        source_columns, source_rows = np.floor(source_columns).astype(int), np.floor(
+            source_rows
+        ).astype(int)
+        west, south, east, north = extent
+        inside = (west < lon) & (lon < east) & (south < lat) & (lat < north)
+        inside &= (
+            (source_columns >= 0)
+            & (source_columns < shape[1])
+            & (source_rows >= 0)
+            & (source_rows < shape[0])
+        )
+        expected = np.full(output.shape, np.nan)
+        expected[inside] = values[source_rows[inside], source_columns[inside]]
+        expected[expected == -9999] = np.nan
+        assert result.valid_pixels == np.isfinite(expected).sum() > 0
+        np.testing.assert_array_equal(output.read(1), expected)
 
 
 def test_regional_longitudes_do_not_pad_to_a_world_grid(tmp_path: Path) -> None:
