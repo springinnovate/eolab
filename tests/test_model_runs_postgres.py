@@ -689,7 +689,6 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         boundary: Catalog raster with elevations increasing east and south, plus
             the vector selection API.
     """
-    pytest.importorskip("ecoshard.geoprocessing.routing")
     vector_client, _, dem_path, _, _ = boundary
     client, worker, service = model_boundary
     with rasterio.open(dem_path) as dem:
@@ -745,9 +744,14 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
     assert download.status_code == 200
     with rasterio.MemoryFile(download.content) as memory, memory.open() as mask:
         expected = numpy.zeros((100, 100), dtype="uint8")
-        expected[51:, 40] = 1
+        # The ramp's lowest neighbour lies northwest. The seed receives flow
+        # along the southeast diagonal, starting one cell outside the polygon.
+        steps = numpy.arange(1, 50)
+        expected[50 + steps, 40 + steps] = 1
         numpy.testing.assert_array_equal(mask.read(1), expected)
         assert mask.nodata == 255
+    run_yaml = parse_yaml(client.get(base + "/run-yaml").content, run=True)
+    assert run_yaml["execution"]["numericalPolicy"]["engine"] == "pyflwdir"
     owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
     rendered_source = client.portal.call(
         service.resolve_model_artifact, owner, identifier, output["artifactId"]

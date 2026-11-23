@@ -1,5 +1,7 @@
 """Check polygon flow masks against independently specified drainage paths."""
 
+from importlib.metadata import version
+import json
 from pathlib import Path
 
 import fiona
@@ -21,18 +23,21 @@ from eolab_app.processing.models import ProcessingError
 from raster_source_support import SOURCE
 
 
-@pytest.fixture
-def drainage_corridor(tmp_path: Path) -> tuple[Path, ResolvedCatalogSelection]:
+@pytest.fixture(params=("float64", "float32"))
+def drainage_corridor(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> tuple[Path, ResolvedCatalogSelection]:
     """Write a descending corridor, disjoint rows and a filtered polygon layer.
 
     Args:
         tmp_path: Disposable directory for admitted native inputs.
+        request: Supplies the storage type used for the elevation band.
 
     Returns:
         A DEM draining east along each valid row and a selection in the middle row.
     """
     dem = tmp_path / "elevation.tif"
-    elevations = numpy.full((5, 7), -9999, dtype="float64")
+    elevations = numpy.full((5, 7), -9999, dtype=request.param)
     elevations[::2] = numpy.arange(12, -1, -2)
     elevations[1, :3] = [numpy.nan, numpy.inf, 100]
     mask = numpy.full(elevations.shape, 255, dtype="uint8")
@@ -46,7 +51,7 @@ def drainage_corridor(tmp_path: Path) -> tuple[Path, ResolvedCatalogSelection]:
             width=7,
             height=5,
             count=1,
-            dtype="float64",
+            dtype=elevations.dtype,
             crs="EPSG:4326",
             transform=from_origin(0, 5, 1, 1),
             nodata=-9999,
@@ -120,7 +125,6 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
         downstream: Whether to mark flow paths leaving the polygon.
         expected_corridor: Expected output in the test's single selected drainage row.
     """
-    pytest.importorskip("ecoshard.geoprocessing.routing")
     dem, selection = drainage_corridor
     inputs = FlowAreaInputs(
         dem=SOURCE,
@@ -145,6 +149,9 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
         assert result.crs.to_epsg() == 4326
         assert result.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
     assert artifact.valid_pixels == 21
+    provenance = json.loads((directory / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["numericalPolicy"]["engine"] == "pyflwdir"
+    assert provenance["numericalPolicy"]["engineVersion"] == version("pyflwdir")
     assert {path.name for path in directory.iterdir()} == {
         "provenance.json",
         "progress.json",
@@ -152,32 +159,49 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
     }
 
 
-def test_flow_crosses_an_interior_pit_after_filling(
-    tmp_path: Path, drainage_corridor: tuple[Path, ResolvedCatalogSelection]
+@pytest.mark.parametrize(
+    ("elevation_row", "direction", "expected"),
+    [
+        ([12, 10, 0, 6, 4, 2, 0], "upstream", [1, 1, 1, 0, 0, 0, 0]),
+        ([12, 10, 8, 6, 6, 6, 0], "downstream", [0, 0, 0, 0, 1, 1, 1]),
+    ],
+    ids=("filled-depression", "flat-toward-outlet"),
+)
+def test_flow_traces_across_an_interior_depression_or_flat(
+    tmp_path: Path,
+    drainage_corridor: tuple[Path, ResolvedCatalogSelection],
+    elevation_row: list[int],
+    direction: str,
+    expected: list[int],
 ) -> None:
-    """A depression upstream still drains through its lowest rim toward the polygon.
+    """Reach an outlet across a filled depression or a flat in a single valley.
 
     Args:
         tmp_path: Disposable source and run directory parent.
         drainage_corridor: Supplies the original selected polygon on the middle row.
+        elevation_row: The valley floor, draining toward its low east edge.
+        direction: Direction to trace from the selected middle cell.
+        expected: Exact mask values along the valley.
     """
-    pytest.importorskip("ecoshard.geoprocessing.routing")
     original_dem, selection = drainage_corridor
-    dem = tmp_path / "interior-pit.tif"
+    dem = tmp_path / "valley.tif"
     elevations = numpy.full((5, 7), 100, dtype="float64")
-    elevations[2] = [12, 10, 0, 6, 4, 2, 0]
+    elevations[2] = elevation_row
     with rasterio.open(original_dem) as original:
         with rasterio.open(dem, "w", **original.profile) as dataset:
             dataset.write(elevations, 1)
     inputs = FlowAreaInputs(
-        dem=SOURCE, polygon=selection.selection, upstream=True, downstream=False
+        dem=SOURCE,
+        polygon=selection.selection,
+        upstream=direction == "upstream",
+        downstream=direction == "downstream",
     )
     plan = FlowAreaPlan(inputs=inputs, grid=plan_flow_grid(dem))
     directory = tmp_path / "attempt"
     directory.mkdir()
     calculate_flow_area((dem, selection), plan, directory, RasterAggregateLimits())
     with rasterio.open(directory / "result.tif") as result:
-        numpy.testing.assert_array_equal(result.read(1)[2], [1, 1, 1, 0, 0, 0, 0])
+        numpy.testing.assert_array_equal(result.read(1)[2], expected)
 
 
 def test_flow_plan_rejects_nonsquare_cells(tmp_path: Path) -> None:

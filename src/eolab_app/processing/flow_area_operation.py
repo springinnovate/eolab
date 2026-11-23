@@ -20,8 +20,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
     ("flow_inputs", "Reading elevation and selected polygons"),
-    ("flow_conditioning", "Filling depressions in the DEM"),
-    ("flow_directions", "Calculating flow directions"),
+    ("flow_directions", "Filling depressions and calculating flow directions"),
     ("flow_upstream", "Tracing upstream area"),
     ("flow_downstream", "Tracing downstream paths"),
     ("flow_writing", "Writing the GeoTIFF mask"),
