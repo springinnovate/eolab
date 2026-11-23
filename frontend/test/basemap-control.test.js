@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { addBasemapControl } from "../src/basemap-control.js";
+import { createSavedMapView, parseSavedMapView, serializeSavedMapView } from "../src/saved-map-view/model.js";
 import { createLeafletDouble } from "../test-support/fake-basemap-leaflet.js";
 
 const configured = { url: "https://tiles.example/{z}/{x}/{y}.png", attribution: "Detailed attribution" };
@@ -11,6 +12,8 @@ const carto = { url: "https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x
 const geometry = { type: "FeatureCollection", features: [] };
 const maptiler = { url: "https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=test-key",
     attribution: 'MapTiler <img alt="MapTiler logo"> and OpenStreetMap', maxNativeZoom: 22 };
+const maptilerStreets = { ...maptiler,
+    url: "https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=test-key" };
 
 test("saved basemaps expose provider IDs and unavailable providers report a fallback", async () => {
     const { leaflet, leafletMap: map, calls } = createLeafletDouble();
@@ -20,8 +23,10 @@ test("saved basemaps expose provider IDs and unavailable providers report a fall
     assert.equal(calls.basemap.url, maptiler.url);
     await choose(control, "none");
     assert.equal(calls.event, "basemapchange");
-    assert.match(await control.restore("carto"), /unavailable|not configured/);
-    assert.equal(control.snapshot(), "detailed");
+    for (const id of ["carto", "maptiler-streets"]) {
+        assert.match(await control.restore(id), /unavailable|not configured/);
+        assert.equal(control.snapshot(), "detailed");
+    }
     await control.restore("none");
     assert.equal(control.snapshot(), "none");
     control.remove();
@@ -158,6 +163,45 @@ test("satellite tile failures are visible only for the active background and all
     control.remove();
     satellite.fire("tileerror");
     assert.equal(status.hidden, true, "removal releases the error listener");
+});
+
+test("Street map loads on demand and restores from a saved map", async () => {
+    const { leaflet, leafletMap: map, calls } = createLeafletDouble();
+    const dataLayer = leaflet.geoJSON(geometry, { attribution: "Data source" }).addTo(map);
+    map.setView([12, 34], 7);
+    const viewport = calls.setView;
+    const control = addBasemapControl(leaflet, map, { ...configured, maptiler, maptilerStreets }, bounds);
+    const select = control.getContainer().querySelector("select");
+    assert.equal(select.children.find(option => option.value === "maptiler-streets")?.textContent, "Street map");
+    assert.equal(calls.layers.length, 2, "Street map loads only when selected");
+
+    await choose(control, "maptiler-streets");
+    const streets = calls.layers.at(-1);
+    assert.equal(streets.data, maptilerStreets.url);
+    assert.equal(streets.options.pane, "eolab-basemap-pane");
+    assert.deepEqual([...map.attributions.keys()], ["Data source", maptilerStreets.attribution]);
+
+    const catalogMapUrl = new URL("../../tests/fixtures/saved-map-catalog.json", import.meta.url);
+    const catalogMap = parseSavedMapView(await readFile(catalogMapUrl, "utf8"));
+    const savedMap = createSavedMapView({ ...catalogMap, basemap: control.snapshot() });
+    const restoredMap = parseSavedMapView(serializeSavedMapView(savedMap));
+
+    const status = control.root.querySelector("p");
+    streets.fire("tileerror");
+    assert.equal(status.hidden, false);
+    assert.match(status.textContent, /street map tiles could not load/);
+    assert.doesNotMatch(status.textContent, /test-key/);
+    await choose(control, "none");
+    streets.fire("tileerror");
+    assert.equal(status.hidden, true);
+    assert.deepEqual([...map.attached], [dataLayer]);
+    assert.deepEqual([...map.attributions.keys()], ["Data source"]);
+
+    assert.equal(await control.restore(restoredMap.basemap), null);
+    assert.deepEqual([...map.attached], [dataLayer, streets]);
+    assert.equal(calls.layers.length, 3, "restoring reuses the street layer");
+    assert.equal(calls.setView, viewport);
+    control.remove();
 });
 
 test("late outline responses cannot replace None or a removed map control", async () => {

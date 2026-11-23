@@ -64,7 +64,7 @@ export class ModelsView {
         this.getSetupIntegration = getSetupIntegration;
         this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["page", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
-            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
+            "library-items", "library-status", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
         this.tabStrip = new ToolTabStrip(documentContext, "models");
@@ -97,7 +97,7 @@ export class ModelsView {
         this.handlers = handlers;
         this.listeners = [[this.openers[0], "click", handlers.onOpen], [this.openers[1], "click", () => { handlers.onPage("runs"); handlers.onOpen(); }],
             [this.elements.close, "click", handlers.onClose], [this.elements.query, "input", () => handlers.onQuery(this.elements.query.value)],
-            [this.elements.refresh, "click", handlers.onRefresh], [this.elements["refresh-runs"], "click", handlers.onRefreshRuns],
+            [this.elements["refresh-runs"], "click", handlers.onRefreshRuns],
             [this.elements.more, "click", handlers.onMore], [this.elements.recover, "click", handlers.onRetry],
             ...Object.entries(this.navigation).map(([page, node]) => [node, "click", () => handlers.onPage(page)])];
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
@@ -752,7 +752,6 @@ export class ModelsView {
             }));
         }
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
-        this.elements.refresh.disabled = state.loading;
         this.renderSetup(state); this.renderRun(state);
         const retainedRuns = new Set(state.runs.map(job => job.jobId));
         for (const [id, card] of this.runCards) {

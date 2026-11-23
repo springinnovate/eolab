@@ -428,11 +428,11 @@ class Settings:
             Browser configuration containing application identity strings,
             the browser-facing catalog and WMS URLs, user-facing scan paths,
             basemap URL and attribution strings, and numeric initial-view
-            latitude, longitude, and zoom values. When configured, basemap.carto
-            and basemap.maptiler contain tile URLs with browser-visible keys,
-            attribution, and native zoom limits. The optional placeSearch entry
-            provides the browser-visible MapTiler key for forward geocoding.
-            Internal service URLs are not exposed.
+            latitude, longitude, and zoom values. Configured optional basemaps
+            include a tile URL with a browser-visible key, attribution, and
+            native zoom limits. The satellite (basemap.maptiler) and street map
+            (basemap.maptilerStreets) use the same MapTiler key as the optional
+            placeSearch configuration for forward geocoding.
         """
         basemap: dict[str, object] = {
             "url": self.basemap_url,
@@ -452,20 +452,30 @@ class Settings:
                 "maxNativeZoom": 20,
             }
         if self.maptiler_api_key:
+            maptiler_key = quote(self.maptiler_api_key, safe="")
+            maptiler_attribution = (
+                '<a href="https://www.maptiler.com/">'
+                '<img src="https://api.maptiler.com/resources/logo.svg" '
+                'alt="MapTiler logo" width="88" height="22" '
+                'class="eolab-maptiler-logo"></a> '
+                '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> '
+                '&copy; <a href="https://www.openstreetmap.org/copyright">'
+                "OpenStreetMap contributors</a>"
+            )
             basemap["maptiler"] = {
                 "url": (
                     "https://api.maptiler.com/tiles/satellite-v2/"
-                    "{z}/{x}/{y}.jpg?key=" + quote(self.maptiler_api_key, safe="")
+                    "{z}/{x}/{y}.jpg?key=" + maptiler_key
                 ),
-                "attribution": (
-                    '<a href="https://www.maptiler.com/">'
-                    '<img src="https://api.maptiler.com/resources/logo.svg" '
-                    'alt="MapTiler logo" width="88" height="22" '
-                    'class="eolab-maptiler-logo"></a> '
-                    '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> '
-                    '&copy; <a href="https://www.openstreetmap.org/copyright">'
-                    "OpenStreetMap contributors</a>"
+                "attribution": maptiler_attribution,
+                "maxNativeZoom": 22,
+            }
+            basemap["maptilerStreets"] = {
+                "url": (
+                    "https://api.maptiler.com/maps/streets-v4/256/"
+                    "{z}/{x}/{y}.png?key=" + maptiler_key
                 ),
+                "attribution": maptiler_attribution,
                 "maxNativeZoom": 22,
             }
         configuration: dict[str, object] = {

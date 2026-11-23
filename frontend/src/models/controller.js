@@ -85,7 +85,7 @@ export class ModelsController {
                 Object.assign(this.state.draft.temporal, change); this.editDraft({});
             },
             onVector: (name, key) => void this.chooseVector(name, key), onEditFilter: name => void this.openVectorFilter(name),
-            onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
+            onSubmit: () => void this.submit(), onRetry: () => void this.submit(true),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml(),
             onRename: label => this.renameRun(label),
