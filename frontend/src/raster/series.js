@@ -106,6 +106,8 @@ function vectorAreasEqual(left, right) {
 
 /** Own raster choices, formulas and presentation settings for Raster series. */
 export class RasterSeriesController {
+    #mapSamplingBoxAvailable = true;
+
     /**
      * Connect the plot to Processing calculations and its own view.
      * @param {Object} options Collaborators.
@@ -626,13 +628,23 @@ export class RasterSeriesController {
             area, label, this.formulas, this.position);
     }
 
-    /** Commit an explicit area choice and start or cancel polygon selection through composition.
+    /** Allow or block new map boxes without changing the series' retained calculation area.
+     * @param {boolean} available Whether the viewer can create a map sampling box.
+     * @return {void}
+     */
+    setMapSamplingBoxAvailable(available) {
+        this.#mapSamplingBoxAvailable = available;
+        this.view.setMapSamplingBoxAvailable(available);
+    }
+
+    /** Commit an available area choice and start or cancel polygon selection through composition.
      * This intent replaces captured inputs even while a filter editor hides this panel.
      * Replacement calculations start when the panel is active. Choosing Vector again
      * retries selection without reusing the previous polygons.
      * @param {"selection"|"vector"|"whole"} choice Area source. @return {void}
      */
     chooseArea(choice) {
+        if (choice === "selection" && !this.#mapSamplingBoxAvailable) return;
         this.useOpeningArea = false;
         this.preservedVectorPreparations.clear();
         this.pendingVectorArea = null;

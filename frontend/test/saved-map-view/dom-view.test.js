@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SavedMapViewDomView } from "../../src/saved-map-view/dom-view.js";
+import { VISITOR_CONTROL_PARENTS } from "../../src/visitor-controls.js";
 
 /** Build the minimal semantic DOM required by the shared-map view. */
 function viewFixture() {
@@ -43,7 +44,7 @@ function viewFixture() {
         for (const listener of [...(listeners.get("click") ?? [])]) listener();
       },
       dispatch(type, event = {}) {
-        for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+        for (const listener of [...(listeners.get(type) ?? [])]) listener({ ...event, currentTarget: this });
       },
     };
   }
@@ -72,6 +73,15 @@ function viewFixture() {
   for (const name of ["dialog", "form", "fields", "title", "subtitle", "slug", "preview", "status", "submit", "close", "result", "url", "open", "copy"]) {
     selectors.set(`#publish-map-${name}`, element());
   }
+  selectors.set("#visitor-inspection-options", { content: { cloneNode: () => ({}) } });
+  for (const selector of ["#publish-map-visitor-controls", "#published-map-visitor-controls"]) {
+    const controls = element();
+    const children = element();
+    const inputs = new Map(Object.keys(VISITOR_CONTROL_PARENTS).map(id => [id, { checked: false, dataset: { visitorControl: id } }]));
+    controls.querySelectorAll = () => inputs.values();
+    controls.querySelector = query => query === "[data-visitor-inspection-children]" ? children : inputs.get("inspectAndSelect");
+    selectors.set(selector, controls);
+  }
   selectors.get("#undo-reset-map-view").hidden = true;
   return {
     elements: selectors,
@@ -89,21 +99,35 @@ test("published-map editing shows fixed URL, explicit save, busy state and retai
   const el = name => elements.get(`#published-map-${name}`);
   let submitted;
   view.bind({ onSavePublishedMap: fields => { submitted = fields; } });
-  view.showPublishedMapEditor({ title: "Amazon", subtitle: "Habitat", slug: "amazon" }, true);
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, featurePicking: true, lasso: false } };
+  const controls = el("visitor-controls");
+  const children = controls.querySelector("[data-visitor-inspection-children]");
+  const [parent, rasterValues, featurePicking, histogramBox, lasso] = [...controls.querySelectorAll()];
+  view.showPublishedMapEditor({ title: "Amazon", subtitle: "Habitat", slug: "amazon", view: { visitorControls } }, true);
   assert.equal(el("editor").hidden, false);
   assert.match(el("editor-heading").textContent, /Amazon/);
   assert.equal(el("edit-url").href, "/maps/amazon");
+  assert.deepEqual([parent.checked, rasterValues.checked, featurePicking.checked, histogramBox.checked, lasso.checked],
+    [false, false, true, false, false]);
+  assert.equal(children.disabled, true);
+  parent.checked = true;
+  controls.dispatch("change");
+  assert.equal(children.disabled, false);
   el("edit-title").value = "New title";
   el("editor").dispatch("submit", { preventDefault() {} });
-  assert.deepEqual(submitted, { title: "New title", subtitle: "Habitat" });
+  assert.deepEqual(submitted, { title: "New title", subtitle: "Habitat", visitorControls: { version: 1,
+    choices: { inspectAndSelect: true, rasterValues: false, featurePicking: true, histogramBox: false, lasso: false } } });
   view.setPublishedMapSaving(true);
   assert.equal(el("cancel").hidden, true);
   assert.equal(el("edit-title").disabled, true);
+  assert.equal(controls.disabled, true);
   view.showPublishedMapEditStatus("Save failed");
   view.setPublishedMapSaving(false);
   assert.equal(el("edit-title").value, "New title");
+  assert.equal(controls.disabled, false);
+  assert.equal(parent.checked && featurePicking.checked, true);
   assert.equal(el("edit-status").textContent, "Save failed");
-  view.showPublishedMapEditor({ title: "Amazon", subtitle: "", slug: "amazon" }, false);
+  view.showPublishedMapEditor({ title: "Amazon", subtitle: "", slug: "amazon", view: {} }, false);
   assert.equal(el("save").disabled, false);
   assert.match(el("edit-status").textContent, /Review the map and any Unavailable layers before saving/);
   view.unbind();
@@ -116,6 +140,12 @@ test("publication dialog suggests editable names, keeps errors inline and expose
   view.bind({ onCopy() {}, onReset() {}, onUndo() {}, onPublish: fields => { submitted = fields; } });
   view.showPublicationForm({ title: "Amazon priorities", subtitle: "Explore habitat" });
   assert.equal(el("slug").value, "amazon-priorities");
+  const controls = el("visitor-controls");
+  const [parent, ...children] = [...controls.querySelectorAll()];
+  assert.ok(children.every(input => input.checked));
+  parent.checked = false;
+  controls.dispatch("change");
+  assert.equal(controls.querySelector("[data-visitor-inspection-children]").disabled, true);
   el("title").value = "Peru & Brazil";
   el("title").dispatch("input");
   assert.equal(el("slug").value, "peru-brazil");
@@ -126,13 +156,16 @@ test("publication dialog suggests editable names, keeps errors inline and expose
   assert.equal(el("slug").value, "my-map");
   el("subtitle").value = "";
   el("form").dispatch("submit", { preventDefault() {} });
-  assert.deepEqual(submitted, { title: "New title", subtitle: "", slug: "my-map" });
+  assert.deepEqual(submitted, { title: "New title", subtitle: "", slug: "my-map", visitorControls: { version: 1,
+    choices: { inspectAndSelect: false, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true } } });
   view.setPublicationBusy(true);
   assert.equal(el("fields").disabled, true);
   view.showPublicationError("Name already taken");
   view.setPublicationBusy(false);
   assert.equal(el("status").textContent, "Name already taken");
   assert.equal(el("slug").value, "my-map");
+  assert.equal(parent.checked, false);
+  assert.ok(children.every(input => input.checked));
   view.showPublishedMap("my-map");
   assert.equal(el("open").href, "https://viewer.example/maps/my-map");
   assert.equal(el("fields").hidden, true);

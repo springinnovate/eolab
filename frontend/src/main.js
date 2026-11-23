@@ -10,6 +10,7 @@ import { annotationSummaryPolygons, filterAnnotationPolygons } from "./annotatio
 import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 import { MapInteractionTools } from "./map-interaction-tools.js";
+import { resolveVisitorControls, VISITOR_CONTROLS_VERSION } from "./visitor-controls.js";
 import { selectLassoFeatures } from "./vector/lasso.js";
 /**
  * Browser entry point and application composition root for EOLab.
@@ -848,7 +849,11 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let mapInteractionMode = "pixel";
+    let inspectionAvailability = resolveVisitorControls(isSharedViewer
+        ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
+    /** @type {Readonly<import("./map-interaction-tools.js").MapPointerActions>} */
+    let mapPointerActions = { rasterValues: false, featurePicking: false, histogramBox: false };
+    let mapLayerEditing = false;
     let rasterVisualization = null;
     let rasterSeries = null;
     /** List each retained temporal dataset once, independent of its displayed observations.
@@ -1105,6 +1110,7 @@ async function initializeCatalog(
         }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
+    rasterSeries.setMapSamplingBoxAvailable(inspectionAvailability.histogramBox);
     rasterClips = new RasterClipsController({
         api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
             onContextChange: context => presentSamplingContext("raster-clips", context),
@@ -1145,11 +1151,11 @@ async function initializeCatalog(
     void rasterClips.start();
 
     rasterVisualization = initializeRasterViewer({
-        controlsView: rasterControls,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
+        inspectionInitiallyEnabled: !isSharedViewer,
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
@@ -1178,6 +1184,7 @@ async function initializeCatalog(
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
     }, {
+        controlsView: rasterControls,
         mapLayerController,
         cursorValuesView: new RasterCursorValuesView(),
         getTemporalItem: identity => catalogItemClient.get(identity),
@@ -1198,10 +1205,8 @@ async function initializeCatalog(
      * @return {void}
      */
     function setLayerEditingMode(editing) {
-        mapFeatureHover?.setEnabled(!editing);
-        mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
+        mapLayerEditing = editing;
         document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
-        rasterVisualization.setPointerInspectionEnabled(!editing);
         mapInteractionTools?.setEditing(editing);
         onLayoutChange();
     }
@@ -1902,6 +1907,13 @@ async function initializeCatalog(
         allowPublishing: !isSharedViewer && editableMapSlug === null,
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
         applyMapHeading,
+        applyVisitorControls: settings => {
+            inspectionAvailability = resolveVisitorControls(settings);
+            const { rasterValues, histogramBox } = inspectionAvailability;
+            rasterVisualization.setMapInspectionAvailability({ rasterValues, histogramBox });
+            rasterSeries.setMapSamplingBoxAvailable(histogramBox);
+            mapInteractionTools?.setAvailability(inspectionAvailability);
+        },
         basemap: basemapControl,
         mapLegend,
         initialViewport: {
@@ -2191,39 +2203,44 @@ async function initializeCatalog(
         onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**
-     * Place a histogram box or inspect a map point using the selected tool.
-     * Leaflet emits this event only for a completed click, not a drag-pan.
+     * Dispatch a completed Leaflet map click to the active inspection actions.
      *
      * @param {{latlng:{lng:number,lat:number},containerPoint?:{x:number,y:number}}}
      * event Leaflet map-click shape.
      * @return {void}
      */
     function exploreMap(event) {
-        if (!["pixel", "box"].includes(mapInteractionMode)) return;
+        const { rasterValues, featurePicking, histogramBox } = mapPointerActions;
+        if (!rasterValues && !featurePicking && !histogramBox) return;
         mapInspection.beginMapClick(event.latlng);
-        const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
-        pixelPoint = isCanonicalWgs84Position(position) ? Object.freeze(position) : null;
-        rasterSeries.setPosition(pixelPoint);
         rasterClickSelected = false;
         selectingMapClick = true;
         try {
-            rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
-                histogram: mapInteractionMode === "box",
-                onSelected: area => {
-                    if (area?.kind === "polygonArea") return;
-                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : ["selectedArea", "samplingBox"].includes(area?.kind) ? "Sampling box" : "Sample area");
-                },
-            });
-            if (!rasterClickSelected) {
-                mapInspection.closeHistogram(false);
-                if (mapInteractionMode === "box") {
-                    const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
-                        ? rasterVisualization.selectSamplingBox(event.latlng) : null;
-                    updateRasterSeriesArea(box, box ? "Sampling box" : "");
+            if (rasterValues || histogramBox) {
+                const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
+                const validPosition = isCanonicalWgs84Position(position);
+                if (inspectionAvailability.rasterValues) {
+                    pixelPoint = validPosition ? Object.freeze(position) : null;
+                    rasterSeries.setPosition(pixelPoint);
                 }
+                rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
+                    histogram: histogramBox,
+                    onSelected: area => {
+                        if (area?.kind === "polygonArea") return;
+                        updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : ["selectedArea", "samplingBox"].includes(area?.kind) ? "Sampling box" : "Sample area");
+                    },
+                });
+                if (!rasterClickSelected) {
+                    mapInspection.closeHistogram(false);
+                    if (histogramBox) {
+                        const box = validPosition && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
+                            ? rasterVisualization.selectSamplingBox(event.latlng) : null;
+                        updateRasterSeriesArea(box, box ? "Sampling box" : "");
+                    }
+                }
+                mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             }
-            mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
-            if (mapInteractionMode === "pixel") {
+            if (featurePicking) {
                 void vectorFeatureInspector.inspect(event);
                 annotations?.inspectAt(event.latlng);
             }
@@ -2286,8 +2303,10 @@ async function initializeCatalog(
                     ...annotations.drawingLayers().filter(layer => layer.drawingLayerId).map(layer => layer.localLayerId)] });
             void annotationSessions.refresh();
         });
+        if (isSharedViewer) await restoringMap;
     }
     mapFeatureHover = new MapFeatureHover(leafletMap, {
+        enabled: false,
         findLocalText: event => {
             const hit = annotations.polygonsAt(event.latlng)[0];
             return hit ? `${hit.layerName}\n${hit.polygon.name}${hit.polygon.contributor ? ` — ${hit.polygon.contributor}` : ""}` : null;
@@ -2299,9 +2318,10 @@ async function initializeCatalog(
             signal,
         }),
     });
-    leafletMap.getContainer().classList.add("leaflet-crosshair");
     mapInteractionTools = new MapInteractionTools({
         documentContext: document, map: leafletMap, leaflet: L,
+        availability: inspectionAvailability,
+        editing: mapLayerEditing,
         getTargets: () => mapLayerController.retainedRecords.flatMap(record => {
             if (record.adapter !== vectorMapLayerAdapter) return [];
             const source = record.adapter.describeSource(record);
@@ -2309,12 +2329,13 @@ async function initializeCatalog(
                 selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
         }),
         selectFeatures: selectLassoFeatures,
-        onModeChange: (mode, enabled) => {
-            mapInteractionMode = enabled ? mode : "layer-editing";
-            mapFeatureHover.setEnabled(enabled && mode === "pixel");
-            rasterVisualization.setPointerInspectionEnabled(enabled && ["pixel", "box"].includes(mode));
-            rasterVisualization.setPixelPickingEnabled(enabled && mode === "pixel");
-            rasterVisualization.setSamplingBoxPointerEnabled(enabled && mode === "box");
+        onActionsChange: actions => {
+            mapPointerActions = actions;
+            mapFeatureHover.setEnabled(actions.featurePicking);
+            vectorFeatureInspector.setPickingEnabled(actions.featurePicking);
+            rasterVisualization.setPixelPickingEnabled(actions.rasterValues);
+            rasterVisualization.setSamplingBoxPointerEnabled(actions.histogramBox);
+            rasterVisualization.setPointerInspectionEnabled(actions.rasterValues || actions.histogramBox);
         },
     });
     leafletMap.on("unload", () => mapInteractionTools.dispose());

@@ -531,13 +531,39 @@ export class VectorFeatureInspectorController {
         if (moveFocus) this.mapContainer.focus();
     }
 
+    /** Whether the map may start another feature inspection. */
+    #pickingEnabled = true;
+
     /**
-     * Inspect every currently visible vector target at one map click.
+     * Enable map-click acquisition or cancel unfinished work and restore the last completed selection.
+     * Existing results remain available to the inspector and its plots.
+     * @param {boolean} enabled Whether map clicks may acquire features.
+     * @return {void}
+     */
+    setPickingEnabled(enabled) {
+        this.#pickingEnabled = enabled;
+        if (enabled || this.abortController === null) return;
+        this.#cancelInspection();
+        if (this.#selectionHistoryIndex >= 0) {
+            this.#restoreSelection(this.#selectionHistoryIndex);
+            return;
+        }
+        this.#inspectionPosition = null;
+        this.clearResults();
+        const message = "Feature inspection cancelled.";
+        this.status.textContent = message;
+        this.#publishSample("empty", [], message);
+        this.onInspectionChange(false);
+    }
+
+    /**
+     * Inspect every currently visible vector target at one map click when picking is active.
      *
      * @param {Object} event Leaflet map-click event.
      * @return {Promise<boolean>} Whether visible vector targets were inspected.
      */
     async inspect(event) {
+        if (!this.#pickingEnabled) return false;
         const visibleTargets = this.visibleTargets();
         if (visibleTargets.length === 0) {
             return false;
@@ -790,10 +816,18 @@ export class VectorFeatureInspectorController {
             throw new TypeError("Selection navigation direction must be previous or next.");
         }
         const index = this.#adjacentSelectionIndex(direction);
-        const selection = this.#selectionHistory[index];
-        if (!selection) return;
+        if (index < 0) return;
 
         this.#cancelInspection();
+        this.#restoreSelection(index);
+    }
+
+    /** Present a completed selection from the inspector's existing history.
+     * @param {number} index Position of the completed selection in history.
+     * @return {void}
+     */
+    #restoreSelection(index) {
+        const selection = this.#selectionHistory[index];
         this.#selectionHistoryIndex = index;
         this.#inspectionPosition = selection.position;
         if (selection.state === "ready") {

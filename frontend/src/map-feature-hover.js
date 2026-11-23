@@ -8,12 +8,13 @@ export class MapFeatureHover {
      * @param {Object} queries Composition-supplied feature lookups.
      * @param {(event:Object)=>string|null} queries.findLocalText Synchronous hit text.
      * @param {(event:Object,signal:AbortSignal)=>Promise<string|null>} queries.findRemoteText Asynchronous hit text.
+     * @param {boolean} [queries.enabled=true] Whether feature picking starts active.
      */
-    constructor(map, { findLocalText, findRemoteText }) {
+    constructor(map, { findLocalText, findRemoteText, enabled = true }) {
         this.map = map;
         this.findLocalText = findLocalText;
         this.findRemoteText = findRemoteText;
-        this.enabled = true;
+        this.enabled = enabled;
         this.moving = false;
         this.generation = 0;
         this.timer = null;
@@ -95,7 +96,7 @@ export class MapFeatureHover {
     }
 
     /**
-     * Suppress hover while the map is being used for editing.
+     * Enable feature hover or cancel its pending lookups and clear the card.
      * @param {boolean} enabled Whether inspection is active.
      * @return {void}
      */

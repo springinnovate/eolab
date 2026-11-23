@@ -3228,7 +3228,7 @@ div.chart-tooltip {
     gap: 0.3rem;
 }
 
-#publish-map-dialog input {
+#publish-map-dialog input:not([type="checkbox"]) {
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
@@ -3242,6 +3242,25 @@ div.chart-tooltip {
 
 #publish-map-fields[hidden] {
     display: none;
+}
+
+:is(#published-map-editor, #publish-map-dialog) .visitor-inspection-options {
+    min-width: 0;
+    padding: 0.35rem 0.65rem 0.55rem;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+}
+:is(#published-map-editor, #publish-map-dialog) .visitor-inspection-options label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    margin: 0.25rem 0;
+}
+.visitor-inspection-options [data-visitor-inspection-children] {
+    min-width: 0;
+    margin: 0;
+    padding: 0 0 0 1.1rem;
+    border: 0;
 }
 
 .panel-content:has(#toggle-catalog-workspace[hidden]) {
@@ -5434,7 +5453,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 #published-map-editor p { margin: 6px 0; font-size: 0.9rem; }
 #published-map-editor label { display: block; margin-top: 6px; }
-#published-map-editor input { width: 100%; }
+#published-map-editor input:not([type="checkbox"]) { width: 100%; }
 #published-map-edit-url { overflow-wrap: anywhere; }
 .published-map-editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 
