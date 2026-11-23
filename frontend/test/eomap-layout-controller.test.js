@@ -223,6 +223,7 @@ function createLayoutFixture() {
         panel.addDescendant(child);
     }
     const elements = new Map([
+        ["#map", new FakeLayoutElement()],
         ["#app", app],
         ["#control-panel", panel],
         ["#collapse-panel", collapsePanel],
@@ -361,6 +362,99 @@ test("shared viewer omits catalog and status while retaining layer and sidebar c
     layout.setControlPanelCollapsed(false);
     assert.equal(fixture.renderingRegion.hidden, false);
     assert.equal(fixture.catalogRegion.hidden, true);
+});
+
+test("unavailable workspaces reject remembered state, clicks and composition requests", () => {
+    for (const allowCatalog of [false, true]) {
+        for (const allowMapContents of [false, true]) {
+            const fixture = createLayoutFixture();
+            const layout = new EomapLayoutController({
+                documentContext: fixture.document, schedule: fixture.schedule,
+                invalidateMapSize() {}, allowCatalog, allowMapContents, allowOperationalStatus: false,
+                workspaceStorage: new SavedMapViewLocalStorage({
+                    getItem: () => '{"catalogOpen":true,"mapLayersOpen":true}',
+                }),
+            });
+            layout.setControlPanelCollapsed(true);
+            for (const [name, allowed, toggle, region] of [
+                ["catalog", allowCatalog, fixture.catalogTab, fixture.catalogRegion],
+                ["map-layers", allowMapContents, fixture.renderingTab, fixture.renderingRegion],
+            ]) {
+                layout.showWorkspace(name, true);
+                assert.equal(toggle.hidden, !allowed);
+                assert.equal(region.hidden, !allowed);
+                if (!allowed) {
+                    toggle.dispatchEvent(new Event("click"));
+                    assert.equal(region.hidden, true);
+                    assert.notEqual(fixture.document.activeElement, toggle);
+                }
+            }
+            if (!allowCatalog && !allowMapContents) {
+                layout.setControlPanelCollapsed(false);
+                fixture.openPanel.dispatchEvent(new Event("click"));
+                assert.equal(fixture.panel.hidden, true);
+                assert.equal(fixture.panel.inert, true);
+                assert.equal(fixture.openPanel.hidden, true);
+            }
+            layout.destroy();
+        }
+    }
+});
+
+test("published initial disclosures override storage and available collapsed panels can reopen", () => {
+    for (const catalog of [false, true]) {
+        for (const mapContents of [false, true]) {
+            const fixture = createLayoutFixture();
+            let reads = 0;
+            const layout = new EomapLayoutController({
+                documentContext: fixture.document, schedule: fixture.schedule, invalidateMapSize() {},
+                initialState: { catalog, mapContents },
+                workspaceStorage: { read() { reads++; return '{"catalogOpen":true,"mapLayersOpen":true}'; }, write() {} },
+            });
+            assert.equal(reads, 0);
+            assert.equal(fixture.catalogRegion.hidden, !catalog);
+            assert.equal(fixture.renderingRegion.hidden, !mapContents);
+            layout.showWorkspace("catalog", true);
+            layout.showWorkspace("map-layers", true);
+            assert.equal(fixture.catalogRegion.hidden, false);
+            assert.equal(fixture.renderingRegion.hidden, false);
+            assert.equal(fixture.document.activeElement, fixture.renderingTab);
+            layout.destroy();
+        }
+    }
+});
+
+test("changing map options preserves child disclosures and moves focus to an available surface", () => {
+    const fixture = createLayoutFixture();
+    const layout = new EomapLayoutController({
+        documentContext: fixture.document, schedule: fixture.schedule, invalidateMapSize() {},
+        initialState: { catalog: true, mapContents: true },
+    });
+    fixture.document.activeElement = fixture.catalogContent;
+    layout.setWorkspaceOptions({ allowCatalog: false, allowMapContents: true });
+    assert.equal(fixture.document.activeElement, fixture.renderingTab);
+    assert.equal(fixture.catalogRegion.hidden, true);
+    layout.setControlPanelCollapsed(true);
+    layout.setWorkspaceOptions({ allowCatalog: false, allowMapContents: true,
+        initialState: { catalog: false, mapContents: true } });
+    assert.equal(fixture.document.activeElement, fixture.collapsePanel,
+        "reapplying a map layout moves focus away from its now-hidden reopen button");
+    layout.setControlPanelCollapsed(true);
+    layout.setWorkspaceOptions({ allowCatalog: false, allowMapContents: false });
+    assert.equal(fixture.document.activeElement, fixture.document.querySelector("#map"));
+    layout.setWorkspaceOptions({ allowCatalog: true, allowMapContents: false,
+        initialState: { catalog: true, mapContents: true } });
+    assert.equal(fixture.panel.hidden, false);
+    assert.equal(fixture.panel.inert, false);
+    assert.equal(fixture.catalogRegion.hidden, false);
+    assert.equal(fixture.renderingRegion.hidden, true);
+    assert.equal(fixture.openPanel.textContent, "Catalog");
+    fixture.catalogTab.focus();
+    layout.setWorkspaceOptions({ allowCatalog: true, allowMapContents: true });
+    assert.equal(fixture.renderingRegion.hidden, false, "availability does not erase initial disclosure choices");
+    assert.equal(fixture.document.activeElement, fixture.catalogTab, "enabling a peer does not steal focus");
+    assert.ok(fixture.timers.every(timer => timer.delay === CONTROL_PANEL_TRANSITION_MILLISECONDS));
+    layout.destroy();
 });
 
 test("inspection layout changes only the changed shell attributes without scheduling resize work", () => {

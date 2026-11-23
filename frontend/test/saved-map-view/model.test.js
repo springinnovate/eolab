@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveVisitorControls, visitorControlChoices } from "../../src/visitor-controls.js";
+import { resolveVisitorControls, visitorControlChoices, visitorInitialPanels } from "../../src/visitor-controls.js";
 import { readFileSync } from "node:fs";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
@@ -302,29 +302,57 @@ test("map legend preferences round-trip for catalog and shared layers", () => {
   }
 });
 
-test("visitor controls preserve the parent's override and default only unconfigured maps to all tools", () => {
+test("visitor controls preserve parent overrides and default only unconfigured maps to the familiar profile", () => {
   const legacy = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-shared.json", import.meta.url), "utf8"));
-  const defaults = { inspectAndSelect: true, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true };
+  const defaults = { inspectAndSelect: true, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true,
+    workspacePanels: true, catalog: false, mapContents: true };
   assert.deepEqual(resolveVisitorControls(parseSavedMapView(JSON.stringify(legacy)).visitorControls), defaults);
   const candidate = { ...legacy, visitorControls: { version: 1, choices: { inspectAndSelect: false, featurePicking: true, lasso: true } } };
   const saved = parseSavedMapView(JSON.stringify(candidate));
   assert.deepEqual(saved, candidate);
   assert.deepEqual(visitorControlChoices(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
+    workspacePanels: false, catalog: false, mapContents: false,
   });
   assert.deepEqual(resolveVisitorControls(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: false, histogramBox: false, lasso: false,
+    workspacePanels: false, catalog: false, mapContents: false,
   });
   const reenabled = parseSavedMapView(JSON.stringify({
     ...saved, visitorControls: { version: 1, choices: { ...saved.visitorControls.choices, inspectAndSelect: true } },
   }));
   assert.deepEqual(resolveVisitorControls(reenabled.visitorControls), {
     inspectAndSelect: true, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
+    workspacePanels: false, catalog: false, mapContents: false,
   });
   for (const visitorControls of [null, {}, { version: 2, choices: {} }, { version: true, choices: {} },
     { version: 1, choices: [] }, { version: 1, choices: { lasso: "true" } }, { version: 1, choices: { zoom: true } },
-    { version: 1, choices: {}, unknown: true }]) {
+    { version: 1, choices: {}, unknown: true }, { version: 1, choices: {}, initialPanels: null },
+    { version: 1, choices: {}, initialPanels: { catalog: 1 } },
+    { version: 1, choices: {}, initialPanels: { canvas: true } }]) {
     assert.throws(() => parseSavedMapView(JSON.stringify({ ...candidate, visitorControls })), /visitor/i);
+  }
+});
+
+test("workspace availability and initial disclosures round trip without changing saved layers or inspection", () => {
+  const original = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-catalog.json", import.meta.url), "utf8"));
+  assert.deepEqual(visitorInitialPanels(), { catalog: false, mapContents: true });
+  assert.deepEqual(visitorInitialPanels({ version: 1, choices: {} }), { catalog: false, mapContents: false });
+  for (const workspacePanels of [false, true]) {
+    for (const catalog of [false, true]) {
+      for (const mapContents of [false, true]) {
+        const settings = { version: 1, choices: { workspacePanels, catalog, mapContents,
+          inspectAndSelect: true, featurePicking: true }, initialPanels: { catalog: true, mapContents: false } };
+        const saved = parseSavedMapView(serializeSavedMapView({ ...original, visitorControls: settings }));
+        assert.deepEqual(saved.visitorControls, settings);
+        assert.deepEqual(saved.layers, original.layers);
+        const resolved = resolveVisitorControls(saved.visitorControls);
+        assert.equal(resolved.catalog, workspacePanels && catalog);
+        assert.equal(resolved.mapContents, workspacePanels && mapContents);
+        assert.equal(resolved.featurePicking, true);
+        assert.deepEqual(visitorInitialPanels(saved.visitorControls), settings.initialPanels);
+      }
+    }
   }
 });
 

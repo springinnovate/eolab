@@ -3244,32 +3244,44 @@ div.chart-tooltip {
     display: none;
 }
 
-:is(#published-map-editor, #publish-map-dialog) .visitor-inspection-options {
+:is(#published-map-editor, #publish-map-dialog) .visitor-control-options {
     min-width: 0;
     padding: 0.35rem 0.65rem 0.55rem;
     border: 1px solid var(--border-1);
     border-radius: var(--radius);
 }
-:is(#published-map-editor, #publish-map-dialog) .visitor-inspection-options label {
+:is(#published-map-editor, #publish-map-dialog) .visitor-control-options label {
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
     margin: 0.25rem 0;
 }
-.visitor-inspection-options [data-visitor-inspection-children] {
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
     min-width: 0;
     margin: 0;
     padding: 0 0 0 1.1rem;
     border: 0;
 }
 
-.panel-content:has(#toggle-catalog-workspace[hidden]) {
+:is(#published-map-editor, #publish-map-dialog) .visitor-panel-initial {
+    margin-left: 1.1rem;
+}
+
+.panel-content:has(.workspace-disclosure[hidden]) {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .panel-content:has(#toggle-catalog-workspace[hidden]) > #toggle-map-layers,
 .panel-content:has(#toggle-catalog-workspace[hidden]) > #eomap-map-layers-region {
   grid-column: 1;
+}
+
+#app:has(#toggle-catalog-workspace[hidden]) {
+  --workspace-catalog-allocation: 0px;
+}
+
+#app:has(#toggle-map-layers[hidden]) {
+  --workspace-map-layers-allocation: 0px;
 }
 
 .shared-layer-details .catalog-inspector:not([hidden]) {
@@ -5462,6 +5474,14 @@ summary:hover > .raster-disclosure-chevron {
   #app.is-control-panel-collapsed #map {
     --map-controls-top-clearance: calc(var(--workspace-edge) + var(--panel-toggle-size) + var(--workspace-gap));
   }
+}
+
+#app.is-workspace-unavailable .map-tools-header {
+  max-inline-size: 100%;
+}
+
+#app.is-workspace-unavailable #map {
+  --map-controls-top-clearance: var(--tools-clearance, 0px);
 }
 
 #published-map-editor {
