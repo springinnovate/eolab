@@ -1299,7 +1299,9 @@ h5 {
 }
 
 .raster-palette,
-.raster-style-stops label {
+.raster-style-stops label,
+.raster-appearance-mode,
+.raster-category-fields label {
   display: grid;
   gap: 5px;
   color: var(--text-2);
@@ -1318,7 +1320,10 @@ h5 {
 .raster-palette-row .secondary-button { margin: 0; }
 
 .raster-palette select,
-.raster-style-stops input[type="number"] {
+.raster-style-stops input[type="number"],
+.raster-appearance-mode select,
+.raster-category-fields input,
+.raster-category-fields textarea {
   min-width: 0;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -1334,13 +1339,18 @@ h5 {
   align-items: end;
 }
 
-.raster-style-stops label { min-width: 0; }
+.raster-style-stops label,
+.raster-appearance-mode,
+.raster-category-fields label { min-width: 0; }
 .raster-value-override { display: grid; gap: 8px; }
 .raster-value-toggle { display: flex; align-items: center; gap: 8px; }
 .raster-value-toggle input { margin: 0; }
 .raster-value-override .raster-style-stops[hidden] { display: none; }
 .raster-value-override .raster-style-stops > p { grid-column: 1 / -1; }
-.raster-style-stops input[type="number"] { width: 100%; }
+.raster-style-stops input[type="number"],
+.raster-appearance-mode select,
+.raster-category-fields input,
+.raster-category-fields textarea { width: 100%; }
 
 .raster-style-stops input[type="color"] {
   width: 42px;
@@ -1354,28 +1364,6 @@ h5 {
 
 .raster-style-stops [aria-invalid="true"] {
   border-color: var(--status-danger);
-}
-
-.raster-appearance-mode,
-.raster-category-fields label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: 0.7rem;
-  font-weight: 600;
-}
-
-.raster-appearance-mode select,
-.raster-category-fields input,
-.raster-category-fields textarea {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  padding: 7px 8px;
-  color: var(--text-1);
 }
 
 .raster-category-fields textarea {
