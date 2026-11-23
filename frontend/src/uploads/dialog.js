@@ -89,13 +89,13 @@ export class UploadsDialog {
         fileLabel.textContent = "Choose file";
         this.file = document.createElement("input");
         this.file.type = "file";
-        this.file.accept = ".gpkg,.tif,.tiff";
+        this.file.accept = ".gpkg,.geojson,.json,.tif,.tiff";
         this.file.required = true;
         this.file.setAttribute("aria-describedby", "upload-polygons-file-help");
         fileLabel.append(this.file);
         this.fileHelp = document.createElement("p");
         this.fileHelp.id = "upload-polygons-file-help";
-        this.fileHelp.textContent = "Polygon GeoPackage (.gpkg), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored.";
+        this.fileHelp.textContent = "Polygon GeoPackage (.gpkg) or GeoJSON (.geojson, .json), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored.";
         this.quotaHelp = document.createElement("p");
         this.quotaHelp.textContent = "You've reached the upload limit. Delete an uploaded file to make room. Files still used by calculations keep their slots until those calculations stop.";
         this.quotaHelp.hidden = true;
@@ -130,7 +130,7 @@ export class UploadsDialog {
         this.trigger.addEventListener("click", () => void this.open());
         this.file.addEventListener("change", () => {
             const selected = this.file.files[0];
-            this.name.value = selected ? selected.name.replace(/\.(gpkg|tiff?)$/i, "").slice(0, 200) : "";
+            this.name.value = selected ? selected.name.replace(/\.(gpkg|geojson|json|tiff?)$/i, "").slice(0, 200) : "";
         });
         this.form.addEventListener("submit", event => {
             event.preventDefault();
@@ -232,7 +232,7 @@ export class UploadsDialog {
             ...(summary.retained_files ? [`${summary.retained_files} deleted or expired file${summary.retained_files === 1 ? " is" : "s are"} still used by calculations. Those slots become available when the calculations stop.`] : []),
             ...(pendingFiles ? [`${pendingFiles} file${pendingFiles === 1 ? " is" : "s are"} being uploaded or removed and still ${pendingFiles === 1 ? "uses a slot" : "use slots"}.`] : []),
         ].join(" ");
-        this.fileHelp.textContent = `Polygon GeoPackage (.gpkg), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored. Up to ${formatUploadBytes(summary.max_file_bytes)} per file.`;
+        this.fileHelp.textContent = `Polygon GeoPackage (.gpkg) or GeoJSON (.geojson, .json), or single-band Byte GeoTIFF mask (.tif, .tiff): 1 marks reference sites, 0 excludes cells, and NoData is ignored. Up to ${formatUploadBytes(summary.max_file_bytes)} per file.`;
     }
 
     /** Render stored uploads with separate map and file actions. @return {void} */

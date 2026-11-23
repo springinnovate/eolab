@@ -19,7 +19,7 @@ function controller() {
         controls: new Map(), clearedFilterLayerIds: new Set(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" }, storageStatus: { textContent: "", hidden: true },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
-        retryButton: { hidden: true }, drawButton: { disabled: true }, importButton: { disabled: true },
+        retryButton: { hidden: true }, drawButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
         document: { createElement() { return { remove() {} }; } },
     });
@@ -217,7 +217,6 @@ test("a missing layer position preserves the entire stored document and explains
     await annotations.load();
     assert.equal(annotations.loaded, false);
     assert.equal(annotations.drawButton.disabled, true);
-    assert.equal(annotations.importButton.disabled, true);
     assert.equal(annotations.storageStatus.hidden, false);
     assert.match(annotations.storageStatus.textContent, /position in Map contents/);
     assert.match(annotations.storageStatus.textContent, /stored on this device/);
@@ -561,7 +560,6 @@ test("startup retains storage failure in the closed editor and clears it after a
     await annotations.load();
     assert.equal(annotations.panel.open, false);
     assert.equal(annotations.loaded, false);
-    assert.equal(annotations.importButton.disabled, true);
     assert.equal(annotations.drawButton.disabled, true);
     assert.equal(annotations.status.textContent, "Cannot open saved polygons: Cannot open database");
     await assert.rejects(annotations.saveForSharing(), /Cannot open database/);
@@ -570,7 +568,6 @@ test("startup retains storage failure in the closed editor and clears it after a
     assert.equal(annotations.panel.open, false);
     assert.equal(annotations.status.textContent, "");
     assert.equal(annotations.loaded, true);
-    assert.equal(annotations.importButton.disabled, false);
     assert.equal(annotations.drawButton.disabled, false);
 });
 
@@ -600,7 +597,7 @@ test("invalid saved drawings stay in the closed editor without overwriting store
         await annotations.load({ attachSavedLayers });
         assert.equal(annotations.panel.open, false);
         assert.equal(annotations.loaded, false);
-        assert.equal(annotations.importButton.disabled, true);
+        assert.equal(annotations.drawButton.disabled, true);
         assert.match(annotations.status.textContent, /invalid polygon/);
         await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", features: [] }),
             /Cannot open saved polygons: Saved polygons contain an invalid polygon/);
@@ -624,7 +621,7 @@ test("recovered filter notices belong to their layers and clear when a filter is
         await annotations.load({ attachSavedLayers });
         assert.equal(annotations.loaded, true);
         assert.equal(annotations.panel.open, false);
-        assert.equal(annotations.importButton.disabled, false);
+        assert.equal(annotations.drawButton.disabled, false);
         assert.equal(annotations.status.textContent, "");
         assert.deepEqual([...annotations.clearedFilterLayerIds], [affected.id]);
         assert.deepEqual(annotations.model.layer(unchanged.id), unchanged);

@@ -9,21 +9,6 @@ import { MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER, MAX_ANNOTATION_DOCUMENT_B
  */
 
 /**
- * Read a bounded local file and validate all polygons before creating any layer.
- * @param {File} file User-selected GeoJSON file; nothing is uploaded.
- * @return {Promise<ImportedAnnotationLayer>} Names, notes and editable polygon coordinates.
- * @throws {Error} If the file cannot be read, is too large, or contains unsupported data.
- */
-export async function readAnnotationGeoJSONFile(file) {
-    if (file.size > MAX_ANNOTATION_DOCUMENT_BYTES) throw new Error("GeoJSON file exceeds the 8 MiB import limit.");
-    let text;
-    try { text = await file.text(); }
-    catch { throw new Error("Could not read this GeoJSON file. Choose it again."); }
-    const filename = file.name.replace(/\.(geojson|json)$/i, "").slice(0, MAX_ANNOTATION_NAME_LENGTH);
-    return parseAnnotationGeoJSON(text, filename || "Imported polygons");
-}
-
-/**
  * Validate an entire GeoJSON document and convert it into editable annotation polygons.
  * Accept a FeatureCollection, Feature or Polygon. Only name/title and note/description
  * strings are imported. EOLab exports also retain contributor labels and colors as
