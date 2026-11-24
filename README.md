@@ -134,8 +134,10 @@ The calculator includes cells whose centers fall inside the analysis area. Cells
 
 ### Run environmental models
 
-**Upstream and downstream area** traces flow around selected polygons. Choose
-a polygon layer and an elevation raster with square cells. Turn on **Upstream**
+**Upstream and downstream area** traces flow around selected polygons. In **Polygon layer**,
+choose a vector layer or a layer you drew on the map. A drawing uses the polygons
+matching its layer filter when you choose **Run tool**. Choose an elevation raster
+with square cells. Turn on **Upstream**
 to find cells that drain into the polygons, **Downstream** to follow paths
 leaving them, or both to combine the areas. The calculation fills depressions
 and traces flow within the DEM. Valid DEM cells with centres inside the

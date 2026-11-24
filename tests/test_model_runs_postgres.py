@@ -761,8 +761,9 @@ def test_model_worker_rejects_changed_routing_dependencies(
         model_runs.compute_implementation_checksum.cache_clear()
 
 
+@pytest.mark.parametrize("polygon_source", ["vector", "drawing"])
 def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
-    model_boundary: Any, boundary: Any
+    model_boundary: Any, boundary: Any, polygon_source: str
 ) -> None:
     """Run, publish and download a known mask through ordinary Processing endpoints.
 
@@ -770,6 +771,7 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         model_boundary: Real model HTTP routes, worker and publication service.
         boundary: Catalog raster with elevations increasing east and south, plus
             the vector selection API.
+        polygon_source: Original vector covering one cell or a drawing covering two independent starting cells.
     """
     vector_client, _, dem_path, _, _ = boundary
     client, worker, service = model_boundary
@@ -777,23 +779,37 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         x, y = dem.xy(50, 40)
         radius = abs(dem.transform.a) / 4
         crs = dem.crs.to_string()
-    path = dem_path.with_name("flow-site.gpkg")
-    write_geopackage_layer(
-        path,
-        "site",
-        crs=crs,
-        geometry=rectangle(x - radius, y - radius, x + radius, y + radius),
-    )
-    selection = register_selection(vector_client, path)
+        second_x, second_y = dem.xy(75, 8)
+    geometry = rectangle(x - radius, y - radius, x + radius, y + radius)
+    if polygon_source == "drawing":
+        second = rectangle(
+            second_x - radius, second_y - radius, second_x + radius, second_y + radius
+        )
+        uploaded = client.post(
+            "/api/processing/polygon-areas",
+            json={"polygons": [geometry, second]},
+            headers=HEADERS,
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        polygon = {"kind": "polygonArea", "reference": uploaded.json()["polygonArea"]}
+    else:
+        path = dem_path.with_name("flow-site.gpkg")
+        write_geopackage_layer(path, "site", crs=crs, geometry=geometry)
+        polygon = {"selection": register_selection(vector_client, path), "fields": {}}
     body = model_request(
         client,
         "polygon-flow-area",
-        inputs={"dem": SOURCE, "polygon": {"selection": selection, "fields": {}}},
+        inputs={"dem": SOURCE, "polygon": polygon},
         parameters={"upstream": True, "downstream": False},
     )
+    run = submit(client, body)
     empty = client.post(
         "/api/processing/model-runs",
-        json={**body, "parameters": {"upstream": False, "downstream": False}},
+        json={
+            **body,
+            "requestId": uuid4().hex,
+            "parameters": {"upstream": False, "downstream": False},
+        },
         headers=HEADERS,
     )
     assert empty.status_code == 422
@@ -803,12 +819,27 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
     }
     invalid = client.post(
         "/api/processing/model-runs",
-        json={**body, "parameters": {"upstream": "false", "downstream": True}},
+        json={
+            **body,
+            "requestId": uuid4().hex,
+            "parameters": {"upstream": "false", "downstream": True},
+        },
         headers=HEADERS,
     )
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_model_inputs"
-    run = submit(client, body)
+    if polygon_source == "drawing":
+        with TestClient(client.app, base_url="https://testserver") as other:
+            foreign = other.post(
+                "/api/processing/model-runs", json=body, headers=HEADERS
+            )
+            assert foreign.status_code == 409, foreign.text
+        released = client.delete(
+            f"/api/processing/polygon-areas/{polygon['reference']['id']}",
+            headers=HEADERS,
+        )
+        assert released.status_code == 200, released.text
+        assert submit(client, body)["jobId"] == run["jobId"]
     assert client.portal.call(worker.run_once)
     identifier = run["jobId"]
     base = f"/api/processing/jobs/{identifier}"
@@ -830,10 +861,14 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         # along the southeast diagonal, starting one cell outside the polygon.
         steps = numpy.arange(1, 50)
         expected[50 + steps, 40 + steps] = 1
+        if polygon_source == "drawing":
+            steps = numpy.arange(1, 25)
+            expected[75 + steps, 8 + steps] = 1
         numpy.testing.assert_array_equal(mask.read(1), expected)
         assert mask.nodata == 255
     run_yaml = parse_yaml(client.get(base + "/run-yaml").content, run=True)
     assert run_yaml["execution"]["numericalPolicy"]["engine"] == "pyflwdir"
+    assert run_yaml["invocation"]["inputs"]["polygon"] == polygon
     owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
     rendered_source = client.portal.call(
         service.resolve_model_artifact, owner, identifier, output["artifactId"]

@@ -51,7 +51,8 @@ function setup(recipe = recipeFor()) {
         getJob: async () => job({model: recipe}), readModelInvocation: async () => ({model: {...recipe, definition: recipe},
             inputs: submitted.at(-1)?.inputs, parameters: {scale: 1}}), readJobStatuses: async () => ({jobs: []})};
     const clock = {setTimeout() {}, clearTimeout() {}}, jobs = new ProcessingJobs(api, clock);
-    const controller = new ModelsController({api, jobs, view, clock, getContext: () => context,
+    const controller = new ModelsController({api, jobs, view, clock,
+        getContext: ({includeDrawnPolygons} = {}) => ({...context, drawnPolygonLayers: includeDrawnPolygons ? context.drawnPolygonLayers : []}),
         storage: {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)},
         prepareVector: () => { throw Error("Configured vector inputs must not preflight scan features"); },
         closeVectorFilter() {}, onOpen() {}, onClose() {}, newId: () => "d".repeat(32)});
@@ -119,6 +120,44 @@ test("source-only vector inputs omit field controls and capture an empty field m
         await h.controller.submit();
         assert.deepEqual(h.submitted[0].inputs.features, {selection, fields: {}});
     }
+});
+
+test("Polygon layer submits the latest matching drawn polygons and reuses the captured area for another run", async t => {
+    const recipe = recipeFor({type: "polygon_layer", label: "Polygon layer"});
+    const h = setup(recipe); t.after(() => h.controller.destroy());
+    await h.controller.loadLibrary();
+    const drawing = {key: "local:annotation:site", label: "Restoration sites", total: 2, polygons: []};
+    const geometry = {type: "Polygon", coordinates: [[[1, 1], [2, 1], [2, 2], [1, 1]]]};
+    const reference = {id: "a".repeat(32), sha256: "b".repeat(64)};
+    const uploads = [];
+    h.api.uploadPolygonArea = async polygons => { uploads.push(structuredClone(polygons)); return {polygonArea: reference}; };
+    h.context.drawnPolygonLayers = [drawing];
+    h.controller.refreshMapLayers();
+    const controls = h.view.setup.inputs.features;
+    assert.ok(controls.source.querySelectorAll("option").some(option => option.textContent === drawing.label));
+    choose(controls.source, source.key);
+    assert.equal(controls.scopeField.hidden, false);
+    choose(controls.source, drawing.key);
+    assert.equal(controls.scopeField.hidden, true);
+    assert.equal(h.view.setup.run.disabled, true);
+    assert.match(controls.status.textContent, /no polygons match/i);
+
+    drawing.polygons = [geometry];
+    h.controller.refreshMapLayers();
+    assert.equal(h.view.setup.run.disabled, false);
+    assert.match(controls.description.textContent, /1 of 2 polygons/);
+    await h.controller.submit();
+    const captured = {kind: "polygonArea", reference};
+    assert.deepEqual(uploads, [[geometry]]);
+    assert.deepEqual(h.submitted[0].inputs.features, captured);
+
+    h.context.drawnPolygonLayers = [];
+    await h.controller.duplicateRun();
+    assert.equal(h.view.setup.run.disabled, false);
+    assert.match(h.view.setup.inputs.features.description.textContent, /original run/i);
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[1].inputs.features, captured);
+    assert.equal(uploads.length, 1);
 });
 
 test("multiple configured vector inputs retain independent source, field and filter choices", () => {

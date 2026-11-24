@@ -20,9 +20,13 @@
  * @typedef {{selection:Object,fields:Object<string,string>,rows?:VectorInputRowValue[]}} VectorInputValue
  */
 
+/** A drawing uploaded by this browser for a model run.
+ * @typedef {{kind:"polygonArea",reference:{id:string,sha256:string}}} DrawnPolygonArea
+ */
+
 /** Recipe-declared vector selection and its required attribute selectors.
  * @typedef {Object} VectorInputDefinition
- * @property {"vector"} type Input family.
+ * @property {"vector"|"polygon_layer"} type Vector attribute picker or a polygon layer that also accepts drawings.
  * @property {string} label User-facing layer selector label.
  * @property {"polygon"} [geometry] Optional polygon restriction; composed calculation inputs currently contain polygon sources only.
  * @property {Object<string,VectorFieldDefinition>} [fields] Named field selectors; absent or empty for a source-only input.
@@ -43,12 +47,12 @@
 /** Independent choices retained while one vector input is edited.
  * @typedef {Object} VectorInputState
  * @property {string} vectorKey Selected live layer key, or empty for a captured run source.
- * @property {VectorInputSource[]} vectors Current composed source choices.
+ * @property {Array<VectorInputSource|import("./inputs.js").DrawnPolygonLayer>} vectors Map layers available for this input.
  * @property {"all"|"filtered"} featureScope Whether to use the whole layer or its accepted filter.
  * @property {Object<string,string>} fields Chosen attribute name for each configured role.
  * @property {VectorInputRowValue[]} [rows] Ordered row values when the recipe declares repeated controls.
  * @property {Object<string,string[]>} [capturedRowFields] Saved field names available for each row role without reading the original source.
- * @property {Object|null} capturedSelection Original run's source/layer and predicate, or null for live input.
+ * @property {Object|null} capturedSelection Original vector selection or drawn polygon area, or null for live input.
  * @property {string} selectionError User-facing reason a live layer is unavailable, or an empty string.
  */
 
@@ -56,7 +60,7 @@
  * @typedef {Object} VectorInputUi
  * @property {(tag:string,text?:string,className?:string)=>HTMLElement} element Create a view-owned element.
  * @property {(id:string,label:string,input:HTMLElement)=>HTMLElement} field Associate a label with a control.
- * @property {(input:HTMLSelectElement,choices:Array<{value:string,label:string}>,selected:string)=>void} options Replace choices while preserving selection.
+ * @property {(input:HTMLSelectElement,choices:Array<{value:string,label:string,group?:string}>,selected:string)=>void} options Replace choices while preserving selection.
  * @property {(filter:Object)=>string} describeFilter Format an accepted field predicate.
  */
 
@@ -86,13 +90,23 @@ function createClearedVectorFields(state, definition) {
     } : {})};
 }
 
+/** List original vector layers and, for a polygon layer input, committed map drawings.
+ * @param {VectorInputDefinition} definition Installed input declaration.
+ * @param {{vectors?:VectorInputSource[],drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} context Detached source choices from composition.
+ * @return {VectorInputState["vectors"]} Choices keyed by their unique Map contents identities.
+ */
+function vectorInputSources(definition, context) {
+    const sources = structuredClone(context.vectors ?? []);
+    return definition.type === "polygon_layer" ? sources.concat(context.drawnPolygonLayers ?? []) : sources;
+}
+
 /** Initialize fields and one configured row without an implicit source choice.
  * @param {VectorInputDefinition} definition Installed input declaration.
- * @param {{vectors?:VectorInputSource[]}} context Current source metadata from composition.
+ * @param {{vectors?:VectorInputSource[],drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} context Current source choices from composition.
  * @return {VectorInputState} Detached editable input state.
  */
 function createVectorInputDraft(definition, context) {
-    return {vectorKey: "", vectors: structuredClone(context.vectors ?? []), featureScope: "filtered",
+    return {vectorKey: "", vectors: vectorInputSources(definition, context), featureScope: "filtered",
         fields: emptyVectorFields(definition.fields), ...(definition.rows ? {rows: [createVectorInputRow(definition.rows)], capturedRowFields: {}} : {}),
         capturedSelection: null, selectionError: ""};
 }
@@ -120,12 +134,17 @@ function captureVectorFields(values, definitions, source, context = "") {
  * are scanned here. Captured run inputs are reauthorized by Processing.
  * @param {VectorInputState} state Editable source and field choices.
  * @param {VectorInputDefinition} definition Required field labels and kinds.
- * @return {VectorInputValue} Detached invocation value for one Processing submission.
- * @throws {Error} If the source, a required field or a row choice is unavailable, or no configured rows remain.
+ * @return {VectorInputValue|DrawnPolygonArea|{kind:"drawnPolygons",key:string,polygons:import("./inputs.js").DrawnPolygonLayer["polygons"]}} Vector input, captured area, or matching drawings for the controller to upload.
+ * @throws {Error} If the source, matching drawings, required fields or rows are unavailable.
  */
 function captureVectorInput(state, definition) {
     const source = state.vectors.find(value => value.key === state.vectorKey);
     if (!source && !state.capturedSelection) throw new Error(`Choose a layer for ${definition.label}.`);
+    if (!source && state.capturedSelection.kind === "polygonArea") return structuredClone(state.capturedSelection);
+    if (source && "polygons" in source) {
+        if (!source.polygons.length) throw new Error(`No polygons match in ${source.label}. Add a polygon or change the layer's filter.`);
+        return {kind: "drawnPolygons", key: source.key, polygons: structuredClone(source.polygons)};
+    }
     const fields = captureVectorFields(state.fields, definition.fields ?? {}, source);
     let rows;
     if (definition.rows) {
@@ -149,37 +168,43 @@ function captureVectorInput(state, definition) {
  * never selects a replacement.
  * @param {VectorInputState} state Editable input to update.
  * @param {VectorInputDefinition} definition Configured field roles.
- * @param {{vectors?:VectorInputSource[]}} context Current source metadata from composition.
+ * @param {{vectors?:VectorInputSource[],drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} context Current source choices from composition.
  * @return {void}
  */
 function refreshVectorInput(state, definition, context) {
-    state.vectors = structuredClone(context.vectors ?? []);
+    state.vectors = vectorInputSources(definition, context);
     if (state.vectorKey && !state.vectors.some(source => source.key === state.vectorKey)) {
         state.vectorKey = "";
         Object.assign(state, createClearedVectorFields(state, definition));
-        state.selectionError = "Add the vector dataset to Map contents, or choose another dataset.";
+        state.selectionError = definition.type === "polygon_layer" ? "Choose another polygon layer from Map contents."
+            : "Add the vector dataset to Map contents, or choose another dataset.";
     }
 }
 
-/** Restore the original run's fields and rows without guessing a matching map view.
+/** Restore the original run's polygon area or vector selection independently of current map layers.
  * @param {VectorInputState} state Newly created editable input.
- * @param {VectorInputValue} value Validated saved invocation input.
+ * @param {VectorInputValue|DrawnPolygonArea} value Validated saved invocation input.
  * @param {VectorInputDefinition} definition Installed declaration for the saved recipe version.
  * @return {void}
  */
 function restoreVectorInput(state, value, definition) {
+    if (value.kind === "polygonArea") {
+        state.capturedSelection = structuredClone(value);
+        return;
+    }
     Object.assign(state, {vectorKey: "", capturedSelection: structuredClone(value.selection), fields: structuredClone(value.fields)});
     if (definition.rows) Object.assign(state, {rows: structuredClone(value.rows),
         capturedRowFields: Object.fromEntries(Object.keys(definition.rows.fields).map(role => [role, [...new Set(value.rows.map(row => row.fields[role]))]]))});
 }
 
-/** Describe a saved vector input using configured field labels and its captured filter.
- * @param {VectorInputValue} value Validated saved invocation input.
+/** Describe a run's drawn polygons or the vector fields and filter it used.
+ * @param {VectorInputValue|DrawnPolygonArea} value Validated saved invocation input.
  * @param {VectorInputDefinition} definition Installed field labels.
  * @param {{describeFilter:(filter:Object)=>string}} formatters Owning view's predicate formatter.
  * @return {string} Readable fields and numbered rows followed by the feature selection.
  */
 function describeVectorInput(value, definition, formatters) {
+    if (value.kind === "polygonArea") return "Drawn polygons captured for this run";
     return [...Object.entries(definition.fields ?? {}).map(([role, field]) => `${field.label}: ${value.fields[role]}`),
         ...(definition.rows ? value.rows.map((row, index) => `${definition.rows.itemLabel} ${index + 1}: ${[
             ...Object.entries(definition.rows.fields).map(([role, field]) => `${field.label}: ${row.fields[role]}`),
@@ -220,8 +245,8 @@ class VectorInputView {
         ui.options(this.scope, [{value: "filtered", label: "Features matching the layer filter"},
             {value: "all", label: "All features in the layer"}], "filtered");
         this.scope.addEventListener("change", () => callbacks.onInput(name, {featureScope: this.scope.value}));
-        this.root.append(ui.field(`models-${name}-source`, definition.label, this.source),
-            ui.field(`models-${name}-scope`, "Features to use", this.scope));
+        this.scopeField = ui.field(`models-${name}-scope`, "Features to use", this.scope);
+        this.root.append(ui.field(`models-${name}-source`, definition.label, this.source), this.scopeField);
         this.fields = {};
         for (const [role, field] of Object.entries(definition.fields ?? {})) {
             const control = ui.element("select"); control.required = true;
@@ -326,9 +351,21 @@ class VectorInputView {
         this.state = state;
         const source = state.vectors.find(value => value.key === state.vectorKey);
         const captured = !source && state.capturedSelection;
-        this.ui.options(this.source, [{value: "", label: captured ? "Layer and filter from original run" : "Choose a vector layer…"},
-            ...state.vectors.map(value => ({value: value.key, label: value.label}))], state.vectorKey);
+        const polygonLayer = this.definition.type === "polygon_layer";
+        const capturedDrawing = captured?.kind === "polygonArea";
+        const prompt = capturedDrawing ? "Drawn polygons from original run" : captured ? "Layer and filter from original run"
+            : polygonLayer ? "Choose a polygon layer…" : "Choose a vector layer…";
+        this.ui.options(this.source, [{value: "", label: prompt},
+            ...state.vectors.map(layer => ({value: layer.key, label: layer.label, group: "polygons" in layer ? "Drawn polygons" : undefined}))], state.vectorKey);
         this.source.required = !captured;
+        const drawing = source && "polygons" in source ? source : null;
+        this.scopeField.hidden = Boolean(drawing || capturedDrawing);
+        if (drawing || capturedDrawing) {
+            this.description.textContent = drawing ? `${drawing.polygons.length} of ${drawing.total} ${drawing.total === 1 ? "polygon" : "polygons"} selected. Uses the layer's filter.`
+                : "Uses the drawn polygons from the original run.";
+            this.status.textContent = drawing && !drawing.polygons.length ? "No polygons match. Add a polygon or change the layer's filter." : "";
+            return capturedDrawing || drawing.polygons.length > 0;
+        }
         this.scope.value = state.featureScope; this.scope.disabled = Boolean(captured);
         const unavailableFields = [];
         for (const [role, field] of Object.entries(this.definition.fields ?? {})) {
@@ -352,7 +389,8 @@ class VectorInputView {
         }
         this.description.textContent = captured ? `Uses the original run's selection. ${this.ui.describeFilter(captured.filter)}` :
             source ? state.featureScope === "all" ? "All features are included, regardless of the layer's map filter or visibility."
-                : `Uses the layer's filter when you run the tool. ${this.ui.describeFilter(source.filter)}` : "Add a vector dataset to Map contents to choose it here.";
+                : `Uses the layer's filter when you run the tool. ${this.ui.describeFilter(source.filter)}`
+                : polygonLayer ? "Draw a polygon or add a polygon layer to Map contents." : "Add a vector dataset to Map contents to choose it here.";
         this.status.textContent = state.selectionError || (unavailableFields.length ? `No eligible fields are available for: ${unavailableFields.join(", ")}.` : "");
         try { captureVectorInput(state, this.definition); return true; } catch { return false; }
     }

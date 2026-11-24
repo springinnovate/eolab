@@ -780,7 +780,7 @@ OPERATIONS = MappingProxyType(
                 flow_area.FlowAreaPlan,
             ](
                 id=flow_area.OPERATION,
-                inputs=(("polygon", "vector"), ("dem", "raster")),
+                inputs=(("polygon", "polygon_layer"), ("dem", "raster")),
                 parameters=(("upstream", "boolean"), ("downstream", "boolean")),
                 output=OperationOutput(
                     "mask", "raster", "map", "image/tiff", "Raster mask"
@@ -791,9 +791,17 @@ OPERATIONS = MappingProxyType(
                 policy_type=flow_area.FlowAreaPolicy,
                 bind=flow.bind_flow_area,
                 source=flow.get_dem_reference,
-                polygon_inputs=lambda request: {},
-                vector_selections=lambda request: {"polygon": request.polygon},
-                queue=lambda request, polygons: flow.queue_flow_area(request),
+                polygon_inputs=lambda request: (
+                    {"polygon": request.polygon}
+                    if isinstance(request.polygon, PolygonAreaReference)
+                    else {}
+                ),
+                vector_selections=lambda request: (
+                    {}
+                    if isinstance(request.polygon, PolygonAreaReference)
+                    else {"polygon": request.polygon}
+                ),
+                queue=flow.queue_flow_area,
                 prepare=flow.prepare_flow_area,
                 execution=flow.select_flow_execution,
                 policy=flow.describe_flow_policy,

@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection
-from eolab_app.processing.aggregate_models import RasterAggregateLimits
+from eolab_app.polygon_areas import PolygonAreaReference
+from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.flow_area import (
     OPERATION,
     FlowAreaInputs,
@@ -30,10 +31,10 @@ PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
 def bind_flow_area(
     inputs: dict[str, Any], parameters: dict[str, Any], request_id: str, label: str
 ) -> FlowAreaInputs:
-    """Bind the model's DEM, selected features and two direction checkboxes.
+    """Bind the model's DEM, polygon layer or drawing, and flow directions.
 
     Args:
-        inputs: Recipe-validated raster reference and vector selection.
+        inputs: Validated DEM reference and either a vector selection or an owned drawing reference.
         parameters: Validated upstream and downstream booleans.
         request_id: Retry identifier retained by the surrounding model service.
         label: User-facing run name retained by the surrounding model service.
@@ -44,9 +45,14 @@ def bind_flow_area(
     Raises:
         ProcessingError: If neither checkbox is selected.
     """
+    polygon = inputs["polygon"]
     return FlowAreaInputs(
         dem=inputs["dem"],
-        polygon=inputs["polygon"]["selection"],
+        polygon=(
+            polygon["reference"]
+            if polygon.get("kind") == "polygonArea"
+            else polygon["selection"]
+        ),
         upstream=parameters["upstream"],
         downstream=parameters["downstream"],
     )
@@ -70,20 +76,23 @@ def get_dem_reference(
     return value.dem
 
 
-def queue_flow_area(request: FlowAreaInputs) -> PreparedJobPlan:
-    """Prepare a durable, path-free submission for the existing model queue.
+def queue_flow_area(
+    request: FlowAreaInputs, polygons: dict[str, AggregateArea]
+) -> PreparedJobPlan:
+    """Queue the selected vector predicate or the drawing captured for this run.
 
     Args:
         request: Validated DEM, polygon selection and flow directions.
+        polygons: Exact drawn geometry read by Processing under the submitting browser's ownership.
 
     Returns:
         Initial job plan with the inputs needed to prepare the raster grid.
     """
     return PreparedJobPlan(
         operation=OPERATION,
-        specification=QueuedFlowArea(request=request).model_dump(
-            mode="json", by_alias=True
-        ),
+        specification=QueuedFlowArea(
+            request=request, drawnPolygons=polygons.get("polygon")
+        ).model_dump(mode="json", by_alias=True),
         summary={},
     )
 
@@ -111,30 +120,36 @@ async def prepare_flow_area(
         raise ProcessingError(*grid)
     return PreparedJobPlan(
         operation=OPERATION,
-        specification=FlowAreaPlan(inputs=queued.request, grid=grid).model_dump(
-            mode="json", by_alias=True
-        ),
+        specification=FlowAreaPlan(
+            inputs=queued.request, grid=grid, drawnPolygons=queued.drawnPolygons
+        ).model_dump(mode="json", by_alias=True),
         summary={},
     )
 
 
 async def resolve_flow_sources(
     context: OperationContext, spec: FlowAreaPlan, dem: AuthorizedRaster
-) -> tuple[tuple[Path, ResolvedCatalogSelection], FlowAreaPlan]:
-    """Open the captured vector selection for the same authorized execution attempt.
+) -> tuple[tuple[Path, ResolvedCatalogSelection | AggregateArea], FlowAreaPlan]:
+    """Pair the DEM with the admitted drawing or the authorized original vector.
 
     Args:
         context: Worker vector source reader with existing ownership and retention.
-        spec: Captured vector predicate and native mask grid.
+        spec: Captured drawing or vector predicate and native mask grid.
         dem: Original DEM already resolved and retained by the worker.
 
     Returns:
-        Ephemeral native raster and vector source descriptions and the accepted plan.
+        Native inputs and the accepted plan for calculating the flow mask.
 
     Raises:
-        ProcessingError: If the vector selection reader is unavailable.
+        ProcessingError: If the captured drawing or vector reader is unavailable.
         SelectionUnavailableError: If the captured original source cannot be used.
     """
+    if isinstance(spec.inputs.polygon, PolygonAreaReference):
+        if spec.drawnPolygons is None:
+            raise ProcessingError(
+                "invalid_plan", "The run's drawn polygons are missing.", 500
+            )
+        return (dem.source_path, spec.drawnPolygons), spec
     if context.areas is None:
         raise ProcessingError(
             "selection_unavailable", "Vector source reading is unavailable.", 409

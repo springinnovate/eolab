@@ -29,7 +29,7 @@ export function modelHasInput(model, type) { return Object.values(model.inputs).
  * @return {boolean} Whether to request polygon drawings from browser composition.
  */
 export function modelSupportsDrawnAreas(model) {
-    return model.id === "habitat-condition" || modelHasInput(model, "explicit_area");
+    return model.id === "habitat-condition" || modelHasInput(model, "explicit_area") || modelHasInput(model, "polygon_layer");
 }
 
 /** Report whether the shared area picker owns this input.

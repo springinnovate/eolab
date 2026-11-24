@@ -70,7 +70,8 @@ class ModelInput(ModelSchema):
     selected operation. Omitting fields and rows makes a source-only chooser.
 
     Attributes:
-        type: Registered input type, including the literal string "vector".
+        type: Registered input type. A "polygon_layer" accepts drawn polygons
+            or an original vector selection. A "vector" can also require attributes.
         label: User-facing input name.
         geometry: Optional polygon restriction for a vector chooser.
         fields: Required vector attributes, keyed by recipe-defined role names.
@@ -571,20 +572,23 @@ def validate_operation(definition: ModelDefinition) -> None:
         requested = [
             output.source.split(".")[1] for output in definition.outputs.values()
         ]
+        operation_inputs = dict(contract.inputs)
+        bound_types = {
+            name: definition.inputs[binding.input].type
+            for name, binding in step.inputs.items()
+            if isinstance(binding, InputBinding)
+        }
         valid = (
-            {
-                name: (
-                    dict(contract.inputs).get(name)
-                    if isinstance(item, FixedInputBinding)
-                    else (
-                        "raster"
-                        if definition.inputs[item.input].type == "catalog_raster"
-                        else definition.inputs[item.input].type
-                    )
-                )
-                for name, item in step.inputs.items()
-            }
-            == dict(contract.inputs)
+            step.inputs.keys() == operation_inputs.keys()
+            and all(
+                declared == operation_inputs[name]
+                or (declared, operation_inputs[name])
+                in {
+                    ("catalog_raster", "raster"),
+                    ("vector", "polygon_layer"),
+                }
+                for name, declared in bound_types.items()
+            )
             and all(
                 name in dict(contract.fixed_input_models)
                 for name, item in step.inputs.items()

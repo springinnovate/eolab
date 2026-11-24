@@ -23,7 +23,7 @@ const BUILTIN_INPUT_TYPES = new Set(["raster", "catalog_raster", "optional_raste
 /** Installed input handlers, independent of individual model recipes.
  * @type {Map<string,ModelInputHandler>}
  */
-const INPUT_HANDLERS = new Map([["vector", vectorInputHandler], ["raster_formula", rasterFormulaInputHandler]]);
+const INPUT_HANDLERS = new Map([["vector", vectorInputHandler], ["polygon_layer", vectorInputHandler], ["raster_formula", rasterFormulaInputHandler]]);
 
 /** Find a registered input handler without changing the established input families.
  * @param {string} type Recipe input type.

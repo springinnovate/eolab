@@ -300,6 +300,52 @@ def test_historical_catalog_recipe_still_executes_without_rewriting_identity() -
     assert invocation.model.definition.digest == saved["model"]["definitionSha256"]
 
 
+def test_flow_operation_still_binds_a_vector_only_polygon_recipe() -> None:
+    """Allow the original flow recipe to bind and keep its captured vector filter."""
+    recipe = (
+        ModelRegistry.load_installed().get("polygon-flow-area", "1.1.0").to_document()
+    )
+    recipe["version"] = "1.0.0"
+    recipe["inputs"]["polygon"] = {
+        "type": "vector",
+        "geometry": "polygon",
+        "label": "Polygon layer",
+    }
+    definition = ModelDefinition.model_validate(recipe)
+    selection = {
+        "collectionId": "eolab-mounted-vectors",
+        "itemId": "drainage-sites",
+        "assetKey": "data",
+        "layerName": "sites",
+        "filter": {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "name", "operator": "eq", "value": "East"}],
+        },
+    }
+    example = summary_request()
+    submitted = ModelRunRequest.model_validate(
+        {
+            **example,
+            "model": {
+                "id": definition.id,
+                "version": definition.version,
+                "definitionSha256": definition.digest,
+            },
+            "inputs": {
+                "dem": example["inputs"]["raster"],
+                "polygon": {"selection": selection, "fields": {}},
+            },
+            "parameters": {"upstream": True, "downstream": False},
+        }
+    )
+    calculation, invocation = build_model_calculation_request(
+        submitted, ModelRegistry((definition,))
+    )
+    assert calculation.polygon.filter.rules[0].value == "East"
+    assert invocation.inputs == submitted.inputs
+
+
 def test_installed_summary_matches_approved_example_and_round_trips() -> None:
     """Installed package discovery and YAML round trips preserve definition identity."""
     definition = ModelRegistry.load_installed().get("raster-summary", "1.1.0")

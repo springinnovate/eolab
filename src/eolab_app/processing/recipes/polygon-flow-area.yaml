@@ -1,15 +1,14 @@
 schema: eolab.model/v1
 id: polygon-flow-area
-version: "1.0.0"
+version: "1.1.0"
 title: Upstream and downstream area
 description: >-
   Find DEM cells that drain into selected polygons, follow flow paths leaving them,
   or do both. The mask covers flow within the DEM and excludes the starting cells.
 inputs:
   polygon:
-    type: vector
+    type: polygon_layer
     label: Polygon layer
-    geometry: polygon
   dem:
     type: raster
     label: Elevation raster (DEM)

@@ -1,6 +1,6 @@
 """Trace flow to and from selected polygons on the elevation raster grid."""
 
-from contextlib import closing
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from hashlib import file_digest
 from importlib.metadata import version as package_version
@@ -17,19 +17,24 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 import rasterio
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import Affine
+from rasterio.windows import Window
 
 from eolab_app.bounded_vector import PolygonRasterizer
 from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.aggregate_models import RasterAggregateLimits
+from eolab_app.polygon_areas import PolygonAreaReference
+from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.d8 import build_d8_flow_graph, read_d8_elevations
 from eolab_app.processing.model_result_contracts import RasterResultGrid
 from eolab_app.processing.models import Artifact, ProcessingError
 from eolab_app.processing.raster_input import validate_supported_raster
 from eolab_app.processing.raster_mask import temporary_polygon_mask
-from eolab_app.raster.bounded_window import NoRasterBoundsOverlapError
-from eolab_app.raster.reader import open_raster_data
+from eolab_app.raster.bounded_window import (
+    NoRasterBoundsOverlapError,
+    selected_raster_area_for_wgs84_polygons,
+)
+from eolab_app.raster.reader import RasterDataset, open_raster_data
 from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.polygon_flow_area.v1"
@@ -39,11 +44,11 @@ LOGGER = logging.getLogger(__name__)
 
 
 class FlowAreaInputs(BaseModel):
-    """Capture the selected DEM, polygon predicate and directions for one run."""
+    """Identify the DEM, vector selection or private drawing, and requested flow directions."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     dem: RasterSourceReference
-    polygon: VectorSelection
+    polygon: VectorSelection | PolygonAreaReference
     upstream: StrictBool
     downstream: StrictBool
 
@@ -65,20 +70,22 @@ class FlowAreaInputs(BaseModel):
 
 
 class QueuedFlowArea(BaseModel):
-    """Persist path-free inputs while the run waits for a worker."""
+    """Keep the submitted inputs and any admitted drawing until a worker prepares the run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation: Literal["hydrology.polygon_flow_area.v1"] = OPERATION
     request: FlowAreaInputs
+    drawnPolygons: AggregateArea | None = None
 
 
 class FlowAreaPlan(BaseModel):
-    """Record the accepted inputs and expected mask grid for a native calculation."""
+    """Keep the accepted inputs, any drawn geometry, and the DEM grid for the calculation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation: Literal["hydrology.polygon_flow_area.v1"] = OPERATION
     inputs: FlowAreaInputs
     grid: RasterResultGrid
+    drawnPolygons: AggregateArea | None = None
 
 
 class FlowAreaPolicy(BaseModel):
@@ -182,8 +189,58 @@ def _write_flow_mask(
             output.write(mask.astype("uint8"), 1, window=window)
 
 
+def _rasterize_flow_start_cells(
+    dem: RasterDataset,
+    source: ResolvedCatalogSelection | AggregateArea,
+    directory: Path,
+    limits: RasterAggregateLimits,
+) -> tuple[Window, NDArray[numpy.bool_]]:
+    """Find DEM cell centres inside the drawn polygons or selected vector features.
+
+    Args:
+        dem: Open elevation raster supplying the native grid.
+        source: Drawing captured at submission or authorized original vector and filter.
+        directory: Private scratch directory for the temporary seed mask.
+        limits: Processing settings for rasterizing the mask.
+
+    Returns:
+        The seed window and its cell membership before excluding missing elevations.
+
+    Raises:
+        ProcessingError: If no DEM cell centres fall inside the polygons.
+        ValueError: If the polygons cannot be projected onto the DEM.
+    """
+    with ExitStack() as resources:
+        try:
+            if isinstance(source, AggregateArea):
+                area = selected_raster_area_for_wgs84_polygons(
+                    dem, source.geometries, None, selected_bounds=source.bounds
+                )
+                seed_window, polygons = area.source_window, area.projected_geometries
+            else:
+                polygons = PolygonRasterizer(
+                    dem, source, None, max_retained_polygon_bytes=None, read_limits=None
+                )
+                resources.callback(polygons.close)
+                seed_window = polygons.source_window
+        except NoRasterBoundsOverlapError as error:
+            raise ProcessingError(
+                "empty_flow_start", "The selected polygons do not overlap the DEM."
+            ) from error
+        with temporary_polygon_mask(
+            dem, seed_window, polygons, directory, limits
+        ) as mask:
+            assert mask is not None  # Both polygon source types supply a mask.
+            selected = mask.read(1).view(numpy.bool_)
+    if not selected.any():
+        raise ProcessingError(
+            "empty_flow_start", "No DEM cell centres fall inside the selected polygons."
+        )
+    return seed_window, selected
+
+
 def calculate_flow_area(
-    sources: tuple[Path, ResolvedCatalogSelection],
+    sources: tuple[Path, ResolvedCatalogSelection | AggregateArea],
     plan: FlowAreaPlan,
     directory: Path,
     limits: RasterAggregateLimits,
@@ -194,7 +251,7 @@ def calculate_flow_area(
     excluded from the result.
 
     Args:
-        sources: Authorized DEM and original vector source with its captured predicate.
+        sources: Authorized DEM and either drawn polygons or an original vector with its filter.
         plan: Accepted directions and native result grid.
         directory: Private, supervisor-owned attempt directory.
         limits: Existing Processing settings for creating the temporary polygon mask.
@@ -212,34 +269,9 @@ def calculate_flow_area(
         scratch = Path(temporary)
         write_progress(directory, "flow_inputs", 0, 0)
         with open_raster_data(dem_path) as dem:
-            try:
-                polygons = PolygonRasterizer(
-                    dem,
-                    selection,
-                    None,
-                    max_retained_polygon_bytes=None,
-                    read_limits=None,
-                )
-            except NoRasterBoundsOverlapError as error:
-                raise ProcessingError(
-                    "empty_flow_start", "The selected polygons do not overlap the DEM."
-                ) from error
-            seed_window = polygons.source_window
-            with (
-                closing(polygons),
-                temporary_polygon_mask(
-                    dem, seed_window, polygons, scratch, limits
-                ) as polygon,
-            ):
-                assert (
-                    polygon is not None
-                )  # A PolygonRasterizer always supplies a mask.
-                selected = polygon.read(1).view(numpy.bool_)
-            if not selected.any():
-                raise ProcessingError(
-                    "empty_flow_start",
-                    "No DEM cell centres fall inside the selected polygons.",
-                )
+            seed_window, selected = _rasterize_flow_start_cells(
+                dem, selection, scratch, limits
+            )
             elevations = read_d8_elevations(dem)
             transform = dem.transform
             latlon = dem.crs.is_geographic

@@ -248,8 +248,16 @@ class ModelInvocation(ModelSchema):
             **dict(operation.input_adapters),
         }
         for name, role in definition.inputs.items():
-            if role.type == "vector":
-                selection = VectorFieldSelection.model_validate(self.inputs[name])
+            value = self.inputs[name]
+            if (
+                role.type == "polygon_layer"
+                and isinstance(value, dict)
+                and value.get("kind") == "polygonArea"
+            ):
+                PolygonArea.model_validate(value)
+                continue
+            if role.type in ("vector", "polygon_layer"):
+                selection = VectorFieldSelection.model_validate(value)
                 if set(selection.fields) != set(role.fields):
                     raise ValueError("Selected vector fields do not match the recipe")
                 if role.rows is None:
