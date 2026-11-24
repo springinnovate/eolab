@@ -7,8 +7,8 @@ import { getVectorLayerStatistics } from "./api.js";
 /** @typedef {import("./api.js").VectorFieldStatistics} VectorFieldStatistics */
 /** @typedef {"mean"|"minimum"|"maximum"} Statistic */
 /** @typedef {(id:string) => {selection:VectorStatisticsSource, fields:ReadonlyArray<{name:string}>}|null} DescribeStatisticsSource */
-/** @typedef {{label:string, source:VectorStatisticsSource|null, fields:string[]}} LayerToSummarize */
-/** @typedef {{label:string, summaries?:VectorFieldStatistics[], message?:string, failed?:boolean}} LayerStatistics */
+/** @typedef {{sourceId:string, source:VectorStatisticsSource|null, fields:string[]}} LayerToSummarize */
+/** @typedef {{sourceId:string, summaries?:VectorFieldStatistics[], message?:string, failed?:boolean}} LayerStatistics */
 
 /** @type {Readonly<Record<Statistic,string>>} */
 const STATISTICS_LABELS = Object.freeze({ mean: "Mean", minimum: "Minimum", maximum: "Maximum" });
@@ -32,6 +32,8 @@ export class VectorPlotStatistics {
         /** @type {[Statistic,HTMLInputElement][]} */
         this.choices = Object.keys(STATISTICS_LABELS).map(statistic => [statistic, element("-" + statistic)]);
         this.observations = [];
+        /** @type {Map<string,string>} Current headings for pending and completed layer statistics. */
+        this.layerLabels = new Map();
         this.fields = [];
         this.pending = null;
         this.completed = null;
@@ -67,18 +69,19 @@ export class VectorPlotStatistics {
         const statistics = this.#selectedStatistics();
         this.button.disabled = this.observations.length === 0 || this.fields.length === 0;
         this.panel.hidden = this.button.disabled || statistics.length === 0;
+        this.layerLabels.clear();
         if (this.panel.hidden) {
             this.#cancelRead();
             if (this.completed?.layers.some(layer => layer.failed)) this.completed = null;
             return;
         }
-        const labels = new Map(this.observations.map(({ sourceId, layerLabel }) => [sourceId, layerLabel]));
-        const layers = [...labels].map(([sourceId, label]) => {
+        for (const {sourceId, layerLabel} of this.observations) this.layerLabels.set(sourceId, layerLabel);
+        const layers = Array.from(this.layerLabels.keys(), sourceId => {
             const description = this.describeSource(sourceId);
             const available = new Set(description?.fields.map(({ name }) => name));
-            return { label, source: description?.selection ?? null, fields: this.fields.filter(field => available.has(field)) };
+            return { sourceId, source: description?.selection ?? null, fields: this.fields.filter(field => available.has(field)) };
         });
-        const key = JSON.stringify([...labels.keys(), layers]);
+        const key = JSON.stringify(layers);
         if (this.pending?.key !== key) this.#cancelRead();
         if (this.completed?.key === key) {
             this.#render(this.completed.layers, statistics);
@@ -98,14 +101,14 @@ export class VectorPlotStatistics {
      * @return {Promise<void>} Settles after the relevant results have been presented.
      */
     async #read(layers, pending) {
-        const results = await Promise.all(layers.map(async ({ label, source, fields }) => {
-            if (!source) return { label, message: "The original layer is unavailable." };
-            if (fields.length === 0) return { label, message: "This layer has none of the plotted numeric fields." };
+        const results = await Promise.all(layers.map(async ({ sourceId, source, fields }) => {
+            if (!source) return { sourceId, message: "The original layer is unavailable." };
+            if (fields.length === 0) return { sourceId, message: "This layer has none of the plotted numeric fields." };
             try {
                 const summaries = await getVectorLayerStatistics(source, fields, pending.controller.signal);
-                return { label, summaries };
+                return { sourceId, summaries };
             } catch {
-                return { label, message: "Could not read whole-layer statistics.", failed: true };
+                return { sourceId, message: "Could not read whole-layer statistics.", failed: true };
             }
         }));
         if (this.pending !== pending) return;
@@ -122,10 +125,10 @@ export class VectorPlotStatistics {
      */
     #render(layers, statistics) {
         const documentContext = this.document;
-        const groups = layers.map(({ label, summaries, message }) => {
+        const groups = layers.map(({ sourceId, summaries, message }) => {
             const group = documentContext.createElement("div");
             const heading = documentContext.createElement("h4");
-            heading.textContent = label;
+            heading.textContent = this.layerLabels.get(sourceId);
             group.append(heading);
             if (message) {
                 const note = documentContext.createElement("p");

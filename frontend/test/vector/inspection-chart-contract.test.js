@@ -231,13 +231,18 @@ test("feature plot benchmarks follow the original layer and ignore obsolete resu
     collectionId: "eolab-mounted-vectors", itemId: "habitat", assetKey: "data", layerName: "habitat", filter: {},
   });
 
-  inspector.onCurrentObservationChange(observation(9, "watersheds"));
+  const watershed = observation(9, "watersheds");
+  inspector.onCurrentObservationChange(watershed);
   assert.equal(requests[0].signal.aborted, true);
   assert.equal(requests[1].source.itemId, "watersheds");
+  inspector.onCurrentObservationChange({...watershed, layerLabel: "River basins"}, null, "labels");
+  assert.equal(requests.length, 2, "renaming a layer must reuse its pending statistics request");
+  assert.equal(requests[1].signal.aborted, false);
   const summary = (field, mean) => ({field, count: 4, mean, minimum: 0, maximum: 80});
   requests[1].resolve(Response.json([summary("R1999", 40), summary("R2000", 50)]));
   await nextTurn();
   const statistics = control("statistics-results");
+  assert.equal(statistics.querySelector("h4").textContent, "River basins");
   assert.deepEqual(statistics.querySelectorAll("dd").map(cell => cell.textContent), ["40", "50"]);
   requests[0].resolve(Response.json([summary("R1999", 20), summary("R2000", 25)]));
   await nextTurn();
@@ -292,6 +297,13 @@ test("comparison displays each layer's chosen benchmarks alongside exact feature
   assert.equal(control("statistics").hidden, false);
   assert.equal(control("values").hidden, false);
   assert.deepEqual(control("table-body").children.map(row => row.children[1].children[0].textContent), ["1", "3", "9"]);
+  inspector.onSampleChange({state: "ready", message: "Ready", observations: observations.map(result =>
+    result.sourceId === "catalog|habitat" ? {...result, layerLabel: "Wetlands"} : result)}, "labels");
+  assert.equal(requests.mock.callCount(), 2, "renaming one layer must reuse both completed statistics results");
+  assert.deepEqual(control("statistics-results").children.map(group => [group.children[0].textContent, group.querySelector("dd").textContent]),
+    [["Wetlands", "-12"], ["Watersheds", "0"]]);
+  assert.equal(control("table-body").children[0].getAttribute("aria-current"), "true",
+    "the selected Watersheds feature moved to the first row");
   control("statistics-minimum").checked = false;
   control("statistics-minimum").dispatchEvent(new Event("change"));
   assert.equal(control("statistics").hidden, true);
