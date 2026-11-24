@@ -4699,15 +4699,20 @@ export function initializeRasterViewer(
         };
     }
 
-    /** Show actual admitted choices and publication feedback in a retained row.
+    /** Show the requested variable and month while their observation time is being looked up.
+     * Once selected, show the exact observation and its publication status.
      * @param {Object} record Temporal raster record.
      * @return {void}
      */
     function renderTemporalControls(record) {
         const temporal = record.state.temporal;
+        const pending = temporal.pendingMonthChoice;
         temporal.controls.render({
             variables: Object.entries(temporal.item.properties["cube:variables"]).map(([id, value]) => ({id, label: value.description ?? id, units: value.unit})),
-            ...temporal.selection, months: temporal.months, month: temporal.month,
+            variable: pending?.variable ?? temporal.selection.variable,
+            month: pending ? pending.month ?? "" : temporal.month,
+            time: pending ? null : temporal.selection.time,
+            months: temporal.months,
             times: temporal.times, loading: temporal.loading, error: temporal.error,
         });
     }
@@ -4797,15 +4802,17 @@ export function initializeRasterViewer(
         }
     }
 
-    /** Load dates for a month choice or look up an exact observation for display.
+    /** Load dates for a new or pending month choice, or recheck the retained observation.
      * @param {Object} record Retained temporal raster.
-     * @param {{variable:string,time:string}} selection Variable and exact timestamp to keep unless a month choice succeeds.
-     * @param {{month?:string,edge:"first"|"last"|"firstOfLastDay"}} [monthChoice] Which observation to choose in the given month, or in the variable's latest month when month is omitted.
-     *     Omit the whole choice to require the exact timestamp.
+     * @param {{variable:string,month?:string,edge:"first"|"last"|"firstOfLastDay"}} [monthChoice] Variable and month edge to use.
+     *     Omitting the month requests that variable's latest month. Omitting the choice retries the pending
+     *     lookup or rechecks the retained variable and exact time.
      * @return {Promise<void>} Completion after date lookup and any publication, with failure shown on the row.
      */
-    async function loadTemporalChoices(record, selection, monthChoice) {
+    async function loadTemporalChoices(record, monthChoice = record.state.temporal.pendingMonthChoice) {
         const temporal = record.state.temporal;
+        const selection = temporal.selection;
+        const variable = monthChoice?.variable ?? selection.variable;
         const month = monthChoice ? monthChoice.month : selection.time.slice(0, 7);
         const edge = monthChoice?.edge;
         temporal.pendingMonthChoice = monthChoice;
@@ -4814,11 +4821,11 @@ export function initializeRasterViewer(
         temporal.loading = true;
         temporal.error = null;
         temporal.times = [];
-        if (selection.variable !== temporal.selection.variable) temporal.months = [];
+        if (monthChoice && month === undefined) temporal.months = [];
         temporal.month = month ?? temporal.month;
         selectTemporalObservation(record, selection, false);
         try {
-            const choices = await loadTimes(temporal.item, selection.variable, month, request.signal);
+            const choices = await loadTimes(temporal.item, variable, month, request.signal);
             if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
             temporal.months = choices.months;
             temporal.month = choices.month;
@@ -4834,7 +4841,7 @@ export function initializeRasterViewer(
                 temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
                 return;
             }
-            selectTemporalObservation(record, {variable: selection.variable, time}, true);
+            selectTemporalObservation(record, {variable, time}, true);
             await publishTemporalObservation(record, request);
         } catch (error) {
             if (!request.signal.aborted) temporal.error = `Could not load observation times: ${error.message}`;
@@ -4883,7 +4890,10 @@ export function initializeRasterViewer(
     async function selectTemporalMonth(key, month, edge) {
         const record = mapLayers.getRecord(key);
         const temporal = record?.state.temporal;
-        if (temporal?.months.includes(month)) await loadTemporalChoices(record, temporal.selection, {month, edge});
+        if (temporal?.months.includes(month)) {
+            const variable = temporal.pendingMonthChoice?.variable ?? temporal.selection.variable;
+            await loadTemporalChoices(record, {variable, month, edge});
+        }
     }
 
     /** Authorize a future observation and capture its style without changing the current layer or analysis.
@@ -4926,15 +4936,15 @@ export function initializeRasterViewer(
             preserveRange: Boolean(presentation.appearance)};
         let record;
         temporal.controls = temporalControlsFactory({
-            onVariableChange: variable => loadTemporalChoices(record, {...temporal.selection, variable}, {edge: "first"}),
-            onMonthChange: month => loadTemporalChoices(record, temporal.selection, {month, edge: "first"}),
+            onVariableChange: variable => loadTemporalChoices(record, {variable, edge: "first"}),
+            onMonthChange: month => selectTemporalMonth(record.entry.key, month, "first"),
             onTimeChange: time => changeTemporalTime(record, time),
-            onRetry: () => loadTemporalChoices(record, temporal.selection, temporal.pendingMonthChoice),
+            onRetry: () => loadTemporalChoices(record),
         });
         const raster = temporalRaster(item, initial, false);
         record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`, canAddView: true,
             label: raster.label, sourceName: raster.label, isCustom: false, raster, temporal, ...presentation}, rasterMapLayerAdapter);
-        await loadTemporalChoices(record, initial, selection ? undefined : {edge: "first"});
+        await loadTemporalChoices(record, selection ? undefined : {variable: initial.variable, edge: "first"});
         if (presentation.isCurrent?.() === false) {
             if (mapLayers.getRecord(record.entry.key) === record) mapLayers.removeKey(record.entry.key);
             return null;
@@ -4942,8 +4952,8 @@ export function initializeRasterViewer(
         return mapLayers.getRecord(record.entry.key);
     }
 
-    /** Refresh metadata and availability for retained temporal views after a server scan.
-     * Keeps explicit selections; missing observations remain visible as unavailable rows.
+    /** Refresh Catalog metadata and retry each layer's pending choice or exact observation.
+     * An explicit missing observation remains visible as unavailable.
      * @return {Promise<void>} Completion after every retained view has refreshed.
      */
     async function refreshTemporalLayers() {
@@ -4958,7 +4968,7 @@ export function initializeRasterViewer(
                 const item = await getTemporalItem({collection: temporal.item.collection, id: temporal.item.id});
                 if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
                 temporal.item = item;
-                await loadTemporalChoices(record, temporal.selection);
+                await loadTemporalChoices(record);
             } catch (error) {
                 if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
                 temporal.loading = false;

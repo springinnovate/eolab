@@ -6159,10 +6159,14 @@ for (const [action, choice, expectedVariable, expectedTime] of [
         try {
             const record = await fixture.viewer.showTemporal(temporalItem(), {variable: "temperature", time: marchTime});
             const view = fixture.temporalViews[0];
+            const originalSource = fixture.viewer.exportTemporal(record).temporalSource;
             failLookup = true;
             await view.handlers[action](choice);
             assert.match(view.state.error, /Dates temporarily unavailable/);
             assert.equal(record.publication, null);
+            assert.deepEqual(fixture.viewer.exportTemporal(record).temporalSource, originalSource);
+            assert.equal(view.state.variable, expectedVariable);
+            assert.equal(view.state.time, null);
             failLookup = false;
             await view.handlers.onRetry();
             assert.deepEqual(lookups[2], lookups[1]);
@@ -6174,6 +6178,51 @@ for (const [action, choice, expectedVariable, expectedTime] of [
         } finally { fixture.destroy(); }
     });
 }
+
+test("saving, copying and undoing removal during a failed variable switch restore the previous observation", async () => {
+    const march = "2020-03-22T12:00:00.000Z", april = "2020-04-03T19:10:00.000Z";
+    const rainLookup = createDeferred();
+    let datesOffline = true;
+    const fixture = temporalFixture({
+        loadTimes: async (_item, variable, month) => {
+            const months = variable === "rain" ? ["2020-03", "2020-04"] : ["2020-03"];
+            if (variable === "rain" && datesOffline) await rainLookup.promise;
+            const selectedMonth = month ?? months.at(-1);
+            return {months, month: selectedMonth, times: [selectedMonth === "2020-03" ? march : april]};
+        },
+    });
+    try {
+        const item = temporalItem();
+        item.properties["cube:dimensions"].time.extent = [march, april];
+        const row = await fixture.viewer.showTemporal(item, {variable: "temperature", time: march});
+        const original = fixture.viewer.exportTemporal(row);
+        const view = fixture.temporalViews[0];
+        const switching = view.handlers.onVariableChange("rain");
+        const duringLookup = fixture.viewer.exportTemporal(row);
+        rainLookup.reject(new Error("Dates temporarily unavailable"));
+        await switching;
+        assert.match(view.state.error, /Dates temporarily unavailable/);
+        assert.deepEqual(duringLookup.temporalSource, original.temporalSource);
+        const saved = fixture.viewer.exportTemporal(row);
+        assert.deepEqual(saved.temporalSource, original.temporalSource);
+        const restored = await fixture.viewer.restoreTemporal(saved, item, () => true);
+        const copy = await fixture.mapLayers.addAnotherView(row.entry.key);
+        for (const key of [restored, copy]) {
+            assert.equal(fixture.mapLayers.getRecord(key).publication.layerName, `eolab:temperature-${march}`);
+        }
+        assert.equal(fixture.mapLayers.removeWithUndo(row.entry.key), true);
+        await fixture.mapLayers.undoLayerRemoval();
+        assert.equal(fixture.mapLayers.getRecord(row.entry.key).publication.layerName, `eolab:temperature-${march}`);
+        const restoredView = fixture.temporalViews[1];
+        await restoredView.handlers.onVariableChange("rain");
+        assert.match(restoredView.state.error, /Dates temporarily unavailable/);
+        datesOffline = false;
+        await fixture.viewer.refreshTemporalLayers();
+        assert.equal(fixture.mapLayers.getRecord(restored).publication.layerName, `eolab:rain-${april}`);
+        assert.equal(restoredView.state.error, null);
+        assert.equal(fixture.mapLayers.getRecord(copy).publication.layerName, `eolab:temperature-${march}`);
+    } finally { fixture.destroy(); }
+});
 
 test("refresh keeps a removed observation explicit and retry recovers publication without losing the row", async () => {
     let times = ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z", "2020-01-01T04:00:00Z"];
@@ -6204,6 +6253,7 @@ test("refresh keeps a removed observation explicit and retry recovers publicatio
         await fixture.temporalViews[0].handlers.onTimeChange(times[1]);
         assert.equal(record.state.item.capabilities.statistics, true);
         assert.match(fixture.temporalViews[0].state.error, /GeoServer unavailable/);
+        assert.equal(fixture.viewer.exportTemporal(record).temporalSource.time, times[1]);
         failPublication = false;
         await fixture.temporalViews[0].handlers.onRetry();
         assert.equal(record.publication.layerName, times[1]);
