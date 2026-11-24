@@ -137,16 +137,18 @@ class DownstreamPlan(HydrologySchema):
 
 
 class ClosedEdgeDownstreamNumericalPolicy(HydrologySchema):
-    """Record closed-edge pit filling before the original WWF MFD calculation.
+    """Record pit-filling settings and the model commit that produced a downstream run.
 
-    The search limit uses EcoShard's exploration cutoff, not an exact count of
-    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    The search limit controls how far EcoShard explores. The number of changed
+    elevations can differ. NoData remains unchanged and MFD retains its edge
+    fallback. Run YAML keeps the full ``wwf_es_beneficiaries`` commit recorded
+    at execution, across upgrades and rollbacks.
     """
 
     version: Literal["hydrology.downstream_beneficiaries.v3"]
-    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
-        BENEFICIARIES_REVISION
-    )
+    beneficiariesRevision: Annotated[
+        str, Field(strict=True, pattern=r"^[a-f0-9]{40}$")
+    ] = BENEFICIARIES_REVISION
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
     )
