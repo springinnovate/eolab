@@ -7,7 +7,7 @@ from typing import cast
 
 from pyproj import CRS as ProjCRS
 from rasterio.crs import CRS
-from rasterio.warp import transform
+from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
 
 from eolab_app.sampling_box import (
@@ -573,6 +573,37 @@ def project_raster_polygons(
     )
 
 
+def _with_polygon_rings(
+    geometries: tuple[dict[str, object], ...],
+    rings: Sequence[Sequence[tuple[float, float]]],
+) -> tuple[dict[str, object], ...]:
+    """Replace rings in traversal order while preserving holes and multipart grouping.
+
+    Args:
+        geometries: Polygonal mappings defining the nesting of the rings.
+        rings: Replacement closed rings in the same order.
+
+    Returns:
+        GeoJSON mappings with the replacement coordinates.
+    """
+    positions = iter(rings)
+    result = []
+    for geometry in geometries:
+        coordinates = cast(Sequence[Sequence[object]], geometry["coordinates"])
+        single = geometry["type"] == "Polygon"
+        polygons = [
+            [next(positions) for _ in polygon]
+            for polygon in ([coordinates] if single else coordinates)
+        ]
+        result.append(
+            {
+                "type": geometry["type"],
+                "coordinates": polygons[0] if single else polygons,
+            }
+        )
+    return tuple(result)
+
+
 def project_polygons_to_crs(
     source_crs: CRS | str,
     target_crs: CRS | str,
@@ -598,15 +629,24 @@ def project_polygons_to_crs(
         ValueError: If coordinates cannot be projected or exceed the ceiling.
         TypeError: If the geometry violates the polygon input contract.
     """
-    geometry_ring_groups: list[
-        tuple[str, tuple[tuple[tuple[float, float], ...], ...]]
-    ] = []
-    all_rings: list[tuple[tuple[float, float], ...]] = []
-    for geometry in geometries:
-        rings = _polygon_rings(geometry)
-        geometry_ring_groups.append((str(geometry["type"]), rings))
-        all_rings.extend(rings)
-    densified_rings = _densify_polygon_rings(tuple(all_rings), maximum_coordinates)
+    all_rings = tuple(
+        ring for geometry in geometries for ring in _polygon_rings(geometry)
+    )
+    densified_rings = _densify_polygon_rings(all_rings, maximum_coordinates)
+    if CRS.from_user_input(source_crs).is_projected and source_crs != target_crs:
+        # GDAL cuts whole polygons at the antimeridian and reconstructs polar
+        # interiors, including holes. A longitude chosen per vertex cannot do that.
+        geometries = tuple(
+            transform_geom(
+                source_crs,
+                "EPSG:4326",
+                _with_polygon_rings(geometries, densified_rings),
+            )
+        )
+        source_crs = "EPSG:4326"
+        densified_rings = tuple(
+            ring for geometry in geometries for ring in _polygon_rings(geometry)
+        )
     x = [point[0] for ring in densified_rings for point in ring]
     y = [point[1] for ring in densified_rings for point in ring]
     projected_x, projected_y = _transform_polygon_positions(
@@ -632,70 +672,7 @@ def project_polygons_to_crs(
         )
         position_index += len(ring)
 
-    target_frame = _longitude_frame(target_crs)
-    unwrap_projected_edges = (
-        target_frame is not None and _longitude_frame(source_crs) is None
-    )
-    projected_geometries: list[dict[str, object]] = []
-    ring_index = 0
-    for geometry_type, source_rings in geometry_ring_groups:
-        ring_counts = []
-        if geometry_type == "Polygon":
-            ring_counts = [len(source_rings)]
-        else:
-            source_geometry = geometries[len(projected_geometries)]
-            coordinates = source_geometry["coordinates"]
-            if not isinstance(coordinates, (list, tuple)):
-                raise TypeError("Selection MultiPolygon is malformed")
-            ring_counts = [len(polygon) for polygon in coordinates]
-        polygons = []
-        for ring_count in ring_counts:
-            polygon_rings = projected_rings[ring_index : ring_index + ring_count]
-            ring_index += ring_count
-            if unwrap_projected_edges:
-                polygon_rings = _unwrap_projected_edges(
-                    polygon_rings, math.tau / abs(target_frame[0])
-                )
-            polygons.append(polygon_rings)
-        projected_geometries.append(
-            {
-                "type": geometry_type,
-                "coordinates": polygons[0] if geometry_type == "Polygon" else polygons,
-            }
-        )
-
-    return tuple(projected_geometries)
-
-
-def _unwrap_projected_edges(
-    rings: list[tuple[tuple[float, float], ...]], period: float
-) -> list[tuple[tuple[float, float], ...]]:
-    """Join projected edge samples continuously across a geographic longitude seam.
-
-    Args:
-        rings: One polygon projected from a planar CRS, exterior first.
-        period: A full longitude turn in target units.
-
-    Returns:
-        Continuous rings with each hole on the same longitude branch as its exterior.
-    """
-    continuous = []
-    exterior_centre = None
-    for ring in rings:
-        points = [ring[0]]
-        for x, y in ring[1:]:
-            previous = points[-1][0]
-            points.append((x + round((previous - x) / period) * period, y))
-        xs = [point[0] for point in points]
-        centre = (min(xs) + max(xs)) / 2
-        if exterior_centre is None:
-            exterior_centre = centre
-        else:
-            shift = round((exterior_centre - centre) / period) * period
-            if shift:
-                points = [(x + shift, y) for x, y in points]
-        continuous.append(tuple(points))
-    return continuous
+    return _with_polygon_rings(geometries, projected_rings)
 
 
 def selected_raster_area_for_wgs84_polygons(

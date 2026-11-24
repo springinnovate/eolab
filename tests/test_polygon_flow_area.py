@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 from pyproj import Transformer
 from rasterio.transform import Affine
 from rasterio.transform import from_origin
-from shapely import segmentize
+from shapely import contains_xy, segmentize
 from shapely.geometry import Polygon, box, mapping
 from shapely.ops import transform as transform_geometry
 
@@ -104,6 +104,77 @@ def test_flow_mask_preserves_projected_source_edges(
     expected = numpy.where(elevations == -9999, 255, 0).astype("uint8")
     expected[20:40:2, :10] = 1
     expected[20:40:2, 70:] = 1
+    numpy.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("polygon", "vector_crs", "dem_crs", "grid", "shape"),
+    [
+        pytest.param(
+            box(
+                *Transformer.from_crs(4326, 3832, always_xy=True).transform(178, 10),
+                *Transformer.from_crs(4326, 3832, always_xy=True).transform(-178, 14),
+            ),
+            "EPSG:3832",
+            "EPSG:3857",
+            from_origin(
+                -20037508.342789244, 1550000, 111319.49079327358, 111319.49079327358
+            ),
+            (3, 360),
+            id="projected-dateline",
+        ),
+        pytest.param(
+            box(-1e6, -1e6, 1e6, 1e6),
+            "EPSG:3413",
+            "EPSG:4326",
+            from_origin(-180, 90, 1, 1),
+            (20, 360),
+            id="polar-cap",
+        ),
+        pytest.param(
+            Polygon(
+                box(-1e6, -1e6, 1e6, 1e6).exterior.coords,
+                [box(-4e5, -4e5, 4e5, 4e5).exterior.coords],
+            ),
+            "EPSG:3413",
+            "EPSG:4326",
+            from_origin(-180, 90, 1, 1),
+            (20, 360),
+            id="polar-hole",
+        ),
+    ],
+)
+def test_projected_flow_seeds_match_original_polygon(
+    tmp_path: Path,
+    polygon: Polygon,
+    vector_crs: str,
+    dem_crs: str,
+    grid: Affine,
+    shape: tuple[int, int],
+) -> None:
+    """Compare published paths with native polygon membership on isolated drainage rows.
+
+    Args:
+        tmp_path: Private directory for the GeoPackage, DEM and output.
+        polygon: Original polygon with straight edges in its source CRS.
+        vector_crs: Coordinate system of the selected vector.
+        dem_crs: Coordinate system of the DEM.
+        grid: Pixel-to-map transform.
+        shape: Native row and column counts.
+    """
+    selection = write_selection(
+        tmp_path / "sites.gpkg", [mapping(polygon)], crs=vector_crs
+    )
+    elevations = numpy.full(shape, -9999, dtype="int16")
+    elevations[::2] = numpy.arange(shape[1] - 1, -1, -1)
+    rows, cols = numpy.indices(shape, dtype="float64") + 0.5
+    x, y = grid * (cols, rows)
+    vx, vy = Transformer.from_crs(dem_crs, vector_crs, always_xy=True).transform(x, y)
+    seeds = contains_xy(polygon, vx, vy) & (elevations != -9999)
+    expected = numpy.where(
+        elevations == -9999, 255, seeds.any(axis=1)[:, None] & ~seeds
+    ).astype("uint8")
+    result = _trace_both_directions(tmp_path, elevations, grid, dem_crs, selection)
     numpy.testing.assert_array_equal(result, expected)
 
 

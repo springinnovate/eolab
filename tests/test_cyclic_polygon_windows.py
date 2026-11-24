@@ -13,6 +13,7 @@ from rasterio.features import geometry_mask
 from rasterio.transform import from_origin
 from rasterio.windows import Window
 from rasterio.windows import transform as window_transform
+from pyproj import Transformer
 from shapely.affinity import translate
 from shapely.geometry import MultiPolygon, Polygon, box, mapping
 
@@ -67,6 +68,42 @@ def test_full_longitude_bounds_include_every_native_column(
     assert stats.valid_sample_count == values.size
     assert stats.sample_minimum == 0
     assert stats.sample_maximum == values.size - 1
+
+
+def test_wide_projected_edge_keeps_its_interior_at_the_statistics_budget(
+    tmp_path: Path,
+) -> None:
+    """Select the wide side of a rectangle even when no extra edge samples fit.
+
+    Args:
+        tmp_path: Directory for the original projected vector and geographic raster.
+    """
+    project = Transformer.from_crs(4326, 3857, always_xy=True)
+    wide = box(*project.transform(-170.2, -10), *project.transform(170.2, 10))
+    angles = np.linspace(0, 2 * np.pi, 250001, endpoint=False)
+    inner = Polygon(np.column_stack((np.cos(angles), np.sin(angles))) * 1000)
+    selection = write_selection(
+        tmp_path / "wide.gpkg", [mapping(wide), mapping(inner)], crs="EPSG:3857"
+    )
+    path = tmp_path / "columns.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=80,
+        height=20,
+        count=1,
+        dtype="int16",
+        crs="EPSG:4326",
+        transform=from_origin(100, 10, 1, 1),
+    ) as dataset:
+        dataset.write(np.tile(np.arange(80, dtype="int16"), (20, 1)), 1)
+    result = read_raster_statistics(path, CatalogSelectionSamplingArea(selection))
+    assert (
+        result.valid_sample_count,
+        result.sample_minimum,
+        result.sample_maximum,
+    ) == (1420, 0, 70)
 
 
 @pytest.fixture
