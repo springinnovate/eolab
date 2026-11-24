@@ -5,6 +5,7 @@ import json
 import math
 from multiprocessing import get_context
 import sys
+from unittest.mock import patch
 
 from affine import Affine
 import numpy as np
@@ -27,6 +28,7 @@ from eolab_app.bounded_vector import native_bbox_for_grid
 from eolab_app.catalog_selection import SelectionUnavailableError
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.ground_area import PixelAreaCalculator
+import eolab_app.processing.ground_area as ground_area
 from eolab_app.raster.bounded_window import selected_raster_area_for_wgs84_polygons
 from eolab_app.vector.filters import VectorFilter
 from catalog_selection_support import owned_polygon_area, write_selection
@@ -427,7 +429,14 @@ def test_fractional_union_matches_owned_polygon_area(
         catalogSelection=resolved.selection,
         resolved=resolved,
     )
-    with rasterio.open(path) as dataset:
+    with (
+        patch.object(
+            ground_area,
+            "project_polygons_to_crs",
+            wraps=ground_area.project_polygons_to_crs,
+        ) as project,
+        rasterio.open(path) as dataset,
+    ):
         baseline = PixelAreaCalculator(dataset, reference, RasterAggregateLimits())
         direct = PixelAreaCalculator(dataset, new, RasterAggregateLimits())
         assert direct.window == baseline.window
@@ -453,6 +462,9 @@ def test_fractional_union_matches_owned_polygon_area(
                     rtol=1e-12,
                     atol=1e-7,
                 )
+        assert sum(len(call.args[2]) for call in project.call_args_list) == len(
+            geometries
+        )
 
 
 def test_predicate_and_spatial_candidates(tmp_path: Path) -> None:

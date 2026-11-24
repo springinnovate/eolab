@@ -527,9 +527,18 @@ export class BivariateRasterControlsView {
      * @return {void}
      */
     openStyle() {
+        if (this.styleRanges.dataset.styleEditing === "false") return;
         this.styleRanges.open = true;
         this.#renderThresholdMarkers();
         this.palette.focus();
+    }
+
+    /** Show map-color actions alongside the always-available percentile estimates and histogram key.
+     * @param {boolean} enabled Whether to allow changes to the paired display.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.styleRanges.dataset.styleEditing = String(enabled);
     }
 
     /**

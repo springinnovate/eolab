@@ -50,6 +50,8 @@ export class SavedMapViewController {
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
+     * @param {()=>Promise<Array<{id:string,title:string}>>} [configuration.listPublisherModels]
+     * Discover the recipes visitors can set up, for the publish and edit forms.
      * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
      * @param {(settings:import("../visitor-controls.js").VisitorControls|undefined)=>void}
      * [configuration.applyVisitorControls] Apply a validated public map's choices before restoring its layers.
@@ -87,6 +89,7 @@ export class SavedMapViewController {
         editPublishedMap = false,
         allowPublishing = false,
         publicationDefaults = { title: "", subtitle: "" },
+        listPublisherModels = async () => [],
         applyMapHeading = () => {},
         applyVisitorControls = () => {},
         basemap = { snapshot: () => "detailed", restore: async () => null },
@@ -135,6 +138,8 @@ export class SavedMapViewController {
         this.editRevision = null;
         this.allowPublishing = allowPublishing;
         this.publicationDefaults = publicationDefaults;
+        this.listPublisherModels = listPublisherModels;
+        this.editorModelRequest = null;
         this.applyMapHeading = applyMapHeading;
         this.applyVisitorControls = applyVisitorControls;
         this.basemap = basemap;
@@ -193,20 +198,30 @@ export class SavedMapViewController {
     }
 
     /**
-     * Capture the current map once and ask the creator for publication labels.
-     * @return {Promise<void>} Completion when the form or capture error is displayed.
+     * Capture the current map once and offer the creator visitor controls and model choices.
+     * @return {Promise<void>} Completion after the open form receives its model choices.
      */
     async openPublicationDialog() {
         if (this.busy || this.destroyed) return;
         this.#setBusy(true);
         try {
             this.publishingView = this.#snapshotCurrentView();
-            this.view.showPublicationForm(this.publicationDefaults);
+            return this.view.showPublicationForm(this.publicationDefaults, this.#loadPublisherModels());
         } catch (error) {
             this.view.showError(asError(error), "copy");
         } finally {
             this.#setBusy(false);
         }
+    }
+
+    /**
+     * Read recipe choices for an author form, allowing other settings to be
+     * edited and existing selections to be retained when discovery fails.
+     * @return {Promise<Array<{id:string,title:string}>|null>} Setup recipes or null on failure.
+     */
+    async #loadPublisherModels() {
+        try { return await this.listPublisherModels(); }
+        catch { return null; }
     }
 
     /**
@@ -254,11 +269,13 @@ export class SavedMapViewController {
             this.applyMapHeading(saved.title, saved.subtitle);
             this.view.showLoading(saved.view.layers.length);
             const report = await this.#restore(saved.view, generation);
-            if (report !== null) this.view.showResults(report);
-            if (this.editPublishedMap && report !== null) {
+            if (report === null || this.destroyed || generation !== this.restoreGeneration) return;
+            this.view.showResults(report);
+            if (this.editPublishedMap) {
                 const complete = report.loaded === report.total && report.details.length === 0;
+                this.editorModelRequest = this.#loadPublisherModels();
                 this.editRevision = saved.revision;
-                this.view.showPublishedMapEditor(saved, complete);
+                this.view.showPublishedMapEditor(saved, complete, this.editorModelRequest);
             }
         } catch (error) {
             this.view.showError(asError(error), "open");
@@ -286,7 +303,7 @@ export class SavedMapViewController {
             });
             this.editRevision = saved.revision;
             this.applyMapHeading(saved.title, saved.subtitle);
-            this.view.showPublishedMapEditor(saved, true);
+            this.view.showPublishedMapEditor(saved, true, this.editorModelRequest);
             this.view.showPublishedMapEditStatus("Saved. Visitors will see these changes when they open or reload the map.");
         } catch (error) {
             this.view.showPublishedMapEditStatus(asError(error).message);
@@ -685,19 +702,27 @@ export class SavedMapViewController {
             this.#discardLayers(stagedLayers);
             return null;
         }
-        try {
-            this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
-        } catch (error) {
-            this.#discardLayers(stagedLayers);
-            throw error;
-        }
-        const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
+        const remainingKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
         for (const [index, result] of preparations.entries()) {
-            if (result.key && !retainedKeys.has(result.key)) {
+            if (result.key && !remainingKeys.has(result.key)) {
                 result.key = null;
                 result.removed = true;
                 result.detail = `${savedMapView.layers[index].customName ?? "A saved layer"} was removed from the map while it was opening.`;
             }
+        }
+        const options = {fitToBounds: false};
+        if (preparations.some(result => result.key)) {
+            const savedKeys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
+            for (const key of savedKeys) remainingKeys.delete(key);
+            options.drawingOrder = [...savedKeys, ...remainingKeys];
+        }
+        try {
+            this.mapLayers.commitStaged(stagedLayers, options);
+        } catch (error) {
+            this.#discardLayers(stagedLayers);
+            throw error;
+        }
+        for (const [index, result] of preparations.entries()) {
             const key = result.key ?? result.staged?.record.entry.key;
             if (key) this.mapLayers.setLegendIncluded(key, savedMapView.layers[index].legendIncluded !== false);
             if (result.key && Object.hasOwn(savedMapView.layers[index], "isCustom")) {
@@ -707,18 +732,12 @@ export class SavedMapViewController {
         if (!restoreAppearanceEarly) {
             this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
         }
-        const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         this.unavailableLayers = preparations.flatMap((result, index) => {
             const layer = savedMapView.layers[index];
             return !result.key && !result.staged && !result.removed && (layer.calculatedFields?.length || layer.runArtifact || layer.drawingLayerId)
                 ? [{index, layer: structuredClone(layer), origin: savedMapView.viewer.origin}] : [];
         });
         this.view.setUnavailableLayerCount(this.unavailableLayers.length);
-        // Older callers may expose only catalog staging; mixed maps require explicit ordering.
-        if (preparations.some(result => result.key)) {
-            const otherKeys = this.mapLayers.retainedRecords.map(record => record.entry.key).filter(key => !keys.includes(key));
-            this.mapLayers.restoreOrder([...keys, ...otherKeys]);
-        }
         return {
             loaded: stagedLayers.length + preparations.filter(result => result.key).length,
             total: savedMapView.layers.length,

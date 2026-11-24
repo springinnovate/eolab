@@ -473,15 +473,15 @@ def test_cylindrical_area_with_a_pole_on_its_edge(south: int, north: int) -> Non
         south: Southern edge of the selected strip in degrees.
         north: Northern edge of the selected strip in degrees.
     """
-    from eolab_app.raster.bounded_window import project_polygons_to_crs
+    from eolab_app.raster.bounded_window import project_polygons_to_output_grid
 
     native = "ESRI:54034"
     to_native = Transformer.from_crs(4326, native, always_xy=True)
     rectangle = box(*to_native.transform_bounds(-10, south, 20, north))
     crs = CRS.from_epsg(4326)
     transform = from_origin(-180, north, 0.5, 0.75)
-    projected = project_polygons_to_crs(
-        native, crs, (mapping(rectangle),), None, pixel_size=(0.5, 0.75)
+    projected = project_polygons_to_output_grid(
+        native, crs, (mapping(rectangle),), pixel_size=(0.5, 0.75)
     )
     rows, cols = np.indices((16, 720), dtype="float64") + 0.5
     expected = contains_xy(rectangle, *to_native.transform(*transform * (cols, rows)))

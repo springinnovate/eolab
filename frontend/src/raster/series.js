@@ -111,6 +111,7 @@ export class RasterSeriesController {
     /**
      * Connect the plot to Processing calculations and its own view.
      * @param {Object} options Collaborators.
+     * @param {()=>boolean} [options.canEditStyle] Whether chart colors and symbol or axis appearance are editable.
      * @param {import("./series-view.js").RasterSeriesView} options.view Plot controls.
      * @param {import("../processing/raster-series-calculations.js").RasterSeriesCalculations} options.areaStatistics Area formulas and Processing client.
      * @param {()=>void} options.onClose Request that composition close this tool.
@@ -118,8 +119,9 @@ export class RasterSeriesController {
      * @param {(choice:"selection"|"vector"|"whole")=>void} [options.onAreaChoice] Start or cancel polygon selection after an explicit area choice.
      * @param {(source:Object)=>Promise<Object>} options.getTemporalItem Read Catalog metadata for a selected dataset.
      */
-    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, onOpenArea = () => {}, getTemporalItem }) {
+    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, onOpenArea = () => {}, getTemporalItem, canEditStyle = () => true }) {
         this.view = view;
+        this.canEditStyle = canEditStyle;
         this.getTemporalItem = getTemporalItem;
         this.areaStatistics = areaStatistics;
         this.onAreaChoice = onAreaChoice;
@@ -180,7 +182,11 @@ export class RasterSeriesController {
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
             },
-            onChartType: type => { this.chartType = type; this.render(); },
+            onChartType: type => {
+                if (!this.canEditStyle()) return;
+                this.chartType = type;
+                this.render();
+            },
             onDownload: () => view.downloadCsv(this.exportCsv()),
         });
         this.render();
@@ -711,10 +717,11 @@ export class RasterSeriesController {
 
     /** Change only where a statistic is displayed, without requesting calculations.
      * @param {number} id Statistic identity.
-     * @param {{visible?:boolean,plotId?:number}} change Visibility, destination plot or user-selected color.
+     * @param {{visible?:boolean,plotId?:number,color?:string}} change Visibility, destination plot or user-selected color.
      * @return {void}
      */
     changeStatisticDisplay(id, change) {
+        if (change.color !== undefined && !this.canEditStyle()) return;
         const display = this.statisticDisplay.get(id);
         if (!display || (change.plotId !== undefined && !this.plots.some(plot => plot.id === change.plotId))) return;
         Object.assign(display, change);
@@ -748,7 +755,12 @@ export class RasterSeriesController {
      */
     setPlotOptions(id, change) {
         const plot = this.plots.find(item => item.id === id);
-        Object.assign(plot, change);
+        if (this.canEditStyle()) Object.assign(plot, change);
+        else {
+            for (const option of ["scale", "bounds", "xBounds"]) {
+                if (Object.hasOwn(change, option)) plot[option] = change[option];
+            }
+        }
         this.render();
     }
 
@@ -781,7 +793,8 @@ export class RasterSeriesController {
         const showingPrevious = !!(area.busy && !rows.some(row => row.state === "value") && area.previousResults);
         for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
-            active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
+            active: this.active, styleEditingEnabled: this.canEditStyle(),
+            area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
                 results: area.results, hasPendingVectorArea: this.hasPendingVectorArea,
                 canCalculateExactStatistics: area.previewFormulas.length > 0 && [...area.results.values()].some(({boxPreview}) =>
@@ -817,7 +830,7 @@ export class RasterSeriesController {
                     value: !matches || row?.value == null ? null : Number(row.value), rawValue: matches ? row?.value : null, unit: row?.unit ?? ""};
             })}));
         if (showingPrevious) for (const statistic of statistics) {statistic.previousRows = statistic.rows; statistic.rows = [];}
-        this.view.render({active: this.active, temporal: {...this.temporal,
+        this.view.render({active: this.active, styleEditingEnabled: this.canEditStyle(), temporal: {...this.temporal,
             variableBound: this.sources.some(source => source.key === this.temporal.viewKey), selectionError: this.temporalSelectionError()},
             area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: this.getSelectedArea(),
                 areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,

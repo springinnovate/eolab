@@ -4,12 +4,11 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
-from rasterio.crs import CRS
 from shapely.geometry import MultiPolygon, Polygon, box, mapping
 
 from catalog_selection_support import write_selection
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import polygon_records
+from eolab_app.bounded_vector import native_polygon_features, polygon_records
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 
@@ -164,20 +163,9 @@ def test_native_topology_is_validated_before_projection(
     """
     source = write_selection(tmp_path / "invalid.gpkg", [mapping(geometry)])
 
-    def project(source_crs: CRS, native: dict[str, Any]) -> dict[str, Any]:
-        """Fail if invalid original geometry reaches the projection callback.
-
-        Args:
-            source_crs: Native vector CRS supplied by the reader.
-            native: Original polygon that must already have been rejected.
-        Raises:
-            AssertionError: If the reader invokes projection before validation.
-        """
-        raise AssertionError("Invalid source topology reached projection")
-
     with pytest.raises(GeometryValidationError, match="valid polygons"):
-        with polygon_records(source, (), project_geometry=project) as records:
-            list(records)
+        with native_polygon_features(source) as (_, polygons):
+            next(polygons)
 
 
 def test_native_ring_validation_counts_holes_and_preserves_finite_z(

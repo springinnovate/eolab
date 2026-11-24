@@ -53,7 +53,7 @@ from eolab_app.processing.raster_preparation import (
     read_warped_tile,
 )
 from eolab_app.projected_boundary import BoundaryConvergenceError
-from eolab_app.raster.bounded_window import project_polygons_to_crs
+from eolab_app.raster.bounded_window import project_polygons_to_output_grid
 from eolab_app.raster.geotiff_crs import GeoTiffReader
 from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference
@@ -286,9 +286,7 @@ def project_calculator_area(
         else:
             decimals = cast(Wgs84Bounds, request.selectedBounds).canonical_tuple()
             geometries = (mapping(box(*decimals)),)
-        return project_polygons_to_crs(
-            "EPSG:4326", crs, geometries, None, pixel_size=pixel_size
-        )
+        return project_polygons_to_output_grid("EPSG:4326", crs, geometries, pixel_size)
     except SelectionUnavailableError as error:
         raise ProcessingError("selection_unavailable", error.detail, 409) from error
     except BoundaryConvergenceError as error:

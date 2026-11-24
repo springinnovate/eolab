@@ -12,8 +12,9 @@ license = { file = "LICENSE" }
 dependencies = [
     "nhi-terrestrial-integrity-modeling @ https://codeload.github.com/springinnovate/nhi-terrestrial-integrity-modeling/tar.gz/36922eb70cc8a42eccdd9eb97c16d3f57521fc6d#sha256=9489db8d66f5a092677e0f6f1f17a67d7197df01c2bb5be87b2ba44ebccd0661",
     "earthengine-api==1.7.50",
-    "wwf-es-beneficiaries==0.0.0+g3f577e27deb3",
+    "wwf-es-beneficiaries==0.0.0+gbe3d4054c2eb",
     "ecoshard @ https://github.com/springinnovate/ecoshard/archive/6bd106862a2cb2517f91f9bd7ca8bb071ccb6013.tar.gz#sha256=e751808a1dc57dfc2236e96f41209ed82dfa85ee492d146da339a8249a001f3b",
+    "pyflwdir==0.6.0+eolab.2",
     "scipy>=1.14,<2",
     "numexpr>=2.10,<3",
     "psutil>=7,<8",
@@ -55,7 +56,8 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-eolab_app = ["static/*", "static/**/*", "processing/*.sql", "processing/recipes/*.yaml", "annotation_sessions/*.sql", "annotation_sessions/admin.*", "saved_maps/*.sql", "planning/*.sql", "drawings/*.sql"]
+eolab_app = ["static/*", "static/**/*", "processing/recipes/*.yaml", "annotation_sessions/*.sql", "annotation_sessions/admin.*", "saved_maps/*.sql", "planning/*.sql", "drawings/*.sql"]
+eolab_jobs = ["schema.sql", "schema_check.sql"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

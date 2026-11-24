@@ -20,7 +20,11 @@ from rasterio.transform import array_bounds
 from rasterio.warp import transform
 from rasterio.windows import Window
 
-from eolab_app.bounded_vector import PolygonRasterizer, polygon_features
+from eolab_app.bounded_vector import (
+    PolygonRasterizer,
+    native_polygon_features,
+    polygon_features,
+)
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
@@ -30,6 +34,7 @@ from eolab_app.raster.bounded_window import (
     grid_boundary_projection,
     project_geographic_polygons,
     project_polygons_to_crs,
+    project_polygons_to_output_grid,
 )
 from eolab_app.raster.geotiff_crs import GeoTiffReader
 from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
@@ -115,24 +120,23 @@ def read_preparation_polygons(
         SelectionUnavailableError: If the original vector cannot be read.
     """
 
-    def project_native_polygon(
-        source_crs: CRS, geometry: dict[str, object]
-    ) -> dict[str, object]:
-        """Project one selected polygon directly from its original CRS."""
-        return project_polygons_to_crs(
-            source_crs, crs, (geometry,), None, pixel_size=pixel_size
-        )[0]
-
-    projector = project_native_polygon if pixel_size is not None else None
-    with polygon_features(
-        selection, limits=None, project_geometry=projector
-    ) as features:
-        if projector is not None:
-            polygons = tuple(features)
-        else:
+    if pixel_size is not None:
+        with native_polygon_features(selection, limits=None) as (source_crs, features):
             polygons = tuple(
-                project_polygons_to_crs("EPSG:4326", crs, (geometry,), None)[0]
+                projected
                 for geometry in features
+                for projected in project_polygons_to_output_grid(
+                    source_crs, crs, (geometry,), pixel_size
+                )
+            )
+    else:
+        with polygon_features(selection, limits=None) as features:
+            polygons = tuple(
+                projected
+                for geometry in features
+                for projected in project_polygons_to_crs(
+                    "EPSG:4326", crs, (geometry,), None
+                )
             )
     if not polygons:
         raise ValueError("The vector selection contains no polygons.")

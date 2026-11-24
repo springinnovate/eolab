@@ -82,6 +82,7 @@ from eolab_app.processing.downstream_models import (
     VectorStartingMask,
 )
 from eolab_app.processing.prepared_hydrology import HydrologySources
+from eolab_app.processing import flow_area, flow_area_operation as flow
 from eolab_app.processing import habitat_operation as habitat
 from eolab_app.processing import habitat_preparation as habitat_inputs
 from eolab_app.processing import habitat_bulk_preparation as habitat_bulk
@@ -772,6 +773,35 @@ OPERATIONS = MappingProxyType(
                 ),
                 input_adapters=(("mask_source", TypeAdapter(StartingMask)),),
                 progress_descriptions=downstream.DOWNSTREAM_PROGRESS_DESCRIPTIONS,
+            ),
+            ModelOperation[
+                flow_area.FlowAreaInputs,
+                flow_area.QueuedFlowArea,
+                flow_area.FlowAreaPlan,
+            ](
+                id=flow_area.OPERATION,
+                inputs=(("polygon", "vector"), ("dem", "raster")),
+                parameters=(("upstream", "boolean"), ("downstream", "boolean")),
+                output=OperationOutput(
+                    "mask", "raster", "map", "image/tiff", "Raster mask"
+                ),
+                execution_profile="polygon-flow-area",
+                queued_type=flow_area.QueuedFlowArea,
+                prepared_type=flow_area.FlowAreaPlan,
+                policy_type=flow_area.FlowAreaPolicy,
+                bind=flow.bind_flow_area,
+                source=flow.get_dem_reference,
+                polygon_inputs=lambda request: {},
+                vector_selections=lambda request: {"polygon": request.polygon},
+                queue=lambda request, polygons: flow.queue_flow_area(request),
+                prepare=flow.prepare_flow_area,
+                execution=flow.select_flow_execution,
+                policy=flow.describe_flow_policy,
+                result=flow.describe_flow_result,
+                outcome=flow.describe_flow_outcome,
+                primary_input="dem",
+                execution_inputs=flow.resolve_flow_sources,
+                progress_descriptions=flow.PROGRESS_DESCRIPTIONS,
             ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
                 id="raster.aggregate.v1",

@@ -82,6 +82,37 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
     } finally { widget.destroy(); }
 });
 
+test("timeline arrows step from a missing saved month to the nearest populated month", () => {
+    const {widget, controls, layer, calls} = fixture();
+    const missing = {...layer.timeline, month: "2000-02", time: "2000-02-29T12:00:00.000Z",
+        months: ["1999-09", "1999-12", "2000-05", "2000-08"], times: [], layerName: null,
+        error: "The selected observation is no longer available."};
+    try {
+        widget.setLayers([{...layer, timeline: missing}]);
+        assert.deepEqual(calls, []);
+        assert.equal(controls.time.getAttribute("aria-valuetext"), "2000-02-29 12:00 UTC");
+        assert.equal(controls.back.disabled, false);
+        assert.equal(controls.forward.disabled, false);
+        assert.equal(controls.gap.textContent, "Next month · 2000-05");
+        controls.back.dispatchEvent(new Event("click"));
+        controls.forward.dispatchEvent(new Event("click"));
+        controls.stride.value = "day";
+        controls.stride.dispatchEvent(new Event("change"));
+        controls.time.dispatchEvent(Object.assign(new Event("keydown"), {key: "ArrowLeft"}));
+        assert.deepEqual(calls, [["rain", "1999-12", "last"], ["rain", "2000-05", "first"],
+            ["rain", "1999-12", "firstOfLastDay"]]);
+
+        for (const [onlyMonth, disabledButton, enabledButton] of [
+            ["1999-12", "forward", "back"], ["2000-05", "back", "forward"],
+        ]) {
+            widget.setLayers([{...layer, timeline: {...missing, months: [onlyMonth]}}]);
+            assert.equal(controls[disabledButton].disabled, true);
+            assert.equal(controls[enabledButton].disabled, false);
+            assert.equal(controls.time.disabled, false, "the arrow keys can reach the only available month");
+        }
+    } finally { widget.destroy(); }
+});
+
 test("Play waits for actual tile completion, buffers at most two and cancels prepared work on Pause", async context => {
     context.mock.timers.enable({apis: ["setTimeout"]});
     const prepared = [], shown = [];

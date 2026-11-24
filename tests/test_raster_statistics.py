@@ -8,9 +8,10 @@ import numpy
 import pytest
 import rasterio
 from pydantic import ValidationError
+from rasterio.coords import BoundingBox
 from rasterio.enums import MaskFlags, Resampling
 from rasterio.features import geometry_mask
-from rasterio.transform import Affine, from_bounds, from_origin
+from rasterio.transform import Affine, array_bounds, from_bounds, from_origin
 from rasterio.warp import transform as transform_coordinates, transform_bounds
 from rasterio.windows import Window
 
@@ -186,7 +187,10 @@ class _NativeStatisticsDataset:
         self.values = values
         self.height, self.width = values.shape
         self.transform = transform or from_origin(0, self.height, 1, 1)
-        self.crs = crs
+        self.crs = rasterio.crs.CRS.from_user_input(crs) if crs is not None else None
+        self.bounds = BoundingBox(
+            *array_bounds(self.height, self.width, self.transform)
+        )
         self.block_shapes = (block_shape or values.shape,)
         self.dtypes = (values.dtype.name,)
         self.nodatavals = (nodata,)
