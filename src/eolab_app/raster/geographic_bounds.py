@@ -44,6 +44,9 @@ def transform_bounds_to_wgs84(
         Geographic and Mercator/equidistant cylindrical systems use PROJ's
         +over control. Other projections retain GDAL's domain handling: +over
         can admit invalid outer corners for non-cylindrical world projections.
+        For geographic grids that reach a native pole, include its valid
+        edge before transforming. If the datum shift moves that pole, retain
+        a conservative full-longitude envelope for the polar strip.
 
     Raises:
         ValueError: If PROJ cannot construct or execute the transformation.
@@ -69,7 +72,34 @@ def transform_bounds_to_wgs84(
         transformer = Transformer.from_crs(
             source_crs, "EPSG:4326", always_xy=True, force_over=True
         )
-        return transformer.transform_bounds(*source_bounds, densify_pts=densify_points)
+        west, south, east, north = source_bounds
+        polar_edges = []
+        if crs.is_geographic:
+            pole = math.pi / (2 * source_crs.units_factor[1])
+            # GeoTIFF angular units can put 100 grads a few ulps below a pole.
+            low, high = round(south / pole, 14), round(north / pole, 14)
+            if low <= -1 < high:
+                south = -pole
+                polar_edges.append((south, -90.0))
+            if low < 1 <= high:
+                north = pole
+                polar_edges.append((north, 90.0))
+        bounds = transformer.transform_bounds(
+            west, south, east, north, densify_pts=densify_points
+        )
+        if not polar_edges or not all(map(math.isfinite, bounds)):
+            return bounds
+        left, bottom, right, top = bounds
+        for native_lat, wgs84_lat in polar_edges:
+            pole_latitude = transformer.transform(west, native_lat)[1]
+            if not math.isclose(pole_latitude, wgs84_lat, rel_tol=0, abs_tol=1e-12):
+                # A shifted pole can swing through longitudes missed by the sampled edges.
+                left, right = -180.0, 180.0
+            if wgs84_lat < 0:
+                bottom = wgs84_lat
+            else:
+                top = wgs84_lat
+        return left, bottom, right, top
     except ProjError as error:
         raise ValueError("Raster bounds could not be transformed to WGS 84") from error
 

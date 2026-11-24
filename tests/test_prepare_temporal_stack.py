@@ -161,27 +161,70 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("west", "pixel_width", "expected_longitudes", "point", "value"),
+    ("epsg", "grid", "expected_longitudes", "point", "value"),
     [
-        (0, 0.01, (2.33651, 2.35451), (2.341, 48.595), 24),
-        (190, 2, (173.33828, 176.93817), (174, 48.595), 24),
-        (0, 200, (-180, 180), (-5, 48.595), 37),
+        (4807, from_origin(0, 54, 0.01, 0.02), (2.33651, 2.35451), (2.341, 48.595), 24),
+        (
+            4807,
+            from_origin(190, 54, 2, 0.02),
+            (173.33828, 176.93817),
+            (174, 48.595),
+            24,
+        ),
+        (4807, from_origin(0, 54, 200, 0.02), (-180, 180), (-5, 48.595), 37),
+        (
+            4322,
+            from_origin(-30, 90.04, 0.1, 0.2),
+            (-29.99985, -29.79985),
+            (-29.94985, 89.999),
+            24,
+        ),
+        (
+            4322,
+            from_origin(-30, -89.84, 0.1, 0.2),
+            (-29.99985, -29.79985),
+            (-29.94985, -90),
+            24,
+        ),
+        (
+            4807,
+            from_origin(20, 100, 0.11, 0.2),
+            (-180, 180),
+            (-161.28646, 89.99930275),
+            24,
+        ),
+        (
+            4807,
+            from_origin(20, -99.84, 0.11, 0.2),
+            (-180, 180),
+            (-161.28646, -89.99930268),
+            24,
+        ),
+    ],
+    ids=[
+        "paris",
+        "eastern-grads",
+        "global-grads",
+        "north",
+        "south",
+        "north-grad-edge",
+        "south-grad-edge",
     ],
 )
-def test_grad_grid_footprint_and_original_pixel(
+def test_geographic_grid_footprint_and_original_pixel(
     tmp_path: Path,
-    west: float,
-    pixel_width: float,
+    epsg: int,
+    grid: rasterio.Affine,
     expected_longitudes: tuple[float, float],
     point: tuple[float, float],
     value: int,
 ) -> None:
-    """Locate a Paris-meridian grid in WGS84 and read its original sample.
+    """Find an original geographic raster cell inside its WGS84 Catalog footprint.
 
     Args:
         tmp_path: Isolated Catalog mount.
-        west: Left edge in grads relative to the Paris meridian.
-        pixel_width: Cell width in grads; two 200-grad cells circle the globe.
+        epsg: Native coordinate reference system for the source.
+        grid: Raster transform in its native angular units.
         expected_longitudes: Western and eastern WGS84 Catalog bounds.
         point: Requested WGS84 position inside the first or wrapped last cell.
         value: Original raster sample at the requested position.
@@ -196,8 +239,8 @@ def test_grad_grid_footprint_and_original_pixel(
     manifest = annual_manifest(root)
     for path in root.glob("*.tif"):
         with rasterio.open(path, "r+") as src:
-            src.crs = "EPSG:4807"
-            src.transform = from_origin(west, 54, pixel_width, 0.02)
+            src.crs = f"EPSG:{epsg}"
+            src.transform = grid
             if path.name == "rain_2024.tif":
                 src.write(numpy.array([[24, 37]], dtype="int16"), 1)
     built = run_cli("build", manifest)
@@ -207,13 +250,11 @@ def test_grad_grid_footprint_and_original_pixel(
     ((key, item),) = writer.write_session.items.items()
     west_deg, south, east_deg, north = item["bbox"]
     assert (west_deg, east_deg) == pytest.approx(expected_longitudes, abs=0.0001)
-    assert south < point[1] < north
+    assert west_deg <= point[0] <= east_deg and south <= point[1] <= north
     assert item["geometry"]["coordinates"][0][0] == [west_deg, south]
     axis = item["properties"]["cube:dimensions"]["x"]
-    assert axis["reference_system"] == 4807
-    assert axis["extent"] == pytest.approx(
-        [west + pixel_width / 2, west + 1.5 * pixel_width]
-    )
+    assert axis["reference_system"] == epsg
+    assert axis["extent"] == pytest.approx([grid.c + grid.a / 2, grid.c + 1.5 * grid.a])
     query = TemporalRasterSelection(
         collectionId=key[0], itemId=key[1], variable="rain", time="2025-01-01T00:00:00Z"
     )
