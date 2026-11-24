@@ -348,6 +348,15 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                     "The file must be relative and inside the stack directory."
                 )
             with rasterio.open(path, driver="GTiff") as src:
+                sidecars = [
+                    Path(name).name
+                    for name in src.files
+                    if Path(name).resolve() != path
+                ]
+                if sidecars:
+                    raise ValueError(
+                        f"Embed the data from {', '.join(sidecars)} in the GeoTIFF before indexing."
+                    )
                 grid = src.transform
                 if src.count != 1 or numpy.dtype(src.dtypes[0]).kind not in "iuf":
                     raise ValueError("Expected one numeric data band.")

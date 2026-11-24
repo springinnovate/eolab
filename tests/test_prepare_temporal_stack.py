@@ -223,6 +223,32 @@ def test_duplicate_manifest_keys(tmp_path: Path, key: str) -> None:
     assert key in result.stderr and f"line {line + 2}" in result.stderr
 
 
+@pytest.mark.parametrize("internal", [False, True])
+def test_standalone_raster_mask(tmp_path: Path, internal: bool) -> None:
+    """Only publish masks that travel with their indexed GeoTIFF.
+
+    Args:
+        tmp_path: Archive directory.
+        internal: Whether GDAL embeds the mask or writes a separate file.
+    """
+    manifest = annual_manifest(tmp_path)
+    frame = tmp_path / "rain_2022.tif"
+    with (
+        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=internal),
+        rasterio.open(frame, "r+") as src,
+    ):
+        src.write_mask(numpy.array([[255, 0]], dtype="uint8"))
+    result = run_cli("build", manifest)
+    if internal:
+        assert result.returncode == 0, result.stderr
+        with rasterio.open(frame) as src:
+            assert src.read(1, masked=True).tolist() == [[22, None]]
+    else:
+        assert result.returncode == 1
+        assert "rain_2022.tif.msk" in result.stderr
+        assert not (tmp_path / "dataset.yaml").exists()
+
+
 @pytest.mark.parametrize(
     ("second_start", "valid"), [("2024-02-29", True), ("2024-02-28", False)]
 )
