@@ -38,9 +38,9 @@
           </div>
           <div class="timeline-caption">
             <output data-timeline="display" aria-live="off"></output>
+            <p data-timeline="status" role="status"></p>
             <span data-timeline="gap"></span>
           </div>
-          <p data-timeline="status" role="status" hidden></p>
         </section>
         <section id="map-place-search" class="map-place-search" popover="manual" aria-labelledby="map-place-search-heading" hidden>
           <header>
@@ -807,7 +807,7 @@
               <button id="map-inspection-tab-style" class="tool-tab"
                 type="button" role="tab" aria-controls="layer-style-editor"
                 aria-selected="false" tabindex="-1" hidden>Style</button>
-              <button id="map-inspection-tab-settings" class="map-inspection-tab" type="button" role="tab" aria-controls="settings-panel"
+              <button id="map-inspection-tab-settings" class="tool-tab" type="button" role="tab" aria-controls="settings-panel"
                 aria-selected="false" tabindex="-1" hidden>Settings</button>
             </div>
             <button id="map-inspection-all-tabs" class="tool-tab-index" type="button" aria-haspopup="menu" popovertarget="map-inspection-tab-menu"

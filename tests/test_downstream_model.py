@@ -1246,16 +1246,6 @@ def test_native_source_failure_identifies_configured_input(
     monkeypatch.setattr(
         downstream_runner, "load_beneficiaries", Mock(return_value=upstream)
     )
-    monkeypatch.setattr(
-        downstream_runner,
-        "prepare_starting_inputs",
-        Mock(
-            return_value=(
-                directory / "starting.geojson",
-                sources.rasters["starting_mask"],
-            )
-        ),
-    )
     expected_code = (
         "watershed_read_failed" if input_name == "watersheds" else "dem_read_failed"
     )

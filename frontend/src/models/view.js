@@ -712,8 +712,9 @@ export class ModelsView {
         }
     }
 
-    /** Present the selected Data tools page, updating run history only while its list is visible.
-     * Raster creation leads the matching tools in search results.
+    /** Present the selected Data tools page, listing raster creation first when it matches the search.
+     * Update run history only while the Runs list is visible.
+     * Preserve keyboard focus on a run button when other runs are added or removed.
      * An offered retry remains visible and focusable while its request is in progress.
      * @param {Object} state Controller snapshot.
      * @return {void}
@@ -768,21 +769,20 @@ export class ModelsView {
             if (retainedRuns.has(id)) continue;
             card.root.remove(); this.runCards.delete(id);
         }
-        for (const job of state.runs) {
+        const runList = this.elements["runs-list"];
+        for (const [index, job] of state.runs.entries()) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
                 const root = this.element("article", "", "models-card");
                 const heading = this.element("h3"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId), "models-card-open models-name");
                 heading.append(button);
                 const status = this.element("small", "", "models-help"); root.append(heading, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
-                this.elements["runs-list"].append(root);
+                // Creation time and job ID fix the relative order of the retained cards.
+                runList.insertBefore(root, runList.children[index] ?? null);
             }
             card.button.textContent = job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
             card.status.textContent = `${describeModelProgress(job)} · ${formatModelRunCreatedTime(job)}`;
         }
-        // Move retained nodes only when ordering changes, keeping focus during status reads.
-        const order = state.runs.map(job => job.jobId).join();
-        if (order !== this.runOrder) { this.runOrder = order; for (const job of state.runs) this.elements["runs-list"].append(this.runCards.get(job.jobId).root); }
         this.elements["runs-status"].textContent = state.historyLoading ? "Loading runs…" : state.runs.length ? "Runs belong to this browser session. Closing Data tools does not cancel them." : "No data tool runs in this browser session yet.";
         this.elements.more.hidden = !state.nextCursor; this.elements.more.disabled = state.historyLoading;
         this.elements["refresh-runs"].disabled = state.historyLoading;
