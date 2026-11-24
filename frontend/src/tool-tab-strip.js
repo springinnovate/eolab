@@ -74,12 +74,7 @@ export class ToolTabStrip {
                 this.#focusMenuChoice();
             }
         }, options);
-        this.trigger.addEventListener("keydown", event => {
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                this.trigger.click();
-            }
-        }, options);
+        this.trigger.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
         const ResizeObserverClass = documentContext.defaultView.ResizeObserver;
         this.observer = ResizeObserverClass && new ResizeObserverClass(() => this.#fitTabs());
         this.observer?.observe(this.list);
@@ -205,9 +200,9 @@ export class ToolTabStrip {
     }
 
     /**
-     * Switch tabs or move between their close buttons along the strip. In All tabs,
+     * Switch tabs, move between their close buttons or open All tabs with unmodified arrows. In All tabs,
      * move vertically within the current column and horizontally between a tool and its close action.
-     * @param {KeyboardEvent} event Key pressed on a tab or a menu item.
+     * @param {KeyboardEvent} event Key pressed on a tab, close button, menu trigger or menu item.
      * @param {boolean} inMenu Whether the key came from the open menu.
      * @return {void}
      */
@@ -222,6 +217,13 @@ export class ToolTabStrip {
             return;
         }
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.currentTarget === this.trigger) {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                this.trigger.click();
+            }
+            return;
+        }
         if (inMenu && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
             const row = this.items.find(({ choice, menuClose }) => event.target === choice || event.target === menuClose);
             const button = event.key === "ArrowLeft" ? row?.choice : row?.menuClose;

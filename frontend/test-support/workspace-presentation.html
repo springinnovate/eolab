@@ -357,7 +357,11 @@
       dock.setClickResult("feature", { state: "ready", message: "One survey plot" });
       check(document.activeElement === models && models.getAttribute("aria-selected") === "true",
         "A background result moved focus away from model setup");
-      index.click();
+      index.focus();
+      const modifiedDown = new KeyboardEvent("keydown", { key: "ArrowDown", ctrlKey: true, bubbles: true, cancelable: true });
+      check(index.dispatchEvent(modifiedDown) && document.activeElement === index && !menu.matches(":popover-open"),
+        "Ctrl+Down on All tabs must leave the menu closed and the shortcut available to the browser");
+      index.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
       await settleLayout();
       const choices = [...menu.querySelectorAll('[role="menuitemradio"]:not([hidden])')];
       check(menu.matches(":popover-open") && choices.length === tabs.length &&
@@ -517,7 +521,10 @@
         }
         const index = document.querySelector("#models-all-tabs");
         check(isReachable(index) && isReachable(setup), "Data tools overflow hid the active Setup tab or its menu");
-        index.click();
+        const modifiedUp = new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true, cancelable: true });
+        check(index.dispatchEvent(modifiedUp) && !document.querySelector("#models-tab-menu").matches(":popover-open"),
+          "Alt+Up on Data tools All tabs must leave the menu closed");
+        index.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
         await settleLayout();
         const menu = document.querySelector("#models-tab-menu");
         const choices = [...menu.querySelectorAll('[role="menuitemradio"]')];
