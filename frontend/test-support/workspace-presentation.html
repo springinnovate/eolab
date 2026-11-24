@@ -12,6 +12,7 @@
     import L from "leaflet";
     import "leaflet/dist/leaflet.css";
     import { createSingleWorldMap } from "../src/map.js";
+    import { TemporalScrubber } from "../src/raster/temporal-scrubber.js";
     import { OnMapLegend } from "../src/map-layers/on-map-legend.js";
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
@@ -33,6 +34,31 @@
      */
     function check(condition, message) {
       if (!condition) throw new Error(message);
+    }
+
+    /** Check that drawing an observation keeps the timeline and Play button in place.
+     * @returns {void}
+     * @throws {Error} If clearing the loading message moves or resizes the widget.
+     */
+    function checkTimelineLoading() {
+      const root = document.querySelector("#temporal-scrubber");
+      const play = root.querySelector('[data-timeline="play"]');
+      const dates = ["2000-01-02T01:00:00Z", "2000-01-02T02:00:00Z"];
+      const timeline = new TemporalScrubber(root, {
+        selectTime: async () => {}, selectMonth: async () => {}, prepare: async () => null,
+      });
+      try {
+        timeline.setLayers([{key: "rain", visible: true, opacity: 1, timeline: {
+          name: "Rainfall", variable: "rain", variableLabel: "Rain", times: dates, time: dates[0],
+          months: ["2000-01"], month: "2000-01", loading: false, error: null, layerName: "first",
+        }}]);
+        const loading = root.getBoundingClientRect();
+        const playTop = play.getBoundingClientRect().top;
+        timeline.setMapStatus({phase: "complete"}, ["first"]);
+        const drawn = root.getBoundingClientRect();
+        check(drawn.height === loading.height && drawn.top === loading.top && play.getBoundingClientRect().top === playTop,
+          "The timeline or its Play button moved when the raster finished loading");
+      } finally { timeline.destroy(); }
     }
 
     /** Wait for layout and the existing sidebar transition to settle.
@@ -531,6 +557,7 @@
         stylesheet.onerror = () => reject(new Error("Application CSS could not be loaded"));
         document.head.append(stylesheet);
       });
+      checkTimelineLoading();
       const layout = new EomapLayoutController({
         documentContext: document,
         /** No map renderer is mounted in this presentation fixture. @returns {void} */
