@@ -6140,7 +6140,7 @@ for (const [action, choice, expectedVariable, expectedTime] of [
     ["onMonthChange", "2020-02", "temperature", "2020-02-27T03:00:00Z"],
     ["onVariableChange", "rain", "rain", "2020-01-15T00:00:00Z"],
 ]) {
-    test(`Refresh dates retries the failed choice of ${choice} on a fixed dataset`, async () => {
+    test(`Refresh dates retries the failed choice of ${choice} on a fixed dataset`, async context => {
         const marchTime = "2020-03-02T16:25:00Z";
         const observations = {
             temperature: {"2020-02": ["2020-02-27T03:00:00Z"], "2020-03": [marchTime]},
@@ -6170,11 +6170,14 @@ for (const [action, choice, expectedVariable, expectedTime] of [
             assert.equal(view.state.time, null);
             assert.equal(fixture.mapLayers.snapshots()[0].timeline.month, action === "onMonthChange" ? choice : "");
             failLookup = false;
+            const renders = context.mock.method(view, "render");
             await view.handlers.onRetry();
             assert.deepEqual(lookups[2], lookups[1]);
             assert.equal(view.state.error, null);
             assert.equal(view.state.time, expectedTime);
             assert.equal(record.publication.layerName, `eolab:${expectedVariable}-${expectedTime}`);
+            const completed = renders.mock.calls.filter(call => !call.arguments[0].loading);
+            assert.equal(completed.length, 1, "the row finishes the date lookup and publication together");
             await view.handlers.onRetry();
             assert.deepEqual(lookups.at(-1), {variable: expectedVariable, month: expectedTime.slice(0, 7)});
         } finally { fixture.destroy(); }

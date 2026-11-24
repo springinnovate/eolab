@@ -4774,10 +4774,10 @@ export function initializeRasterViewer(
     }
 
     /** Publish the selected observation while analysis reads its original source.
-     * Caller owns cancellation across both availability and publication work.
+     * The caller owns cancellation and the final row update for the whole request.
      * @param {Object} record Retained temporal view.
      * @param {AbortController} request Current view request.
-     * @return {Promise<void>} Completion, with failures kept on the row for retry.
+     * @return {Promise<void>} Completion with the publication or its retryable error recorded on the layer.
      */
     async function publishTemporalObservation(record, request) {
         const temporal = record.state.temporal;
@@ -4793,13 +4793,19 @@ export function initializeRasterViewer(
         } catch (error) {
             if (request.signal.aborted) return;
             temporal.error = `Could not display this observation: ${error.message}`;
-        } finally {
-            if (!request.signal.aborted && mapLayers.getRecord(record.entry.key) === record) {
-                temporal.loading = false;
-                renderTemporalControls(record);
-                mapLayers.render();
-            }
         }
+    }
+
+    /** End the loading state and show the result if this request still owns the layer.
+     * @param {Object} record Retained temporal raster.
+     * @param {AbortController} request Date lookup or direct observation selection that just finished.
+     * @return {void}
+     */
+    function finishTemporalRequest(record, request) {
+        if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
+        record.state.temporal.loading = false;
+        renderTemporalControls(record);
+        mapLayers.render();
     }
 
     /** Load dates for a new or pending month choice, or recheck the retained observation.
@@ -4846,11 +4852,7 @@ export function initializeRasterViewer(
         } catch (error) {
             if (!request.signal.aborted) temporal.error = `Could not load observation times: ${error.message}`;
         } finally {
-            if (!request.signal.aborted && mapLayers.getRecord(record.entry.key) === record) {
-                temporal.loading = false;
-                renderTemporalControls(record);
-                mapLayers.render();
-            }
+            finishTemporalRequest(record, request);
         }
     }
 
@@ -4867,8 +4869,10 @@ export function initializeRasterViewer(
         temporal.loading = publication === null;
         temporal.error = null;
         selectTemporalObservation(record, {...temporal.selection, time}, true, publication);
-        if (publication === null) await publishTemporalObservation(record, request);
-        else if (bivariateMode.contains(record.entry.key)) applyBivariatePresentation();
+        if (publication === null) {
+            await publishTemporalObservation(record, request);
+            finishTemporalRequest(record, request);
+        } else if (bivariateMode.contains(record.entry.key)) applyBivariatePresentation();
     }
 
     /** Show an available UTC timestamp through the same selection path as Map contents.
