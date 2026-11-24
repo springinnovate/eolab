@@ -6198,7 +6198,10 @@ test("temporal Catalog removal names the topmost matching view after renaming an
 
 test("temporal source changes cancel old statistics and exact pixels before accepting new values", async () => {
     const statistics = [], pixels = [], cursorValues = [], clock = createManualClock();
+    const nextPublication = createDeferred();
     const fixture = temporalFixture({
+        publishRaster: async raster => raster.source.time === "2020-01-01T02:00:00Z" ? nextPublication.promise :
+            {layerName: "first", bbox: raster.bbox},
         clock, cursorValuesView: {render: snapshot => cursorValues.push(snapshot), clear: () => cursorValues.push(null)},
         loadStatistics: (item, area, signal) => {const deferred = createDeferred(); statistics.push({item, area, signal, ...deferred}); return deferred.promise;},
         sampleCursorPixel: (item, _point, signal) => {const deferred = createDeferred(); pixels.push({item, signal, ...deferred}); return deferred.promise;},
@@ -6210,7 +6213,13 @@ test("temporal source changes cancel old statistics and exact pixels before acce
         clock.flush();
         await flushPromises();
         const obsoleteStatistics = [...statistics], oldPixel = pixels[0];
-        await fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        const oldLayer = record.state.layer;
+        const changing = fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        assert.equal(record.publication, null, "the previous pixels cannot authorize the selected date");
+        assert.equal(record.state.item.source.time, "2020-01-01T02:00:00Z");
+        assert.ok(fixture.leafletMap.layers.has(oldLayer), "keep the visible raster while the new source is published");
+        nextPublication.resolve({layerName: "second", bbox: record.state.item.bbox});
+        await changing;
         const current = statistics.at(-1);
         assert.ok(obsoleteStatistics.every(request => request.signal.aborted));
         assert.equal(oldPixel.signal.aborted, true);

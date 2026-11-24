@@ -1,6 +1,7 @@
 /** Keyed Leaflet attachment, opacity, and drawing-order adapter. */
 
 import { TileRecovery } from "./tile-recovery.js";
+import { revealLoadedRasterFrame } from "./raster-frame.js";
 
 const INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT = 1;
 
@@ -10,9 +11,9 @@ export class LeafletLayerSet {
      * Create an empty keyed layer set.
      *
      * @param {{removeLayer:(layer:Object)=>void}} leafletMap Leaflet map.
-     * @param {{update:(layers:Object[])=>void,clear:()=>void,prepare:(layers:Object[],signal:AbortSignal)=>Promise<void>}|null}
+     * @param {{update:(layers:Object[],options?:{keepPreviousFrame:boolean})=>void,clear:()=>void,prepare:(layers:Object[],signal:AbortSignal)=>Promise<void>,previousFrameLayer:(index:number)=>Object|undefined}|null}
      * [compositeRenderer=null] Optional ordinary-map composite renderer.
-     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:string[])=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
+     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:Map<string,string>)=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
      * [tileStatus=null] Optional feedback for independent grids beside local layers.
      */
     constructor(leafletMap, compositeRenderer = null, tileStatus = null) {
@@ -28,6 +29,7 @@ export class LeafletLayerSet {
         this.tileStatus = tileStatus;
         this.localTileRecovery = new Map();
         this.showingLocalLayers = false;
+        this.keepCompositeFrameOnNextRender = false;
     }
 
     /**
@@ -44,7 +46,7 @@ export class LeafletLayerSet {
             throw new Error(`Leaflet layer already exists: ${key}`);
         }
         layer.setOpacity(opacity);
-        const record = { layer, attached: false, visible, opacity };
+        const record = { layer, attached: false, visible, opacity, previousFrame: null, waitingDescriptor: null };
         this.layers.set(key, record);
         this.order.push(key);
         if (visible && this.compositeRenderer === null) {
@@ -64,6 +66,7 @@ export class LeafletLayerSet {
     setVisible(key, visible) {
         const record = this.#require(key);
         record.visible = visible;
+        if (!visible) this.#removePreviousFrame(record);
         if (
             this.compositeRenderer !== null &&
             this.individualRenderingKeys === null
@@ -103,6 +106,7 @@ export class LeafletLayerSet {
         const record = this.#require(key);
         record.opacity = opacity;
         record.layer.setOpacity(opacity);
+        record.previousFrame?.layer.setOpacity(opacity);
     }
 
     /**
@@ -127,9 +131,10 @@ export class LeafletLayerSet {
         this.order = [...orderedKeys];
         const baseZIndex = 200;
         orderedKeys.forEach((key, index) => {
-            this.#require(key).layer.setZIndex(
-                baseZIndex + orderedKeys.length - index
-            );
+            const record = this.#require(key);
+            const zIndex = baseZIndex + orderedKeys.length - index;
+            record.layer.setZIndex(zIndex);
+            record.previousFrame?.layer.setZIndex(zIndex);
         });
     }
 
@@ -148,17 +153,51 @@ export class LeafletLayerSet {
      * The controller supplies updated rendering descriptors immediately afterward.
      * @param {string} key Retained map-layer key.
      * @param {Object} layer Replacement Leaflet-compatible layer.
+     * @param {{keepPreviousFrame?:boolean,awaitingPublication?:boolean}} [options] Keep the displayed date during publication and until replacement tiles draw.
      * @return {void}
      */
-    replace(key, layer) {
-        const { visible, opacity } = this.#require(key);
-        const order = [...this.order];
-        const rendering = this.rendering;
-        this.remove(key);
-        this.add(key, layer, { visible, opacity });
-        this.rendering = rendering;
+    replace(key, layer, {keepPreviousFrame = false, awaitingPublication = false} = {}) {
+        const record = this.#require(key);
+        const {visible, opacity} = record;
+        const prior = this.rendering.find(candidate => candidate.key === key)?.descriptor;
+        const replacingDrawnSource = keepPreviousFrame && visible && opacity > 0 && Boolean(prior);
+        this.keepCompositeFrameOnNextRender = replacingDrawnSource;
+        if (replacingDrawnSource && awaitingPublication) {
+            if (record.previousFrame) {
+                this.#cancelPendingIndividualRendering();
+                this.#removeLocalTileRecovery(key);
+                if (record.attached) this.leafletMap.removeLayer(record.layer);
+                record.layer = record.previousFrame.layer;
+                record.waitingDescriptor = record.previousFrame.descriptor;
+                record.previousFrame = null;
+                record.attached = true;
+            } else {
+                const index = this.#visibleCompositeEntries().findIndex(item => item.key === key);
+                const drawn = this.compositeRenderer?.previousFrameLayer?.(index);
+                record.waitingDescriptor = drawn ?? prior;
+            }
+            return;
+        }
+        const drawn = this.localTileRecovery.get(key)?.status.phase === "complete" ||
+            this.activeIndividualRenderingSignature !== null;
+        this.#removeLocalTileRecovery(key);
+        if (this.pendingIndividualRendering?.keys.has(key)) this.#cancelPendingIndividualRendering();
+        if (!replacingDrawnSource) this.#removePreviousFrame(record);
+        if (record.attached) {
+            if (replacingDrawnSource && drawn && !record.previousFrame) {
+                record.previousFrame = {layer: record.layer, descriptor: prior};
+            } else {
+                this.#setLayerHidden(record.layer, false);
+                this.leafletMap.removeLayer(record.layer);
+            }
+        }
+        record.layer = layer;
+        record.waitingDescriptor = null;
+        layer.setOpacity(opacity);
+        record.attached = visible && this.compositeRenderer === null;
+        if (record.attached) layer.addTo(this.leafletMap);
         this.activeIndividualRenderingSignature = null;
-        this.setOrder(order);
+        this.setOrder(this.order);
     }
 
     /**
@@ -192,7 +231,7 @@ export class LeafletLayerSet {
         }
         this.rendering = rendering.map((candidate) => ({
             ...candidate,
-            descriptor: structuredClone(candidate.descriptor),
+            descriptor: structuredClone(candidate.descriptor ?? this.#require(candidate.key).waitingDescriptor),
         }));
         for (const candidate of this.rendering) {
             const record = this.#require(candidate.key);
@@ -200,7 +239,9 @@ export class LeafletLayerSet {
             record.opacity = candidate.opacity;
         }
         this.setOrder(keys);
-        this.#applyRenderingStrategy();
+        const keepPreviousFrame = this.keepCompositeFrameOnNextRender;
+        this.keepCompositeFrameOnNextRender = false;
+        this.#applyRenderingStrategy(keepPreviousFrame);
     }
 
     /**
@@ -241,6 +282,7 @@ export class LeafletLayerSet {
         if (record === undefined) {
             return null;
         }
+        this.#removePreviousFrame(record);
         this.#removeLocalTileRecovery(key);
         if (this.pendingIndividualRendering?.keys.has(key)) {
             this.#cancelPendingIndividualRendering();
@@ -263,6 +305,7 @@ export class LeafletLayerSet {
      * @return {void}
      */
     clear() {
+        this.keepCompositeFrameOnNextRender = false;
         this.#clearLocalTileRecovery();
         this.individualRenderingGeneration += 1;
         this.#cancelPendingIndividualRendering();
@@ -276,8 +319,11 @@ export class LeafletLayerSet {
         this.activeIndividualRenderingSignature = null;
     }
 
-    /** Apply either one composite grid or the retained independent grids. */
-    #applyRenderingStrategy() {
+    /** Apply the selected map strategy and carry a date handoff into composite rendering.
+     * @param {boolean} [keepPreviousFrame] Whether this update replaces one temporal observation.
+     * @return {void}
+     */
+    #applyRenderingStrategy(keepPreviousFrame = false) {
         if (this.compositeRenderer === null) return;
         if (this.rendering.some(candidate => candidate.descriptor === null && candidate.visible)) {
             this.#renderWithLocalLayers();
@@ -290,13 +336,14 @@ export class LeafletLayerSet {
         }
         this.#cancelPendingIndividualRendering();
         for (const record of this.layers.values()) {
+            this.#removePreviousFrame(record);
             if (record.attached) {
                 this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
                 record.attached = false;
             }
         }
-        this.compositeRenderer.update(this.#compositeLayers());
+        this.compositeRenderer.update(this.#compositeLayers(), {keepPreviousFrame});
     }
 
     /** Prepare an ordinary composite with one replacement while preserving its neighbors and their drawing order.
@@ -320,8 +367,24 @@ export class LeafletLayerSet {
      * @return {Object[]} Visible styled descriptors with their current opacity.
      */
     #compositeLayers(key, replacement) {
-        return this.rendering.filter(layer => layer.visible && layer.opacity > 0 && layer.descriptor !== null)
+        return this.#visibleCompositeEntries()
             .map(layer => ({...structuredClone(layer.key === key ? replacement : layer.descriptor), opacity: layer.opacity}));
+    }
+
+    /** Match drawn composite publications to their views, including duplicate sources in different rows.
+     * @param {string[]} names Drawn publication names in composite drawing order, or empty while no stack has drawn.
+     * @return {Map<string,string>} Drawn publication name by retained map-layer key.
+     */
+    displayedCompositePublications(names) {
+        const entries = this.#visibleCompositeEntries();
+        return new Map(names.map((name, index) => [entries[index].key, name]));
+    }
+
+    /** Return visible, published entries in the order used to build the server composite.
+     * @return {{key:string,descriptor:Object,opacity:number}[]} Ordered map entries.
+     */
+    #visibleCompositeEntries() {
+        return this.rendering.filter(layer => layer.visible && layer.opacity > 0 && layer.descriptor !== null);
     }
 
     /**
@@ -340,9 +403,10 @@ export class LeafletLayerSet {
             const record = this.#require(candidate.key);
             const visible = candidate.visible && (candidate.descriptor === null ||
                 this.individualRenderingKeys === null || this.individualRenderingKeys.has(candidate.key));
-            this.#setLayerHidden(record.layer, false);
+            if (!visible) this.#removePreviousFrame(record);
             if (visible && !record.attached) record.layer.addTo(this.leafletMap);
             if (!visible && record.attached) this.leafletMap.removeLayer(record.layer);
+            this.#setLayerHidden(record.layer, Boolean(record.previousFrame));
             record.attached = visible;
         }
     }
@@ -378,7 +442,7 @@ export class LeafletLayerSet {
             if (!this.localTileRecovery.has(key)) {
                 const record = this.#require(key);
                 // A previously staged paired grid must start a fresh observable tile cycle.
-                if (record.attached) {
+                if (record.attached && !record.waitingDescriptor) {
                     this.leafletMap.removeLayer(record.layer);
                     record.attached = false;
                 }
@@ -387,6 +451,7 @@ export class LeafletLayerSet {
                     const current = this.localTileRecovery.get(key);
                     if (!current || current.recovery !== recovery) return;
                     current.status = snapshot;
+                    if (snapshot.phase === "complete" && record.previousFrame) this.#revealFrame(record);
                     this.tileStatus.onLayerStatus(key, snapshot);
                     this.#reportLocalTileStatus();
                 });
@@ -408,8 +473,13 @@ export class LeafletLayerSet {
             : statuses.some(status => status.phase === "retrying") ? "retrying"
             : statuses.some(status => status.phase === "loading") ? "loading"
             : failed ? "incomplete" : "complete";
-        const displayed = this.rendering.filter(layer => this.localTileRecovery.get(layer.key)?.status.phase === "complete")
-            .map(layer => layer.descriptor.layerName);
+        const displayed = new Map();
+        for (const layer of this.rendering) {
+            const current = this.localTileRecovery.get(layer.key);
+            if (!current) continue;
+            const drawn = current.status.phase === "complete" ? layer.descriptor : this.#require(layer.key).previousFrame?.descriptor;
+            if (drawn) displayed.set(layer.key, drawn.layerName);
+        }
         this.tileStatus.onStatus({ phase, total, loaded, failed }, displayed);
     }
 
@@ -496,6 +566,7 @@ export class LeafletLayerSet {
         this.#cancelPendingIndividualRendering();
         const selected = new Set(keys);
         for (const [key, record] of this.layers) {
+            if (!selected.has(key)) this.#removePreviousFrame(record);
             if (!selected.has(key) && record.attached) {
                 this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
@@ -518,14 +589,17 @@ export class LeafletLayerSet {
             listeners: [],
         };
         this.pendingIndividualRendering = pending;
-        this.tileStatus?.onStatus({phase: "loading", total: 0, loaded: 0, failed: 0}, []);
+        const holdingFrame = keys.some(key => this.#require(key).previousFrame);
+        this.tileStatus?.onStatus({phase: "loading", total: 0, loaded: 0, failed: 0},
+            holdingFrame ? this.#drawnIndividualPublications(keys) : new Map());
         for (const key of keys) {
             const record = this.#require(key);
+            const keepVisible = holdingFrame && record.attached && !record.previousFrame && !record.layer.isLoading();
             if (!record.attached) {
                 record.layer.addTo(this.leafletMap);
                 record.attached = true;
             }
-            this.#setLayerHidden(record.layer, true);
+            this.#setLayerHidden(record.layer, !keepVisible);
             const onLoad = () => this.#recordIndividualLayerLoad(
                 generation,
                 key
@@ -571,12 +645,11 @@ export class LeafletLayerSet {
         for (const selectedKey of pending.keys) {
             const record = this.layers.get(selectedKey);
             if (record?.attached) {
-                this.#setLayerHidden(record.layer, false);
+                this.#revealFrame(record);
             }
         }
         this.activeIndividualRenderingSignature = pending.signature;
-        const displayed = this.rendering.filter(layer => pending.keys.has(layer.key) && layer.descriptor)
-            .map(layer => layer.descriptor.layerName);
+        const displayed = this.#drawnIndividualPublications(pending.keys);
         this.tileStatus?.onStatus({phase: "complete", total: 0, loaded: 0, failed: 0}, displayed);
     }
 
@@ -635,9 +708,10 @@ export class LeafletLayerSet {
         if (pending === null || pending.generation !== generation) return;
         this.#removePendingIndividualListeners(pending);
         this.pendingIndividualRendering = null;
+        const holdingFrame = [...pending.keys].some(key => this.#require(key).previousFrame);
         for (const key of pending.keys) {
             const record = this.layers.get(key);
-            if (record?.attached) {
+            if (record?.attached && (!holdingFrame || record.previousFrame)) {
                 this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
                 record.attached = false;
@@ -645,7 +719,7 @@ export class LeafletLayerSet {
         }
         this.activeIndividualRenderingSignature = null;
         this.tileStatus?.onStatus({phase: "error", total: 0, loaded: 0, failed: 0,
-            message: "The selected map layers could not be drawn."}, []);
+            message: "The selected map layers could not be drawn."}, holdingFrame ? this.#drawnIndividualPublications(pending.keys) : new Map());
     }
 
     /**
@@ -660,7 +734,7 @@ export class LeafletLayerSet {
         for (const key of pending.keys) {
             const record = this.layers.get(key);
             if (record !== undefined) {
-                this.#setLayerHidden(record.layer, false);
+                this.#setLayerHidden(record.layer, Boolean(record.previousFrame));
             }
         }
         this.pendingIndividualRendering = null;
@@ -694,11 +768,46 @@ export class LeafletLayerSet {
         }
     }
 
+    /** Return the publications still visible as a paired frame loads or fails.
+     * @param {Iterable<string>} keys Selected independent grids.
+     * @return {Map<string,string>} Drawn publication by selected layer key.
+     */
+    #drawnIndividualPublications(keys) {
+        const displayed = new Map();
+        for (const key of keys) {
+            const record = this.#require(key);
+            const drawn = record.previousFrame?.descriptor ??
+                (record.attached && !record.layer.isLoading() ? this.rendering.find(item => item.key === key)?.descriptor : null);
+            if (drawn) displayed.set(key, drawn.layerName);
+        }
+        return displayed;
+    }
+
+    /** Reveal a complete independent grid at its configured opacity and retire its previous date.
+     * @param {Object} record Retained layer and optional previous frame.
+     * @return {void}
+     */
+    #revealFrame(record) {
+        if (record.previousFrame) revealLoadedRasterFrame(record.layer);
+        else this.#setLayerHidden(record.layer, false);
+        this.#removePreviousFrame(record);
+    }
+
+    /** Detach an observation held on screen during publication or tile loading.
+     * @param {Object} record Retained layer whose previous date can be released.
+     * @return {void}
+     */
+    #removePreviousFrame(record) {
+        if (!record.previousFrame) return;
+        this.leafletMap.removeLayer(record.previousFrame.layer);
+        record.previousFrame = null;
+    }
+
     /**
      * Require one retained record.
      *
      * @param {string} key Stable map-layer key.
-     * @return {{layer:Object,attached:boolean}} Retained record.
+     * @return {{layer:Object,attached:boolean,visible:boolean,opacity:number,previousFrame:{layer:Object,descriptor:Object}|null,waitingDescriptor:Object|null}} Retained record.
      * @throws {RangeError} If the key is unknown.
      */
     #require(key) {

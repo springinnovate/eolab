@@ -6,7 +6,7 @@ import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 /** Create a Leaflet-compatible layer with inspectable presentation state. */
 function createLayer() {
     const handlers = new Map();
-    const container = { style: {} };
+    const container = { style: {}, querySelectorAll: () => [] };
     return {
         redrawCount: 0,
         loading: false,
@@ -99,6 +99,8 @@ test("preparing a date preserves other visible views of the same source, their s
         {key: "active", visible: true, opacity: 0.45, descriptor: source}]);
     const signal = new AbortController().signal;
     await layers.prepareLayer("active", replacement, signal);
+    assert.deepEqual(layers.displayedCompositePublications([prior.layerName, replacement.layerName]),
+        new Map([["reference", prior.layerName], ["active", replacement.layerName]]));
     assert.deepEqual(prepared, [{stack: [{...prior, opacity: 0.7}, {...replacement, opacity: 0.45}], signal}]);
     assert.deepEqual(displayed.at(-1), [{...prior, opacity: 0.7}, {...source, opacity: 0.45}]);
     layers.clear();
@@ -306,12 +308,16 @@ test("replacing one paired frame reveals it without waiting for an unchanged loa
     first.emit("load"); unchanged.emit("load");
     assert.equal(unchanged.isLoading(), false);
     const pending = createLayer();
-    layers.replace("first", pending);
+    layers.replace("first", pending, {keepPreviousFrame: true, awaitingPublication: true});
     layers.render([{...rendering[0], descriptor: null}, rendering[1]]);
+    assert.ok(map.attached.has(first), "the previous date stays on the map during publication");
+    assert.equal(unchanged.container.style.visibility, "");
     const current = createLayer();
-    layers.replace("first", current);
+    layers.replace("first", current, {keepPreviousFrame: true});
     layers.render([{...rendering[0], descriptor: {layerName: "new"}}, rendering[1]]);
     assert.equal(current.container.style.visibility, "hidden");
+    assert.ok(map.attached.has(first), "the previous date stays on the map while the new tiles load");
+    assert.equal(unchanged.container.style.visibility, "", "the other half of the comparison stays visible");
     current.emit("load");
     assert.equal(current.container.style.visibility, "");
     assert.equal(unchanged.container.style.visibility, "");

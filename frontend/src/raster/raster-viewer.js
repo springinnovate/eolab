@@ -4718,9 +4718,10 @@ export function initializeRasterViewer(
      * @param {{variable:string,time:string}} selection Replacement observation.
      * @param {boolean} available Whether numerical readers may use the selection.
      * @param {Object|null} [publication] Already authorized publication for this exact observation.
+     * @param {boolean} [keepPreviousFrame] Keep the drawn date visible while replacing it in the same variable.
      * @return {void}
      */
-    function selectTemporalObservation(record, selection, available, publication = null) {
+    function selectTemporalObservation(record, selection, available, publication = null, keepPreviousFrame = false) {
         const session = record.state, temporal = session.temporal;
         cancelHistogramStyleUpdate(session.key);
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
@@ -4751,7 +4752,7 @@ export function initializeRasterViewer(
         session.publishedRaster = publication ?? {bbox: session.item.bbox};
         record.publication = publication;
         record.error = null;
-        mapLayers.replaceLayer(record.entry.key);
+        mapLayers.replaceLayer(record.entry.key, {keepPreviousFrame});
         visibleHistogramSignature = null;
         mapLayers.updateLocalPresentation(record.entry.key, {sourceName: session.item.label});
         if (bivariateMode.contains(session.key)) {
@@ -4781,7 +4782,7 @@ export function initializeRasterViewer(
             record.state.publishedRaster = publication;
             record.error = null;
             temporal.error = null;
-            mapLayers.replaceLayer(record.entry.key);
+            mapLayers.replaceLayer(record.entry.key, {keepPreviousFrame: true});
             if (bivariateMode.contains(record.entry.key)) applyBivariatePresentation();
         } catch (error) {
             if (request.signal.aborted) return;
@@ -4809,9 +4810,10 @@ export function initializeRasterViewer(
         temporal.loading = true;
         temporal.error = null;
         temporal.times = [];
-        if (selection.variable !== temporal.selection.variable) temporal.months = [];
+        const sameVariable = selection.variable === temporal.selection.variable;
+        if (!sameVariable) temporal.months = [];
         temporal.month = month ?? temporal.month;
-        selectTemporalObservation(record, selection, false);
+        selectTemporalObservation(record, selection, false, null, sameVariable);
         try {
             const choices = await loadTimes(temporal.item, selection.variable, month, request.signal);
             if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
@@ -4829,7 +4831,7 @@ export function initializeRasterViewer(
                 temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
                 return;
             }
-            selectTemporalObservation(record, {variable: selection.variable, time}, true);
+            selectTemporalObservation(record, {variable: selection.variable, time}, true, null, sameVariable);
             await publishTemporalObservation(record, request);
         } catch (error) {
             if (!request.signal.aborted) temporal.error = `Could not load observation times: ${error.message}`;
@@ -4854,7 +4856,7 @@ export function initializeRasterViewer(
         const request = temporal.request = new AbortController();
         temporal.loading = publication === null;
         temporal.error = null;
-        selectTemporalObservation(record, {...temporal.selection, time}, true, publication);
+        selectTemporalObservation(record, {...temporal.selection, time}, true, publication, true);
         if (publication === null) await publishTemporalObservation(record, request);
         else if (bivariateMode.contains(record.entry.key)) applyBivariatePresentation();
     }

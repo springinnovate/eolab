@@ -105,6 +105,10 @@ select:hover:not(:disabled) {
   font-family: inherit;
 }
 
+/* Leaflet starts each tile's inline opacity at zero even after tileload.
+   A ready frame must paint at its layer's configured opacity on the first draw. */
+.map-raster-frame-tile { opacity: 1 !important; }
+
 .temporal-scrubber {
   position: absolute;
   z-index: 801;

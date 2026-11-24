@@ -1188,11 +1188,14 @@ export class MapLayerController {
      * Rebuild a retained layer after its owner changes the source or publication.
      * Keep its row, appearance, visibility and drawing position.
      * @param {string} key Retained map-layer key.
+     * @param {{keepPreviousFrame?:boolean}} [options] Keep the drawn observation during a date change in the same variable.
      * @return {void}
      */
-    replaceLayer(key) {
+    replaceLayer(key, {keepPreviousFrame = false} = {}) {
         const record = this.#requireRecord(key);
-        this.leafletLayers.replace(key, this.#createLayer(record));
+        this.leafletLayers.replace(key, this.#createLayer(record), {
+            keepPreviousFrame, awaitingPublication: record.publication === null,
+        });
         this.render();
     }
 

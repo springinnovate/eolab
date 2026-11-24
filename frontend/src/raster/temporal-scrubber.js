@@ -43,7 +43,8 @@ export class TemporalScrubber {
         this.ticks = root.querySelector("datalist");
         this.layers = [];
         this.layer = null;
-        this.displayed = [];
+        this.displayed = new Map();
+        this.drawnObservation = null;
         this.phase = "idle";
         this.frames = new Map();
         this.playing = false;
@@ -104,7 +105,7 @@ export class TemporalScrubber {
 
     /** Report the actual loaded map, independently of date availability and raster publication.
      * @param {{phase:string}} status Current drawing status.
-     * @param {string[]} displayed Published layer names whose visible tiles have finished loading.
+     * @param {Map<string,string>} displayed Drawn publication name by retained map-layer key.
      * @return {void}
      */
     setMapStatus(status, displayed) {
@@ -145,8 +146,10 @@ export class TemporalScrubber {
         const previous = this.layer;
         const layer = this.layers.find(candidate => candidate.key === key) ?? this.layers[0];
         const before = previous?.timeline, next = layer?.timeline;
+        const changedView = !next || layer.key !== previous?.key || next.variable !== before?.variable;
+        if (changedView) this.drawnObservation = null;
         const crossingMonth = this.action?.month && this.action.month === next?.month;
-        if (!next || layer.key !== previous?.key || next.variable !== before?.variable ||
+        if (changedView ||
             (!crossingMonth && (next.month !== before.month || next.times !== before.times ||
                 (next.time !== before.time && this.action?.time !== next.time && this.dragPreview !== next.time)))) this.pause();
         this.layer = layer;
@@ -235,7 +238,8 @@ export class TemporalScrubber {
     #render() {
         if (!this.layer) return;
         const t = this.layer.timeline, c = this.controls;
-        const painted = !t.loading && t.layerName !== null && this.displayed.includes(t.layerName);
+        const drawnLayerName = this.displayed.get(this.layer.key);
+        const painted = !t.loading && t.layerName !== null && drawnLayerName === t.layerName;
         const failed = t.error || (!painted && !t.loading && t.layerName && ["error", "incomplete"].includes(this.phase));
         if (this.dragPreview === t.time && (painted || failed)) {
             this.dragPreview = null;
@@ -252,7 +256,9 @@ export class TemporalScrubber {
         c.forward.disabled = !next;
         c.play.disabled = !this.playing && (!next || !painted || Boolean(failed));
         c.play.textContent = this.playing ? "Pause" : "Play";
-        c.display.textContent = painted ? "On map · " + utcLabel(t.time) : "";
+        if (painted) this.drawnObservation = {time: t.time, layerName: t.layerName};
+        const drawn = this.drawnObservation;
+        c.display.textContent = drawn && drawn.layerName === drawnLayerName ? "On map · " + utcLabel(drawn.time) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
         const message = t.error || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
             t.loading && !t.times.length ? "Loading dates for " + t.month :
@@ -290,7 +296,7 @@ export class TemporalScrubber {
      * @return {Promise<void>} Completion after selection or cancellation.
      */
     async #advance() {
-        if (!this.playing || !this.displayed.includes(this.layer.timeline.layerName)) return;
+        if (!this.playing || this.displayed.get(this.layer.key) !== this.layer.timeline.layerName) return;
         const target = this.#neighbor(1);
         if (!target) return;
         this.action = target;
