@@ -15,6 +15,7 @@ from pydantic import (
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import Artifact
+from eolab_app.processing.temporal_coverage import OptionalObservationLabels
 from eolab_app.processing.temporal_grid import TemporalReadGrid
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.sampling_box import Wgs84SamplingBox
@@ -176,6 +177,7 @@ class TemporalMapSpec(BaseModel):
     observationCount: int
     firstObservation: datetime
     lastObservation: datetime
+    observationLabels: OptionalObservationLabels = None
 
 
 @dataclass(frozen=True)

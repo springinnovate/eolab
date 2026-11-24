@@ -212,7 +212,8 @@ test("period-map result coverage survives API validation and rejects malformed s
     const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
     assert.deepEqual((await h.api.getJob(job().jobId)).result.temporalCoverage, temporalCoverage);
     for (const coverage of [null, {...temporalCoverage, observationCount: 0},
-        {...temporalCoverage, lastObservation: "not-a-date"}]) {
+        {...temporalCoverage, lastObservation: "not-a-date"},
+        {...temporalCoverage, observationLabels: {period: "explicit", explicitStarts: ["not-a-date", temporalCoverage.lastObservation]}}]) {
         result.temporalCoverage = coverage;
         await assert.rejects(h.api.getJob(job().jobId), /invalid temporal coverage/);
     }

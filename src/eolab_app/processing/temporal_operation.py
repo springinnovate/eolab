@@ -13,6 +13,11 @@ from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.raster_operations import bind_area_arguments
+from eolab_app.processing.temporal_coverage import (
+    ObservationLabels,
+    OptionalObservationLabels,
+    temporal_result_coverage,
+)
 from eolab_app.processing.temporal_models import (
     QueuedTemporalMap,
     TemporalMapRequest,
@@ -48,6 +53,7 @@ class TemporalMapNumericalPolicy(BaseModel):
     observationCount: int
     firstObservation: datetime
     lastObservation: datetime
+    observationLabels: OptionalObservationLabels = None
 
 
 def bind_temporal_map(
@@ -217,6 +223,7 @@ async def prepare_temporal_map(
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
+        observationLabels=ObservationLabels.from_interval(source),
     )
     return PreparedJobPlan(
         specification=spec.model_dump(mode="json", by_alias=True),
@@ -293,6 +300,7 @@ def describe_temporal_policy(spec: TemporalMapSpec) -> TemporalMapNumericalPolic
         observationCount=spec.observationCount,
         firstObservation=spec.firstObservation,
         lastObservation=spec.lastObservation,
+        observationLabels=spec.observationLabels,
     )
 
 
@@ -316,15 +324,7 @@ def describe_temporal_result(
     return {
         "grid": summary["grid"],
         "validPixels": artifact["valid_pixels"],
-        "temporalCoverage": {
-            name: policy[name]
-            for name in (
-                "unit",
-                "observationCount",
-                "firstObservation",
-                "lastObservation",
-            )
-        },
+        "temporalCoverage": temporal_result_coverage(policy, policy["unit"]),
     }
 
 

@@ -1,5 +1,6 @@
 """Verify period-map calculations using native GeoTIFF inputs and completed COGs."""
 
+import asyncio
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -9,6 +10,7 @@ from pathlib import Path
 from statistics import pstdev
 from types import SimpleNamespace, TracebackType
 from typing import Literal
+from unittest.mock import Mock
 
 import numpy as np
 from numpy.typing import NDArray
@@ -21,7 +23,12 @@ from rasterio.windows import Window
 from shapely.geometry import box, mapping
 
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
+from eolab_app.execution.reusable_process import run_process
+from eolab_app.processing import temporal_operation as period_map
+from eolab_app.processing import temporal_series_operation as area_series
+from eolab_app.processing import temporal_stack_operation as raster_stack
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.temporal_models import (
     PrecipitationConversion,
@@ -187,6 +194,99 @@ def _calculate(
         lastObservation=interval.observations[-1].time,
     )
     return spec, create_temporal_map(interval, spec, directory, limits)
+
+
+@pytest.mark.parametrize("recipe", ["period-map", "area-series", "raster-stack"])
+def test_completed_recipe_keeps_prepared_interval_labels(
+    interval: ResolvedTemporalInterval, recipe: str
+) -> None:
+    """Read explicit coverage back from the policy saved by each recipe's planner.
+
+    Args:
+        interval: Real GeoTIFFs on the common analysis grid.
+        recipe: Model to prepare and reopen through its result metadata.
+    """
+    observations = tuple(
+        replace(obs, interval_start=obs.time - timedelta(minutes=index + 1))
+        for index, obs in enumerate(interval.observations)
+    )
+    source = replace(
+        interval,
+        observations=observations,
+        time_support="mean_rate",
+        time_labels="explicit",
+    )
+    selection = TemporalIntervalSelection(
+        collectionId="eolab-temporal-datasets",
+        itemId="weather",
+        variable="temperature",
+        startTime=observations[0].interval_start,
+        endTime=observations[-1].interval_end,
+    )
+    if recipe == "period-map":
+        queued = period_map.QueuedTemporalMap(
+            request=TemporalMapRequest(
+                source=selection,
+                wholeRaster=True,
+                reduction=TemporalReduction(reducer="mean"),
+                precipitation=PrecipitationConversion(
+                    inputUnit="mm/s", outputUnit="mm", factor=1
+                ),
+            )
+        )
+        prepare, spec_type = period_map.prepare_temporal_map, TemporalMapSpec
+        policy, result = (
+            period_map.describe_temporal_policy,
+            period_map.describe_temporal_result,
+        )
+    elif recipe == "area-series":
+        queued = area_series.QueuedTemporalSeries(
+            request=area_series.TemporalSeriesRequest(
+                source=selection,
+                wholeRaster=True,
+                statistic="mean",
+            )
+        )
+        prepare, spec_type = (
+            area_series.prepare_temporal_series,
+            area_series.TemporalSeriesSpec,
+        )
+        policy, result = (
+            area_series.describe_series_policy,
+            area_series.describe_series_result,
+        )
+    else:
+        queued = raster_stack.QueuedTemporalStack(
+            request=raster_stack.TemporalStackRequest(
+                source=selection,
+                wholeRaster=True,
+                metrics={"calculations": [{"label": "Mean", "expression": "mean(a)"}]},
+            )
+        )
+        prepare, spec_type = (
+            raster_stack.prepare_temporal_stack,
+            raster_stack.TemporalStackSpec,
+        )
+        policy, result = (
+            raster_stack.describe_stack_policy,
+            raster_stack.describe_stack_result,
+        )
+    context = Mock(
+        spec=OperationContext,
+        run_native=run_process,
+        native=None,
+        aggregate_limits=RasterAggregateLimits(),
+    )
+    plan = asyncio.run(prepare(context, queued, source))
+    spec = spec_type.model_validate(plan.specification)
+    saved_policy = json.loads(policy(spec).model_dump_json(exclude_none=True))
+    coverage = result(plan.summary, {"valid_pixels": 4}, saved_policy)[
+        "temporalCoverage"
+    ]
+    assert coverage["observationLabels"] == {
+        "period": "explicit",
+        "explicitStarts": ["1999-12-31T23:59:00Z", "2000-01-01T04:57:00Z"],
+    }
 
 
 @pytest.fixture
