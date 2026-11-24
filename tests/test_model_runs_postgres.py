@@ -19,6 +19,7 @@ import psycopg
 import pytest
 
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
+from eolab_app.processing import model_runs
 from eolab_app.processing.habitat_models import QueuedHabitat
 from eolab_app.processing.model_run_contracts import ModelRunSpec, RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
@@ -677,6 +678,45 @@ def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     job = response.json()
     assert response.headers["location"] == f"/api/processing/jobs/{job['jobId']}"
     return job
+
+
+@pytest.mark.parametrize("dependency", ["pyflwdir", "numba", "llvmlite"])
+def test_model_worker_rejects_changed_routing_dependencies(
+    model_boundary: Any, monkeypatch: pytest.MonkeyPatch, dependency: str
+) -> None:
+    """Reject an accepted run when the worker's routing dependency version differs.
+
+    Args:
+        model_boundary: Real model HTTP routes, database and worker.
+        monkeypatch: Change installed-version metadata between admission and execution.
+        dependency: Routing engine or compiler package whose version has changed.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    installed_version = model_runs.version
+
+    def changed_version(package: str) -> str:
+        """Report a changed installation for just the selected dependency.
+
+        Args:
+            package: Distribution name requested by the implementation fingerprint.
+
+        Returns:
+            Different version text for the selected package, or its real version.
+        """
+        current = installed_version(package)
+        return current + "+changed" if package == dependency else current
+
+    try:
+        with monkeypatch.context() as versions:
+            versions.setattr(model_runs, "version", changed_version)
+            model_runs.compute_implementation_checksum.cache_clear()
+            assert client.portal.call(worker.run_once)
+            result = client.get(f"/api/processing/jobs/{run['jobId']}").json()
+            assert result["status"] == "failed", result
+            assert result["error"]["code"] == "model_implementation_changed"
+    finally:
+        model_runs.compute_implementation_checksum.cache_clear()
 
 
 def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
