@@ -10,11 +10,12 @@ from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
-from shapely import from_wkb, union_all
+from shapely import from_wkb, union_all, voronoi_polygons
 from shapely.affinity import scale
 from shapely.errors import GEOSException
-from shapely.geometry import LinearRing, Point, Polygon, mapping, shape
+from shapely.geometry import LinearRing, MultiPoint, Point, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import split
 
 from eolab_app.projected_boundary import (
     Position,
@@ -639,6 +640,7 @@ def project_geographic_polygons(
     rings independently so a hole enclosing a pole remains separate from its
     shell. For a ring enclosing one target pole, apply the datum operation
     first, then let GDAL cut the cap on that datum's stereographic plane.
+    A ring containing both poles is divided between them before the two cuts.
     GEOS subtracts each part's holes before joining the resulting parts.
 
     Args:
@@ -699,11 +701,22 @@ def project_geographic_polygons(
                 RuntimeError: If a native coordinate operation fails.
             """
             polygon = Polygon(ring)
-            native = ogr.CreateGeometryFromWkb(polygon.wkb)
-            splitter = projector
             poles = [
                 latitude for latitude, point in target_poles if polygon.contains(point)
             ]
+            if len(poles) == 2:
+                # Bisect in source coordinates so each piece contains at most one pole.
+                bisector = voronoi_polygons(
+                    MultiPoint([point for _, point in target_poles]),
+                    extend_to=polygon,
+                    only_edges=True,
+                )
+                parts = split(polygon, bisector).geoms
+                if len(parts) < 2:
+                    raise ValueError("Selection could not be split between the poles")
+                return union_all([split_ring(piece.exterior) for piece in parts])
+            native = ogr.CreateGeometryFromWkb(polygon.wkb)
+            splitter = projector
             if len(poles) == 1:
                 # A datum shift can move the pole away from the source origin.
                 # Transform the vertices through the requested datum operation

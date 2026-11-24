@@ -488,12 +488,41 @@ def test_cylindrical_area_with_a_pole_on_its_edge(south: int, north: int) -> Non
     )
 
 
-def test_visible_bounds_enclosing_the_displaced_paris_pole() -> None:
-    """Select every NTF grid center inside a WGS84 box around the NTF north pole."""
+@pytest.mark.parametrize(
+    "bounds,pixel_size,shape,expected_count",
+    [
+        (
+            Wgs84Bounds(west=-164, south=89.9981, east=-154, north=89.9987),
+            (400 / 480, 0.00004),
+            (48, 480),
+            2884,
+        ),
+        (
+            Wgs84Bounds(
+                west=-171.34618, south=-89.99876, east=-133.34618, north=89.9988
+            ),
+            (1, 0.5),
+            (400, 400),
+            16800,
+        ),
+    ],
+)
+def test_visible_bounds_enclosing_displaced_paris_poles(
+    bounds: Wgs84Bounds,
+    pixel_size: tuple[float, float],
+    shape: tuple[int, int],
+    expected_count: int,
+) -> None:
+    """Match the inverse-projected NTF cells inside a box enclosing one or both poles.
+
+    Args:
+        bounds: Physical selection in WGS84.
+        pixel_size: Width and height of an NTF cell in grads.
+        shape: Number of rows and columns in the reference grid.
+        expected_count: Number of selected centers on the reference grid.
+    """
     crs = CRS.from_epsg(4807)
-    pixel_size = (400 / 480, 0.00004)
     transform = from_origin(-200, 100, *pixel_size)
-    bounds = Wgs84Bounds(west=-164, south=89.9981, east=-154, north=89.9987)
     request = RasterCalculatorRequest(
         calculation=RasterFormulaInput(
             layers=(
@@ -504,14 +533,14 @@ def test_visible_bounds_enclosing_the_displaced_paris_pole() -> None:
         ),
         selectedBounds=bounds,
     )
-    rows, columns = np.indices((48, 480), dtype="float64") + 0.5
+    rows, columns = np.indices(shape, dtype="float64") + 0.5
     x, y = Transformer.from_crs(crs, 4326, always_xy=True).transform(
         *transform * (columns, rows)
     )
     expected = contains_xy(
         box(bounds.west, bounds.south, bounds.east, bounds.north), x, y
     )
-    assert expected.sum() == 2884
+    assert expected.sum() == expected_count
     projected = project_calculator_area(request, None, None, crs, pixel_size)
     np.testing.assert_array_equal(
         geometry_mask(projected, expected.shape, transform, invert=True), expected
