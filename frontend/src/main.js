@@ -2947,6 +2947,8 @@ async function initializeScanner(refreshCatalog) {
 
 /**
  * Starts the browser application from its runtime contract.
+ * Following another private edit link reloads its credentials and saved draft
+ * together, discarding unsaved changes as ordinary page navigation does.
  *
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
@@ -2967,6 +2969,7 @@ async function startApplication() {
             document.querySelector("#published-map-editor").hidden = false;
             if (privateMapEdit !== null) {
                 document.querySelector("#published-map-cancel").href = `/maps/${encodeURIComponent(editableMapSlug)}`;
+                window.addEventListener("hashchange", () => window.location.reload());
             }
         }
     } else {
