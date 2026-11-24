@@ -9,7 +9,7 @@ import numpy
 import pytest
 import rasterio
 from numpy.typing import NDArray
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 from rasterio.transform import Affine
 from rasterio.transform import from_origin
 from shapely import contains_xy, segmentize
@@ -141,6 +141,17 @@ def test_flow_mask_preserves_projected_source_edges(
             from_origin(-180, 90, 1, 1),
             (20, 360),
             id="polar-hole",
+        ),
+        pytest.param(
+            box(58, 35, 62, 39),
+            CRS.from_proj4(
+                "+proj=ob_tran +o_proj=longlat +o_lon_p=180 +o_lat_p=39.25 "
+                "+lon_0=18 +ellps=WGS84 +type=crs"
+            ).to_wkt(),
+            "EPSG:4326",
+            from_origin(-125, 10, 0.25, 0.25),
+            (48, 64),
+            id="rotated-geographic",
         ),
     ],
 )

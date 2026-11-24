@@ -66,15 +66,20 @@ def _transform_polygon_positions(
 
     Returns:
         Projected x and y. Between geographic systems, each longitude is moved
-        by complete turns to the branch implied by its original longitude.
-        This keeps wide rings wide and aligns holes with their exterior.
+        by complete turns when both longitudes refer to ordinary meridians.
+        Derived geographic coordinates, such as rotated poles, use the full
+        coordinate operation because their longitudes also depend on latitude.
     """
     tx, ty = coordinate_transform(source_crs, target_crs, x, y)
     target = _longitude_frame(target_crs)
     if target is None or source_crs == target_crs:
         return tx, ty
     source = _longitude_frame(source_crs)
-    if source is not None:
+    if (
+        source is not None
+        and not ProjCRS(source_crs).is_derived
+        and not ProjCRS(target_crs).is_derived
+    ):
         period = math.tau / abs(target[0])
         for index, (original, projected) in enumerate(zip(x, tx, strict=True)):
             if math.isfinite(projected):
