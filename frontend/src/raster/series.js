@@ -4,6 +4,7 @@ import { samplingBoxFormula } from "../sampling-box-statistics.js";
 import { vectorSelectionsEqual } from "../selected-area.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
 import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
+import { observationLabel } from "../observation-period.js";
 import { csvParse, csvFormat } from "d3";
 
 const SERIES_STATISTICS = Object.freeze({
@@ -809,11 +810,13 @@ export class RasterSeriesController {
         const result = area.temporalResult ?? (showingPrevious ? area.previousTemporalResult : null);
         const observations = result?.observations ?? [];
         const statistics = this.formulas.map(formula => ({...formula, ...this.statisticDisplay.get(formula.id), previousRows: null,
-            rows: observations.map(({time, rows}) => {
+            rows: observations.map(({time, start, period, rows}) => {
                 const capturedLabel = getCapturedStatisticLabel(result, formula);
                 const row = rows.find(value => value.label === capturedLabel);
                 const matches = capturedLabel !== undefined;
-                return {key: time, xValue: Date.parse(time), label: new Date(time).toISOString().replace("T", " ").replace(/(\.000)?Z$/, " UTC"),
+                const end = new Date(time).toISOString();
+                const label = observationLabel(end, period, start && new Date(start).toISOString()) ?? end.replace("T", " ").replace(/(\.000)?Z$/, " UTC");
+                return {key: time, xValue: Date.parse(start ?? time), label,
                     statisticId: formula.id, statisticLabel: formula.label || formula.expression, state: !matches ? "waiting" : row?.state === "ok" ? "value" : row?.state ?? "waiting",
                     value: !matches || row?.value == null ? null : Number(row.value), rawValue: matches ? row?.value : null, unit: row?.unit ?? ""};
             })}));

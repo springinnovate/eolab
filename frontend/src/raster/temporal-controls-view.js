@@ -91,8 +91,8 @@ export class TemporalControlsView {
         } else this.month.value = month;
         if (this.period !== period || this.times !== times || this.unavailableTime || !times.includes(time)) {
             this.unavailableTime = Boolean(time && !times.includes(time));
-            setChoices(this.time, times.map(value => ({value, label: observationLabel(value, period, intervalStarts) ?? formatObservationTime(value)})), time,
-                time && (observationLabel(time, period, intervalStarts) ?? time));
+            setChoices(this.time, times.map(value => ({value, label: observationLabel(value, period, intervalStarts?.[value]) ?? formatObservationTime(value)})), time,
+                time && (observationLabel(time, period, intervalStarts?.[time]) ?? time));
             this.times = times;
         } else this.time.value = time;
         this.month.disabled = months.length === 0;

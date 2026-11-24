@@ -937,14 +937,16 @@ def test_temporal_point_formulas_ignore_area_and_read_only_the_selected_cell(
     assert not (directory / "polygon-mask.tif").exists()
 
 
+@pytest.mark.parametrize("time_labels", [None, "timestamp"])
 def test_temporal_stack_csv_preserves_named_results_and_path_free_provenance(
-    interval: ResolvedTemporalInterval, tmp_path: Path
+    interval: ResolvedTemporalInterval, tmp_path: Path, time_labels: str | None
 ) -> None:
     """Write ordered real-TIFF results without losing values, states or coverage.
 
     Args:
         interval: Gapped observations with a selected pixel that is NoData on one date.
         tmp_path: Private native calculation and CSV publication directories.
+        time_labels: Optional prepared-stack precision stored with the completed result.
     """
     metrics = TemporalStackMetrics(
         calculations=(
@@ -998,6 +1000,8 @@ def test_temporal_stack_csv_preserves_named_results_and_path_free_provenance(
     ]
     directory = tmp_path / "csv"
     directory.mkdir()
+    if time_labels:
+        interval = replace(interval, time_labels=time_labels)
     artifact = create_temporal_stack(interval, spec, directory, limits)
     result_path = directory / "result.csv"
     with result_path.open(encoding="utf-8", newline="") as stream:
@@ -1012,6 +1016,7 @@ def test_temporal_stack_csv_preserves_named_results_and_path_free_provenance(
             "interval_end_utc": observation.interval_end.isoformat(),
             "variable": "temperature",
             "calculation": result["label"],
+            **({"time_labels": time_labels} if time_labels else {}),
             "expression": result["expression"],
             "value": result["value"] if result["value"] is not None else "",
             "value_type": result["valueType"] or "",

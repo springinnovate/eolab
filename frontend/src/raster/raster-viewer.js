@@ -4697,7 +4697,7 @@ export function initializeRasterViewer(
     function temporalRaster(item, selection, available, starts) {
         const variable = item.properties["cube:variables"][selection.variable];
         const period = item.properties["eolab:time_labels"];
-        const timeLabel = observationLabel(selection.time, period, starts) ??
+        const timeLabel = observationLabel(selection.time, period, starts?.[selection.time]) ??
             `${formatObservationTime(selection.time)} UTC`;
         return {
             source: {collectionId: item.collection, itemId: item.id, ...selection},

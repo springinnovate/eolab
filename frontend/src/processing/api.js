@@ -506,7 +506,7 @@ export class ProcessingApiClient {
      * The current writer supplies chronological observations and named formula rows.
      * @param {Object} job Completed, validated temporal stack job.
      * @param {AbortSignal} [signal] Cancellation when the requested plot changes.
-     * @return {Promise<{csv:string, observations:{time:string,rows:Object[]}[]}>} Original download and plot rows grouped by observation.
+     * @return {Promise<{csv:string, observations:{time:string,period?:string,start?:string,rows:Object[]}[]}>} Original download and grouped rows with prepared-stack coverage.
      * @throws {ProcessingRequestError|Error} If the owned download is unavailable, expired, cancelled or unreadable.
      */
     async readTemporalStackRows(job, signal) {
@@ -517,7 +517,8 @@ export class ProcessingApiClient {
         const observations = new Map();
         const expressions = new Map(job.result.calculations.map(value => [value.label, value.expression]));
         for (const row of csvParse(csv)) {
-            if (!observations.has(row.time_utc)) observations.set(row.time_utc, {time: row.time_utc, rows: []});
+            if (!observations.has(row.time_utc)) observations.set(row.time_utc, {time: row.time_utc, rows: [],
+                ...(row.time_labels ? {period: row.time_labels, start: row.interval_start_utc} : {})});
             observations.get(row.time_utc).rows.push({label: row.calculation, expression: expressions.get(row.calculation),
                 value: row.value === "" ? null : row.value, valueType: row.value_type, unit: row.unit,
                 state: row.state, aggregates: JSON.parse(row.aggregates)});

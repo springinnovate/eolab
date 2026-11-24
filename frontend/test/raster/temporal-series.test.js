@@ -8,6 +8,7 @@ import { RasterSeriesCalculations } from "../../src/processing/raster-series-cal
 import { CalculationRequests } from "../../src/processing/calculation-requests.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
+import { ProcessingApiClient } from "../../src/processing/api.js";
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 
 const DATASET = {key: '["eolab-temporal-datasets","weather"]', collectionId: "eolab-temporal-datasets", itemId: "weather", label: "Weather"};
@@ -417,6 +418,24 @@ test("a second named view can replace a range choice while its Catalog metadata 
     } finally { h.close(); }
 });
 
+
+test("completed statistics plot each prepared observation at its covered start and retain its exact key", async t => {
+    const h = fixture();
+    t.after(h.close);
+    await h.controller.chooseTimeRange(DATASET.key);
+    h.view.actions.onTemporalEdit({periodMode: "year", startTime: "2024-01-01T00:00", endTime: "2025-01-01T00:00"});
+    h.controller.updateSamplingForPanelVisibility(true); await h.tick();
+    const job = [...h.server.values()][0], calculations = h.submitted[0].calculations;
+    const end = "2025-01-01T00:00:00+00:00", start = "2024-01-01T00:00:00+00:00";
+    const csv = csvFormat([{time_utc: end, interval_start_utc: start, interval_end_utc: end, time_labels: "calendar_year",
+        calculation: calculations[0].label, expression: calculations[0].expression, value: "24", unit: "mm", state: "ok", aggregates: "[]"}]);
+    const reader = new ProcessingApiClient(async () => new Response(csv), null);
+    const result = await reader.readTemporalStackRows({...job, result: {url: `/api/processing/jobs/${job.jobId}/result`, calculations}});
+    await h.finish(job.jobId, "ready", result);
+    const [row] = h.view.state.rows;
+    assert.deepEqual([row.label, row.xValue, row.key, row.value], ["2024", Date.parse(start), end, 24]);
+    assert.equal(csvParse(h.controller.exportCsv())[0].interval_end_utc, end);
+});
 
 test("completed temporal statistics can be repeated without another run or download and keep exact CSV rows", async () => {
     const h = fixture();

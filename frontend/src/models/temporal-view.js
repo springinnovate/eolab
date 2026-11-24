@@ -118,7 +118,7 @@ export class TemporalModelInputsView {
         }
         this.refresh.disabled = temporal.loading || !temporal.datasetKey;
         this.availability.hidden = !temporal.datasetKey;
-        const label = time => observationLabel(time, period, choices.interval_starts) ?? formatUtcTime(time);
+        const label = time => observationLabel(time, period, choices.interval_starts?.[time]) ?? formatUtcTime(time);
         this.coverage.textContent = temporal.loading ? "Loading available observations…" : temporal.datesError ? temporal.datesError : !choices ? "Choose a variable to see available observations." :
             choices.times.length === 1 && period ? `1 observation · ${label(choices.times[0])}` :
             choices.times.length ? `${choices.times.length.toLocaleString()} observations in ${observationMonthLabel(choices.month, period)}. First: ${label(choices.times[0])}. Last: ${label(choices.times.at(-1))}.` :

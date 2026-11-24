@@ -58,11 +58,13 @@ class ResolvedTemporalInterval:
         time_support: Whether values describe an instant, a mean rate over an
             interval, or an accumulation over an interval. Calculations use this
             distinction to interpret the values without guessing from names.
+        time_labels: Prepared-stack period or snapshot precision for result labels.
     """
 
     observations: tuple[TemporalObservation, ...]
     unit: str
     time_support: Literal["instantaneous", "mean_rate", "accumulation"]
+    time_labels: str | None = None
 
 
 class TemporalRasterDataset:

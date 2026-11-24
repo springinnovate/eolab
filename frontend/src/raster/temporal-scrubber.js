@@ -250,7 +250,7 @@ export class TemporalScrubber {
         if (failed && this.playing) this.pause();
         const target = this.dragTime ?? t.time;
         if (t.times.length) c.time.value = Date.parse(target);
-        c.time.setAttribute("aria-valuetext", observationLabel(target, t.period, t.intervalStarts) ?? utcLabel(target));
+        c.time.setAttribute("aria-valuetext", observationLabel(target, t.period, t.intervalStarts?.[target]) ?? utcLabel(target));
         c.time.disabled = t.times.length < 2 && t.months.length < 2;
         c.month.disabled = !t.months.length;
         const next = this.#neighbor(1), previous = this.#neighbor(-1);
@@ -258,7 +258,7 @@ export class TemporalScrubber {
         c.forward.disabled = !next;
         c.play.disabled = !this.playing && (!next || !painted || Boolean(failed));
         c.play.textContent = this.playing ? "Pause" : "Play";
-        c.display.textContent = painted ? "On map · " + (observationLabel(t.time, t.period, t.intervalStarts) ?? utcLabel(t.time)) : "";
+        c.display.textContent = painted ? "On map · " + (observationLabel(t.time, t.period, t.intervalStarts?.[t.time]) ?? utcLabel(t.time)) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
         const message = t.error || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
             t.loading && !t.times.length ? "Loading dates for " + observationMonthLabel(t.month, t.period) :

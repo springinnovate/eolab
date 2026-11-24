@@ -13,18 +13,18 @@ export function observationDate(time, period) {
 /** Format a reviewed stack's timestamp for the period or snapshot that it represents.
  * @param {string} time Exact UTC observation key.
  * @param {string|undefined} period Archive's declared period or snapshot precision.
- * @param {Object<string,string>} [starts] Inclusive starts for explicit intervals keyed by exclusive end.
+ * @param {string} [start] Inclusive UTC start of an explicit range.
  * @return {string|null} Human-readable observation or null for the viewer's ordinary timestamp.
  */
-export function observationLabel(time, period, starts) {
+export function observationLabel(time, period, start) {
     if (!period) return null;
     const date = observationDate(time, period);
     switch (period) {
     case "year": case "calendar_year": return date.slice(0, 4);
     case "month": case "calendar_month": return date.slice(0, 7);
     case "day": case "calendar_day": return date.slice(0, 10);
-    case "explicit": return starts?.[time] ?
-        `${starts[time].replace("T", " ").replace(/(?:\.000)?Z$/, "")} to ${time.replace("T", " ").replace(/(?:\.000)?Z$/, " UTC")} (end excluded)` :
+    case "explicit": return start ?
+        `${start.replace("T", " ").replace(/(?:\.000)?Z$/, "")} to ${time.replace("T", " ").replace(/(?:\.000)?Z$/, " UTC")} (end excluded)` :
         "Period ending " + time.replace("T", " ").replace(/(?:\.000)?Z$/, " UTC");
     default: return time.replace("T", " ").replace(/(?:\.000)?Z$/, " UTC");
     }
