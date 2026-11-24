@@ -121,8 +121,9 @@ test("field summaries expose heterogeneous coverage without coercion", () => {
 test("large comparisons page sorted rows and can plot the entire selection", () => {
   const {controller, documentContext:doc} = fixture();
   const base = observations()[0];
+  let xReads = 0;
   const rows = Array.from({length:1002}, (_, i) => ({...base, featureId:String(i + 1),
-    properties:{year:1002 - i, score:i}}));
+    properties:{get year() { xReads++; return 1002 - i; }, score:i}}));
   const control = name => doc.querySelector("#vector-time-series-" + name);
   controller.setSample({state:"ready", message:"Ready", observations:rows});
   controller.open();
@@ -131,10 +132,12 @@ test("large comparisons page sorted rows and can plot the entire selection", () 
   assert.equal(control("feature-list").children.length, 0);
   const range = control("row-range");
   assert.match(range.children[0].textContent, /1.000 of 1.002/);
+  const xReadsAfterOpening = xReads;
   range.value = "1000";
   range.dispatchEvent(new Event("change"));
   control("values-button").dispatchEvent(new Event("click"));
   assert.deepEqual(control("table-body").children.map(row => row.children[1].children[0].textContent), ["1", "0"]);
+  assert.equal(xReads, xReadsAfterOpening, "Paging and switching views reuse the sorted feature rows");
   assert.equal(control("chart").querySelectorAll(".series-chart-point").length, 0);
   control("features-button").dispatchEvent(new Event("click"));
   const featureRange = control("feature-range");
@@ -156,6 +159,12 @@ test("large comparisons page sorted rows and can plot the entire selection", () 
   assert.equal(control("chart").querySelectorAll(".series-chart-point").length, rows.length);
   control("values-button").dispatchEvent(new Event("click"));
   assert.equal(control("table-body").children.length, 1000, "The exact values table remains paged");
+  const xField = control("x");
+  xField.value = "score";
+  xField.dispatchEvent(new Event("change"));
+  assert.equal(control("table-body").children[0].children[0].textContent, "1001", "Changing the X field reorders the rows");
+  controller.setSample({state:"ready", message:"Ready", observations:[rows[0]]});
+  assert.equal(control("table-body").children[0].children[0].textContent, "0", "A new sample replaces the previous rows");
   controller.destroy();
 });
 

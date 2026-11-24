@@ -100,22 +100,20 @@ function vectorTimeSeriesXScale(points) {
  */
 
 /** @typedef {{field:string,points:(ComparisonRow & {yValue:number|bigint|null})[],finiteCount:number}} ComparisonPlot */
+/** @typedef {{orderedRows:ComparisonRow[],xScale:"numeric"|"ordinal",xField:string,direction:"ascending"|"descending"}} OrderedComparison */
+/** @typedef {{rows:ComparisonRow[],start:number|null,xScale:"numeric"|"ordinal",plots:ComparisonPlot[]}} ComparisonPage */
 
 /**
- * Order every inspected feature once for the values table and all comparison plots.
- * Missing X values sort last and stay in the table and stacked chart. Missing
- * measurements keep their slots, and equal X values retain the inspection order.
+ * Sort the entire selection by its X field and determine the shared chart scale.
+ * Missing X values sort last and equal X values retain the inspection order.
  * @param {ReadonlyArray<VectorInspectionObservation>} observations Inspected features in their original selection order.
- * @param {VectorTimeSeriesSettings} settings Selected axes and sort direction.
- * @param {number|null} [firstRow=null] First row of a displayed page after sorting, or null for every feature.
- * @param {number|null} [selectedIndex=null] Keep this original feature on the displayed page when the order changes.
- * @return {{rows:ComparisonRow[],start:number|null,xScale:"numeric"|"ordinal",plots:ComparisonPlot[]}}
- * Displayed rows, their offset in the sorted selection, and marks for the requested measurements.
+ * @param {Pick<VectorTimeSeriesSettings,"xField"|"direction">} order Field and direction that determine row order.
+ * @return {OrderedComparison} Sorted feature rows, scale, and the settings used to order them.
  */
-export function buildVectorFeatureComparison(observations, settings, firstRow = null, selectedIndex = null) {
+function orderComparisonRows(observations, {xField,direction}) {
     const orderedRows = observations.map((observation, sourceIndex) => {
-        const raw = settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL
-            ? observation.layerLabel : observation.properties[settings.xField];
+        const raw = xField === VECTOR_TIME_SERIES_LAYER_LABEL
+            ? observation.layerLabel : observation.properties[xField];
         const xValue = isOrderableValue(raw) ? raw : null;
         return {observation, sourceIndex, xValue, xLabel: xValue === null ? "No value" : formatScalar(xValue)};
     });
@@ -125,8 +123,21 @@ export function buildVectorFeatureComparison(observations, settings, firstRow = 
         const order = xScale === "numeric"
             ? Number(left.xValue > right.xValue) - Number(left.xValue < right.xValue)
             : NATURAL_TEXT.compare(left.xLabel, right.xLabel);
-        return (settings.direction === "ascending" ? order : -order) || left.sourceIndex - right.sourceIndex;
+        return (direction === "ascending" ? order : -order) || left.sourceIndex - right.sourceIndex;
     });
+    return {orderedRows,xScale,xField,direction};
+}
+
+/**
+ * Build the displayed rows and marks from an already sorted feature selection.
+ * Missing X values stay in the table and stacked chart. Missing Y values keep their slots.
+ * @param {OrderedComparison} comparison Globally sorted feature rows and shared chart scale.
+ * @param {Pick<VectorTimeSeriesSettings,"chartType"|"yFields">} settings Plot mode and measurements to show.
+ * @param {number|null} firstRow First displayed row, or null for every feature.
+ * @param {number|null} selectedIndex Original feature index that should stay visible, if any.
+ * @return {ComparisonPage} Displayed page, chart scale, and marks for its measurements.
+ */
+function buildComparisonPage({orderedRows,xScale}, settings, firstRow, selectedIndex) {
     let start = firstRow;
     if (firstRow !== null && selectedIndex !== null && orderedRows.length > FEATURES_PER_PAGE) {
         const position = orderedRows.findIndex(row => row.sourceIndex === selectedIndex);
@@ -142,6 +153,18 @@ export function buildVectorFeatureComparison(observations, settings, firstRow = 
         return {field, points, finiteCount: points.filter(point => point.yValue !== null).length};
     });
     return {rows, start, plots, xScale};
+}
+
+/**
+ * Build a comparison for a feature selection whose row order has not been prepared.
+ * @param {ReadonlyArray<VectorInspectionObservation>} observations Inspected features in their original selection order.
+ * @param {VectorTimeSeriesSettings} settings Selected axes, sort direction, and plot type.
+ * @param {number|null} [firstRow=null] First displayed row, or null for every feature.
+ * @param {number|null} [selectedIndex=null] Original feature index that should stay visible, if any.
+ * @return {ComparisonPage} Displayed page, chart scale, and marks for its measurements.
+ */
+export function buildVectorFeatureComparison(observations, settings, firstRow = null, selectedIndex = null) {
+    return buildComparisonPage(orderComparisonRows(observations, settings), settings, firstRow, selectedIndex);
 }
 
 /**
@@ -166,6 +189,9 @@ export function vectorTimeSeriesPresentation(observations, fields) {
 
 /** Plot selected numeric fields across the features returned by one map click. */
 export class VectorTimeSeriesController {
+    /** @type {OrderedComparison|null} */
+    #orderedComparison = null;
+
     /**
      * @param {Object} configuration Browser composition callbacks.
      * @param {(visible:boolean,moveFocus:boolean)=>void} configuration.onVisibilityChange Show or close the dock view.
@@ -332,6 +358,7 @@ export class VectorTimeSeriesController {
         this.selected = null;
         this.firstRow = 0;
         this.fieldSummary = null;
+        this.#orderedComparison = null;
         this.plotPanel.setFeatureChoices(this.observations);
         this.fields.search.value = "";
         this.render();
@@ -401,8 +428,11 @@ export class VectorTimeSeriesController {
         if (yFields.length === 0) {
             this.status.textContent = numericFields.length ? "Choose a field to plot." : "These features have no numeric fields.";
         } else {
-            const {rows,start,plots,xScale} = buildVectorFeatureComparison(this.observations,
-                showPlot ? this.settings : {...this.settings, yFields:[]}, this.firstRow, this.selected?.index);
+            if (this.#orderedComparison?.xField !== xField || this.#orderedComparison.direction !== direction) {
+                this.#orderedComparison = orderComparisonRows(this.observations, this.settings);
+            }
+            const {rows,start,plots,xScale} = buildComparisonPage(this.#orderedComparison,
+                showPlot ? this.settings : {...this.settings, yFields:[]}, this.firstRow, this.selected?.index ?? null);
             this.firstRow = start;
             this.rowRange.value = start === null ? "all" : String(start);
             const xLabel = choices.get(xField);
