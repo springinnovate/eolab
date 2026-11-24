@@ -279,6 +279,38 @@ def test_nonfinite_nodata_catalog(tmp_path: Path, nodata: float) -> None:
         assert src.read(1, masked=True).tolist() == [[12, None]]
 
 
+def test_retry_interrupted_publication(tmp_path: Path) -> None:
+    """Recover after process exit between publishing the index and its descriptor.
+
+    Args:
+        tmp_path: Dedicated archive directory.
+    """
+    manifest = annual_manifest(tmp_path)
+    crash = """import os, runpy, sys
+from pathlib import Path
+link = Path.hardlink_to
+def interrupt(path, target):
+    if path.name == 'dataset.yaml':
+        os._exit(12)
+    link(path, target)
+Path.hardlink_to = interrupt
+runpy.run_path(sys.argv[1])['build_stack'](Path(sys.argv[2]), False)
+"""
+    assert (
+        subprocess.run([sys.executable, "-c", crash, SCRIPT, manifest]).returncode == 12
+    )
+    index = tmp_path / "catalog.sqlite"
+    original = index.read_bytes()
+    index.write_bytes(b"unrelated index")
+    assert run_cli("build", manifest).returncode == 1
+    assert index.read_bytes() == b"unrelated index"
+    index.write_bytes(original)
+    result = run_cli("build", manifest)
+    assert result.returncode == 0, result.stderr
+    assert list(tmp_path.rglob("dataset.yaml")) == [tmp_path / "dataset.yaml"]
+    assert index.read_bytes() == original
+
+
 @pytest.mark.parametrize(
     ("second_start", "valid"), [("2024-02-29", True), ("2024-02-28", False)]
 )

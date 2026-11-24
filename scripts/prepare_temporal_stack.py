@@ -3,6 +3,7 @@
 import argparse
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import filecmp
 import json
 import math
 from pathlib import Path
@@ -444,7 +445,7 @@ def build_stack(manifest: Path, check: bool) -> None:
 
     Raises:
         ValueError: The manifest or sources are invalid.
-        OSError: Publication fails or either output already exists.
+        OSError: Publication fails, a descriptor exists or an existing index differs.
         sqlite3.Error: The complete observation index could not be written.
     """
     root = manifest.resolve(strict=True).parent
@@ -472,7 +473,7 @@ def build_stack(manifest: Path, check: bool) -> None:
         return
     catalog = root / "catalog.sqlite"
     descriptor = root / "dataset.yaml"
-    if descriptor.exists() or catalog.exists():
+    if descriptor.exists():
         raise FileExistsError(
             "Archive output already exists. Build in a new dedicated directory."
         )
@@ -496,17 +497,24 @@ def build_stack(manifest: Path, check: bool) -> None:
             "time_labels": stack.variable.period,
             "source": {"format": "temporal_cog", "catalog": catalog.name},
         }
-        staged = Path(temp) / descriptor.name
+        staged = Path(temp) / "descriptor.pending"
         staged.write_text(
             yaml.safe_dump(description, sort_keys=False, allow_unicode=True),
             encoding="utf-8",
         )
-        catalog.hardlink_to(index)
         try:
-            descriptor.hardlink_to(staged)
-        except OSError:
-            catalog.unlink()
-            raise
+            catalog.hardlink_to(index)
+        except FileExistsError:
+            # A previous build may have stopped after installing this exact index.
+            if (
+                catalog.is_symlink()
+                or not catalog.is_file()
+                or not filecmp.cmp(index, catalog, shallow=False)
+            ):
+                raise FileExistsError(
+                    "An existing catalog.sqlite differs from the reviewed stack."
+                )
+        descriptor.hardlink_to(staged)
     print(f"Prepared {len(rows)} observations. Scan the dataset directory in EOLab.")
 
 
