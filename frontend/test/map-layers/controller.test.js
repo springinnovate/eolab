@@ -792,8 +792,10 @@ test("local layers keep their identity and survive Catalog clearing and restorat
     await controller.show(catalogItem("raster"), catalog);
     controller.clear({preserveLocal: true});
     assert.deepEqual(controller.retainedRecords, [record]);
+    controller.activate(record.entry.key);
     const staged = await controller.stage(catalogItem("restored"), catalog);
     controller.commitStaged([staged]);
+    assert.deepEqual(local.events.at(-1), ["deactivate", record.entry.key, staged.key]);
     assert.equal(controller.retainedRecords.length, 2);
     assert.equal(controller.getRecord(record.entry.key), record);
     controller.setVisible(record.entry.key, false);

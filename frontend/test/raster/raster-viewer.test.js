@@ -1358,6 +1358,30 @@ test("saved style updates a staged raster before it is attached", async () => {
     h.destroy();
 });
 
+test("restoring a Catalog raster completes both histograms when an upload is already loading", async t => {
+    const upload = {source: {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"},
+        label: "Survey", bbox: [77, 20, 79, 24], capabilities: {pixels: true, statistics: true}};
+    const pending = createDeferred();
+    const reads = [];
+    const h = visibleLayerFixture(async (item, _area, signal) => {
+        reads.push(signal);
+        if (reads.length === 1) return pending.promise;
+        return item === upload ? EXACT_RASTER_STATISTICS : RASTER_STATISTICS;
+    });
+    t.after(h.destroy);
+    await h.viewer.showSource(upload, {removed() {}});
+    const staged = await h.viewer.stage(createRasterItem("habitat"), {visible: true});
+    h.mapLayers.commitStaged([staged], {fitToBounds: false});
+    pending.resolve(RASTER_STATISTICS);
+    await flushPromises();
+
+    assert.deepEqual(h.controlsView.layerHistograms.map(({label, state, statistics}) =>
+        [label, state, statistics?.validSampleCount]), [
+        ["habitat.tif", "ready", 8000], ["Survey", "ready", 2048],
+    ]);
+    assert.equal(reads[0].aborted, true);
+});
+
 test("views sharing one Catalog Item keep separate styles and histogram categories", async () => {
     const requestedCodes = [];
     const h = visibleLayerFixture(async (item, area, _signal, _fetch, codes) => {

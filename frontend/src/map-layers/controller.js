@@ -447,11 +447,7 @@ export class MapLayerController {
                     record.adapter.visibilityChanged?.(record, false);
                 }
             }
-            this.presentationActiveKey = this.stack.activeKey;
-            const activeRecord = this.presentationActiveKey === null
-                ? null
-                : this.records.get(this.presentationActiveKey);
-            activeRecord?.adapter.activate?.(activeRecord);
+            if (this.stack.activeKey !== null) this.#activateRecord(this.stack.activeKey);
             for (const entry of [...this.stack.entries].reverse()) {
                 if (entry.visible) {
                     this.leafletLayers.setVisible(entry.key, true);
@@ -1448,20 +1444,25 @@ export class MapLayerController {
      * @return {Object} Activated record.
      */
     #activate(key, requestedFocus = null) {
+        const record = this.#activateRecord(key);
+        this.render(requestedFocus);
+        return record;
+    }
+
+    /**
+     * Release the previous layer's controls and activate the next layer before rendering the stack.
+     * @param {string} key Retained layer key.
+     * @return {Object} Activated record.
+     */
+    #activateRecord(key) {
         const record = this.#requireRecord(key);
-        const previousRecord = this.presentationActiveKey === null
-            ? null
-            : this.records.get(this.presentationActiveKey) ?? null;
-        if (
-            previousRecord !== null &&
-            previousRecord.entry.key !== record.entry.key
-        ) {
+        const previousRecord = this.records.get(this.presentationActiveKey);
+        if (previousRecord && previousRecord !== record) {
             previousRecord.adapter.deactivate?.(previousRecord, record);
         }
         this.stack.activate(key);
         this.presentationActiveKey = key;
         record.adapter.activate?.(record);
-        this.render(requestedFocus);
         return record;
     }
 
