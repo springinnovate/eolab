@@ -165,3 +165,29 @@ def test_warp_uses_projected_base_meridian(
         np.testing.assert_array_equal(
             values, np.where(inside, 13 * source_row + source_col, np.nan)
         )
+
+
+@pytest.mark.parametrize("survey_mercator", [False, True], indirect=True)
+def test_matched_mercator_cog_preserves_survey_grid(
+    survey_mercator: Path, tmp_path: Path
+) -> None:
+    """Read all published samples at their original metre and longitude coordinates.
+
+    Args:
+        survey_mercator: Original Mercator reference.
+        tmp_path: Directory for the matched output.
+    """
+    path = calculate_survey_grid(
+        tmp_path, survey_mercator, MatchRasterGrid(kind="match", alias="a")
+    )
+    with tifffile.TiffFile(path) as published:
+        keys = published.pages[0].geotiff_tags
+        assert keys["GeogAngularUnitsGeoKey"] == 9105
+        assert keys["GeogPrimeMeridianLongGeoKey"] == pytest.approx(2.137 / 0.9)
+    with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(path) as output:
+        assert output.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+        assert output.transform.to_gdal() == (0, 1000, 0, 4000, 0, -1000)
+        np.testing.assert_array_equal(output.read(1), np.arange(52).reshape(4, 13))
+    geographic = Transformer.from_crs(3395, 4326, always_xy=True)
+    lon, lat = geographic.transform(12500, 500)
+    assert read_raster_pixel(path, lon + 2.137, lat).value == 51

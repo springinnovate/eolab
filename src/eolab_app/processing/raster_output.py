@@ -18,10 +18,8 @@ from eolab_app.processing.model_result_contracts import RasterResultGrid
 from eolab_app.processing.models import ProcessingError
 
 
-def _copy_geographic_reference_keys(
-    reference: Path, destination: Path, crs: ProjCRS
-) -> None:
-    """Preserve the matched geographic CRS in the GDAL-created COG.
+def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -> None:
+    """Preserve a matched grid's geographic or projected CRS in the GDAL-created COG.
 
     GeoTIFF stores its CRS in a key directory with separate doubles and text.
     Only these three TIFF tags describe the CRS. Pixel registration belongs to
@@ -52,7 +50,7 @@ def _copy_geographic_reference_keys(
     }
     entries[GeoKeys.GTRasterTypeGeoKey] = (0, 1, 1)  # PixelIsArea
     meridian = crs.prime_meridian
-    grid_unit = crs.axis_info[0].unit_conversion_factor
+    grid_unit = crs.geodetic_crs.axis_info[0].unit_conversion_factor
     geographic_code = entries.get(GeoKeys.GeographicTypeGeoKey, (0, 1, 32767))[2]
     longitude = None
     if meridian.longitude != 0 and geographic_code != crs.geodetic_crs.to_epsg(
@@ -77,7 +75,7 @@ def _copy_geographic_reference_keys(
             # GDAL accepts explicit WKT in its projection-engine citation.
             # Keep the standard numeric keys authoritative for other readers.
             encoded = (
-                "ESRI PE String = " + crs.to_wkt(version="WKT2_2019_SIMPLIFIED") + "|"
+                "ESRI PE String = " + crs.to_wkt(version="WKT2_2019") + "|"
             ).encode("utf-8")
             citation = citation.encode("utf-8")
             entries[GeoKeys.GTModelTypeGeoKey] = (0, 1, 32767)
@@ -150,8 +148,11 @@ def write_float64_cog(
             staged.set_band_unit(1, band_unit)
     copy_keys = (
         reference is not None
-        and definition.is_geographic
         and (definition.to_json_dict().get("id", {}).get("authority") != "EPSG")
+        and (
+            definition.is_geographic
+            or (definition.is_projected and definition.prime_meridian.longitude != 0)
+        )
     )
     copy_raster(
         stage,
@@ -166,7 +167,7 @@ def write_float64_cog(
         GEOTIFF_VERSION="1.0" if copy_keys else "AUTO",
     )
     if reference is not None and copy_keys:
-        _copy_geographic_reference_keys(reference, destination, definition)
+        _copy_reference_crs_keys(reference, destination, definition)
     with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(destination) as result:
         if (
             result.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") != "COG"

@@ -162,7 +162,8 @@ class GeoTiffReader(DatasetReader):
         horizontal = horizontal.get("source_crs", horizontal)
         horizontal = horizontal.get("base_crs", horizontal)
         datum = horizontal.get("datum") or horizontal["datum_ensemble"]
-        datum.setdefault("prime_meridian", {"name": meridian.name})["longitude"] = (
-            math.degrees(radians)
-        )
+        datum.setdefault("prime_meridian", {"name": meridian.name})["longitude"] = {
+            "value": radians / radians_per_unit,
+            "unit": horizontal["coordinate_system"]["axis"][0]["unit"],
+        }
         return CRS.from_wkt(ProjCRS.from_json_dict(document).to_wkt())
