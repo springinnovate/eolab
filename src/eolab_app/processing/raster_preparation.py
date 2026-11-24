@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from math import ceil, floor, isclose, radians, tau
+from math import ceil, floor, isclose, isfinite, radians, tau
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
@@ -12,6 +12,7 @@ from xml.etree import ElementTree
 from affine import Affine
 import numpy as np
 from numpy.typing import NDArray
+from pyproj import Transformer
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
@@ -324,6 +325,8 @@ def _write_warped_vrt(
     being mistaken for a coarser source resolution when choosing the kernel.
     Center interpolated and aggregate periodic views on the output so scale
     probes and cell footprints have continuous neighbors across the seam.
+    If the output envelope's midpoint is in a projection gap, retain the
+    periodic source's own center; a valid multipart area need not include it.
     GDAL skips automatic centering for sources wider
     than one period, so set its native CENTER_LONG option in the serialized warp.
     Convert non-degree geographic coordinates to degrees in a virtual source
@@ -399,7 +402,14 @@ def _write_warped_vrt(
                 pass
             if center_periodic_longitudes:
                 center_x, center_y = grid.transform * (grid.width / 2, grid.height / 2)
-                longitude, _ = transform(grid.crs, source.crs, [center_x], [center_y])
+                longitude, _ = Transformer.from_crs(
+                    grid.crs, source.crs, always_xy=True
+                ).transform(center_x, center_y)
+                if not isfinite(longitude):
+                    longitude, _ = source.transform * (
+                        source.width / 2,
+                        source.height / 2,
+                    )
                 tree = ElementTree.parse(path)
                 reprojection = tree.find(".//ReprojectionTransformer")
                 if reprojection is None:
@@ -412,7 +422,7 @@ def _write_warped_vrt(
                     center_option = ElementTree.SubElement(
                         options, "Option", key="CENTER_LONG"
                     )
-                center_option.text = str(longitude[0] * to_degrees)
+                center_option.text = str(longitude * to_degrees)
                 tree.write(path)
     except RuntimeError as error:
         raise rasterio.errors.RasterioError(

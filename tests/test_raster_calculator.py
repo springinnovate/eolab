@@ -625,6 +625,71 @@ def test_global_bilinear_samples_agree_across_longitude_encodings(
         )
 
 
+@pytest.mark.parametrize("method", ["nearest", "bilinear", "mean"])
+def test_disconnected_area_can_have_an_unprojectable_grid_center(
+    tmp_path: Path, method: str
+) -> None:
+    """Publish both valid projection lobes although their envelope center is a gap.
+
+    Args:
+        tmp_path: Original sources, selected vector and calculator output directory.
+        method: Native resampler used for the constant global input.
+    """
+    source = write_source(
+        tmp_path / "source.tif",
+        np.full((180, 360), 7, dtype="uint8"),
+        transform=from_origin(-180, 90, 1, 1),
+    )
+    reference = write_source(
+        tmp_path / "reference.tif",
+        np.ones((30, 830), dtype="uint8"),
+        transform=from_origin(-8300000, 7600000, 10000, 10000),
+        crs="ESRI:54052",
+    )
+    original = MultiPolygon(
+        [box(-41.3, 69.8, -40.7, 70.2), box(-39.3, 69.8, -38.7, 70.2)]
+    )
+    area = write_selection(tmp_path / "lobes.gpkg", [mapping(original)])
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling=method),
+                RasterFormulaLayer(alias="b", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="b"),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source, "b": reference}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        x = output.transform.c + columns * output.transform.a
+        y = output.transform.f + rows * output.transform.e
+        inverse = Transformer.from_crs(output.crs, 4326, always_xy=True)
+        lon, lat = inverse.transform(x, y)
+        back_x, back_y = Transformer.from_crs(
+            4326, output.crs, always_xy=True
+        ).transform(lon, lat)
+        # Some inverse coordinates in the interrupted gaps map to another lobe.
+        inside = (
+            contains_xy(original, lon, lat)
+            & np.isclose(back_x, x, rtol=0, atol=0.01)
+            & np.isclose(back_y, y, rtol=0, atol=0.01)
+        )
+        assert not np.isfinite(
+            inverse.transform(
+                *(output.transform * (output.width / 2, output.height / 2))
+            )
+        ).all()
+        assert result.valid_pixels == inside.sum() == 18
+        np.testing.assert_allclose(output.read(1), np.where(inside, 7, np.nan))
+
+
 @pytest.mark.parametrize("source_left", [0, -180])
 @pytest.mark.parametrize("columns", [1, 505])
 @pytest.mark.parametrize("y_size", [35000, 97517.9])
