@@ -51,7 +51,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends g++ libgdal-dev=3.10.3+dfsg-1 \
     && rm -rf /var/lib/apt/lists/*
 COPY deployment/application-*-requirements.txt ./
-COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json ./
+COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json deployment/build-pyflwdir.py ./
 RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
         -r application-build-requirements.txt \
     && sed -n '/^numpy==/p' application-runtime-requirements.txt > numpy-requirements.txt \
@@ -66,6 +66,7 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
         --require-hashes --wheel-dir /wheels -r application-ecoshard-requirements.txt \
     && python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
         --require-hashes --wheel-dir /wheels -r application-habitat-requirements.txt \
+    && python build-pyflwdir.py /wheels \
     && python build-beneficiaries.py --manifest beneficiaries-source.json --output /wheels \
     && (g++ --version; dpkg-query -W) > /gdal-build-packages.txt
 
@@ -92,7 +93,7 @@ RUN addgroup --system eolab \
     && adduser --system --ingroup eolab --home /app eolab
 
 COPY deployment/application-*-requirements.txt Dockerfile.app /app/build-inputs/
-COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json /app/build-inputs/
+COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json deployment/build-pyflwdir.py /app/build-inputs/
 COPY deployment/application-build-report.py /usr/local/bin/application-build-report.py
 RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
         -r /app/build-inputs/application-build-requirements.txt \

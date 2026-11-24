@@ -31,8 +31,7 @@ pycparser==3.12 --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec
 # Required by the pinned EcoShard package; pure Python wheel.
 filelock==3.20.0 --hash=sha256:339b4732ffda5cd79b13f4e2711a31b0365ce445d95d243bb996273d072546a2
 
-# PyFlwDir D8 routing and its compiler runtime.
-pyflwdir==0.6.0 --hash=sha256:33ffaa55082fa82d6b3bfc68cbb8aaf8d4b81981d587f8ddf5b176c81813eabc
+# Compiler runtime for the precision-preserving PyFlwDir model wheel.
 numba==0.68.1 --hash=sha256:8b33fee239194b9b6cb9b176f3c2563b94e5882fd846748ad0cf960daeee5406
 llvmlite==0.50.0 --hash=sha256:d501e5103076b9a14be885d2574dc2f6793171aa54a853d1244e011d476f1399
 

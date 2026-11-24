@@ -324,12 +324,19 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
     ],
     ids=("filled-depression", "flat-toward-outlet"),
 )
+@pytest.mark.parametrize(
+    ("storage", "datum"),
+    [(None, 0), ("int32", 2**30), ("float64", 2**45)],
+    ids=["native", "int32-high-datum", "float64-high-datum"],
+)
 def test_flow_traces_across_an_interior_depression_or_flat(
     tmp_path: Path,
     drainage_corridor: tuple[Path, ResolvedCatalogSelection],
     elevation_row: list[int],
     direction: str,
     expected: list[int],
+    storage: str | None,
+    datum: int,
 ) -> None:
     """Reach an outlet across a filled depression or a flat in a single valley.
 
@@ -339,13 +346,19 @@ def test_flow_traces_across_an_interior_depression_or_flat(
         elevation_row: The valley floor, draining toward its low east edge.
         direction: Direction to trace from the selected middle cell.
         expected: Exact mask values along the valley.
+        storage: Override the fixture band type for high-precision encodings.
+        datum: Uniform elevation offset that must preserve the drainage path.
     """
     original_dem, selection = drainage_corridor
     dem = tmp_path / "valley.tif"
     elevations = numpy.full((5, 7), 100, dtype="float64")
     elevations[2] = elevation_row
+    elevations += datum
     with rasterio.open(original_dem) as original:
-        with rasterio.open(dem, "w", **original.profile) as dataset:
+        profile = original.profile
+        if storage is not None:
+            profile.update(dtype=storage)
+        with rasterio.open(dem, "w", **profile) as dataset:
             dataset.write(elevations, 1)
     inputs = FlowAreaInputs(
         dem=SOURCE,
