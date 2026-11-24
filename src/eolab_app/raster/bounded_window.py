@@ -2,6 +2,7 @@
 
 import math
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from typing import cast
 
 from pyproj import CRS as ProjCRS
@@ -25,6 +26,61 @@ SAMPLING_BOX_MAXIMUM_ERROR_PIXELS = 0.01
 
 class NoRasterBoundsOverlapError(ValueError):
     """Raised when a selected WGS 84 area misses a raster source grid."""
+
+
+@lru_cache(maxsize=64)
+def _longitude_frame(crs: CRS | str) -> tuple[float, float] | None:
+    """Describe the angular unit and longitude origin of a geographic CRS.
+
+    Args:
+        crs: Native or geographic selection coordinate system.
+
+    Returns:
+        Signed radians per longitude unit and prime meridian in radians east of
+        Greenwich, or None for projected coordinates.
+    """
+    system = ProjCRS(crs)
+    if not system.is_geographic:
+        return None
+    axis = next(axis for axis in system.axis_info if axis.direction in {"east", "west"})
+    unit = axis.unit_conversion_factor * (1 if axis.direction == "east" else -1)
+    meridian = system.prime_meridian
+    return unit, meridian.longitude * meridian.unit_conversion_factor
+
+
+def _transform_polygon_positions(
+    source_crs: CRS | str,
+    target_crs: CRS | str,
+    x: list[float],
+    y: list[float],
+    coordinate_transform: Callable[..., tuple[list[float], list[float]]],
+) -> tuple[list[float], list[float]]:
+    """Project vertices while retaining the source longitude branch across meridians.
+
+    Args:
+        source_crs: Coordinate system in which each input edge is defined.
+        target_crs: Raster coordinate system.
+        x: Source x coordinates.
+        y: Corresponding source y coordinates.
+        coordinate_transform: Projection that supplies the actual target positions.
+
+    Returns:
+        Projected x and y. Between geographic systems, each longitude is moved
+        by complete turns to the branch implied by its original longitude.
+        This keeps wide rings wide and aligns holes with their exterior.
+    """
+    tx, ty = coordinate_transform(source_crs, target_crs, x, y)
+    target = _longitude_frame(target_crs)
+    if target is None or source_crs == target_crs:
+        return tx, ty
+    source = _longitude_frame(source_crs)
+    if source is not None:
+        period = math.tau / abs(target[0])
+        for index, (original, projected) in enumerate(zip(x, tx, strict=True)):
+            if math.isfinite(projected):
+                reference = (original * source[0] + source[1] - target[1]) / target[0]
+                tx[index] = projected + round((reference - projected) / period) * period
+    return tx, ty
 
 
 def get_longitude_wrap_width(dataset: RasterDataset) -> float | None:
@@ -68,11 +124,12 @@ def prepare_raster_for_wgs84_bounds(
     if get_longitude_wrap_width(dataset) is None:
         return
     ring = densified_wgs84_bounds_ring(selected_bounds)
-    x, y = transform(
+    x, y = _transform_polygon_positions(
         "EPSG:4326",
         dataset.crs,
         [point[0] for point in ring],
         [point[1] for point in ring],
+        transform,
     )
     inverse = ~dataset.transform
     columns = [(inverse * point)[0] for point in zip(x, y)]
@@ -122,12 +179,8 @@ def _periodic_polygon_copies(
         and not isinstance(dataset, TemporalRasterDataset)
         and dataset.crs.is_geographic
     ):
-        longitude_axis = next(
-            axis
-            for axis in ProjCRS(dataset.crs).axis_info
-            if axis.direction in {"east", "west"}
-        )
-        period = math.tau / longitude_axis.unit_conversion_factor
+        unit, _ = _longitude_frame(dataset.crs)
+        period = math.tau / abs(unit)
     if period is None:
         return geometries
     grid_left, grid_right = sorted((dataset.bounds.left, dataset.bounds.right))
@@ -239,11 +292,12 @@ def selected_raster_area_for_wgs84_bounds(
     """
     prepare_raster_for_wgs84_bounds(dataset, selected_bounds)
     wgs84_ring = densified_wgs84_bounds_ring(selected_bounds)
-    projected_x, projected_y = coordinate_transform(
+    projected_x, projected_y = _transform_polygon_positions(
         "EPSG:4326",
         dataset.crs,
         [coordinate[0] for coordinate in wgs84_ring],
         [coordinate[1] for coordinate in wgs84_ring],
+        coordinate_transform,
     )
     projected_ring = tuple(zip(projected_x, projected_y, strict=True))
     if not all(
@@ -302,11 +356,12 @@ def selected_raster_area_for_sampling_box(
         Returns:
             Floating native columns and rows in the same order.
         """
-        x, y = coordinate_transform(
+        x, y = _transform_polygon_positions(
             "EPSG:4326",
             dataset.crs,
             [point[0] for point in positions],
             [point[1] for point in positions],
+            coordinate_transform,
         )
         projected = tuple(zip(x, y, strict=True))
         projected_positions.update(zip(positions, projected, strict=True))
@@ -554,11 +609,12 @@ def project_polygons_to_crs(
     densified_rings = _densify_polygon_rings(tuple(all_rings), maximum_coordinates)
     x = [point[0] for ring in densified_rings for point in ring]
     y = [point[1] for ring in densified_rings for point in ring]
-    projected_x, projected_y = coordinate_transform(
+    projected_x, projected_y = _transform_polygon_positions(
         source_crs,
         target_crs,
         x,
         y,
+        coordinate_transform,
     )
     projected_positions = tuple(zip(projected_x, projected_y, strict=True))
     if not all(
@@ -576,6 +632,10 @@ def project_polygons_to_crs(
         )
         position_index += len(ring)
 
+    target_frame = _longitude_frame(target_crs)
+    unwrap_projected_edges = (
+        target_frame is not None and _longitude_frame(source_crs) is None
+    )
     projected_geometries: list[dict[str, object]] = []
     ring_index = 0
     for geometry_type, source_rings in geometry_ring_groups:
@@ -592,6 +652,10 @@ def project_polygons_to_crs(
         for ring_count in ring_counts:
             polygon_rings = projected_rings[ring_index : ring_index + ring_count]
             ring_index += ring_count
+            if unwrap_projected_edges:
+                polygon_rings = _unwrap_projected_edges(
+                    polygon_rings, math.tau / abs(target_frame[0])
+                )
             polygons.append(polygon_rings)
         projected_geometries.append(
             {
@@ -601,6 +665,37 @@ def project_polygons_to_crs(
         )
 
     return tuple(projected_geometries)
+
+
+def _unwrap_projected_edges(
+    rings: list[tuple[tuple[float, float], ...]], period: float
+) -> list[tuple[tuple[float, float], ...]]:
+    """Join projected edge samples continuously across a geographic longitude seam.
+
+    Args:
+        rings: One polygon projected from a planar CRS, exterior first.
+        period: A full longitude turn in target units.
+
+    Returns:
+        Continuous rings with each hole on the same longitude branch as its exterior.
+    """
+    continuous = []
+    exterior_centre = None
+    for ring in rings:
+        points = [ring[0]]
+        for x, y in ring[1:]:
+            previous = points[-1][0]
+            points.append((x + round((previous - x) / period) * period, y))
+        xs = [point[0] for point in points]
+        centre = (min(xs) + max(xs)) / 2
+        if exterior_centre is None:
+            exterior_centre = centre
+        else:
+            shift = round((exterior_centre - centre) / period) * period
+            if shift:
+                points = [(x + shift, y) for x, y in points]
+        continuous.append(tuple(points))
+    return continuous
 
 
 def selected_raster_area_for_wgs84_polygons(

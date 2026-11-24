@@ -9,10 +9,12 @@ import numpy
 import pytest
 import rasterio
 from numpy.typing import NDArray
+from pyproj import Transformer
 from rasterio.transform import Affine
 from rasterio.transform import from_origin
 from shapely import segmentize
-from shapely.geometry import box, mapping
+from shapely.geometry import Polygon, box, mapping
+from shapely.ops import transform as transform_geometry
 
 from catalog_selection_support import write_selection
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
@@ -102,6 +104,51 @@ def test_flow_mask_preserves_projected_source_edges(
     expected[20:40:2, :10] = 1
     expected[20:40:2, 70:] = 1
     numpy.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("crs", "west"),
+    [("EPSG:4326", -4), ("+proj=longlat +datum=WGS84 +pm=180 +type=crs", 176)],
+    ids=["greenwich", "shifted-prime-meridian"],
+)
+@pytest.mark.parametrize("shape", ["small", "with-hole", "wide"])
+@pytest.mark.parametrize("vector_crs", ["EPSG:4326", "EPSG:3857"])
+def test_flow_mask_crosses_the_native_longitude_seam(
+    tmp_path: Path, crs: str, west: int, shape: str, vector_crs: str
+) -> None:
+    """Keep polygon interiors and holes on equivalent geographic grids.
+
+    Args:
+        tmp_path: Directory for the original vector, DEM and mask.
+        crs: Greenwich or Pacific prime meridian.
+        west: Left grid edge in native degrees.
+        shape: Boundary and expected membership on the valid drainage row.
+        vector_crs: Original coordinate system of the same rectangular polygon.
+    """
+    geometry, expected_row = {
+        "small": (box(-1.8, 1.2, 1.8, 1.8), [1, 1, 0, 0, 0, 0, 1, 1]),
+        "with-hole": (
+            Polygon(
+                box(-2.8, 1.1, 2.8, 1.9).exterior.coords,
+                [box(-0.8, 1.2, 0.8, 1.8).exterior.coords],
+            ),
+            [1, 0, 0, 1, 1, 0, 0, 1],
+        ),
+        "wide": (box(-178, 1.2, 178, 1.8), [0] * 8),
+    }[shape]
+    projected = transform_geometry(
+        Transformer.from_crs("EPSG:4326", vector_crs, always_xy=True).transform,
+        geometry,
+    )
+    selection = write_selection(
+        tmp_path / "greenwich.gpkg", [mapping(projected)], crs=vector_crs
+    )
+    elevations = numpy.full((3, 8), -9999, dtype="int16")
+    elevations[1] = numpy.arange(7, -1, -1)
+    result = _trace_both_directions(
+        tmp_path, elevations, from_origin(west, 3, 1, 1), crs, selection
+    )
+    numpy.testing.assert_array_equal(result, [[255] * 8, expected_row, [255] * 8])
 
 
 @pytest.fixture(
