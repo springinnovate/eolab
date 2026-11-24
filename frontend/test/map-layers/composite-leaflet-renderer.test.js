@@ -236,8 +236,9 @@ test("Leaflet load following tileerror cannot claim completion; transient failur
 
 test("offscreen buffered requests do not prevent visible completion", async () => {
     const f = fixture(); f.update([{}]); await flush();
-    const layer = f.grids[0], tile = f.tile();
-    f.tile(3); // Still loading outside the viewport; the grid has not fired load.
+    const layer = f.grids[0];
+    layer.emit("loading");
+    const tile = f.tile(), offscreen = f.tile(3);
     layer.emit("tileload", { tile }); await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 1, loaded: 1, failed: 0 });
     let views;
@@ -245,6 +246,9 @@ test("offscreen buffered requests do not prevent visible completion", async () =
     f.map.bounds = {min: {x: 512, y: 0}, max: {x: 768, y: 256}};
     f.map.emit("moveend"); await flush();
     assert.equal(views.get("0")?.outsideViewport, true, "the composite finished without any tiles in this viewport");
+    layer.emit("tileunload", {tile: offscreen});
+    f.map.emit("moveend"); await flush();
+    assert.equal(f.status().phase, "complete", "Leaflet can discard its last pending tile without a grid load event");
     f.renderer.destroy();
 });
 

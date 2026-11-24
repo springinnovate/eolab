@@ -31,13 +31,10 @@ export class TileRecovery {
         this.tiles = new Map();
         /** Whether a loaded tile covers the viewport, including one Leaflet retains during a zoom. @type {boolean} */
         this.hasLoadedTilesInView = false;
-        this.loading = false;
         this.destroyed = false;
         this.scheduled = false;
         this.onMove = () => this.refresh();
         this.handlers = {
-            loading: () => { this.loading = true; this.refresh(); },
-            load: () => { this.loading = false; this.refresh(); },
             tileloadstart: ({ tile, coords }) => {
                 this.forget(tile);
                 this.tiles.set(tile, { coords, source: tile.src, phase: "loading", attempts: 0, timer: null });
@@ -173,8 +170,7 @@ export class TileRecovery {
             const failed = tiles.filter(record => record.phase === "failed").length;
             const retrying = tiles.some(record => record.phase === "retrying");
             const pending = tiles.length - loaded - failed;
-            const phase = retrying ? "retrying" : pending || (!tiles.length && this.loading)
-                ? "loading" : failed ? "incomplete" : "complete";
+            const phase = retrying ? "retrying" : pending ? "loading" : failed ? "incomplete" : "complete";
             this.onStatus({ phase, total: tiles.length, loaded, failed });
         });
     }
