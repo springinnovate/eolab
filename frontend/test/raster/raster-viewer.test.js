@@ -17,6 +17,7 @@ import {
 } from "../../src/raster/raster-viewer.js";
 import { loadRasterStatistics, RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { TemporalControlsView } from "../../src/raster/temporal-controls-view.js";
 import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM } from "../../src/raster/geometry.js";
@@ -6302,6 +6303,44 @@ test("temporal Catalog removal names the topmost matching view after renaming an
     } finally { fixture.destroy(); }
 });
 
+
+test("same-minute map choices identify the selected observation in layer titles and pixel results", async () => {
+    const observations = [
+        {time: "2024-02-29T00:00:00.000Z", timeOfDay: "00:00", value: 19},
+        {time: "2024-02-29T00:00:11.000Z", timeOfDay: "00:00:11", value: 201},
+        {time: "2024-02-29T00:00:52.000Z", timeOfDay: "00:00:52", value: 202},
+    ];
+    const clock = createManualClock(), cursorValues = [];
+    const fixture = temporalFixture({
+        clock,
+        loadTimes: async () => ({months: ["2024-02"], month: "2024-02", times: observations.map(row => row.time)}),
+        temporalControlsFactory: handlers => new TemporalControlsView(handlers, new FakeRasterControlDocument()),
+        sampleCursorPixel: async item => ({inBounds: true, value: observations.find(row => row.time === item.source.time).value}),
+        cursorValuesView: {render: snapshot => cursorValues.push(snapshot), clear: () => cursorValues.push(null)},
+    });
+    try {
+        const item = temporalItem();
+        item.properties["cube:dimensions"].time.extent = [observations[0].time, observations.at(-1).time];
+        const record = await fixture.viewer.showTemporal(item);
+        const picker = record.state.temporal.controls.time;
+        for (const [index, {time, timeOfDay, value}] of observations.entries()) {
+            const option = picker.children[index];
+            assert.equal(option.value, time);
+            assert.equal(option.textContent.match(/\d{2}:\d{2}(?::\d{2})?/)?.[0], timeOfDay, option.textContent);
+            picker.value = time;
+            picker.dispatchEvent(new Event("change"));
+            await flushPromises();
+            const title = `Weather · Temperature · ${option.textContent} UTC`;
+            assert.equal(record.entry.label, title);
+            fixture.viewer.exploreAt({lng: 1, lat: 1});
+            fixture.leafletMap.emit("mousemove", {latlng: {lng: 1, lat: 1}, originalEvent: {clientX: 100, clientY: 100}});
+            clock.flush();
+            await flushPromises();
+            const sample = cursorValues.at(-1).samples[0];
+            assert.deepEqual([sample.label, sample.value], [title, value]);
+        }
+    } finally { fixture.destroy(); }
+});
 
 test("temporal source changes cancel old statistics and exact pixels before accepting new values", async () => {
     const statistics = [], pixels = [], cursorValues = [], clock = createManualClock();

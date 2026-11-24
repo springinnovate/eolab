@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from functools import partial
 from pathlib import Path
 import logging
 import signal
@@ -32,7 +33,10 @@ from eolab_app.routes.saved_maps import (
 from eolab_app.routes.admin_auth import create_administrator_dependency
 from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
-from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.routes.browser_identity import (
+    establish_browser_identity,
+    get_browser_owner_hash,
+)
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.routes.raster_uploads import create_raster_uploads_router
 from eolab_app.raster_uploads import RasterUploadStore
@@ -974,6 +978,13 @@ def create_app(
         create_system_router(
             app_global_configuration.app_version,
             app_global_configuration.as_public_dict(),
+            (
+                establish_browser_identity,
+                partial(
+                    get_processing_session_owner_hash,
+                    session_ttl_seconds=processing_session_ttl,
+                ),
+            ),
         )
     )
     application.include_router(create_diagnostics_router(rendering_diagnostics))

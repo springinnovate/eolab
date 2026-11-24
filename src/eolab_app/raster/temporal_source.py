@@ -3,6 +3,7 @@
 import json
 import math
 import sqlite3
+from calendar import monthrange
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -224,8 +225,9 @@ def get_temporal_time_choices(
             )
         selected_month = query.month if query.month is not None else months[-1]
         year, month = map(int, selected_month.split("-"))
-        start = datetime(year, month, 1, tzinfo=timezone.utc)
-        end = datetime(year + month // 12, month % 12 + 1, 1, tzinfo=timezone.utc)
+        start_seconds = datetime(year, month, 1, tzinfo=timezone.utc).timestamp()
+        # The exclusive end of December 9999 is representable in Unix seconds.
+        end_seconds = start_seconds + monthrange(year, month)[1] * 86_400
         times = tuple(
             observation_datetime(time)
             .isoformat(timespec="milliseconds")
@@ -233,7 +235,7 @@ def get_temporal_time_choices(
             for (time,) in connection.execute(
                 "SELECT valid_time FROM observations WHERE variable = ? "
                 "AND valid_time >= ? AND valid_time < ? ORDER BY valid_time",
-                (query.variable, start.timestamp(), end.timestamp()),
+                (query.variable, start_seconds, end_seconds),
             )
         )
     return TemporalTimeChoices(months, selected_month, times)

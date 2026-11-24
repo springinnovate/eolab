@@ -661,14 +661,16 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
                 "2000-03-04T12:00:00.000Z",
             ],
         }
-        absent = api.post(
-            "/api/catalog/temporal-times", json={**query, "month": "2000-03"}
-        )
-        assert absent.json() == {
-            "months": ["2000-01", "2000-02"],
-            "month": "2000-03",
-            "times": [],
-        }
+        for month in ("2000-03", "9999-12"):
+            absent = api.post(
+                "/api/catalog/temporal-times", json={**query, "month": month}
+            )
+            assert absent.status_code == 200, absent.text
+            assert absent.json() == {
+                "months": ["2000-01", "2000-02"],
+                "month": month,
+                "times": [],
+            }
         for invalid_month in ("2000-13", "200001", "2000-1", "2000-W01"):
             invalid = api.post(
                 "/api/catalog/temporal-times", json={**query, "month": invalid_month}
@@ -690,6 +692,14 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
             era5_archive, 2, {TEMPERATURE: (0,), PRECIPITATION: (0,), RADIATION: (0,)}
         )
         publish_month(era5_archive, 3, {TEMPERATURE: (0,), PRECIPITATION: (0,)})
+        # Give one instantaneous observation the last possible whole-second UTC label.
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute(
+                "UPDATE coverage SET valid_time = unixepoch(:label), "
+                "interval_start = unixepoch(:label), interval_end = unixepoch(:label) "
+                "WHERE variable = :variable AND valid_time = unixepoch('2000-03-01')",
+                {"label": "9999-12-31T23:59:59Z", "variable": TEMPERATURE},
+            )
         api.portal.call(scan, scanner)
         assert scanner.status()["errors"] == []
         refreshed = api.post(
@@ -704,6 +714,17 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
             api.post("/api/catalog/temporal-times", json=query).json()["month"]
             == "2000-03"
         )
+        for month_fields in ({}, {"month": "9999-12"}):
+            december = api.post(
+                "/api/catalog/temporal-times",
+                json={**query, "variable": TEMPERATURE, **month_fields},
+            )
+            assert december.status_code == 200, december.text
+            assert december.json() == {
+                "months": ["2000-01", "2000-02", "9999-12"],
+                "month": "9999-12",
+                "times": ["9999-12-31T23:59:59.000Z"],
+            }
         (era5_archive / "catalog.sqlite").unlink()
         unreadable = api.post("/api/catalog/temporal-times", json=query)
         assert unreadable.status_code == 409
