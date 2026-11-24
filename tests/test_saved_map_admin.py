@@ -16,13 +16,23 @@ PASSWORD = "test-administrator-password-561"
 BASE = "/api/admin/saved-maps"
 
 
-@pytest.mark.parametrize("method,suffix", [("DELETE", ""), ("POST", "/restore")])
-def test_map_deletion_requires_admin_and_same_origin(method: str, suffix: str) -> None:
-    """Protect both reversible deletion endpoints before they reach storage.
+@pytest.mark.parametrize(
+    "method,suffix",
+    [
+        ("DELETE", ""),
+        ("POST", "/restore"),
+        ("POST", "/edit-link"),
+        ("DELETE", "/edit-link"),
+    ],
+)
+def test_map_management_requires_admin_and_same_origin(
+    method: str, suffix: str
+) -> None:
+    """Protect administrator map lifecycle endpoints before they reach storage.
 
     Args:
         method: Mutation HTTP method.
-        suffix: Restore suffix, or empty for deletion.
+        suffix: API path after the map slug.
     """
     app = FastAPI()
     app.include_router(create_saved_maps_admin_router(SavedMapStore(), PASSWORD))
@@ -112,3 +122,4 @@ def test_edit_page_requires_admin(
     assert response.status_code == 200
     assert response.headers["cache-control"] == "private, no-store"
     assert client.get("/maps/amazon").status_code == 200
+    assert client.get("/maps/amazon/edit").status_code == 200

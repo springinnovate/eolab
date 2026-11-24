@@ -46,7 +46,7 @@ export class SavedMapViewController {
      * @param {(record:Object)=>Object|null} configuration.exportTemporal Export a temporal selection and raster appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreTemporal Retain an independent temporal row with saved appearance; return its key, including unavailable observations shown with a row error, or null after supersession.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
-     * @param {string|null} [configuration.namedMapSlug] Published map name for a viewer or administrator URL.
+     * @param {string|null} [configuration.namedMapSlug] Published map name for a viewer or editor URL.
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
@@ -224,7 +224,7 @@ export class SavedMapViewController {
             const view = { ...this.publishingView, visitorControls };
             const saved = await this.publicationApi.create({ ...fields, view });
             this.publishingView = null;
-            this.view.showPublishedMap(saved.slug);
+            this.view.showPublishedMap(saved.slug, saved.editToken);
         } catch (error) {
             this.view.showPublicationError(asError(error).message);
         } finally {
@@ -272,7 +272,7 @@ export class SavedMapViewController {
      * Capture current map settings and save the draft at its existing published URL.
      * Failures preserve the draft and revision; no shared polygon writes are performed.
      * @param {{title:string,subtitle:string,visitorControls:import("../visitor-controls.js").VisitorControls}} fields
-     * Administrator's edited headings and visitor choices.
+     * Editor's updated headings and visitor choices.
      * @return {Promise<void>} Completion after saved confirmation or an actionable error.
      */
     async savePublishedMapChanges({ visitorControls, ...fields }) {

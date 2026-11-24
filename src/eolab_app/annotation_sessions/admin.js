@@ -1,5 +1,5 @@
 /** @typedef {{id: string, name: string, joinCode: string, deletedAt: string|null, contributorCount: number, polygonCount: number}} AdminSharedLayer */
-/** @typedef {{slug: string, title: string, deletedAt: string|null}} AdminPublishedMap */
+/** @typedef {{slug: string, title: string, deletedAt: string|null, hasEditLink: boolean}} AdminPublishedMap */
 
 const status = document.querySelector('#status');
 const rows = document.querySelector('#layers');
@@ -12,7 +12,8 @@ document.querySelector('#accept-delete').addEventListener('click', () => confirm
  * Call the administrator API without storing credentials in JavaScript.
  * @param {string} path API path.
  * @param {string} [method='GET'] HTTP method.
- * @returns {Promise<AdminSharedLayer[]|AdminPublishedMap[]|null>} Admin list or empty mutation result.
+ * @returns {Promise<AdminSharedLayer[]|AdminPublishedMap[]|{editToken:string}|null>}
+ * Admin list, newly issued edit token, or empty mutation result.
  * @throws {Error} When authentication, storage or transport fails.
  */
 async function request(path, method = 'GET') {
@@ -155,8 +156,28 @@ async function refreshLayers() {
 refresh.addEventListener('click', refreshLayers);
 refreshLayers();
 
+const mapEditLinkDialog = document.querySelector('#map-edit-link-dialog');
+const mapEditLinkValue = document.querySelector('#map-edit-link-value');
+const mapEditLinkStatus = document.querySelector('#map-edit-link-status');
+document.querySelector('#copy-map-edit-link').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(mapEditLinkValue.value);
+    mapEditLinkStatus.textContent = 'Private edit link copied.';
+  } catch {
+    mapEditLinkValue.focus();
+    mapEditLinkValue.select();
+    mapEditLinkStatus.textContent = 'Copy the selected link.';
+  }
+});
+mapEditLinkDialog.addEventListener('close', () => {
+  mapEditLinkValue.value = '';
+  mapEditLinkStatus.textContent = '';
+  const slug = mapEditLinkDialog.dataset.mapSlug;
+  document.querySelector(`[data-map-slug="${slug}"] .published-map-actions button`)?.focus();
+});
+
 /**
- * List active and deleted maps with editing, deletion and restoration controls.
+ * List published maps and their available administration actions.
  * @returns {Promise<boolean>} Whether the list loaded; failures keep the previous rows.
  */
 async function loadPublishedMaps() {
@@ -175,13 +196,30 @@ async function loadPublishedMaps() {
       const path = `/maps/${encodeURIComponent(map.slug)}`;
       const url = document.createElement('td');
       url.textContent = path;
-      const actions = document.createElement('td');
+      const actionCell = document.createElement('td');
+      const actions = document.createElement('div');
+      actions.className = 'published-map-actions';
+      actionCell.append(actions);
       for (const [label, href] of map.deletedAt ? [] : [['Open', path], ['Edit', `/admin-eolab/maps/${encodeURIComponent(map.slug)}/edit`]]) {
         const link = document.createElement('a');
         link.textContent = label;
         link.href = href;
         link.setAttribute('aria-label', `${label}: ${map.title}`);
-        actions.append(link, ' ');
+        actions.append(link);
+      }
+      if (!map.deletedAt) {
+        const issue = document.createElement('button');
+        issue.textContent = map.hasEditLink ? 'Replace private edit link' : 'Create private edit link';
+        issue.setAttribute('aria-label', `${issue.textContent}: ${map.title}`);
+        issue.addEventListener('click', () => changeMapEditLink(map, 'issue'));
+        actions.append(issue);
+      }
+      if (map.hasEditLink) {
+        const revoke = document.createElement('button');
+        revoke.textContent = 'Revoke private edit link';
+        revoke.setAttribute('aria-label', `${revoke.textContent}: ${map.title}`);
+        revoke.addEventListener('click', () => changeMapEditLink(map, 'revoke'));
+        actions.append(revoke);
       }
       const state = document.createElement('td');
       state.textContent = map.deletedAt ? 'Deleted' : 'Active';
@@ -192,7 +230,7 @@ async function loadPublishedMaps() {
       change.setAttribute('aria-label', `${change.textContent}: ${map.title}`);
       change.addEventListener('click', () => changeMapDeletion(map));
       actions.append(change);
-      row.append(title, url, state, actions);
+      row.append(title, url, state, actionCell);
       return row;
     }));
     message.textContent = maps.length ? `${maps.length} published maps.` : 'No published maps on this site.';
@@ -202,6 +240,43 @@ async function loadPublishedMaps() {
     return false;
   } finally {
     button.disabled = false;
+  }
+}
+
+/**
+ * Issue a new edit link or disable the existing link for a selected map.
+ * @param {AdminPublishedMap} map Map represented by the clicked row.
+ * @param {'issue'|'revoke'} action Create or replace the link, or disable it.
+ * @returns {Promise<void>} Completion after showing the new link or revocation status.
+ */
+async function changeMapEditLink(map, action) {
+  if (map.hasEditLink) {
+    const verb = action === 'revoke' ? 'Revoke' : 'Replace';
+    if (!window.confirm(`${verb} the private edit link for “${map.title}”? The current edit link will stop working.`)) return;
+  }
+  setBusy(true);
+  const message = document.querySelector('#maps-status');
+  message.textContent = 'Updating private edit link…';
+  try {
+    const slug = encodeURIComponent(map.slug);
+    const result = await request(`/api/admin/saved-maps/${slug}/edit-link`, action === 'issue' ? 'POST' : 'DELETE');
+    if (result) {
+      document.querySelector('#map-edit-link-title').textContent = `Private edit link for ${map.title}`;
+      mapEditLinkValue.value = new URL(`/maps/${slug}/edit#${result.editToken}`, window.location.origin).href;
+      mapEditLinkDialog.dataset.mapSlug = slug;
+      mapEditLinkDialog.showModal();
+      mapEditLinkValue.select();
+    }
+    if (await loadPublishedMaps()) {
+      message.textContent = result ? 'Created a new private edit link.' : 'Private edit link revoked.';
+    }
+  } catch (error) {
+    message.textContent = `${error.message} Refresh the list to check the current state.`;
+  } finally {
+    setBusy(false);
+    if (!mapEditLinkDialog.open) {
+      document.querySelector(`[data-map-slug="${map.slug}"] .published-map-actions button`)?.focus();
+    }
   }
 }
 

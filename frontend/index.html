@@ -1957,13 +1957,19 @@
           <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
           <p id="publish-map-preview" class="publish-map-url"></p>
           <fieldset id="publish-map-visitor-controls" class="visitor-control-options"></fieldset>
-          <p>Shared layers stay live. An administrator can update or delete this published map.</p>
+          <p>Shared layers stay live. You'll get a private link to edit this map later.</p>
         </fieldset>
         <div id="publish-map-result" hidden>
-          <label>Shared map link<input id="publish-map-url" readonly></label>
+          <label>Public map link<input id="publish-map-url" readonly></label>
           <div class="saved-map-view-dialog-actions">
             <a id="publish-map-open" target="_blank" rel="noopener">Open shared map</a>
-            <button id="publish-map-copy" type="button" class="secondary-button">Copy link</button>
+            <button id="publish-map-copy" type="button" class="secondary-button">Copy public link</button>
+          </div>
+          <label>Private edit link<input id="publish-map-edit-link" readonly spellcheck="false" aria-describedby="publish-map-edit-help"></label>
+          <p id="publish-map-edit-help">Save this link somewhere private. Anyone with it can edit this map.</p>
+          <div class="saved-map-view-dialog-actions">
+            <a id="publish-map-open-editor" target="_blank" rel="noopener">Open map editor</a>
+            <button id="publish-map-copy-editor" type="button" class="secondary-button">Copy private edit link</button>
           </div>
         </div>
         <p id="publish-map-status" role="status" aria-live="polite"></p>

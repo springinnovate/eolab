@@ -15,7 +15,7 @@ export function createNamedMapFixture(initialView = null) {
       Object.assign(record, JSON.parse(request.body));
       record.revision++;
     }
-    return Response.json(record);
+    return Response.json(request.method === "POST" ? { ...record, editToken: "f".repeat(64) } : record);
   });
   return {
     record,

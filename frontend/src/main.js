@@ -101,7 +101,7 @@ import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
-import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, MAP_LINK_NAME_PATTERN } from "./saved-map-view/api-client.js";
+import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, privateMapEditFromLocation, MAP_LINK_NAME_PATTERN } from "./saved-map-view/api-client.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
@@ -168,11 +168,12 @@ import "./style.css";
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 
-/** Presentation mode only; API permissions and source authorization are unchanged.
+const privateMapEdit = privateMapEditFromLocation(globalThis.location);
+/** Presentation mode. The server authorizes editing separately.
  * Read the named-map URL before choosing authoring or recipient controls.
  * @type {string|null}
  */
-const editableMapSlug = editableMapSlugFromPath(globalThis.location.pathname);
+const editableMapSlug = privateMapEdit?.slug ?? editableMapSlugFromPath(globalThis.location.pathname);
 const namedMapSlug = editableMapSlug ?? namedMapSlugFromPath(globalThis.location.pathname);
 /** @type {boolean} Named maps and older shared links use recipient controls. */
 const isSharedViewer = editableMapSlug === null && (namedMapSlug !== null || new URL(globalThis.location.href).searchParams.get("viewer") === "shared");
@@ -1904,7 +1905,7 @@ async function initializeCatalog(
         viewerOrigin: globalThis.location.origin,
         storage: isSharedViewer || editableMapSlug !== null ? null : new SavedMapViewLocalStorage(),
         restoreSharedMap: isSharedViewer,
-        publicationApi: new SavedMapApiClient(),
+        publicationApi: new SavedMapApiClient(undefined, privateMapEdit?.token),
         namedMapSlug,
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
@@ -2954,6 +2955,8 @@ async function initializeScanner(refreshCatalog) {
 
 /**
  * Starts the browser application from its runtime contract.
+ * Following another private edit link reloads its credentials and saved draft
+ * together, discarding unsaved changes as ordinary page navigation does.
  *
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
@@ -2970,7 +2973,13 @@ async function startApplication() {
         document.querySelector("#reset-map-view").hidden = true;
         document.querySelector("#copy-map-link").hidden = true;
         if (isSharedViewer) document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Reload to retry, or ask the author for a complete map link.";
-        if (editableMapSlug !== null) document.querySelector("#published-map-editor").hidden = false;
+        if (editableMapSlug !== null) {
+            document.querySelector("#published-map-editor").hidden = false;
+            if (privateMapEdit !== null) {
+                document.querySelector("#published-map-cancel").href = `/maps/${encodeURIComponent(editableMapSlug)}`;
+                window.addEventListener("hashchange", () => window.location.reload());
+            }
+        }
     } else {
         document.querySelector("#copy-map-link-label").textContent = "Publish map";
         document.querySelector("#copy-map-link").title = "Publish a map for others to explore";
