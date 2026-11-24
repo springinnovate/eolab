@@ -61,13 +61,13 @@ export class ModelsController {
         this.getSetupIntegration = getSetupIntegration;
         this.allowedModelIds = allowedModelIds === null ? null : new Set(allowedModelIds);
         this.recoveryScope = recoveryScope;
-        this.libraryLoaded = false;
+        this.installedModels = null;
         this.outputState = outputState;
         this.onRunChange = onRunChange;
         this.onViewLabel = onViewLabel;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
         this.deletions = new Map();
-        this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
+        this.state = {page: "library", active: false, library: [], missingModels: false, loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             habitatDatasetLabels: null,
             pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
@@ -155,19 +155,9 @@ export class ModelsController {
      */
     setAllowedModelIds(ids) {
         this.allowedModelIds = ids === null ? null : new Set(ids);
-        const closeDraft = this.state.draft && !this.#allowsModel(this.state.draft.model.id);
-        const leaveSetup = closeDraft && this.state.page === "setup";
-        if (closeDraft) {
-            this.#discardSetup();
-            if (leaveSetup) {
-                this.revision += 1;
-                this.state.page = "library";
-                this.state.yaml = null;
-            }
-        }
         this.#restorePendingSubmission();
+        this.#updateSetupLibrary();
         this.render();
-        if (leaveSetup && this.state.active) this.view.focusPage();
     }
 
     /** Check the active map's choice for all installed versions of a recipe.
@@ -176,6 +166,47 @@ export class ModelsController {
      */
     #allowsModel(id) {
         return this.allowedModelIds === null || this.allowedModelIds.has(id);
+    }
+
+    /** Return the offered recipe with the exact version and definition used by a setup or run.
+     * @param {{id:string,version:string,definitionSha256:string}} recipe Captured model identity.
+     * @return {Object|undefined} Matching installed recipe, when available on this map.
+     */
+    #findSetupVersion(recipe) {
+        return this.state.library.find(model => model.id === recipe.id && model.version === recipe.version &&
+            model.definitionSha256 === recipe.definitionSha256);
+    }
+
+    /** Check a model choice against the map and, once loaded, the current recipe library.
+     * @param {{id:string,version:string,definitionSha256:string}} recipe Model chosen for setup.
+     * @return {boolean} Whether this version can open or retain an editable setup.
+     */
+    #canSetUp(recipe) {
+        return this.installedModels === null ? this.#allowsModel(recipe.id) : Boolean(this.#findSetupVersion(recipe));
+    }
+
+    /** Update the picker after discovery or a map choice changes. Close a superseded
+     * draft through normal navigation so its input jobs stop being observed.
+     * @return {void}
+     */
+    #updateSetupLibrary() {
+        const installed = this.installedModels ?? [];
+        const allowed = this.allowedModelIds;
+        const library = allowed === null ? installed : installed.filter(model => allowed.has(model.id));
+        this.state.library = library;
+        this.state.missingModels = this.installedModels !== null && allowed !== null &&
+            new Set(library.map(model => model.id)).size < allowed.size;
+
+        const draft = this.state.draft;
+        if (!draft || this.#canSetUp(draft.model)) return;
+        this.#discardSetup();
+        if (this.state.page !== "setup") return;
+        this.state.yaml = null;
+        this.navigate("library");
+        if (this.#allowsModel(draft.model.id)) {
+            this.state.error = `This version of ${draft.model.title} is no longer available. Choose a tool from the library.`;
+        }
+        if (this.state.active) this.view.focusPage();
     }
 
     /** Open the retained Models page and refresh its library and history.
@@ -216,8 +247,8 @@ export class ModelsController {
         if (this.state.loading) return;
         this.state.loading = true; this.render();
         try {
-            this.state.library = await this.listSetupModels();
-            this.libraryLoaded = true;
+            this.installedModels = await this.listSetupModels();
+            this.#updateSetupLibrary();
         }
         catch (error) { this.state.error = `Data tools unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -229,7 +260,7 @@ export class ModelsController {
      */
     navigate(page) {
         if (page === "setup" && !this.state.draft) return;
-        if (page !== "setup") this.closeVectorFilter();
+        if (page !== "setup" && this.state.draft) this.closeVectorFilter();
         this.revision += 1;
         this.state.page = page;
         this.state.error = "";
@@ -257,7 +288,7 @@ export class ModelsController {
      * @return {void}
      */
     chooseModel(model) {
-        if (!this.#allowsModel(model.id)) return;
+        if (!this.#canSetUp(model)) return;
         this.revision += 1;
         this.#discardSetup();
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
@@ -1045,8 +1076,7 @@ export class ModelsController {
     async duplicateRun() {
         const saved = this.state.invocation;
         if (!saved || !this.#allowsModel(saved.model.id)) return;
-        const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
-            value.definitionSha256 === saved.model.definitionSha256);
+        const model = this.#findSetupVersion(saved.model);
         if (!model) { this.state.error = "This tool version is not available in setup. Its YAML remains available until metadata expires."; this.render(); return; }
         this.revision += 1;
         this.#discardSetup();
@@ -1112,10 +1142,7 @@ export class ModelsController {
             library: "Choose a tool", setup: this.state.draft?.model.title ?? "Setup",
             runs: "Runs", run: job?.label ?? "Data tool run",
         }[this.state.page]);
-        const library = this.state.library.filter(model => this.#allowsModel(model.id));
-        const missingModels = this.libraryLoaded && this.allowedModelIds !== null &&
-            [...this.allowedModelIds].some(id => !library.some(model => model.id === id));
-        this.view.render({...this.state, library, missingModels, noModelsSelected: this.allowedModelIds?.size === 0,
+        this.view.render({...this.state, noModelsSelected: this.allowedModelIds?.size === 0,
             duplicateRestricted: !this.#allowsModel(this.state.invocation?.model.id ?? job?.model.id),
             deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});

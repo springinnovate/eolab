@@ -130,6 +130,19 @@ test("published model choices govern search, retained setup and duplication whil
     assert.equal(h.controller.state.draft.model.version, model.version);
     await h.controller.submit();
     assert.deepEqual(h.submitted.map(request => request.model.id), [model.id]);
+
+    h.controller.navigate("library");
+    const previousVersionButton = view.elements["library-items"].children[1];
+    previousVersionButton.dispatchEvent(new Event("click"));
+    h.controller.setActive(false);
+    recipes.splice(recipes.indexOf(newer), 1);
+    await h.controller.open();
+    assert.equal(h.controller.state.page, "library", "reopening Data tools leaves setup for a version the site removed");
+    assert.match(view.elements.error.textContent, /no longer available/i);
+    previousVersionButton.dispatchEvent(new Event("click"));
+    await h.controller.submit();
+    assert.equal(view.navigation.setup.disabled, true);
+    assert.equal(h.submitted.length, 1);
 });
 
 test("a map recovers only eligible retries and other maps can submit independently in the same tab", async t => {
@@ -1333,6 +1346,12 @@ test("Runs history controls load result inputs while preserving unfinished setup
     assert.match(view.runCards.get(recent.jobId).status.textContent, /^Cancelled/);
     assert.deepEqual(Array.from(view.elements["runs-list"].querySelectorAll("button"), button => button.textContent),
         [recent.label, older.label, result.label]);
+    view.navigation.setup.dispatchEvent(new Event("click"));
+    view.setup.inputs.raster.source.value = modelSourceKey(source);
+    view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
+    assert.equal(h.jobs.tracked.has(result.jobId), true);
+    h.controller.setAllowedModelIds([]);
+    assert.deepEqual([...h.jobs.tracked], [older.jobId], "closing a restricted setup releases its finished input and keeps active runs");
     assert.equal(h.submitted.length, 0);
     h.controller.destroy();
 });
