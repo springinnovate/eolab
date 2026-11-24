@@ -376,6 +376,40 @@ def test_measurements_with_identical_units(tmp_path: Path, name_tag: str) -> Non
     assert not (tmp_path / "dataset.yaml").exists()
 
 
+@pytest.mark.parametrize("tag_band", [0, 1], ids=["dataset", "band"])
+def test_build_checks_temporal_cell_methods(tmp_path: Path, tag_band: int) -> None:
+    """Reject an annual maximum labeled as a mean before publishing the archive.
+
+    Args:
+        tmp_path: Directory for two annual observations of the same variable.
+        tag_band: Location of the conflicting CF metadata on the second frame.
+    """
+    manifest = annual_manifest(tmp_path)
+    stack = yaml.safe_load(manifest.read_text())
+    stack["variable"].update(id="temperature", units="degC", time_support="mean")
+    manifest.write_text(yaml.safe_dump(stack))
+    first, second = sorted(tmp_path.glob("*.tif"))
+    for path in (first, second):
+        with rasterio.open(path, "r+") as src:
+            src.update_tags(standard_name="air_temperature", units="degC")
+    with rasterio.open(first, "r+") as src:
+        src.update_tags(cell_methods="area: maximum time: mean (interval: 1 day)")
+    with rasterio.open(second, "r+") as src:
+        src.update_tags(tag_band, CELL_METHODS="time: maximum")
+    for options in (("--check",), ()):
+        failed = run_cli("build", manifest, *options)
+        assert failed.returncode == 1, failed.stderr
+        assert all(word in failed.stderr for word in (second.name, "maximum", "mean"))
+        assert not (tmp_path / "catalog.sqlite").exists()
+        assert not (tmp_path / "dataset.yaml").exists()
+    with rasterio.open(second, "r+") as src:
+        src.update_tags(
+            tag_band, CELL_METHODS="time: area: mean (comment: time: maximum)"
+        )
+    built = run_cli("build", manifest)
+    assert built.returncode == 0, built.stderr
+
+
 def test_units_in_geotiff_metadata(tmp_path: Path) -> None:
     """Report a conflicting band unit even when the dedicated GDAL unit matches.
 

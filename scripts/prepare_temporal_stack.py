@@ -330,6 +330,9 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
         ValueError: Lists incompatible files, invalid times or overlapping intervals.
     """
     var = stack.variable
+    expected_time_method = {"snapshot": "point", "mean": "mean", "total": "sum"}[
+        var.time_support
+    ]
     if (var.time_support == "snapshot") != (var.period in PRECISIONS):
         raise ValueError(
             f"Time support {var.time_support} is incompatible with period {var.period}."
@@ -393,6 +396,18 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                             measurement_sources.setdefault(value, obs.file)
                         elif tag == "units" and value:
                             declared_units.add(value)
+                        elif tag == "cell_methods":
+                            # CF comments can mention methods, and one method can name several axes.
+                            clauses = re.sub(r"\([^)]*\)", " ", value)
+                            for method in re.findall(
+                                r"\btime\s*:\s*(?:\w+\s*:\s*)*(\w+)", clauses
+                            ):
+                                if method != expected_time_method:
+                                    raise ValueError(
+                                        f"cell_methods declares time: {method}, but "
+                                        f"time_support {var.time_support!r} requires "
+                                        f"time: {expected_time_method}."
+                                    )
                 for unit in sorted(declared_units):
                     if unit != var.units:
                         raise ValueError(
