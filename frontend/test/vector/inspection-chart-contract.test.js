@@ -276,29 +276,36 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(status.display, null);
 });
 
-test("a comparison rendering error preserves the completed Lasso selection in Features and history", async t => {
-  const rows = [{id:"19", properties:{x:3}}, {id:"23", properties:{x:8}}];
-  let matches = rows;
-  const {inspector, profile, series, status} = composition(async (url, options) =>
-    Response.json(url.endsWith("/lasso") ? {matched:matches.length, featureIds:matches.map(row => row.id), geometry:null} :
-      {selection:JSON.parse(options.body).selection, features:matches}));
-  t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
-  const plot = t.mock.method(series, "setSample", sample => {
-    if (sample.state === "ready") throw new Error("The comparison could not draw.");
+for (const plotName of ["Compare features", "One feature"]) {
+  test(`${plotName} rendering errors preserve the completed Lasso selection in Features and history`, async t => {
+    const rows = [{id:"19", properties:{x:3}}, {id:"23", properties:{x:8}}];
+    let matches = rows;
+    const {inspector, profile, series, documentContext:doc, status} = composition(async (url, options) =>
+      Response.json(url.endsWith("/lasso") ? {matched:matches.length, featureIds:matches.map(row => row.id), geometry:null} :
+        {selection:JSON.parse(options.body).selection, features:matches}));
+    t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
+    const renderProfile = profile.render.bind(profile);
+    const plot = plotName === "Compare features" ? t.mock.method(series, "setSample", sample => {
+      if (sample.state === "ready") throw new Error("The comparison could not draw.");
+    }) : t.mock.method(profile, "render", () => {
+      if (profile.currentObservation !== null) throw new Error("One feature could not draw.");
+      renderProfile();
+    });
+    const lasso = () => inspector.inspectLasso(inspector.getSelectionTargets()[0],
+      {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);
+    await assert.rejects(lasso(), /could not draw/);
+    assert.deepEqual(inspector.results.map(result => result.feature.id), ["19","23"]);
+    assert.equal(inspector.lastSample.state, "ready");
+    assert.deepEqual(status.count, {count:2, loading:false});
+    assert.equal(status.display.count, 2);
+    assert.ok(doc.querySelector("#vector-feature-attributes").children.some(cell => cell.textContent === "3"));
+    plot.mock.restore();
+    matches = [];
+    await lasso();
+    inspector.navigateSelection("previous");
+    assert.deepEqual(series.observations.map(feature => feature.featureId), ["19","23"]);
   });
-  const lasso = () => inspector.inspectLasso(inspector.getSelectionTargets()[0],
-    {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);
-  await assert.rejects(lasso(), /could not draw/);
-  assert.deepEqual(inspector.results.map(result => result.feature.id), ["19","23"]);
-  assert.equal(inspector.lastSample.state, "ready");
-  assert.deepEqual(status.count, {count:2, loading:false});
-  assert.equal(status.display.count, 2);
-  plot.mock.restore();
-  matches = [];
-  await lasso();
-  inspector.navigateSelection("previous");
-  assert.deepEqual(series.observations.map(feature => feature.featureId), ["19","23"]);
-});
+}
 
 test("wide parcel attributes keep their exact values and numeric spacing in both plots", async t => {
   const base = 9007199254740992n;

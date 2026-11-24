@@ -728,9 +728,13 @@ export class VectorFeatureInspectorController {
         }));
         this.#selectionDisplay = {polygon, geometry: selected.geometry, count: selected.matched, label: currentTarget.label};
         this.#updateTimeSeriesAction(rows.length);
-        if (rows.length) this.showResult(0);
         this.status.textContent = formatLassoSelectionStatus(this.#selectionDisplay);
-        this.#finishSelection(rows.length ? "ready" : "empty", this.status.textContent);
+        try {
+            this.#finishSelection(rows.length ? "ready" : "empty", this.status.textContent);
+        } finally {
+            // Present the feature even if the comparison plot cannot draw the completed sample.
+            if (rows.length) this.showResult(0);
+        }
     }
 
     /**
@@ -1168,7 +1172,6 @@ export class VectorFeatureInspectorController {
         this.previous.disabled = !navigation.canPrevious;
         this.next.disabled = !navigation.canNext;
         this.featureProfileButton.disabled = !Object.values(observation.properties).some(isNumericFeatureValue);
-        this.onCurrentObservationChange(observation, navigation);
         this.#showAttributes(this.results[this.resultIndex]);
         this.clearHighlight();
         if (target.publication && typeof feature.id === "string" && feature.id.length > 0) {
@@ -1189,6 +1192,7 @@ export class VectorFeatureInspectorController {
                     this.leaflet.circleMarker(latlng, HIGHLIGHT_STYLE),
             }).addTo(this.map);
         }
+        this.onCurrentObservationChange(observation, navigation);
     }
 
     /**
