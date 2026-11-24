@@ -28,15 +28,8 @@ from eolab_app.processing.models import (
     ProcessingLimits,
     JobInputFile,
 )
-from eolab_jobs.worker_claim import CLAIM_NEXT_JOB_SQL, WORKER_SLOT_AVAILABLE_SQL
+from eolab_jobs.worker_claim import claim_next_job, lock_job_queue
 
-# Processing owns this key in PostgreSQL's single-bigint, database-wide advisory
-# lock namespace. It serializes schema migration and shared admission, job-state,
-# storage, and transfer decisions; it is never held during native execution.
-# The integer is an assigned identifier, not a limit or a generated random value.
-# Keep it stable across releases so all Processing transactions use the same lock.
-# Other components using this database must allocate a different advisory key.
-PROCESSING_ADVISORY_LOCK_ID = 7_610_329
 UNFINISHED = ("queued", "running", "cancelling")
 
 
@@ -144,10 +137,7 @@ class PostgresJobStore:
             with self._pool.connection() as connection:
                 with connection.cursor() as cursor:
                     if acquire_lock:
-                        cursor.execute(
-                            "SELECT pg_advisory_xact_lock(%s)",
-                            (PROCESSING_ADVISORY_LOCK_ID,),
-                        )
+                        lock_job_queue(cursor)
                     yield cursor
         except psycopg.Error as error:
             raise ProcessingError(
@@ -1140,20 +1130,12 @@ class PostgresJobStore:
             ProcessingError: If the database cannot complete the claim.
         """
 
-        with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute(
-                WORKER_SLOT_AVAILABLE_SQL, {"worker_count": self.limits.worker_count}
+        with self._transaction() as cursor:
+            return claim_next_job(
+                cursor,
+                worker_count=self.limits.worker_count,
+                lease_seconds=self.limits.lease_seconds,
             )
-            if not cursor.fetchone()["available"]:
-                return None
-            cursor.execute(
-                CLAIM_NEXT_JOB_SQL,
-                {
-                    "attempt_id": uuid4().hex,
-                    "lease_seconds": self.limits.lease_seconds,
-                },
-            )
-            return cursor.fetchone()
 
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]

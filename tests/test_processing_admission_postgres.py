@@ -11,6 +11,7 @@ import psycopg
 import pytest
 
 import eolab_app.processing.job_store as job_store_module
+from eolab_jobs.worker_claim import JOB_QUEUE_LOCK_ID
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import (
     Artifact,
@@ -289,7 +290,7 @@ def test_admission_returns_after_commit_and_lock_release(
     with psycopg.connect(store.conninfo) as connection:
         assert connection.execute(
             "SELECT pg_try_advisory_xact_lock(%s)",
-            (job_store_module.PROCESSING_ADVISORY_LOCK_ID,),
+            (JOB_QUEUE_LOCK_ID,),
         ).fetchone() == (True,)
         assert connection.execute(
             "SELECT id FROM processing.job_subscribers "

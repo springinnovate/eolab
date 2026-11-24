@@ -1,21 +1,20 @@
-"""PostgreSQL claim used by workers sharing the durable job queue.
+"""Serialize durable queue writes and assign leased attempts to available workers."""
 
-Under the queue's transaction advisory lock, check capacity before issuing the
-claim. This keeps the full-pool path independent of the queue and its history.
-The claim takes a fresh attempt ID and the lease duration in seconds and returns
-the job and selected subscriber, or no row when the queue is empty.
-"""
+from typing import Any, Final
+from uuid import uuid4
 
-from typing import Final
+import psycopg
 
+# Deployed PostgreSQL single-bigint advisory key, shared by claims and queue writes.
+JOB_QUEUE_LOCK_ID: Final = 7_610_329
 
-WORKER_SLOT_AVAILABLE_SQL: Final = """
+_WORKER_SLOT_AVAILABLE_SQL: Final = """
 SELECT count(*) < %(worker_count)s AS available
 FROM processing.jobs
 WHERE status IN ('running', 'cancelling')
 """
 
-CLAIM_NEXT_JOB_SQL: Final = """
+_CLAIM_NEXT_JOB_SQL: Final = """
 WITH waiting AS (
     SELECT DISTINCT ON (s.owner) j.id, s.owner, s.created_at AS submitted_at, s.id AS subscriber_id
     FROM processing.jobs AS j
@@ -43,3 +42,48 @@ FROM next_job
 WHERE job.id = next_job.id
 RETURNING job.*, next_job.owner
 """
+
+
+def lock_job_queue(cursor: psycopg.Cursor[dict[str, Any]]) -> None:
+    """Serialize queue decisions until the caller's transaction ends.
+
+    Args:
+        cursor: Open cursor in an explicit or implicitly started transaction.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot acquire the advisory lock.
+    """
+    cursor.execute("SELECT pg_advisory_xact_lock(%s)", (JOB_QUEUE_LOCK_ID,))
+
+
+def claim_next_job(
+    cursor: psycopg.Cursor[dict[str, Any]], *, worker_count: int, lease_seconds: int
+) -> dict[str, Any] | None:
+    """Claim one fair turn and a worker slot in the same transaction.
+
+    An idle connection commits the claim on return. Inside an existing transaction
+    the caller controls the final commit or rollback, including the recorded turn.
+    Start native work only after commit.
+
+    Args:
+        cursor: Dictionary-row cursor on the queue database at read committed isolation.
+        worker_count: Shared limit on running and cancelling jobs.
+        lease_seconds: Initial lease duration measured from the recorded start.
+
+    Returns:
+        The running job row with its selected owner and new attempt ID, or None
+        when the pool is full or no subscribed job is waiting.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot lock, select or update the queue.
+    """
+    with cursor.connection.transaction():
+        lock_job_queue(cursor)
+        cursor.execute(_WORKER_SLOT_AVAILABLE_SQL, {"worker_count": worker_count})
+        if not cursor.fetchone()["available"]:
+            return None
+        cursor.execute(
+            _CLAIM_NEXT_JOB_SQL,
+            {"attempt_id": uuid4().hex, "lease_seconds": lease_seconds},
+        )
+        return cursor.fetchone()
