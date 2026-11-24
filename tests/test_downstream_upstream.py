@@ -99,7 +99,7 @@ def test_selected_polygon_matches_raster_starts_on_routing_grids(
             "id": sink,
             "next": 0,
             "sink": sink,
-            "geometry": mapping(box(*(grid * (west, 3)), *(grid * (east, 0)))),
+            "geometry": mapping(box(*(grid @ (west, 3)), *(grid @ (east, 0)))),
         }
         for sink, (west, east) in enumerate(drain_extents, start=1)
     ]
@@ -131,8 +131,8 @@ def test_selected_polygon_matches_raster_starts_on_routing_grids(
             dataset.write(data, 1)
 
     west, east = polygon_edges
-    selected = box(*(grid * (west, 1.88)), *(grid * (east, 1.10)))
-    excluded = box(*(grid * (1, 2)), *(grid * (2, 1)))
+    selected = box(*(grid @ (west, 1.88)), *(grid @ (east, 1.10)))
+    excluded = box(*(grid @ (1, 2)), *(grid @ (2, 1)))
     selection = write_selection(
         tmp_path / "starts.gpkg",
         [mapping(selected), mapping(excluded)],
