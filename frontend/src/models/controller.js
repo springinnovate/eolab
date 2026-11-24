@@ -67,8 +67,8 @@ export class ModelsController {
         this.onViewLabel = onViewLabel;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
         this.deletions = new Map();
-        this.state = {page: "library", active: false, library: [], missingModels: false, loading: false, error: "", query: "", draft: null,
-            runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
+        this.state = {page: "library", active: false, library: [], missingModels: false, loading: false, libraryError: "", error: "", query: "", draft: null,
+            runs: [], nextCursor: null, historyLoading: false, historyError: "", selectedRun: null, invocation: null, invocationError: "", yaml: null,
             habitatDatasetLabels: null,
             pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
@@ -247,12 +247,12 @@ export class ModelsController {
      */
     async loadLibrary() {
         if (this.state.loading) return;
-        this.state.loading = true; this.render();
+        this.state.loading = true; this.state.libraryError = ""; this.render();
         try {
             this.installedModels = await this.listSetupModels();
             this.#updateSetupLibrary();
         }
-        catch (error) { this.state.error = `Data tools unavailable: ${error.message}`; }
+        catch (error) { this.state.libraryError = `Data tools unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
     }
 
@@ -851,7 +851,7 @@ export class ModelsController {
     async loadRuns(more = false) {
         if (this.state.historyLoading) return;
         const revision = ++this.historyRevision;
-        this.state.historyLoading = true; this.render();
+        this.state.historyLoading = true; this.state.historyError = ""; this.render();
         try {
             const page = await this.api.listModelRuns(more ? this.state.nextCursor : null);
             if (revision !== this.historyRevision || this.destroyed) return;
@@ -860,7 +860,7 @@ export class ModelsController {
                 if (!current || current.updatedAt <= job.updatedAt) this.rememberRun(job);
             }
             this.state.nextCursor = page.nextCursor; this.jobs.schedule();
-        } catch (error) { this.state.error = `Data tool runs unavailable: ${error.message}`; }
+        } catch (error) { this.state.historyError = `Data tool runs unavailable: ${error.message}`; }
         finally { this.state.historyLoading = false; this.refreshMapLayers(); this.render(); }
     }
 
@@ -1077,7 +1077,7 @@ export class ModelsController {
      */
     async duplicateRun() {
         const saved = this.state.invocation;
-        if (!saved || !this.#allowsModel(saved.model.id)) return;
+        if (!saved || this.state.loading || this.state.libraryError || !this.#allowsModel(saved.model.id)) return;
         const model = this.#findSetupVersion(saved.model);
         if (!model) { this.state.error = "This tool version is not available in setup. Its YAML remains available until metadata expires."; this.render(); return; }
         this.revision += 1;

@@ -597,7 +597,7 @@ export class ModelsView {
         r.error.textContent = state.invocationError || job?.error?.message || job?.error?.detail || ""; r.error.hidden = !r.error.textContent;
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
         r.duplicate.hidden = Boolean(state.duplicateRestricted);
-        r.duplicate.disabled = !state.invocation || r.duplicate.hidden || Boolean(state.actionBusy);
+        r.duplicate.disabled = !state.invocation || r.duplicate.hidden || Boolean(state.loading || state.libraryError || state.actionBusy);
         r.progress.hidden = job?.status !== "running";
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
@@ -738,7 +738,8 @@ export class ModelsView {
         });
         this.elements["setup-heading"].hidden = state.page !== "setup";
         this.elements["setup-heading"].textContent = setupTitle;
-        const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
+        const pageError = state.page === "runs" ? state.historyError : state.libraryError;
+        const error = state.error || (state.page === "setup" ? "" : pageError || state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
         this.elements.recovery.hidden = !state.pending;
@@ -759,7 +760,7 @@ export class ModelsView {
                 return open;
             }));
         }
-        let libraryStatus = filtered.length ? "" : "No matching tools.";
+        let libraryStatus = filtered.length || state.libraryError ? "" : "No matching tools.";
         if (state.noModelsSelected) libraryStatus = "This map offers no models for new runs. Choose Runs to view earlier work.";
         if (state.missingModels) libraryStatus = "A model selected for this map is unavailable on this site. Ask the map publisher to review the choices.";
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : libraryStatus;

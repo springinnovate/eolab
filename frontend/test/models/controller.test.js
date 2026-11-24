@@ -91,7 +91,18 @@ test("published model choices govern search, retained setup and duplication whil
     const view = new ModelsView(new SummaryControlDocument());
     const h = fixture({discoverModels: async () => recipes}, view, {allowedModelIds: [model.id], recoveryScope: "survey"});
     t.after(() => h.controller.destroy());
-    await h.controller.open();
+    let finishDiscovery;
+    h.api.discoverModels = () => new Promise(resolve => { finishDiscovery = resolve; });
+    const opening = h.controller.open();
+    await h.controller.showRun(job().jobId);
+    assert.equal(view.run.duplicate.disabled, true, "a linked run must wait for its recipe to be checked");
+    await h.controller.duplicateRun();
+    assert.equal(view.elements.error.textContent, "");
+    finishDiscovery(recipes);
+    await opening;
+    assert.equal(view.run.duplicate.disabled, false);
+    h.controller.navigate("library");
+    h.api.discoverModels = async () => recipes;
     const libraryTitles = () => view.elements["library-items"].children.map(button => button.textContent);
     assert.deepEqual(libraryTitles(), [model.title, newer.title]);
     recipes.push(seriesModel);
@@ -143,6 +154,27 @@ test("published model choices govern search, retained setup and duplication whil
     await h.controller.submit();
     assert.equal(view.navigation.setup.disabled, true);
     assert.equal(h.submitted.length, 1);
+});
+
+test("reopening Data tools clears recovered discovery and history errors on their respective pages", async t => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => { throw new Error("Service offline"); },
+        listModelRuns: async () => { throw new Error("History offline"); }}, view, {allowedModelIds: [model.id]});
+    t.after(() => h.controller.destroy());
+    await h.controller.open();
+    assert.match(view.elements.error.textContent, /Service offline/);
+    h.controller.setActive(false);
+    h.api.discoverModels = async () => [model];
+    await h.controller.open();
+    assert.equal(view.elements["library-items"].children[0].textContent, model.title);
+    assert.equal(view.elements.error.textContent, "");
+    h.controller.navigate("runs");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(view.elements.error.textContent, /History offline/);
+    h.api.listModelRuns = async () => ({jobs: [job()], nextCursor: null});
+    await h.controller.loadRuns();
+    assert.equal(view.elements["runs-list"].children.length, 1);
+    assert.equal(view.elements.error.textContent, "");
 });
 
 test("a map recovers only eligible retries and other maps can submit independently in the same tab", async t => {
