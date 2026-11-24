@@ -30,6 +30,7 @@ from eolab_app.raster.bounded_window import (
     project_geographic_polygons,
     project_polygons_to_crs,
 )
+from eolab_app.raster.geotiff_crs import GeoTiffReader
 from eolab_app.sampling_box import Wgs84SamplingBox, tessellate_sampling_box
 
 
@@ -471,7 +472,7 @@ def open_warped_raster(
         RasterioError: If the source or warp cannot be opened.
         OSError: If a virtual source cannot be written.
     """
-    with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(path) as source:
+    with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), GeoTiffReader(path) as source:
         _write_masked_source_vrt(source, vrt_path)
         axes = source.transform
         periodic_longitude = False

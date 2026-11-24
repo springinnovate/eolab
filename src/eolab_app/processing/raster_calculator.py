@@ -54,6 +54,7 @@ from eolab_app.processing.raster_preparation import (
 )
 from eolab_app.projected_boundary import BoundaryConvergenceError
 from eolab_app.raster.bounded_window import project_polygons_to_crs
+from eolab_app.raster.geotiff_crs import GeoTiffReader
 from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference
 
@@ -325,7 +326,7 @@ def plan_calculator_grid(
         required.add(choice.alias)
         with (
             rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
-            rasterio.open(sources.rasters[choice.alias]) as reference,
+            GeoTiffReader(sources.rasters[choice.alias]) as reference,
         ):
             axes = reference.transform
             if axes.b != 0 or axes.d != 0 or axes.a <= 0 or axes.e >= 0:

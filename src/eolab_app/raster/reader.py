@@ -7,6 +7,7 @@ from typing import TypeAlias
 
 import rasterio
 
+from eolab_app.raster.geotiff_crs import GeoTiffReader
 from eolab_app.raster.temporal import TemporalObservation, TemporalRasterDataset
 
 RasterData: TypeAlias = Path | TemporalObservation
@@ -32,5 +33,5 @@ def open_raster_data(source: RasterData) -> Iterator[RasterDataset]:
         with TemporalRasterDataset(source) as dataset:
             yield dataset
     else:
-        with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(source) as dataset:
+        with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), GeoTiffReader(source) as dataset:
             yield dataset

@@ -10,6 +10,7 @@ import numpy as np
 from pyproj import CRS as ProjCRS, Transformer
 import pytest
 import rasterio
+import tifffile
 from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from rasterio.transform import from_bounds, from_origin
@@ -1425,6 +1426,134 @@ def test_custom_grid_accepts_equivalent_crs_in_published_tiff(tmp_path: Path) ->
         assert output.crs == CRS.from_epsg(4269)
         assert output.transform == from_origin(-124, 46, 0.25, 0.25)
         np.testing.assert_array_equal(output.read(1), np.ones((4, 4)))
+
+
+@pytest.fixture
+def survey_reference(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> tuple[Path, float, float, int | None]:
+    """Write independent GeoTIFF keys for a survey grid with a known longitude origin.
+
+    Args:
+        tmp_path: Directory for the reference raster.
+        request: Angular unit code, units per degree, optional vertical EPSG code, and citation choice.
+
+    Returns:
+        Source path, units per degree, meridian in degrees, and vertical CRS code.
+    """
+    angular_code, factor, vertical, esri = request.param
+    meridian = -17.123 if esri else 2.137
+    citation = "GCS Name = Local survey CRS|Primem = Survey prime meridian|"
+    keys = [
+        (1024, 0, 1, 32767 if esri else 2),
+        (1025, 0, 1, 2 if vertical else 1),
+        (2048, 0, 1, 32767),
+        (2049, 34737, len(citation), 0),
+        (2050, 0, 1, 6326),
+        (2051, 0, 1, 32767),
+        (2054, 0, 1, angular_code),
+        (2056, 0, 1, 7030),
+        (2061, 34736, 1, 0),
+    ]
+    if esri:
+        projection = (
+            'ESRI PE String = GEOGCS["Survey",DATUM["D_WGS_1984",'
+            'SPHEROID["WGS_1984",6378137,298.257223563]],'
+            f'PRIMEM["Survey",{meridian * factor}],UNIT["Grad",{math.pi / 200}]]|'
+        )
+        keys.append((3073, 34737, len(projection), len(citation)))
+        citation += projection
+    if vertical:
+        label = "Survey control|"
+        keys.append((3073, 34737, len(label), len(citation)))
+        citation += label
+        keys.append((4096, 0, 1, vertical))
+    directory = (1, 1, 1, len(keys), *(value for entry in keys for value in entry))
+    source = tmp_path / "survey.tif"
+    tifffile.imwrite(
+        source,
+        np.arange(52, dtype="int16").reshape(4, 13),
+        metadata=None,
+        bigtiff=angular_code == 9103,
+        byteorder=">",
+        extratags=[
+            (33550, "d", 3, (0.01 * factor, 0.01 * factor, 0), False),
+            (
+                33922,
+                "d",
+                6,
+                (
+                    0,
+                    0,
+                    0,
+                    (-4.305 if vertical else -4.31) * factor,
+                    (48.365 if vertical else 48.37) * factor,
+                    0,
+                ),
+                False,
+            ),
+            (34735, "H", len(directory), directory, False),
+            (34736, "d", 1, (meridian * factor,), False),
+            (34737, "s", 0, citation, False),
+        ],
+    )
+    return source, factor, meridian, vertical
+
+
+@pytest.mark.parametrize(
+    "survey_reference",
+    [(9105, 1 / 0.9, None, False), (9103, 60, None, False)],
+    indirect=True,
+)
+def test_numeric_meridian_locates_reference_and_warped_samples(
+    tmp_path: Path, survey_reference: tuple[Path, float, float, int | None]
+) -> None:
+    """Plan the matched grid and warp its actual cells at the surveyed longitude.
+
+    Args:
+        tmp_path: Calculation directory.
+        survey_reference: Numeric GeoKeys written independently of GDAL's CRS encoder.
+    """
+    source, factor, meridian, _ = survey_reference
+    calculation = RasterFormulaInput(
+        layers=(RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),),
+        expression="a",
+        grid=MatchRasterGrid(kind="match", alias="a"),
+    )
+    bounds = Wgs84Bounds(
+        west=-4.308 + meridian, south=48.332, east=-4.181 + meridian, north=48.368
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    request = RasterCalculatorRequest(calculation=calculation, selectedBounds=bounds)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    pm = ProjCRS.from_wkt(spec.grid.crs).prime_meridian
+    assert math.degrees(pm.longitude * pm.unit_conversion_factor) == pytest.approx(
+        meridian
+    )
+    assert spec.grid.transform == pytest.approx(
+        tuple(
+            from_origin(-4.31 * factor, 48.37 * factor, 0.01 * factor, 0.01 * factor)
+        )[:6]
+    )
+    assert read_raster_pixel(source, -4.305 + meridian, 48.365).value == 0
+    custom = calculation.model_copy(
+        update={
+            "grid": CustomRasterGrid(
+                kind="custom", crs="EPSG:4326", pixelSize=(0.01, 0.01)
+            )
+        }
+    )
+    request = RasterCalculatorRequest(calculation=custom, selectedBounds=bounds)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / result.filename) as output:
+        np.testing.assert_array_equal(
+            output.read(1, masked=True).compressed(), np.arange(52)
+        )
 
 
 @pytest.mark.parametrize(
