@@ -377,11 +377,9 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                     raise ValueError(
                         "Convert packed values to their declared units before indexing."
                     )
-                nodata = (
-                    "NaN"
-                    if src.nodata is not None and math.isnan(src.nodata)
-                    else src.nodata
-                )
+                nodata = src.nodata
+                if nodata is not None and not math.isfinite(nodata):
+                    nodata = str(nodata)
                 fields = {
                     "CRS": src.crs,
                     "transform": grid,

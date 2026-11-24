@@ -1,6 +1,7 @@
 """Exercise operator preparation with real GeoTIFFs and the temporal Catalog reader."""
 
 import asyncio
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -247,6 +248,35 @@ def test_standalone_raster_mask(tmp_path: Path, internal: bool) -> None:
         assert result.returncode == 1
         assert "rain_2022.tif.msk" in result.stderr
         assert not (tmp_path / "dataset.yaml").exists()
+
+
+@pytest.mark.parametrize("nodata", [float("inf"), float("-inf"), float("nan")])
+def test_nonfinite_nodata_catalog(tmp_path: Path, nodata: float) -> None:
+    """Publish nonfinite NoData as valid JSON while preserving the native cell mask.
+
+    Args:
+        tmp_path: Mount containing the archive.
+        nodata: Floating-point sentinel written to the GeoTIFF.
+    """
+    from tests.test_catalog_temporal import create_scanner, scan
+
+    root = tmp_path / "stack"
+    root.mkdir()
+    manifest = annual_manifest(root)
+    for path in root.glob("*.tif"):
+        with rasterio.open(path) as src:
+            profile = src.profile
+        profile.update(dtype="float32", nodata=nodata)
+        with rasterio.open(path, "w", **profile) as src:
+            src.write(numpy.array([[12, nodata]], dtype="float32"), 1)
+    result = run_cli("build", manifest)
+    assert result.returncode == 0, result.stderr
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["errors"] == []
+    (item,) = writer.write_session.items.values()
+    json.dumps(item, allow_nan=False)
+    with rasterio.open(root / "rain_2024.tif") as src:
+        assert src.read(1, masked=True).tolist() == [[12, None]]
 
 
 @pytest.mark.parametrize(
