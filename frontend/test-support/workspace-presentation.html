@@ -20,6 +20,7 @@
     import { SavedMapViewLocalStorage } from "../src/saved-map-view/local-storage.js";
     import { MapInspectionController } from "../src/map-inspection-controller.js";
     import { MapLayerStackView } from "../src/map-layers/layer-stack-view.js";
+    import { MapLayerStyleEditor } from "../src/map-layers/style-editor.js";
     import { ModelsController } from "../src/models/controller.js";
     import { ModelsView } from "../src/models/view.js";
     import { ProcessingJobs } from "../src/processing/jobs.js";
@@ -613,6 +614,34 @@
       view.unbind();
     }
 
+    /** Check that dismissing background Style leaves the layer list at its reading position.
+     * @param {MapInspectionController} inspection Mounted Map tools dock.
+     * @param {HTMLElement} contents Scrollable Map contents with a real layer at the top.
+     * @returns {void}
+     * @throws {Error} If closing Style moves Map contents or loses focus on Settings.
+     */
+    function checkBackgroundStyleClose(inspection, contents) {
+      const opener = contents.querySelector('[data-layer-action="style"]');
+      const editor = new MapLayerStyleEditor({ inspection,
+        mapLayers: { snapshots: () => [{ key: opener.dataset.layerKey, label: "Health costs", visible: true, opacity: 1 }] },
+        rasterViewer: { openStyle: () => true, refreshStyle() {}, closeStyle() {} },
+      });
+      try {
+        opener.focus();
+        editor.open(opener.dataset.layerKey);
+        document.querySelector("#open-settings").click();
+        contents.scrollTop = contents.scrollHeight;
+        const position = contents.scrollTop;
+        check(position > 0, "Map contents needs enough layers to scroll the Style opener out of view");
+        editor.closeButton.click();
+        check(contents.scrollTop === position && document.activeElement.id === "map-inspection-tab-settings",
+          "Closing background Style moved Map contents or lost focus on Settings");
+        document.querySelector("#close-settings").click();
+      } finally {
+        editor.destroy();
+      }
+    }
+
     /** Exercise workspace scrolling, panel disclosures and result navigation at this viewport size.
      * @returns {Promise<void>} Resolves after the current viewport passes.
      * @throws {Error} If markup cannot load or a presentation outcome fails.
@@ -673,6 +702,10 @@
       }
       await settleLayout();
       checkMapLayerFilename();
+      const inspection = new MapInspectionController({
+        onLayoutChange: state => layout.setInspectionLayout(state),
+      });
+      checkBackgroundStyleClose(inspection, mapContents);
       const catalogPosition = resultsScroll.scrollTop;
       checkScrollRegion(mapContents, "Map contents");
       check(resultsScroll.scrollTop === catalogPosition, "Scrolling Map contents moves Catalog results");
@@ -695,9 +728,6 @@
       const lastLocation = locations.lastElementChild;
       lastLocation.scrollIntoView({ block: "nearest" });
       check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
-      const inspection = new MapInspectionController({
-        onLayoutChange: state => layout.setInspectionLayout(state),
-      });
       layout.registerPanelActivitySource(document.querySelector("#map-inspection"),
         listener => inspection.subscribeClickResultActivity(listener));
       await checkPanelDisclosures(inspection);

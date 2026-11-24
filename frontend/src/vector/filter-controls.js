@@ -100,7 +100,7 @@ export class VectorFilterControls {
         this.#listen(this.cancelZoomButton, "click", () => {
             this.cancelZoom("Zoom cancelled."); this.zoomButton.focus();
         });
-        this.#listen(this.closeButton, "click", () => this.close());
+        this.#listen(this.closeButton, "click", () => this.close({ focusOpener: Boolean(this.host) }));
         this.#listen(this.applyButton, "click", () => { this.#cancelTimer(); void this.#apply(); });
         this.#listen(this.cancelButton, "click", () => {
             this.attempt++;
@@ -196,8 +196,12 @@ export class VectorFilterControls {
         if (this.conditionChoices) this.conditionChoices.children[0].disabled = !target.fields.length;
     }
 
-    /** Apply pending map edits, release action preparation, hide the panel and restore focus. @return {void} */
-    close() {
+    /** Apply pending map edits, release action preparation and hide the filter editor.
+     * @param {Object} [options] Focus after dismissal.
+     * @param {boolean} [options.focusOpener=true] Return focus to the opening control. The map tab row handles focus for its own ×.
+     * @return {void}
+     */
+    close({ focusOpener = true } = {}) {
         if (this.key === null) return;
         this.cancelZoom();
         this.#clearValuePickers();
@@ -206,7 +210,7 @@ export class VectorFilterControls {
         this.key = null;
         if (this.host) this.root.hidden = true;
         else this.inspection.hideFilter();
-        if (this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
+        if (focusOpener && this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
     }
 
     /** Detach panel listeners and cancel timers on teardown. @return {void} */
