@@ -154,8 +154,11 @@ def test_conflicting_clues_and_declined_dates(tmp_path: Path, answer: str) -> No
         "snow_2025-01-02_08-30-42",
         "snow_2024-12-31T08h30m",
         "snow_20241231T083042Z",
+        "snow_20241231T083042.000Z",
+        "snow_20241231T083042.001Z",
     ):
         write_frame(tmp_path / f"{stem}.tif", 5)
+    write_frame(tmp_path / "tagged.tif", 6, acquisition="2024-07-14T06:00:00.000000+00:00")
     result = run_cli("draft", tmp_path, answers=f"{answer}\nsnapshot\n")
     assert result.returncode == 0, result.stderr
     manifest = tmp_path / "stack.yaml"
@@ -169,6 +172,8 @@ def test_conflicting_clues_and_declined_dates(tmp_path: Path, answer: str) -> No
             "frame_2022.tif": "2022",
             "snow.2024.12.31.tif": "2024-12-31",
             "snow_20241231T083042Z.tif": "2024-12-31T08:30:42Z",
+            "snow_20241231T083042.000Z.tif": "2024-12-31T08:30:42.000Z",
+            "tagged.tif": "2024-07-14T06:00:00.000000+00:00",
         }
         if answer == "y"
         else {}

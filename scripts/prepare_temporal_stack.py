@@ -99,7 +99,7 @@ UTC = timezone.utc
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 PRECISIONS = ("year", "month", "day", "timestamp")
 TIMESTAMP = (
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{2}:[0-9]{2})"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.0+)?(?:Z|[+-][0-9]{2}:[0-9]{2})"
 )
 # Match the entire date-shaped token so a bad month cannot become a plausible year.
 FILE_DATE = re.compile(
@@ -201,13 +201,14 @@ def date_evidence(path: Path) -> dict[str, str]:
     """
     evidence = {}
     for index, token in enumerate(FILE_DATE.findall(path.stem), 1):
-        token = token.replace("_", "-").replace(".", "-")
+        date, separator, clock = token.partition("T")
+        token = date.replace("_", "-").replace(".", "-") + separator + clock
         token = re.sub(
             r"^(\d{4})(\d{2})(\d{2})?(?=T|$)",
             lambda m: "-".join(filter(None, m.groups())),
             token,
         )
-        token = re.sub(r"T(\d{2})(\d{2})(\d{2})(?=Z|[+-]|$)", r"T\1:\2:\3", token)
+        token = re.sub(r"T(\d{2})(\d{2})(\d{2})(?=Z|[.+-]|$)", r"T\1:\2:\3", token)
         evidence[f"filename {index}"] = token
     with rasterio.open(path, driver="GTiff") as src:
         for band in (0, 1):
