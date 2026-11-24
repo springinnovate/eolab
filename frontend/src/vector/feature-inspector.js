@@ -43,11 +43,25 @@ const MAX_SELECTION_HISTORY_ENTRIES = 20;
  */
 
 /**
- * @typedef {{identity:string|null,results:InspectedVectorFeature[],position:InspectionPosition|null,
+ * @typedef {{clickIdentity:string|null,results:InspectedVectorFeature[],position:InspectionPosition|null,
  * context:FeatureSelectionContext,display:FeatureSelectionDisplay|null,
  * resultIndex:number,state:"ready"|"empty",message:string,failedLayers:number}} FeatureSelection
  * A completed inspection with its last highlighted feature.
  */
+
+/**
+ * Decide whether the latest inspection can replace the current history entry.
+ * Lasso returns native IDs in numeric order within one retained view and predicate.
+ * @param {FeatureSelection|undefined} previous Currently displayed history entry, if any.
+ * @param {FeatureSelection} next Newly completed inspection.
+ * @return {boolean} Whether both represent the same selected features.
+ */
+function sameFeatureSelection(previous, next) {
+    if (next.context.kind === "click") return next.clickIdentity !== null && next.clickIdentity === previous?.clickIdentity;
+    return previous?.context.kind === "lasso" && previous.context.key === next.context.key &&
+        previous.context.signature === next.context.signature && previous.results.length === next.results.length &&
+        next.results.every(({feature}, index) => feature.id === previous.results[index].feature.id);
+}
 
 /**
  * Describe completed Lasso results using the layer's current display name.
@@ -919,12 +933,11 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Identify a feature set without equating WMS display IDs with original IDs.
-     * Repeated selections deduplicate within the same original source or publication.
-     * @param {InspectedVectorFeature[]} results Features from one completed inspection.
+     * Identify features returned by a map click independent of WMS response order.
+     * @param {InspectedVectorFeature[]} results Features from one completed map click.
      * @return {string|null} Source, publication and feature IDs, or null if a feature has no ID.
      */
-    #identifyFeatureSelection(results) {
+    #identifyClickFeatures(results) {
         const ids = [];
         for (const { feature, target } of results) {
             const id = feature.id;
@@ -946,14 +959,13 @@ export class VectorFeatureInspectorController {
      */
     #finishSelection(state, message, failedLayers = 0) {
         if (state === "ready" || failedLayers === 0) {
-            const identity = this.#identifyFeatureSelection(this.results);
             const selection = {
-                identity, results: this.results, resultIndex: this.resultIndex,
+                clickIdentity: this.#selectionContext.kind === "click" ? this.#identifyClickFeatures(this.results) : null,
+                results: this.results, resultIndex: this.resultIndex,
                 position: this.#inspectionPosition, state, message, failedLayers,
                 context: this.#selectionContext, display: this.#selectionDisplay,
             };
-            const current = this.#selectionHistory[this.#selectionHistoryIndex];
-            if (identity !== null && identity === current?.identity) {
+            if (sameFeatureSelection(this.#selectionHistory[this.#selectionHistoryIndex], selection)) {
                 this.#selectionHistory[this.#selectionHistoryIndex] = selection;
             } else {
                 this.#selectionHistory.splice(this.#selectionHistoryIndex + 1, this.#selectionHistory.length, selection);

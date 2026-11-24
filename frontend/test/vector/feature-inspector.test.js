@@ -473,6 +473,35 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
   assert.equal(h.selectionNavigation.at(-1).canPrevious, false);
 });
 
+test("Lasso history distinguishes empty views and exact native membership within one view", async t => {
+  let ids = ["1", "9007199254740992"];
+  const h = createFixture(async (url, options) => Response.json(url.endsWith("/lasso")
+    ? {matched:ids.length, featureIds:ids, geometry:null}
+    : {selection:JSON.parse(options.body).selection, features:ids.map(id => ({id, properties:{}}))}));
+  t.after(() => h.controller.destroy());
+  const parcels = h.selectionTargets[0];
+  const basins = {...parcels, key:"view-2", label:"Basins"};
+  const ridges = {...parcels, key:"view-3", label:"Ridges"};
+  h.selectionTargets.push(basins, ridges);
+  const lasso = target => h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+  await lasso(parcels);
+  ids = ["1", "9007199254740993"];
+  await lasso(parcels);
+  ids = [];
+  await lasso(basins);
+  await lasso(basins);
+  await lasso(ridges);
+
+  h.controller.navigateSelection("previous");
+  assert.equal(h.displays.at(-1).label, "Basins");
+  assert.equal(h.displays.at(-1).count, 0);
+  for (const lastId of ["9007199254740993", "9007199254740992"]) {
+    h.controller.navigateSelection("previous");
+    assert.deepEqual(h.sampleChanges.at(-1).observations.map(row => row.featureId), ["1", lastId]);
+  }
+  assert.equal(h.selectionNavigation.at(-1).canPrevious, false);
+});
+
 test("invalidated Lasso history keeps earlier and later selections on their own sides", async t => {
   for (const change of ["remove", "filter"]) for (const index of [0, 1, 2]) {
     await t.test(`${change} selection ${index + 1}`, async t => {
