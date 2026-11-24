@@ -136,7 +136,7 @@ export class TemporalModelInputsView {
         const unit = variable?.unit;
         this.reductionHelp.textContent = areaSeries ?
             `Each CSV row summarizes valid pixels in the selected area for one observation. Pixels have equal weight; missing pixel values are omitted. Rows with no valid pixels have an empty value and are marked as having no valid data.${reduction.reducer === "count" ? " Result units: cells." : unit ? ` Result units: ${unit}.` : ""}${reduction.reducer === "stdev" ? " Standard deviation uses the population formula." : ""}` : precipitation ?
-            `Each precipitation rate in ${temporal.precipitation.inputUnit} is multiplied by its interval duration in seconds and converted to ${temporal.precipitation.outputUnit}. Missing intervals and missing pixel values are omitted, not filled with zero. A second map counts valid available observations at each pixel.` :
+            `Each mean rate in ${temporal.precipitation.inputUnit} is multiplied by the seconds it covers within your dates and converted to ${temporal.precipitation.outputUnit}. For a partial interval, this estimates precipitation assuming the rate stayed constant. Missing intervals and missing pixel values are omitted, not filled with zero. A second map counts valid available observations at each pixel.` :
             `Each valid observation has equal weight; missing values are omitted.${unit ? ` Result units: ${unit}.` : ""}${convention} A second map counts valid observations at each pixel.`;
         return selectionError || reductionError;
     }

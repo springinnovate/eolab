@@ -101,7 +101,7 @@ Use the timeline at the bottom of the map to drag through a month or press **Pla
 
 *Rainfall at 06:00 UTC on July 1, 2026. A band of rain crosses the tropical Atlantic toward West Africa. Choose another available hour to see how the pattern changes.*
 
-- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each available rate by its recorded interval duration to calculate accumulated depth. Start and end use whole UTC hours.
+- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. Ordinary statistics include the complete value of each overlapping observation. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each mean rate by the seconds its interval overlaps the selected period. A partial interval gives an estimate assuming a constant rate. Start and end use whole UTC hours.
 - **Export area statistics over time (CSV)** calculates a statistic across an area's valid pixels for each available observation, such as mean temperature within a watershed over time. The CSV contains one row per observation, including valid pixel counts.
 - **Raster statistics** plots statistics or formulas across the dates you select. Compare an area average with a value at a clicked point, or download the plotted values as CSV. You choose the calculation dates independently of the hour displayed on the map.
 

@@ -137,6 +137,7 @@ def _calculate(
     area: AggregateArea,
     directory: Path,
     conversion: PrecipitationConversion | None = None,
+    requested_period: tuple[datetime, datetime] | None = None,
 ) -> tuple[TemporalMapSpec, TemporalMapArtifact]:
     """Plan and execute a real period-map operation in one private attempt.
 
@@ -146,6 +147,7 @@ def _calculate(
         area: Validated spatial area.
         directory: New attempt output directory.
         conversion: Model units and factor for an integrated precipitation total.
+        requested_period: UTC boundaries when the user selects part of the observations.
 
     Returns:
         Native plan and completed artifact metadata.
@@ -158,17 +160,21 @@ def _calculate(
     directory.mkdir()
     limits = RasterAggregateLimits()
     grid = plan_temporal_grid(interval.observations[0], area, limits)
+    start, end = requested_period or (
+        interval.observations[0].interval_start,
+        (
+            interval.observations[-1].interval_end
+            if reduction.reducer == "precipitation_total"
+            else interval.observations[-1].time + timedelta(hours=1)
+        ),
+    )
     spec = TemporalMapSpec(
         source=TemporalIntervalSelection(
             collectionId="eolab-temporal-datasets",
             itemId="weather",
             variable="temperature",
-            startTime=interval.observations[0].interval_start,
-            endTime=(
-                interval.observations[-1].interval_end
-                if reduction.reducer == "precipitation_total"
-                else interval.observations[-1].time + timedelta(hours=1)
-            ),
+            startTime=start,
+            endTime=end,
         ),
         reduction=reduction,
         area=area,
@@ -1047,10 +1053,12 @@ def test_unreadable_observation_fails_without_publishing_partial_outputs(
         PrecipitationConversion(inputUnit="m s**-1", outputUnit="cm", factor=100),
     ],
 )
+@pytest.mark.parametrize("partial_edges", [False, True])
 def test_precipitation_total_uses_recorded_durations_and_valid_cells(
     interval: ResolvedTemporalInterval,
     tmp_path: Path,
     conversion: PrecipitationConversion,
+    partial_edges: bool,
 ) -> None:
     """Integrate actual interval lengths without filling gaps or discarding zero rates.
 
@@ -1058,6 +1066,7 @@ def test_precipitation_total_uses_recorded_durations_and_valid_cells(
         interval: Native values with NaN and explicit NoData on a regional grid.
         tmp_path: Isolated output directory.
         conversion: Source units, output units and factor configured by the model.
+        partial_edges: Whether the first and last observations extend past the requested period.
     """
     origin = datetime(2000, 1, 1, tzinfo=timezone.utc)
     rates = replace(
@@ -1072,7 +1081,12 @@ def test_precipitation_total_uses_recorded_durations_and_valid_cells(
                 interval_end=origin + timedelta(hours=end),
             )
             for observation, (start, end) in zip(
-                interval.observations, ((0, 1), (1, 3), (5, 6))
+                interval.observations,
+                (
+                    (-0.25 if partial_edges else 0, 1),
+                    (1, 3),
+                    (5, 7.5 if partial_edges else 6),
+                ),
             )
         ),
     )
@@ -1085,6 +1099,7 @@ def test_precipitation_total_uses_recorded_durations_and_valid_cells(
         AggregateArea(kind="wholeRaster"),
         directory,
         conversion,
+        (origin, origin + timedelta(hours=6)),
     )
     with (
         rasterio.open(directory / "result.tif") as total,
@@ -1102,14 +1117,16 @@ def test_precipitation_total_uses_recorded_durations_and_valid_cells(
         assert artifact.valid_pixels == 6
     policy = describe_temporal_policy(spec)
     assert policy.timeSupport == "mean_rate"
-    assert policy.weighting == "interval_duration"
+    assert policy.weighting == "overlap_duration"
     assert policy.unit == conversion.outputUnit
     provenance = json.loads((directory / "provenance.json").read_text())
     assert provenance["inputUnit"] == conversion.inputUnit
     assert provenance["unit"] == conversion.outputUnit
     assert provenance["conversionFactor"] == conversion.factor
     assert provenance["availableDurationSeconds"] == 4 * 3600
-    assert provenance["weighting"] == "interval duration"
+    assert provenance["weighting"] == (
+        "mean rate assumed constant over the overlap with the requested period"
+    )
     assert [
         (item["intervalStart"], item["intervalEnd"])
         for item in provenance["observations"]

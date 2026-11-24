@@ -544,7 +544,7 @@ def test_precipitation_total_uses_model_conversion_and_preserves_input_units(
     assert exported["execution"]["sources"]["source"]["unit"] == configured["inputUnit"]
     policy = exported["execution"]["numericalPolicy"]
     assert policy["timeSupport"] == "mean_rate"
-    assert policy["weighting"] == "interval_duration"
+    assert policy["weighting"] == "overlap_duration"
     assert policy["unit"] == configured["outputUnit"]
     provenance = client.get(ready["result"]["provenanceUrl"]).json()
     assert provenance["inputUnit"] == configured["inputUnit"]

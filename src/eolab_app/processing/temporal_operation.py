@@ -33,7 +33,9 @@ class TemporalMapNumericalPolicy(BaseModel):
     resampling: Literal["none"] = "none"
     numericInclusion: Literal["cell_center"] = "cell_center"
     timeSupport: Literal["instantaneous", "mean_rate", "accumulation"]
-    weighting: Literal["equal_observation", "interval_duration"] = "equal_observation"
+    weighting: Literal["equal_observation", "interval_duration", "overlap_duration"] = (
+        "equal_observation"
+    )
     nodata: Literal["exclude_source_nodata_and_nonfinite"] = (
         "exclude_source_nodata_and_nonfinite"
     )
@@ -285,7 +287,7 @@ def describe_temporal_policy(spec: TemporalMapSpec) -> TemporalMapNumericalPolic
     total = spec.reduction.reducer == "precipitation_total"
     return TemporalMapNumericalPolicy(
         timeSupport=spec.timeSupport,
-        weighting="interval_duration" if total else "equal_observation",
+        weighting="overlap_duration" if total else "equal_observation",
         reduction=spec.reduction,
         unit=spec.unit,
         observationCount=spec.observationCount,

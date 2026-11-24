@@ -844,7 +844,8 @@ test("precipitation controls explain duration totals and round changed dates vis
     assert.equal(controls.period.startTime.step, "3600"); assert.equal(controls.period.endTime.step, "3600");
     assert.match(controls.periodHelp.textContent, /30 minutes rounds forward/);
     assert.match(controls.availabilityHelp.textContent, /observation labels, not the boundaries/);
-    assert.match(controls.reductionHelp.textContent, /interval duration in seconds/);
+    assert.match(controls.reductionHelp.textContent, /seconds it covers within your dates/);
+    assert.match(controls.reductionHelp.textContent, /partial interval.*rate stayed constant/);
     assert.match(controls.reductionHelp.textContent, /converted to mm/);
     assert.match(controls.reductionHelp.textContent, /omitted, not filled with zero/);
     assert.match(controls.reductionHelp.textContent, /counts valid available observations/);
