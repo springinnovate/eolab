@@ -251,6 +251,7 @@ class MapVisitorChoices(MapDocumentPart):
     workspacePanels: bool = False
     catalog: bool = False
     mapContents: bool = False
+    runModels: bool = False
 
 
 class MapVisitorInitialPanels(MapDocumentPart):
@@ -265,13 +266,38 @@ class MapVisitorInitialPanels(MapDocumentPart):
 
 
 class MapVisitorControls(MapDocumentPart):
-    """Versioned visitor choices contained in a named map document."""
+    """Store a named map's visitor choices and the recipe IDs selected for new runs.
+
+    Each ID covers all installed versions supported by Data tools. Preserve
+    selections when a model is unavailable or its parent switch is disabled.
+    """
 
     version: Annotated[int, Field(ge=1, le=1)]
     choices: MapVisitorChoices
     initialPanels: MapVisitorInitialPanels = Field(
         default_factory=MapVisitorInitialPanels
     )
+    modelIds: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")]] = Field(
+        default_factory=list
+    )
+
+    @field_validator("modelIds")
+    @classmethod
+    def unique_model_ids(cls, model_ids: list[str]) -> list[str]:
+        """Validate the publisher's selection independently of installed recipes.
+
+        Args:
+            model_ids: Recipe identifiers from the saved map.
+
+        Returns:
+            Selected identifiers in their saved order.
+
+        Raises:
+            ValueError: If a recipe appears more than once.
+        """
+        if len(set(model_ids)) != len(model_ids):
+            raise ValueError("Visitor model selections must use distinct recipe IDs.")
+        return model_ids
 
 
 class SavedMapView(MapDocumentPart):
@@ -281,7 +307,7 @@ class SavedMapView(MapDocumentPart):
     entry preserves its place in the layer order and its own appearance.
     The basemap is stored as a provider ID such as `"maptiler-streets"`.
     Omitting mapLegend leaves the legend visible and expanded.
-    Omitting visitorControls preserves inspection tools and open Map contents,
+    Omitting visitorControls preserves all Data tools, inspection tools and open Map contents,
     with Catalog unavailable. Explicit settings leave omitted capabilities off.
     """
 

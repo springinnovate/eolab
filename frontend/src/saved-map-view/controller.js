@@ -50,6 +50,8 @@ export class SavedMapViewController {
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
+     * @param {()=>Promise<Array<{id:string,title:string}>>} [configuration.listPublisherModels]
+     * Discover the recipes visitors can set up, for the publish and edit forms.
      * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
      * @param {(settings:import("../visitor-controls.js").VisitorControls|undefined)=>void}
      * [configuration.applyVisitorControls] Apply a validated public map's choices before restoring its layers.
@@ -87,6 +89,7 @@ export class SavedMapViewController {
         editPublishedMap = false,
         allowPublishing = false,
         publicationDefaults = { title: "", subtitle: "" },
+        listPublisherModels = async () => [],
         applyMapHeading = () => {},
         applyVisitorControls = () => {},
         basemap = { snapshot: () => "detailed", restore: async () => null },
@@ -135,6 +138,8 @@ export class SavedMapViewController {
         this.editRevision = null;
         this.allowPublishing = allowPublishing;
         this.publicationDefaults = publicationDefaults;
+        this.listPublisherModels = listPublisherModels;
+        this.editorModels = null;
         this.applyMapHeading = applyMapHeading;
         this.applyVisitorControls = applyVisitorControls;
         this.basemap = basemap;
@@ -193,7 +198,7 @@ export class SavedMapViewController {
     }
 
     /**
-     * Capture the current map once and ask the creator for publication labels.
+     * Capture the current map once and offer the creator visitor controls and model choices.
      * @return {Promise<void>} Completion when the form or capture error is displayed.
      */
     async openPublicationDialog() {
@@ -201,12 +206,23 @@ export class SavedMapViewController {
         this.#setBusy(true);
         try {
             this.publishingView = this.#snapshotCurrentView();
-            this.view.showPublicationForm(this.publicationDefaults);
+            const models = await this.#loadPublisherModels();
+            if (!this.destroyed) this.view.showPublicationForm(this.publicationDefaults, models);
         } catch (error) {
             this.view.showError(asError(error), "copy");
         } finally {
             this.#setBusy(false);
         }
+    }
+
+    /**
+     * Read recipe choices for an author form, allowing other settings to be
+     * edited and existing selections to be retained when discovery fails.
+     * @return {Promise<Array<{id:string,title:string}>|null>} Setup recipes or null on failure.
+     */
+    async #loadPublisherModels() {
+        try { return await this.listPublisherModels(); }
+        catch { return null; }
     }
 
     /**
@@ -257,8 +273,10 @@ export class SavedMapViewController {
             if (report !== null) this.view.showResults(report);
             if (this.editPublishedMap && report !== null) {
                 const complete = report.loaded === report.total && report.details.length === 0;
+                this.editorModels = await this.#loadPublisherModels();
+                if (this.destroyed || generation !== this.restoreGeneration) return;
                 this.editRevision = saved.revision;
-                this.view.showPublishedMapEditor(saved, complete);
+                this.view.showPublishedMapEditor(saved, complete, this.editorModels);
             }
         } catch (error) {
             this.view.showError(asError(error), "open");
@@ -286,7 +304,7 @@ export class SavedMapViewController {
             });
             this.editRevision = saved.revision;
             this.applyMapHeading(saved.title, saved.subtitle);
-            this.view.showPublishedMapEditor(saved, true);
+            this.view.showPublishedMapEditor(saved, true, this.editorModels);
             this.view.showPublishedMapEditStatus("Saved. Visitors will see these changes when they open or reload the map.");
         } catch (error) {
             this.view.showPublishedMapEditStatus(asError(error).message);

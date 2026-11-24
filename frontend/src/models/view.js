@@ -460,7 +460,12 @@ export class ModelsView {
      * @return {void}
      */
     renderSetup(state) {
-        const draft = state.draft; if (!draft) return;
+        const draft = state.draft;
+        if (!draft) {
+            if (this.setup) this.elements.setup.replaceChildren();
+            this.setup = null;
+            return;
+        }
         if (this.setup?.id !== draft.id) this.buildSetup(draft);
         const setupControls = this.setup;
         const temporalError = setupControls.temporal?.render(draft.temporal, draft.reduction) ?? "";
@@ -591,7 +596,8 @@ export class ModelsView {
         r.status.textContent = job ? describeModelProgress(job) : "Reading run…";
         r.error.textContent = state.invocationError || job?.error?.message || job?.error?.detail || ""; r.error.hidden = !r.error.textContent;
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
-        r.duplicate.disabled = !state.invocation || Boolean(state.actionBusy);
+        r.duplicate.hidden = Boolean(state.duplicateRestricted);
+        r.duplicate.disabled = !state.invocation || r.duplicate.hidden || Boolean(state.actionBusy);
         r.progress.hidden = job?.status !== "running";
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
@@ -751,7 +757,10 @@ export class ModelsView {
                 return open;
             }));
         }
-        this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
+        let libraryStatus = filtered.length ? "" : "No matching tools.";
+        if (state.noModelsSelected) libraryStatus = "This map offers no models for new runs. Choose Runs to view earlier work.";
+        if (state.missingModels) libraryStatus = "A model selected for this map is unavailable on this site. Ask the map publisher to review the choices.";
+        this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : libraryStatus;
         this.renderSetup(state); this.renderRun(state);
         const retainedRuns = new Set(state.runs.map(job => job.jobId));
         for (const [id, card] of this.runCards) {

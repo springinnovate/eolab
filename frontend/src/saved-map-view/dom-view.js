@@ -14,6 +14,8 @@ function readVisitorControls(fields) {
             .map(input => [input.dataset.visitorControl, input.checked])),
         initialPanels: Object.fromEntries([...fields.querySelectorAll("input[data-visitor-panel-open]")]
             .map(input => [input.dataset.visitorPanelOpen, input.checked])),
+        modelIds: [...fields.querySelectorAll("input[data-visitor-model-id]")]
+            .filter(input => input.checked).map(input => input.dataset.visitorModelId),
     };
 }
 
@@ -27,6 +29,10 @@ function updateVisitorChoiceInputs(fields) {
         !fields.querySelector('[data-visitor-control="inspectAndSelect"]').checked;
     fields.querySelector("[data-visitor-workspace-children]").disabled =
         !fields.querySelector('[data-visitor-control="workspacePanels"]').checked;
+    const runModels = fields.querySelector('[data-visitor-control="runModels"]');
+    fields.querySelector("[data-visitor-model-children]").disabled = !runModels.checked;
+    runModels.setCustomValidity(fields.dataset.needsModelList === "true" && runModels.checked
+        ? "Reopen these settings to load the models, or turn off Run models to save." : "");
     for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
         input.disabled = !fields.querySelector(`[data-visitor-control="${input.dataset.visitorPanelOpen}"]`).checked;
     }
@@ -35,10 +41,12 @@ function updateVisitorChoiceInputs(fields) {
 /**
  * Populate a fresh visitor-controls form with saved or default choices.
  * @param {HTMLFieldSetElement} fields Visitor controls in one form.
- * @param {import("../visitor-controls.js").VisitorControls} [settings] Saved visitor settings.
+ * @param {import("../visitor-controls.js").VisitorControls|undefined} settings Saved visitor settings.
+ * @param {ReadonlyArray<{id:string,title:string}>|null} models Installed recipes supported
+ * by Data tools, or null if discovery failed.
  * @return {void}
  */
-function showVisitorChoices(fields, settings) {
+function showVisitorChoices(fields, settings, models) {
     const choices = visitorControlChoices(settings);
     for (const input of fields.querySelectorAll("input[data-visitor-control]")) {
         input.checked = choices[input.dataset.visitorControl];
@@ -47,6 +55,34 @@ function showVisitorChoices(fields, settings) {
     for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
         input.checked = initialPanels[input.dataset.visitorPanelOpen];
     }
+    const titles = new Map((models ?? []).map(model => [model.id, model.title]));
+    const selected = new Set(settings === undefined ? titles.keys() : settings.modelIds);
+    const list = fields.querySelector("[data-visitor-model-list]");
+    list.replaceChildren();
+    for (const id of new Set([...titles.keys(), ...selected])) {
+        const label = fields.ownerDocument.createElement("label");
+        const input = fields.ownerDocument.createElement("input");
+        input.type = "checkbox";
+        input.dataset.visitorModelId = id;
+        input.checked = selected.has(id);
+        label.append(input, titles.get(id) ?? id);
+        if (models !== null && !titles.has(id)) label.append(" (unavailable on this site)");
+        list.append(label);
+    }
+    fields.dataset.needsModelList = String(models === null && settings === undefined);
+    const status = fields.querySelector("[data-visitor-model-status]");
+    let message = "";
+    if (models === null) {
+        message = settings === undefined
+            ? "The model list could not load. Reopen these settings to try again, or turn off Run models to save."
+            : "The model list could not load. Your saved choices are shown. Reopen these settings to try again.";
+    } else if ([...selected].some(id => !titles.has(id))) {
+        message = "Keep unavailable models selected for when they return, or uncheck them to remove them.";
+    } else if (titles.size === 0) {
+        message = "This site has no models available in Data tools.";
+    }
+    status.textContent = message;
+    status.hidden = !message;
     updateVisitorChoiceInputs(fields);
 }
 
@@ -211,14 +247,16 @@ export class SavedMapViewDomView {
      * @param {{slug:string,title:string,subtitle:string,view:{visitorControls?:import("../visitor-controls.js").VisitorControls}}}
      * saved Loaded map labels and choices for the editor.
      * @param {boolean} complete Whether every saved layer and style restored successfully.
+     * @param {ReadonlyArray<{id:string,title:string}>|null} models Model choices for this site,
+     * or null if they could not be loaded.
      * @return {void}
      */
-    showPublishedMapEditor(saved, complete) {
+    showPublishedMapEditor(saved, complete, models) {
         this.document.querySelector("#published-map-editor").hidden = false;
         this.document.querySelector("#published-map-editor-heading").textContent = `Editing published map: ${saved.title}`;
         this.document.querySelector("#published-map-edit-title").value = saved.title;
         this.document.querySelector("#published-map-edit-subtitle").value = saved.subtitle;
-        showVisitorChoices(this.editVisitorControls, saved.view.visitorControls);
+        showVisitorChoices(this.editVisitorControls, saved.view.visitorControls, models);
         this.editVisitorControls.disabled = false;
         const link = this.document.querySelector("#published-map-edit-url");
         link.href = `/maps/${encodeURIComponent(saved.slug)}`;
@@ -254,13 +292,15 @@ export class SavedMapViewDomView {
     /**
      * Show a fresh publication form with the default visitor choices.
      * @param {{title:string,subtitle:string}} defaults Initial map labels.
+     * @param {ReadonlyArray<{id:string,title:string}>|null} models Model choices for this site,
+     * or null if they could not be loaded.
      * @return {void}
      */
-    showPublicationForm(defaults) {
+    showPublicationForm(defaults, models) {
         this.publishTitle.value = defaults.title;
         this.publishSubtitle.value = defaults.subtitle;
         this.publishSlug.value = suggestMapLinkName(defaults.title);
-        showVisitorChoices(this.publishVisitorControls);
+        showVisitorChoices(this.publishVisitorControls, undefined, models);
         this.slugEdited = false;
         this.publishStatus.textContent = "";
         this.publishFields.hidden = false;
