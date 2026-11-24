@@ -61,12 +61,15 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
     try {
         assert.equal(controls.display.textContent, "");
         widget.setMapStatus({phase: "complete"}, ["first"]);
+        assert.equal(controls.status.hidden, false, "the loading status keeps its place between frames");
+        assert.equal(controls.status.textContent, "");
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC");
         controls.time.valueAsNumber = Date.parse(stamps[1]);
         controls.time.dispatchEvent(new Event("input"));
         controls.time.valueAsNumber = Date.parse("2000-01-04T20:30:00Z");
         controls.time.dispatchEvent(new Event("input"));
         assert.equal(controls.time.getAttribute("aria-valuetext"), "2000-01-05 01:00 UTC");
+        assert.equal(controls.status.textContent, "Loading raster…");
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC");
         controls.time.dispatchEvent(new Event("change"));
         context.mock.timers.tick(100);
@@ -113,7 +116,9 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
         assert.deepEqual(shown, [stamps[1]]);
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]], "publication alone cannot advance playback");
+        assert.equal(controls.status.textContent, "Loading raster…");
         widget.setMapStatus({phase: "complete"}, [stamps[1]]);
+        assert.equal(controls.status.textContent, "");
         controls.play.dispatchEvent(new Event("click"));
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]]);

@@ -77,10 +77,20 @@ def test_bad_budget_names_its_variable_before_app_starts(
         create_app(version_file_path)
 
 
+@pytest.mark.parametrize(
+    "first_path,second_path",
+    [
+        ("/api/processing/models", "/api/processing/models"),
+        ("/api/config", "/api/processing/models"),
+        ("/api/processing/models", "/api/config"),
+    ],
+)
 def test_processing_cookie_covers_configured_metadata_retention(
     configured_environment: None,
     version_file_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    first_path: str,
+    second_path: str,
 ) -> None:
     """Keep browser access to retained runs and renew the same session on access.
 
@@ -88,20 +98,27 @@ def test_processing_cookie_covers_configured_metadata_retention(
         configured_environment: Valid application environment values.
         version_file_path: The installed application version fixture.
         monkeypatch: Sets a fourteen-day metadata lifetime.
+        first_path: Configuration or Processing route establishing the owner.
+        second_path: Route expected to renew the same owner.
     """
     monkeypatch.setenv("PROCESSING_METADATA_TTL_SECONDS", "1209600")
     app = create_app(version_file_path)
     # Discovery uses installed recipes only; these requests do not start services.
     client = TestClient(app, base_url="https://testserver")
     try:
-        first = client.get("/api/processing/models")
+        first = client.get(first_path)
         assert first.status_code == 200, first.text
         token = client.cookies.get(COOKIE)
-        second = client.get("/api/processing/models")
+        assert token is not None
+        second = client.get(second_path)
         assert second.status_code == 200, second.text
         assert client.cookies.get(COOKIE) == token
         for response in (first, second):
-            cookie = response.headers["set-cookie"]
+            cookie = next(
+                header
+                for header in response.headers.get_list("set-cookie")
+                if header.startswith(f"{COOKIE}=")
+            )
             assert "Max-Age=1209600" in cookie
             assert (
                 "HttpOnly" in cookie and "Secure" in cookie and "SameSite=lax" in cookie

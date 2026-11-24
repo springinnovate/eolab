@@ -233,7 +233,7 @@ export class TemporalScrubber {
         this.#render();
     }
 
-    /** Show the requested thumb separately from the UTC stamp of a fully drawn frame.
+    /** Show loading progress and label the on-map time only after its raster has drawn.
      * @return {void}
      */
     #render() {
@@ -260,9 +260,8 @@ export class TemporalScrubber {
         const pending = this.dragTime ?? this.action?.time ?? t.time;
         const message = t.error || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
             t.loading && !t.times.length ? "Loading dates for " + observationMonthLabel(t.month, t.period) :
-                (!painted || pending !== t.time) ? "Loading " + (observationLabel(pending, t.period) ?? utcLabel(pending)) : "");
+                (!painted || pending !== t.time) ? "Loading raster…" : "");
         if (c.status.textContent !== message) c.status.textContent = message;
-        c.status.hidden = !message;
         if (next?.time) {
             const seconds = (Date.parse(next.time) - Date.parse(t.time)) / 1000;
             const unit = seconds % 86400 === 0 ? ["day", 86400] : seconds % 3600 === 0 ? ["hour", 3600] :
