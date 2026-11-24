@@ -454,6 +454,14 @@
           `An empty result must return focus to Settings in the ${inMenu ? "open menu" : "tab row"}`);
         if (inMenu) menu.hidePopover();
       }
+      dock.showFeatureInspector();
+      const details = document.querySelector("#toggle-vector-inspector-details");
+      details.focus();
+      check(document.activeElement === details, "The Features details control must have focus before the empty result");
+      dock.hideFeatureInspector();
+      dock.setClickResult("feature", null);
+      check(dock.activeTool === "settings" && document.activeElement === document.querySelector("#map-inspection-tab-settings"),
+        "An empty result must return focus from inside Features to the surviving Settings tab");
       document.querySelector("#close-settings").click();
       dock.hideModels();
       dock.hideAnnotations();

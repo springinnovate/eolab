@@ -187,8 +187,7 @@ export class MapInspectionController {
          */
         this.onTabCloseClick = event => {
             if (!event.target.classList.contains("tool-tab-close")) return;
-            const target = this.activeTool ? this.#tool(this.activeTool).tab : this.mapToolsButton;
-            target.focus();
+            this.#focusActiveTabOrChooser();
         };
         /** Let Escape dismiss a tool from its close button just as it does from its panel.
          * @param {KeyboardEvent} event Key pressed in the map tab row.
@@ -679,13 +678,22 @@ export class MapInspectionController {
 
     /**
      * Close one retained map tool and activate the most recently used survivor.
+     * If the closed panel held keyboard focus, move it to the surviving tab or chooser.
      *
      * @param {string} name Stable presentation name from this controller's tool set.
      * @return {void}
      */
     #hideTool(name) {
+        const panelHadFocus = this.#tool(name).panel.contains(this.document.activeElement);
         this.#closeToolState(name);
         this.#synchronize();
+        if (panelHadFocus) this.#focusActiveTabOrChooser();
+    }
+
+    /** Focus the surviving tab after a tool closes, or the chooser when none remain. @return {void} */
+    #focusActiveTabOrChooser() {
+        const target = this.activeTool ? this.#tool(this.activeTool).tab : this.mapToolsButton;
+        target.focus();
     }
 
     /**
