@@ -3265,7 +3265,7 @@ div.chart-tooltip {
     gap: 0.4rem;
     margin: 0.25rem 0;
 }
-.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children], [data-visitor-model-children]) {
     min-width: 0;
     margin: 0;
     padding: 0 0 0 1.1rem;
@@ -4507,6 +4507,8 @@ article.raster-histogram-summary {
 [data-inspection-loading="true"] #vector-feature-result { opacity: 0.35; }
 @keyframes map-inspection-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
+  /* A tab revealed from overflow must accept focus during the same keypress. */
+  .tool-tab { transition-property: none; }
   .tool-tab[data-loading="true"]::after { animation: none; }
 }
 

@@ -197,18 +197,26 @@ let basemapControl = null;
  */
 
 /**
- * Load application settings and establish the private browser identity.
- * Startup awaits this same-origin response before enabling feature requests.
+ * Load application settings and establish the browser's private ownership cookies.
+ * Browsers with Web Locks serialize this request across tabs until the cookie
+ * headers arrive. Each tab can then load history and use features independently.
  *
  * @return {Promise<AppGlobalConfiguration>} The application settings.
- * @throws {Error} If the settings endpoint does not return a successful response.
+ * @throws {Error} If the settings request fails or returns unreadable JSON.
  */
 async function loadAppGlobalConfiguration() {
-    const configurationResponse = await fetch("/api/config", {
+    /** Fetch the settings and let the browser apply the server's cookie headers.
+     * @return {Promise<Response>} Same-origin configuration response.
+     */
+    const requestConfiguration = () => fetch("/api/config", {
         headers: { Accept: "application/json" },
         credentials: "same-origin",
         cache: "no-store",
     });
+    const locks = window.navigator.locks;
+    const configurationResponse = await (locks
+        ? locks.request("eolab-browser-startup", requestConfiguration)
+        : requestConfiguration());
 
     if (!configurationResponse.ok) {
         throw new Error(
@@ -1664,6 +1672,7 @@ async function initializeCatalog(
     };
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        allowedModelIds: visitorAvailability.allowedModelIds, recoveryScope: namedMapSlug ?? "",
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
         /** Show a requested result and reveal controls when a new generated vector attaches.
@@ -1948,9 +1957,11 @@ async function initializeCatalog(
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
+        listPublisherModels: () => models.listSetupModels(),
         applyMapHeading,
         applyVisitorControls: settings => {
             visitorAvailability = resolveVisitorControls(settings);
+            models.setAllowedModelIds(visitorAvailability.allowedModelIds);
             onWorkspaceOptionsChange({
                 allowCatalog: visitorAvailability.catalog,
                 allowMapContents: visitorAvailability.mapContents,

@@ -37,6 +37,7 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r
 
 COPY services/jobs/job_service/ ./job_service/
 COPY src/eolab_app/ ./eolab_app/
+COPY src/eolab_jobs/ ./eolab_jobs/
 COPY --chmod=0555 deployment/require-read-only-scan-source.sh /usr/local/bin/require-read-only-scan-source
 COPY --chown=jobs:jobs services/jobs/smoke.py /tmp/eolab-jobs-smoke.py
 USER jobs

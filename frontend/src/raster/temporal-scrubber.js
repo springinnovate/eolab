@@ -139,7 +139,7 @@ export class TemporalScrubber {
         this.root.hidden = true;
     }
 
-    /** Adopt a backing view, clearing obsolete playback after external changes to the layer or its dates.
+    /** Show the selected layer's dates and update navigation when its layer or dates change.
      * @param {string|undefined} key Preferred visible view key.
      * @return {void}
      */
@@ -158,7 +158,12 @@ export class TemporalScrubber {
         setOptions(this.controls.layer, this.layers.map((item, i) => [item.key,
             (this.layers.length > 1 ? (i + 1) + ". " : "") + item.timeline.name + " · " + item.timeline.variableLabel]));
         this.controls.layer.value = layer.key;
-        if (next.months !== before?.months) setOptions(this.controls.month, next.months.map(month => [month, month]));
+        const availableMonthsChanged = next.months !== before?.months;
+        if (availableMonthsChanged) setOptions(this.controls.month, next.months.map(month => [month, month]));
+        if (availableMonthsChanged || next.month !== before?.month) {
+            this.previousMonth = next.months.findLast(month => month < next.month);
+            this.nextMonth = next.months.find(month => month > next.month);
+        }
         this.controls.month.value = next.month;
         if (next.times !== before?.times) {
             this.days = next.times.filter((time, index, times) => !index || time.slice(0, 10) !== times[index - 1].slice(0, 10));
@@ -185,21 +190,19 @@ export class TemporalScrubber {
         return this.layer.timeline.times[index];
     }
 
-    /** Find a real neighboring observation, crossing gaps via the next populated month.
+    /** Find the next or previous observation even when the selected month is missing.
      * @param {-1|1} direction Backward or forward.
      * @param {string} [from] Starting UTC label, defaulting to the selected observation.
      * @return {Destination|null} Time, populated month and edge, or end of coverage.
      */
     #neighbor(direction, from = this.layer.timeline.time) {
-        const {times, months, month} = this.layer.timeline;
         const daily = this.controls.stride.value === "day";
-        const candidates = daily ? this.days : times;
+        const candidates = daily ? this.days : this.layer.timeline.times;
         const coordinate = daily ? from.slice(0, 10) : from;
         const time = direction > 0 ? candidates.find(t => (daily ? t.slice(0, 10) : t) > coordinate)
             : candidates.findLast(t => (daily ? t.slice(0, 10) : t) < coordinate);
         if (time) return {time};
-        const index = months.indexOf(month);
-        const adjacent = index < 0 ? null : months[index + direction];
+        const adjacent = direction > 0 ? this.nextMonth : this.previousMonth;
         return adjacent ? {month: adjacent, edge: direction > 0 ? "first" : daily ? "firstOfLastDay" : "last"} : null;
     }
 
@@ -241,7 +244,7 @@ export class TemporalScrubber {
             drawn?.variable === selected.variable && drawn.time === selected.time;
     }
 
-    /** Show loading progress and label the on-map time only after its raster has drawn.
+    /** Update timeline navigation, loading progress and the time shown on the map after its raster has drawn.
      * @return {void}
      */
     #render() {
@@ -259,9 +262,9 @@ export class TemporalScrubber {
         const target = this.dragTime ?? t.time;
         if (t.times.length) c.time.value = Date.parse(target);
         c.time.setAttribute("aria-valuetext", utcLabel(target));
-        c.time.disabled = t.times.length < 2 && t.months.length < 2;
         c.month.disabled = !t.months.length;
         const next = this.#neighbor(1), previous = this.#neighbor(-1);
+        c.time.disabled = t.times.length < 2 && !next && !previous;
         c.back.disabled = !previous;
         c.forward.disabled = !next;
         c.play.disabled = !this.playing && (!next || !ready || Boolean(failed));
