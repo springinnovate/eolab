@@ -28,6 +28,7 @@ from eolab_app.processing.models import (
     ProcessingLimits,
     JobInputFile,
 )
+from eolab_jobs.worker_claim import CLAIM_NEXT_JOB_SQL
 
 # Processing owns this key in PostgreSQL's single-bigint, database-wide advisory
 # lock namespace. It serializes schema migration and shared admission, job-state,
@@ -1136,37 +1137,14 @@ class PostgresJobStore:
 
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
-                "SELECT count(*) AS active FROM processing.jobs WHERE status IN ('running','cancelling')"
+                CLAIM_NEXT_JOB_SQL,
+                {
+                    "worker_count": self.limits.worker_count,
+                    "attempt_id": uuid4().hex,
+                    "lease_seconds": self.limits.lease_seconds,
+                },
             )
-            if cursor.fetchone()["active"] >= self.limits.worker_count:
-                return None
-            cursor.execute(
-                "SELECT waiting.id,waiting.owner FROM ("
-                "SELECT DISTINCT ON (s.owner) j.id,s.owner,j.created_at FROM processing.jobs j "
-                "JOIN processing.job_subscribers s ON s.job_id=j.id "
-                "WHERE j.status='queued' AND s.status IS NULL "
-                "ORDER BY s.owner,j.created_at,j.id) waiting "
-                "LEFT JOIN LATERAL (SELECT j.started_at FROM processing.jobs j "
-                "JOIN processing.job_subscribers s ON s.job_id=j.id "
-                "WHERE s.owner=waiting.owner AND j.started_at IS NOT NULL "
-                "ORDER BY j.started_at DESC LIMIT 1) served ON true "
-                "ORDER BY served.started_at NULLS FIRST,waiting.created_at,waiting.id LIMIT 1",
-            )
-            row = cursor.fetchone()
-            if not row:
-                return None
-            cursor.execute(
-                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',"
-                "started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
-                (
-                    uuid4().hex,
-                    self.limits.lease_seconds,
-                    row["id"],
-                ),
-            )
-            claimed = cursor.fetchone()
-            claimed["owner"] = row["owner"]
-            return claimed
+            return cursor.fetchone()
 
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]

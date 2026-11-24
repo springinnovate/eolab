@@ -405,5 +405,7 @@ def test_cancellation_racing_a_new_subscriber_keeps_new_work_live(
         assert cancelled.result()["status"] == "cancelled"
         two = joined.result()
     assert store.get(two["id"], "second")["status"] == "queued"
-    assert store.claim_next_job()["id"] == two["job_id"]
+    claimed = store.claim_next_job()
+    assert claimed["id"] == two["job_id"]
+    assert claimed["owner"] == "second"
     assert store.claim_next_job() is None
