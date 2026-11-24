@@ -98,9 +98,7 @@ class Stack(StackFields):
 UTC = timezone.utc
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 PRECISIONS = ("year", "month", "day", "timestamp")
-TIMESTAMP = (
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.0+)?(?:Z|[+-][0-9]{2}:[0-9]{2})"
-)
+TIMESTAMP = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.0+)?(?:Z|[+-][0-9]{2}:[0-9]{2})"
 # Match the entire date-shaped token so a bad month cannot become a plausible year.
 FILE_DATE = re.compile(
     r"(?<![a-zA-Z0-9])([0-9]{4,}(?:[-_.][0-9]+)*(?:T[a-zA-Z0-9:.+-]+)?)"
@@ -419,7 +417,7 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                         var.id,
                         var.title,
                         var.units,
-                        member.as_posix(),
+                        path.relative_to(root).as_posix(),
                         1,
                         last,
                         None,

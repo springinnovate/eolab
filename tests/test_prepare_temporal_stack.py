@@ -1,8 +1,10 @@
 """Exercise operator preparation with real GeoTIFFs and the temporal Catalog reader."""
 
 import asyncio
+from contextlib import closing
 import json
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 
@@ -107,12 +109,21 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
     manifest = annual_manifest(root)
     stack = yaml.safe_load(manifest.read_text())
     write_frame(root / "rain_2025.tif", 25)
+    # Operators may enter a different spelling on case-insensitive filesystems.
+    (root / "frames").mkdir()
+    stack["observations"][1]["file"] = (
+        "RAIN_2024.TIF"
+        if (root / "RAIN_2024.TIF").exists()
+        else "frames/../rain_2024.tif"
+    )
     stack["observations"].append({"file": "rain_2025.tif", "time": "2025"})
     manifest.write_text(yaml.safe_dump(stack))
     assert run_cli("build", manifest, "--check").returncode == 0
     assert not (root / "catalog.sqlite").exists()
     built = run_cli("build", manifest)
     assert built.returncode == 0, built.stderr
+    with closing(sqlite3.connect(root / "catalog.sqlite")) as db:
+        assert ("rain_2024.tif",) in list(db.execute("SELECT path FROM observations"))
     assert run_cli("build", manifest).returncode == 1
     manager, writer = create_scanner(tmp_path)
     assert asyncio.run(scan(manager))["errors"] == []
@@ -158,7 +169,9 @@ def test_conflicting_clues_and_declined_dates(tmp_path: Path, answer: str) -> No
         "snow_20241231T083042.001Z",
     ):
         write_frame(tmp_path / f"{stem}.tif", 5)
-    write_frame(tmp_path / "tagged.tif", 6, acquisition="2024-07-14T06:00:00.000000+00:00")
+    write_frame(
+        tmp_path / "tagged.tif", 6, acquisition="2024-07-14T06:00:00.000000+00:00"
+    )
     result = run_cli("draft", tmp_path, answers=f"{answer}\nsnapshot\n")
     assert result.returncode == 0, result.stderr
     manifest = tmp_path / "stack.yaml"
