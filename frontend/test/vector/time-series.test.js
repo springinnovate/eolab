@@ -159,12 +159,26 @@ test("large comparisons page sorted rows and can plot the entire selection", () 
   assert.equal(control("chart").querySelectorAll(".series-chart-point").length, rows.length);
   control("values-button").dispatchEvent(new Event("click"));
   assert.equal(control("table-body").children.length, 1000, "The exact values table remains paged");
+  range.value = "1000";
+  range.dispatchEvent(new Event("change"));
+  assert.equal(control("table-body").children.length, 2);
+  control("plot-button").dispatchEvent(new Event("click"));
+  assert.equal(range.value, "all", "Reading a later page of values preserves the whole plot");
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, rows.length);
+  control("values-button").dispatchEvent(new Event("click"));
+  assert.equal(range.value, "1000", "Returning to Values keeps its table page");
+  range.value = "0";
+  range.dispatchEvent(new Event("change"));
   const xField = control("x");
   xField.value = "score";
   xField.dispatchEvent(new Event("change"));
   assert.equal(control("table-body").children[0].children[0].textContent, "1001", "Changing the X field reorders the rows");
   controller.setSample({state:"ready", message:"Ready", observations:[rows[0]]});
   assert.equal(control("table-body").children[0].children[0].textContent, "0", "A new sample replaces the previous rows");
+  controller.setSample({state:"ready", message:"Ready", observations:rows});
+  control("plot-button").dispatchEvent(new Event("click"));
+  assert.equal(range.value, "0", "A new selection starts with a bounded plot");
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, 1000);
   controller.destroy();
 });
 

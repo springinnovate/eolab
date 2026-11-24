@@ -235,6 +235,7 @@ export class VectorTimeSeriesController {
         this.rowRange = element("row-range");
         this.rowRangeLabel = element("row-range-label");
         this.firstRow = 0;
+        this.plotAllFeatures = false;
         this.status = element("status");
         this.selection = element("selection");
         this.selectionText = element("selection-text");
@@ -278,14 +279,16 @@ export class VectorTimeSeriesController {
         }
         this.openFeature.addEventListener("click", () => onOpenFeature(this.selected?.index ?? null), listen);
         this.rowRange.addEventListener("change", () => {
-            this.firstRow = this.rowRange.value === "all" ? null : Number(this.rowRange.value);
+            const all = this.rowRange.value === "all";
+            if (this.plotPanel.values.hidden) this.plotAllFeatures = all;
+            this.firstRow = all ? 0 : Number(this.rowRange.value);
             this.selected = null;
             this.render();
         }, listen);
         this.plotPanel.featureList.addEventListener("change", () => {
             const index = Number(this.plotPanel.featureList.value);
             this.plotPanel.closePicker();
-            if (this.firstRow !== null && this.observations.length > FEATURES_PER_PAGE) {
+            if (this.rowRange.value !== "all" && this.observations.length > FEATURES_PER_PAGE) {
                 this.selected = {index, field:null};
                 this.render();
             } else this.#select(index, null);
@@ -357,6 +360,7 @@ export class VectorTimeSeriesController {
         this.failedLayers = sample.failedLayers ?? 0;
         this.selected = null;
         this.firstRow = 0;
+        this.plotAllFeatures = false;
         this.fieldSummary = null;
         this.#orderedComparison = null;
         this.plotPanel.setFeatureChoices(this.observations);
@@ -404,9 +408,9 @@ export class VectorTimeSeriesController {
         this.status.textContent = ready ? "" : this.sampleMessage;
         if (!this.active) return;
         const showPlot = this.plotPanel.values.hidden;
-        if (!showPlot && this.firstRow === null) this.firstRow = 0;
+        const firstRow = showPlot && this.plotAllFeatures ? null : this.firstRow;
         this.rowRangeLabel.hidden = count <= FEATURES_PER_PAGE;
-        fillFeatureRanges(this.rowRange, count, this.firstRow, showPlot);
+        fillFeatureRanges(this.rowRange, count, firstRow, showPlot);
         const {xFields,numericFields} = this.fieldSummary;
         const choices = new Map([[VECTOR_TIME_SERIES_LAYER_LABEL,"Filename or layer"]]);
         for (const field of xFields) choices.set(field.name, field.name);
@@ -432,8 +436,8 @@ export class VectorTimeSeriesController {
                 this.#orderedComparison = orderComparisonRows(this.observations, this.settings);
             }
             const {rows,start,plots,xScale} = buildComparisonPage(this.#orderedComparison,
-                showPlot ? this.settings : {...this.settings, yFields:[]}, this.firstRow, this.selected?.index ?? null);
-            this.firstRow = start;
+                showPlot ? this.settings : {...this.settings, yFields:[]}, firstRow, this.selected?.index ?? null);
+            if (start !== null) this.firstRow = start;
             this.rowRange.value = start === null ? "all" : String(start);
             const xLabel = choices.get(xField);
             if (!showPlot) {
