@@ -34,7 +34,7 @@ export class TemporalScrubber {
      * @param {Object} actions Browser composition callbacks.
      * @param {(key:string,time:string)=>Promise<void>} actions.selectTime Show an admitted observation.
      * @param {(key:string,month:string,edge:"first"|"last"|"firstOfLastDay")=>Promise<void>} actions.selectMonth Browse a populated month.
-     * @param {(key:string,time:string,signal:AbortSignal)=>Promise<(()=>void)|null>} actions.prepare Prepare an upcoming frame and return its display action.
+     * @param {(key:string,destination:string|{month:string},signal:AbortSignal)=>Promise<(()=>void)|null>} actions.prepare Prepare a timestamp or the first frame of a month and return its display action.
      */
     constructor(root, actions) {
         this.root = root;
@@ -47,6 +47,7 @@ export class TemporalScrubber {
         this.phase = "idle";
         this.frames = new Map();
         this.playing = false;
+        this.playbackError = "";
         this.clock = null;
         this.action = null;
         this.dragTime = null;
@@ -62,7 +63,7 @@ export class TemporalScrubber {
         forward.addEventListener("click", () => this.#manual(this.#neighbor(1)), options);
         play.addEventListener("click", () => {
             if (this.playing) this.pause();
-            else this.playing = true;
+            else { this.playbackError = ""; this.playing = true; }
             this.#render();
         }, options);
         time.addEventListener("input", () => {
@@ -118,6 +119,7 @@ export class TemporalScrubber {
      */
     pause() {
         this.playing = false;
+        this.playbackError = "";
         this.action = null;
         clearTimeout(this.clock);
         this.clock = null;
@@ -266,9 +268,9 @@ export class TemporalScrubber {
         c.play.textContent = this.playing ? "Pause" : "Play";
         c.display.textContent = onMapTime ? "On map · " + utcLabel(onMapTime) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
-        const message = t.error || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
+        const message = t.error || this.playbackError || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
             t.loading && !t.times.length ? "Loading dates for " + t.month :
-                (!ready || pending !== t.time) ? "Loading raster…" : "");
+                (!ready || pending !== t.time || (this.action?.month && this.action.month !== t.month)) ? "Loading raster…" : "");
         if (c.status.textContent !== message) c.status.textContent = message;
         if (next?.time) {
             const seconds = (Date.parse(next.time) - Date.parse(t.time)) / 1000;
@@ -280,22 +282,26 @@ export class TemporalScrubber {
         if (!this.playing || this.action || !ready) return;
         if (!next) { this.pause(); c.play.textContent = "Play"; c.play.disabled = true; return; }
         if (next.time) {
-            this.#prepare(next.time);
+            this.#prepare(next);
             const following = this.#neighbor(1, next.time);
-            if (following?.time) this.#prepare(following.time);
+            if (following?.time) this.#prepare(following);
         }
         this.clock ??= setTimeout(() => { this.clock = null; void this.#advance(); }, 167);
     }
 
-    /** Prepare one look-ahead frame. A failed preload retries through ordinary date selection.
-     * @param {string} time Upcoming admitted observation.
-     * @return {void}
+    /** Reuse a pending frame or prepare a timestamp or the first observation in the next month.
+     * @param {Destination} target Next playback destination.
+     * @return {{controller:AbortController,ready:Promise<(()=>void)|null>}} Cancellable work and its display action.
      */
-    #prepare(time) {
-        if (this.frames.has(time)) return;
-        const controller = new AbortController();
-        const ready = this.actions.prepare(this.layer.key, time, controller.signal).catch(() => null);
-        this.frames.set(time, {controller, ready});
+    #prepare(target) {
+        const key = target.time ?? target.month;
+        if (!this.frames.has(key)) {
+            const controller = new AbortController();
+            const destination = target.time ?? {month: target.month};
+            const ready = this.actions.prepare(this.layer.key, destination, controller.signal).catch(() => null);
+            this.frames.set(key, {controller, ready});
+        }
+        return this.frames.get(key);
     }
 
     /** Advance after the frame interval and tile readiness, holding the drawn observation during buffering.
@@ -307,18 +313,20 @@ export class TemporalScrubber {
         if (!target) return;
         this.action = target;
         this.#render();
-        const frame = this.frames.get(target.time);
+        const frame = this.#prepare(target);
         try {
-            if (target.month) await this.actions.selectMonth(this.layer.key, target.month, target.edge);
+            const show = await frame.ready;
+            if (this.action !== target) return;
+            this.frames.delete(target.time ?? target.month);
+            if (show) show();
+            else if (target.time) await this.actions.selectTime(this.layer.key, target.time);
             else {
-                const show = await frame?.ready;
-                if (this.action !== target) return;
-                this.frames.delete(target.time);
-                if (show) show();
-                else await this.actions.selectTime(this.layer.key, target.time);
+                this.pause();
+                this.playbackError = "Could not load the next month. Press Play to retry or choose another month.";
+                this.#render();
             }
         } finally {
-            frame?.controller.abort();
+            frame.controller.abort();
             if (this.action === target) { this.action = null; this.#render(); }
         }
     }

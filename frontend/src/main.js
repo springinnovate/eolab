@@ -931,8 +931,8 @@ async function initializeCatalog(
     const timeline = new TemporalScrubber(timelineRoot, {
         selectTime: (key, time) => rasterVisualization.selectTemporalTime(key, time),
         selectMonth: (key, month, edge) => rasterVisualization.selectTemporalMonth(key, month, edge),
-        prepare: async (key, time, signal) => {
-            const frame = await rasterVisualization.prepareTemporalFrame(key, time, signal);
+        prepare: async (key, destination, signal) => {
+            const frame = await rasterVisualization.prepareTemporalFrame(key, destination, signal);
             if (!frame) return null;
             await leafletLayers.prepareLayer(key, frame.descriptor, signal);
             return frame.show;

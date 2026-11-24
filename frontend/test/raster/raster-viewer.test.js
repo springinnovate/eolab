@@ -6125,6 +6125,56 @@ test("timeline selections reuse the row, consume only admitted prepared times an
     } finally { f.destroy(); }
 });
 
+test("playback changes the selected month and analysis source only when its prepared frame is shown", async () => {
+    const jan = "2020-01-31T23:59:59Z", may = "2020-05-01T00:00:01Z";
+    const months = ["2020-01", "2020-05"], lookups = [], publications = [];
+    const f = temporalFixture({
+        loadTimes: async (_item, _variable, month = months[0], signal) => {
+            if (month === months[1]) {
+                const pending = createDeferred();
+                lookups.push({...pending, signal});
+                await pending.promise;
+            }
+            return {months, month, times: [month === months[0] ? jan : may]};
+        },
+        publishRaster: async (raster, _fetch, signal) => {
+            if (raster.source.time === may) {
+                const pending = createDeferred();
+                publications.push({...pending, signal});
+                await pending.promise;
+            }
+            return {layerName: raster.source.time, bbox: raster.bbox};
+        },
+    });
+    try {
+        const row = await f.viewer.showTemporal(temporalItem());
+        const target = {month: months[1]}, first = new AbortController();
+        const searching = f.viewer.prepareTemporalFrame(row.entry.key, target, first.signal);
+        assert.equal(lookups.length, 1, "search the next populated month before selecting it");
+        first.abort(); lookups[0].resolve();
+        assert.equal(await searching, null);
+        assert.equal(publications.length, 0, "a cancelled lookup cannot publish its result");
+        const second = new AbortController();
+        const publishing = f.viewer.prepareTemporalFrame(row.entry.key, target, second.signal);
+        lookups[1].resolve(); await flushPromises();
+        second.abort(); publications[0].resolve();
+        assert.equal(await publishing, null);
+        assert.equal(f.viewer.exportTemporal(row).temporalSource.time, jan);
+        assert.equal(row.publication.layerName, jan);
+        assert.equal(f.temporalViews[0].state.month, months[0]);
+        const ready = f.viewer.prepareTemporalFrame(row.entry.key, target, new AbortController().signal);
+        lookups[2].resolve(); await flushPromises(); publications[1].resolve();
+        const frame = await ready;
+        assert.equal(f.viewer.exportTemporal(row).temporalSource.time, jan);
+        frame.show();
+        assert.equal(f.viewer.exportTemporal(row).temporalSource.time, may);
+        assert.equal(row.publication.layerName, may);
+        assert.equal(f.temporalViews[0].state.month, months[1]);
+        assert.deepEqual(f.temporalViews[0].state.times, [may]);
+        assert.equal(publications.length, 2, "showing the prepared frame reuses its publication");
+    } finally { f.destroy(); }
+});
+
 test("refresh keeps a removed observation explicit and retry recovers publication without losing the row", async () => {
     let times = ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"];
     let failPublication = false;

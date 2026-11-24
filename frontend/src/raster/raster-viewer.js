@@ -198,7 +198,7 @@ function canRetryRasterStatistics(error) {
  * @property {(item:Object,selection?:Object,presentation?:Object)=>Promise<Object|null>} showTemporal Retain an independent temporal view.
  * @property {(key:string,time:string)=>Promise<void>} selectTemporalTime Show an admitted observation in the named view.
  * @property {(key:string,month:string,edge:"first"|"last"|"firstOfLastDay")=>Promise<void>} selectTemporalMonth Browse to an observation at either end of a populated month.
- * @property {(key:string,time:string,signal:AbortSignal)=>Promise<{descriptor:Object,show:()=>void}|null>} prepareTemporalFrame Prepare the selected view's styled observation for playback without changing its source.
+ * @property {(key:string,destination:string|{month:string},signal:AbortSignal)=>Promise<{descriptor:Object,show:()=>void}|null>} prepareTemporalFrame Prepare a timestamp or the first observation in a populated month without changing the selected source.
  * @property {()=>Promise<void>} refreshTemporalLayers Reload retained temporal availability after server refresh.
  * @property {(item:Object)=>string|null} temporalLayerKey Topmost retained view of this Catalog dataset.
  * @property {(item:Object)=>{key:string,label:string,count:number}|null} temporalRemovalTarget Topmost matching temporal view and matching count.
@@ -4864,25 +4864,42 @@ export function initializeRasterViewer(
 
     /** Authorize a future observation and capture its style without changing the current layer or analysis.
      * @param {string} key Retained temporal view key.
-     * @param {string} time Admitted UTC timestamp.
+     * @param {string|{month:string}} destination Admitted UTC timestamp or the next populated month.
      * @param {AbortSignal} signal Playback request lifetime.
      * @return {Promise<{descriptor:Object,show:()=>void}|null>} Rendering descriptor and selection action, or null after a change of month, refresh or removal.
-     * @throws {Error} If publication fails.
+     * @throws {Error} If the month lookup or publication fails.
      */
-    async function prepareTemporalFrame(key, time, signal) {
+    async function prepareTemporalFrame(key, destination, signal) {
         const record = mapLayers.getRecord(key);
         const temporal = record?.state.temporal;
-        const times = temporal?.times;
-        if (!times?.includes(time)) return null;
-        const selection = {variable: temporal.selection.variable, time};
-        const publication = await publishRaster(temporalRaster(temporal.item, selection, true), undefined, signal);
+        if (!temporal || signal.aborted) return null;
+        const times = temporal.times, variable = temporal.selection.variable;
         /** @return {boolean} Whether the original view and admitted month still own this frame. */
         const current = () => !signal.aborted && mapLayers.getRecord(key) === record && temporal.times === times;
+        let choices = null, time;
+        if (typeof destination === "string") {
+            if (!times.includes(destination)) return null;
+            time = destination;
+        } else {
+            if (!temporal.months.includes(destination.month)) return null;
+            choices = await loadTimes(temporal.item, variable, destination.month, signal);
+            time = choices.times[0];
+            if (!time || !current()) return null;
+        }
+        const publication = await publishRaster(temporalRaster(temporal.item, {variable, time}, true), undefined, signal);
         if (!current()) return null;
         return {
             descriptor: rasterMapLayerAdapter.renderDescriptor({...record, publication}),
             /** Apply this publication through the ordinary observation selection. @return {void} */
-            show() { if (current()) void changeTemporalTime(record, time, publication); },
+            show() {
+                if (!current()) return;
+                if (choices) {
+                    temporal.months = choices.months;
+                    temporal.month = choices.month;
+                    temporal.times = choices.times;
+                }
+                void changeTemporalTime(record, time, publication);
+            },
         };
     }
 

@@ -125,6 +125,39 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
     } finally { widget.destroy(); }
 });
 
+test("Pause cancels a pending month change and a failed month can be played again", async context => {
+    context.mock.timers.enable({apis: ["setTimeout"]});
+    const requests = [], shown = [];
+    const {widget, controls, layer, calls} = fixture({prepare: (_key, destination, signal) =>
+        new Promise((resolve, reject) => requests.push({destination, signal, resolve, reject}))});
+    const time = stamps.at(-1);
+    widget.setLayers([{...layer, timeline: {...layer.timeline, time}}]);
+    widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time}]]));
+    try {
+        controls.play.dispatchEvent(new Event("click"));
+        context.mock.timers.tick(167);
+        assert.equal(requests.length, 1, "crossing the month uses cancellable frame preparation");
+        assert.deepEqual(requests[0].destination, {month: months[1]});
+        controls.play.dispatchEvent(new Event("click"));
+        assert.equal(requests[0].signal.aborted, true);
+        requests[0].resolve(() => shown.push("obsolete"));
+        await new Promise(resolve => setImmediate(resolve));
+        controls.play.dispatchEvent(new Event("click"));
+        context.mock.timers.tick(167);
+        requests[1].reject(new Error("temporarily unavailable"));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(controls.play.textContent, "Play");
+        assert.equal(controls.play.disabled, false);
+        assert.match(controls.status.textContent, /retry/i);
+        controls.play.dispatchEvent(new Event("click"));
+        context.mock.timers.tick(167);
+        requests[2].resolve(() => shown.push("May"));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(shown, ["May"]);
+        assert.deepEqual(calls, []);
+    } finally { widget.destroy(); }
+});
+
 test("a held drag previews before release and coalesces motion while the first map is drawing", context => {
     context.mock.timers.enable({apis: ["setTimeout"]});
     const {widget, controls, layer, calls} = fixture();
