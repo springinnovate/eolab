@@ -424,6 +424,9 @@
       check(document.activeElement === settingsChoice, "End must focus Settings in the tool column");
       settingsChoice.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       check(document.activeElement === closeSettings, "The last overflow close action must be reachable by keyboard");
+      const browserBack = new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true, cancelable: true });
+      check(closeSettings.dispatchEvent(browserBack) && document.activeElement === closeSettings,
+        "All tabs must leave Alt+Left available to the browser and keep focus on the close action");
       closeSettings.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
       check(document.activeElement === settingsChoice, "Left Arrow on the close button must return to its tool");
       settingsChoice.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));

@@ -221,6 +221,7 @@ export class ToolTabStrip {
             }
             return;
         }
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
         if (inMenu && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
             const row = this.items.find(({ choice, menuClose }) => event.target === choice || event.target === menuClose);
             const button = event.key === "ArrowLeft" ? row?.choice : row?.menuClose;
