@@ -73,7 +73,7 @@
           <p>Changes won't affect visitors until you save. Shared polygon edits are saved separately.</p>
           <label>Map title<input id="published-map-edit-title" required maxlength="160"></label>
           <label>Subtitle<input id="published-map-edit-subtitle" maxlength="240"></label>
-          <fieldset id="published-map-visitor-controls" class="visitor-inspection-options" disabled></fieldset>
+          <fieldset id="published-map-visitor-controls" class="visitor-control-options" disabled></fieldset>
           <p>Fixed URL: <a id="published-map-edit-url" target="_blank" rel="noopener"></a></p>
           <div class="published-map-editor-actions">
             <button id="published-map-save" type="submit" disabled>Save changes for everyone</button>
@@ -899,7 +899,7 @@
                 <div id="models-runs-list"></div>
                 <button id="models-more" class="models-action" type="button" hidden>Load older runs</button>
               </div>
-              <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
+              <pre id="models-yaml" aria-label="Tool definition (YAML)" tabindex="0" hidden></pre>
             </div>
           </section>
           <section id="raster-series" role="tabpanel" aria-labelledby="open-raster-series-dock" hidden>
@@ -1958,7 +1958,7 @@
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>
           <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
           <p id="publish-map-preview" class="publish-map-url"></p>
-          <fieldset id="publish-map-visitor-controls" class="visitor-inspection-options"></fieldset>
+          <fieldset id="publish-map-visitor-controls" class="visitor-control-options"></fieldset>
           <p>Shared layers stay live. An administrator can update or delete this published map.</p>
         </fieldset>
         <div id="publish-map-result" hidden>
@@ -1975,8 +1975,16 @@
         </div>
       </form>
     </dialog>
-    <template id="visitor-inspection-options">
-      <legend>Visitor tools</legend>
+    <template id="visitor-control-options">
+      <legend>Visitor panels and tools</legend>
+      <label><input type="checkbox" data-visitor-control="workspacePanels"> Workspace panels</label>
+      <fieldset data-visitor-workspace-children>
+        <legend class="visually-hidden">Workspace panels</legend>
+        <label><input type="checkbox" data-visitor-control="catalog"> Catalog</label>
+        <label class="visitor-panel-initial"><input type="checkbox" data-visitor-panel-open="catalog"> Open Catalog when the map loads</label>
+        <label><input type="checkbox" data-visitor-control="mapContents"> Map contents</label>
+        <label class="visitor-panel-initial"><input type="checkbox" data-visitor-panel-open="mapContents"> Open Map contents when the map loads</label>
+      </fieldset>
       <label><input type="checkbox" data-visitor-control="inspectAndSelect"> Inspect and select</label>
       <fieldset data-visitor-inspection-children>
         <legend class="visually-hidden">Inspection tools</legend>

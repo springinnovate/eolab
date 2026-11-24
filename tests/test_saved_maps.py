@@ -659,16 +659,31 @@ def test_map_legend_preferences_round_trip() -> None:
 
 
 def test_visitor_controls_validate_and_round_trip() -> None:
-    """Keep disabled-parent children and missing choices in the stored map document."""
+    """Keep inspection-only settings and independent panel choices without filling omissions."""
     candidate = map_request()
-    candidate["view"]["visitorControls"] = {
-        "version": 1,
-        "choices": {"inspectAndSelect": False, "featurePicking": True, "lasso": True},
-    }
-    saved = CreateSavedMap.model_validate(candidate)
-    assert saved.model_dump(mode="json", exclude_unset=True) == candidate
-    assert saved.view.visitorControls is not None
-    assert saved.view.visitorControls.choices.rasterValues is False
+    for panel_choices, initial_panels in (
+        ({}, None),
+        ({"workspacePanels": True, "catalog": True}, {}),
+        (
+            {"workspacePanels": False, "catalog": True, "mapContents": True},
+            {"catalog": True, "mapContents": False},
+        ),
+    ):
+        candidate["view"]["visitorControls"] = {
+            "version": 1,
+            "choices": {
+                "inspectAndSelect": False,
+                "featurePicking": True,
+                "lasso": True,
+                **panel_choices,
+            },
+            **({"initialPanels": initial_panels} if initial_panels is not None else {}),
+        }
+        saved = CreateSavedMap.model_validate(candidate)
+        assert saved.model_dump(mode="json", exclude_unset=True) == candidate
+        assert saved.view.visitorControls is not None
+        assert saved.view.visitorControls.choices.rasterValues is False
+        assert saved.view.visitorControls.initialPanels.mapContents is False
     for visitor_controls in (
         None,
         {},
@@ -678,6 +693,9 @@ def test_visitor_controls_validate_and_round_trip() -> None:
         {"version": 1, "choices": {"lasso": "true"}},
         {"version": 1, "choices": {"zoom": True}},
         {"version": 1, "choices": {}, "unknown": True},
+        {"version": 1, "choices": {}, "initialPanels": None},
+        {"version": 1, "choices": {}, "initialPanels": {"catalog": 1}},
+        {"version": 1, "choices": {}, "initialPanels": {"canvas": True}},
     ):
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(

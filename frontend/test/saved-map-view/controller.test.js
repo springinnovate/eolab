@@ -324,7 +324,8 @@ test("published drafts ignore personal autosave and only write on explicit save"
   view.setPublishedMapSaving = saving => { view.saving = saving; };
   let position = emptySavedMap(10, 20, 6).viewport;
   const loaded = { slug: "amazon", title: "Original", subtitle: "", revision: 1, view: emptySavedMap(10, 20, 6) };
-  const visitorControls = { version: 1, choices: { inspectAndSelect: false, lasso: true } };
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, lasso: true,
+    workspacePanels: false, catalog: true, mapContents: true }, initialPanels: { catalog: true, mapContents: false } };
   const controller = createController({ view, storage, editPublishedMap: true, namedMapSlug: "amazon",
     viewerVersion: "0.6.0", viewerOrigin: loaded.view.viewer.origin,
     publicationApi: {
@@ -438,7 +439,8 @@ test("named URLs take precedence over private state, restore basemap and copy th
   const view = createView(), storage = createStorage("private"), loaded = [], headings = [], basemaps = [], visitorChoices = [];
   let position;
   view.copyNamedMapLink = async slug => { view.namedCopy = slug; return { copied: true }; };
-  const visitorControls = { version: 1, choices: { inspectAndSelect: false, rasterValues: true } };
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, rasterValues: true,
+    workspacePanels: true, catalog: false, mapContents: true }, initialPanels: { catalog: false, mapContents: true } };
   const saved = { ...emptySavedMap(10, 20, 6), basemap: "none", visitorControls };
   const controller = createController({ view, storage, restoreSharedMap: true, namedMapSlug: "amazon",
     publicationApi: { async get(slug) { loaded.push(slug); return { title: "Amazon", subtitle: "", view: saved }; } },

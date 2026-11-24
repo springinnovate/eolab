@@ -71,7 +71,7 @@ Open **Choose statistics** to add a built-in measure or write a formula. For exa
 
 </details>
 
-For a calculation you want to follow in **Runs**, use **Data tools → Raster summary** to evaluate one statistic or formula for a raster and an area.
+Use **Data tools → Calculate a raster statistic within an area** to calculate one summary value from the raster pixels in your chosen area, such as average elevation within a watershed. Selected polygons are treated as one combined area.
 
 ### Plot attributes and summarize polygons
 
@@ -89,7 +89,7 @@ Use **Layer stats** to show the mean, minimum, or maximum of each plotted field 
 
 Use the calculator on a custom vector layer to create a numeric field. For example, `'Population' / 'Area km2'` gives population density. You can filter or style the layer using the new field and save it with the map. **Treat numeric text as numbers** accepts values stored as text. Missing inputs and division by zero produce a missing result.
 
-Use **Data tools → Vector summary** to group polygons by an attribute such as state name. Calculate sums, means, minima, maxima, or standard deviations for one or more fields, and merge each group’s outlines. Choose all features or the layer’s filter. Display the result on the map or download it as a GeoPackage. Adjusting boundary detail changes how the outlines look while preserving the statistics.
+Use **Data tools → Group polygons and calculate field statistics** to group polygons by a field such as state name. Calculate sums, means, minima, maxima, or population standard deviations for selected numeric fields, and merge each group’s outlines. Each feature's valid field value has equal weight. Choose all features or the layer’s filter. The result contains one GeoPackage feature per group. **Boundary simplification** changes the outlines while preserving the statistics; use 0 to keep detailed merged boundaries.
 
 ### Follow observations through time
 
@@ -101,8 +101,8 @@ Use the timeline at the bottom of the map to drag through a month or press **Pla
 
 *Rainfall at 06:00 UTC on July 1, 2026. A band of rain crosses the tropical Atlantic toward West Africa. Choose another available hour to see how the pattern changes.*
 
-- **Create a raster from a time series** summarizes a period into a map. A second map counts the valid observations behind each pixel. For suitable hourly rainfall rates, **Precipitation total** gives accumulated depth in millimeters.
-- **Time series for an area** calculates a mean, maximum, or standard deviation for each available observation. For example, download a CSV of mean temperature in a watershed over time.
+- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each available rate by its recorded interval duration to calculate accumulated depth. Start and end use whole UTC hours.
+- **Export area statistics over time (CSV)** calculates a statistic across an area's valid pixels for each available observation, such as mean temperature within a watershed over time. The CSV contains one row per observation, including valid pixel counts.
 - **Raster statistics** plots statistics or formulas across the dates you select. Compare an area average with a value at a clicked point, or download the plotted values as CSV. You choose the calculation dates independently of the hour displayed on the map.
 
 Ordinary period statistics weight available observations equally. Gaps remain missing, so check observation counts before comparing periods.
@@ -111,9 +111,9 @@ Ordinary period statistics weight available observations equally. Gaps remain mi
 
 In **Map contents**, select **Download** on the raster you want. The panel opens beside that layer. Choose **Visible map area** to use the view captured when you opened the panel, **Entire raster** to export the full extent, or a sampling box or selected polygons. Select **Prepare GeoTIFF**, then **Download GeoTIFF** when it is ready. Select the same layer’s **Download** again to close the panel while preparation continues.
 
-In **Data tools**, choose **Raster clip**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
+In **Data tools**, choose **Clip a raster to an area**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
 
-To clip to several polygon layers, open **Map contents → Polygon groups → New polygon group**. Name the group and select its layers. In Raster clip, choose the group under **Analysis area**. The clip uses the combined area of the features selected by each layer's filter, including layers hidden on the map.
+To clip to several polygon layers, open **Map contents → Polygon groups → New polygon group**. Name the group and select its layers. In **Clip a raster to an area**, choose the group under **Analysis area**. The clip uses the combined area of the features selected by each layer's filter, including layers hidden on the map.
 
 <details>
 <summary>See the finished biomass clip and GeoTIFF download</summary>
@@ -126,18 +126,18 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 ### Run environmental models
 
-**Downstream ecosystem beneficiaries** maps where water flows from a selected area. Overlay population data to estimate how many people are in the downstream footprint of a proposed restoration site.
+**Map downstream areas and summarize raster values** uses the WWF model to trace and buffer downstream flow from a starting area, then calculates a statistic from positive raster values within the resulting area. For example, sum a population raster to estimate how many people are within the downstream area of a proposed restoration site.
 
 ![A teal downstream footprint near Tawau, Sabah, beside the completed run reporting a population total of 30,799.](docs/images/eolab-model-downstream-beneficiaries.jpg)
 
 *Sabah, Malaysia. In this example, EOLab mapped the area downstream of a selected corridor and estimated that about 30,800 people were within it using LandScan 2023 population data.*
 
-**Ecosystem Condition** learns how environmental conditions relate to observed habitat at reference sites. It maps how closely the rest of the analysis area matches those expectations. **Reference similarity** ranges from 0 to 1, with higher values indicating a closer match. Download the 500 m map and diagnostics to examine places where observations depart from expectations. [See the model inputs.](docs/images/eolab-model-habitat-condition.jpg)
+**Map ecosystem similarity to reference conditions** uses the **Ecosystem Condition** model to learn expected responses from environmental predictors at reference sites. It maps how closely observed responses across the analysis area match those expectations. The **Reference similarity score (0–1)** is higher where observations more closely match expectations. Download the 500 m map and model diagnostics to examine those differences. [See the model inputs.](docs/images/eolab-model-habitat-condition.jpg)
 
 <details>
 <summary>Choose reference sites and prepare Ecosystem Condition inputs</summary>
 
-Use the original Google Earth Engine inputs for a prepared area and assessment year, or supply your own predictor and habitat-response rasters. With the original inputs you can select datasets separately for each role. SRTM landforms and at least one observed response are required. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
+Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. With the prepared inputs you can select datasets separately for each role. SRTM landforms and at least one observed response are required. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
 
 For reference sites, select saved polygons or a raster mask. With a Catalog raster mask, valid finite nonzero values inside the area designate reference sites. For an uploaded mask, use a single-band Byte GeoTIFF with its own coordinate system, `1` for reference sites and `0` elsewhere. NoData is excluded. The output uses the equal-area EPSG:6933 grid.
 
@@ -159,7 +159,7 @@ The **Planning API** lets participants save private scenarios with one intervent
 - **Bring a project boundary.** Under **Your uploads**, add a GeoJSON file or a GeoPackage containing one polygon layer to keep its attributes. Filter the layer to a country, watershed, or project group and use that selection for statistics or a model.
 - **Reshape a copy.** In **Map contents**, duplicate a GeoPackage polygon layer, choose **Edit geometry**, then click a polygon. Drag its vertices, click an edge to insert one, or hover or focus a vertex and press **Delete**. **Save changes** keeps the edited layer in your browser’s private uploads. Each save uses a file slot for seven days.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
-- **Publish a map.** Choose **Publish map**, give the map a title and link name, and choose which inspection tools visitors can use. Turning off **Inspect and select** keeps your individual tool choices for when you turn it back on. Select **Create map link** to share the layers, styles, order, and starting view. An administrator can change the visitor tools at the same public URL. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
+- **Publish a map.** Choose **Publish map**, give the map a title and link name, and choose which panels and inspection tools visitors can use. **Workspace panels** lets you offer **Catalog**, **Map contents**, or neither. Choose separately whether each available panel opens when the map loads; visitors can reopen a collapsed panel. Turning off a group keeps its individual choices for when you turn it back on. Select **Create map link** to share the layers, styles, order, and starting view. An administrator can change the visitor choices at the same public URL with **Save changes for everyone**, or leave without saving with **Cancel**. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser’s map.
 
 <details>
 <summary>Which files stay private, what expires, and what a download includes</summary>

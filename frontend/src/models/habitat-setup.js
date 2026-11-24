@@ -405,7 +405,7 @@ function describeInput(invocation, name) {
     if (stack.kind !== "earthEngine") for (const [role, label, prefix] of [["predictors", "Predictor", "predictor"], ["responses", "Observed response", "response"]]) {
         stack[role].forEach((row, index) => rows.push({label: `${label}: ${row.name} resampling`, value: RESAMPLING_LABELS[value.resampling[`${prefix}_${index}`]]}));
     }
-    for (const [key, label] of [["reference_mask", "Reference raster resampling"], ["habitat_mask", "Habitat assessment mask resampling"]]) {
+    for (const [key, label] of [["reference_mask", "Reference raster resampling"], ["habitat_mask", "Output mask resampling"]]) {
         if (value.resampling[key]) rows.push({label, value: RESAMPLING_LABELS[value.resampling[key]]});
     }
     return rows;
@@ -482,12 +482,12 @@ function buildInput(ui, handlers, name, definition, draft) {
     if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
         const isOutputMask = name === "habitat_mask" && definition.type === "optional_raster";
         const fields = ui.element(isOutputMask ? "fieldset" : "div", "", "models-vector");
-        const displayDefinition = isOutputMask ? {...definition, label: "Limit output to a raster mask (optional)"} : definition;
+        const displayDefinition = isOutputMask ? {...definition, label: "Output mask (optional)"} : definition;
         const controls = buildRasterInput(ui, fields, name, displayDefinition, raster => handlers.onInput(name, {raster}),
             resampling => handlers.onInput(name, {resampling}));
         if (isOutputMask) {
             fields.setAttribute("aria-label", "Output mask (optional)");
-            const hint = ui.element("p", "Only cells equal to 1 receive results.", "models-help");
+            const hint = ui.element("p", "Limits results to cells with a mask value of 1 on the output grid.", "models-help");
             hint.id = `models-${name}-help`;
             controls.source.setAttribute("aria-describedby", `${hint.id} ${controls.reason.id}`);
             fields.append(hint);

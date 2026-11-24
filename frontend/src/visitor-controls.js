@@ -7,9 +7,20 @@
  * @property {boolean} featurePicking Allow vector and drawing feature picking.
  * @property {boolean} histogramBox Allow drawing or placing a histogram sampling box.
  * @property {boolean} lasso Allow freehand feature selection.
+ * @property {boolean} workspacePanels Allow workspace panels as a group.
+ * @property {boolean} catalog Allow visitors to open Catalog.
+ * @property {boolean} mapContents Allow visitors to open Map contents.
  */
 
-/** @typedef {{version:1,choices:Readonly<Partial<VisitorControlChoices>>}} VisitorControls */
+/** @typedef {{catalog:boolean,mapContents:boolean}} VisitorInitialPanels */
+
+/**
+ * @typedef {Object} VisitorControls
+ * @property {1} version Visitor-settings schema version within saved-map v5.
+ * @property {Readonly<Partial<VisitorControlChoices>>} choices Stored availability choices.
+ * @property {Readonly<Partial<VisitorInitialPanels>>} [initialPanels] Initial disclosure,
+ * independent of availability. Missing entries in an explicit configuration are collapsed.
+ */
 
 export const VISITOR_CONTROLS_VERSION = 1;
 
@@ -20,23 +31,27 @@ export const VISITOR_CONTROL_PARENTS = Object.freeze({
     featurePicking: "inspectAndSelect",
     histogramBox: "inspectAndSelect",
     lasso: "inspectAndSelect",
+    workspacePanels: null,
+    catalog: "workspacePanels",
+    mapContents: "workspacePanels",
 });
 
 /**
  * Return the choices to show in the publishing form, including checked children of a disabled parent.
- * Maps without settings and new forms start with the familiar full inspection profile.
+ * Maps without settings and new forms start with inspection and Map contents available,
+ * and Catalog unavailable, preserving the earlier published-viewer profile.
  * A missing choice in an explicit configuration is off until the author enables it.
  * @param {Readonly<VisitorControls>} [settings] Validated choices from one saved map.
  * @return {Readonly<VisitorControlChoices>} Stored choices expanded for the current viewer.
  */
 export function visitorControlChoices(settings) {
     return Object.freeze(Object.fromEntries(Object.keys(VISITOR_CONTROL_PARENTS).map(id =>
-        [id, settings === undefined || settings.choices[id] === true]
+        [id, settings === undefined ? id !== "catalog" : settings.choices[id] === true]
     )));
 }
 
 /**
- * Resolve which inspection capabilities may be used without changing any stored choices.
+ * Resolve which visitor capabilities may be used without changing any stored choices.
  * A capability has to be enabled along with every ancestor. Pan is always available.
  * @param {Readonly<VisitorControls>} [settings] Validated choices from one saved map.
  * @return {Readonly<VisitorControlChoices>} Effective capabilities for browser composition.
@@ -48,4 +63,17 @@ export function resolveVisitorControls(settings) {
         while (ancestor !== null && choices[ancestor]) ancestor = VISITOR_CONTROL_PARENTS[ancestor];
         return [id, ancestor === null];
     })));
+}
+
+/**
+ * Return initial panel disclosures without applying availability or browser preferences.
+ * Unconfigured maps open Map contents. Explicit settings collapse omitted entries.
+ * @param {Readonly<VisitorControls>} [settings] Validated settings from one saved map.
+ * @return {Readonly<VisitorInitialPanels>} Initial open choices, including unavailable panels.
+ */
+export function visitorInitialPanels(settings) {
+    return Object.freeze({
+        catalog: settings?.initialPanels?.catalog === true,
+        mapContents: settings === undefined || settings.initialPanels?.mapContents === true,
+    });
 }
