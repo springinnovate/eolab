@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
+import { FakeRasterControlElement } from "../../test-support/raster/fake-controls-document.js";
 
-/** Create a Leaflet-compatible layer with inspectable presentation state. */
+/** Create a Leaflet-compatible grid that attaches its container to the test map's pane.
+ * @return {Object} Grid with observable presentation state and load events.
+ */
 function createLayer() {
     const handlers = new Map();
-    const container = { style: {}, querySelectorAll: () => [] };
+    const container = new FakeRasterControlElement();
     return {
         redrawCount: 0,
         loading: false,
@@ -14,6 +17,7 @@ function createLayer() {
         addTo(map) {
             this.loading = true;
             map.attached.add(this);
+            (map.pane ??= new FakeRasterControlElement()).appendChild(container);
             return this;
         },
         setOpacity(opacity) {
@@ -295,7 +299,7 @@ test("local layers interleave with source grids and never enter a server composi
 
 
 test("replacing one paired frame reveals it without waiting for an unchanged loaded grid", () => {
-    const map = {attached: new Set(), removeLayer(layer) { this.attached.delete(layer); }};
+    const map = {attached: new Set(), removeLayer(layer) { this.attached.delete(layer); layer.getContainer().remove(); }};
     const layers = new LeafletLayerSet(map, {update() {}, clear() {}});
     const first = createLayer(), unchanged = createLayer();
     layers.add("first", first, {visible: true, opacity: .4});
@@ -326,6 +330,8 @@ test("replacing one paired frame reveals it without waiting for an unchanged loa
     assert.equal(unchanged.opacity, .6);
     assert.equal(map.attached.has(first), false);
     assert.equal(map.attached.has(pending), false);
+    assert.equal(map.pane.children[0], current.container,
+        "a replacement keeps its drawing position relative to the stationary axis");
     const next = createLayer(), nextReference = createLayer();
     const bothChanged = rendering.map(row => ({...row, descriptor: {layerName: row.key + "-next"}}));
     layers.replace("first", next, {keepPreviousFrame: true});

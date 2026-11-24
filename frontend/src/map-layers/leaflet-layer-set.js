@@ -777,8 +777,9 @@ export class LeafletLayerSet {
      * @return {void}
      */
     #revealFrame(record) {
-        if (this.#heldFrame(record)) {
-            revealLoadedRasterFrame(record.layer);
+        const previous = this.#heldFrame(record);
+        if (previous) {
+            revealLoadedRasterFrame(record.layer, previous.layer);
             this.#removeDrawnFrame(record);
         } else this.#setLayerHidden(record.layer, false);
         record.drawnFrame = record.frame;

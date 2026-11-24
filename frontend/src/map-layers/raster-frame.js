@@ -2,14 +2,17 @@
  * @typedef {{layer:Object,descriptor:Object,observation:{variable:string,time:string}|null}} MapFrame
  */
 
-/** Show a loaded raster frame at its configured layer opacity on the next paint.
- * Leaflet starts loaded tile images transparent. Mark only images already in
- * this grid so tiles fetched by a later pan keep Leaflet's normal fade.
- * @param {{getContainer:()=>HTMLElement}} layer Attached Leaflet tile grid.
+/** Show a ready raster in the outgoing grid's position at its configured opacity.
+ * In Chromium, removing the drawn grid while its replacement is elsewhere in
+ * the pane can expose the basemap for one paint. Move the hidden grid first.
+ * Only already-loaded tiles skip Leaflet's fade, so tiles fetched by a pan still fade in.
+ * @param {{getContainer:()=>HTMLElement}} layer Attached incoming Leaflet tile grid.
+ * @param {{getContainer:()=>HTMLElement}} [previousLayer] Drawn grid about to be removed from the same pane.
  * @return {void}
  */
-export function revealLoadedRasterFrame(layer) {
+export function revealLoadedRasterFrame(layer, previousLayer) {
     const container = layer.getContainer();
+    if (previousLayer) container.parentNode.insertBefore(container, previousLayer.getContainer());
     for (const tile of container.querySelectorAll(".leaflet-tile-loaded")) tile.classList.add("map-raster-frame-tile");
     container.style.visibility = "";
 }

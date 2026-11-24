@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CompositeLeafletRenderer } from "../../src/map-layers/composite-leaflet-renderer.js";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
+import { FakeRasterControlElement } from "../../test-support/raster/fake-controls-document.js";
 
 /** Flush publication promises and tile status. @return {Promise<void>} Settled microtasks. */
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
@@ -31,20 +32,20 @@ function evented() {
 function fixture(create = null) {
     const statuses = [], displayed = [], grids = [], calls = [];
     const map = Object.assign(evented(), {
-        attached: new Set(), zoom: 1,
+        attached: new Set(), pane: new FakeRasterControlElement(), zoom: 1,
         bounds: { min: { x: 0, y: 0 }, max: { x: 512, y: 256 } },
         getZoom() { return this.zoom; },
         getPixelBounds() { return this.bounds; },
-        removeLayer(layer) { this.attached.delete(layer); },
+        removeLayer(layer) { this.attached.delete(layer); layer.getContainer?.().remove(); },
     });
     const renderer = new CompositeLeafletRenderer({
         leaflet: { tileLayer: { wms(url, options) {
-            const container = {style: {}, loadedTiles: [], querySelectorAll: () => container.loadedTiles};
+            const container = new FakeRasterControlElement();
             const layer = Object.assign(evented(), {
                 url, options,
                 getContainer() { return container; },
                 getTileSize() { return { x: 256, y: 256 }; },
-                addTo() { map.attached.add(this); map.onLayerAdd?.(); },
+                addTo() { map.attached.add(this); map.pane.appendChild(container); map.onLayerAdd?.(); },
             });
             grids.push(layer);
             return layer;
@@ -104,22 +105,30 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     f.grids[0].emit("tileload", {tile: t});
     await flush();
     assert.deepEqual(f.displayed.at(-1), ["January"]);
+    const lookahead = new AbortController();
+    await f.renderer.prepare([{layerName: "September", opacity: 0.4}], lookahead.signal);
+    const laterGrid = f.grids.at(-1);
     const preparing = f.renderer.prepare(second, controller.signal);
     await Promise.resolve();
-    const staged = f.grids[1], secondTile = f.tile();
-    secondTile.classList = new Set();
-    staged.getContainer().loadedTiles.push(secondTile);
+    const staged = f.grids.at(-1), secondTile = new FakeRasterControlElement();
+    staged.getContainer().appendChild(secondTile);
+    staged.emit("tileloadstart", {tile: secondTile, coords: {x: 0, y: 0, z: 1}});
     assert.equal(staged.getContainer().style.visibility, "hidden");
+    secondTile.setAttribute("class", "leaflet-tile-loaded");
     staged.emit("tileload", {tile: secondTile});
     await preparing;
     assert.deepEqual(f.displayed.at(-1), ["January"]);
     f.update(second, {keepPreviousFrame: true});
     controller.abort();
     await flush();
-    assert.equal(f.calls.length, 2, "the selected grid needs no second map plan");
+    assert.equal(f.calls.length, 3, "the selected grid needs no second map plan");
+    assert.equal(f.map.pane.children[0], staged.getContainer(),
+        "the ready grid takes the drawn grid's position even when another date was prepared first");
+    assert.equal(f.map.pane.children[1], laterGrid.getContainer());
+    lookahead.abort();
     assert.deepEqual([...f.map.attached], [staged]);
     assert.equal(staged.getContainer().style.visibility, "");
-    assert.ok(secondTile.classList.has("map-raster-frame-tile"), "a buffered tile must paint at the frame's opacity on handoff");
+    assert.ok(secondTile.classList.contains("map-raster-frame-tile"), "a buffered tile must paint at the frame's opacity on handoff");
     assert.deepEqual(f.displayed.at(-1), ["May"]);
 
     const third = [{layerName: "June", opacity: 0.4}];

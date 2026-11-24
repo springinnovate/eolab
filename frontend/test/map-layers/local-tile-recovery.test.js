@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
+import { FakeRasterControlElement } from "../../test-support/raster/fake-controls-document.js";
 
 /** Flush tile-status microtasks. @return {Promise<void>} Settled callbacks. */
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
@@ -29,10 +30,10 @@ function evented() {
 function fixture() {
     const statuses = [], layerStatuses = new Map();
     const map = Object.assign(evented(), {
-        zoom: 1, attached: new Set(),
+        zoom: 1, attached: new Set(), pane: new FakeRasterControlElement(),
         getZoom() { return this.zoom; },
         getPixelBounds: () => ({ min: { x: 0, y: 0 }, max: { x: 512, y: 256 } }),
-        removeLayer(layer) { this.attached.delete(layer); },
+        removeLayer(layer) { this.attached.delete(layer); layer.getContainer().remove(); },
     });
     const set = new LeafletLayerSet(map, { clear() {}, update() {} }, {
         onStatus: status => statuses.push(status),
@@ -40,10 +41,12 @@ function fixture() {
     });
     const layers = new Map();
     for (const key of ["a", "annotation", "b"]) {
+        const container = new FakeRasterControlElement();
         const layer = Object.assign(evented(), {
             additions: 0,
             isLoading: () => true,
-            addTo() { this.additions++; map.attached.add(this); },
+            getContainer: () => container,
+            addTo() { this.additions++; map.attached.add(this); map.pane.appendChild(this.getContainer()); },
             setOpacity() {}, setZIndex() {},
             getTileSize: () => ({ x: 256, y: 256 }),
         });
@@ -84,7 +87,7 @@ test("an annotation map keeps already drawn tiles when a pan and a date change o
     const f = fixture(), old = f.layers.get("a");
     old.emit("tileload", {tile: f.tile("a")}); await flush();
     f.tile("a", 1); await flush();
-    const container = {style: {}, querySelectorAll: () => []};
+    const container = new FakeRasterControlElement();
     const incoming = {...old, ...evented(), getContainer: () => container};
     f.layers.set("a", incoming);
     f.set.replace("a", incoming, {keepPreviousFrame: true});
@@ -95,6 +98,8 @@ test("an annotation map keeps already drawn tiles when a pan and a date change o
     incoming.emit("tileload", {tile: pending}); await flush();
     assert.equal(f.map.attached.has(old), false);
     assert.ok(f.map.attached.has(incoming));
+    assert.equal(f.map.pane.children[0], container,
+        "the incoming raster replaces its old position beside the annotation");
     f.set.clear();
 });
 

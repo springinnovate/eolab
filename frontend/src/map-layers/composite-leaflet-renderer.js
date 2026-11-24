@@ -198,7 +198,7 @@ export class CompositeLeafletRenderer {
             if (this.selected?.grid === grid) {
                 if (this.drawn !== this.selected && status.phase === "complete") {
                     if (this.drawn) {
-                        revealLoadedRasterFrame(layer);
+                        revealLoadedRasterFrame(layer, this.drawn.grid.layer);
                         this.#release(this.drawn);
                     }
                     this.drawn = status.loaded ? this.selected : null;
