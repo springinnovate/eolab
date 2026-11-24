@@ -558,20 +558,17 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Hide inspection, cancel work, clear results and history, and optionally focus the map.
+     * Hide the inspector and discard its reads, results and selection history when its sources are removed or it is destroyed.
      *
-     * @param {Object} [options] Close options.
-     * @param {boolean} [options.moveFocus=false] Restore focus to the map.
      * @return {void}
      */
-    close({ moveFocus = false } = {}) {
+    close() {
         this.#cancelInspection();
         this.#clearSelectionHistory();
         this.clearResults();
         this.#publishSelectionNavigation();
         this.status.textContent = "Click the map to inspect visible vector features.";
         this.onInspectionChange(false);
-        if (moveFocus) this.mapContainer.focus();
     }
 
     /** Whether the map may start another feature inspection. */
