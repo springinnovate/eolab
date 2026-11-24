@@ -97,9 +97,12 @@ export class FakeRasterControlElement extends EventTarget {
         for (const child of children.reverse()) this.insertBefore(child, this.children[0] ?? null);
     }
 
-    /** Detach this element from its parent. @return {void} */
+    /** Detach this element and clear focus if it contains the focused control. @return {void} */
     remove() {
-        if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this);
+        if (this.parentNode) {
+            if (this.contains(this.ownerDocument?.activeElement)) this.ownerDocument.activeElement = null;
+            this.parentNode.children = this.parentNode.children.filter(child => child !== this);
+        }
         this.parentNode = null;
     }
 
