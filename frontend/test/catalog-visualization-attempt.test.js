@@ -313,6 +313,7 @@ test("disabled Catalog row and details shortcuts cannot open a retained layer's 
   h.style(item);
   assert.deepEqual(h.calls, []);
   assert.equal(h.zoomButton.hidden, false);
+  assert.equal(h.status.textContent, "This dataset is on the map.");
 });
 
 test("pending row Add needs no selection, disables only its Item, and prevents duplicates", async () => {
@@ -352,7 +353,7 @@ test("selected Item mirrors pending and success states", async () => {
   assert.equal(h.onMap.hidden, false);
   assert.equal(h.row.state.retained, true);
   assert.equal(h.actionStatus.textContent, "Raster added to the map.");
-  assert.equal(h.status.textContent, "This dataset is on the map. Use Map contents to create a copy with its own style or filter.");
+  assert.equal(h.status.textContent, "This dataset is on the map.");
   assert.equal(h.actionContainer.getAttribute("aria-busy"), "false");
   assert.equal(h.row.state.pendingAction, null);
 });
@@ -608,7 +609,7 @@ test("temporal Catalog controls explain which view they remove and pass the data
   assert.equal(h.layerButton.textContent, "Remove from map");
   assert.equal(h.row.mapButton.textContent, "Remove from map");
   assert.match(h.row.mapButton.getAttribute("aria-label"), /^Remove from map:/);
-  assert.match(h.status.textContent, /Map contents.*create a copy with its own style or filter/);
+  assert.match(h.status.textContent, /This dataset is on the map\.$/);
   h.styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.calls.at(-1), ["style", getCatalogItemKey(item), item]);
   h.row.mapButton.dispatchEvent(new Event("click"));

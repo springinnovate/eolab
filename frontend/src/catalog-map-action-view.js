@@ -44,7 +44,6 @@ export function renderCatalogMapAction(elements, item, state) {
     );
     elements.layerStatus.textContent = [
         formatCatalogVisualizationReason(item, visualization?.metadata?.reason),
-        retained ? (canStyle ? "This dataset is on the map. Use Map contents to create a copy with its own style or filter."
-            : "This dataset is on the map.") : "",
+        retained ? "This dataset is on the map." : "",
     ].filter((message) => message !== "").join(" ");
 }
