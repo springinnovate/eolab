@@ -199,8 +199,8 @@ export class ToolTabStrip {
     }
 
     /**
-     * Switch tabs with horizontal arrows, move between their close buttons without
-     * switching tools, or move vertically within All tabs.
+     * Switch tabs or move between their close buttons along the strip. In All tabs,
+     * move vertically between tool rows and horizontally between a tool and its close action.
      * @param {KeyboardEvent} event Key pressed on a tab or a menu item.
      * @param {boolean} inMenu Whether the key came from the open menu.
      * @return {void}
@@ -215,11 +215,25 @@ export class ToolTabStrip {
             }
             return;
         }
+        if (inMenu && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+            const row = this.items.find(({ choice, menuClose }) => event.target === choice || event.target === menuClose);
+            const button = event.key === "ArrowLeft" ? row?.choice : row?.menuClose;
+            if (button && !button.hidden && !button.disabled) {
+                event.preventDefault();
+                button.focus();
+            }
+            return;
+        }
+        const previousKey = inMenu ? "ArrowUp" : "ArrowLeft";
+        const nextKey = inMenu ? "ArrowDown" : "ArrowRight";
+        if (!["Home", "End", previousKey, nextKey].includes(event.key)) return;
         const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled);
         const onClose = !inMenu && event.target.classList.contains("tool-tab-close");
         let controls;
         if (inMenu) {
-            controls = Array.from(this.menu.children).filter(button => !button.hidden && !button.disabled);
+            const closeColumn = event.target.getAttribute("role") === "menuitem";
+            controls = enabled.map(({ choice, menuClose }) =>
+                closeColumn && menuClose && !menuClose.hidden && !menuClose.disabled ? menuClose : choice);
         } else if (onClose) {
             controls = enabled.filter(({ tab, close }) => close && this.visibleTabs.includes(tab) && tab.getAttribute("data-open") === "true")
                 .map(item => item.close);
@@ -231,9 +245,8 @@ export class ToolTabStrip {
         let next;
         if (event.key === "Home") next = 0;
         else if (event.key === "End") next = controls.length - 1;
-        else if (event.key === (inMenu ? "ArrowDown" : "ArrowRight")) next = (current + 1) % controls.length;
-        else if (event.key === (inMenu ? "ArrowUp" : "ArrowLeft")) next = (current - 1 + controls.length) % controls.length;
-        else return;
+        else if (event.key === nextKey) next = (current + 1) % controls.length;
+        else next = (current - 1 + controls.length) % controls.length;
         event.preventDefault();
         if (inMenu || onClose) controls[next].focus();
         else this.#activateTab(controls[next]);

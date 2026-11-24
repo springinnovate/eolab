@@ -365,6 +365,12 @@
       const selected = menu.querySelector('[aria-checked="true"]');
       check(selected.innerText.includes("Ecosystem Condition") && document.activeElement === selected,
         "The menu lost the selected model's name or keyboard focus");
+      selected.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      const planning = choices.find(choice => choice.querySelector("span").textContent === "Planning");
+      check(document.activeElement === planning && dock.activeTool === "models",
+        "Down Arrow from Data tools must focus the next tool row without closing or activating a tool");
+      planning.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+      check(document.activeElement === selected, "Up Arrow must return to the previous tool row");
       const control = getComputedStyle(document.querySelector(".catalog-search input"));
       const supporting = getComputedStyle(document.querySelector(".catalog-search"));
       for (const label of [models, index, selected]) {
@@ -401,7 +407,14 @@
       const closeSettings = menu.querySelector('[role="menuitem"][aria-label="Close Settings"]');
       check(closeSettings && isReachable(closeSettings), "All tabs must offer an independent Close Settings action");
       document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+      const settingsChoice = [...menu.querySelectorAll('[role="menuitemradio"]')].find(choice =>
+        choice.querySelector("span").textContent === "Settings");
+      check(document.activeElement === settingsChoice, "End must focus Settings in the tool column");
+      settingsChoice.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       check(document.activeElement === closeSettings, "The last overflow close action must be reachable by keyboard");
+      closeSettings.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      check(document.activeElement === settingsChoice, "Left Arrow on the close button must return to its tool");
+      settingsChoice.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       closeSettings.click();
       check(document.querySelector("#settings-panel").hidden && dock.activeTool === "raster-clips" &&
         document.activeElement === clipTab && !menu.matches(":popover-open"),
