@@ -320,8 +320,9 @@ def _write_warped_vrt(
     GDAL handles geographic longitude wrapping, rotated grids and alpha masks.
     Its grid-sampled horizontal scale keeps repeated longitude periods from
     being mistaken for a coarser source resolution when choosing the kernel.
-    Center that periodic view on the output so even a one-column scale probe
-    has a continuous neighbor. GDAL skips automatic centering for sources wider
+    Center interpolated and aggregate periodic views on the output so scale
+    probes and cell footprints have continuous neighbors across the seam.
+    GDAL skips automatic centering for sources wider
     than one period, so set its native CENTER_LONG option in the serialized warp.
     Convert non-degree geographic coordinates to degrees in a virtual source
     because the native longitude-centering operation requires those units.
@@ -346,6 +347,7 @@ def _write_warped_vrt(
     path = masked_path.with_name(f"{masked_path.stem}-warped.vrt")
     warp_source_path = masked_path
     sample_periodic_scale = periodic_longitude and resampling == Resampling.bilinear
+    center_periodic_longitudes = periodic_longitude and resampling != Resampling.nearest
     warp_options = ["UNIFIED_SRC_NODATA=NO"]
     if sample_periodic_scale:
         warp_options.append("XSCALE=FROM_GRID_SAMPLING")
@@ -391,7 +393,7 @@ def _write_warped_vrt(
                 warpOptions=warp_options,
             ):
                 pass
-            if sample_periodic_scale:
+            if center_periodic_longitudes:
                 center_x, center_y = grid.transform * (grid.width / 2, grid.height / 2)
                 longitude, _ = transform(grid.crs, source.crs, [center_x], [center_y])
                 tree = ElementTree.parse(path)

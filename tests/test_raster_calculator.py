@@ -911,6 +911,67 @@ def test_warp_uses_native_neighbours_across_greenwich(
         np.testing.assert_array_equal(output.read(1), [[179.5], [179.5]])
 
 
+@pytest.mark.parametrize("source_left", [0, -180])
+@pytest.mark.parametrize("epsg", [4326, 3857])
+@pytest.mark.parametrize(
+    "method,expected", [("mean", 57.2), ("min", 20), ("max", 80), ("mode", 80)]
+)
+def test_aggregate_cell_crossing_dateline_uses_only_adjacent_values(
+    tmp_path: Path, source_left: int, epsg: int, method: str, expected: float
+) -> None:
+    """Aggregate the cell footprint across the seam without distant longitudes.
+
+    Args:
+        tmp_path: Original inputs and published calculator output directory.
+        source_left: Equivalent longitude origin of the full-period input.
+        epsg: Geographic or projected reference grid.
+        method: Requested aggregate resampling method.
+        expected: Independently weighted mean or selected adjacent value.
+    """
+    values = np.full(360, 40, dtype="int16")
+    values[178:180] = 80
+    values[180:182] = [20, 50]
+    values[5], values[100] = 999, 1
+    source = write_source(
+        tmp_path / "source.tif",
+        np.tile(np.roll(values, -source_left), (8, 1)),
+        transform=from_origin(source_left, 2, 1, 0.5),
+    )
+    project = Transformer.from_crs(4326, epsg, always_xy=True)
+    left, top = project.transform(178.76, 0.9)
+    _, bottom = project.transform(178.76, 0.5)
+    # Web Mercator has a continuous X spacing even beyond its canonical seam.
+    cell_width = 2 * (math.pi * 6378137 / 180 if epsg == 3857 else 1)
+    axes = from_origin(left, top, cell_width, top - bottom)
+    reference = write_source(
+        tmp_path / "reference.tif",
+        np.ones((1, 1), dtype="uint8"),
+        transform=axes,
+        crs=f"EPSG:{epsg}",
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling=method),
+                RasterFormulaLayer(alias="b", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="b"),
+        ),
+        selectedBounds=Wgs84Bounds(west=178.8, south=0.5, east=180, north=0.9),
+    )
+    sources = RasterCalculatorSources({"a": source, "b": reference}, None)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        assert output.transform == axes
+        assert result.valid_pixels == 1
+        # 1.24 degrees of value 80 and 0.76 degrees of value 20 give mean 57.2.
+        np.testing.assert_allclose(output.read(1), [[expected]], rtol=0, atol=1e-9)
+
+
 @pytest.mark.parametrize("epsg", [4269, 4979])
 @pytest.mark.parametrize("area_kind", ["bounds", "mercator"])
 def test_geographic_projection_preserves_wide_bounds(
