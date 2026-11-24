@@ -226,8 +226,8 @@ export class VectorFeatureInspectorController {
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
      * Requests presentation changes without knowing the presentation owner.
-     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>)=>void} configuration.onSampleChange
-     * Publishes immutable bounded observations through application composition.
+     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>,change:"inspection"|"labels")=>void} configuration.onSampleChange
+     * Publishes observations through composition. Label edits refresh plots without announcing another map result.
      * @param {(navigation:Readonly<{canPrevious:boolean,canNext:boolean}>)=>void}
      * configuration.onSelectionNavigationChange Publishes available directions
      * between completed map selections.
@@ -486,8 +486,9 @@ export class VectorFeatureInspectorController {
     syncVisibleLayers() {
         const targets = this.visibleTargets();
         if (this.#refreshResultNames(targets) && this.results.length) {
-            this.showResult(this.resultIndex);
-            if (this.lastSample) this.#publishSample(this.lastSample.state, this.results, this.lastSample.message, this.lastSample.failedLayers);
+            this.showResult(this.resultIndex, { updateHighlight: false });
+            if (this.lastSample) this.#publishSample(this.lastSample.state, this.results,
+                this.lastSample.message, this.lastSample.failedLayers, "labels");
         }
         const available = targets.length > 0;
         const signature = this.#targetSignature(targets);
@@ -922,14 +923,15 @@ export class VectorFeatureInspectorController {
      * @param {InspectedVectorFeature[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
      * @param {number} [failedLayers=0] Completed layers whose inspection failed.
+     * @param {"inspection"|"labels"} [change="inspection"] Whether the inspection changed or its layer names were edited.
      * @return {void}
      */
-    #publishSample(state, results, message, failedLayers = 0) {
+    #publishSample(state, results, message, failedLayers = 0, change = "inspection") {
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
         );
         this.lastSample = Object.freeze({ state, observations, message, failedLayers, position: this.#inspectionPosition });
-        this.onSampleChange(this.lastSample);
+        this.onSampleChange(this.lastSample, change);
         this.#publishSelectionNavigation();
     }
 
@@ -970,9 +972,11 @@ export class VectorFeatureInspectorController {
      * WMS highlights remain visible through the map's maximum zoom of 22.
      *
      * @param {number} index Zero-based result index.
+     * @param {Object} [options] Selected feature presentation.
+     * @param {boolean} [options.updateHighlight=true] Draw the selection on the map. A layer rename only refreshes its text.
      * @return {void}
      */
-    showResult(index) {
+    showResult(index, { updateHighlight = true } = {}) {
         if (this.results.length === 0) {
             return;
         }
@@ -1007,6 +1011,7 @@ export class VectorFeatureInspectorController {
         this.featureProfileButton.disabled = !Object.values(observation.properties).some(Number.isFinite);
         this.onCurrentObservationChange(observation, navigation);
         this.#showAttributes(this.results[this.resultIndex]);
+        if (!updateHighlight) return;
         this.clearHighlight();
         if (typeof feature.id === "string" && feature.id.length > 0) {
             const highlightLayer = this.leaflet.tileLayer.wms(this.wmsUrl, {

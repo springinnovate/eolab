@@ -2243,10 +2243,10 @@ async function initializeCatalog(
                 mapInspection.setClickResult("feature", null);
             }
         },
-        onSampleChange: (sample) => {
+        onSampleChange: (sample, change) => {
             vectorTimeSeries.setSample(sample);
             vectorFeatureProfile.setFeatureChoices(sample.observations);
-            if (sample.state === "interrupted") return;
+            if (change === "labels" || sample.state === "interrupted") return;
             const returned = sample.observations.length;
             const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
             const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;

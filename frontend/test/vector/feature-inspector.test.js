@@ -28,6 +28,17 @@ test("renaming a layer updates inspected feature labels without another query", 
   assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent, "Workshop habitats");
   assert.equal(reads, previousReads);
   assert.equal(h.controller.results[0].target.sourceId, "catalog|parcels");
+  const visibleHighlight = h.wmsHighlights.at(-1);
+  h.documentContext.querySelector("#close-vector-inspector").click();
+  assert.equal(h.removedLayers.at(-1), visibleHighlight);
+  const highlightCount = h.wmsHighlights.length;
+  h.targets[0] = { ...h.targets[0], label: "Renamed after dismissal" };
+  h.controller.syncVisibleLayers();
+  assert.equal(h.wmsHighlights.length, highlightCount, "a label edit must not draw a dismissed highlight");
+  assert.equal(h.currentObservationChanges.at(-1).layerLabel, "Renamed after dismissal");
+  assert.equal(h.sampleChanges.at(-1).observations[0].layerLabel, "Renamed after dismissal");
+  assert.equal(h.sampleChangeKinds.at(-1), "labels");
+  assert.equal(reads, previousReads);
   h.controller.destroy();
 });
 
@@ -119,6 +130,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
   };
   const inspectionChanges = [];
   const sampleChanges = [];
+  const sampleChangeKinds = [];
   const selectionNavigation = [];
   const currentObservationChanges = [];
   const currentNavigationChanges = [];
@@ -136,7 +148,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
       inspectionChanges.push(visible);
       documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
     },
-    onSampleChange: (sample) => sampleChanges.push(sample),
+    onSampleChange: (sample, kind) => { sampleChanges.push(sample); sampleChangeKinds.push(kind); },
     onSelectionNavigationChange: (navigation) => selectionNavigation.push(navigation),
     onCurrentObservationChange: (observation, navigation) => {
       currentObservationChanges.push(observation);
@@ -164,6 +176,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
     removedLayers,
     inspectionChanges,
     sampleChanges,
+    sampleChangeKinds,
     selectionNavigation,
     currentObservationChanges,
     currentNavigationChanges,
