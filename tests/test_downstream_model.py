@@ -32,26 +32,50 @@ from raster_fixture_support import write_source
 from test_prepared_hydrology import prepare_sources
 
 
-def test_packaged_wwf_model_preserves_uint64_population(tmp_path: Path) -> None:
-    """Verify the installed model's native TIFF pixels and floating-point total.
+@pytest.mark.parametrize(
+    ("dtype", "nodata", "samples", "expected"),
+    [
+        ("uint64", None, (2**64 - 1, 7), (2**64 - 1, 7)),
+        ("int64", 2**54, (2**54 - 1, 2**54, 2**54 + 1), (2**54 - 1, 0, 2**54 + 1)),
+    ],
+    ids=("uint64-maximum", "int64-nodata-neighbors"),
+)
+def test_packaged_model_preserves_64bit_population(
+    tmp_path: Path,
+    dtype: str,
+    nodata: int | None,
+    samples: tuple[int, ...],
+    expected: tuple[int, ...],
+) -> None:
+    """Check that the installed wwf_es_beneficiaries wheel retains exact 64-bit pixels.
 
     Args:
         tmp_path: Directory for the population, coverage and masked GeoTIFFs.
+        dtype: Native signed or unsigned integer type of the population band.
+        nodata: Value declared missing by the source, if any.
+        samples: Population row inside the coverage grid.
+        expected: Output row with excluded samples set to zero.
     """
     from eolab_app.processing.downstream_runner import load_beneficiaries
 
-    values = np.array([[2**64 - 1, 7]], dtype="uint64")
-    population = write_source(tmp_path / "population.tif", values)
-    coverage = write_source(tmp_path / "coverage.tif", np.ones((1, 2), dtype="uint8"))
+    values = np.array([samples], dtype=dtype)
+    population = write_source(tmp_path / "population.tif", values, nodata=nodata)
+    coverage = write_source(
+        tmp_path / "coverage.tif", np.ones(values.shape, dtype="uint8")
+    )
     output = tmp_path / "masked.tif"
     total = load_beneficiaries().mask_population_with_coverage(
         population, coverage, output
     )
+    expected_values = np.array([expected], dtype=dtype)
     with rasterio.open(output) as masked:
-        assert masked.dtypes == ("uint64",)
-        np.testing.assert_array_equal(masked.read(1), values)
-        np.testing.assert_array_equal(masked.read_masks(1), [[255, 255]])
-    assert total == float((2**64 - 1) + 7)
+        assert masked.dtypes == (dtype,)
+        assert masked.nodata == 0
+        np.testing.assert_array_equal(masked.read(1), expected_values)
+        np.testing.assert_array_equal(
+            masked.read_masks(1), np.where(expected_values > 0, 255, 0)
+        )
+    assert total == float(sum(expected))
 
 
 def scaled_downstream_fixture(
@@ -290,7 +314,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
-        == "814fa56310ba90d0e9c9631c339b977dcc6f484d"
+        == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
     )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -443,7 +467,7 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-    assert saved["beneficiariesRevision"] == "814fa56310ba90d0e9c9631c339b977dcc6f484d"
+    assert saved["beneficiariesRevision"] == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
     assert (
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
             mode="json"
