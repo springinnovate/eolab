@@ -370,20 +370,33 @@ def test_native_polygon_preserves_both_sides_of_the_dateline(
 
 
 @pytest.mark.parametrize("polar_epsg", [3413, 3031])
-@pytest.mark.parametrize("prime_meridian", ["greenwich", "paris"])
+@pytest.mark.parametrize(
+    "reference_crs,small_cap",
+    [
+        ("+proj=longlat +datum=WGS84 +pm=greenwich", False),
+        ("+proj=longlat +datum=WGS84 +pm=paris", False),
+        ("EPSG:4807", False),
+        ("EPSG:4807", True),
+    ],
+)
 def test_polar_area_preserves_membership_in_geographic_reference_crs(
-    tmp_path: Path, polar_epsg: int, prime_meridian: str
+    tmp_path: Path, polar_epsg: int, reference_crs: str, small_cap: bool
 ) -> None:
     """Publish every selected polar cell in the reference's longitude convention.
 
     Args:
         tmp_path: Native vector, reference raster and calculator output directory.
         polar_epsg: Native projection for an area enclosing either pole.
-        prime_meridian: Longitude origin of the geographic reference raster.
+        reference_crs: Geographic grid, including a longitude rotation or datum shift.
+        small_cap: Enclose only the target datum's pole, excluding the source origin.
     """
-    crs = CRS.from_string(f"+proj=longlat +datum=WGS84 +pm={prime_meridian}")
-    top = 90 if polar_epsg == 3413 else -88.2
-    transform = from_origin(-180, top, 0.75, 0.0375)
+    crs = CRS.from_string(reference_crs)
+    factor = math.radians(1) / crs.units_factor[1]
+    row_degrees = 0.0000375 if small_cap else 0.0375
+    top = 90 if polar_epsg == 3413 else -90 + 48 * row_degrees
+    transform = from_origin(
+        -180 * factor, top * factor, 0.75 * factor, row_degrees * factor
+    )
     values = np.arange(48 * 480, dtype="int16").reshape(48, 480)
     source = write_source(
         tmp_path / "source.tif", values, transform=transform, crs=crs.to_wkt()
@@ -391,6 +404,13 @@ def test_polar_area_preserves_membership_in_geographic_reference_crs(
     with rasterio.open(source) as reference:
         crs = reference.crs
     original = box(-50000, -40000, 45000, 58000)
+    if small_cap:
+        target_pole = 90 * factor if polar_epsg == 3413 else -90 * factor
+        x, y = Transformer.from_crs(crs, polar_epsg, always_xy=True).transform(
+            0, target_pole
+        )
+        original = box(x - 50, y - 40, x + 45, y + 58)
+        assert not original.covers(Point(0, 0))
     area = write_selection(
         tmp_path / "polar.gpkg", [mapping(original)], crs=f"EPSG:{polar_epsg}"
     )
@@ -488,15 +508,56 @@ def test_polar_area_projection_retains_non_greenwich_angular_units(
     )
 
 
+def test_local_area_projects_when_a_pole_is_outside_the_source_domain(
+    tmp_path: Path,
+) -> None:
+    """Retain a local polygon when its source projection cannot see the opposite pole.
+
+    Args:
+        tmp_path: Directory for the original polygon in an orthographic projection.
+    """
+    source_crs = CRS.from_string("+proj=ortho +lat_0=48 +lon_0=2 +datum=WGS84 +units=m")
+    original = box(-12000, -13000, 14000, 15000)
+    area = write_selection(
+        tmp_path / "local.gpkg", [mapping(original)], crs=source_crs.to_wkt()
+    )
+    target = CRS.from_epsg(4807)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(
+                kind="custom", crs="EPSG:4807", pixelSize=(0.01, 0.01)
+            ),
+        ),
+        catalogSelection=area.selection,
+    )
+    projected = project_calculator_area(request, None, area, target, (0.01, 0.01))
+    transform = from_origin(-1, 54, 0.01, 0.01)
+    rows, columns = np.indices((100, 100), dtype="float64") + 0.5
+    x, y = Transformer.from_crs(target, source_crs, always_xy=True).transform(
+        *transform * (columns, rows)
+    )
+    inside = contains_xy(original, x, y)
+    assert 0 < inside.sum() < inside.size
+    np.testing.assert_array_equal(
+        geometry_mask(projected, inside.shape, transform, invert=True), inside
+    )
+
+
+@pytest.mark.parametrize("reference_epsg", [4326, 4807])
 @pytest.mark.parametrize("include_island", [False, True])
 def test_geographic_output_preserves_a_hole_enclosing_the_pole(
-    tmp_path: Path, include_island: bool
+    tmp_path: Path, include_island: bool, reference_epsg: int
 ) -> None:
     """Keep a polar hole and any separate island when projecting to longitude.
 
     Args:
         tmp_path: Native polar vector, geographic raster and calculator output.
         include_island: Add a separate polygon inside the other part's hole.
+        reference_epsg: Geographic grid, on the source datum or NTF (Paris).
     """
     shell = box(-49001, -31013, 37001, 46003)
     hole = box(-7111, -20101, 14999, 16003)
@@ -511,10 +572,14 @@ def test_geographic_output_preserves_a_hole_enclosing_the_pole(
         tmp_path / "polar.gpkg", [mapping(original)], crs="EPSG:3031"
     )
     values = np.arange(24 * 720, dtype="int16").reshape(24, 720)
+    crs = CRS.from_epsg(reference_epsg)
+    factor = math.radians(1) / crs.units_factor[1]
+    transform = from_origin(-180 * factor, -88.8 * factor, 0.5 * factor, 0.05 * factor)
     source = write_source(
         tmp_path / "source.tif",
         values,
-        transform=from_origin(-180, -88.8, 0.5, 0.05),
+        transform=transform,
+        crs=crs.to_wkt(),
     )
     request = RasterCalculatorRequest(
         calculation=RasterFormulaInput(
@@ -535,20 +600,31 @@ def test_geographic_output_preserves_a_hole_enclosing_the_pole(
         rows, columns = np.indices(output.shape, dtype="float64") + 0.5
         lon = output.transform.c + columns * output.transform.a
         lat = output.transform.f + rows * output.transform.e
-        x, y = Transformer.from_crs(4326, 3031, always_xy=True).transform(lon, lat)
+        to_native = Transformer.from_crs(crs, 3031, always_xy=True)
+        x, y = to_native.transform(lon, lat)
         inside = contains_xy(original, x, y)
-        source_rows = np.floor((-88.8 - lat) / 0.05).astype(int)
-        source_columns = np.floor((lon + 180) / 0.5).astype(int)
-        assert output.shape == (13 if include_island else 12, 720)
-        assert output.crs == CRS.from_epsg(4326)
-        assert result.valid_pixels == inside.sum()
-        if include_island:
-            assert inside.sum() > 3983
-        else:
-            assert inside.sum() == 3983
+        source_columns, source_rows = ~transform * (lon, lat)
+        all_rows, all_columns = np.indices(values.shape, dtype="float64") + 0.5
+        all_x, all_y = to_native.transform(*transform * (all_columns, all_rows))
+        assert output.crs == crs
+        assert (
+            result.valid_pixels
+            == inside.sum()
+            == contains_xy(original, all_x, all_y).sum()
+        )
+        if reference_epsg == 4326:
+            assert output.shape == (13 if include_island else 12, 720)
+            if include_island:
+                assert inside.sum() > 3983
+            else:
+                assert inside.sum() == 3983
         np.testing.assert_array_equal(
             output.read(1),
-            np.where(inside, values[source_rows, source_columns], np.nan),
+            np.where(
+                inside,
+                values[source_rows.astype(int), source_columns.astype(int)],
+                np.nan,
+            ),
         )
 
 

@@ -13,7 +13,8 @@ from rasterio.windows import Window
 from shapely import from_wkb, union_all
 from shapely.affinity import scale
 from shapely.errors import GEOSException
-from shapely.geometry import Polygon, mapping, shape
+from shapely.geometry import LinearRing, Point, Polygon, mapping, shape
+from shapely.geometry.base import BaseGeometry
 
 from eolab_app.projected_boundary import (
     Position,
@@ -636,7 +637,9 @@ def project_geographic_polygons(
     degree CRS retains its datum and prime meridian; source edges must already
     be refined to the caller's accuracy before this final transformation. Split
     rings independently so a hole enclosing a pole remains separate from its
-    shell. GEOS subtracts each part's holes before joining the resulting parts.
+    shell. For a projected ring enclosing a pole on another datum, apply the
+    datum operation first, then let GDAL cut the cap on that datum's polar plane.
+    GEOS subtracts each part's holes before joining the resulting parts.
 
     Args:
         source_crs: Coordinate system of the refined source polygons.
@@ -649,7 +652,7 @@ def project_geographic_polygons(
     Raises:
         ValueError: If GDAL cannot transform or split the polygons.
     """
-    from osgeo import ogr, osr
+    from osgeo import gdal, ogr, osr
 
     to_degrees = target_crs.units_factor[1] / math.radians(1)
     uses_degrees = math.isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12)
@@ -669,31 +672,70 @@ def project_geographic_polygons(
             target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
             coordinates = osr.CoordinateTransformation(source, target)
             projector = ogr.GeomTransformer(coordinates, ["WRAPDATELINE=YES"])
+        target_poles: list[tuple[float, Point]] = []
+        if source.IsProjected() and not source.IsSameGeogCS(target):
+            # A pole outside the source projection has no location to test.
+            with osr.ExceptionMgr(useExceptions=False), gdal.quiet_errors():
+                reverse = coordinates.GetInverse()
+                if reverse is not None:
+                    for latitude in (-90.0, 90.0):
+                        x, y, _, _, error = reverse.TransformPointWithErrorCode(
+                            0, latitude, 0, 0
+                        )
+                        if error == 0:
+                            target_poles.append((latitude, Point(x, y)))
+
+        def split_ring(ring: LinearRing) -> BaseGeometry:
+            """Project one refined ring and cut it at the target's longitude seam.
+
+            Args:
+                ring: Exterior or hole in the original coordinate system.
+
+            Returns:
+                A valid shell or set of shell pieces in target degrees.
+
+            Raises:
+                ValueError: If GDAL cannot produce a valid geographic ring.
+                RuntimeError: If a native coordinate operation fails.
+            """
+            polygon = Polygon(ring)
+            native = ogr.CreateGeometryFromWkb(polygon.wkb)
+            splitter = projector
+            poles = [
+                latitude for latitude, point in target_poles if polygon.covers(point)
+            ]
+            if len(poles) == 1:
+                # A datum shift can move the pole away from the source origin.
+                # Transform the vertices through the requested datum operation
+                # before using a stereographic plane just for GDAL's cap cut.
+                with osr.ExceptionMgr(), ogr.ExceptionMgr():
+                    polar = target.Clone()
+                    polar.SetPS(poles[0], 0, 1, 0, 0)
+                    to_polar = osr.CoordinateTransformation(target, polar)
+                    native.Transform(coordinates)
+                    native.Transform(to_polar)
+                    from_polar = to_polar.GetInverse()
+                    splitter = ogr.GeomTransformer(from_polar, ["WRAPDATELINE=YES"])
+            # GDAL may report a failed intermediate cut and still return a
+            # valid final cap. Check the geometry it returns.
+            with ogr.ExceptionMgr(useExceptions=False):
+                transformed = splitter.Transform(native)
+            if transformed is None:
+                raise ValueError("Selection could not be projected")
+            projected = from_wkb(bytes(transformed.ExportToWkb()))
+            if not projected.is_valid:
+                raise ValueError("Selection could not be projected")
+            return projected
+
         for geometry in geometries:
             original = shape(geometry)
             polygons = (
                 original.geoms if original.geom_type == "MultiPolygon" else (original,)
             )
-            rings = []
-            for polygon in polygons:
-                for ring in (polygon.exterior, *polygon.interiors):
-                    # GDAL may report a failed intermediate cut and still return
-                    # a valid polar cap. Check its final result at this boundary.
-                    with ogr.ExceptionMgr(useExceptions=False):
-                        transformed = projector.Transform(
-                            ogr.CreateGeometryFromWkb(Polygon(ring).wkb)
-                        )
-                    if transformed is None:
-                        raise ValueError("Selection could not be projected")
-                    projected_ring = from_wkb(bytes(transformed.ExportToWkb()))
-                    if not projected_ring.is_valid:
-                        raise ValueError("Selection could not be projected")
-                    rings.append(projected_ring)
-            projected_rings = iter(rings)
             parts = []
             for polygon in polygons:
-                shell = next(projected_rings)
-                holes = [next(projected_rings) for _ in polygon.interiors]
+                shell = split_ring(polygon.exterior)
+                holes = [split_ring(hole) for hole in polygon.interiors]
                 parts.append(shell.difference(union_all(holes)))
             projected = union_all(parts)
             if not uses_degrees:
