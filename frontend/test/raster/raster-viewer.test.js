@@ -3059,8 +3059,11 @@ test("published styles survive histogram, palette, category and paired actions w
         assert.equal(h.viewer.openPairedStyle(y.entry.key), false);
         actions.onBivariatePaletteChange("different");
         actions.onBivariateSwapAxes();
+        h.controlsView.bivariatePercentiles.x = {lower: 25, middle: 50, upper: 75, rescale: true};
         actions.onBivariatePercentileInput("x");
         clock.flush();
+        assert.equal(Number(h.controlsView.bivariateRanges.x.values.lower), 8, "The 25th percentile is still available");
+        assert.equal(h.controlsView.bivariateRanges.x.settings.rescale, false);
         assert.deepEqual(styleRequests, []);
         assert.deepEqual(renderingSelections, []);
         assert.deepEqual(h.mapLayers.snapshots().map(row => row.roleBadge.label), ["X", "Y"]);

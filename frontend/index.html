@@ -1361,7 +1361,7 @@
                 <button id="calculate-bivariate-y" class="secondary-button" type="button">Analyze Y</button>
               </div>
               <details class="raster-bivariate-style-ranges" id="raster-bivariate-style-ranges">
-                <summary>Style rasters</summary>
+                <summary>Percentiles and colors</summary>
                 <div id="raster-bivariate-panel" hidden>
                   <div class="raster-bivariate-palette-controls">
                     <label for="raster-bivariate-palette">
@@ -1370,7 +1370,7 @@
                     </label>
                     <button class="secondary-button" id="swap-raster-bivariate-axes" type="button">Swap X/Y</button>
                   </div>
-                  <p class="raster-bivariate-range-help">Inspect lower (L), middle (M), and upper (U) percentiles on each outer histogram. Turn on matching to update its 2D map colors as you move the sliders or change the sample area.</p>
+                  <p class="raster-bivariate-range-help">Use the sliders to read percentiles for each raster in the paired sample. <span class="raster-bivariate-style-help">Turn on matching to update its map colors as the percentiles change.</span></p>
                   <fieldset class="raster-percentile-controls raster-bivariate-range">
                     <legend>Horizontal (X) · <span id="bivariate-x-range-label"></span></legend>
                     <label for="bivariate-x-lower">
@@ -1427,7 +1427,7 @@
                         <span id="raster-bivariate-legend-y-range"></span>
                       </figcaption>
                     </figure>
-                    <p class="raster-bivariate-explanation">Map colors combine both rasters. Returning to 1D restores each raster's individual style and range.</p>
+                    <p class="raster-bivariate-explanation">The histogram color key shows how a pair of X and Y values determines each bin’s color.</p>
                   </details>
                 </div>
               </details>

@@ -4023,6 +4023,9 @@ article.raster-histogram-summary {
   font-size: 0.8rem;
   font-weight: 600;
 }
+.raster-bivariate-style-ranges[data-style-editing="false"] :is(.raster-bivariate-palette-controls, .raster-bivariate-rescale, .raster-bivariate-style-help) {
+  display: none;
+}
 
 .raster-bivariate-style-ranges[open] > summary {
   list-style-type: disclosure-open;

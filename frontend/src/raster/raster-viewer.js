@@ -4455,10 +4455,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleBivariatePercentileInput(axis) {
-        if (!styleEditingEnabled || !bivariateMode.active) return;
-        bivariatePercentiles.set(bivariateMode[`${axis}Key`], controlsView.readBivariatePercentiles(axis));
+        if (!bivariateMode.active) return;
+        const settings = controlsView.readBivariatePercentiles(axis);
+        bivariatePercentiles.set(bivariateMode[`${axis}Key`], {...settings, rescale: styleEditingEnabled && settings.rescale});
         const ranges = updateBivariatePercentileValues();
-        if (!["x", "y"].some(name => getBivariatePercentiles(name).rescale && ranges[name])) {
+        if (!styleEditingEnabled || !["x", "y"].some(name => getBivariatePercentiles(name).rescale && ranges[name])) {
             cancelBivariateStyleUpdate();
             return;
         }
