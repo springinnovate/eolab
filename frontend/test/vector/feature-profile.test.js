@@ -555,6 +555,15 @@ test("numeric field-name spacing is reflected on the horizontal axis", () => {
   assert.equal(circles.length, bars.length);
   const positions = circles.map(circle => Number(circle.getAttribute("cx")));
   assert.ok(positions[2] - positions[1] > 2 * (positions[1] - positions[0]));
+  const xHeading = h.documentContext.querySelector("#vector-feature-profile-x-heading");
+  const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
+  for (const [style, hideX] of [["stacked", true], ["bar", false]]) {
+    chartType.value = style;
+    chartType.dispatchEvent(new Event("change"));
+    assert.equal(xHeading.hidden, hideX);
+    assert.deepEqual(table.children.map(row => row.children[1].hidden), [hideX, hideX, hideX]);
+    assert.deepEqual(table.children.map(row => row.children[2].textContent), ["1", "2", "3"]);
+  }
 });
 
 test("per-source rules survive feature navigation and missing values break lines", () => {

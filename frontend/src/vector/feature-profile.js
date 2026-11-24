@@ -555,7 +555,7 @@ export class VectorFeatureProfileController {
             this.currentObservation,
             settings
         );
-        this.#renderTable(profile.points);
+        this.#renderTable(profile, settings.chartType === "stacked");
         this.#renderProfileChart(profile, settings, presentation.heading);
         if (this.selectedField !== null) this.#selectField(this.selectedField);
         if (this.zoomFeatureButton.disabled) this.status.textContent = UNAVAILABLE_LOCATION_MESSAGE;
@@ -570,8 +570,6 @@ export class VectorFeatureProfileController {
      */
     #renderProfileChart(profile, settings, heading) {
         const stacked = settings.chartType === "stacked";
-        this.xHeading.hidden = stacked || profile.xScale === "ordinal";
-        this.xHeading.textContent = profile.xAxisLabel;
         if (profile.points.length === 0) {
             this.status.textContent =
                 "Select numeric fields to plot from this feature.";
@@ -741,11 +739,15 @@ export class VectorFeatureProfileController {
     /**
      * Present selected fields and missing values in an accessible compact table.
      *
-     * @param {Object[]} points Ordered profile points.
+     * @param {ReturnType<typeof buildVectorFeatureProfile>} profile Ordered measurements and their X-axis labels.
+     * @param {boolean} stacked Whether the chart stacks all fields in a single bar.
      * @return {void}
      */
-    #renderTable(points) {
-        for (const point of points) {
+    #renderTable(profile, stacked) {
+        const hideX = stacked || profile.xScale === "ordinal";
+        this.xHeading.hidden = hideX;
+        this.xHeading.textContent = profile.xAxisLabel;
+        for (const point of profile.points) {
             const row = this.document.createElement("tr");
             const field = this.document.createElement("td");
             const button = this.document.createElement("button");
@@ -760,11 +762,11 @@ export class VectorFeatureProfileController {
             value.textContent = point.yValue === null ? "No value" : String(point.yValue);
             const x = this.document.createElement("td");
             x.textContent = point.xLabel;
-            x.hidden = this.xHeading.hidden;
+            x.hidden = hideX;
             row.append(field, x, value);
             this.tableBody.append(row);
         }
-        this.table.hidden = points.length === 0;
+        this.table.hidden = profile.points.length === 0;
     }
 
     /** Release listeners and request removal of retained presentation. @return {void} */
