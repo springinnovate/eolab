@@ -78,7 +78,7 @@ export class CompositeLeafletRenderer {
                 if (frame !== this.selected) return;
                 frame.grid = this.#createGrid(plan);
                 frame.grid.layer.addTo(this.leafletMap);
-                if (this.drawn) frame.grid.layer.getContainer().style.visibility = "hidden";
+                if (this.drawn) frame.grid.layer.getContainer().hidden = true;
                 frame.grid.recovery.refresh();
             },
             error => {
@@ -131,7 +131,7 @@ export class CompositeLeafletRenderer {
             this.prepared.set(signature, {grid, detach, release});
             signal.addEventListener("abort", release, {once: true});
             grid.layer.addTo(this.leafletMap);
-            grid.layer.getContainer().style.visibility = "hidden";
+            grid.layer.getContainer().hidden = true;
             grid.recovery.refresh();
         });
     }

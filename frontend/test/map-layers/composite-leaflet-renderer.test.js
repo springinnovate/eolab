@@ -113,7 +113,8 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     const staged = f.grids.at(-1), secondTile = new FakeRasterControlElement();
     staged.getContainer().appendChild(secondTile);
     staged.emit("tileloadstart", {tile: secondTile, coords: {x: 0, y: 0, z: 1}});
-    assert.equal(staged.getContainer().style.visibility, "hidden");
+    assert.equal(staged.getContainer().hidden, true, "the buffered grid cannot paint through the translucent drawn raster");
+    assert.equal(f.grids[0].getContainer().hidden, false);
     secondTile.setAttribute("class", "leaflet-tile-loaded");
     staged.emit("tileload", {tile: secondTile});
     await preparing;
@@ -127,7 +128,7 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     assert.equal(f.map.pane.children[1], laterGrid.getContainer());
     lookahead.abort();
     assert.deepEqual([...f.map.attached], [staged]);
-    assert.equal(staged.getContainer().style.visibility, "");
+    assert.equal(staged.getContainer().hidden, false);
     assert.ok(secondTile.classList.contains("map-raster-frame-tile"), "a buffered tile must paint at the frame's opacity on handoff");
     assert.deepEqual(f.displayed.at(-1), ["May"]);
 
@@ -142,7 +143,7 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     f.map.onLayerAdd = null;
     incoming.emit("tileload", {tile: left}); await flush();
     assert.ok(f.map.attached.has(staged), "keep the drawn observation until every visible replacement tile is ready");
-    assert.equal(incoming.getContainer().style.visibility, "hidden");
+    assert.equal(incoming.getContainer().hidden, true);
     assert.deepEqual(f.displayed.at(-1), ["May"]);
     f.tile(2); // The new grid also has a pending tile in the destination of the pan.
     f.map.bounds = {min: {x: 512, y: 0}, max: {x: 768, y: 256}};
@@ -153,7 +154,7 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     assert.deepEqual(f.displayed.at(-1), ["May"], "the visible overlap still belongs to May");
     incoming.emit("tileload", {tile: right}); await flush();
     assert.deepEqual([...f.map.attached], [incoming]);
-    assert.equal(incoming.getContainer().style.visibility, "");
+    assert.equal(incoming.getContainer().hidden, false);
     assert.deepEqual(f.displayed.at(-1), ["June"]);
 
     const unused = new AbortController();
@@ -318,7 +319,7 @@ test("failed plan is recoverable and late responses cannot replace current layer
     f.map.onLayerAdd = () => { nextTile = f.tile(); };
     f.renderer.retryFailedTiles(); await flush();
     const next = f.grids.at(-1);
-    assert.equal(next.getContainer().style.visibility, "hidden");
+    assert.equal(next.getContainer().hidden, true);
     assert.ok(f.map.attached.has(drawn), "retry keeps the old frame until the replacement has drawn");
     next.emit("tileload", {tile: nextTile}); await flush();
     assert.deepEqual([...f.map.attached], [next]);

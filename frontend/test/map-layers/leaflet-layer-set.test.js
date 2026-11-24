@@ -172,17 +172,17 @@ test("Leaflet layer set atomically isolates selected individual grids", () => {
     layers.setIndividualRendering(["top", "bottom"]);
     assert.equal(clears, 0, "composite remains until both grids load");
     assert.deepEqual(map.attached, new Set([bottom, top]));
-    assert.equal(top.container.style.visibility, "hidden");
-    assert.equal(bottom.container.style.visibility, "hidden");
-    assert.equal(unrelated.container.style.visibility, undefined);
+    assert.equal(top.container.hidden, true);
+    assert.equal(bottom.container.hidden, true);
+    assert.equal(unrelated.container.hidden, false);
 
     top.emit("load");
     assert.equal(clears, 0);
-    assert.equal(top.container.style.visibility, "hidden");
+    assert.equal(top.container.hidden, true);
     bottom.emit("load");
     assert.equal(clears, 1);
-    assert.equal(top.container.style.visibility, "");
-    assert.equal(bottom.container.style.visibility, "");
+    assert.equal(top.container.hidden, false);
+    assert.equal(bottom.container.hidden, false);
 
     layers.setIndividualRendering(null);
     assert.equal(map.attached.size, 0);
@@ -220,21 +220,21 @@ test("Leaflet layer set ignores stale loads and retries only a failed grid", () 
     first.emit("load");
     second.emit("load");
     assert.equal(clears, 0);
-    assert.equal(replacement.container.style.visibility, "hidden");
+    assert.equal(replacement.container.hidden, true);
 
     replacement.emit("tileerror");
     replacement.emit("load");
     assert.equal(clears, 0);
     assert.equal(replacement.redrawCount, 1);
     assert.deepEqual(map.attached, new Set([second, replacement]));
-    assert.equal(second.container.style.visibility, "hidden");
-    assert.equal(replacement.container.style.visibility, "hidden");
+    assert.equal(second.container.hidden, true);
+    assert.equal(replacement.container.hidden, true);
 
     replacement.emit("load");
     assert.equal(clears, 1);
     assert.deepEqual(map.attached, new Set([second, replacement]));
-    assert.equal(second.container.style.visibility, "");
-    assert.equal(replacement.container.style.visibility, "");
+    assert.equal(second.container.hidden, false);
+    assert.equal(replacement.container.hidden, false);
 });
 
 test("Leaflet layer set keeps the composite after the bounded retry fails", () => {
@@ -316,16 +316,17 @@ test("replacing one paired frame reveals it without waiting for an unchanged loa
     layers.replace("first", pending, {keepPreviousFrame: true, awaitingPublication: true});
     layers.render([{...rendering[0], descriptor: null}, rendering[1]]);
     assert.ok(map.attached.has(first), "the previous date stays on the map during publication");
-    assert.equal(unchanged.container.style.visibility, "");
+    assert.equal(unchanged.container.hidden, false);
     const current = createLayer();
     layers.replace("first", current, {keepPreviousFrame: true});
     layers.render([{...rendering[0], descriptor: {layerName: "new"}}, rendering[1]]);
-    assert.equal(current.container.style.visibility, "hidden");
+    assert.equal(current.container.hidden, true, "the incoming grid stays out of the drawing order until its tiles load");
+    assert.equal(first.container.hidden, false);
     assert.ok(map.attached.has(first), "the previous date stays on the map while the new tiles load");
-    assert.equal(unchanged.container.style.visibility, "", "the other half of the comparison stays visible");
+    assert.equal(unchanged.container.hidden, false, "the other half of the comparison stays visible");
     current.emit("load");
-    assert.equal(current.container.style.visibility, "");
-    assert.equal(unchanged.container.style.visibility, "");
+    assert.equal(current.container.hidden, false);
+    assert.equal(unchanged.container.hidden, false);
     assert.equal(current.opacity, .4);
     assert.equal(unchanged.opacity, .6);
     assert.equal(map.attached.has(first), false);

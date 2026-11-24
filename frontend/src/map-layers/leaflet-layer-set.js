@@ -738,7 +738,7 @@ export class LeafletLayerSet {
     }
 
     /**
-     * Hide or reveal one attached Leaflet layer container.
+     * Keep a staged grid out of the map's drawing order while Leaflet loads its tiles.
      *
      * @param {Object} layer Leaflet-compatible layer.
      * @param {boolean} hidden Whether the layer must remain visually hidden.
@@ -746,9 +746,7 @@ export class LeafletLayerSet {
      */
     #setLayerHidden(layer, hidden) {
         const container = layer.getContainer?.();
-        if (container?.style !== undefined) {
-            container.style.visibility = hidden ? "hidden" : "";
-        }
+        if (container) container.hidden = hidden;
     }
 
     /** Return the source frames currently visible in a paired presentation.
