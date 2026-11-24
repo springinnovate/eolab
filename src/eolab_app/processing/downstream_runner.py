@@ -183,8 +183,8 @@ def summarize_downstream_covered_values(
     """Summarize raster values inside the downstream coverage produced by the WWF model.
 
     ``sum(a)`` reports the exact float returned by the original model. Optional
-    formulas are explicitly postprocessing: they read the model's output grid
-    and NoData convention without changing its coverage or masked values.
+    formulas evaluate the model's masked output cells in Float64, using the
+    same arithmetic precision as Raster summary.
 
     Args:
         covered_values_path: Complete values raster masked by downstream coverage.
@@ -212,7 +212,7 @@ def summarize_downstream_covered_values(
             else None
         )
         for _, window in dataset.block_windows(1):
-            values = dataset.read(1, window=window, masked=True)
+            values = dataset.read(1, window=window, masked=True, out_dtype="float64")
             valid_covered_pixels = ~np.ma.getmaskarray(values) & np.isfinite(
                 values.data
             )
