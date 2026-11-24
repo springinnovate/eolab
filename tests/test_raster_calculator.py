@@ -1644,9 +1644,9 @@ def test_numeric_meridian_locates_reference_and_warped_samples(
 @pytest.mark.parametrize(
     "survey_reference",
     [
-        (9102, 1, None, "numeric"),
-        (9103, 60, None, "numeric"),
-        (9105, 1 / 0.9, 5720, "numeric"),
+        pytest.param((9102, 1, None, "numeric"), id="degrees"),
+        pytest.param((9103, 60, None, "numeric"), id="arcminutes"),
+        pytest.param((9105, 1 / 0.9, 5720, "numeric"), id="height"),
         (9105, 1 / 0.9, None, "esri"),
     ],
     indirect=True,
@@ -1688,7 +1688,12 @@ def test_published_survey_grid_preserves_numeric_meridian_and_height(
         rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
         rasterio.open(destination) as result_grid,
     ):
-        assert result_grid.crs == CRS.from_wkt(spec.grid.crs)
+        published_crs = ProjCRS.from_wkt(result_grid.crs.to_wkt(version="WKT2_2019"))
+        assert published_crs.equals(
+            ProjCRS.from_wkt(spec.grid.crs), ignore_axis_order=True
+        )
+        if vertical:
+            assert published_crs.sub_crs_list[-1].to_epsg() == vertical
         assert result_grid.units == ("unknown" if vertical else None,)
         np.testing.assert_array_equal(result_grid.read(1), np.arange(52).reshape(4, 13))
     assert read_raster_pixel(destination, -4.185 + meridian, 48.335).value == 51
@@ -1801,14 +1806,24 @@ def test_published_raster_keeps_reference_longitudes(
         spec = plan_calculator_grid(
             sources, QueuedRasterCalculator(request=request, polygonArea=None)
         )
-        assert CRS.from_wkt(spec.grid.crs) == CRS.from_wkt(admitted)
+        if geokeys == "STANDARD":
+            assert ProjCRS.from_wkt(spec.grid.crs).equals(
+                ProjCRS.from_wkt(admitted), ignore_axis_order=True
+            )
+        else:
+            assert CRS.from_wkt(spec.grid.crs) == CRS.from_wkt(admitted)
         result = calculate_raster(sources, spec, directory, RasterAggregateLimits())
         source = directory / "result.tif"
         with (
             rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
             rasterio.open(source, GEOREF_SOURCES="INTERNAL") as output,
         ):
-            assert output.crs == CRS.from_wkt(admitted)
+            if geokeys == "STANDARD":
+                assert ProjCRS.from_wkt(output.crs.to_wkt(version="WKT2_2019")).equals(
+                    ProjCRS.from_wkt(admitted), ignore_axis_order=True
+                )
+            else:
+                assert output.crs == CRS.from_wkt(admitted)
             assert output.transform == transform
             assert output.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
             assert output.overviews(1) == ([] if width == 4 else [2, 4])

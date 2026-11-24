@@ -4,6 +4,7 @@ import hashlib
 from itertools import batched
 import math
 from pathlib import Path
+import re
 
 import numpy as np
 from pyproj import CRS as ProjCRS
@@ -69,14 +70,27 @@ def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -
         has_projection_citation = decoded.get(
             "GTModelTypeGeoKey"
         ) == 32767 and decoded.get("PCSCitationGeoKey", "").startswith(
-            "ESRI PE String = "
+            ("ESRI PE String = GEOGCS[", "ESRI PE String = PROJCS[")
         )
-        if not math.isclose(grid_unit, math.radians(1)) and not has_projection_citation:
-            # GDAL accepts explicit WKT in its projection-engine citation.
-            # Keep the standard numeric keys authoritative for other readers.
-            encoded = (
-                "ESRI PE String = " + crs.to_wkt(version="WKT2_2019") + "|"
-            ).encode("utf-8")
+        # GeoTools takes the meridian from a registered datum. A custom
+        # datum in degrees already round-trips through both native readers.
+        if not has_projection_citation and (
+            not math.isclose(grid_unit, math.radians(1))
+            or decoded.get("GeogGeodeticDatumGeoKey") != 32767
+        ):
+            # GeoTools reads WKT1 in raster x/y order. ESRI's compound form
+            # lets GDAL retain height while GeoTools opens the horizontal image.
+            dialect = "WKT1_ESRI" if crs.is_compound else "WKT1_GDAL"
+            wkt = crs.to_wkt(version=dialect, output_axis_rule=False)
+            # PROJ emits PRIMEM in degrees. The citation readers interpret its
+            # number in the geographic angular unit. Edit only the emitted token.
+            wkt = re.sub(
+                r'(\bPRIMEM\["(?:[^"]|"")*",)[^,\]]+',
+                lambda match: match[1] + repr(longitude),
+                wkt,
+                count=1,
+            )
+            encoded = ("ESRI PE String = " + wkt + "|").encode("utf-8")
             citation = citation.encode("utf-8")
             entries[GeoKeys.GTModelTypeGeoKey] = (0, 1, 32767)
             entries[GeoKeys.PCSCitationGeoKey] = (34737, len(encoded), len(citation))
@@ -175,7 +189,16 @@ def write_float64_cog(
             or result.height != grid.height
             or result.count != 1
             or result.dtypes != ("float64",)
-            or result.crs != CRS.from_wkt(grid.crs)
+            or not (
+                result.crs == CRS.from_wkt(grid.crs)
+                or (
+                    copy_keys
+                    and result.crs
+                    and ProjCRS.from_wkt(result.crs.to_wkt(version="WKT2_2019")).equals(
+                        definition, ignore_axis_order=True
+                    )
+                )
+            )
             or tuple(result.transform)[:6] != grid.transform
             or result.nodata is None
             or not math.isnan(result.nodata)
