@@ -472,12 +472,13 @@ def _source_window_for_projected_geometries(
     )
 
 
-def project_wgs84_polygons(
+def project_raster_polygons(
     dataset: RasterDataset,
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
     *,
+    source_crs: CRS | str = "EPSG:4326",
     maximum_output_coordinates: int | None,
 ) -> tuple[dict[str, object], ...]:
     """Project bounded polygons without clipping their source-pixel envelope.
@@ -489,9 +490,10 @@ def project_wgs84_polygons(
 
     Args:
         dataset: Open source raster with a coordinate reference system.
-        geometries: Validated polygonal WGS 84 GeoJSON values.
+        geometries: Validated polygon coordinates in their original CRS.
         maximum_coordinates: Hard transformation capacity owned by the caller.
         coordinate_transform: Injectable CRS transformation mechanism.
+        source_crs: CRS in which the input edges are straight.
         maximum_output_coordinates: Output-coordinate capacity including periodic
             copies, or None when the caller permits unlimited geometry.
 
@@ -506,7 +508,7 @@ def project_wgs84_polygons(
     return _periodic_polygon_copies(
         dataset,
         project_polygons_to_crs(
-            "EPSG:4326",
+            source_crs,
             dataset.crs,
             geometries,
             maximum_coordinates,
@@ -645,7 +647,7 @@ def selected_raster_area_for_wgs84_polygons(
                 max(point[1] for point in positions),
             )
         prepare_raster_for_wgs84_bounds(dataset, selected_bounds)
-    projected_tuple = project_wgs84_polygons(
+    projected_tuple = project_raster_polygons(
         dataset,
         geometries,
         maximum_coordinates,

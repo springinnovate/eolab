@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
+from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from shapely.geometry import MultiPolygon, Polygon, box, mapping
 
@@ -67,13 +68,14 @@ def test_calculation_reuses_polygons_and_releases_them(
     calls = 0
 
     def project(
-        reader: vector.PolygonRasterizer, geometry: dict[str, Any]
+        reader: vector.PolygonRasterizer, geometry: dict[str, Any], source_crs: CRS
     ) -> tuple[dict[str, object], ...]:
         """Count projections and retain the reader only to inspect its cleanup.
 
         Args:
             reader: Production reader being prepared.
             geometry: Validated source polygon.
+            source_crs: Original coordinate system of the polygon edges.
 
         Returns:
             Unchanged production projection.
@@ -85,7 +87,7 @@ def test_calculation_reuses_polygons_and_releases_them(
         calls += 1
         if reader not in prepared:
             prepared.append(reader)
-        return original_project(reader, geometry)
+        return original_project(reader, geometry, source_crs)
 
     def forbidden_read(*args: Any, **kwargs: Any) -> Any:
         """Raise a simulated raster I/O error after area preparation.
@@ -151,13 +153,14 @@ def test_preparation_limits_and_cancellation_release_prior_features(
     cancelled = False
 
     def project(
-        reader: vector.PolygonRasterizer, geometry: dict[str, Any]
+        reader: vector.PolygonRasterizer, geometry: dict[str, Any], source_crs: CRS
     ) -> tuple[dict[str, object], ...]:
         """Inject a second-feature failure after retaining the first.
 
         Args:
             reader: Production reader with the first retained feature.
             geometry: Next source polygon.
+            source_crs: Original coordinate system of the polygon edges.
 
         Returns:
             Unchanged projection unless testing failure.
@@ -173,7 +176,7 @@ def test_preparation_limits_and_cancellation_release_prior_features(
             if failure == "projection":
                 raise ValueError("Injected projection failure")
             cancelled = True
-        return original(reader, geometry)
+        return original(reader, geometry, source_crs)
 
     monkeypatch.setattr(vector.PolygonRasterizer, "project", project)
     expected = {
@@ -227,7 +230,7 @@ def test_retained_masks_do_not_reopen_sources_and_remain_cancellable(
             """
             raise AssertionError("Unexpected per-tile source read")
 
-        monkeypatch.setattr(vector, "polygon_features", forbidden)
+        monkeypatch.setattr(vector, "_source_collection", forbidden)
         monkeypatch.setattr(vector, "native_bbox_for_grid", forbidden)
         for _ in range(3):
             mask = reader.rasterize((8, 8), dataset.transform, False)

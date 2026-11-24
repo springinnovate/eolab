@@ -8,7 +8,10 @@ import fiona
 import numpy
 import pytest
 import rasterio
+from numpy.typing import NDArray
+from rasterio.transform import Affine
 from rasterio.transform import from_origin
+from shapely import segmentize
 from shapely.geometry import box, mapping
 
 from catalog_selection_support import write_selection
@@ -22,6 +25,83 @@ from eolab_app.processing.flow_area import (
 )
 from eolab_app.processing.models import ProcessingError
 from raster_source_support import SOURCE
+
+
+def _trace_both_directions(
+    directory: Path,
+    elevations: NDArray[numpy.int16],
+    transform: Affine,
+    crs: str,
+    selection: ResolvedCatalogSelection,
+) -> NDArray[numpy.uint8]:
+    """Write a DEM and read the published flow mask for a catalog selection.
+
+    Args:
+        directory: Disposable source and calculation directory.
+        elevations: Native DEM cells, with -9999 marking missing values.
+        transform: Pixel-to-map transform of the DEM.
+        crs: Coordinate reference system for the DEM.
+        selection: Authorized original polygon layer.
+
+    Returns:
+        Published upstream and downstream mask with the polygon cells excluded.
+    """
+    dem = directory / "dem.tif"
+    with rasterio.open(
+        dem,
+        "w",
+        driver="GTiff",
+        height=elevations.shape[0],
+        width=elevations.shape[1],
+        count=1,
+        dtype=elevations.dtype,
+        crs=crs,
+        transform=transform,
+        nodata=-9999,
+    ) as dataset:
+        dataset.write(elevations, 1)
+    plan = FlowAreaPlan(
+        inputs=FlowAreaInputs(
+            dem=SOURCE, polygon=selection.selection, upstream=True, downstream=True
+        ),
+        grid=plan_flow_grid(dem),
+    )
+    attempt = directory / "attempt"
+    attempt.mkdir()
+    calculate_flow_area((dem, selection), plan, attempt, RasterAggregateLimits())
+    with rasterio.open(attempt / "result.tif") as result:
+        return result.read(1)
+
+
+@pytest.mark.parametrize(
+    "subdivide", [False, True], ids=["four-corners", "5km-vertices"]
+)
+def test_flow_mask_preserves_projected_source_edges(
+    tmp_path: Path, subdivide: bool
+) -> None:
+    """Trace the same polar rectangle with or without intermediate vertices.
+
+    Args:
+        tmp_path: Directory for the native GeoPackage, DEM and result.
+        subdivide: Add collinear vertices every five kilometres to the rectangle.
+    """
+    crs = "EPSG:3413"
+    rectangle = box(-300000, -1300000, 300000, -1100000)
+    geometry = segmentize(rectangle, 5000) if subdivide else rectangle
+    selection = write_selection(tmp_path / "polar.gpkg", [mapping(geometry)], crs=crs)
+    elevations = numpy.full((56, 80), -9999, dtype="int16")
+    elevations[::2] = numpy.arange(79, -1, -1)
+    result = _trace_both_directions(
+        tmp_path,
+        elevations,
+        from_origin(-400000, -900000, 10000, 10000),
+        crs,
+        selection,
+    )
+    expected = numpy.where(elevations == -9999, 255, 0).astype("uint8")
+    expected[20:40:2, :10] = 1
+    expected[20:40:2, 70:] = 1
+    numpy.testing.assert_array_equal(result, expected)
 
 
 @pytest.fixture(
