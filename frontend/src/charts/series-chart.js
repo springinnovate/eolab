@@ -103,7 +103,7 @@ function bindSeriesPointSelection(mark, select) {
  * @param {boolean} [configuration.fitXAxisLabels=false] Fit the bottom margin to the displayed X ticks and title in a compact plot.
  * @param {number|null} [configuration.axisFontSize=null] Tick font size in screen pixels; axis titles are one pixel larger. Null keeps the caller's CSS.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
- * @param {string} configuration.yAxisLabel Vertical-axis title.
+ * @param {string} configuration.yAxisLabel Vertical-axis title. A top title can use newlines for full-width caption lines.
  * @param {"left"|"top"} [configuration.yAxisLabelPosition="left"] Place the Y title beside or above the plot.
  * @param {string} configuration.ariaLabel Chart-level accessible description.
  * @param {(point:Object,series:ChartSeries,index:number)=>string} configuration.pointAccessibleLabel Accessible point label.
@@ -200,8 +200,11 @@ export function renderOrdinalSeriesChart({
      */
     const tickLabel = index => formatTickLabel(points[index].xLabel, xTickLabelLimit);
     const tickLength = Math.max(0, ...indexes.map(index => tickLabel(index).length));
+    const topYTitle = yAxisLabelPosition === "top";
+    const yTitleLines = topYTitle ? yAxisLabel.split("\n") : [yAxisLabel];
+    const lineHeight = (axisFontSize ?? 11) + 4;
     const margin = {...CHART_MARGIN,
-        top: yAxisLabelPosition === "top" ? Math.max(CHART_MARGIN.top, (axisFontSize ?? 11) + 17) : CHART_MARGIN.top,
+        top: topYTitle ? lineHeight * yTitleLines.length + 13 : CHART_MARGIN.top,
         left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
         bottom: CHART_MARGIN.bottom + fontGrowth * 5};
     if (fitXAxisLabels || axisFontSize !== null) {
@@ -252,15 +255,16 @@ export function renderOrdinalSeriesChart({
     // values never overflow the library's decimal tick-step calculation.
     const yTicks = yScale === "log" ? scaleLinear([minimum, maximum]).ticks(yTickCount)
         .map(value => Math.min(Number.MAX_VALUE, Math.max(Number.MIN_VALUE, 10 ** value))) : y.ticks(yTickCount);
-    const topYTitle = yAxisLabelPosition === "top";
-    const yTitleX = topYTitle ? margin.left : axisFontSize === null ? 16 : Math.max(16, axisFontSize + 4);
-    const yTitleY = topYTitle ? margin.top - 13 : margin.top + plotHeight / 2;
+    const yTitles = topYTitle ? yTitleLines.map((text, line) => ({
+        text, x: yTitleLines.length > 1 ? 4 : margin.left, y: (line + 1) * lineHeight, anchor: "start",
+    })) : [{text: yAxisLabel, x: Math.max(16, (axisFontSize ?? 0) + 4),
+        y: margin.top + plotHeight / 2, rotation: -90}];
     drawChartAxes(documentContext, chart, {left: margin.left, top: margin.top, width: plotWidth, height: plotHeight},
         {scale: horizontal, values: [...new Set(ticks)], rotation: -35,
             format: value => tickLabel(xScale === "numeric" ? numericX.indexOf(value) : value)},
         {scale: y, values: yTicks, format: formatSeriesNumber}, [
             {text: xAxisLabel, x: margin.left + plotWidth / 2, y: height - 8},
-            {text: yAxisLabel, x: yTitleX, y: yTitleY, rotation: topYTitle ? 0 : -90, anchor: topYTitle ? "start" : "middle"},
+            ...yTitles,
         ], axisFontSize);
     const clipId = `series-chart-clip-${++clipSerial}`;
     const definitions = createSvgElement(documentContext, "defs", {});

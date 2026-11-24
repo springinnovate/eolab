@@ -246,7 +246,7 @@ export function renderVectorFieldChart(options) {
             xValue: xScale === "numeric" ? fieldCoordinate(point.xValue, xOrigin) : point.xValue,
             yValue: point.yValue === null ? null : fieldCoordinate(point.yValue, yOrigin),
         })),
-        yAxisLabel: yOrigin === undefined ? options.yAxisLabel : options.yAxisLabel + " relative to " + yOrigin,
+        yAxisLabel: yOrigin === undefined ? options.yAxisLabel : options.yAxisLabel + " relative to\n" + yOrigin,
         yAxisLabelPosition: yOrigin === undefined ? options.yAxisLabelPosition : "top",
         pointAccessibleLabel: point => options.pointAccessibleLabel(point.original),
         pointTooltip: point => options.pointTooltip(point.original),
