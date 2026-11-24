@@ -23,7 +23,7 @@ from rasterio.features import geometry_mask
 from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
-from shapely.geometry import shape
+from shapely.geometry import mapping, shape
 
 from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.catalog_selection import (
@@ -43,6 +43,14 @@ from eolab_app.raster.bounded_window import (
 from eolab_app.raster.read_cancellation import require_active_raster_read
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 from eolab_app.raster.models import RasterAreaMask
+from eolab_app.vector_native import (
+    get_native_feature,
+    iter_native_features,
+    native_feature_properties,
+    native_field_types,
+    native_spatial_geometry,
+    open_native_vector_layer,
+)
 from eolab_app.attribute_filter import (
     AttributeFilterError,
     matches_filter,
@@ -262,24 +270,37 @@ def polygon_records(
                 raise GeometryValidationError(
                     "The catalog vector has no coordinate reference system"
                 )
-            candidates = dataset
-            if resolved.driver == "GPKG" and resolved.selection.filter.active:
+            native_candidates = None
+            native_geometry_layer = None
+            filtered_geopackage = (
+                resolved.driver == "GPKG" and resolved.selection.filter.active
+            )
+            if filtered_geopackage or resolved.matches is not None:
                 filter_fields = required_source_fields(
                     resolved.calculated_fields,
                     tuple(
                         dict.fromkeys(
-                            [
-                                *resolved.selection.filter.fields,
-                                *property_names,
-                            ]
+                            [*resolved.selection.filter.fields, *property_names]
                         )
                     ),
                 )
-                candidates = sources.enter_context(
-                    _source_collection(
-                        resolved, ignore_geometry=True, include_fields=filter_fields
+                native_candidates = sources.enter_context(
+                    open_native_vector_layer(
+                        resolved,
+                        ignore_geometry=filtered_geopackage,
+                        include_fields=filter_fields,
+                        where=resolved.where,
+                        bbox=bbox,
                     )
                 )
+                fields_to_read = native_field_types(native_candidates)
+                if filtered_geopackage and bbox is None:
+                    native_geometry_layer = sources.enter_context(
+                        open_native_vector_layer(
+                            resolved,
+                            include_fields=(),
+                        )
+                    )
 
             def iterate() -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
                 """Yield polygons and requested attributes within the source-read budget.
@@ -295,7 +316,12 @@ def polygon_records(
                     options["where"] = resolved.where
                 if bbox is not None:
                     options["bbox"] = bbox
-                for count, feature in enumerate(candidates.filter(**options), 1):
+                candidates = (
+                    iter_native_features(native_candidates)
+                    if native_candidates is not None
+                    else dataset.filter(**options)
+                )
+                for count, feature in enumerate(candidates, 1):
                     require_active_raster_read(cancellation_requested)
                     if max_features is not None and count > max_features:
                         raise GeometryValidationError(
@@ -305,26 +331,44 @@ def polygon_records(
                         raise GeometryValidationError(
                             f"Vector reading exceeded its {timeout_seconds:g}-second time budget after {count - 1:,} features"
                         )
-                    properties = dict(feature.properties)
+                    native = native_candidates is not None
+                    if (
+                        resolved.matches is not None
+                        and feature.GetFID() not in resolved.matches.ids
+                    ):
+                        continue
+                    properties = (
+                        native_feature_properties(feature, fields_to_read)
+                        if native
+                        else dict(feature.properties)
+                    )
                     properties.update(
                         evaluate_calculated_fields(
                             resolved.calculated_fields, properties
                         )
                     )
-                    if not (int(feature.id) in resolved.matches.ids if resolved.matches is not None
-                            else matches_filter(resolved.selection.filter, properties)):
+                    if resolved.matches is None and not matches_filter(
+                        resolved.selection.filter, properties
+                    ):
                         continue
-                    if candidates is not dataset:
-                        feature = dataset.get(feature.id)
+                    if native_geometry_layer is not None:
+                        feature = get_native_feature(
+                            native_geometry_layer, feature.GetFID()
+                        )
                         if feature is None:
                             raise SelectionUnavailableError(
                                 "A selected polygon could not be read from its source."
                             )
-                    if feature.geometry is None:
+                    geometry = feature.GetGeometryRef() if native else feature.geometry
+                    if geometry is None:
                         raise GeometryValidationError(
                             "Sampling requires non-null polygons"
                         )
-                    raw = to_dict(feature.geometry)
+                    raw = (
+                        mapping(native_spatial_geometry(geometry))
+                        if native
+                        else to_dict(geometry)
+                    )
                     _validate_native_polygon_coordinates(
                         raw, max_feature_coordinates, validate_wgs84_bounds=False
                     )
