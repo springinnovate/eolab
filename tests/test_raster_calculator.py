@@ -18,6 +18,7 @@ from rasterio.warp import transform_bounds
 from shapely import contains_xy
 from shapely.geometry import MultiPolygon, Point, Polygon, box, mapping
 
+from eolab_app.catalog.geotiff import build_stac_item
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_calculator import (
@@ -39,7 +40,9 @@ from eolab_app.processing.raster_expression import (
     evaluate_pixel_expression,
 )
 from eolab_app.raster.models import Wgs84Bounds
+from eolab_app.raster.paired_statistics import read_raster_paired_statistics
 from eolab_app.raster.pixel import read_raster_pixel
+from eolab_app.raster.source_access import describe_raster_data
 from catalog_selection_support import write_selection
 from raster_fixture_support import write_source
 from raster_source_support import SOURCE
@@ -1663,6 +1666,21 @@ def test_published_survey_grid_preserves_numeric_meridian_and_height(
         np.testing.assert_array_equal(result_grid.read(1), np.arange(52).reshape(4, 13))
     assert read_raster_pixel(destination, -4.185 + meridian, 48.335).value == 51
     assert result.valid_pixels == 52
+    expected_bounds = (-4.31 + meridian, 48.33, -4.18 + meridian, 48.37)
+    geographic = write_source(
+        tmp_path / "wgs84.tif",
+        np.arange(52, dtype="int16").reshape(4, 13),
+        transform=from_origin(expected_bounds[0], expected_bounds[3], 0.01, 0.01),
+    )
+    for path in (source, destination):
+        assert describe_raster_data(path)["bounds"] == pytest.approx(expected_bounds)
+        assert build_stac_item(tmp_path, path)["bbox"] == pytest.approx(expected_bounds)
+        paired = read_raster_paired_statistics(path, geographic, None)
+        assert paired.paired_sample_count > 0
+        assert (paired.x_minimum, paired.x_maximum) == (
+            paired.y_minimum,
+            paired.y_maximum,
+        )
 
 
 @pytest.mark.parametrize(

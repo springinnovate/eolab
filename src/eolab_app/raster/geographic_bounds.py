@@ -35,7 +35,7 @@ def transform_bounds_to_wgs84(
         rasterio.errors.RasterioError: If GDAL cannot transform the extent.
     """
     try:
-        crs = ProjCRS(source_crs)
+        crs = ProjCRS.from_wkt(source_crs.to_wkt(version="WKT2_2019"))
         operation = crs.coordinate_operation
         cylindrical = operation is not None and operation.method_name in {
             "Popular Visualisation Pseudo Mercator",
@@ -52,7 +52,7 @@ def transform_bounds_to_wgs84(
                 densify_pts=densify_points,
             )
         transformer = Transformer.from_crs(
-            source_crs, "EPSG:4326", always_xy=True, force_over=True
+            crs, "EPSG:4326", always_xy=True, force_over=True
         )
         return transformer.transform_bounds(*source_bounds, densify_pts=densify_points)
     except ProjError as error:
