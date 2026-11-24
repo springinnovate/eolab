@@ -379,14 +379,20 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                     raise ValueError(
                         "Reproject or shift the regional longitude grid into -180 to 180 degrees."
                     )
-                if src.units[0] and src.units[0] != var.units:
-                    raise ValueError(
-                        f"Band units {src.units[0]!r} differ from {var.units!r}."
-                    )
+                declared_units = {src.units[0]} if src.units[0] else set()
                 for band in (0, 1):
-                    standard_name = src.tags(band).get("standard_name", "").strip()
-                    if standard_name:
-                        measurement_sources.setdefault(standard_name, obs.file)
+                    for key, raw_value in src.tags(band).items():
+                        tag = key.lower()
+                        value = raw_value.strip()
+                        if tag == "standard_name" and value:
+                            measurement_sources.setdefault(value, obs.file)
+                        elif tag == "units" and value:
+                            declared_units.add(value)
+                for unit in sorted(declared_units):
+                    if unit != var.units:
+                        raise ValueError(
+                            f"Band units {unit!r} differ from {var.units!r}."
+                        )
                 if src.scales[0] != 1 or src.offsets[0] != 0:
                     raise ValueError(
                         "Convert packed values to their declared units before indexing."

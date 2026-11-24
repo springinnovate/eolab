@@ -241,24 +241,46 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     assert not (tmp_path / "dataset.yaml").exists()
 
 
-def test_measurements_with_identical_units(tmp_path: Path) -> None:
+@pytest.mark.parametrize("name_tag", ["standard_name", "STANDARD_NAME"])
+def test_measurements_with_identical_units(tmp_path: Path, name_tag: str) -> None:
     """Keep different declared measurements out of one indexed variable.
 
     Args:
         tmp_path: Archive containing equally sized rasters with matching units.
+        name_tag: Spelling used by the GeoTIFF writer for its measurement tag.
     """
     manifest = annual_manifest(tmp_path)
     first, second = sorted(tmp_path.glob("*.tif"))
     with rasterio.open(first, "r+") as src:
-        src.update_tags(standard_name="precipitation_amount")
+        src.update_tags(**{name_tag: "precipitation_amount"})
     assert run_cli("build", manifest, "--check").returncode == 0
     with rasterio.open(second, "r+") as src:
-        src.update_tags(1, standard_name="runoff_amount")
+        src.update_tags(1, **{name_tag: "runoff_amount"})
     result = run_cli("build", manifest)
     assert result.returncode == 1
     for clue in (first.name, second.name, "precipitation_amount", "runoff_amount"):
         assert clue in result.stderr
     assert not (tmp_path / "dataset.yaml").exists()
+
+
+def test_units_in_geotiff_metadata(tmp_path: Path) -> None:
+    """Report a conflicting band unit even when the dedicated GDAL unit matches.
+
+    Args:
+        tmp_path: Directory containing two observations reviewed as millimetres.
+    """
+    manifest = annual_manifest(tmp_path)
+    first, second = sorted(tmp_path.glob("*.tif"))
+    with rasterio.open(first, "r+") as src:
+        src.update_tags(units="mm")
+    with rasterio.open(second, "r+") as src:
+        src.set_band_unit(1, "mm")
+        src.update_tags(1, UNITS="cm")
+    result = run_cli("build", manifest)
+    assert result.returncode == 1
+    for clue in (second.name, "cm", "mm"):
+        assert clue in result.stderr
+    assert not (tmp_path / "catalog.sqlite").exists()
 
 
 @pytest.mark.parametrize("key", ["observations", "time"])
