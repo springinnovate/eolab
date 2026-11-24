@@ -3,14 +3,45 @@ import { formatSeriesNumber, renderOrdinalSeriesChart } from "../charts/series-c
 
 const FIELD_ORDER = new Intl.Collator("en", {numeric: true, sensitivity: "base"});
 
+/** Number of features in one interactive comparison or native picker page. */
+export const FEATURES_PER_PAGE = 1000;
+
+/** List the exact feature ranges available in a plot, values table, or picker.
+ * @param {HTMLSelectElement} select Range control.
+ * @param {number} total Number of features in the complete selection.
+ * @param {number|null} start First zero-based row, or null for the entire plot.
+ * @param {boolean} [offerAll=false] Include the slower whole-selection plot.
+ * @return {void}
+ */
+export function fillFeatureRanges(select, total, start, offerAll = false) {
+    select.replaceChildren();
+    if (total <= FEATURES_PER_PAGE) return;
+    const count = total.toLocaleString();
+    for (let offset = 0; offset < total; offset += FEATURES_PER_PAGE) {
+        const option = select.ownerDocument.createElement("option");
+        option.value = String(offset);
+        option.textContent = (offset + 1).toLocaleString() + "–" +
+            Math.min(offset + FEATURES_PER_PAGE, total).toLocaleString() + " of " + count;
+        select.append(option);
+    }
+    if (offerAll) {
+        const option = select.ownerDocument.createElement("option");
+        option.value = "all";
+        option.textContent = "Plot all " + count + " features (slower)";
+        select.append(option);
+    }
+    select.value = start === null ? "all" : String(start);
+}
+
 /** Bind the result switch and in-place pickers for one vector plot. */
 export class VectorPlotPanel {
     /**
      * @param {Document} documentContext Document containing this panel.
      * @param {string} prefix ID of the owning feature plot.
-     * @param {()=>void} redraw Redraw at the new plot width.
+     * @param {()=>void} redraw Render the requested chart or values at the current width.
+     * @param {()=>number|null} selectedFeature Index to select when the feature picker opens.
      */
-    constructor(documentContext, prefix, redraw) {
+    constructor(documentContext, prefix, redraw, selectedFeature) {
         this.abort = new AbortController();
         const listen = { signal: this.abort.signal };
         const element = suffix => documentContext.querySelector("#" + prefix + "-" + suffix);
@@ -20,6 +51,12 @@ export class VectorPlotPanel {
         this.valuesButton = element("values-button");
         this.fieldButton = element("fields-button");
         this.featureButton = element("features-button");
+        this.featureList = element("feature-list");
+        this.featureRange = element("feature-range");
+        this.featureRangeLabel = element("feature-range-label");
+        this.featureRange.addEventListener("change", () => this.#fillFeatureList(Number(this.featureRange.value)), listen);
+        this.selectedFeature = selectedFeature;
+        this.observations = [];
         this.fieldSearch = element("field-search");
         this.pickers = [
             {button: this.featureButton, body: element("features-picker"), done: element("features-done")},
@@ -35,13 +72,19 @@ export class VectorPlotPanel {
                     this.activePicker = picker;
                     picker.body.hidden = false;
                     picker.button.setAttribute("aria-expanded", "true");
+                    if (picker.button === this.featureButton) this.#showFeatureRange();
                     if (picker.button === this.fieldButton) this.fieldSearch.focus();
                 }
             }, listen);
             picker.done.addEventListener("click", () => this.closePicker(), listen);
         }
-        this.plotButton.addEventListener("click", () => this.showValues(false), listen);
-        this.valuesButton.addEventListener("click", () => this.showValues(true), listen);
+        for (const [button, values] of [[this.plotButton, false], [this.valuesButton, true]]) {
+            button.addEventListener("click", () => {
+                if (this.plot.hidden === values) return;
+                this.showValues(values);
+                redraw();
+            }, listen);
+        }
         this.showValues(false);
         this.width = 0;
         const view = documentContext.defaultView;
@@ -78,6 +121,61 @@ export class VectorPlotPanel {
         this.valuesButton.setAttribute("aria-pressed", String(values));
     }
 
+    /** Retain the selectable features and update the list only while it is open.
+     * @param {ReadonlyArray<import("./inspection-observation.js").VectorInspectionObservation>} observations Ordered map selection.
+     * @return {void}
+     */
+    setFeatureChoices(observations) {
+        this.observations = observations;
+        if (this.activePicker?.button === this.featureButton) this.#showFeatureRange();
+    }
+
+    /** Follow feature navigation in the open picker, including across page boundaries. @return {void} */
+    syncSelectedFeature() {
+        if (this.activePicker?.button !== this.featureButton) return;
+        const index = this.selectedFeature();
+        if (index === null || index >= this.observations.length) return;
+        const start = Math.floor(index / FEATURES_PER_PAGE) * FEATURES_PER_PAGE;
+        if (this.observations.length > FEATURES_PER_PAGE && this.featureRange.value !== String(start)) {
+            this.featureRange.value = String(start);
+            this.#fillFeatureList(start);
+        } else this.featureList.value = String(index);
+    }
+
+    /** Open the picker on the page containing the inspected feature. @return {void} */
+    #showFeatureRange() {
+        const selected = this.selectedFeature() ?? 0;
+        const start = selected < this.observations.length ? Math.floor(selected / FEATURES_PER_PAGE) * FEATURES_PER_PAGE : 0;
+        this.featureRangeLabel.hidden = this.observations.length <= FEATURES_PER_PAGE;
+        fillFeatureRanges(this.featureRange, this.observations.length, start);
+        this.#fillFeatureList(start);
+    }
+
+    /** Populate one page of the open native list, keeping original selection indexes.
+     * @param {number} start First zero-based feature in the picker. @return {void}
+     */
+    #fillFeatureList(start) {
+        const list = this.featureList;
+        const selected = this.selectedFeature();
+        list.replaceChildren();
+        const end = Math.min(start + FEATURES_PER_PAGE, this.observations.length);
+        const onPage = selected !== null && selected >= start && selected < end;
+        if (!onPage) {
+            const prompt = list.ownerDocument.createElement("option");
+            prompt.textContent = "Choose a feature";
+            prompt.value = "";
+            prompt.disabled = true;
+            list.append(prompt);
+        }
+        for (let index = start; index < end; index++) {
+            const option = list.ownerDocument.createElement("option");
+            option.value = String(index);
+            option.textContent = vectorFeatureLabel(this.observations[index], index);
+            list.append(option);
+        }
+        list.value = onPage ? String(selected) : "";
+    }
+
     /**
      * Close the open context picker and optionally return focus to its button.
      * @param {boolean} [focus=true] Restore keyboard focus when dismissing the picker.
@@ -87,6 +185,10 @@ export class VectorPlotPanel {
         const picker = this.activePicker;
         if (!picker) return false;
         picker.body.hidden = true;
+        if (picker.button === this.featureButton) {
+            this.featureList.replaceChildren();
+            this.featureRange.replaceChildren();
+        }
         picker.button.setAttribute("aria-expanded", "false");
         if (focus) picker.button.focus();
         this.activePicker = null;

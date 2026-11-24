@@ -351,13 +351,13 @@ export class VectorFeatureProfileController {
         this.currentObservation = null;
         this.currentNavigation = null;
         this.settingsBySource = new Map();
-        this.plotPanel = new VectorPlotPanel(documentContext, "vector-feature-profile", () => this.render());
+        this.plotPanel = new VectorPlotPanel(documentContext, "vector-feature-profile", () => this.render(),
+            () => (this.currentNavigation?.position ?? 1) - 1);
         this.statistics = new VectorPlotStatistics(documentContext, "vector-feature-profile", describeStatisticsSource);
         this.chooser = new VectorPlotFields(documentContext, "vector-feature-profile", names => {
             const settings = this.#currentSettings();
             if (settings) { settings.selectedFields = names; this.render(); }
         });
-        this.features = documentContext.querySelector("#vector-feature-profile-feature-list");
         this.compare = documentContext.querySelector("#vector-feature-profile-compare");
         this.selection = documentContext.querySelector("#vector-feature-profile-selection");
         this.selectionText = documentContext.querySelector("#vector-feature-profile-selection-text");
@@ -368,12 +368,13 @@ export class VectorFeatureProfileController {
         this.selectedField = null;
         this.abort = new AbortController();
         const listen = { signal: this.abort.signal };
-        this.features.addEventListener("change", () => {
-            onSelectFeature(Number(this.features.value));
+        this.plotPanel.featureList.addEventListener("change", () => {
+            onSelectFeature(Number(this.plotPanel.featureList.value));
             this.plotPanel.closePicker();
         }, listen);
         this.compare.addEventListener("click", () => onCompareFeatures(), listen);
         this.modeActive = false;
+        this.active = false;
         this.onClose = () => this.close({ moveFocus: true });
         this.onPreviousFeature = () => {
             if (!this.previousFeature.disabled) {
@@ -430,7 +431,7 @@ export class VectorFeatureProfileController {
         if (this.currentObservation === null) return;
         this.modeActive = true;
         this.onVisibilityChange(true, false);
-        this.render();
+        this.setActive(true);
         this.document.querySelector("#vector-feature-profile-one").focus();
     }
 
@@ -443,9 +444,19 @@ export class VectorFeatureProfileController {
      */
     close({ moveFocus = false } = {}) {
         this.modeActive = false;
-        this.statistics.update([], []);
-        this.plotPanel.closePicker(false);
+        this.setActive(false);
         this.onVisibilityChange(false, moveFocus);
+    }
+
+    /** Render this feature's fields while One feature is in front of the dock.
+     * @param {boolean} active Whether the expanded dock presents One feature.
+     * @return {void}
+     */
+    setActive(active) {
+        if (this.active === active) return;
+        this.active = active;
+        if (!active) this.plotPanel.closePicker(false);
+        this.render();
     }
 
     /**
@@ -466,6 +477,7 @@ export class VectorFeatureProfileController {
         }
         this.currentObservation = observation;
         this.currentNavigation = normalizedNavigation;
+        this.plotPanel.syncSelectedFeature();
         if (observation === null && !this.panel.hidden) {
             this.onVisibilityChange(false, false);
         }
@@ -489,22 +501,16 @@ export class VectorFeatureProfileController {
     }
 
     /**
-     * List results from the same map click for direct navigation in the feature picker.
+     * Retain the selection for direct navigation when the feature picker opens.
      * @param {ReadonlyArray<VectorInspectionObservation>} observations Inspector's ordered sample.
      * @return {void}
      */
     setFeatureChoices(observations) {
-        this.features.replaceChildren(...observations.map((observation, index) => {
-            const option = this.document.createElement("option");
-            option.value = String(index);
-            option.textContent = vectorFeatureLabel(observation, index);
-            return option;
-        }));
-        this.features.value = String((this.currentNavigation?.position ?? 1) - 1);
+        this.plotPanel.setFeatureChoices(observations);
         this.compare.disabled = observations.length < 2;
     }
 
-    /** Render the chosen profile chart, exact field values, and current-feature status. @return {void} */
+    /** Update feature navigation and render the requested chart or exact values in the open dock. @return {void} */
     render() {
         this.chart.replaceChildren();
         this.legend.hidden = true;
@@ -520,7 +526,7 @@ export class VectorFeatureProfileController {
         this.zoomFeatureButton.title = this.currentObservation?.focus === null ? "Feature location is unavailable for this selection." : "";
         this.#renderNavigation();
         const settings = this.#currentSettings();
-        this.statistics.update(this.modeActive && this.currentObservation ? [this.currentObservation] : [], settings?.selectedFields ?? []);
+        this.statistics.update(this.active && this.currentObservation ? [this.currentObservation] : [], settings?.selectedFields ?? []);
         if (this.currentObservation === null || settings === null) {
             this.#renderPresentation(null);
             this.titleField.replaceChildren();
@@ -533,6 +539,7 @@ export class VectorFeatureProfileController {
             settings.titleField
         );
         this.#renderPresentation(presentation);
+        if (!this.active) return;
         this.#renderTitleOptions(settings);
         this.direction.value = settings.direction;
         this.chartType.value = settings.chartType;
@@ -549,7 +556,7 @@ export class VectorFeatureProfileController {
         const stacked = settings.chartType === "stacked";
         this.xHeading.hidden = stacked || profile.xScale === "ordinal";
         this.xHeading.textContent = profile.xAxisLabel;
-        this.#renderTable(profile.points);
+        if (!this.plotPanel.values.hidden) this.#renderTable(profile.points);
         if (profile.points.length === 0) {
             this.status.textContent =
                 "Select numeric fields to plot from this feature.";
@@ -558,6 +565,12 @@ export class VectorFeatureProfileController {
         if (profile.finiteCount === 0) {
             this.status.textContent =
                 "The selected fields have no finite numeric values on this feature.";
+            return;
+        }
+        if (profile.missingCount) this.status.textContent = profile.missingCount === 1
+            ? "One field has no numeric value." : profile.missingCount + " fields have no numeric value.";
+        if (!this.plotPanel.values.hidden) {
+            if (this.selectedField) this.#selectField(this.selectedField);
             return;
         }
         this.figure.hidden = false;
@@ -591,8 +604,6 @@ export class VectorFeatureProfileController {
             labelVectorPlotValues(this.chart, pointElements, settings.chartType);
         }
         if (this.selectedField !== null) this.#selectField(this.selectedField);
-        if (profile.missingCount) this.status.textContent = profile.missingCount === 1
-            ? "One field has no numeric value." : profile.missingCount + " fields have no numeric value.";
     }
 
     /**
@@ -689,7 +700,6 @@ export class VectorFeatureProfileController {
         }
         this.heading.textContent = presentation.heading;
         this.plotPanel.featureButton.textContent = vectorFeatureLabel(this.currentObservation, this.currentNavigation.position - 1);
-        this.features.value = String(this.currentNavigation.position - 1);
         this.context.textContent = presentation.context;
         this.context.hidden = false;
         this.onPresentationChange({

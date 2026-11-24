@@ -1160,10 +1160,16 @@
               <button id="vector-time-series-fields-button" class="summary-text-button" type="button" aria-controls="vector-time-series-fields-picker" aria-expanded="false">Choose fields</button>
               <button id="vector-time-series-statistics-button" class="summary-text-button" type="button" aria-controls="vector-time-series-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
+            <label id="vector-time-series-row-range-label" hidden>Features shown
+              <select id="vector-time-series-row-range"></select>
+            </label>
             <div id="vector-time-series-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Selected features</strong>
                 <button id="vector-time-series-features-done" class="summary-text-button" type="button">Done</button></div>
               <p id="vector-time-series-context" class="vector-series-context" hidden></p>
+              <label id="vector-time-series-feature-range-label" hidden>Feature numbers
+                <select id="vector-time-series-feature-range"></select>
+              </label>
               <label for="vector-time-series-feature-list">Inspect feature</label>
               <select id="vector-time-series-feature-list"></select>
             </div>
@@ -1267,6 +1273,9 @@
               <div class="vector-plot-picker-heading"><strong>Selected features</strong>
                 <button id="vector-feature-profile-features-done" class="summary-text-button" type="button">Done</button></div>
               <p id="vector-feature-profile-context" class="vector-series-context" hidden></p>
+              <label id="vector-feature-profile-feature-range-label" hidden>Feature numbers
+                <select id="vector-feature-profile-feature-range"></select>
+              </label>
               <label for="vector-feature-profile-feature-list">Show feature</label>
               <select id="vector-feature-profile-feature-list"></select>
               <nav class="vector-feature-navigation vector-feature-profile-navigation" aria-label="Features in this inspection">

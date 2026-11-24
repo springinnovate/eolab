@@ -694,29 +694,20 @@ export class VectorFeatureInspectorController {
             this.#restoreCompletedSelection();
         };
         signal.addEventListener("abort", cancel, {once: true});
+        let selected, rows, currentTarget;
         try {
-            const selected = await selectLassoFeatures(target.selection, polygon, abort.signal, this.fetchImplementation);
+            selected = await selectLassoFeatures(target.selection, polygon, abort.signal, this.fetchImplementation);
             abort.signal.throwIfAborted();
             this.status.textContent = `Reading attributes for ${selected.matched} selected features in ${target.label}…`;
             this.#publishSample("loading", [], this.status.textContent);
-            const rows = selected.matched === 0 ? [] : await getSelectedVectorFeatures(
+            rows = selected.matched === 0 ? [] : await getSelectedVectorFeatures(
                 target.selection, selected.featureIds, abort.signal, this.fetchImplementation);
             abort.signal.throwIfAborted();
-            const currentTarget = this.getSelectionTargets().find(value => value.key === target.key);
+            currentTarget = this.getSelectionTargets().find(value => value.key === target.key);
             if (!currentTarget || JSON.stringify(currentTarget.selection) !== this.#selectionContext.signature) {
                 this.syncVisibleLayers();
                 throw new DOMException("The selected source changed.", "AbortError");
             }
-            this.results = rows.map(row => ({
-                feature: {...row, geometry: null},
-                target: {sourceId: target.key, label: currentTarget.label},
-                inspectionPosition: null,
-            }));
-            this.#selectionDisplay = {polygon, geometry: selected.geometry, count: selected.matched, label: currentTarget.label};
-            this.#updateTimeSeriesAction(rows.length);
-            if (rows.length) this.showResult(0);
-            this.status.textContent = formatLassoSelectionStatus(this.#selectionDisplay);
-            this.#finishSelection(rows.length ? "ready" : "empty", this.status.textContent);
         } catch (error) {
             if (generation === this.requestGeneration && error.name !== "AbortError") {
                 this.clearResults();
@@ -730,6 +721,16 @@ export class VectorFeatureInspectorController {
             signal.removeEventListener("abort", cancel);
             if (generation === this.requestGeneration) this.abortController = null;
         }
+        this.results = rows.map(row => ({
+            feature: {...row, geometry: null},
+            target: {sourceId: target.key, label: currentTarget.label},
+            inspectionPosition: null,
+        }));
+        this.#selectionDisplay = {polygon, geometry: selected.geometry, count: selected.matched, label: currentTarget.label};
+        this.#updateTimeSeriesAction(rows.length);
+        if (rows.length) this.showResult(0);
+        this.status.textContent = formatLassoSelectionStatus(this.#selectionDisplay);
+        this.#finishSelection(rows.length ? "ready" : "empty", this.status.textContent);
     }
 
     /**
@@ -1090,8 +1091,8 @@ export class VectorFeatureInspectorController {
             results.map(vectorInspectionObservation)
         );
         this.lastSample = Object.freeze({ state, observations, message, failedLayers, position: this.#inspectionPosition });
-        this.onSampleChange(this.lastSample);
         this.#publishSelectionNavigation();
+        this.onSampleChange(this.lastSample);
     }
 
     /**

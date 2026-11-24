@@ -1,7 +1,7 @@
 /** Ordered numeric analysis for bounded vector feature-inspection results. */
 
 import { renderStackedSeriesChart } from "../charts/series-chart.js";
-import { labelVectorPlotValues, renderVectorFieldChart, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { FEATURES_PER_PAGE, fillFeatureRanges, labelVectorPlotValues, renderVectorFieldChart, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
 import { isNumericFeatureValue } from "./inspection-observation.js";
 import { VectorPlotStatistics } from "./plot-statistics.js";
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
@@ -105,25 +105,34 @@ function vectorTimeSeriesXScale(points) {
  * Order every inspected feature once for the values table and all comparison plots.
  * Missing X values sort last and stay in the table and stacked chart. Missing
  * measurements keep their slots, and equal X values retain the inspection order.
- * @param {ReadonlyArray<VectorInspectionObservation>} observations Features from the map click.
+ * @param {ReadonlyArray<VectorInspectionObservation>} observations Inspected features in their original selection order.
  * @param {VectorTimeSeriesSettings} settings Selected axes and sort direction.
- * @return {{rows:ComparisonRow[],xScale:"numeric"|"ordinal",plots:ComparisonPlot[]}} Aligned plots and table rows.
+ * @param {number|null} [firstRow=null] First row of a displayed page after sorting, or null for every feature.
+ * @param {number|null} [selectedIndex=null] Keep this original feature on the displayed page when the order changes.
+ * @return {{rows:ComparisonRow[],start:number|null,xScale:"numeric"|"ordinal",plots:ComparisonPlot[]}}
+ * Displayed rows, their offset in the sorted selection, and marks for the requested measurements.
  */
-export function buildVectorFeatureComparison(observations, settings) {
-    const rows = observations.map((observation, sourceIndex) => {
+export function buildVectorFeatureComparison(observations, settings, firstRow = null, selectedIndex = null) {
+    const orderedRows = observations.map((observation, sourceIndex) => {
         const raw = settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL
             ? observation.layerLabel : observation.properties[settings.xField];
         const xValue = isOrderableValue(raw) ? raw : null;
         return {observation, sourceIndex, xValue, xLabel: xValue === null ? "No value" : formatScalar(xValue)};
     });
-    const xScale = vectorTimeSeriesXScale(rows.filter(row => row.xValue !== null));
-    rows.sort((left, right) => {
+    const xScale = vectorTimeSeriesXScale(orderedRows.filter(row => row.xValue !== null));
+    orderedRows.sort((left, right) => {
         if (left.xValue === null || right.xValue === null) return Number(left.xValue === null) - Number(right.xValue === null);
         const order = xScale === "numeric"
             ? Number(left.xValue > right.xValue) - Number(left.xValue < right.xValue)
             : NATURAL_TEXT.compare(left.xLabel, right.xLabel);
         return (settings.direction === "ascending" ? order : -order) || left.sourceIndex - right.sourceIndex;
     });
+    let start = firstRow;
+    if (firstRow !== null && selectedIndex !== null && orderedRows.length > FEATURES_PER_PAGE) {
+        const position = orderedRows.findIndex(row => row.sourceIndex === selectedIndex);
+        start = Math.floor(position / FEATURES_PER_PAGE) * FEATURES_PER_PAGE;
+    }
+    const rows = start === null ? orderedRows : orderedRows.slice(start, start + FEATURES_PER_PAGE);
     const positions = settings.chartType === "stacked" ? rows : rows.filter(row => row.xValue !== null);
     const plots = settings.yFields.map(field => {
         const points = positions.map(row => {
@@ -132,7 +141,7 @@ export function buildVectorFeatureComparison(observations, settings) {
         });
         return {field, points, finiteCount: points.filter(point => point.yValue !== null).length};
     });
-    return {rows, plots, xScale};
+    return {rows, start, plots, xScale};
 }
 
 /**
@@ -197,15 +206,18 @@ export class VectorTimeSeriesController {
         this.table = element("table");
         this.tableHead = element("table-head");
         this.tableBody = element("table-body");
+        this.rowRange = element("row-range");
+        this.rowRangeLabel = element("row-range-label");
+        this.firstRow = 0;
         this.status = element("status");
         this.selection = element("selection");
         this.selectionText = element("selection-text");
         this.zoomFeatureButton = documentContext.querySelector("#zoom-vector-time-series-feature");
-        this.featureList = element("feature-list");
         this.openFeature = element("one");
         this.previousSelection = element("previous-selection");
         this.nextSelection = element("next-selection");
-        this.plotPanel = new VectorPlotPanel(documentContext, "vector-time-series", () => this.render());
+        this.plotPanel = new VectorPlotPanel(documentContext, "vector-time-series", () => this.render(),
+            () => this.selected?.index ?? null);
         this.statistics = new VectorPlotStatistics(documentContext, "vector-time-series", describeStatisticsSource);
         this.fields = new VectorPlotFields(documentContext, "vector-time-series", names => {
             this.settings.yFields = names;
@@ -219,7 +231,7 @@ export class VectorTimeSeriesController {
         this.sampleState = "empty";
         this.sampleMessage = "Use Picker or Lasso to select features to compare.";
         this.failedLayers = 0;
-        this.modeActive = false;
+        this.active = false;
         this.abort = new AbortController();
         const listen = {signal: this.abort.signal};
         this.setSelectionNavigation({canPrevious: false, canNext: false});
@@ -239,9 +251,18 @@ export class VectorTimeSeriesController {
             control.addEventListener("change", () => { this.settings[setting] = control.value; this.render(); }, listen);
         }
         this.openFeature.addEventListener("click", () => onOpenFeature(this.selected?.index ?? null), listen);
-        this.featureList.addEventListener("change", () => {
-            this.#select(Number(this.featureList.value), null);
+        this.rowRange.addEventListener("change", () => {
+            this.firstRow = this.rowRange.value === "all" ? null : Number(this.rowRange.value);
+            this.selected = null;
+            this.render();
+        }, listen);
+        this.plotPanel.featureList.addEventListener("change", () => {
+            const index = Number(this.plotPanel.featureList.value);
             this.plotPanel.closePicker();
+            if (this.firstRow !== null && this.observations.length > FEATURES_PER_PAGE) {
+                this.selected = {index, field:null};
+                this.render();
+            } else this.#select(index, null);
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
             if (this.selected) this.#zoomToFeature(this.selected.index);
@@ -257,9 +278,8 @@ export class VectorTimeSeriesController {
 
     /** Open the current comparison. @return {void} */
     open() {
-        this.modeActive = true;
         this.onVisibilityChange(true, false);
-        this.render();
+        this.setActive(true);
         this.document.querySelector("#vector-time-series-compare").focus();
     }
 
@@ -269,10 +289,19 @@ export class VectorTimeSeriesController {
      * @return {void}
      */
     close({moveFocus = false} = {}) {
-        this.modeActive = false;
-        this.statistics.update([], []);
-        this.plotPanel.closePicker(false);
+        this.setActive(false);
         this.onVisibilityChange(false, moveFocus);
+    }
+
+    /** Draw the comparison when its dock view is in front and release hidden results.
+     * @param {boolean} active Whether the expanded dock presents Compare features.
+     * @return {void}
+     */
+    setActive(active) {
+        if (this.active === active) return;
+        this.active = active;
+        if (!active) this.plotPanel.closePicker(false);
+        this.render();
     }
 
     /**
@@ -286,7 +315,7 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Replace the map click's observations without discarding the user's field or display choices.
+     * Retain the inspector's observations for the next visible chart or values table.
      * @param {{state:"loading"|"ready"|"empty"|"invalidated",observations:ReadonlyArray<VectorInspectionObservation>,
      * message:string,failedLayers?:number}} sample Inspector-owned result and progress.
      * @return {void}
@@ -296,49 +325,35 @@ export class VectorTimeSeriesController {
         if (!["loading", "ready", "empty", "invalidated"].includes(sample?.state) || typeof sample.message !== "string") {
             throw new TypeError("Invalid vector inspection sample.");
         }
-        this.observations = Object.freeze([...sample.observations]);
+        this.observations = sample.observations;
         this.sampleState = sample.state;
         this.sampleMessage = sample.message;
         this.failedLayers = sample.failedLayers ?? 0;
         this.selected = null;
-        const summary = summarizeVectorTimeSeriesFields(this.observations);
-        if (!this.hasInitialFields && sample.state === "ready" && summary.numericFields.length) {
-            const date = summary.xFields.find(field => field.count === this.observations.length &&
-                /^(year|survey_year|date|survey_date)$/i.test(field.name));
-            if (date) this.settings.xField = date.name;
-            const measure = summary.numericFields.find(field => field.name !== date?.name && !/^(id|fid|objectid)$/i.test(field.name));
-            this.settings.yFields = [(measure ?? summary.numericFields[0]).name];
-            this.hasInitialFields = true;
-        }
+        this.firstRow = 0;
+        this.fieldSummary = null;
+        this.plotPanel.setFeatureChoices(this.observations);
         this.fields.search.value = "";
         this.render();
     }
 
-    /** Rebuild picker options, the selected chart style, and exact values for each feature. @return {void} */
+    /** Update the dock identity and render only the foreground chart or values table. @return {void} */
     render() {
-        const {xFields,numericFields} = summarizeVectorTimeSeriesFields(this.observations);
-        const {xField,yFields,direction,chartType} = this.settings;
-        const choices = new Map([[VECTOR_TIME_SERIES_LAYER_LABEL,"Filename or layer"]]);
-        for (const field of xFields) choices.set(field.name, field.name);
-        if (!choices.has(xField)) choices.set(xField, xField + " (unavailable)");
-        this.xField.replaceChildren(...[...choices].map(([value,label]) => this.#option(value,label)));
-        this.xField.value = xField;
-        this.xFieldLabel.textContent = chartType === "stacked" ? "Feature labels" : "X axis";
-        this.direction.value = direction;
-        this.chartType.value = chartType;
-        this.fields.update(new Map(numericFields.map(field =>
-            [field.name, field.count === field.total ? "" : field.count + " of " + field.total])), yFields);
-        this.featureList.replaceChildren(this.#option("", "Choose a feature"),
-            ...this.observations.map((o,i) => this.#option(String(i), vectorFeatureLabel(o,i))));
-        this.featureList.children[0].disabled = true;
-        this.plotPanel.fieldButton.textContent = yFields.length > 1 ? yFields.length + " fields" : "Choose fields";
         const count = this.observations.length;
-        this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
         const ready = this.sampleState === "ready";
-        this.statistics.update(this.modeActive && ready ? this.observations : [], yFields);
-        this.openFeature.disabled = !ready || count === 0;
-        this.plotPanel.featureButton.disabled = !ready || count === 0;
-        this.plotPanel.fieldButton.disabled = !ready || (numericFields.length === 0 && !yFields.length);
+        if (this.active) {
+            this.fieldSummary ??= summarizeVectorTimeSeriesFields(this.observations);
+            const {xFields,numericFields} = this.fieldSummary;
+            if (!this.hasInitialFields && ready && numericFields.length) {
+                const date = xFields.find(field => field.count === count && /^(year|survey_year|date|survey_date)$/i.test(field.name));
+                if (date) this.settings.xField = date.name;
+                const measure = numericFields.find(field => field.name !== date?.name && !/^(id|fid|objectid)$/i.test(field.name));
+                this.settings.yFields = [(measure ?? numericFields[0]).name];
+                this.hasInitialFields = true;
+            }
+        }
+        const {xField,yFields,direction,chartType} = this.settings;
+        this.statistics.update(this.active && ready ? this.observations : [], yFields);
         const identity = vectorTimeSeriesPresentation(this.observations,yFields);
         this.heading.textContent = identity?.heading ?? "Compare features";
         this.context.textContent = identity?.context ?? "";
@@ -359,20 +374,45 @@ export class VectorTimeSeriesController {
         this.selection.hidden = true;
         this.zoomFeatureButton.hidden = true;
         this.zoomFeatureButton.disabled = true;
-        this.featureList.value = "";
         this.status.textContent = ready ? "" : this.sampleMessage;
+        if (!this.active) return;
+        const showPlot = this.plotPanel.values.hidden;
+        if (!showPlot && this.firstRow === null) this.firstRow = 0;
+        this.rowRangeLabel.hidden = count <= FEATURES_PER_PAGE;
+        fillFeatureRanges(this.rowRange, count, this.firstRow, showPlot);
+        const {xFields,numericFields} = this.fieldSummary;
+        const choices = new Map([[VECTOR_TIME_SERIES_LAYER_LABEL,"Filename or layer"]]);
+        for (const field of xFields) choices.set(field.name, field.name);
+        if (!choices.has(xField)) choices.set(xField, xField + " (unavailable)");
+        this.xField.replaceChildren();
+        for (const [value,label] of choices) this.xField.append(this.#option(value,label));
+        this.xField.value = xField;
+        this.xFieldLabel.textContent = chartType === "stacked" ? "Feature labels" : "X axis";
+        this.direction.value = direction;
+        this.chartType.value = chartType;
+        this.fields.update(new Map(numericFields.map(field =>
+            [field.name, field.count === field.total ? "" : field.count + " of " + field.total])), yFields);
+        this.plotPanel.fieldButton.textContent = yFields.length > 1 ? yFields.length + " fields" : "Choose fields";
+        this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
+        this.openFeature.disabled = !ready || count === 0;
+        this.plotPanel.featureButton.disabled = !ready || count === 0;
+        this.plotPanel.fieldButton.disabled = !ready || (numericFields.length === 0 && !yFields.length);
         if (!ready) return;
         if (yFields.length === 0) {
             this.status.textContent = numericFields.length ? "Choose a field to plot." : "These features have no numeric fields.";
         } else {
-            const {rows,plots,xScale} = buildVectorFeatureComparison(this.observations,this.settings);
+            const {rows,start,plots,xScale} = buildVectorFeatureComparison(this.observations,
+                showPlot ? this.settings : {...this.settings, yFields:[]}, this.firstRow, this.selected?.index);
+            this.firstRow = start;
+            this.rowRange.value = start === null ? "all" : String(start);
             const xLabel = choices.get(xField);
-            if (chartType === "stacked") {
+            if (!showPlot) {
+                this.#renderTable(rows,yFields,xLabel);
+            } else if (chartType === "stacked") {
                 this.#drawStackedComparison(plots);
             } else {
-                for (const [index,plot] of plots.entries()) this.#drawField(plot,index,xLabel,xScale,count);
+                for (const [index,plot] of plots.entries()) this.#drawField(plot,index,xLabel,xScale,rows.length);
             }
-            this.#renderTable(rows,yFields,xLabel);
         }
         if (this.failedLayers) this.status.textContent += (this.status.textContent ? " " : "") +
             this.failedLayers + (this.failedLayers === 1 ? " layer could not be inspected." : " layers could not be inspected.");
@@ -428,7 +468,7 @@ export class VectorTimeSeriesController {
                 onPointSelect: point => this.#selectAndZoomToFeature(point.sourceIndex, plot.field),
             });
             labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
-            this.pointElements.push(...handles.pointElements);
+            for (const mark of handles.pointElements) this.pointElements.push(mark);
         } else chart.setAttribute("hidden","");
         const missing = total - plot.finiteCount;
         if (missing) {
@@ -500,7 +540,7 @@ export class VectorTimeSeriesController {
     #select(index,field) {
         const observation = this.observations[index];
         this.selected = {index,field};
-        this.featureList.value = String(index);
+        this.plotPanel.syncSelectedFeature();
         const x = this.settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL ? observation.layerLabel : observation.properties[this.settings.xField];
         this.selectionText.textContent = this.#identity(observation,index,field,isOrderableValue(x) ? formatScalar(x) : "No value");
         this.selection.hidden = false;

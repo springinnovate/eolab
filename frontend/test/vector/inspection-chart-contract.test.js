@@ -66,6 +66,7 @@ function composition(fetchImplementation = null) {
       };
     },
     mapInspection: {
+      subscribeActiveTool(listener) { status.showTool = listener; listener(null); },
       showFeatureInspector() { documentContext.querySelector("#vector-feature-inspector").hidden = false; },
       hideFeatureInspector() { documentContext.querySelector("#vector-feature-inspector").hidden = true; },
       setVectorTimeSeriesIdentity() {},
@@ -126,20 +127,24 @@ test("inspection composition delivers distinct observations to both chart consum
   assert.equal(documentContext.querySelector("#next-vector-feature-profile").disabled, true);
   assert.equal(series.observations[0], observations[0]);
   assert.equal(series.observations[1], observations[1]);
+  inspector.onFeatureProfileRequested();
+  documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   assert.deepEqual(documentContext.querySelector("#vector-feature-profile-table-body")
     .children.map(row => [row.children[0].children[0].textContent, ...row.children.slice(1).map(cell => cell.textContent)]),
     [["R1999", "1999", "9"], ["R2000", "2000", "10"]]);
+  documentContext.querySelector("#zoom-vector-feature-profile-feature").dispatchEvent(new Event("click"));
+  inspector.onTimeSeriesRequested();
+  documentContext.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
     .children.map(row => [row.children[0].textContent, row.children[0].children[0].textContent, row.children[1].children[0].textContent]),
     [["Habitat", "Habitat · habitat.1", "1"], ["Habitat", "Habitat · habitat.9", "9"]]);
   assert.deepEqual(status.feature, {state: "ready", message: "2 features returned across 1 layer · Ready", position: null});
   assert.deepEqual(status.count, {count: 2, loading: false});
-  documentContext.querySelector("#zoom-vector-feature-profile-feature").dispatchEvent(new Event("click"));
   assert.deepEqual(mapActions, [{zoom: { center: [20, 10], bounds: [20, 10, 20, 10] }}]);
   assert.deepEqual(observations[1].properties, { R1999: 9, R2000: 10 });
   assert.equal(Object.isFrozen(observations[1].properties), true);
 
-  series.open();
+  documentContext.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   const chart = documentContext.querySelector("#vector-time-series-chart");
   chart.querySelectorAll(".series-chart-point")[0].dispatchEvent(new Event("click"));
   assert.deepEqual(mapActions.slice(1), [{highlight: 0}, {zoom: observations[0].focus}]);
@@ -149,6 +154,8 @@ test("inspection composition delivers distinct observations to both chart consum
 test("a new inspection replaces the prior chart and communicates partial results", t => {
   const {inspector, profile, series, documentContext, status} = composition();
   t.after(() => { profile.destroy(); series.destroy(); });
+  series.open();
+  documentContext.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   inspector.onSampleChange({state: "ready", message: "Ready", observations: [observation(1)]});
   inspector.onSampleChange({state: "loading", message: "Reading features", observations: []});
   assert.equal(documentContext.querySelector("#vector-time-series-table-body").children.length, 0);
@@ -187,8 +194,10 @@ test("comparison history controls request the adjacent selection through composi
   inspector.onSampleChange({state: "ready", message: "Ready", observations: restoredObservations, position});
   inspector.onSelectionNavigationChange({canPrevious: false, canNext: true});
   assert.deepEqual(status.feature.position, position);
+  documentContext.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   assert.deepEqual(documentContext.querySelector("#vector-time-series-table-body")
     .children.map(row => row.children[1].children[0].textContent), ["1", "9"]);
+  documentContext.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   const chart = documentContext.querySelector("#vector-time-series-chart");
   chart.querySelectorAll(".series-chart-point")[1].dispatchEvent(new Event("click"));
   assert.deepEqual(mapActions, [{highlight: 1}, {zoom: restoredObservations[1].focus}]);
@@ -218,6 +227,11 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(status.feature.state, "ready");
   assert.equal(status.feature.position, null);
   assert.equal(status.display.geometry, null);
+  const chart = doc.querySelector("#vector-time-series-chart");
+  assert.equal(chart.querySelectorAll(".series-chart-point").length, 0, "A Lasso does not draw a closed comparison");
+  assert.equal(doc.querySelector("#vector-time-series-table-body").children.length, 0);
+  assert.equal(doc.querySelector("#vector-time-series-feature-list").children.length, 0);
+  assert.equal(doc.querySelector("#vector-feature-profile-feature-list").children.length, 0);
   assert.equal(doc.querySelector("#vector-feature-field-display").hidden, false,
     "A hidden source still supplies editable field display settings");
   const fieldImport = doc.querySelector("#import-vector-field-formats");
@@ -232,7 +246,6 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   doc.querySelector("#open-vector-time-series").dispatchEvent(new Event("click"));
   series.settings = {xField: "x", yFields: ["y"], direction: "ascending", chartType: "scatter"};
   series.render();
-  const chart = doc.querySelector("#vector-time-series-chart");
   const marks = chart.querySelectorAll(".series-chart-point");
   assert.equal(marks.length, 2, "The missing Y stays absent from the scatterplot");
   assert.deepEqual(series.observations.map(observation => observation.properties.x), [1.25, 2.5, -3],
@@ -241,10 +254,17 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.ok(Number(marks[0].getAttribute("cy")) > Number(marks[1].getAttribute("cy")), "Numeric Y positions follow 0.5 then 4");
   assert.match(marks[0].getAttribute("aria-label"), /9007199254740993/);
   assert.match(marks[1].getAttribute("aria-label"), /-7/);
+  assert.equal(doc.querySelector("#vector-time-series-table-body").children.length, 0);
+  doc.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   assert.equal(doc.querySelector("#vector-time-series-table-body").children.length, 3, "Values retain the feature with missing Y");
+  status.showTool("feature");
+  assert.equal(doc.querySelector("#vector-time-series-table-body").children.length, 0);
+  status.showTool("time-series");
+  assert.equal(doc.querySelector("#vector-time-series-table-body").children.length, 3);
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   doc.querySelector("#close-vector-inspector").dispatchEvent(new Event("click"));
   assert.equal(inspector.results.length, 3);
-  marks[0].dispatchEvent(new Event("click"));
+  chart.querySelectorAll(".series-chart-point")[0].dispatchEvent(new Event("click"));
   assert.equal(profile.currentObservation.featureId, rows[2].id);
   assert.deepEqual(mapActions, [], "Attribute-only observations must not invent a zoom point");
   doc.querySelector("#vector-time-series-one").dispatchEvent(new Event("click"));
@@ -254,6 +274,30 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(profile.currentObservation, null);
   assert.equal(series.observations.length, 0);
   assert.equal(status.display, null);
+});
+
+test("a comparison rendering error preserves the completed Lasso selection in Features and history", async t => {
+  const rows = [{id:"19", properties:{x:3}}, {id:"23", properties:{x:8}}];
+  let matches = rows;
+  const {inspector, profile, series, status} = composition(async (url, options) =>
+    Response.json(url.endsWith("/lasso") ? {matched:matches.length, featureIds:matches.map(row => row.id), geometry:null} :
+      {selection:JSON.parse(options.body).selection, features:matches}));
+  t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
+  const plot = t.mock.method(series, "setSample", sample => {
+    if (sample.state === "ready") throw new Error("The comparison could not draw.");
+  });
+  const lasso = () => inspector.inspectLasso(inspector.getSelectionTargets()[0],
+    {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);
+  await assert.rejects(lasso(), /could not draw/);
+  assert.deepEqual(inspector.results.map(result => result.feature.id), ["19","23"]);
+  assert.equal(inspector.lastSample.state, "ready");
+  assert.deepEqual(status.count, {count:2, loading:false});
+  assert.equal(status.display.count, 2);
+  plot.mock.restore();
+  matches = [];
+  await lasso();
+  inspector.navigateSelection("previous");
+  assert.deepEqual(series.observations.map(feature => feature.featureId), ["19","23"]);
 });
 
 test("wide parcel attributes keep their exact values and numeric spacing in both plots", async t => {
@@ -293,9 +337,11 @@ test("wide parcel attributes keep their exact values and numeric spacing in both
     const [a,b,c] = marks.map(mark => Number(mark.getAttribute(axis)));
     assert.ok(Math.abs((c-b)/(b-a) - 3) < 1e-9, axis + " must preserve one-unit and three-unit distances");
   }
+  doc.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   const table = doc.querySelector("#vector-time-series-table-body").children;
   assert.deepEqual(table.map(row => row.children[1].children[0].textContent),
     ["-9007199254740996","-9007199254740995","-9007199254740992"]);
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   series.plotPanel.width = 242; // Chart width in the 320-pixel dock.
   series.settings.xField = "signedCode";
   series.settings.yFields = ["signedCode"];
@@ -359,6 +405,7 @@ test("feature plot benchmarks follow the original layer and ignore obsolete resu
   assert.deepEqual(statistics.querySelectorAll("dt").map(cell => cell.textContent), ["Maximum", "Maximum"]);
   assert.deepEqual(statistics.querySelectorAll("dd").map(cell => cell.textContent), ["80", "80"]);
   assert.equal(requests.length, 2);
+  control("values-button").dispatchEvent(new Event("click"));
   assert.equal(control("table-body").children[0].children[2].textContent, "9");
 });
 

@@ -2149,6 +2149,10 @@ async function initializeCatalog(
             vectorFeatureInspector?.navigateResult(direction),
         onFeatureZoom: zoomInspectedVectorFeature,
     });
+    mapInspection.subscribeActiveTool(tool => {
+        vectorTimeSeries.setActive(tool === "time-series");
+        vectorFeatureProfile.setActive(tool === "feature-profile");
+    });
     /** Show the inspector's current feature and keep following its navigation. @return {void} */
     function openFeaturePlot() {
         vectorTimeSeries.close();
@@ -2247,8 +2251,6 @@ async function initializeCatalog(
             }
         },
         onSampleChange: (sample) => {
-            vectorTimeSeries.setSample(sample);
-            vectorFeatureProfile.setFeatureChoices(sample.observations);
             const returned = sample.observations.length;
             const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
             const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
@@ -2264,6 +2266,8 @@ async function initializeCatalog(
                 position: sample.position ?? null,
             });
             mapInspection.setFeatureResultCount(sample.observations.length, {loading: sample.state === "loading"});
+            vectorTimeSeries.setSample(sample);
+            vectorFeatureProfile.setFeatureChoices(sample.observations);
         },
         onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
         onCurrentObservationChange: (observation, navigation) =>
