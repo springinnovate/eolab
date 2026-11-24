@@ -71,16 +71,18 @@
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
     }
 
-    /** Hide the on-map legend with its own ×, then restore it from the active tool's chooser.
+    /** Check map centering between the panels and keyboard access to the legend's hide and restore controls.
      * @param {MapInspectionController} inspection Mounted right panel with the Style tool selected.
      * @returns {void}
-     * @throws {Error} If either action loses its focus target or changes the active tool.
+     * @throws {Error} If the map is off-center or a legend action loses focus or changes the active tool.
      */
     function checkLegendControls(inspection) {
+      const sidebar = document.querySelector("#control-panel");
+      const inspectionPanel = document.querySelector("#map-inspection");
       const map = createSingleWorldMap(L, {
         initialView: {latitude: 0, longitude: 0, zoom: 2},
         basemap: {url: L.Util.emptyImageUrl, attribution: "Test map"},
-      });
+      }, undefined, [sidebar, inspectionPanel]);
       const command = document.querySelector("#toggle-map-legend");
       const menu = document.querySelector("#workspace-tool-actions");
       const legend = new OnMapLegend(L, map, {
@@ -92,8 +94,8 @@
         if (innerWidth >= 1200) {
           map.fitBounds([[0, 0], [0, 0]], {maxZoom: 8, animate: false});
           const x = map.latLngToContainerPoint([0, 0]).x + map.getContainer().getBoundingClientRect().left;
-          const freeLeft = document.querySelector("#control-panel").getBoundingClientRect().right;
-          const freeRight = document.querySelector("#map-inspection").getBoundingClientRect().left;
+          const freeLeft = sidebar.getBoundingClientRect().right;
+          const freeRight = inspectionPanel.getBoundingClientRect().left;
           check(Math.abs(x - (freeLeft + freeRight) / 2) <= 2, "Zoom to layer missed the clear center between the open panels");
         }
         document.querySelector("#toggle-map-inspection-dock").click();
@@ -163,9 +165,9 @@
       }
     }
 
-    /** Tune panel fading through Tools, reopen the controls, and check the result on the map.
+    /** Enable and tune idle panel fading, then check the saved controls and the panels' final opacity.
      * @returns {void}
-     * @throws {Error} If a chosen value, visible panel opacity, or keyboard destination is wrong.
+     * @throws {Error} If a control, saved value, rendered opacity, or keyboard destination is wrong.
      */
     function checkFadeSettings() {
       const app = document.querySelector("#app");
@@ -198,7 +200,8 @@
         command.click();
         check(document.activeElement === panel && panel.getClientRects().length && !menu.matches(":popover-open"),
           "Settings did not open in the dock with keyboard focus");
-        check(toggle.checked && fields.map(field => field.value).join(",") === defaults, "Unexpected fade defaults");
+        check(!toggle.checked && fields.map(field => field.value).join(",") === defaults, "Unexpected fade defaults");
+        toggle.click();
         edit(enterDelay, 0); edit(fadeIn, 0); edit(exitDelay, 3123); edit(fadeOut, 0);
         const slider = opacity.parentElement.querySelector('input[type="range"]');
         edit(slider, 63);
@@ -211,18 +214,20 @@
         const sidebar = document.querySelector("#control-panel");
         check(getComputedStyle(sidebar).transitionDelay.split(", ").includes("3.123s"), "The map ignored the new exit delay");
         toggle.click();
-        check(opacity.matches(":disabled") && getComputedStyle(sidebar).opacity === "1", "Turning fading off left a translucent panel or enabled inputs");
+        check(panel.querySelector("#panel-fade-options input:enabled") === null, "Turning fading off left a fade control enabled");
+        checkPanelOpacity(sidebar, "1");
         unbind();
         unbind = bindPanelFadeSettings(app, storage);
         check(!toggle.checked && opacity.value === "63" && exitDelay.value === "3123", "Reopening lost the saved toggle or values");
         toggle.click(); edit(exitDelay, 0);
-        check(getComputedStyle(sidebar).opacity === "0.63" && getComputedStyle(document.querySelector("#map-inspection")).opacity === "0.63",
-          "Both panels must use the selected idle opacity");
+        checkPanelOpacity(sidebar, "0.63");
+        checkPanelOpacity(document.querySelector("#map-inspection"), "0.63");
         edit(opacity, 101);
         opacity.dispatchEvent(new Event("blur"));
-        check(opacity.value === "63" && getComputedStyle(sidebar).opacity === "0.63", "An invalid edit replaced the last valid opacity");
+        check(opacity.value === "63", "An invalid edit replaced the last valid opacity");
+        checkPanelOpacity(sidebar, "0.63");
         panel.querySelector("#restore-panel-fade-defaults").click();
-        check(toggle.checked && fields.map(field => field.value).join(",") === defaults && storage.read() === null,
+        check(!toggle.checked && fields.map(field => field.value).join(",") === defaults && storage.read() === null,
           "Restoring defaults left a custom preference");
         panel.querySelector("#close-settings").click();
         check(document.activeElement === chooser && panel.hidden, "Closing Settings lost keyboard focus");
