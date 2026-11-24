@@ -369,6 +369,125 @@ def test_native_polygon_preserves_both_sides_of_the_dateline(
         np.testing.assert_array_equal(output.read(1), np.where(inside, 1, np.nan))
 
 
+@pytest.mark.parametrize("polar_epsg", [3413, 3031])
+@pytest.mark.parametrize("prime_meridian", ["greenwich", "paris"])
+def test_polar_area_preserves_membership_in_geographic_reference_crs(
+    tmp_path: Path, polar_epsg: int, prime_meridian: str
+) -> None:
+    """Publish every selected polar cell in the reference's longitude convention.
+
+    Args:
+        tmp_path: Native vector, reference raster and calculator output directory.
+        polar_epsg: Native projection for an area enclosing either pole.
+        prime_meridian: Longitude origin of the geographic reference raster.
+    """
+    crs = CRS.from_string(f"+proj=longlat +datum=WGS84 +pm={prime_meridian}")
+    top = 90 if polar_epsg == 3413 else -88.2
+    transform = from_origin(-180, top, 0.75, 0.0375)
+    values = np.arange(48 * 480, dtype="int16").reshape(48, 480)
+    source = write_source(
+        tmp_path / "source.tif", values, transform=transform, crs=crs.to_wkt()
+    )
+    with rasterio.open(source) as reference:
+        crs = reference.crs
+    original = box(-50000, -40000, 45000, 58000)
+    area = write_selection(
+        tmp_path / "polar.gpkg", [mapping(original)], crs=f"EPSG:{polar_epsg}"
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    rows, columns = np.indices(values.shape, dtype="float64") + 0.5
+    longitude, latitude = transform * (columns, rows)
+    x, y = Transformer.from_crs(crs, polar_epsg, always_xy=True).transform(
+        longitude, latitude
+    )
+    expected_count = contains_xy(original, x, y).sum()
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / "result.tif") as output:
+        rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+        longitude, latitude = output.transform * (columns, rows)
+        x, y = Transformer.from_crs(crs, polar_epsg, always_xy=True).transform(
+            longitude, latitude
+        )
+        inside = contains_xy(original, x, y)
+        source_columns, source_rows = ~transform * (longitude, latitude)
+        assert output.crs == crs
+        assert result.valid_pixels == inside.sum() == expected_count
+        assert expected_count > 6000
+        np.testing.assert_array_equal(
+            output.read(1),
+            np.where(
+                inside,
+                values[source_rows.astype(int), source_columns.astype(int)],
+                np.nan,
+            ),
+        )
+
+
+@pytest.mark.parametrize("angular_unit", ["degree", "grad"])
+def test_polar_area_projection_retains_non_greenwich_angular_units(
+    tmp_path: Path, angular_unit: str
+) -> None:
+    """Compare projected masks with native membership independently of TIFF CRS I/O.
+
+    Args:
+        tmp_path: Original polar vector location.
+        angular_unit: Unit of the Paris-meridian target coordinates.
+    """
+    definition = ProjCRS.from_proj4(
+        "+proj=longlat +datum=WGS84 +pm=paris"
+    ).to_json_dict()
+    if angular_unit == "grad":
+        for axis in definition["coordinate_system"]["axis"]:
+            axis["unit"] = {
+                "type": "AngularUnit",
+                "name": "grad",
+                "conversion_factor": math.pi / 200,
+            }
+    crs = CRS.from_wkt(ProjCRS.from_json_dict(definition).to_wkt())
+    factor = math.radians(1) / crs.units_factor[1]
+    transform = from_origin(-180 * factor, 90 * factor, 0.75 * factor, 0.0375 * factor)
+    original = box(-50000, -40000, 45000, 58000)
+    area = write_selection(
+        tmp_path / "polar.gpkg", [mapping(original)], crs="EPSG:3413"
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    projected = project_calculator_area(
+        request, None, area, crs, (transform.a, -transform.e)
+    )
+    rows, columns = np.indices((48, 480), dtype="float64") + 0.5
+    longitude, latitude = transform * (columns, rows)
+    x, y = Transformer.from_crs(crs, 3413, always_xy=True).transform(
+        longitude, latitude
+    )
+    inside = contains_xy(original, x, y)
+    assert inside.sum() == 6332
+    np.testing.assert_array_equal(
+        geometry_mask(projected, (48, 480), transform, invert=True), inside
+    )
+
+
 @pytest.mark.parametrize("include_island", [False, True])
 def test_geographic_output_preserves_a_hole_enclosing_the_pole(
     tmp_path: Path, include_island: bool

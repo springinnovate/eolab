@@ -5,14 +5,12 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import cast
 
-from fiona.errors import TransformError
-from fiona.transform import transform_geom
 from pyproj import Transformer
 from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
-from shapely import union_all
+from shapely import from_wkb, union_all
 from shapely.affinity import scale
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon, mapping, shape
@@ -636,7 +634,7 @@ def project_geographic_polygons(
     Raises:
         ValueError: If GDAL cannot transform or split the polygons.
     """
-    from osgeo import osr
+    from osgeo import ogr, osr
 
     to_degrees = target_crs.units_factor[1] / math.radians(1)
     uses_degrees = math.isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12)
@@ -649,22 +647,34 @@ def project_geographic_polygons(
                 degrees = osr.SpatialReference(wkt=target_wkt)
                 degrees.SetAngularUnits("degree", math.radians(1))
                 target_wkt = degrees.ExportToWkt()
+        with osr.ExceptionMgr():
+            source = osr.SpatialReference(wkt=source_wkt)
+            target = osr.SpatialReference(wkt=target_wkt)
+            source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            coordinates = osr.CoordinateTransformation(source, target)
+            projector = ogr.GeomTransformer(coordinates, ["WRAPDATELINE=YES"])
         for geometry in geometries:
             original = shape(geometry)
             polygons = (
                 original.geoms if original.geom_type == "MultiPolygon" else (original,)
             )
-            rings = [
-                mapping(Polygon(ring))
-                for polygon in polygons
-                for ring in (polygon.exterior, *polygon.interiors)
-            ]
-            projected_rings = iter(
-                shape(ring)
-                for ring in transform_geom(
-                    source_wkt, target_wkt, rings, antimeridian_cutting=True
-                )
-            )
+            rings = []
+            for polygon in polygons:
+                for ring in (polygon.exterior, *polygon.interiors):
+                    # GDAL may report a failed intermediate cut and still return
+                    # a valid polar cap. Check its final result at this boundary.
+                    with ogr.ExceptionMgr(useExceptions=False):
+                        transformed = projector.Transform(
+                            ogr.CreateGeometryFromWkb(Polygon(ring).wkb)
+                        )
+                    if transformed is None:
+                        raise ValueError("Selection could not be projected")
+                    projected_ring = from_wkb(bytes(transformed.ExportToWkb()))
+                    if not projected_ring.is_valid:
+                        raise ValueError("Selection could not be projected")
+                    rings.append(projected_ring)
+            projected_rings = iter(rings)
             parts = []
             for polygon in polygons:
                 shell = next(projected_rings)
@@ -679,7 +689,7 @@ def project_geographic_polygons(
                     origin=(0, 0),
                 )
             projected_geometries.append(mapping(projected))
-    except (RuntimeError, TransformError, GEOSException) as error:
+    except (RuntimeError, GEOSException) as error:
         raise ValueError("Selection could not be projected") from error
     return tuple(projected_geometries)
 
