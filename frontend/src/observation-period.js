@@ -1,12 +1,20 @@
 import {getTemporalDayBoundaries, getTemporalMonthBoundaries, getTemporalYearBoundaries} from "./temporal-period.js";
 
+/** Identify prepared observations whose UTC selection key is an excluded interval end.
+ * @param {string|undefined} period Declared period or snapshot precision.
+ * @return {boolean} Whether the instant just before the key belongs to the observation.
+ */
+export function hasExclusiveEnd(period) {
+    return period === "explicit" || Boolean(period?.startsWith("calendar_"));
+}
+
 /** Return the last covered UTC date of a prepared interval, or the date of a snapshot.
  * @param {string} time Exact UTC selection key.
  * @param {string|undefined} period Declared calendar period, explicit range or snapshot precision.
  * @return {string} ISO calendar date used for browsing.
  */
 export function observationDate(time, period) {
-    return (period?.startsWith("calendar_") || period === "explicit" ?
+    return (hasExclusiveEnd(period) ?
         new Date(Date.parse(time) - 1).toISOString() : time).slice(0, 10);
 }
 

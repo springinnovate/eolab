@@ -1,5 +1,5 @@
 /** Browse and play the published observations of one visible map layer. */
-import { observationDate, observationLabel, observationMonthLabel } from "../observation-period.js";
+import { hasExclusiveEnd, observationDate, observationLabel, observationMonthLabel } from "../observation-period.js";
 
 /** @typedef {{key:string,visible:boolean,opacity:number,timeline?:import("./raster-viewer.js").TemporalMapTimeline|null}} TimelineLayer */
 /** @typedef {{time?:string,month?:string,edge?:"first"|"last"|"firstOfLastDay"}} Destination */
@@ -161,10 +161,16 @@ export class TemporalScrubber {
             setOptions(this.controls.month, next.months.map(month => [month, observationMonthLabel(month, next.period)]));
         }
         this.controls.month.value = next.month;
-        if (next.times !== before?.times) {
-            this.days = next.times.filter((time, index, times) => !index ||
-                observationDate(time, next.period) !== observationDate(times[index - 1], next.period));
+        if (next.times !== before?.times || next.period !== before?.period) {
             this.epochs = next.times.map(Date.parse);
+            const offset = hasExclusiveEnd(next.period) ? 1 : 0;
+            let previousDay;
+            this.days = next.times.filter((_, index) => {
+                const day = Math.floor((this.epochs[index] - offset) / 86400000);
+                const first = day !== previousDay;
+                previousDay = day;
+                return first;
+            });
             this.controls.time.min = this.epochs[0] ?? 0;
             this.controls.time.max = this.epochs.at(-1) ?? 0;
             this.ticks.replaceChildren(...(next.times.length <= 31 ? next.times : this.days).map(time => {
