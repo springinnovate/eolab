@@ -75,7 +75,12 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     assert len(active) == 2
     assert {row["owner"] for row in active} == {"stack", "visitor"}
     assert visitor["job_id"] in {row["id"] for row in active}
-    assert store.claim_next_job() is None
+    # A full pool can answer even while the subscriber table is unavailable.
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "LOCK TABLE processing.job_subscribers IN ACCESS EXCLUSIVE MODE"
+        )
+        assert store.claim_next_job() is None
     # Cancellation and an expired heartbeat do not release native capacity.
     row = active[0]
     store.cancel(row["id"], row["owner"])

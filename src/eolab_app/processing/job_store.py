@@ -28,6 +28,7 @@ from eolab_app.processing.models import (
     ProcessingLimits,
     JobInputFile,
 )
+from eolab_jobs.worker_claim import CLAIM_NEXT_JOB_SQL, WORKER_SLOT_AVAILABLE_SQL
 
 # Processing owns this key in PostgreSQL's single-bigint, database-wide advisory
 # lock namespace. It serializes schema migration and shared admission, job-state,
@@ -156,11 +157,12 @@ class PostgresJobStore:
             ) from error
 
     def migrate(self) -> None:
-        """Install a fresh Processing schema, or verify an existing layout without DDL.
+        """Install or verify the queue schema and upgrade a supported version 22 queue.
 
-        Fresh installations store version 22 directly. Existing installations of
-        the same layout may have all 22 historical markers. The structure is checked
-        as well because distinct historical Habitat layouts shared marker 22.
+        Version 23 records which owners were served when each job started.
+        Existing version 22 layouts are checked before upgrading because
+        different historical Habitat layouts used the same version marker.
+        An up-to-date database is checked without changing its contents.
 
         Raises:
             UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
@@ -171,6 +173,7 @@ class PostgresJobStore:
             cursor.execute("SELECT to_regnamespace('processing') AS namespace")
             if cursor.fetchone()["namespace"] is None:
                 cursor.execute(resources.joinpath("schema.sql").read_text())
+                cursor.execute(resources.joinpath("schema_23.sql").read_text())
                 return
             try:
                 cursor.execute(
@@ -192,10 +195,12 @@ class PostgresJobStore:
                     "The installed Processing schema is unsupported. "
                     f"Check {mismatch['problem']} before starting this worker."
                 )
-            if versions not in ([22], list(range(1, 23))):
+            if versions in ([22], list(range(1, 23))):
+                cursor.execute(resources.joinpath("schema_23.sql").read_text())
+            elif versions not in ([22, 23], list(range(1, 24))):
                 raise UnsupportedProcessingSchemaError(
                     "The installed Processing schema has an unsupported version history. "
-                    "This worker requires the current version 22 layout."
+                    "This worker requires a supported version 22 or 23 layout."
                 )
 
     def interrupt_unfinished_jobs_on_restart(self) -> int:
@@ -1120,8 +1125,9 @@ class PostgresJobStore:
     def claim_next_job(self) -> dict[str, Any] | None:
         """Claim the next session's queued job when a worker slot is available.
 
-        Sessions are served by their most recent start, with newcomers first and FIFO
-        order within each session. Shared work serves its subscribed sessions together.
+        Sessions are served by their most recent start, with newcomers first. Each
+        session's oldest pending subscription goes first, including requests to join
+        shared work. A shared start serves all sessions subscribed at that time.
         Running and cancelling jobs retain their slots until native exit is confirmed.
         A lost heartbeat never releases capacity. Container replacement interrupts
         unfinished jobs only after the previous worker and its native children stop.
@@ -1136,37 +1142,18 @@ class PostgresJobStore:
 
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
-                "SELECT count(*) AS active FROM processing.jobs WHERE status IN ('running','cancelling')"
+                WORKER_SLOT_AVAILABLE_SQL, {"worker_count": self.limits.worker_count}
             )
-            if cursor.fetchone()["active"] >= self.limits.worker_count:
+            if not cursor.fetchone()["available"]:
                 return None
             cursor.execute(
-                "SELECT waiting.id,waiting.owner FROM ("
-                "SELECT DISTINCT ON (s.owner) j.id,s.owner,j.created_at FROM processing.jobs j "
-                "JOIN processing.job_subscribers s ON s.job_id=j.id "
-                "WHERE j.status='queued' AND s.status IS NULL "
-                "ORDER BY s.owner,j.created_at,j.id) waiting "
-                "LEFT JOIN LATERAL (SELECT j.started_at FROM processing.jobs j "
-                "JOIN processing.job_subscribers s ON s.job_id=j.id "
-                "WHERE s.owner=waiting.owner AND j.started_at IS NOT NULL "
-                "ORDER BY j.started_at DESC LIMIT 1) served ON true "
-                "ORDER BY served.started_at NULLS FIRST,waiting.created_at,waiting.id LIMIT 1",
+                CLAIM_NEXT_JOB_SQL,
+                {
+                    "attempt_id": uuid4().hex,
+                    "lease_seconds": self.limits.lease_seconds,
+                },
             )
-            row = cursor.fetchone()
-            if not row:
-                return None
-            cursor.execute(
-                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',"
-                "started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
-                (
-                    uuid4().hex,
-                    self.limits.lease_seconds,
-                    row["id"],
-                ),
-            )
-            claimed = cursor.fetchone()
-            claimed["owner"] = row["owner"]
-            return claimed
+            return cursor.fetchone()
 
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]
