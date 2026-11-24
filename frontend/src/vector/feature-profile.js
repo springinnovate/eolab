@@ -3,11 +3,11 @@
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
 import {
     formatSeriesNumber,
-    renderOrdinalSeriesChart,
     renderStackedSeriesChart,
 } from "../charts/series-chart.js";
 
-import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { labelVectorPlotValues, renderVectorFieldChart, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { isNumericFeatureValue } from "./inspection-observation.js";
 import { VectorPlotStatistics } from "./plot-statistics.js";
 
 export const FEATURE_PROFILE_TITLE_NONE = "__eolab_no_title__";
@@ -65,7 +65,7 @@ const NATURAL_TEXT = new Intl.Collator("en", {
  */
 export function numericFeatureFields(observation) {
     return Object.entries(observation.properties)
-        .filter(([, value]) => typeof value === "number" && Number.isFinite(value))
+        .filter(([, value]) => isNumericFeatureValue(value))
         .map(([name]) => name)
         .sort(NATURAL_TEXT.compare);
 }
@@ -207,7 +207,7 @@ export function suggestFeatureProfileFields(observation) {
  * @param {Object} settings Per-source feature-profile settings.
  * @param {string[]} settings.selectedFields Selected attribute names.
  * @param {"ascending"|"descending"} settings.direction Sort direction.
- * @return {{points:{fieldName:string,xValue:number|null,xLabel:string,yValue:number|null}[],
+ * @return {{points:{fieldName:string,xValue:number|null,xLabel:string,yValue:number|bigint|null}[],
  * finiteCount:number,missingCount:number,xAxisLabel:string,xScale:"numeric"|"ordinal"}}
  * Ordered chart model with its matching horizontal scale.
  * @throws {TypeError} If the observation or settings violate their contract.
@@ -237,9 +237,7 @@ export function buildVectorFeatureProfile(observation, settings) {
             fieldName,
             xValue: number,
             xLabel: number === null ? fieldName : String(number),
-            yValue: typeof value === "number" && Number.isFinite(value)
-                ? value
-                : null,
+            yValue: isNumericFeatureValue(value) ? value : null,
         };
     });
     points.sort((left, right) => {
@@ -570,7 +568,7 @@ export class VectorFeatureProfileController {
         if (stacked) {
             this.#drawStackedProfile(profile.points, presentation.heading);
         } else {
-            const {pointElements} = renderOrdinalSeriesChart({
+            const {pointElements} = renderVectorFieldChart({
                 documentContext: this.document,
                 chart: this.chart,
                 points: profile.points,
@@ -599,7 +597,7 @@ export class VectorFeatureProfileController {
 
     /**
      * Draw the current feature as a single stack in the profile's field order.
-     * @param {{fieldName:string,yValue:number|null}[]} points Parsed field readings.
+     * @param {{fieldName:string,yValue:number|bigint|null}[]} points Parsed field readings.
      * @param {string} featureLabel Name shown beside the stack.
      * @return {void}
      */
@@ -632,7 +630,7 @@ export class VectorFeatureProfileController {
     #selectField(field) {
         this.selectedField = field;
         const value = this.currentObservation.properties[field];
-        this.selectionText.textContent = field + " · " + (Number.isFinite(value) ? String(value) : "No value");
+        this.selectionText.textContent = field + " · " + (isNumericFeatureValue(value) ? String(value) : "No value");
         this.selection.hidden = false;
         for (const [name, button] of this.fieldCells) {
             button.setAttribute("aria-pressed", String(name === field));

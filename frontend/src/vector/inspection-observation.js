@@ -11,9 +11,18 @@
  * Feature center and optional WGS 84 bounds; full geometry is not included.
  * Without bounds the center preserves click context and must not be used for zoom.
  * Attribute-only Lasso selections have null focus; no point is invented for a feature.
- * @property {Readonly<Record<string,string|number|boolean|null>>} properties
- * Feature attributes limited to strings, numbers, booleans and null.
+ * @property {Readonly<Record<string,string|number|bigint|boolean|null>>} properties
+ * Scalar feature attributes. Integers outside the safe Number range retain their exact value as bigint.
  */
+
+/**
+ * Check whether an inspected reading can be plotted as a number.
+ * @param {unknown} value Original scalar reading.
+ * @return {boolean} Whether the reading is a finite number or exact integer.
+ */
+export function isNumericFeatureValue(value) {
+    return typeof value === "bigint" || Number.isFinite(value);
+}
 
 /**
  * Bounded observations and presentation state from one vector inspection.

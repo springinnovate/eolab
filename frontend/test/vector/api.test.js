@@ -25,7 +25,7 @@ const VECTOR_ITEM = Object.freeze({
 test("selected attributes preserve exact IDs, missing values and private ownership", async () => {
     const selection = {uploadId: "a".repeat(32), layerName: "sites", filter: {}};
     const featureIds = ["-7", "9007199254740993"];
-    const features = [{id: featureIds[0], properties: {x: -3, y: null, name: "CO2"}},
+    const features = [{id: featureIds[0], properties: {x: -3, y: null, name: "CO2", parcel: {integer:"-9007199254740993"}, code:"001"}},
         {id: featureIds[1], properties: {x: 1.25, y: 4, name: "Café"}}];
     const signal = new AbortController().signal;
     assert.deepEqual(await getSelectedVectorFeatures(selection, featureIds, signal, async (url, options) => {
@@ -37,10 +37,12 @@ test("selected attributes preserve exact IDs, missing values and private ownersh
         assert.equal(options.headers["X-EOLab-Uploads"], "1");
         assert.equal(options.headers["X-EOLab-Processing"], "1");
         return Response.json({selection, features});
-    }), features);
+    }), [{...features[0], properties:{...features[0].properties, parcel:-9007199254740993n}}, features[1]]);
     for (const invalid of [[], features.slice(1), [...features].reverse(),
         [features[0], {...features[1], id: Number(featureIds[1])}],
-        [features[0], {...features[1], properties: {x: []}}]]) {
+        [features[0], {...features[1], properties: {x: []}}],
+        [features[0], {...features[1], properties: {x: {integer:"001"}}}],
+        [features[0], {...features[1], properties: {x: {integer:"5", extra:true}}}]]) {
         await assert.rejects(getSelectedVectorFeatures(selection, featureIds, signal,
             async () => Response.json({features: invalid})), /incomplete or invalid/);
     }

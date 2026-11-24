@@ -30,8 +30,16 @@ from eolab_app.vector.errors import VectorConflictError
 MAX_FEATURE_ATTRIBUTE_BYTES = 8 * 1024**2
 """Maximum encoded inspection response, independent of map geometry budgets."""
 
-FeatureAttributeValue = str | int | float | bool | None
-"""JSON scalar retained from an original or calculated feature field."""
+
+class ExactIntegerAttribute(BaseModel):
+    """Carry an integer outside JavaScript's safe range as signed decimal text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    integer: str
+
+
+FeatureAttributeValue = str | int | float | bool | None | ExactIntegerAttribute
+"""Scalar feature reading, with exact decimal encoding for wide integers."""
 
 
 class FeatureAttributesRequest(BaseModel):
@@ -76,7 +84,9 @@ class FeatureAttributesRequest(BaseModel):
 class FeatureAttributes(BaseModel):
     """Native ID as decimal text and scalar attributes, without display geometry.
 
-    Non-finite numbers become null. Binary and other nonscalar values are
+    Integers outside ±(2**53 - 1) use {"integer": "<decimal digits>"} so a
+    browser can distinguish them from numeric-looking text. Non-finite numbers
+    become null. Binary and other nonscalar values are
     omitted, matching the scalar observations consumed by feature plots.
     """
 
@@ -176,7 +186,9 @@ def _read_feature_attributes(
                 for feature_id, properties, _geometry in originals:
                     scalars: dict[str, FeatureAttributeValue] = {}
                     for name, value in properties.items():
-                        if value is None or isinstance(value, (str, int, bool)):
+                        if isinstance(value, int) and abs(value) >= 2**53:
+                            scalars[name] = ExactIntegerAttribute(integer=str(value))
+                        elif value is None or isinstance(value, (str, int, bool)):
                             scalars[name] = value
                         elif isinstance(value, float):
                             scalars[name] = value if math.isfinite(value) else None

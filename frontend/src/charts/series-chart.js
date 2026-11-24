@@ -21,11 +21,11 @@ let clipSerial = 0;
 /**
  * Return compact finite-number text for axes and accessible details.
  *
- * @param {number} value Finite number.
- * @return {string} Compact localized value.
+ * @param {number|bigint} value Finite number or exact integer.
+ * @return {string} Compact localized number or the full digits of an exact integer.
  */
 export function formatSeriesNumber(value) {
-    return NUMBER_FORMAT.format(value);
+    return typeof value === "bigint" ? String(value) : NUMBER_FORMAT.format(value);
 }
 
 /**
@@ -343,7 +343,7 @@ export function renderOrdinalSeriesChart({
  * Missing readings paint no segment, while an all-zero row is labeled zero.
  * Mark labels and selection callbacks use the caller's original readings.
  *
- * @template {{yValue:number|null}} Point
+ * @template {{yValue:number|bigint|null}} Point
  * @param {Object} configuration Stacked chart inputs.
  * @param {Document} configuration.documentContext Owning document.
  * @param {SVGSVGElement} configuration.chart Empty target SVG.
@@ -363,13 +363,13 @@ export function renderStackedSeriesChart({
     describePoint, onPointSelect, width = CHART_WIDTH,
 }) {
     const rowIndexes = rowLabels.map((_, index) => index);
-    const largest = max(series, item => max(item.points, point => Math.abs(point.yValue ?? 0)));
+    const largest = max(series, item => max(item.points, point => Math.abs(Number(point.yValue))));
     const exponent = Math.floor(Math.log10(largest || 1));
     const axisExponent = exponent >= 6 || exponent <= -4 ? Math.max(-308, exponent) : 0;
     const divisor = 10 ** axisExponent;
     const stacks = stack()
         .keys(series.map((_, index) => index))
-        .value((row, field) => (series[field].points[row].yValue ?? 0) / divisor)
+        .value((row, field) => Number(series[field].points[row].yValue) / divisor)
         .offset(stackOffsetDiverging)(rowIndexes);
     let minimum = 0;
     let maximum = 0;
@@ -436,7 +436,7 @@ export function renderStackedSeriesChart({
             const point = item.points[row];
             if (point.yValue === null) continue;
             hasReading = true;
-            if (point.yValue === 0) continue;
+            if (point.yValue === 0 || point.yValue === 0n) continue;
             hasNonzeroReading = true;
             const [start, end] = parts[row];
             const x = horizontal(start);

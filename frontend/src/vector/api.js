@@ -14,7 +14,8 @@ import { validateCalculatedFields } from "../calculated-fields.js";
  * @param {string[]} featureIds Canonical decimal-text native IDs returned by Lasso.
  * @param {AbortSignal} signal Cancel superseded selection reads.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
- * @return {Promise<Array<{id:string,properties:Record<string,string|number|boolean|null>}>>} Selected rows.
+ * @return {Promise<Array<{id:string,properties:Record<string,string|number|bigint|boolean|null>}>>}
+ * Selected rows with wide integer attributes decoded from tagged decimal text.
  * @throws {Error} If the source read fails or the response is incomplete or invalid.
  * @throws {DOMException} If the request is aborted.
  */
@@ -26,12 +27,17 @@ export async function getSelectedVectorFeatures(selection, featureIds, signal, f
     });
     if (!response.ok) throw await vectorRenderingError(response, "selected feature attributes");
     const result = await response.json();
-    if (!Array.isArray(result.features) || result.features.length !== featureIds.length ||
-        result.features.some((row, index) => row?.id !== featureIds[index] ||
-            row.properties === null || typeof row.properties !== "object" || Array.isArray(row.properties) ||
-            Object.values(row.properties).some(value => !(value === null ||
-                typeof value === "string" || typeof value === "boolean" || Number.isFinite(value))))) {
-        throw new Error("The selected feature attributes were incomplete or invalid. Select the features again.");
+    const invalid = "The selected feature attributes were incomplete or invalid. Select the features again.";
+    if (!Array.isArray(result?.features) || result.features.length !== featureIds.length) throw new Error(invalid);
+    for (const [index, row] of result.features.entries()) {
+        if (row?.id !== featureIds[index] || row.properties === null ||
+            typeof row.properties !== "object" || Array.isArray(row.properties)) throw new Error(invalid);
+        for (const [name, value] of Object.entries(row.properties)) {
+            if (value === null || typeof value === "string" || typeof value === "boolean" || Number.isFinite(value)) continue;
+            if (typeof value?.integer !== "string" || !/^(?:0|-?[1-9]\d*)$/.test(value.integer) ||
+                Object.keys(value).length !== 1) throw new Error(invalid);
+            row.properties[name] = BigInt(value.integer);
+        }
     }
     return result.features;
 }

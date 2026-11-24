@@ -1,5 +1,5 @@
 /** Presentation shared by the two plots of inspected vector features. */
-import { formatSeriesNumber } from "../charts/series-chart.js";
+import { formatSeriesNumber, renderOrdinalSeriesChart } from "../charts/series-chart.js";
 
 const FIELD_ORDER = new Intl.Collator("en", {numeric: true, sensitivity: "base"});
 
@@ -205,12 +205,59 @@ export function vectorFeatureLabel(observation, index) {
     return observation.layerLabel + " · " + (observation.featureId ?? "Feature " + (index + 1));
 }
 
+/**
+ * Measure a field value from an integer origin before converting to chart coordinates.
+ * The fractional part of an ordinary reading is retained on mixed numeric axes.
+ * @param {number|bigint} value Original numeric reading.
+ * @param {bigint|undefined} origin Exact origin, or undefined for an ordinary absolute scale.
+ * @return {number} Distance in source units.
+ */
+function fieldCoordinate(value, origin) {
+    if (origin === undefined) return Number(value);
+    if (typeof value === "bigint") return Number(value - origin);
+    return Number(BigInt(Math.trunc(value)) - origin) + value % 1;
+}
+
+/**
+ * Draw a feature plot with exact readings for labels, selection and values.
+ * Nearby wide integers are spaced by their exact difference. Bars retain a
+ * zero baseline. Numeric X ticks always show the original field values.
+ * @template {{xValue:number|bigint|string|boolean|null,xLabel:string,yValue:number|bigint|null}} Point
+ * @param {Omit<Parameters<typeof renderOrdinalSeriesChart>[0],"series"|"points"|"pointAccessibleLabel"|"pointTooltip"|"onPointSelect"> &
+ * {points:Point[],pointAccessibleLabel:(point:Point)=>string,pointTooltip:(point:Point)=>string,onPointSelect:(point:Point)=>void}} options Single-feature or comparison chart.
+ * @return {{pointElements:{circle:SVGElement,point:Point}[]}} Rendered marks tied to the original observations.
+ * @throws {TypeError} If the underlying chart receives invalid positions or no plottable reading.
+ */
+export function renderVectorFieldChart(options) {
+    const {points, xScale, chartType} = options;
+    const firstWideX = xScale === "numeric" ? points.find(point => typeof point.xValue === "bigint") : undefined;
+    const firstWideY = points.find(point => typeof point.yValue === "bigint");
+    if (!firstWideX && !firstWideY) return renderOrdinalSeriesChart(options);
+
+    const xOrigin = firstWideX?.xValue;
+    const yOrigin = chartType === "bar" ? undefined : firstWideY?.yValue;
+    const {pointElements} = renderOrdinalSeriesChart({
+        ...options,
+        points: points.map(point => ({
+            original: point,
+            xLabel: point.xLabel,
+            xValue: xScale === "numeric" ? fieldCoordinate(point.xValue, xOrigin) : point.xValue,
+            yValue: point.yValue === null ? null : fieldCoordinate(point.yValue, yOrigin),
+        })),
+        yAxisLabel: yOrigin === undefined ? options.yAxisLabel : options.yAxisLabel + " relative to " + yOrigin,
+        yAxisLabelPosition: yOrigin === undefined ? options.yAxisLabelPosition : "top",
+        pointAccessibleLabel: point => options.pointAccessibleLabel(point.original),
+        pointTooltip: point => options.pointTooltip(point.original),
+        onPointSelect: point => options.onPointSelect(point.original),
+    });
+    return {pointElements: pointElements.map(({circle, point}) => ({circle, point:point.original}))};
+}
 
 /**
  * Label the peak of a profile or the readings in a small bar comparison.
  * Labels use the actual painted bar centers, including distinct features at the same X.
  * @param {SVGElement} chart Rendered comparison or profile SVG.
- * @param {{circle:SVGElement,point:{yValue:number}}[]} marks Selectable plotted observations.
+ * @param {{circle:SVGElement,point:{yValue:number|bigint}}[]} marks Selectable plotted observations.
  * @param {"line"|"scatter"|"bar"} shape Chart style.
  * @return {void}
  */

@@ -1,10 +1,8 @@
 /** Ordered numeric analysis for bounded vector feature-inspection results. */
 
-import {
-    renderOrdinalSeriesChart,
-    renderStackedSeriesChart,
-} from "../charts/series-chart.js";
-import { labelVectorPlotValues, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { renderStackedSeriesChart } from "../charts/series-chart.js";
+import { labelVectorPlotValues, renderVectorFieldChart, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { isNumericFeatureValue } from "./inspection-observation.js";
 import { VectorPlotStatistics } from "./plot-statistics.js";
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
 
@@ -33,7 +31,7 @@ function isOrderableValue(value) {
     return (
         typeof value === "string" ||
         typeof value === "boolean" ||
-        (typeof value === "number" && Number.isFinite(value))
+        isNumericFeatureValue(value)
     );
 }
 
@@ -52,7 +50,7 @@ export function summarizeVectorTimeSeriesFields(observations) {
             if (isOrderableValue(value)) {
                 xCoverage.set(name, (xCoverage.get(name) ?? 0) + 1);
             }
-            if (typeof value === "number" && Number.isFinite(value)) {
+            if (isNumericFeatureValue(value)) {
                 numericCoverage.set(name, (numericCoverage.get(name) ?? 0) + 1);
             }
         }
@@ -69,7 +67,7 @@ export function summarizeVectorTimeSeriesFields(observations) {
 /**
  * Format one supported scalar as an axis or table label.
  *
- * @param {string|number|boolean} value Scalar chart value.
+ * @param {string|number|bigint|boolean} value Scalar chart value.
  * @return {string} Stable user-facing label.
  */
 function formatScalar(value) {
@@ -89,9 +87,7 @@ function formatScalar(value) {
  * @return {"ordinal"|"numeric"} Shared chart X-scale mode.
  */
 function vectorTimeSeriesXScale(points) {
-    return points.every((point) =>
-        typeof point.xValue === "number" && Number.isFinite(point.xValue)
-    ) ? "numeric" : "ordinal";
+    return points.every(point => isNumericFeatureValue(point.xValue)) ? "numeric" : "ordinal";
 }
 
 
@@ -99,11 +95,11 @@ function vectorTimeSeriesXScale(points) {
  * @typedef {Object} ComparisonRow
  * @property {number} sourceIndex Position in this inspection, independent of feature IDs.
  * @property {VectorInspectionObservation} observation Original feature and zoom target.
- * @property {string|number|boolean|null} xValue Raw X coordinate, or null when unavailable.
+ * @property {string|number|bigint|boolean|null} xValue Raw X coordinate, or null when unavailable.
  * @property {string} xLabel Exact display value of the X coordinate.
  */
 
-/** @typedef {{field:string,points:(ComparisonRow & {yValue:number|null})[],finiteCount:number}} ComparisonPlot */
+/** @typedef {{field:string,points:(ComparisonRow & {yValue:number|bigint|null})[],finiteCount:number}} ComparisonPlot */
 
 /**
  * Order every inspected feature once for the values table and all comparison plots.
@@ -123,14 +119,16 @@ export function buildVectorFeatureComparison(observations, settings) {
     const xScale = vectorTimeSeriesXScale(rows.filter(row => row.xValue !== null));
     rows.sort((left, right) => {
         if (left.xValue === null || right.xValue === null) return Number(left.xValue === null) - Number(right.xValue === null);
-        const order = xScale === "numeric" ? left.xValue - right.xValue : NATURAL_TEXT.compare(left.xLabel, right.xLabel);
+        const order = xScale === "numeric"
+            ? Number(left.xValue > right.xValue) - Number(left.xValue < right.xValue)
+            : NATURAL_TEXT.compare(left.xLabel, right.xLabel);
         return (settings.direction === "ascending" ? order : -order) || left.sourceIndex - right.sourceIndex;
     });
     const positions = settings.chartType === "stacked" ? rows : rows.filter(row => row.xValue !== null);
     const plots = settings.yFields.map(field => {
         const points = positions.map(row => {
             const value = row.observation.properties[field];
-            return {...row, yValue: Number.isFinite(value) ? value : null};
+            return {...row, yValue: isNumericFeatureValue(value) ? value : null};
         });
         return {field, points, finiteCount: points.filter(point => point.yValue !== null).length};
     });
@@ -419,7 +417,7 @@ export class VectorTimeSeriesController {
         title.textContent = plot.field;
         if (plot.finiteCount) {
             chart.removeAttribute("hidden");
-            const handles = renderOrdinalSeriesChart({
+            const handles = renderVectorFieldChart({
                 documentContext:this.document,chart,points:plot.points,chartType:this.settings.chartType,
                 width:this.plotPanel.width || undefined,height:this.settings.yFields.length > 1 ? 188 : 218,
                 fitXAxisLabels:true,
@@ -490,7 +488,7 @@ export class VectorTimeSeriesController {
         const identity = vectorFeatureLabel(observation,index);
         if (field === null) return identity;
         const y = observation.properties[field];
-        return identity + " · " + xLabel + " · " + field + " = " + (Number.isFinite(y) ? String(y) : "No value");
+        return identity + " · " + xLabel + " · " + field + " = " + (isNumericFeatureValue(y) ? String(y) : "No value");
     }
 
     /**
@@ -577,7 +575,7 @@ export class VectorTimeSeriesController {
                 const y = row.observation.properties[field];
                 button.type = "button";
                 button.classList.add("summary-text-button");
-                button.textContent = Number.isFinite(y) ? String(y) : "No value";
+                button.textContent = isNumericFeatureValue(y) ? String(y) : "No value";
                 button.setAttribute("aria-pressed", "false");
                 cells.set(field, button);
                 button.setAttribute("aria-label",this.#identity(row.observation,row.sourceIndex,field,row.xLabel));

@@ -256,6 +256,49 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(status.display, null);
 });
 
+test("wide parcel attributes keep their exact values and numeric spacing in both plots", async t => {
+  const base = 9007199254740992n;
+  const rows = [4n, 0n, 1n].map((offset, id) => ({id:String(id), properties:{
+    x:{integer:String(base + offset)}, y:{integer:String(-base - 4n + offset)}, code:"9007199254740993",
+  }}));
+  const {inspector, profile, series, documentContext:doc} = composition(async (url, options) =>
+    Response.json(url.endsWith("/lasso") ? {matched:3, featureIds:rows.map(row => row.id), geometry:null} :
+      {selection:JSON.parse(options.body).selection, features:rows}));
+  t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
+  await inspector.inspectLasso(inspector.getSelectionTargets()[0],
+    {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);
+  assert.ok(doc.querySelector("#vector-feature-attributes").children.some(cell => cell.textContent === "9007199254740996"));
+  const openProfile = doc.querySelector("#open-vector-feature-profile");
+  assert.equal(openProfile.disabled, false, "Wide integers alone enable One feature");
+  openProfile.dispatchEvent(new Event("click"));
+  const profileSettings = profile.settingsBySource.get(profile.currentObservation.sourceId);
+  profileSettings.selectedFields = ["y"];
+  for (const shape of ["scatter", "stacked"]) {
+    profileSettings.chartType = shape;
+    profile.render();
+    const mark = doc.querySelector("#vector-feature-profile-chart").querySelectorAll(".series-chart-point")[0];
+    assert.ok(mark.getAttribute("aria-label").includes("-9007199254740992"));
+  }
+  doc.querySelector("#open-vector-time-series").dispatchEvent(new Event("click"));
+  series.settings = {xField:"x", yFields:["y"], direction:"ascending", chartType:"scatter"};
+  series.render();
+  const marks = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point");
+  assert.equal(marks.length, 3);
+  assert.equal(series.observations[2].properties.code, "9007199254740993", "Numeric-looking text keeps its source type");
+  const labels = marks.map(mark => mark.getAttribute("aria-label"));
+  assert.ok(labels[1].includes("9007199254740993") && labels[1].includes("-9007199254740995"));
+  for (const axis of ["cx", "cy"]) {
+    const [a,b,c] = marks.map(mark => Number(mark.getAttribute(axis)));
+    assert.ok(Math.abs((c-b)/(b-a) - 3) < 1e-9, axis + " must preserve one-unit and three-unit distances");
+  }
+  const table = doc.querySelector("#vector-time-series-table-body").children;
+  assert.deepEqual(table.map(row => row.children[1].children[0].textContent),
+    ["-9007199254740996","-9007199254740995","-9007199254740992"]);
+  series.settings.chartType = "stacked";
+  series.render();
+  assert.equal(doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point").length, 3);
+});
+
 test("feature plot benchmarks follow the original layer and ignore obsolete results", async t => {
   const {inspector, profile, series, documentContext} = composition();
   t.after(() => { profile.destroy(); series.destroy(); });

@@ -2,6 +2,7 @@
 
 import { getFeatureInfoViewport } from "./feature-info-viewport.js";
 import { getSelectedVectorFeatures } from "./api.js";
+import { isNumericFeatureValue } from "./inspection-observation.js";
 import { selectLassoFeatures } from "./lasso.js";
 import { DEFAULT_FIELD_FORMATS } from "../feature-field-formats.js";
 import { VectorFeatureFieldDisplay } from "./feature-field-display.js";
@@ -121,7 +122,7 @@ export function vectorInspectionObservation({ feature, target, inspectionPositio
             value === null ||
             typeof value === "string" ||
             typeof value === "boolean" ||
-            typeof value === "number"
+            typeof value === "number" || typeof value === "bigint"
         ) {
             properties[name] = value;
         }
@@ -171,7 +172,7 @@ export function formatVectorFeatureAttribute(value, format) {
     if (typeof value === "boolean") {
         return value ? "True" : "False";
     }
-    if (format?.format && Number.isFinite(value)) {
+    if (format?.format && isNumericFeatureValue(value)) {
         /** @type {Intl.NumberFormatOptions} */
         const options = {};
         if (format.format === "currency") {
@@ -1166,7 +1167,7 @@ export class VectorFeatureInspectorController {
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;
         this.next.disabled = !navigation.canNext;
-        this.featureProfileButton.disabled = !Object.values(observation.properties).some(Number.isFinite);
+        this.featureProfileButton.disabled = !Object.values(observation.properties).some(isNumericFeatureValue);
         this.onCurrentObservationChange(observation, navigation);
         this.#showAttributes(this.results[this.resultIndex]);
         this.clearHighlight();
