@@ -133,8 +133,69 @@ class MapVectorStyle(MapDocumentPart):
     definition: dict[str, JsonValue]
 
 
+class MapFeatureFieldFormat(MapDocumentPart):
+    """Set a vector field's inspector label and optional numeric display.
+
+    Attributes:
+        displayName: Trimmed label of at most 160 characters on one line.
+            Omit to use the original field name.
+        format: Number or currency display. Omit to keep the default value display.
+        decimals: Exact decimal places, or the format's default precision when omitted.
+        unit: Text to append to the formatted value.
+        currency: Three-letter currency code, required for currency display.
+    """
+
+    displayName: (
+        Annotated[
+            str,
+            StringConstraints(
+                min_length=1, max_length=160, pattern=r"^[^\x00-\x1f\x7f]+$"
+            ),
+        ]
+        | None
+    ) = None
+    format: Literal["number", "currency"] | None = None
+    decimals: Annotated[int, Field(ge=0, le=20)] | None = None
+    unit: (
+        Annotated[
+            str, StringConstraints(min_length=1, max_length=64, pattern=r"^[^\r\n]+$")
+        ]
+        | None
+    ) = None
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_display_options(self) -> Self:
+        """Validate optional labels and require a format for numeric display options.
+
+        Returns:
+            This field's label and options for displaying the original value.
+        Raises:
+            ValueError: If settings are empty, null, untrimmed, or combine numeric
+                display options without the required number or currency format.
+        """
+        for name in self.model_fields_set:
+            if getattr(self, name) is None:
+                raise ValueError("Omit unused field display options.")
+        if (
+            self.displayName is not None
+            and self.displayName != self.displayName.strip()
+        ):
+            raise ValueError("A field display name must contain trimmed text.")
+        if self.format is None:
+            if self.displayName is None:
+                raise ValueError("Provide a display name or number format.")
+            if self.model_fields_set & {"decimals", "unit", "currency"}:
+                raise ValueError("Numeric display options require a number format.")
+        if self.unit is not None and self.unit != self.unit.strip():
+            raise ValueError("A field display unit must contain trimmed text.")
+        if (self.format == "currency") != (self.currency is not None):
+            raise ValueError("A currency code is required only for currency display.")
+        return self
+
+
 class MapStyledLayer(MapDocumentPart):
-    """Saved appearance and filtering shared by catalog and uploaded layers.
+    """Saved appearance, filtering and field display for source-backed layers.
 
     customName is presentation text; it never replaces the source identity or
     source metadata. Omitted or null means to display the original source name.
@@ -143,6 +204,8 @@ class MapStyledLayer(MapDocumentPart):
     When omitted, the browser uses the source owner's ordinary presentation.
     calculatedFields preserves ordered numeric definitions independently of style;
     source access and field bindings are revalidated before restoring the view.
+    fieldFormats stores Feature inspector labels and formats by exact source
+    field name for vector views with custom display.
     """
 
     customName: Title | None = None
@@ -156,6 +219,10 @@ class MapStyledLayer(MapDocumentPart):
     calculatedFields: Annotated[list[CalculatedField], Field(max_length=64)] | None = (
         None
     )
+    fieldFormats: (
+        dict[Annotated[str, StringConstraints(min_length=1)], MapFeatureFieldFormat]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def validate_optional_filter(self) -> Self:
@@ -184,6 +251,21 @@ class MapStyledLayer(MapDocumentPart):
             names = [field.name for field in self.calculatedFields]
             if len(set(names)) != len(names):
                 raise ValueError("Calculated field names must be unique within a view.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_field_formats(self) -> Self:
+        """Accept field display settings only on vector layers.
+
+        Returns:
+            This layer with its optional settings keyed by field name.
+        Raises:
+            ValueError: If field formats are null or supplied on a raster layer.
+        """
+        if "fieldFormats" in self.model_fields_set and (
+            self.fieldFormats is None or self.style.kind != "vector"
+        ):
+            raise ValueError("Field formats require a vector layer and a field table.")
         return self
 
 

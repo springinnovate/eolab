@@ -52,10 +52,10 @@ test("setup and saved runs share a collapsed recipe disclosure with their existi
         Object.assign(h.state, {page: "setup", draft: createModelDraft(recipe, {rasters: [raster], area}, `recipe-${index}`)});
         h.view.render(h.state);
         const setup = h.view.setup.details;
-        assert.equal(setup.root.children[0].textContent, "Click to inspect the EOlab model recipe");
+        assert.equal(setup.root.children[0].textContent, "Tool definition (YAML)");
         assert.equal(Boolean(setup.root.open), false);
-        assert.equal(setup.preview.textContent, "View Model YAML");
-        assert.equal(setup.model.textContent, "Download Model YAML");
+        assert.equal(setup.preview.textContent, "View tool definition (YAML)");
+        assert.equal(setup.model.textContent, "Download tool definition (YAML)");
         assert.equal(setup.model.href, `/api/processing/models/${recipe.id}/versions/${recipe.version}/yaml`);
         assert.equal(setup.run.hidden, true);
         assert.equal(h.view.setup.fields.querySelectorAll("p").some(node => node.textContent.includes("uses the choices shown here")), false);
@@ -73,7 +73,7 @@ test("setup and saved runs share a collapsed recipe disclosure with their existi
         assert.equal(run.model.hidden, false); assert.equal(run.run.hidden, false);
         assert.equal(run.model.href, `/api/processing/jobs/${saved.jobId}/model-yaml`);
         assert.equal(run.run.href, `/api/processing/jobs/${saved.jobId}/run-yaml`);
-        assert.equal(run.run.textContent, "Download Run YAML");
+        assert.equal(run.run.textContent, "Download run record (YAML)");
         run.preview.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "Yaml");
         run.root.open = true; saved.progress.completed = 2; h.view.render(h.state);
         assert.equal(h.view.run.details, run); assert.equal(run.root.open, true);
@@ -333,7 +333,7 @@ test("primary output comes first even when the inventory lists supporting files 
     assert.equal(children[0].children[0].textContent, clipResult.label);
     const details = children[1];
     assert.equal(details.className, "models-details"); assert.equal(Boolean(details.open), false);
-    assert.equal(details.children[0].textContent, "Details");
+    assert.equal(details.children[0].textContent, "Additional outputs");
     assert.match(details.children[1].children[1].textContent, /Intermediate result/);
     assert.equal(details.children[2].children[0].textContent, provenance.displayName);
     const cards = [children[0], ...details.children.slice(1)];
@@ -647,7 +647,7 @@ test("time-series runs show saved coverage, their statistic and the ordinary CSV
     for (const value of ["Area time series", "series.csv", "Statistic: Mean", "Units: K", "Observations in this run: 3",
         "First observation: 2000-01-01 00:00:00 UTC", "Last observation: 2000-01-03 12:00:00 UTC"])
         assert.ok(text.includes(value), value);
-    assert.ok(text.includes("Download the CSV for values and per-calculation pixel counts."));
+    assert.ok(text.includes("The CSV contains each calculation's value and valid pixel count for every available observation."));
     assert.deepEqual(h.view.run.inputsBody.children[0].children.slice(-2).map(node => node.textContent), ["Statistic", "Mean"]);
     const actions = card.children.at(-2);
     assert.equal(actions.children[0].hidden, true);
@@ -827,7 +827,7 @@ test("precipitation controls explain duration totals and round changed dates vis
     h.draft.temporal.variable = "precipitation"; h.draft.reduction.reducer = "precipitation_total";
     h.view.render(h.state);
     assert.equal(controls.variable.children[2].disabled, false);
-    assert.equal(controls.statistic.children.at(-1).textContent, "Precipitation total (mm)");
+    assert.equal(controls.statistic.children.at(-1).textContent, "Total precipitation (mm)");
     assert.equal(controls.period.startTime.step, "3600"); assert.equal(controls.period.endTime.step, "3600");
     assert.match(controls.periodHelp.textContent, /30 minutes rounds forward/);
     assert.match(controls.availabilityHelp.textContent, /observation labels, not the boundaries/);

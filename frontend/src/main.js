@@ -10,7 +10,7 @@ import { annotationSummaryPolygons, filterAnnotationPolygons } from "./annotatio
 import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 import { MapInteractionTools } from "./map-interaction-tools.js";
-import { resolveVisitorControls, VISITOR_CONTROLS_VERSION } from "./visitor-controls.js";
+import { resolveVisitorControls, visitorInitialPanels, VISITOR_CONTROLS_VERSION } from "./visitor-controls.js";
 import { selectLassoFeatures } from "./vector/lasso.js";
 /**
  * Browser entry point and application composition root for EOLab.
@@ -65,7 +65,6 @@ import {
 } from "./catalog-system-state.js";
 import {
     createSingleWorldMap,
-    observeMapViewportSize,
     getCatalogItemMapBounds,
     getSingleWorldMapBounds,
     formatSingleWorldPosition
@@ -274,14 +273,14 @@ function placeSamplingTool(map) {
 }
 
 /**
- * Create the map, coordinate guide, sampling control and viewport resize observation.
+ * Create the map and supply the floating panels that cover its canvas.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
- * @return {L.Map} The initialized Leaflet map.
+ * @return {ReturnType<typeof createSingleWorldMap>} The initialized application map.
  */
 function initializeMap(appGlobalConfiguration) {
-    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
-    observeMapViewportSize(leafletMap);
+    const panels = [document.getElementById("control-panel"), document.getElementById("map-inspection")];
+    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; }, panels);
     addMapCoordinateGuide(L, leafletMap);
     placeSamplingTool(leafletMap);
 
@@ -300,7 +299,7 @@ function initializeMap(appGlobalConfiguration) {
         );
     }
 
-    updateMapPosition({ latlng: leafletMap.getCenter() });
+    updateMapPosition({ latlng: leafletMap.visibleView.getCenter() });
     leafletMap.on("mousemove", updateMapPosition);
 
     return leafletMap;
@@ -687,6 +686,8 @@ function renderCatalogItemInspector(
  * @param {() => void} [onCatalogWorkspaceRequested=() => {}] Reveals Catalog
  * when retained-layer details are requested.
  * @param {() => void} [onLayoutChange=() => {}] Updates map size after editing-mode layout changes.
+ * @param {(options:import("./eomap-layout-controller.js").WorkspacePanelOptions)=>void}
+ * [onWorkspaceOptionsChange=() => {}] Applies visitor panel choices before restoring sources.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  * @throws {TypeError} If the rendering-workspace callback is not callable.
  */
@@ -698,7 +699,8 @@ async function initializeCatalog(
     mapInspection,
     onRenderingWorkspaceRequested = () => {},
     onCatalogWorkspaceRequested = () => {},
-    onLayoutChange = () => {}
+    onLayoutChange = () => {},
+    onWorkspaceOptionsChange = () => {}
 ) {
     if (
         typeof onRenderingWorkspaceRequested !== "function" ||
@@ -849,7 +851,7 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let inspectionAvailability = resolveVisitorControls(isSharedViewer
+    let visitorAvailability = resolveVisitorControls(isSharedViewer
         ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
     /** @type {Readonly<import("./map-interaction-tools.js").MapPointerActions>} */
     let mapPointerActions = { rasterValues: false, featurePicking: false, histogramBox: false };
@@ -1110,7 +1112,7 @@ async function initializeCatalog(
         }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
-    rasterSeries.setMapSamplingBoxAvailable(inspectionAvailability.histogramBox);
+    rasterSeries.setMapSamplingBoxAvailable(visitorAvailability.histogramBox);
     rasterClips = new RasterClipsController({
         api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
             onContextChange: context => presentSamplingContext("raster-clips", context),
@@ -1153,6 +1155,7 @@ async function initializeCatalog(
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
+        getMapCenter: leafletMap.visibleView.getCenter,
         leaflet: L,
         onTileError: reportMapTileError,
         inspectionInitiallyEnabled: !isSharedViewer,
@@ -1893,7 +1896,7 @@ async function initializeCatalog(
     }
     savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
-        viewport: createSavedMapLeafletViewport(leafletMap),
+        viewport: createSavedMapLeafletViewport(leafletMap.visibleView),
         mapLayers: mapLayerController,
         catalogVisualization,
         catalogItems: catalogItemClient,
@@ -1908,11 +1911,16 @@ async function initializeCatalog(
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
         applyMapHeading,
         applyVisitorControls: settings => {
-            inspectionAvailability = resolveVisitorControls(settings);
-            const { rasterValues, histogramBox } = inspectionAvailability;
+            visitorAvailability = resolveVisitorControls(settings);
+            onWorkspaceOptionsChange({
+                allowCatalog: visitorAvailability.catalog,
+                allowMapContents: visitorAvailability.mapContents,
+                initialState: visitorInitialPanels(settings),
+            });
+            const { rasterValues, histogramBox } = visitorAvailability;
             rasterVisualization.setMapInspectionAvailability({ rasterValues, histogramBox });
             rasterSeries.setMapSamplingBoxAvailable(histogramBox);
-            mapInteractionTools?.setAvailability(inspectionAvailability);
+            mapInteractionTools?.setAvailability(visitorAvailability);
         },
         basemap: basemapControl,
         mapLegend,
@@ -2157,10 +2165,34 @@ async function initializeCatalog(
                 };
             });
     }
+    /**
+     * Provide the selected vector view's fields and remember inspector label and format changes.
+     * @param {string} key Opaque identity of the inspected map layer view.
+     * @return {import("./vector/feature-field-display.js").FeatureFieldDisplay|null} Settings for a current vector view.
+     */
+    function describeFeatureFieldDisplay(key) {
+        const record = mapLayerController.getRecord(key);
+        if (record?.adapter !== vectorMapLayerAdapter || !record.entry.visible) return null;
+        const source = record.adapter.describeSource(record);
+        const fields = source.fields.map(({name}) => name);
+        const numericFields = source.numericFields.map(({name}) => name);
+        const fieldNames = new Set(fields);
+        const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
+            .filter(([field]) => fieldNames.has(field)));
+        return {fields, numericFields, formats, apply: fieldFormats => {
+            if (mapLayerController.getRecord(key) !== record || !record.entry.visible) return false;
+            const currentFields = new Set(record.adapter.describeSource(record).fields.map(({name}) => name));
+            if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
+            record.fieldFormats = fieldFormats;
+            savedMapViewController.scheduleRemember();
+            return true;
+        }};
+    }
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
         getVisibleTargets: () => visibleVectorInspectionTargets(),
+        getFieldDisplay: describeFeatureFieldDisplay,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
             if (visible) mapInspection.showFeatureInspector({ activate: false });
@@ -2219,7 +2251,7 @@ async function initializeCatalog(
             if (rasterValues || histogramBox) {
                 const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
                 const validPosition = isCanonicalWgs84Position(position);
-                if (inspectionAvailability.rasterValues) {
+                if (visitorAvailability.rasterValues) {
                     pixelPoint = validPosition ? Object.freeze(position) : null;
                     rasterSeries.setPosition(pixelPoint);
                 }
@@ -2320,7 +2352,7 @@ async function initializeCatalog(
     });
     mapInteractionTools = new MapInteractionTools({
         documentContext: document, map: leafletMap, leaflet: L,
-        availability: inspectionAvailability,
+        availability: visitorAvailability,
         editing: mapLayerEditing,
         getTargets: () => mapLayerController.retainedRecords.flatMap(record => {
             if (record.adapter !== vectorMapLayerAdapter) return [];
@@ -2782,7 +2814,7 @@ async function initializeCatalog(
     catalogLayerToggle.addEventListener("click", () => {
         void catalogMapActions.toggle(catalogState.selectedItem);
     });
-    if (!isSharedViewer) await loadCatalog(true);
+    if (!isSharedViewer || visitorAvailability.catalog) await loadCatalog(true);
     return refreshCatalogDatasets;
 }
 
@@ -2960,12 +2992,12 @@ async function startApplication() {
             placeFirstSampleHint(leafletMap);
         },
         allowCatalog: !isSharedViewer,
+        allowMapContents: !isSharedViewer,
         allowOperationalStatus: !isSharedViewer,
         workspaceStorage: isSharedViewer || editableMapSlug !== null
             ? null
             : new SavedMapViewLocalStorage(undefined, "eolab.workspace-panels.v1"),
     });
-    if (isSharedViewer) layoutController.showWorkspace("map-layers");
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
@@ -2989,7 +3021,8 @@ async function startApplication() {
         mapInspection,
         () => layoutController.showWorkspace("map-layers"),
         () => layoutController.showWorkspace("catalog"),
-        () => layoutController.notifyLayoutChange()
+        () => layoutController.notifyLayoutChange(),
+        options => layoutController.setWorkspaceOptions(options)
     );
     if (!isSharedViewer) await initializeScanner(refreshCatalog);
 }

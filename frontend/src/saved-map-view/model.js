@@ -1,5 +1,6 @@
 /** Versioned, portable saved-map document validation and construction. */
 import { validateCalculatedFields } from "../calculated-fields.js";
+import { validateFeatureFieldFormats } from "../feature-field-formats.js";
 import { VISITOR_CONTROL_PARENTS, VISITOR_CONTROLS_VERSION } from "../visitor-controls.js";
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
@@ -206,17 +207,28 @@ function validateSavedMapView(candidate) {
  */
 function validateVisitorControls(candidate) {
     requirePlainObject(candidate, "Visitor controls");
-    requireExactKeys(candidate, ["version", "choices"], "Visitor controls");
+    requireExactKeys(candidate, ["version", "choices",
+        ...(Object.hasOwn(candidate, "initialPanels") ? ["initialPanels"] : [])], "Visitor controls");
     if (candidate.version !== VISITOR_CONTROLS_VERSION) {
         throw new SavedMapViewValidationError("This map uses a visitor controls version this viewer does not support.");
     }
     requirePlainObject(candidate.choices, "Visitor choices");
     for (const [id, enabled] of Object.entries(candidate.choices)) {
         if (!Object.hasOwn(VISITOR_CONTROL_PARENTS, id) || typeof enabled !== "boolean") {
-            throw new SavedMapViewValidationError("Visitor choices must use supported tools and true or false values.");
+            throw new SavedMapViewValidationError("Visitor choices must use supported controls and true or false values.");
         }
     }
-    return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }) });
+    if (Object.hasOwn(candidate, "initialPanels")) {
+        requirePlainObject(candidate.initialPanels, "Visitor initial panels");
+        for (const [id, open] of Object.entries(candidate.initialPanels)) {
+            if (!["catalog", "mapContents"].includes(id) || typeof open !== "boolean") {
+                throw new SavedMapViewValidationError("Visitor initial panels must use Catalog or Map contents and true or false values.");
+            }
+        }
+    }
+    return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }),
+        ...(candidate.initialPanels === undefined ? {} : { initialPanels: Object.freeze({ ...candidate.initialPanels }) }),
+    });
 }
 
 /**
@@ -309,7 +321,8 @@ function validateLayer(candidate) {
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filterViewId") ? ["filterViewId"] : []),
-            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : [])],
+            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : []),
+            ...(!isTemporal && Object.hasOwn(candidate, "fieldFormats") ? ["fieldFormats"] : [])],
         "Saved layer"
     );
     let customName;
@@ -374,6 +387,9 @@ function validateLayer(candidate) {
     if ((isArtifact || Object.hasOwn(candidate, "calculatedFields")) && candidate.style.kind !== "vector") {
         throw new SavedMapViewValidationError("Calculated fields and vector run results require a vector style.");
     }
+    if (Object.hasOwn(candidate, "fieldFormats") && candidate.style.kind !== "vector") {
+        throw new SavedMapViewValidationError("Field formats require a vector layer.");
+    }
     if (isUpload && candidate.style.kind === "raster" && Object.hasOwn(candidate, "filter")) {
         throw new SavedMapViewValidationError("Uploaded raster layers cannot have polygon filters.");
     }
@@ -399,6 +415,7 @@ function validateLayer(candidate) {
         style: structuredClone(candidate.style),
         ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
         ...(Object.hasOwn(candidate, "calculatedFields") ? {calculatedFields: validateCalculatedFields(candidate.calculatedFields)} : {}),
+        ...(Object.hasOwn(candidate, "fieldFormats") ? {fieldFormats: validateFeatureFieldFormats(candidate.fieldFormats)} : {}),
     });
 }
 

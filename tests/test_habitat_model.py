@@ -415,7 +415,10 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         },
     )
 
-    assert submission.summary["model"]["title"] == "Ecosystem Condition"
+    assert (
+        submission.summary["model"]["title"]
+        == "Map ecosystem similarity to reference conditions"
+    )
     assert submission.summary["model"]["id"] == "habitat-condition"
     assert submission.summary["label"] == "Habitat fixture"
 
@@ -504,7 +507,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     }
     response = ModelJobResponse.model_validate(serialize_processing_job(ready))
     assert response.result.name == "reference_similarity"
-    assert response.result.label == "Reference similarity"
+    assert response.result.label == "Reference similarity score (0–1)"
     assert response.result.presentation == "map"
     assert response.result.preparedInputCoverage is None
     assert "preparedInputCoverage" not in response.model_dump(mode="json")["result"]

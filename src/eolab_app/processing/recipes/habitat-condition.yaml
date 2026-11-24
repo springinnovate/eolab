@@ -1,12 +1,12 @@
 schema: eolab.model/v1
 id: habitat-condition
 version: "1.0.0"
-title: Ecosystem Condition
-description: Fit expected habitat responses from reference sites inside the analysis area, then map how closely observed conditions resemble those references.
+title: Map ecosystem similarity to reference conditions
+description: Use the Ecosystem Condition model to learn expected responses from environmental predictors at reference sites. Map how closely observed responses match those expectations, producing a 0–1 similarity map on a 500 m grid.
 inputs:
   stack:
     type: habitat_stack
-    label: Predictors and observed responses
+    label: Environmental predictors and observed responses
   area:
     type: summary_area
     label: Analysis area
@@ -17,10 +17,10 @@ inputs:
     label: Reference sites
   habitat_mask:
     type: optional_raster
-    label: Habitat assessment mask
+    label: Output mask (optional)
   preparation:
     type: raster_preparation
-    label: Raster preparation
+    label: Output grid
 parameters: {}
 steps:
   - id: calculate
@@ -55,14 +55,14 @@ steps:
 outputs:
   reference_similarity:
     type: raster
-    label: Reference similarity
+    label: Reference similarity score (0–1)
     source: calculate.reference_similarity
     role: result
     presentation: map
     saveEligible: true
   diagnostics:
     type: raster
-    label: Response diagnostics
+    label: Model diagnostics (ZIP)
     source: calculate.diagnostics
     role: intermediate
     presentation: download

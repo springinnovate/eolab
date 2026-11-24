@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveVisitorControls, visitorControlChoices } from "../../src/visitor-controls.js";
+import { resolveVisitorControls, visitorControlChoices, visitorInitialPanels } from "../../src/visitor-controls.js";
 import { readFileSync } from "node:fs";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
@@ -40,6 +40,8 @@ test("version five shares drawing view definitions with the server without copyi
 test("saved maps round-trip calculated vectors and raster uploads without values or credentials", () => {
   const fields = [{version: 1, name: "Density", expression: "'Population' / 'Area km2'", numericText: false}];
   const presentation = {isCustom: true, visible: true, opacity: 1, calculatedFields: fields,
+    fieldFormats: {Density: {displayName: "Population density", format: "number", decimals: 1, unit: "people/km²"},
+      name: {displayName: "Site name"}},
     style: {kind: "vector", definition: {graduated: {field: "Density"}}},
     filter: {enabled: true, match: "all", rules: [{field: "Density", operator: "gt", value: 2}]}};
   const view = createSavedMapView({...savedMapCandidate(), layers: [
@@ -55,6 +57,17 @@ test("saved maps round-trip calculated vectors and raster uploads without values
     value => { value.layers[0].calculatedFields[0].numericText = "true"; },
     value => { value.layers[0].calculatedFields.push({...fields[0]}); },
     value => { value.layers[1].runArtifact.path = "private/file.gpkg"; },
+    value => { value.layers[0].fieldFormats.Density.decimals = -1; },
+    value => { value.layers[0].fieldFormats.Density.currency = "USD"; },
+    ...[null, "", " ", " Site name ", "line\nbreak", "tab\tname", "x".repeat(161), 123]
+      .map(displayName => value => { value.layers[0].fieldFormats.name.displayName = displayName; }),
+    value => { value.layers[0].fieldFormats.name.format = null; },
+    value => { value.layers[0].fieldFormats.name.decimals = 2; },
+    value => { value.layers[0].fieldFormats.name.unit = "ha"; },
+    value => { value.layers[0].fieldFormats.name = {}; },
+    value => { value.layers[1].fieldFormats.Density.unit = null; },
+    value => { value.layers[2].fieldFormats = null; },
+    value => { value.layers[3].fieldFormats = {cost: {format: "currency", currency: "USD"}}; },
     value => { value.layers[1].runArtifact.jobId = "../private"; },
     value => { value.schemaVersion = 3; },
   ]) {
@@ -289,29 +302,57 @@ test("map legend preferences round-trip for catalog and shared layers", () => {
   }
 });
 
-test("visitor controls preserve the parent's override and default only unconfigured maps to all tools", () => {
+test("visitor controls preserve parent overrides and default only unconfigured maps to the familiar profile", () => {
   const legacy = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-shared.json", import.meta.url), "utf8"));
-  const defaults = { inspectAndSelect: true, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true };
+  const defaults = { inspectAndSelect: true, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true,
+    workspacePanels: true, catalog: false, mapContents: true };
   assert.deepEqual(resolveVisitorControls(parseSavedMapView(JSON.stringify(legacy)).visitorControls), defaults);
   const candidate = { ...legacy, visitorControls: { version: 1, choices: { inspectAndSelect: false, featurePicking: true, lasso: true } } };
   const saved = parseSavedMapView(JSON.stringify(candidate));
   assert.deepEqual(saved, candidate);
   assert.deepEqual(visitorControlChoices(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
+    workspacePanels: false, catalog: false, mapContents: false,
   });
   assert.deepEqual(resolveVisitorControls(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: false, histogramBox: false, lasso: false,
+    workspacePanels: false, catalog: false, mapContents: false,
   });
   const reenabled = parseSavedMapView(JSON.stringify({
     ...saved, visitorControls: { version: 1, choices: { ...saved.visitorControls.choices, inspectAndSelect: true } },
   }));
   assert.deepEqual(resolveVisitorControls(reenabled.visitorControls), {
     inspectAndSelect: true, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
+    workspacePanels: false, catalog: false, mapContents: false,
   });
   for (const visitorControls of [null, {}, { version: 2, choices: {} }, { version: true, choices: {} },
     { version: 1, choices: [] }, { version: 1, choices: { lasso: "true" } }, { version: 1, choices: { zoom: true } },
-    { version: 1, choices: {}, unknown: true }]) {
+    { version: 1, choices: {}, unknown: true }, { version: 1, choices: {}, initialPanels: null },
+    { version: 1, choices: {}, initialPanels: { catalog: 1 } },
+    { version: 1, choices: {}, initialPanels: { canvas: true } }]) {
     assert.throws(() => parseSavedMapView(JSON.stringify({ ...candidate, visitorControls })), /visitor/i);
+  }
+});
+
+test("workspace availability and initial disclosures round trip without changing saved layers or inspection", () => {
+  const original = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-catalog.json", import.meta.url), "utf8"));
+  assert.deepEqual(visitorInitialPanels(), { catalog: false, mapContents: true });
+  assert.deepEqual(visitorInitialPanels({ version: 1, choices: {} }), { catalog: false, mapContents: false });
+  for (const workspacePanels of [false, true]) {
+    for (const catalog of [false, true]) {
+      for (const mapContents of [false, true]) {
+        const settings = { version: 1, choices: { workspacePanels, catalog, mapContents,
+          inspectAndSelect: true, featurePicking: true }, initialPanels: { catalog: true, mapContents: false } };
+        const saved = parseSavedMapView(serializeSavedMapView({ ...original, visitorControls: settings }));
+        assert.deepEqual(saved.visitorControls, settings);
+        assert.deepEqual(saved.layers, original.layers);
+        const resolved = resolveVisitorControls(saved.visitorControls);
+        assert.equal(resolved.catalog, workspacePanels && catalog);
+        assert.equal(resolved.mapContents, workspacePanels && mapContents);
+        assert.equal(resolved.featurePicking, true);
+        assert.deepEqual(visitorInitialPanels(saved.visitorControls), settings.initialPanels);
+      }
+    }
   }
 });
 

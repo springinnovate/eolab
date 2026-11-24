@@ -1299,7 +1299,9 @@ h5 {
 }
 
 .raster-palette,
-.raster-style-stops label {
+.raster-style-stops label,
+.raster-appearance-mode,
+.raster-category-fields label {
   display: grid;
   gap: 5px;
   color: var(--text-2);
@@ -1318,7 +1320,10 @@ h5 {
 .raster-palette-row .secondary-button { margin: 0; }
 
 .raster-palette select,
-.raster-style-stops input[type="number"] {
+.raster-style-stops input[type="number"],
+.raster-appearance-mode select,
+.raster-category-fields input,
+.raster-category-fields textarea {
   min-width: 0;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -1334,13 +1339,18 @@ h5 {
   align-items: end;
 }
 
-.raster-style-stops label { min-width: 0; }
+.raster-style-stops label,
+.raster-appearance-mode,
+.raster-category-fields label { min-width: 0; }
 .raster-value-override { display: grid; gap: 8px; }
 .raster-value-toggle { display: flex; align-items: center; gap: 8px; }
 .raster-value-toggle input { margin: 0; }
 .raster-value-override .raster-style-stops[hidden] { display: none; }
 .raster-value-override .raster-style-stops > p { grid-column: 1 / -1; }
-.raster-style-stops input[type="number"] { width: 100%; }
+.raster-style-stops input[type="number"],
+.raster-appearance-mode select,
+.raster-category-fields input,
+.raster-category-fields textarea { width: 100%; }
 
 .raster-style-stops input[type="color"] {
   width: 42px;
@@ -1354,28 +1364,6 @@ h5 {
 
 .raster-style-stops [aria-invalid="true"] {
   border-color: var(--status-danger);
-}
-
-.raster-appearance-mode,
-.raster-category-fields label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: 0.7rem;
-  font-weight: 600;
-}
-
-.raster-appearance-mode select,
-.raster-category-fields input,
-.raster-category-fields textarea {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  padding: 7px 8px;
-  color: var(--text-1);
 }
 
 .raster-category-fields textarea {
@@ -3244,32 +3232,44 @@ div.chart-tooltip {
     display: none;
 }
 
-:is(#published-map-editor, #publish-map-dialog) .visitor-inspection-options {
+:is(#published-map-editor, #publish-map-dialog) .visitor-control-options {
     min-width: 0;
     padding: 0.35rem 0.65rem 0.55rem;
     border: 1px solid var(--border-1);
     border-radius: var(--radius);
 }
-:is(#published-map-editor, #publish-map-dialog) .visitor-inspection-options label {
+:is(#published-map-editor, #publish-map-dialog) .visitor-control-options label {
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
     margin: 0.25rem 0;
 }
-.visitor-inspection-options [data-visitor-inspection-children] {
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
     min-width: 0;
     margin: 0;
     padding: 0 0 0 1.1rem;
     border: 0;
 }
 
-.panel-content:has(#toggle-catalog-workspace[hidden]) {
+:is(#published-map-editor, #publish-map-dialog) .visitor-panel-initial {
+    margin-left: 1.1rem;
+}
+
+.panel-content:has(.workspace-disclosure[hidden]) {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .panel-content:has(#toggle-catalog-workspace[hidden]) > #toggle-map-layers,
 .panel-content:has(#toggle-catalog-workspace[hidden]) > #eomap-map-layers-region {
   grid-column: 1;
+}
+
+#app:has(#toggle-catalog-workspace[hidden]) {
+  --workspace-catalog-allocation: 0px;
+}
+
+#app:has(#toggle-map-layers[hidden]) {
+  --workspace-map-layers-allocation: 0px;
 }
 
 .shared-layer-details .catalog-inspector:not([hidden]) {
@@ -4658,6 +4658,24 @@ article.raster-histogram-summary {
 .vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; }
 .vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
 .vector-feature-profile-navigation { grid-template-columns: auto 1fr auto; }
+.vector-field-display { margin-top: 12px; font-size: 0.78rem; }
+.vector-field-display summary { cursor: pointer; font-weight: 600; }
+.vector-field-display p { margin: 8px 0; }
+.vector-field-display p:empty { margin: 0; }
+.vector-field-display-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.vector-field-display-actions[hidden] { display: none; }
+.vector-field-display input { min-width: 0; max-width: 100%; }
+.vector-field-display-preview { max-height: 12rem; overflow: auto; border: 1px solid var(--border-1); }
+.vector-field-display-preview table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.vector-field-display-preview caption,
+.vector-field-display-preview th,
+.vector-field-display-preview td {
+  padding: 4px 6px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.vector-field-display-preview th,
+.vector-field-display-preview td { border-top: 1px solid var(--border-1); }
 .vector-feature-attributes {
   display: grid;
   grid-template-columns: minmax(90px, 0.4fr) minmax(0, 1fr);
@@ -5444,6 +5462,14 @@ summary:hover > .raster-disclosure-chevron {
   #app.is-control-panel-collapsed #map {
     --map-controls-top-clearance: calc(var(--workspace-edge) + var(--panel-toggle-size) + var(--workspace-gap));
   }
+}
+
+#app.is-workspace-unavailable .map-tools-header {
+  max-inline-size: 100%;
+}
+
+#app.is-workspace-unavailable #map {
+  --map-controls-top-clearance: var(--tools-clearance, 0px);
 }
 
 #published-map-editor {
