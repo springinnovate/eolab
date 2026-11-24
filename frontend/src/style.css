@@ -3510,6 +3510,9 @@ div.chart-tooltip {
   gap: 6px;
   font-weight: 400;
 }
+.raster-histogram-percentiles .raster-histogram-rescale[hidden] {
+  display: none;
+}
 .raster-histogram-percentiles .raster-histogram-rescale-help,
 .raster-histogram-percentiles .raster-percentile-status {
   margin: 0;
@@ -4027,6 +4030,9 @@ article.raster-histogram-summary {
   cursor: pointer;
   font-size: 0.8rem;
   font-weight: 600;
+}
+.raster-bivariate-style-ranges[data-style-editing="false"] :is(.raster-bivariate-palette-controls, .raster-bivariate-rescale, .raster-bivariate-style-help) {
+  display: none;
 }
 
 .raster-bivariate-style-ranges[open] > summary {

@@ -10,6 +10,7 @@
  * @property {boolean} workspacePanels Allow workspace panels as a group.
  * @property {boolean} catalog Allow visitors to open Catalog.
  * @property {boolean} mapContents Allow visitors to open Map contents.
+ * @property {boolean} styleEditing Allow visitors to change layer and chart appearance.
  * @property {boolean} runModels Allow visitors to start runs of the selected models.
  */
 
@@ -37,12 +38,13 @@ export const VISITOR_CONTROL_PARENTS = Object.freeze({
     workspacePanels: null,
     catalog: "workspacePanels",
     mapContents: "workspacePanels",
+    styleEditing: null,
     runModels: null,
 });
 
 /**
  * Return the choices to show in the publishing form, including checked children of a disabled parent.
- * Maps without settings and new forms start with inspection and Map contents available,
+ * Maps without settings and new forms start with styling, inspection and Map contents available,
  * and Catalog unavailable, preserving the earlier published-viewer profile.
  * A missing choice in an explicit configuration is off until the author enables it.
  * @param {Readonly<VisitorControls>} [settings] Validated choices from one saved map.

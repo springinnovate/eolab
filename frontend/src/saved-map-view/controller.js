@@ -702,19 +702,27 @@ export class SavedMapViewController {
             this.#discardLayers(stagedLayers);
             return null;
         }
-        try {
-            this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
-        } catch (error) {
-            this.#discardLayers(stagedLayers);
-            throw error;
-        }
-        const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
+        const remainingKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
         for (const [index, result] of preparations.entries()) {
-            if (result.key && !retainedKeys.has(result.key)) {
+            if (result.key && !remainingKeys.has(result.key)) {
                 result.key = null;
                 result.removed = true;
                 result.detail = `${savedMapView.layers[index].customName ?? "A saved layer"} was removed from the map while it was opening.`;
             }
+        }
+        const options = {fitToBounds: false};
+        if (preparations.some(result => result.key)) {
+            const savedKeys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
+            for (const key of savedKeys) remainingKeys.delete(key);
+            options.drawingOrder = [...savedKeys, ...remainingKeys];
+        }
+        try {
+            this.mapLayers.commitStaged(stagedLayers, options);
+        } catch (error) {
+            this.#discardLayers(stagedLayers);
+            throw error;
+        }
+        for (const [index, result] of preparations.entries()) {
             const key = result.key ?? result.staged?.record.entry.key;
             if (key) this.mapLayers.setLegendIncluded(key, savedMapView.layers[index].legendIncluded !== false);
             if (result.key && Object.hasOwn(savedMapView.layers[index], "isCustom")) {
@@ -724,18 +732,12 @@ export class SavedMapViewController {
         if (!restoreAppearanceEarly) {
             this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
         }
-        const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         this.unavailableLayers = preparations.flatMap((result, index) => {
             const layer = savedMapView.layers[index];
             return !result.key && !result.staged && !result.removed && (layer.calculatedFields?.length || layer.runArtifact || layer.drawingLayerId)
                 ? [{index, layer: structuredClone(layer), origin: savedMapView.viewer.origin}] : [];
         });
         this.view.setUnavailableLayerCount(this.unavailableLayers.length);
-        // Older callers may expose only catalog staging; mixed maps require explicit ordering.
-        if (preparations.some(result => result.key)) {
-            const otherKeys = this.mapLayers.retainedRecords.map(record => record.entry.key).filter(key => !keys.includes(key));
-            this.mapLayers.restoreOrder([...keys, ...otherKeys]);
-        }
         return {
             loaded: stagedLayers.length + preparations.filter(result => result.key).length,
             total: savedMapView.layers.length,

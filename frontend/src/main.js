@@ -803,7 +803,12 @@ async function initializeCatalog(
         surpriseRequestGeneration: 0,
     };
 
+    let visitorAvailability = resolveVisitorControls(isSharedViewer
+        ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
+    /** Whether user actions may edit layer or chart appearance in the current map. @return {boolean} */
+    const canEditStyle = () => visitorAvailability.styleEditing;
     const catalogMapActions = new CatalogMapActions({
+        canEditStyle,
         removalTarget: item => catalogVisualization.removalTarget(item),
         prepare: item => catalogVisualization.prepare(item),
         show: item => catalogVisualization.show(item),
@@ -871,8 +876,6 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let visitorAvailability = resolveVisitorControls(isSharedViewer
-        ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
     /** @type {Readonly<import("./map-interaction-tools.js").MapPointerActions>} */
     let mapPointerActions = { rasterValues: false, featurePicking: false, histogramBox: false };
     let mapLayerEditing = false;
@@ -967,6 +970,7 @@ async function initializeCatalog(
         onLayerStatus: (key, status) => mapLayerController.updateTileStatus(key, status),
     });
     const mapLayerController = new MapLayerController({
+        canEditStyle,
         leafletMap,
         view: mapLayerStackView,
         leafletLayers,
@@ -1118,6 +1122,7 @@ async function initializeCatalog(
     const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxPreview: loadSamplingBoxPreview });
     const resultLocator = new RasterResultLocator(document, L, appGlobalConfiguration.basemap);
     rasterSeries = new RasterSeriesController({
+        canEditStyle,
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
         onOpenArea: editProcessingArea,
@@ -1182,6 +1187,7 @@ async function initializeCatalog(
         leaflet: L,
         onTileError: reportMapTileError,
         inspectionInitiallyEnabled: !isSharedViewer,
+        styleEditingEnabled: canEditStyle(),
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
@@ -1881,6 +1887,7 @@ async function initializeCatalog(
     });
     const vectorStyleControls = new VectorStyleControls();
     layerStyleEditor = new MapLayerStyleEditor({
+        canEditStyle,
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,
         inspection: mapInspection,
         vectorStyleControls,
@@ -1956,6 +1963,10 @@ async function initializeCatalog(
         applyMapHeading,
         applyVisitorControls: settings => {
             visitorAvailability = resolveVisitorControls(settings);
+            const { styleEditing } = visitorAvailability;
+            rasterVisualization.setStyleEditingEnabled(styleEditing);
+            vectorFeatureInspector.setStyleEditingEnabled(styleEditing);
+            annotations.setStyleEditingEnabled(styleEditing);
             models.setAllowedModelIds(visitorAvailability.allowedModelIds);
             onWorkspaceOptionsChange({
                 allowCatalog: visitorAvailability.catalog,
@@ -2368,6 +2379,8 @@ async function initializeCatalog(
                 if (annotations.updateSharedLayer(id, data)) { vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); }
             },
         });
+        annotations.setStyleEditingEnabled(canEditStyle());
+        vectorFeatureInspector.setStyleEditingEnabled(canEditStyle());
         annotationsReady = annotationSessions.start({ restoreBindings: false, refreshImmediately: false }).then(async () => {
             await annotations.load({ attachSavedLayers: !isSharedViewer && editableMapSlug === null,
                 sharedLayerIds: annotationSessions.bookmarkedLayerIds() });

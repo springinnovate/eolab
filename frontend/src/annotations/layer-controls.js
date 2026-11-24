@@ -79,6 +79,7 @@ export class AnnotationLayerControls {
         for (const [key, label, type] of [["color", "Fill color", "color"], ["outline", "Outline color", "color"],
             ["weight", "Outline width", "number"], ["fillOpacity", "Fill opacity", "number"], ["labels", "Show label", "checkbox"]]) {
             const wrapper = this.createLabeledInput(label, type, layer.style[key], value => {
+                if (this.appearance.hidden) return;
                 if (key === "color" && this.collaborating) { actions.color(value); return; }
                 layer.style[key] = type === "number" ? Number(value) : value;
                 if (key === "color") for (const polygon of layer.polygons) delete polygon.contributorColor;
@@ -90,7 +91,9 @@ export class AnnotationLayerControls {
             this.styleInputs[key] = input;
             (key === "color" ? this.sharedAppearance : this.localAppearance).append(wrapper);
         }
-        const opacity = this.createLabeledInput("Layer opacity", "range", layer.opacity, value => actions.opacity(Number(value)));
+        const opacity = this.createLabeledInput("Layer opacity", "range", layer.opacity, value => {
+            if (!this.appearance.hidden) actions.opacity(Number(value));
+        });
         this.opacity = opacity.querySelector("input");
         this.opacity.min = "0"; this.opacity.max = "1"; this.opacity.step = "0.05";
         this.localAppearance.append(opacity);
@@ -266,7 +269,7 @@ export class AnnotationLayerControls {
         this.readOnlyDrawing = !canEdit;
         this.draw.disabled = !canEdit;
         this.share.hidden = true;
-        this.sharedStatus.textContent = canEdit ? "Saved drawing · polygon edits update its linked uses" : "Read-only drawing · filters and style affect your view";
+        this.sharedStatus.textContent = canEdit ? "Saved drawing · polygon edits update its linked uses" : "Read-only drawing · only its owner can edit the saved polygons";
         this.refresh();
     }
 
@@ -370,9 +373,19 @@ export class AnnotationLayerControls {
      * @return {void}
      */
     open(control) {
+        if (control === "style" && this.appearance.hidden) return;
         const details = control === "style" ? this.appearance : control === "filter" ? this.filter : this.polygons;
         details.open = true;
         details.scrollIntoView({ block: "nearest" });
         (details.querySelector("input") ?? details.querySelector("summary"))?.focus();
+    }
+
+    /** Show or close this drawing's appearance controls independently of contribution rights.
+     * @param {boolean} enabled Whether visitors may change this layer's style.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.appearance.hidden = !enabled;
+        if (!enabled) this.appearance.open = false;
     }
 }

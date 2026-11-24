@@ -597,8 +597,14 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(styleButton.getAttribute("aria-label"), "Style Parcels");
   styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.styleRequests, ["catalog|parcels"]);
+  h.controller.setStyleEditingEnabled(false);
   h.controller.navigateResult("previous");
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "First");
+  assert.equal(styleButton.hidden, true);
+  styleButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.styleRequests, ["catalog|parcels"]);
+  h.controller.setStyleEditingEnabled(true);
+  assert.equal(styleButton.hidden, false);
   assert.deepEqual(h.currentNavigationChanges.at(-1), {
     position: 1,
     total: 2,
