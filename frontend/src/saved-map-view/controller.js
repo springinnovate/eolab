@@ -139,7 +139,7 @@ export class SavedMapViewController {
         this.allowPublishing = allowPublishing;
         this.publicationDefaults = publicationDefaults;
         this.listPublisherModels = listPublisherModels;
-        this.editorModels = null;
+        this.editorModelRequest = null;
         this.applyMapHeading = applyMapHeading;
         this.applyVisitorControls = applyVisitorControls;
         this.basemap = basemap;
@@ -199,15 +199,14 @@ export class SavedMapViewController {
 
     /**
      * Capture the current map once and offer the creator visitor controls and model choices.
-     * @return {Promise<void>} Completion when the form or capture error is displayed.
+     * @return {Promise<void>} Completion after the open form receives its model choices.
      */
     async openPublicationDialog() {
         if (this.busy || this.destroyed) return;
         this.#setBusy(true);
         try {
             this.publishingView = this.#snapshotCurrentView();
-            const models = await this.#loadPublisherModels();
-            if (!this.destroyed) this.view.showPublicationForm(this.publicationDefaults, models);
+            return this.view.showPublicationForm(this.publicationDefaults, this.#loadPublisherModels());
         } catch (error) {
             this.view.showError(asError(error), "copy");
         } finally {
@@ -270,13 +269,13 @@ export class SavedMapViewController {
             this.applyMapHeading(saved.title, saved.subtitle);
             this.view.showLoading(saved.view.layers.length);
             const report = await this.#restore(saved.view, generation);
-            if (report !== null) this.view.showResults(report);
-            if (this.editPublishedMap && report !== null) {
+            if (report === null || this.destroyed || generation !== this.restoreGeneration) return;
+            this.view.showResults(report);
+            if (this.editPublishedMap) {
                 const complete = report.loaded === report.total && report.details.length === 0;
-                this.editorModels = await this.#loadPublisherModels();
-                if (this.destroyed || generation !== this.restoreGeneration) return;
+                this.editorModelRequest = this.#loadPublisherModels();
                 this.editRevision = saved.revision;
-                this.view.showPublishedMapEditor(saved, complete, this.editorModels);
+                this.view.showPublishedMapEditor(saved, complete, this.editorModelRequest);
             }
         } catch (error) {
             this.view.showError(asError(error), "open");
@@ -304,7 +303,7 @@ export class SavedMapViewController {
             });
             this.editRevision = saved.revision;
             this.applyMapHeading(saved.title, saved.subtitle);
-            this.view.showPublishedMapEditor(saved, true, this.editorModels);
+            this.view.showPublishedMapEditor(saved, true, this.editorModelRequest);
             this.view.showPublishedMapEditStatus("Saved. Visitors will see these changes when they open or reload the map.");
         } catch (error) {
             this.view.showPublishedMapEditStatus(asError(error).message);

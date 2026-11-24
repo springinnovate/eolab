@@ -2,6 +2,8 @@
 import { suggestMapLinkName } from "./api-client.js";
 import { VISITOR_CONTROLS_VERSION, visitorControlChoices, visitorInitialPanels } from "../visitor-controls.js";
 
+/** @typedef {ReadonlyArray<{id:string,title:string}>} PublisherModels */
+
 /**
  * Read checked visitor choices including the stored values under a disabled parent.
  * @param {HTMLFieldSetElement} fields Visitor controls in one form.
@@ -31,30 +33,20 @@ function updateVisitorChoiceInputs(fields) {
         !fields.querySelector('[data-visitor-control="workspacePanels"]').checked;
     const runModels = fields.querySelector('[data-visitor-control="runModels"]');
     fields.querySelector("[data-visitor-model-children]").disabled = !runModels.checked;
-    runModels.setCustomValidity(fields.dataset.needsModelList === "true" && runModels.checked
-        ? "Reopen these settings to load the models, or turn off Run models to save." : "");
+    runModels.setCustomValidity(runModels.checked ? fields.dataset.modelListRequirement ?? "" : "");
     for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
         input.disabled = !fields.querySelector(`[data-visitor-control="${input.dataset.visitorPanelOpen}"]`).checked;
     }
 }
 
 /**
- * Populate a fresh visitor-controls form with saved or default choices.
+ * Show the model choices without resetting edits to the rest of the form.
  * @param {HTMLFieldSetElement} fields Visitor controls in one form.
  * @param {import("../visitor-controls.js").VisitorControls|undefined} settings Saved visitor settings.
- * @param {ReadonlyArray<{id:string,title:string}>|null} models Installed recipes supported
- * by Data tools, or null if discovery failed.
+ * @param {PublisherModels|null|undefined} models Installed recipes, undefined while loading, or null on failure.
  * @return {void}
  */
-function showVisitorChoices(fields, settings, models) {
-    const choices = visitorControlChoices(settings);
-    for (const input of fields.querySelectorAll("input[data-visitor-control]")) {
-        input.checked = choices[input.dataset.visitorControl];
-    }
-    const initialPanels = visitorInitialPanels(settings);
-    for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
-        input.checked = initialPanels[input.dataset.visitorPanelOpen];
-    }
+function showModelChoices(fields, settings, models) {
     const titles = new Map((models ?? []).map(model => [model.id, model.title]));
     const selected = new Set(settings === undefined ? titles.keys() : settings.modelIds);
     const list = fields.querySelector("[data-visitor-model-list]");
@@ -65,14 +57,17 @@ function showVisitorChoices(fields, settings, models) {
         input.type = "checkbox";
         input.dataset.visitorModelId = id;
         input.checked = selected.has(id);
+        input.disabled = models === undefined;
         label.append(input, titles.get(id) ?? id);
-        if (models !== null && !titles.has(id)) label.append(" (unavailable on this site)");
+        if (models && !titles.has(id)) label.append(" (unavailable on this site)");
         list.append(label);
     }
-    fields.dataset.needsModelList = String(models === null && settings === undefined);
     const status = fields.querySelector("[data-visitor-model-status]");
     let message = "";
-    if (models === null) {
+    if (models === undefined) {
+        message = settings === undefined
+            ? "Loading model choices. You can turn off Run models to save now." : "Loading model choices…";
+    } else if (models === null) {
         message = settings === undefined
             ? "The model list could not load. Reopen these settings to try again, or turn off Run models to save."
             : "The model list could not load. Your saved choices are shown. Reopen these settings to try again.";
@@ -83,11 +78,14 @@ function showVisitorChoices(fields, settings, models) {
     }
     status.textContent = message;
     status.hidden = !message;
+    fields.dataset.modelListRequirement = models == null && settings === undefined ? message : "";
     updateVisitorChoiceInputs(fields);
 }
 
 /** Present shared-map actions without owning restoration or validation. */
 export class SavedMapViewDomView {
+    #authorFormRevision = 0;
+
     /**
      * Bind the fixed saved-map controls and browser capabilities.
      *
@@ -243,26 +241,48 @@ export class SavedMapViewDomView {
     }
 
     /**
+     * Initialize the current author form immediately. Late discovery replies belong to the
+     * form that requested them, including when a save or reopen starts a fresh form.
+     * @param {HTMLFieldSetElement} fields Visitor controls in the publish dialog or saved-map editor.
+     * @param {import("../visitor-controls.js").VisitorControls|undefined} settings Saved visitor settings.
+     * @param {Promise<PublisherModels|null>} modelRequest Setup recipes for this site, or null on failure.
+     * @return {Promise<void>} Completion after the model list settles.
+     */
+    async #showVisitorChoices(fields, settings, modelRequest) {
+        const revision = ++this.#authorFormRevision;
+        const choices = visitorControlChoices(settings);
+        for (const input of fields.querySelectorAll("input[data-visitor-control]")) {
+            input.checked = choices[input.dataset.visitorControl];
+        }
+        const initialPanels = visitorInitialPanels(settings);
+        for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
+            input.checked = initialPanels[input.dataset.visitorPanelOpen];
+        }
+        showModelChoices(fields, settings, undefined);
+        const models = await modelRequest;
+        if (revision === this.#authorFormRevision) showModelChoices(fields, settings, models);
+    }
+
+    /**
      * Display a map draft, including any notice about omitted layers.
      * @param {{slug:string,title:string,subtitle:string,view:{visitorControls?:import("../visitor-controls.js").VisitorControls}}}
      * saved Loaded map labels and choices for the editor.
      * @param {boolean} complete Whether every saved layer and style restored successfully.
-     * @param {ReadonlyArray<{id:string,title:string}>|null} models Model choices for this site,
-     * or null if they could not be loaded.
-     * @return {void}
+     * @param {Promise<PublisherModels|null>} modelRequest Model discovery for the editor.
+     * @return {Promise<void>} Completion after the model list settles.
      */
-    showPublishedMapEditor(saved, complete, models) {
+    showPublishedMapEditor(saved, complete, modelRequest) {
         this.document.querySelector("#published-map-editor").hidden = false;
         this.document.querySelector("#published-map-editor-heading").textContent = `Editing published map: ${saved.title}`;
         this.document.querySelector("#published-map-edit-title").value = saved.title;
         this.document.querySelector("#published-map-edit-subtitle").value = saved.subtitle;
-        showVisitorChoices(this.editVisitorControls, saved.view.visitorControls, models);
         this.editVisitorControls.disabled = false;
         const link = this.document.querySelector("#published-map-edit-url");
         link.href = `/maps/${encodeURIComponent(saved.slug)}`;
         link.textContent = link.href;
         this.document.querySelector("#published-map-save").disabled = false;
         this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some map contents or settings could not load. Review the map and any Unavailable layers before saving.");
+        return this.#showVisitorChoices(this.editVisitorControls, saved.view.visitorControls, modelRequest);
     }
 
     /**
@@ -292,15 +312,13 @@ export class SavedMapViewDomView {
     /**
      * Show a fresh publication form with the default visitor choices.
      * @param {{title:string,subtitle:string}} defaults Initial map labels.
-     * @param {ReadonlyArray<{id:string,title:string}>|null} models Model choices for this site,
-     * or null if they could not be loaded.
-     * @return {void}
+     * @param {Promise<PublisherModels|null>} modelRequest Model discovery for the publication.
+     * @return {Promise<void>} Completion after the model list settles.
      */
-    showPublicationForm(defaults, models) {
+    showPublicationForm(defaults, modelRequest) {
         this.publishTitle.value = defaults.title;
         this.publishSubtitle.value = defaults.subtitle;
         this.publishSlug.value = suggestMapLinkName(defaults.title);
-        showVisitorChoices(this.publishVisitorControls, undefined, models);
         this.slugEdited = false;
         this.publishStatus.textContent = "";
         this.publishFields.hidden = false;
@@ -311,6 +329,7 @@ export class SavedMapViewDomView {
         this.publishDialog.showModal();
         this.publishTitle.focus();
         this.publishTitle.select();
+        return this.#showVisitorChoices(this.publishVisitorControls, undefined, modelRequest);
     }
 
     /** Update the visible URL suggestion after title or link-name edits. @return {void} */
@@ -581,6 +600,7 @@ export class SavedMapViewDomView {
      * @return {void}
      */
     unbind() {
+        this.#authorFormRevision += 1;
         this.#setCancelBlocked(false);
         if (this.handlers !== null) {
             this.copyButton.removeEventListener("click", this.handlers.copy);
