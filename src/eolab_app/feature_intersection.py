@@ -1,5 +1,6 @@
 """Find whole target features that intersect the selected original polygons."""
 
+import json
 import sqlite3
 from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping
 from contextlib import ExitStack, closing, contextmanager
@@ -326,7 +327,8 @@ def iter_original_features(
 
     Yields:
         Selected native IDs, properties and optional WGS84 geometry while the
-        dataset remains open. Geometry is None when read_geometry is False.
+        dataset remains open. JSON-subtype fields retain their decoded values;
+        ordinary text remains text. Geometry is None when read_geometry is False.
 
     Raises:
         GeometryValidationError: If requested geometry has no CRS, or the read
@@ -377,6 +379,7 @@ def iter_original_features(
                 (
                     definition.GetFieldDefn(index).GetName(),
                     definition.GetFieldDefn(index).GetType(),
+                    definition.GetFieldDefn(index).GetSubType(),
                 )
                 for index in range(definition.GetFieldCount())
             ]
@@ -402,10 +405,12 @@ def iter_original_features(
                 if layer.matches is not None and fid not in layer.matches.ids:
                     continue
                 properties = feature.items()
-                for name, field_type in fields:
+                for name, field_type, field_subtype in fields:
                     if properties[name] is None:
                         continue
-                    if field_type == ogr.OFTDate:
+                    if field_subtype == ogr.OFSTJSON:
+                        properties[name] = json.loads(properties[name])
+                    elif field_type == ogr.OFTDate:
                         properties[name] = date(
                             *feature.GetFieldAsDateTime(name)[:3]
                         ).isoformat()
@@ -446,7 +451,7 @@ def iter_original_features(
                         )
                     )
                 yield fid, properties, geometry
-    except (RuntimeError, OSError) as error:
+    except (RuntimeError, OSError, json.JSONDecodeError) as error:
         raise SelectionUnavailableError(
             "The original vector features could not be read."
         ) from error

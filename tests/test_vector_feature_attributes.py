@@ -10,6 +10,7 @@ import fiona
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from osgeo import gdal, ogr
 from shapely.geometry import box, mapping
 
 from catalog_selection_support import FixtureCatalog
@@ -399,7 +400,7 @@ def test_attribute_reader_does_not_decode_geometry(
 def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
     tmp_path: Path,
 ) -> None:
-    """Keep supported native types and omit binary data from plot observations.
+    """Keep native and JSON scalars, filter JSON nulls, and omit nonscalar values.
 
     Args:
         tmp_path: Original GeoPackage directory.
@@ -434,6 +435,30 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
                 },
             }
         )
+    json_values = {
+        "json_null": "null",
+        "json_number": "2.5",
+        "json_boolean": "true",
+        "json_string": '"001"',
+        "json_object": '{"value":7}',
+        "json_array": "[1,2]",
+    }
+    with (
+        gdal.ExceptionMgr(),
+        ogr.ExceptionMgr(),
+        gdal.OpenEx(str(path), gdal.OF_VECTOR | gdal.OF_UPDATE) as dataset,
+    ):
+        layer = dataset.GetLayerByName("scalars")
+        for name in json_values:
+            field = ogr.FieldDefn(name, ogr.OFTString)
+            field.SetSubType(ogr.OFSTJSON)
+            layer.CreateField(field)
+        layer.CreateField(ogr.FieldDefn("text", ogr.OFTString))
+        feature = layer.GetFeature(1)
+        for name, value in json_values.items():
+            feature.SetField(name, value)
+        feature.SetField("text", '{"keep":"text"}')
+        layer.SetFeature(feature)
     catalog = FixtureCatalog(
         ResolvedVectorSource("mounted", "geopackage", path, "data", "scalars")
     )
@@ -455,8 +480,29 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
         "missing": None,
         "infinite": None,
         "date": "2026-11-23",
+        "text": '{"keep":"text"}',
+        "json_null": None,
+        "json_number": 2.5,
+        "json_boolean": True,
+        "json_string": "001",
     }
     assert result.features[0].properties["flag"] is True
+    assert result.features[0].properties["json_boolean"] is True
+    for operator, expected_ids in [("present", []), ("missing", [1])]:
+        predicate = VectorFilter.model_validate(
+            {"rules": [{"field": "json_null", "operator": operator}]}
+        )
+        original = asyncio.run(
+            service.resolve_for_sampling(
+                selection.model_copy(update={"filter": predicate})
+            )
+        )
+        assert [
+            fid
+            for fid, _, _ in iter_original_features(
+                original, None, None, feature_ids=(1,), read_geometry=False
+            )
+        ] == expected_ids
 
 
 @pytest.mark.parametrize("failure", ["output", "features", "deadline"])
