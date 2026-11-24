@@ -345,7 +345,8 @@ export class VectorTimeSeriesController {
         this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
         const interrupted = this.sampleState === "interrupted";
         const canShowResults = this.sampleState === "ready" || interrupted;
-        this.statistics.update(this.modeActive && canShowResults ? this.observations : [], yFields);
+        this.statistics.update(this.modeActive && canShowResults ? this.observations : [], yFields,
+            this.modeActive && this.sampleState === "loading");
         this.openFeature.disabled = !canShowResults || count === 0;
         this.plotPanel.featureButton.disabled = !canShowResults || count === 0;
         this.plotPanel.fieldButton.disabled = !canShowResults || count === 0 || (numericFields.length === 0 && !yFields.length);

@@ -304,7 +304,57 @@ test("comparison displays each layer's chosen benchmarks alongside exact feature
     [["Wetlands", "-12"], ["Watersheds", "0"]]);
   assert.equal(control("table-body").children[0].getAttribute("aria-current"), "true",
     "the selected Watersheds feature moved to the first row");
+  for (const [sample, expected] of [
+    [[observation(11)], [["Habitat", "-12"]]],
+    [[observation(12, "watersheds"), observation(8)], [["Watersheds", "0"], ["Habitat", "-12"]]],
+  ]) {
+    inspector.onSampleChange({state: "loading", message: "Reading features", observations: []});
+    inspector.onSampleChange({state: "ready", message: "Ready", observations: sample});
+    await nextTurn();
+    assert.deepEqual(control("statistics-results").children.map(group =>
+      [group.children[0].textContent, group.querySelector("dd").textContent]), expected);
+  }
+  assert.deepEqual(requests.mock.calls.map(call => JSON.parse(call.arguments[1].body).source.itemId),
+    ["habitat", "watersheds"], "three overlapping map clicks need only two whole-layer reads");
   control("statistics-minimum").checked = false;
   control("statistics-minimum").dispatchEvent(new Event("change"));
   assert.equal(control("statistics").hidden, true);
+});
+
+test("overlapping clicks keep pending layer reads and retry only a failed layer", async t => {
+  const {inspector, profile, series, documentContext} = composition();
+  t.after(() => { profile.destroy(); series.destroy(); });
+  const requests = [];
+  t.mock.method(globalThis, "fetch", (_url, {body, signal}) => new Promise(resolve => {
+    requests.push({itemId: JSON.parse(body).source.itemId, signal, resolve});
+  }));
+  const samples = [observation(2), observation(4, "watersheds")];
+  const show = observations => inspector.onSampleChange({state: "ready", message: "Ready", observations});
+  const loading = () => inspector.onSampleChange({state: "loading", message: "Reading", observations: []});
+  const response = mean => Response.json([{field: "R1999", count: 1, mean, minimum: mean, maximum: mean}]);
+  const control = suffix => documentContext.querySelector("#vector-time-series-statistics" + suffix);
+  show(samples);
+  inspector.onTimeSeriesRequested();
+  control("-mean").checked = true;
+  control("-mean").dispatchEvent(new Event("change"));
+  loading();
+  assert.equal(control("").hidden, true);
+  show([samples[0]]);
+  assert.deepEqual(requests.map(request => request.itemId), ["habitat", "watersheds"]);
+  assert.deepEqual(requests.map(request => request.signal.aborted), [false, true]);
+  requests[0].resolve(response(14));
+  await nextTurn();
+  assert.equal(control("-results").querySelector("dd").textContent, "14");
+
+  show(samples);
+  requests[2].resolve(Response.json({}, {status: 503}));
+  await nextTurn();
+  assert.match(control("-results").children[1].querySelector("p").textContent, /Could not read/);
+  loading();
+  show(samples);
+  assert.deepEqual(requests.map(request => request.itemId), ["habitat", "watersheds", "watersheds", "watersheds"]);
+  requests[3].resolve(response(27));
+  requests[1].resolve(response(99));
+  await nextTurn();
+  assert.deepEqual(control("-results").querySelectorAll("dd").map(cell => cell.textContent), ["14", "27"]);
 });
