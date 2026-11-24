@@ -341,7 +341,11 @@ test("replacing one paired frame reveals it without waiting for an unchanged loa
     layers.render(bothChanged);
     next.emit("load");
     assert.ok(map.attached.has(current) && map.attached.has(unchanged), "keep both drawn axes until both new axes are ready");
+    next.loading = true; // A pan requests another tile after this axis first finished.
     nextReference.emit("load");
+    assert.ok(map.attached.has(current) && map.attached.has(unchanged), "keep the drawn pair while the panned axis reloads");
+    assert.equal(next.container.hidden, true);
+    next.emit("load");
     assert.deepEqual(map.attached, new Set([next, nextReference]));
     layers.clear();
 });

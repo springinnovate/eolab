@@ -566,7 +566,6 @@ export class LeafletLayerSet {
             failed: new Set(),
             generation,
             keys: selected,
-            remaining: new Set(keys),
             retryCount: 0,
             signature,
             listeners: [],
@@ -583,10 +582,7 @@ export class LeafletLayerSet {
                 record.attached = true;
             }
             this.#setLayerHidden(record.layer, !keepVisible);
-            const onLoad = () => this.#recordIndividualLayerLoad(
-                generation,
-                key
-            );
+            const onLoad = () => this.#revealReadyIndividualLayers(generation);
             const onError = () => this.#recordIndividualLayerError(
                 generation,
                 key
@@ -601,22 +597,23 @@ export class LeafletLayerSet {
             } else {
                 record.layer.once?.("load", onLoad);
             }
-            if (!record.layer.isLoading()) onLoad();
         }
+        this.#revealReadyIndividualLayers(generation);
     }
 
     /**
-     * Record one selected grid load and reveal the complete current selection.
+     * Reveal the selected grids once all are ready for the current viewport.
+     * A pan can start a new tile cycle on an axis that previously finished.
      *
      * @param {number} generation Rendering transition generation.
-     * @param {string} key Loaded retained key.
      * @return {void}
      */
-    #recordIndividualLayerLoad(generation, key) {
+    #revealReadyIndividualLayers(generation) {
         const pending = this.pendingIndividualRendering;
         if (pending === null || pending.generation !== generation) return;
-        pending.remaining.delete(key);
-        if (pending.remaining.size > 0) return;
+        for (const key of pending.keys) {
+            if (this.#require(key).layer.isLoading()) return;
+        }
         if (pending.failed.size > 0) {
             if (this.#retryFailedIndividualLayers(pending)) return;
             this.#failIndividualRendering(generation);
@@ -672,7 +669,6 @@ export class LeafletLayerSet {
         }
         const retryKeys = [...pending.failed];
         pending.failed.clear();
-        pending.remaining = new Set(retryKeys);
         pending.retryCount += 1;
         for (const key of retryKeys) {
             this.#require(key).layer.redraw();
