@@ -95,7 +95,7 @@ class FlowAreaPolicy(BaseModel):
     polygonPixels: Literal["cell_centres_excluded_from_result"] = (
         "cell_centres_excluded_from_result"
     )
-    valueDomain: Literal["stored_native_values"] = "stored_native_values"
+    valueDomain: Literal["physical_elevation_order"] = "physical_elevation_order"
     nodata: Literal[255] = MASK_NODATA
 
 

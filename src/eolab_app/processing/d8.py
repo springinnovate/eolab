@@ -16,25 +16,28 @@ if TYPE_CHECKING:
 def read_d8_elevations(
     dataset: RasterDataset,
 ) -> NDArray[numpy.float32 | numpy.float64]:
-    """Read native elevation values on the DEM grid, with missing cells set to NaN.
+    """Read elevations for D8 ordering on the native grid, with missing cells as NaN.
 
     Args:
         dataset: Open, validated single-band DEM with its original validity mask.
 
     Returns:
-        An elevation array in the source's vertical units. Use Float32 when the
-        native storage type fits and Float64 for wider types.
+        Stored values with the sign of the band scale applied. This preserves
+        downhill ordering without applying a uniform offset or scale magnitude.
+        Calculations that need physical heights must read calibrated elevations.
 
     Raises:
         rasterio.errors.RasterioError: If a native elevation or mask read fails.
     """
     dtype = numpy.result_type(dataset.dtypes[0], numpy.float32)
+    reverse_order = dataset.scales[0] < 0
     elevations = numpy.empty((dataset.height, dataset.width), dtype=dtype)
     for _, window in dataset.block_windows(1):
         values = read_native_raster_block(dataset, window)
-        elevations[window.toslices()] = values.astype(dtype, copy=False).filled(
-            numpy.nan
-        )
+        block = elevations[window.toslices()]
+        block[:] = values.astype(dtype, copy=False).filled(numpy.nan)
+        if reverse_order:
+            numpy.negative(block, out=block)
     return elevations
 
 
@@ -50,14 +53,14 @@ def build_d8_flow_graph(
     missing cells can drain out of the grid.
 
     Args:
-        elevations: Native elevation array with NaN in missing cells.
+        elevations: Values ordered by physical elevation, with NaN in missing cells.
         transform: Pixel-to-map transform of the elevation array.
         latlon: True for longitude and latitude in degrees. PyFlwDir assumes
             metres for distance and area calculations on a projected grid.
 
     Returns:
-        A flow graph aligned to the elevation array, usable with that array for
-        height above drainage and floodplain calculations.
+        A flow graph aligned to the DEM. Use calibrated elevations with this
+        graph for height above drainage and floodplain calculations.
 
     Raises:
         ValueError: If PyFlwDir cannot construct a flow graph for the elevations.

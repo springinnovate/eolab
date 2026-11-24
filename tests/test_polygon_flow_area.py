@@ -26,11 +26,12 @@ from raster_source_support import SOURCE
 
 @pytest.fixture(
     params=(
-        ("float64", 0),
-        ("float32", 0),
-        ("float32", 178),
-        ("float32", -182),
-        ("float64", 356),
+        ("float64", 0, 1),
+        ("float32", 0, 1),
+        ("float32", 178, 1),
+        ("float32", -182, 1),
+        ("float64", 356, 1),
+        ("float32", 0, -0.5),
     ),
     ids=(
         "float64",
@@ -38,6 +39,7 @@ from raster_source_support import SOURCE
         "east-of-dateline",
         "west-of-dateline",
         "positive-longitudes",
+        "negative-scale",
     ),
 )
 def drainage_corridor(
@@ -47,17 +49,17 @@ def drainage_corridor(
 
     Args:
         tmp_path: Disposable directory for admitted native inputs.
-        request: Supplies the elevation storage type and native western longitude.
+        request: Supplies the storage type, western longitude and band scale.
 
     Returns:
         A DEM draining east along each valid row and a selection in the middle row.
     """
-    dtype, west = request.param
+    dtype, west, scale = request.param
     chosen_longitude = (west + 3.5 + 180) % 360 - 180
     other_longitude = (west + 2.5 + 180) % 360 - 180
     dem = tmp_path / "elevation.tif"
     elevations = numpy.full((5, 7), -9999, dtype=dtype)
-    elevations[::2] = numpy.arange(12, -1, -2)
+    elevations[::2] = numpy.arange(12, -1, -2) / scale
     elevations[1, :3] = [numpy.nan, numpy.inf, 100]
     mask = numpy.full(elevations.shape, 255, dtype="uint8")
     mask[1, 2] = 0
@@ -77,6 +79,7 @@ def drainage_corridor(
         ) as dataset,
     ):
         dataset.write(elevations, 1)
+        dataset.scales = (scale,)
         dataset.write_mask(mask)
 
     vector = tmp_path / "sites.gpkg"
@@ -178,6 +181,7 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
     provenance = json.loads((directory / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["numericalPolicy"]["engine"] == "pyflwdir"
     assert provenance["numericalPolicy"]["engineVersion"] == version("pyflwdir")
+    assert provenance["numericalPolicy"]["valueDomain"] == "physical_elevation_order"
     assert {path.name for path in directory.iterdir()} == {
         "provenance.json",
         "progress.json",
