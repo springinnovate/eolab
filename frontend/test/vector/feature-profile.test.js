@@ -594,6 +594,14 @@ test("per-source rules survive feature navigation and missing values break lines
   assert.match(path.getAttribute("d"), /^M/);
   assert.doesNotMatch(path.getAttribute("d"), /L/);
 
+  const missing = observation({ featureId: "corridors.3", properties: { R2000: null, R2001: null } });
+  h.controller.setCurrentObservation(missing);
+  tableBody.children[0].children[0].children[0].click();
+  h.controller.setCurrentObservation({...missing, layerLabel: "Renamed corridors"}, null, "labels");
+  assert.equal(tableBody.children[0].children[0].children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-selection").hidden, false);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-selection-text").textContent, "R2000 · No value");
+
   h.controller.setCurrentObservation(observation({ sourceId: "catalog|other-corridors" }));
   assert.equal(chartType.value, "bar");
   h.controller.setCurrentObservation(observation());

@@ -553,10 +553,22 @@ export class VectorFeatureProfileController {
             this.currentObservation,
             settings
         );
+        this.#renderTable(profile.points);
+        this.#renderProfileChart(profile, settings, presentation.heading);
+        if (this.selectedField !== null) this.#selectField(this.selectedField);
+    }
+
+    /**
+     * Draw the selected measurements or explain why no chart can be shown.
+     * @param {ReturnType<typeof buildVectorFeatureProfile>} profile Ordered fields and values for this feature.
+     * @param {{chartType:"bar"|"line"|"scatter"|"stacked",direction:"ascending"|"descending"}} settings Plot style and field order.
+     * @param {string} heading Display name for the feature in a stacked chart.
+     * @return {void}
+     */
+    #renderProfileChart(profile, settings, heading) {
         const stacked = settings.chartType === "stacked";
         this.xHeading.hidden = stacked || profile.xScale === "ordinal";
         this.xHeading.textContent = profile.xAxisLabel;
-        this.#renderTable(profile.points);
         if (profile.points.length === 0) {
             this.status.textContent =
                 "Select numeric fields to plot from this feature.";
@@ -573,7 +585,7 @@ export class VectorFeatureProfileController {
             profile.xScale === "numeric" ? first + " – " + profile.points.at(-1).fieldName : "";
         this.chartTitle.hidden = stacked || this.chartTitle.textContent === "";
         if (stacked) {
-            this.#drawStackedProfile(profile.points, presentation.heading);
+            this.#drawStackedProfile(profile.points, heading);
         } else {
             const {pointElements} = renderOrdinalSeriesChart({
                 documentContext: this.document,
@@ -597,7 +609,6 @@ export class VectorFeatureProfileController {
             this.pointElements = pointElements;
             labelVectorPlotValues(this.chart, pointElements, settings.chartType);
         }
-        if (this.selectedField !== null) this.#selectField(this.selectedField);
         if (profile.missingCount) this.status.textContent = profile.missingCount === 1
             ? "One field has no numeric value." : profile.missingCount + " fields have no numeric value.";
     }
