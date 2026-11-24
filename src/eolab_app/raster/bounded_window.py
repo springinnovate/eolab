@@ -637,8 +637,8 @@ def project_geographic_polygons(
     degree CRS retains its datum and prime meridian; source edges must already
     be refined to the caller's accuracy before this final transformation. Split
     rings independently so a hole enclosing a pole remains separate from its
-    shell. For a projected ring enclosing a pole on another datum, apply the
-    datum operation first, then let GDAL cut the cap on that datum's polar plane.
+    shell. For a ring enclosing one target pole, apply the datum operation
+    first, then let GDAL cut the cap on that datum's stereographic plane.
     GEOS subtracts each part's holes before joining the resulting parts.
 
     Args:
@@ -673,7 +673,7 @@ def project_geographic_polygons(
             coordinates = osr.CoordinateTransformation(source, target)
             projector = ogr.GeomTransformer(coordinates, ["WRAPDATELINE=YES"])
         target_poles: list[tuple[float, Point]] = []
-        if source.IsProjected() and not source.IsSameGeogCS(target):
+        if source.IsProjected() or not source.IsSameGeogCS(target):
             # A pole outside the source projection has no location to test.
             with osr.ExceptionMgr(useExceptions=False), gdal.quiet_errors():
                 reverse = coordinates.GetInverse()
@@ -714,8 +714,8 @@ def project_geographic_polygons(
                     to_polar = osr.CoordinateTransformation(target, polar)
                     native.Transform(coordinates)
                     native.Transform(to_polar)
-                    from_polar = to_polar.GetInverse()
-                    splitter = ogr.GeomTransformer(from_polar, ["WRAPDATELINE=YES"])
+                    # GDAL cuts a stereographic cap at the seam and pole itself.
+                    splitter = ogr.GeomTransformer(to_polar.GetInverse())
             # GDAL may report a failed intermediate cut and still return a
             # valid final cap. Check the geometry it returns.
             with ogr.ExceptionMgr(useExceptions=False):

@@ -369,7 +369,7 @@ def test_native_polygon_preserves_both_sides_of_the_dateline(
         np.testing.assert_array_equal(output.read(1), np.where(inside, 1, np.nan))
 
 
-@pytest.mark.parametrize("polar_epsg", [3413, 3031])
+@pytest.mark.parametrize("polar_epsg", [3413, 3031, 5041])
 @pytest.mark.parametrize(
     "reference_crs,small_cap",
     [
@@ -393,7 +393,8 @@ def test_polar_area_preserves_membership_in_geographic_reference_crs(
     crs = CRS.from_string(reference_crs)
     factor = math.radians(1) / crs.units_factor[1]
     row_degrees = 0.0000375 if small_cap else 0.0375
-    top = 90 if polar_epsg == 3413 else -90 + 48 * row_degrees
+    north = polar_epsg != 3031
+    top = 90 if north else -90 + 48 * row_degrees
     transform = from_origin(
         -180 * factor, top * factor, 0.75 * factor, row_degrees * factor
     )
@@ -404,8 +405,10 @@ def test_polar_area_preserves_membership_in_geographic_reference_crs(
     with rasterio.open(source) as reference:
         crs = reference.crs
     original = box(-50000, -40000, 45000, 58000)
+    if polar_epsg == 5041:
+        original = box(1946563, 1962581, 2047523, 2049856)
     if small_cap:
-        target_pole = 90 * factor if polar_epsg == 3413 else -90 * factor
+        target_pole = (90 if north else -90) * factor
         x, y = Transformer.from_crs(crs, polar_epsg, always_xy=True).transform(
             0, target_pole
         )
@@ -454,6 +457,36 @@ def test_polar_area_preserves_membership_in_geographic_reference_crs(
                 np.nan,
             ),
         )
+
+
+def test_visible_bounds_enclosing_the_displaced_paris_pole() -> None:
+    """Select every NTF grid center inside a WGS84 box around the NTF north pole."""
+    crs = CRS.from_epsg(4807)
+    pixel_size = (400 / 480, 0.00004)
+    transform = from_origin(-200, 100, *pixel_size)
+    bounds = Wgs84Bounds(west=-164, south=89.9981, east=-154, north=89.9987)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=CustomRasterGrid(kind="custom", crs="EPSG:4807", pixelSize=pixel_size),
+        ),
+        selectedBounds=bounds,
+    )
+    rows, columns = np.indices((48, 480), dtype="float64") + 0.5
+    x, y = Transformer.from_crs(crs, 4326, always_xy=True).transform(
+        *transform * (columns, rows)
+    )
+    expected = contains_xy(
+        box(bounds.west, bounds.south, bounds.east, bounds.north), x, y
+    )
+    assert expected.sum() == 2884
+    projected = project_calculator_area(request, None, None, crs, pixel_size)
+    np.testing.assert_array_equal(
+        geometry_mask(projected, expected.shape, transform, invert=True), expected
+    )
 
 
 @pytest.mark.parametrize("angular_unit", ["degree", "grad"])
