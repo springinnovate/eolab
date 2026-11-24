@@ -250,7 +250,7 @@ export class VectorFeatureInspectorController {
      * @param {() => import("./feature-info.js").VectorFeatureInspectionTarget[]}
      * configuration.getVisibleTargets Current visible vectors from composition.
      * @param {()=>VectorSelectionTarget[]} [configuration.getSelectionTargets] Retained original sources, including hidden views.
-     * @param {(display:FeatureSelectionDisplay|null)=>void} [configuration.onSelectionDisplayChange]
+     * @param {(display:FeatureSelectionDisplay|null,options?:{cancelGesture:boolean})=>void} [configuration.onSelectionDisplayChange]
      * Publishes the current Lasso outline and optional highlights through composition.
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
@@ -615,7 +615,7 @@ export class VectorFeatureInspectorController {
         this.clearResults();
         this.#selectionContext = null;
         this.#selectionDisplay = null;
-        this.onSelectionDisplayChange(null);
+        this.onSelectionDisplayChange(null, {cancelGesture:true});
         this.status.textContent = "Selection cleared. Use Picker or Lasso to select features.";
         this.#publishSample("empty", [], this.status.textContent);
     }
@@ -995,14 +995,15 @@ export class VectorFeatureInspectorController {
         if (index < 0) return;
 
         this.#cancelInspection();
-        this.#restoreSelection(index);
+        this.#restoreSelection(index, {cancelGesture:true});
     }
 
     /** Present a completed selection from the inspector's existing history.
      * @param {number} index Position of the completed selection in history.
+     * @param {{cancelGesture:boolean}} [options] Cancel the map gesture when the user navigates history.
      * @return {void}
      */
-    #restoreSelection(index) {
+    #restoreSelection(index, options) {
         const selection = this.#selectionHistory[index];
         this.#selectionHistoryIndex = index;
         this.#inspectionPosition = selection.position;
@@ -1020,7 +1021,7 @@ export class VectorFeatureInspectorController {
         const message = selection.display === null ? selection.message : formatLassoSelectionStatus(selection.display);
         this.status.textContent = message;
         this.onInspectionChange(selection.state === "ready");
-        this.onSelectionDisplayChange(this.#selectionDisplay);
+        this.onSelectionDisplayChange(this.#selectionDisplay, options);
         this.#publishSample(selection.state, selection.results, message, selection.failedLayers);
     }
 

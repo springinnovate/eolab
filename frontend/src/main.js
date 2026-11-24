@@ -2237,7 +2237,7 @@ async function initializeCatalog(
         leafletMap,
         getVisibleTargets: () => visibleVectorInspectionTargets(),
         getSelectionTargets: retainedVectorInspectionTargets,
-        onSelectionDisplayChange: display => mapInteractionTools?.setSelectionDisplay(display),
+        onSelectionDisplayChange: (display, options) => mapInteractionTools?.setSelectionDisplay(display, options),
         getFieldDisplay: describeFeatureFieldDisplay,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {

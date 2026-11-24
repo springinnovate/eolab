@@ -93,7 +93,13 @@ test('release closes a freehand polygon and preserves the chosen hidden view and
     assert.equal(h.container.hasPointerCapture(closePress.pointerId), false,
         'Lasso must let the Leaflet control receive the click');
 
-    h.tools.beginStroke(pointer(10,10));h.tools.moveStroke(pointer(30,10));h.tools.moveStroke(pointer(20,30));h.tools.finishStroke(pointer(10,10));
+    h.tools.beginStroke(pointer(10,10));
+    const drawing = h.layers.at(-1);
+    h.tools.setSelectionDisplay(null); // A different, previously selected source disappeared.
+    h.tools.moveStroke(pointer(30,10));
+    assert.deepEqual(drawing.points, [[1,1],[1,3]]);
+    assert.match(h.status.textContent, /Drawing lasso/);
+    h.tools.moveStroke(pointer(20,30));h.tools.finishStroke(pointer(10,10));
     await new Promise(setImmediate);
     assert.deepEqual(request.selection,original);assert.deepEqual(h.getTargets()[0].selection,original);
     const ring=request.area.coordinates[0];assert.deepEqual(ring[0],ring.at(-1));
@@ -176,6 +182,22 @@ test('clear and source replacement cancel reads and reject a late successful res
     const targets=structuredClone(h.getTargets());targets[0].selection.filter.rules[0].value='grass';h.setTargets(targets);h.tools.refresh();
     assert.equal(signal.aborted,true);finish({matched:9,geometry:null});await second;
     assert.doesNotMatch(h.status.textContent,/9 features/);assert.equal(h.tools.outline,null);
+});
+
+test('clearing Features or revisiting history during a drag releases the pointer without submitting it', async () => {
+    let submissions = 0;
+    const h = fixture(async () => { submissions++; return {matched:0, geometry:null}; });
+    h.tools.setMode('lasso');
+    for (const display of [null, {polygon, geometry:null, count:2, label:'Earlier selection'}]) {
+        h.tools.beginStroke(pointer(10,10));
+        h.tools.moveStroke(pointer(30,10));
+        h.tools.setSelectionDisplay(display, {cancelGesture:true});
+        assert.equal(h.container.hasPointerCapture(1), false);
+        h.tools.finishStroke(pointer(20,30));
+    }
+    await new Promise(setImmediate);
+    assert.equal(submissions, 0);
+    assert.match(h.status.textContent, /2 features selected in Earlier selection/);
 });
 
 test('Escape cancels a stroke and pending read while retaining the previous completed selection',async()=>{

@@ -202,9 +202,8 @@ export class MapInteractionTools {
         event.preventDefault(); event.stopImmediatePropagation();
         this.#cancelLassoWork();
         this.container.setPointerCapture(event.pointerId);
-        this.stroke = {pointer:event.pointerId, points:[], target:structuredClone(target), screen:null};
-        this.preview?.remove();
-        this.preview = this.leaflet.polyline([], {color:this.color, weight:2, dashArray:'6 4', interactive:false}).addTo(this.map);
+        const preview = this.leaflet.polyline([], {color:this.color, weight:2, dashArray:'6 4', interactive:false}).addTo(this.map);
+        this.stroke = {pointer:event.pointerId, points:[], target:structuredClone(target), screen:null, preview};
         this.status.textContent = 'Drawing lasso… Release to select; Esc cancels.';
         this.moveStroke(event);
     }
@@ -224,7 +223,7 @@ export class MapInteractionTools {
         const position = this.map.mouseEventToLatLng(event);
         this.stroke.points.push([position.lng, position.lat]);
         this.stroke.screen = [event.clientX,event.clientY];
-        this.preview.setLatLngs(this.stroke.points.map(([lng,lat])=>[lat,lng]));
+        this.stroke.preview.setLatLngs(this.stroke.points.map(([lng,lat])=>[lat,lng]));
     }
 
     /** Close the captured polygon and begin exact selection against its captured view.
@@ -251,10 +250,11 @@ export class MapInteractionTools {
      */
     cancelStroke() {
         const stroke = this.stroke;
+        if (!stroke) return;
         this.stroke = null;
-        if (stroke && this.container.hasPointerCapture(stroke.pointer)) this.container.releasePointerCapture(stroke.pointer);
-        this.preview?.remove(); this.preview = null;
-        if (stroke) this.status.textContent = this.selectionMessage || 'Lasso cancelled. Drag around features to try again.';
+        if (this.container.hasPointerCapture(stroke.pointer)) this.container.releasePointerCapture(stroke.pointer);
+        stroke.preview.remove();
+        this.status.textContent = this.selectionMessage || 'Lasso cancelled. Drag around features to try again.';
     }
 
     /** Release an unfinished Lasso gesture and supersede its read, preserving completed results.
@@ -264,6 +264,8 @@ export class MapInteractionTools {
         this.cancelStroke();
         if (!this.abort) return;
         ++this.generation;
+        this.pendingOutline.remove();
+        this.pendingOutline = null;
         this.abort.abort();
         this.abort = null;
         this.root.setAttribute('aria-busy','false');
@@ -283,7 +285,7 @@ export class MapInteractionTools {
         this.clearButton.hidden = false;
         this.status.textContent = `Selecting features in ${target.label}…`;
         this.root.setAttribute('aria-busy','true');
-        this.preview = this.leaflet.geoJSON(polygon, {style:{color:this.color,weight:2,dashArray:'6 4',fillOpacity:.06},interactive:false}).addTo(this.map);
+        this.pendingOutline = this.leaflet.geoJSON(polygon, {style:{color:this.color,weight:2,dashArray:'6 4',fillOpacity:.06},interactive:false}).addTo(this.map);
         try {
             await this.selectFeatures(target, polygon, abort.signal);
         } catch (error) {
@@ -292,7 +294,8 @@ export class MapInteractionTools {
         } finally {
             if (generation === this.generation) {
                 this.abort = null;
-                this.preview?.remove(); this.preview = null;
+                this.pendingOutline.remove();
+                this.pendingOutline = null;
                 this.root.setAttribute('aria-busy','false');
             }
         }
@@ -301,16 +304,18 @@ export class MapInteractionTools {
     /** Display the selection owner's completed Lasso, including history restoration.
      * This presentation carries no feature IDs or analytical state.
      * @param {{polygon:Object,geometry:Object|null,count:number,label:string}|null} display Current Lasso display, or null for another selection or Clear.
+     * @param {Object} [options] Gesture handling for explicit user actions.
+     * @param {boolean} [options.cancelGesture=false] Clear or history navigation supersedes a drawing or pending selection.
      * @return {void}
      */
-    setSelectionDisplay(display) {
+    setSelectionDisplay(display, {cancelGesture = false} = {}) {
+        if (cancelGesture) this.#cancelLassoWork();
         this.highlight?.remove(); this.highlight = null;
         this.outline?.remove(); this.outline = null;
-        this.preview?.remove(); this.preview = null;
         this.selectionMessage = null;
         this.clearButton.hidden = display === null;
         if (display === null) {
-            if (this.mode === 'lasso') this.status.textContent = 'Use Lasso to select features, then open Features to inspect or plot them.';
+            if (this.mode === 'lasso' && !this.stroke) this.status.textContent = 'Use Lasso to select features, then open Features to inspect or plot them.';
             return;
         }
         this.outline = this.leaflet.geoJSON(display.polygon, {style:{color:this.color,weight:2,dashArray:'6 4',fillOpacity:.06},interactive:false}).addTo(this.map);
@@ -321,7 +326,7 @@ export class MapInteractionTools {
         this.selectionMessage = `${display.count.toLocaleString()} ${display.count===1?'feature':'features'} selected in ${display.label}.` +
             (display.count > 0 ? ' Open Features to inspect or plot them.' : ' Draw another area to select features.') +
             (display.count > 0 && display.geometry === null ? ' Map highlights are unavailable.' : '');
-        if (this.mode === 'lasso') this.status.textContent = this.selectionMessage;
+        if (this.mode === 'lasso' && !this.stroke) this.status.textContent = this.selectionMessage;
     }
 
     /** Clear the transient selection and cancel obsolete work without changing filters.
