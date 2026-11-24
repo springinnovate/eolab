@@ -455,7 +455,11 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
   assert.equal(next.disabled, false);
   next.dispatchEvent(new Event("click"));
   assert.equal(h.displays.at(-1).count, 0);
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
+    "Restoring zero Lasso matches keeps Previous selection reachable");
   assert.equal(next.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
+    "Returning to the zero-match selection keeps Features and its history controls open");
   previous.dispatchEvent(new Event("click"));
   assert.equal(reads, 3, "History in Features restores both selections without another read");
   outcome = "error";
@@ -1063,7 +1067,8 @@ test("an empty click clears and closes a previous feature result", async () => {
   h.controller.navigateSelection("next");
   assert.equal(h.sampleChanges.at(-1).state, "empty");
   assert.deepEqual(h.sampleChanges.at(-1).position, { lng: 6, lat: 7 });
-  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
+    "Browsing back to an empty map click keeps the open history controls visible");
   assert.equal(h.removedLayers.length, 2);
   assert.equal(reads, 2, "browsing saved results does not inspect again");
 });

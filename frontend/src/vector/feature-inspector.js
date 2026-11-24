@@ -1012,7 +1012,7 @@ export class VectorFeatureInspectorController {
         if (wasFocused && button.disabled && !opposite.disabled) opposite.focus();
     }
 
-    /** Present a completed selection from the inspector's existing history.
+    /** Present a completed selection and keep the history controls available across empty results.
      * @param {number} index Position of the completed selection in history.
      * @param {{cancelGesture:boolean}} [options] Cancel the map gesture when the user navigates history.
      * @return {void}
@@ -1028,13 +1028,13 @@ export class VectorFeatureInspectorController {
         if (selection.state === "ready") {
             this.showResult(selection.resultIndex);
             this.#updateTimeSeriesAction(this.results.length);
+            this.onInspectionChange(true);
         } else {
             this.clearResults();
             this.results = selection.results;
         }
         const message = selection.display === null ? selection.message : formatLassoSelectionStatus(selection.display);
         this.status.textContent = message;
-        this.onInspectionChange(selection.state === "ready");
         this.onSelectionDisplayChange(this.#selectionDisplay, options);
         this.#publishSample(selection.state, selection.results, message, selection.failedLayers);
     }
