@@ -426,7 +426,7 @@
         name.dispatchEvent(new Event("input", { bubbles: true }));
         runs.click();
         runs.focus();
-        row.style.inlineSize = "205px";
+        row.style.inlineSize = `${library.offsetWidth + setup.offsetWidth + runs.offsetWidth - 1}px`;
         await settleLayout();
         check(getComputedStyle(library).visibility === "hidden", "Choose a tool must be in overflow before pressing Home");
         for (const [key, tab, pageId] of [
@@ -542,6 +542,15 @@
           button.top === label.top && button.right <= tab.parentElement.getBoundingClientRect().right + 1,
           `The close button for ${tab.textContent} is outside its tab`);
       }
+      const row = document.querySelector("#map-inspection-tabs");
+      const stops = [...row.querySelectorAll("button")].filter(button =>
+        button.tabIndex >= 0 && !button.disabled && isReachable(button));
+      check(stops[0] === settings && stops[1] === closeSettings,
+        "Keyboard entry must reach the selected Settings tab before any close button");
+      closeSettings.focus();
+      closeSettings.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      check(document.activeElement !== closeSettings && document.activeElement.classList.contains("tool-tab-close") &&
+        settings.getAttribute("aria-selected") === "true", "ArrowLeft on × must reach a background close without switching tools");
       closeHistogram.click();
       check(!isReachable(closeHistogram) && settings.getAttribute("aria-selected") === "true" &&
         document.activeElement === settings, "Closing a background tab interrupted Settings");

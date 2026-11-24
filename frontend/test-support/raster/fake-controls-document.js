@@ -244,6 +244,7 @@ export class FakeRasterControlDocument extends EventTarget {
                 const item = this.createElement("span");
                 const close = this.querySelector(`#${closeId}`);
                 close.classList.add("tool-tab-close");
+                close.setAttribute("class", "tool-tab-close");
                 item.getBoundingClientRect = () => ({
                     width: tab.scrollWidth + (tab.getAttribute("data-open") === "true" ? 26 : 0), height: 44,
                 });

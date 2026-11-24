@@ -36,6 +36,7 @@ export class ToolTabStrip {
         const options = { signal: this.events.signal };
         this.items = Array.from(this.list.children, container => {
             const tab = container.querySelector(".tool-tab") ?? container;
+            const close = container.querySelector(".tool-tab-close");
             const choice = documentContext.createElement("button");
             choice.type = "button";
             choice.tabIndex = -1;
@@ -49,7 +50,8 @@ export class ToolTabStrip {
                 this.#activateTab(tab);
             }, options);
             tab.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
-            return { container, tab, choice, label, detail };
+            close?.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
+            return { container, tab, close, choice, label, detail };
         });
         this.menu.addEventListener("keydown", event => this.#handleNavigationKey(event, true), options);
         this.menu.addEventListener("toggle", event => {
@@ -86,10 +88,11 @@ export class ToolTabStrip {
         this.activeTab = active;
         this.list.hidden = hidden;
         const first = this.items.find(({ tab }) => !tab.hidden && !tab.disabled);
-        for (const { container, tab, choice, label, detail } of this.items) {
+        for (const { container, tab, close, choice, label, detail } of this.items) {
             container.hidden = tab.hidden;
             tab.setAttribute("aria-selected", String(tab === active));
             tab.tabIndex = tab === (active ?? first?.tab) ? 0 : -1;
+            if (close) close.tabIndex = tab === active ? 0 : -1;
             choice.hidden = tab.hidden;
             choice.disabled = tab.disabled;
             choice.setAttribute("aria-checked", String(tab === active));
@@ -178,7 +181,8 @@ export class ToolTabStrip {
     }
 
     /**
-     * Switch views along the strip or move focus vertically within All tabs.
+     * Switch tabs with horizontal arrows, move between their close buttons without
+     * switching tools, or move vertically within All tabs.
      * @param {KeyboardEvent} event Key pressed on a tab or a menu item.
      * @param {boolean} inMenu Whether the key came from the open menu.
      * @return {void}
@@ -194,17 +198,22 @@ export class ToolTabStrip {
             return;
         }
         const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled);
-        const current = enabled.findIndex(item => (inMenu ? item.choice : item.tab) === event.target);
+        const onClose = !inMenu && event.target.classList.contains("tool-tab-close");
+        const controls = onClose
+            ? enabled.filter(({ tab, close }) => close && this.visibleTabs.includes(tab) && tab.getAttribute("data-open") === "true")
+                .map(item => item.close)
+            : enabled.map(item => inMenu ? item.choice : item.tab);
+        const current = controls.indexOf(event.target);
+        if (current === -1) return;
         let next;
         if (event.key === "Home") next = 0;
-        else if (event.key === "End") next = enabled.length - 1;
-        else if (event.key === (inMenu ? "ArrowDown" : "ArrowRight")) next = (current + 1) % enabled.length;
-        else if (event.key === (inMenu ? "ArrowUp" : "ArrowLeft")) next = (current - 1 + enabled.length) % enabled.length;
+        else if (event.key === "End") next = controls.length - 1;
+        else if (event.key === (inMenu ? "ArrowDown" : "ArrowRight")) next = (current + 1) % controls.length;
+        else if (event.key === (inMenu ? "ArrowUp" : "ArrowLeft")) next = (current - 1 + controls.length) % controls.length;
         else return;
-        if (current === -1) return;
         event.preventDefault();
-        if (inMenu) enabled[next].choice.focus();
-        else this.#activateTab(enabled[next].tab);
+        if (inMenu || onClose) controls[next].focus();
+        else this.#activateTab(controls[next]);
     }
 
     /** Release tab listeners, menu entries and size observation. @return {void} */
