@@ -352,7 +352,7 @@ test("composition forwards compatible map areas and closes inspection when no ra
 test("map-layer Info can reveal Catalog through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /onCatalogWorkspaceRequested\(\);\s*selectCatalogItem\(item\);/
+        /if \(!isSharedViewer\) onCatalogWorkspaceRequested\(\);\s*selectCatalogItem\(item, null, returnFocusTarget\);/
     );
     assert.match(
         COMPOSITION_SOURCE,

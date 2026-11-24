@@ -800,7 +800,7 @@ async function initializeCatalog(
             }
             renderCatalogItemInspector(
                 catalogState.selectedItem,
-                catalogState.collectionsDocument.collections,
+                catalogState.collectionsDocument?.collections ?? [],
                 appGlobalConfiguration.scanDisplayPathPrefix
             );
         },
@@ -2411,15 +2411,17 @@ async function initializeCatalog(
     }
 
     /**
-     * Select one result, show its footprint until details close, and activate
+     * Select a result or retained layer, show its footprint until details close, and activate
      * analysis when it is a Catalog raster.
      *
      * @param {Object} item Catalog Item selected from results or discovery.
      * @param {HTMLElement|null} [requestedButton=null] Optional matching result
      * button when the Item is already present in the current page.
+     * @param {HTMLElement|null} [returnFocusTarget=null] Layer-information opener;
+     * defaults to the matching Catalog result button.
      * @return {void}
      */
-    function selectCatalogItem(item, requestedButton = null) {
+    function selectCatalogItem(item, requestedButton = null, returnFocusTarget = null) {
         catalogMapActions.applyAssessment(item);
         const itemButton = requestedButton ??
             catalogState.resultViews.get(getCatalogItemKey(item))?.detailsButton ?? null;
@@ -2435,7 +2437,7 @@ async function initializeCatalog(
         footprintController.select(item);
         renderCatalogItemInspector(
             item,
-            catalogState.collectionsDocument.collections,
+            catalogState.collectionsDocument?.collections ?? [],
             appGlobalConfiguration.scanDisplayPathPrefix
         );
         const visualization = getCatalogVisualization(item);
@@ -2446,7 +2448,7 @@ async function initializeCatalog(
         }
         updateCatalogMapAction(item);
         catalogPaneControls.showInspector({
-            moveFocus: true, returnFocusTarget: itemButton,
+            moveFocus: true, returnFocusTarget: returnFocusTarget ?? itemButton,
             onDismiss: () => footprintController.clearSelectedFootprint(),
         });
     }
@@ -2797,13 +2799,9 @@ async function initializeCatalog(
      */
     function inspectRetainedMapLayer(item) {
         if (item === null) return;
-        if (isSharedViewer) {
-            renderCatalogItemInspector(item, [], appGlobalConfiguration.scanDisplayPathPrefix);
-            catalogPaneControls.showInspector({ moveFocus: true, returnFocusTarget: document.activeElement });
-            return;
-        }
-        onCatalogWorkspaceRequested();
-        selectCatalogItem(item);
+        const returnFocusTarget = document.activeElement;
+        if (!isSharedViewer) onCatalogWorkspaceRequested();
+        selectCatalogItem(item, null, returnFocusTarget);
     }
 
     catalogLayerZoom.addEventListener("click", () => {
