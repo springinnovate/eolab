@@ -153,6 +153,16 @@ def test_flow_mask_preserves_projected_source_edges(
             (48, 64),
             id="rotated-geographic",
         ),
+        pytest.param(
+            box(3e6, 2e6, 5e6, 4e6),
+            "EPSG:3035",
+            "EPSG:4326",
+            from_origin(
+                3.6353681167303544 - 0.064, 58.953353325692866 + 0.064, 0.0005, 0.0005
+            ),
+            (256, 256),
+            id="fine-grid-curved-edge",
+        ),
     ],
 )
 def test_projected_flow_seeds_match_original_polygon(

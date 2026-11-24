@@ -923,8 +923,8 @@ class PolygonRasterizer:
 
         Returns:
             GeoJSON polygon dictionaries in the raster CRS. Edges are subdivided
-            before projection using the spacing chosen during initialization;
-            polygons are not clipped to the current raster tile.
+            in their native CRS to follow curved edges at this raster's resolution.
+            The resulting geometry covers the complete feature.
 
         Raises:
             ValueError: If projection would exceed the coordinate-count limit.
@@ -936,9 +936,10 @@ class PolygonRasterizer:
         return project_raster_polygons(
             self.dataset,
             (geometry,),
-            count,
+            self.maximum_coordinates,
             source_crs=source_crs,
             maximum_output_coordinates=self.maximum_coordinates,
+            initial_edge_points=self.densify,
         )
 
     def iter_projected_polygons(self) -> Iterator[dict[str, object]]:

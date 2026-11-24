@@ -5,7 +5,10 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import cast
 
+from affine import Affine
+import numpy as np
 from pyproj import CRS as ProjCRS
+from pyproj import Transformer
 from rasterio.crs import CRS
 from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
@@ -22,6 +25,7 @@ from eolab_app.raster.temporal import TemporalRasterDataset
 BOUNDED_WGS84_DENSIFY_POINTS = 21
 BOUNDED_SOURCE_WINDOW_PADDING_PIXELS = 1
 SAMPLING_BOX_MAXIMUM_ERROR_PIXELS = 0.01
+POLYGON_EDGE_ERROR_PIXELS = 0.0001
 
 
 class NoRasterBoundsOverlapError(ValueError):
@@ -429,12 +433,14 @@ def _polygon_rings(
 def _densify_polygon_rings(
     rings: tuple[tuple[tuple[float, float], ...], ...],
     maximum_coordinates: int | None,
+    initial_edge_points: int,
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
     """Densify polygon edges without exceeding transformed-coordinate capacity.
 
     Args:
         rings: Validated closed polygon rings in their source coordinate system.
         maximum_coordinates: Hard limit on all transformed positions.
+        initial_edge_points: Requested number of intermediate samples per edge.
 
     Returns:
         Rings with a bounded number of evenly spaced edge positions.
@@ -451,10 +457,10 @@ def _densify_polygon_rings(
     ):
         raise ValueError("Selection exceeds the transformed-geometry limit")
     densify_points = (
-        BOUNDED_WGS84_DENSIFY_POINTS
+        initial_edge_points
         if maximum_coordinates is None
         else min(
-            BOUNDED_WGS84_DENSIFY_POINTS,
+            initial_edge_points,
             max(
                 0,
                 (maximum_coordinates - len(rings)) // segment_count - 1,
@@ -466,7 +472,7 @@ def _densify_polygon_rings(
     for ring in rings:
         result = [ring[0]]
         for start, end in zip(ring, ring[1:]):
-            for step in range(1, denominator + 1):
+            for step in range(1, denominator):
                 fraction = step / denominator
                 result.append(
                     (
@@ -474,8 +480,101 @@ def _densify_polygon_rings(
                         start[1] + (end[1] - start[1]) * fraction,
                     )
                 )
+            result.append(end)
         densified.append(tuple(result))
     return tuple(densified)
+
+
+@lru_cache(maxsize=64)
+def _edge_transformer(source_crs: CRS | str, target_crs: CRS | str) -> Transformer:
+    """Get the continuous-longitude operation for measuring projected edge curvature.
+
+    Args:
+        source_crs: CRS in which polygon edges are straight.
+        target_crs: CRS in which chord error is measured.
+
+    Returns:
+        A reusable x/y transformer accepting longitudes beyond a single turn.
+    """
+    return Transformer.from_crs(source_crs, target_crs, always_xy=True, force_over=True)
+
+
+def _refine_raster_rings(
+    rings: tuple[tuple[tuple[float, float], ...], ...],
+    source_crs: CRS | str,
+    target_crs: CRS | str,
+    grid_transform: Affine,
+    maximum_coordinates: int | None,
+) -> tuple[tuple[tuple[float, float], ...], ...]:
+    """Bisect native edges whose projected quarter points deviate from the pixel chord.
+
+    Args:
+        rings: Closed rings sampled on their original straight edges.
+        source_crs: Coordinate system of the input positions.
+        target_crs: Destination grid's coordinate system.
+        grid_transform: Pixel-to-map affine, including rotation and skew.
+        maximum_coordinates: Maximum retained positions across the rings, or None.
+
+    Returns:
+        Source-coordinate rings refined to the destination pixel tolerance.
+
+    Raises:
+        ValueError: If projection, numerical convergence or coordinate capacity fails.
+    """
+    if CRS.from_user_input(source_crs) == CRS.from_user_input(target_crs):
+        return rings
+    transformer = _edge_transformer(source_crs, target_crs)
+    frame = _longitude_frame(target_crs)
+    inverse = ~grid_transform
+    to_pixels = np.array([[inverse.a, inverse.d], [inverse.b, inverse.e]])
+    fractions = np.array([0, 0.25, 0.5, 0.75, 1])[None, :, None]
+    count = sum(map(len, rings))
+    refined = []
+    for ring in rings:
+        points = np.asarray(ring)
+        while True:
+            split = np.zeros(len(points) - 1, dtype=bool)
+            # Limit transient probe arrays even for an unlimited Processing job.
+            for start in range(0, len(split), 4096):
+                edges = points[start : start + 4097]
+                probes = (
+                    edges[:-1, None, :] + np.diff(edges, axis=0)[:, None, :] * fractions
+                )
+                x, y = transformer.transform(probes[:, :, 0], probes[:, :, 1])
+                if frame is not None:
+                    x = np.unwrap(x, period=math.tau / abs(frame[0]), axis=1)
+                mapped = np.stack((x, y), axis=-1)
+                if not np.isfinite(mapped).all():
+                    raise ValueError("Selection could not be projected")
+                relative = (mapped[:, 1:, :] - mapped[:, :1, :]) @ to_pixels
+                chord = relative[:, -1:, :]
+                tested = relative[:, :-1, :]
+                length_squared = np.sum(chord * chord, axis=2)
+                along = np.clip(
+                    np.sum(tested * chord, axis=2) / np.maximum(length_squared, 1e-30),
+                    0,
+                    1,
+                )
+                error = np.linalg.norm(tested - along[:, :, None] * chord, axis=2)
+                split[start : start + len(edges) - 1] = np.any(
+                    error > POLYGON_EDGE_ERROR_PIXELS, axis=1
+                )
+            if not split.any():
+                break
+            count += int(split.sum())
+            if maximum_coordinates is not None and count > maximum_coordinates:
+                raise ValueError("Selection exceeds the transformed-geometry limit")
+            left, right = points[:-1][split], points[1:][split]
+            middle = left + (right - left) / 2
+            if np.any(np.all(middle == left, axis=1) | np.all(middle == right, axis=1)):
+                raise ValueError("Selection edge accuracy did not converge")
+            offsets = np.concatenate(([0], np.cumsum(1 + split)))
+            next_points = np.empty((offsets[-1] + 1, 2))
+            next_points[offsets] = points
+            next_points[offsets[:-1][split] + 1] = middle
+            points = next_points
+        refined.append(tuple(map(tuple, points.tolist())))
+    return tuple(refined)
 
 
 def _source_window_for_projected_geometries(
@@ -540,13 +639,12 @@ def project_raster_polygons(
     *,
     source_crs: CRS | str = "EPSG:4326",
     maximum_output_coordinates: int | None,
+    initial_edge_points: int = BOUNDED_WGS84_DENSIFY_POINTS,
 ) -> tuple[dict[str, object], ...]:
     """Project bounded polygons without clipping their source-pixel envelope.
 
-    Every polygon edge is densified under a fixed transformed-coordinate
-    ceiling before explicit longitude/latitude transformation. The resulting
-    Polygon and MultiPolygon mappings remain separate; ``geometry_mask`` unions
-    them so overlaps can never count a grid cell twice.
+    Native edges are refined to pixel accuracy before polygon projection.
+    Rasterizing the resulting polygon union counts overlapping cells once.
 
     Args:
         dataset: Open source raster with a coordinate reference system.
@@ -556,6 +654,7 @@ def project_raster_polygons(
         source_crs: CRS in which the input edges are straight.
         maximum_output_coordinates: Output-coordinate capacity including periodic
             copies, or None when the caller permits unlimited geometry.
+        initial_edge_points: Initial intermediate samples per original edge.
 
     Returns:
         Projected polygonal geometries, including those outside the raster.
@@ -573,6 +672,8 @@ def project_raster_polygons(
             geometries,
             maximum_coordinates,
             coordinate_transform,
+            grid_transform=dataset.transform,
+            initial_edge_points=initial_edge_points,
         ),
         maximum_output_coordinates,
     )
@@ -615,6 +716,9 @@ def project_polygons_to_crs(
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+    *,
+    grid_transform: Affine | None = None,
+    initial_edge_points: int = BOUNDED_WGS84_DENSIFY_POINTS,
 ) -> tuple[dict[str, object], ...]:
     """Densify and project polygons without depending on raster coverage.
 
@@ -625,6 +729,8 @@ def project_polygons_to_crs(
         maximum_coordinates: Transformed-coordinate ceiling, or None for
             caller-supervised unlimited geometry.
         coordinate_transform: Injectable transformation between coordinate systems.
+        grid_transform: If given, refine projected chords to destination pixel accuracy.
+        initial_edge_points: Initial intermediate samples per original edge.
 
     Returns:
         Separate polygon mappings in the requested CRS, preserving holes and
@@ -637,7 +743,13 @@ def project_polygons_to_crs(
     all_rings = tuple(
         ring for geometry in geometries for ring in _polygon_rings(geometry)
     )
-    densified_rings = _densify_polygon_rings(all_rings, maximum_coordinates)
+    densified_rings = _densify_polygon_rings(
+        all_rings, maximum_coordinates, initial_edge_points
+    )
+    if grid_transform is not None:
+        densified_rings = _refine_raster_rings(
+            densified_rings, source_crs, target_crs, grid_transform, maximum_coordinates
+        )
     if CRS.from_user_input(source_crs).is_projected and source_crs != target_crs:
         # GDAL cuts whole polygons at the antimeridian and reconstructs polar
         # interiors, including holes. A longitude chosen per vertex cannot do that.
