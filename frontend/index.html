@@ -649,7 +649,7 @@
         <section id="map-interaction-tools" data-pixel-picker-obstacle aria-label="Map interaction tools" hidden>
           <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
             <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
-            <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
+            <button type="button" data-map-mode="pixel" aria-pressed="true">Picker</button>
             <button type="button" data-map-mode="box" aria-pressed="false">Histogram box</button>
             <button type="button" data-map-mode="lasso" aria-pressed="false">Lasso</button>
           </div>
@@ -763,6 +763,7 @@
           <button id="open-model-runs" class="workspace-tool-action" type="button" aria-controls="models-panel">Data tool runs</button>
           <button id="open-raster-series" class="workspace-tool-action" type="button"
             aria-controls="raster-series">Raster statistics</button>
+          <button id="open-features" class="workspace-tool-action" type="button" aria-controls="vector-feature-inspector">Features</button>
         </div>
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Export</strong>
@@ -795,7 +796,7 @@
               </span>
               <span class="tool-tab-item" role="presentation">
                 <button id="map-inspection-tab-feature" class="tool-tab" type="button" role="tab"
-                  aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-selected="false" tabindex="-1" disabled>Features</button>
+                  aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-selected="false" tabindex="-1">Features</button>
                 <button id="close-vector-inspector" class="tool-tab-close" type="button" aria-label="Close feature inspector">×</button>
               </span>
               <span class="tool-tab-item" role="presentation">
@@ -1085,6 +1086,7 @@
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
               <div class="vector-feature-inspector-actions">
+                <button id="clear-vector-selection" class="secondary-button" type="button" disabled>Clear selection</button>
                 <button id="toggle-vector-inspector-details"
                   class="analysis-panel-action vector-feature-inspector-toggle"
                   type="button" aria-controls="vector-feature-inspector-details"
@@ -1092,6 +1094,12 @@
               </div>
             </header>
             <p id="map-click-context" class="map-inspection-context"></p>
+            <div class="vector-selection-history" role="group" aria-label="Selection history">
+              <button id="previous-vector-selection" class="secondary-button" type="button"
+                aria-controls="vector-feature-inspector-details" disabled><span aria-hidden="true">←</span> Previous selection</button>
+              <button id="next-vector-selection" class="secondary-button" type="button"
+                aria-controls="vector-feature-inspector-details" disabled>Next selection <span aria-hidden="true">→</span></button>
+            </div>
             <div id="vector-feature-inspector-details">
               <div class="vector-feature-inspector-plots">
                 <span class="immediate-action-help">
@@ -1106,11 +1114,11 @@
                     type="button" aria-controls="vector-time-series"
                     aria-describedby="vector-time-series-action-help" disabled>Compare features</button>
                   <span id="vector-time-series-action-help" class="immediate-action-tooltip"
-                    role="tooltip">Click a location with at least two features to compare their fields.</span>
+                    role="tooltip">Select at least two features with Picker or Lasso to compare their fields.</span>
                 </span>
               </div>
               <p id="vector-feature-status" class="vector-feature-status" role="status">
-                Click the map to inspect visible vector features.
+                Use Picker or Lasso to select features, then inspect their attributes or plot their fields.
               </p>
               <article id="vector-feature-result" hidden>
                 <div class="vector-feature-result-heading">
@@ -1177,10 +1185,16 @@
               <button id="vector-time-series-fields-button" class="summary-text-button" type="button" aria-controls="vector-time-series-fields-picker" aria-expanded="false">Choose fields</button>
               <button id="vector-time-series-statistics-button" class="summary-text-button" type="button" aria-controls="vector-time-series-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
+            <label id="vector-time-series-row-range-label" hidden>Features shown
+              <select id="vector-time-series-row-range"></select>
+            </label>
             <div id="vector-time-series-features-picker" class="vector-plot-picker" hidden>
-              <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
+              <div class="vector-plot-picker-heading"><strong>Selected features</strong>
                 <button id="vector-time-series-features-done" class="summary-text-button" type="button">Done</button></div>
               <p id="vector-time-series-context" class="vector-series-context" hidden></p>
+              <label id="vector-time-series-feature-range-label" hidden>Feature numbers
+                <select id="vector-time-series-feature-range"></select>
+              </label>
               <label for="vector-time-series-feature-list">Inspect feature</label>
               <select id="vector-time-series-feature-list"></select>
             </div>
@@ -1279,9 +1293,12 @@
               <button id="vector-feature-profile-statistics-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-feature-profile-features-picker" class="vector-plot-picker" hidden>
-              <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
+              <div class="vector-plot-picker-heading"><strong>Selected features</strong>
                 <button id="vector-feature-profile-features-done" class="summary-text-button" type="button">Done</button></div>
               <p id="vector-feature-profile-context" class="vector-series-context" hidden></p>
+              <label id="vector-feature-profile-feature-range-label" hidden>Feature numbers
+                <select id="vector-feature-profile-feature-range"></select>
+              </label>
               <label for="vector-feature-profile-feature-list">Show feature</label>
               <select id="vector-feature-profile-feature-list"></select>
               <nav class="vector-feature-navigation vector-feature-profile-navigation" aria-label="Features in this inspection">

@@ -127,7 +127,7 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   );
   assert.match(
     MARKUP,
-    />Click a location with at least two features to compare their fields\.<\/span>/,
+    />Select at least two features with Picker or Lasso to compare their fields\.<\/span>/,
   );
   assert.match(
     MARKUP,

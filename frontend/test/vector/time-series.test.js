@@ -118,6 +118,70 @@ test("field summaries expose heterogeneous coverage without coercion", () => {
   });
 });
 
+test("large comparisons page sorted rows and can plot the entire selection", () => {
+  const {controller, documentContext:doc} = fixture();
+  const base = observations()[0];
+  let xReads = 0;
+  const rows = Array.from({length:1002}, (_, i) => ({...base, featureId:String(i + 1),
+    properties:{get year() { xReads++; return 1002 - i; }, score:i}}));
+  const control = name => doc.querySelector("#vector-time-series-" + name);
+  controller.setSample({state:"ready", message:"Ready", observations:rows});
+  controller.open();
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, 1000);
+  assert.equal(control("table-body").children.length, 0);
+  assert.equal(control("feature-list").children.length, 0);
+  const range = control("row-range");
+  assert.match(range.children[0].textContent, /1.000 of 1.002/);
+  const xReadsAfterOpening = xReads;
+  range.value = "1000";
+  range.dispatchEvent(new Event("change"));
+  control("values-button").dispatchEvent(new Event("click"));
+  assert.deepEqual(control("table-body").children.map(row => row.children[1].children[0].textContent), ["1", "0"]);
+  assert.equal(xReads, xReadsAfterOpening, "Paging and switching views reuse the sorted feature rows");
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, 0);
+  control("features-button").dispatchEvent(new Event("click"));
+  const featureRange = control("feature-range");
+  featureRange.value = "1000";
+  featureRange.dispatchEvent(new Event("change"));
+  assert.equal(control("feature-list").children.at(-1).value, "1001");
+  control("feature-list").value = "1001";
+  control("feature-list").dispatchEvent(new Event("change"));
+  assert.equal(range.value, "0", "Picking feature 1002 reveals its globally sorted comparison row");
+  assert.match(control("selection-text").textContent, /1002/);
+  const direction = control("direction");
+  direction.value = "descending";
+  direction.dispatchEvent(new Event("change"));
+  assert.equal(range.value, "1000", "Changing sort keeps the selected feature on screen");
+  assert.equal(control("table-body").children.at(-1).getAttribute("aria-current"), "true");
+  control("plot-button").dispatchEvent(new Event("click"));
+  range.value = "all";
+  range.dispatchEvent(new Event("change"));
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, rows.length);
+  control("values-button").dispatchEvent(new Event("click"));
+  assert.equal(control("table-body").children.length, 1000, "The exact values table remains paged");
+  range.value = "1000";
+  range.dispatchEvent(new Event("change"));
+  assert.equal(control("table-body").children.length, 2);
+  control("plot-button").dispatchEvent(new Event("click"));
+  assert.equal(range.value, "all", "Reading a later page of values preserves the whole plot");
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, rows.length);
+  control("values-button").dispatchEvent(new Event("click"));
+  assert.equal(range.value, "1000", "Returning to Values keeps its table page");
+  range.value = "0";
+  range.dispatchEvent(new Event("change"));
+  const xField = control("x");
+  xField.value = "score";
+  xField.dispatchEvent(new Event("change"));
+  assert.equal(control("table-body").children[0].children[0].textContent, "1001", "Changing the X field reorders the rows");
+  controller.setSample({state:"ready", message:"Ready", observations:[rows[0]]});
+  assert.equal(control("table-body").children[0].children[0].textContent, "0", "A new sample replaces the previous rows");
+  controller.setSample({state:"ready", message:"Ready", observations:rows});
+  control("plot-button").dispatchEvent(new Event("click"));
+  assert.equal(range.value, "0", "A new selection starts with a bounded plot");
+  assert.equal(control("chart").querySelectorAll(".series-chart-point").length, 1000);
+  controller.destroy();
+});
+
 test("two measurements share positions, retain exact cells, and zoom to the chosen original feature", () => {
   const {controller, documentContext:doc, zoomRequests} = fixture();
   const sample = observations().slice(0,3).map((o,index) => ({
@@ -126,6 +190,7 @@ test("two measurements share positions, retain exact cells, and zoom to the chos
     },
   }));
   controller.setSample({state:"ready",message:"Ready",observations:sample});
+  controller.open();
   checkField(doc,"temp_c",true);
   const first=doc.querySelector("#vector-time-series-chart");
   const second=doc.querySelector("#vector-time-series-extra-charts").children[0].children[1];
@@ -181,6 +246,7 @@ test("comparison stacks fields on separate feature rows while retaining exact fe
     },
   }));
   controller.setSample({state: "ready", message: "Ready", observations: sample});
+  controller.open();
   doc.querySelector("#vector-time-series-field-search").value = "area";
   doc.querySelector("#vector-time-series-select-matching").dispatchEvent(new Event("click"));
   const xField = doc.querySelector("#vector-time-series-x");
@@ -209,6 +275,7 @@ test("comparison stacks fields on separate feature rows while retaining exact fe
   assert.deepEqual(rows.map(row => row.children.slice(1).map(cell => cell.children[0].textContent)),
     [["3", "2"], ["0", "No value"], ["9", "-6"], ["3.25", "4"]]);
   checkField(doc, "areaForest", false);
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   assert.deepEqual(legend.children.map(item => item.textContent), ["areaWetland"]);
   chartType.value = "scatter";
   chartType.dispatchEvent(new Event("change"));
@@ -263,9 +330,12 @@ test("mixed scalar points and table rows are displayed in the same natural order
   h.controller.setSample({state:"ready",message:"Ready",observations:[-10,-2,"-5"].map((x,featureId)=>
     ({...observations()[0],featureId,properties:{x,y:1}}))});
   const x=doc.querySelector("#vector-time-series-x");
+  h.controller.open();
   x.value="x"; x.dispatchEvent(new Event("change"));
   checkField(doc,"x",false); checkField(doc,"y",true);
+  doc.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   assert.deepEqual(doc.querySelector("#vector-time-series-table-body").children.map(row=>row.children[0].textContent),["-2","-5","-10"]);
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   assert.deepEqual(h.controller.pointElements.map(entry=>entry.point.xValue),[-2,"-5",-10]);
 });
 
@@ -284,7 +354,9 @@ test("comparison controls retain unavailable fields and expose the original rows
   const chart=doc.querySelector("#vector-time-series-chart");
   assert.equal(chart.getAttribute("hidden"),null);
   assert.match(chart.getAttribute("aria-label"),/score by Filename or layer/);
+  doc.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
   assert.equal(doc.querySelector("#vector-time-series-table-body").children.length,4);
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   assert.match(doc.querySelector("#vector-time-series-first").children.at(-1).textContent,/1 feature lacks/);
   const x=doc.querySelector("#vector-time-series-x"), order=doc.querySelector("#vector-time-series-direction");
   x.value="year"; x.dispatchEvent(new Event("change"));
@@ -297,6 +369,7 @@ test("comparison controls retain unavailable fields and expose the original rows
   assert.equal(order.value,"descending");
   assert.equal(doc.querySelector("#vector-time-series-values").hidden,false);
   assert.equal(doc.querySelector("#vector-time-series-table-body").children[0].children[1].children[0].textContent,"No value");
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
   assert.equal(doc.querySelector("#vector-time-series-first").children.at(-1).textContent,"No numeric readings with the selected X field.");
   assert.equal(doc.querySelector("#vector-time-series-heading").textContent,"later.shp");
   assert.deepEqual(h.visibility,[{visible:true,moveFocus:false}]);
@@ -304,6 +377,7 @@ test("comparison controls retain unavailable fields and expose the original rows
 
 test("categorical and numeric X fields use their expected spacing", () => {
   const h = fixture();
+  h.controller.open();
   h.controller.setSample({
     state: "ready",
     observations: observations(),
@@ -331,6 +405,8 @@ test("categorical and numeric X fields use their expected spacing", () => {
 
 test("loading and invalidation retain settings without a stale chart", () => {
   const h = fixture();
+  h.controller.open();
+  h.documentContext.querySelector("#vector-time-series-values-button").click();
   const status = h.documentContext.querySelector("#vector-time-series-status");
   h.controller.setSample({
     state: "interrupted", observations: observations().slice(0, 2),
@@ -364,6 +440,7 @@ test("loading and invalidation retain settings without a stale chart", () => {
 
 test("scatter and bar modes redraw the same sampled points without a connecting line", () => {
   const h = fixture();
+  h.controller.open();
   h.controller.setSample({
     state: "ready",
     observations: observations(),
@@ -466,6 +543,7 @@ test("a point with no map bounds stays selected and another point can still zoom
   const {controller, documentContext: doc, zoomRequests} = fixture(featureFocus => featureFocus.bounds !== null);
   const sample = { state: "ready", observations: observations(), message: "Ready" };
   controller.setSample(sample);
+  controller.open();
   const marks = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point");
   const selection = doc.querySelector("#vector-time-series-selection-text");
   const zoom = doc.querySelector("#zoom-vector-time-series-feature");
@@ -489,6 +567,7 @@ test("a point with no map bounds stays selected and another point can still zoom
 
 test("a new inspection sample clears the selected series point", () => {
   const h = fixture();
+  h.controller.open();
   h.controller.setSample({
     state: "ready",
     observations: observations(),

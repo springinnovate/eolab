@@ -38,6 +38,7 @@ function renderProfile(properties) {
     onNavigateFeature() {}, onFeatureZoom: () => true,
   });
   controller.setCurrentObservation(observation(properties));
+  controller.open();
   return { controller, document };
 }
 
@@ -68,10 +69,12 @@ for (const fields of [
       const model = buildVectorFeatureProfile(current, { selectedFields: fields, direction: order });
       assert.equal(model.xScale, "ordinal");
       assert.deepEqual(model.points.map(point => point.xValue), [null, null]);
+      f.document.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
       const rows = f.document.querySelector("#vector-feature-profile-table-body").children;
       assert.deepEqual(rows.map(row => [row.children[0].children[0].textContent, row.children[1].textContent]),
         expectedFields.map(field => [field, field]));
       const chart = f.document.querySelector("#vector-feature-profile-chart");
+      f.document.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
       const labels = chart.querySelectorAll("text").map(element => element.textContent);
       assert.ok(labels.includes("Field"));
       assert.ok(!labels.includes("Number in field name"));
@@ -98,6 +101,7 @@ test("unsigned year and decimal families keep their actual numeric spacing", () 
     const positions = chart.querySelectorAll(".series-chart-point").map(marker => Number(marker.getAttribute("cx")));
     assert.ok(Math.abs((positions[1] - positions[0]) / (positions[2] - positions[0]) -
       (values[1] - values[0]) / (values[2] - values[0])) < 1e-12);
+    f.document.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
     const rows = f.document.querySelector("#vector-feature-profile-table-body").children;
     assert.deepEqual(rows.map(row => row.children[1].textContent), values.map(String));
     f.controller.destroy();
@@ -110,6 +114,7 @@ test("changing selected signed fields preserves labels, missing gaps and source 
   const f = renderProfile(properties);
   const list = f.document.querySelector("#vector-feature-profile-field-list");
   const negative = list.children.find(row => row.children[0].value === fields[0]).children[0];
+  f.document.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   negative.checked = true;
   negative.dispatchEvent(new Event("change"));
   const rows = () => f.document.querySelector("#vector-feature-profile-table-body").children;
@@ -122,6 +127,7 @@ test("changing selected signed fields preserves labels, missing gaps and source 
   f.controller.setCurrentObservation(observation({ ...properties, [fields[1]]: null }));
   assert.deepEqual(rows().map(row => row.children[1].textContent), fields);
   assert.deepEqual(rows().map(row => row.children[2].textContent), ["1", "No value", "3"]);
+  f.document.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
   const markers = f.document.querySelector("#vector-feature-profile-chart").querySelectorAll(".series-chart-point");
   assert.deepEqual(markers.map(marker => marker.getAttribute("aria-label")),
     ["temperature_-20_C: 1", "temperature_10_C: 3"]);
