@@ -3,6 +3,8 @@
 /** @typedef {{key:string,visible:boolean,opacity:number,timeline?:import("./raster-viewer.js").TemporalMapTimeline|null}} TimelineLayer */
 /** @typedef {{time?:string,month?:string,edge?:"first"|"last"|"firstOfLastDay"}} Destination */
 
+const PLAYBACK_LOOKAHEAD = 5;
+
 /** Return an exact, compact observation label, preserving nonzero seconds.
  * @param {string} time ISO UTC timestamp.
  * @return {string} Timestamp with an explicit UTC suffix.
@@ -27,7 +29,7 @@ function setOptions(select, choices) {
     }));
 }
 
-/** Own the map timeline controls, drag intent and at most two upcoming playback frames. */
+/** Own the map timeline controls, drag intent and upcoming playback frames. */
 export class TemporalScrubber {
     /** Connect the map control to the same date selections as Map contents.
      * @param {HTMLElement} root Timeline region inside the map.
@@ -284,10 +286,10 @@ export class TemporalScrubber {
         } else c.gap.textContent = next ? "Next month · " + next.month : "End of available dates";
         if (!this.playing || this.action || !ready) return;
         if (!next) { this.pause(); c.play.textContent = "Play"; c.play.disabled = true; return; }
-        if (next.time) {
-            this.#prepare(next);
-            const following = this.#neighbor(1, next.time);
-            if (following?.time) this.#prepare(following);
+        for (let target = next; target && this.frames.size < PLAYBACK_LOOKAHEAD; target = this.#neighbor(1, target.time)) {
+            this.#prepare(target);
+            // The new month's other dates are available once its first observation is shown.
+            if (target.month) break;
         }
         this.clock ??= setTimeout(() => { this.clock = null; void this.#advance(); }, 167);
     }
