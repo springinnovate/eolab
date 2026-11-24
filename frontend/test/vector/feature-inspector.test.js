@@ -362,16 +362,28 @@ test("cancelled Lasso restores the completed selection and Clear rejects late at
   assert.equal(h.displays.at(-1), null);
 });
 
-test("click and Lasso retain one history entry for the same native feature", async t => {
-  const h = createFixture(async (url, options) => ({ok: true, json: async () => {
-    if (url.endsWith("/lasso")) return {matched: 1, featureIds: ["1"], geometry: null};
-    if (url.endsWith("/features")) return {selection: JSON.parse(options.body).selection, features: [{id: "1", properties: {rank: 1}}]};
-    return {type: "FeatureCollection", features: [{type: "Feature", id: "parcels.1", geometry: null, properties: {rank: 1}}]};
-  }}));
-  t.after(() => h.controller.destroy());
-  await h.controller.inspect(inspectionEvent(12, 24));
-  await h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
-  assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: false, canNext: false});
+test("click display IDs never replace a different native feature's Lasso history", async t => {
+  for (const displayId of ["parcels.1", "1", 1]) await t.test(`display ID ${JSON.stringify(displayId)}`, async t => {
+    const h = createFixture(async (url, options) => ({ok: true, json: async () => {
+      if (url.endsWith("/lasso")) return {matched: 1, featureIds: ["1"], geometry: null};
+      if (url.endsWith("/features")) return {selection: JSON.parse(options.body).selection,
+        features: [{id: "1", properties: {rank: 200}}]};
+      return {type: "FeatureCollection", features: [{type: "Feature", id: displayId,
+        geometry: null, properties: {rank: 10}}]};
+    }}));
+    t.after(() => h.controller.destroy());
+    await h.controller.inspect(inspectionEvent(12, 24));
+    const select = () => h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
+    await select();
+    assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: true, canNext: false});
+    await select();
+    h.controller.navigateSelection("previous");
+    assert.equal(h.currentObservationChanges.at(-1).featureId, displayId);
+    assert.equal(h.currentObservationChanges.at(-1).properties.rank, 10);
+    h.controller.navigateSelection("next");
+    assert.equal(h.currentObservationChanges.at(-1).featureId, "1");
+    assert.equal(h.currentObservationChanges.at(-1).properties.rank, 200);
+  });
 });
 
 test("empty and failed Lasso replacements never leave stale attributes in plots", async t => {

@@ -885,21 +885,17 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Identify a native feature set independently of order and acquisition mode.
-     * Remove only the selected publication's WMS prefix from canonical native IDs.
+     * Identify a feature set without equating WMS display IDs with original IDs.
+     * Repeated selections deduplicate within the same original source or publication.
      * @param {InspectedVectorFeature[]} results Features from one completed inspection.
-     * @return {string|null} Source and feature IDs, or null if a feature has no ID.
+     * @return {string|null} Source, publication and feature IDs, or null if a feature has no ID.
      */
     #identifyFeatureSelection(results) {
         const ids = [];
         for (const { feature, target } of results) {
-            let id = feature.id;
+            const id = feature.id;
             if (typeof id !== "number" && !(typeof id === "string" && id.length)) return null;
-            if (typeof id === "string" && target.publication) {
-                const prefix = target.publication.layerName.split(":").at(-1) + ".";
-                if (id.startsWith(prefix) && /^(0|-?[1-9]\d*)$/.test(id.slice(prefix.length))) id = id.slice(prefix.length);
-            }
-            ids.push(JSON.stringify([target.sourceId, String(id)]));
+            ids.push(JSON.stringify([target.sourceId, target.publication?.layerName ?? null, String(id)]));
         }
         return JSON.stringify(ids.sort());
     }
