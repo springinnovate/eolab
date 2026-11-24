@@ -10,22 +10,33 @@ from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.selection_operation import ComparisonResult, SelectionMeasurementResult
 
 
-async def compare_selection_job(jobs: JobsClient, token: str) -> None:
+async def compare_selection_job(
+    jobs: JobsClient, token: str, execution_seconds: int
+) -> None:
     """Queue an exact polygon comparison and hold both original inputs until native exit.
 
     Args:
         jobs: Authenticated application connection to the existing Jobs queue.
         token: One-request capability for obtaining the source pair and returning its IDs.
+        execution_seconds: Outer native deadline covering the requested comparison or Lasso stages.
 
     Raises:
         VectorConflictError: If the queue or native reader cannot complete the comparison.
         asyncio.CancelledError: After the job has stopped using both original sources.
     """
+    queue_seconds = 30
     try:
         result = await jobs.run(
-            {"operation": "vector.intersection.v1", "inputs": {"spatialRead": token}, "priority": 0,
-             "executionTimeoutSeconds": 20, "queueTimeoutSeconds": 30},
-            timeout_seconds=60, delete_on_completion=True, require_terminal_cleanup=True,
+            {
+                "operation": "vector.intersection.v1",
+                "inputs": {"spatialRead": token},
+                "priority": 0,
+                "executionTimeoutSeconds": execution_seconds,
+                "queueTimeoutSeconds": queue_seconds,
+            },
+            timeout_seconds=queue_seconds + execution_seconds + 10,
+            delete_on_completion=True,
+            require_terminal_cleanup=True,
         )
         outcome = ComparisonResult.model_validate(result.value)
     except (JobFailed, httpx2.HTTPError, ValueError, TimeoutError) as error:

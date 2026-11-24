@@ -146,10 +146,18 @@ def create_vector_sampling_router(
             raise HTTPException(409, error.detail) from error
 
     @router.api_route("/spatial-read", methods=["GET", "PUT"], include_in_schema=False)
-    async def spatial_read(request: Request) -> Response:
-        """Exchange original sources or matching feature IDs with the authorized Jobs worker.
+    async def spatial_read(request: Request, stage: str | None = None) -> Response:
+        """Exchange original sources, IDs or staged Lasso output with the authorized job.
 
-        The submitting request owns the bearer token and holds every source until the worker stops.
+        Args:
+            request: Bearer-authenticated worker GET for inputs or PUT for results.
+            stage: Lasso delivery step. Ordinary comparisons return their matches directly.
+
+        Returns:
+            Held inputs, or acknowledgment of an accepted delivery.
+
+        Raises:
+            HTTPException: The credential expired or the Lasso delivery is invalid.
         """
         from fastapi.responses import JSONResponse
 
@@ -157,6 +165,17 @@ def create_vector_sampling_router(
         read = service.spatial_reads.get(token) if scheme.lower() == "bearer" else None
         if read is None:
             raise HTTPException(404, "This polygon filter is unavailable.")
+        if read.lasso is not None:
+            try:
+                if request.method == "GET":
+                    read.lasso.receive("intersection")
+                else:
+                    read.lasso.receive(stage, await request.body())
+                    return Response(status_code=204)
+            except ValueError as error:
+                raise HTTPException(
+                    409, "This Lasso result could not be accepted."
+                ) from error
         if request.method == "GET":
             return JSONResponse(read.inputs)
         read.result = FeatureMatches.model_validate_json(await request.body())
@@ -249,7 +268,7 @@ def create_vector_sampling_router(
             response: Renews the selected private source's browser cookie.
 
         Returns:
-            Exact matching IDs and count, plus optional whole-feature highlights.
+            Exact matching IDs, count and scalar rows, plus optional whole-feature highlights.
 
         Raises:
             HTTPException: For invalid ownership, unavailable sources or failed reads.

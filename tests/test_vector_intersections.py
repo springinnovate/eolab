@@ -268,12 +268,21 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
     monkeypatch.setattr(selection_operation, "UPLOAD_MOUNT", uploads.root)
     completed = []
 
-    async def run_job(token: str) -> None:
-        """Run the installed worker read against the real application and the fixture catalog."""
+    async def run_job(token: str, execution_seconds: int) -> None:
+        """Run the installed comparison with the deadline for the requested result.
+
+        Args:
+            token: Request-scoped credential for these source layers.
+            execution_seconds: Hard deadline passed to the Jobs executor.
+        """
+        read = reader.spatial_reads.get(token)
+        assert execution_seconds == (50 if read.lasso else 20)
         catalog = httpx2.MockTransport(lambda request: httpx2.Response(200, json=item))
         mounts = {"http://app:8000": httpx2.ASGITransport(app=app), "http://stac-api:8080": catalog}
         async with httpx2.AsyncClient(mounts=mounts, trust_env=False) as client:
-            await selection_operation.return_intersecting_ids(client, selection_operation.ComparisonInput(spatialRead=token))
+            await selection_operation.deliver_intersection_result(
+                client, selection_operation.ComparisonInput(spatialRead=token)
+            )
         completed.append(token)
 
     async def read_drawing(owner: str, reference: Any) -> tuple[SummaryPolygon, ...]:
@@ -340,5 +349,21 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         empty = owner.post(url, json=request, headers=HEADERS)
         assert empty.status_code == 200, empty.text
         assert empty.json()["count"] == {"matched": 0, "total": 8, "complete": True}
+        # A Lasso covering the layer must still use the empty private spatial filter.
+        before_lasso = len(completed)
+        lasso_url = "/api/vector-sampling/lasso"
+        lasso_body = {"selection": target, "polygon": mapping(box(-1, -1, 1, 1))}
+        lasso = owner.post(lasso_url, json=lasso_body, headers=HEADERS)
+        assert lasso.status_code == 200, lasso.text
+        assert lasso.json() == {
+            "matched": 0,
+            "featureIds": [],
+            "features": [],
+            "geometry": {"type": "FeatureCollection", "features": []},
+        }
+        assert len(completed) == before_lasso + 2  # One bound filter and one Lasso.
+        assert (
+            other.post(lasso_url, json=lasso_body, headers=HEADERS).status_code == 404
+        )
         assert owner.delete(f"{BASE}/{identifier}", headers=HEADERS).status_code == 204
         assert owner.post(url, json=request, headers=HEADERS).status_code == 404
