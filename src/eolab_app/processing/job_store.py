@@ -28,7 +28,7 @@ from eolab_app.processing.models import (
     ProcessingLimits,
     JobInputFile,
 )
-from eolab_jobs.worker_claim import CLAIM_NEXT_JOB_SQL
+from eolab_jobs.worker_claim import CLAIM_NEXT_JOB_SQL, WORKER_SLOT_AVAILABLE_SQL
 
 # Processing owns this key in PostgreSQL's single-bigint, database-wide advisory
 # lock namespace. It serializes schema migration and shared admission, job-state,
@@ -1137,9 +1137,13 @@ class PostgresJobStore:
 
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
+                WORKER_SLOT_AVAILABLE_SQL, {"worker_count": self.limits.worker_count}
+            )
+            if not cursor.fetchone()["available"]:
+                return None
+            cursor.execute(
                 CLAIM_NEXT_JOB_SQL,
                 {
-                    "worker_count": self.limits.worker_count,
                     "attempt_id": uuid4().hex,
                     "lease_seconds": self.limits.lease_seconds,
                 },

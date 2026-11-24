@@ -1,13 +1,19 @@
 """PostgreSQL claim used by workers sharing the durable job queue.
 
-Run this statement after acquiring the queue's transaction advisory lock, with
-the worker count, a fresh attempt ID and the lease duration in seconds. It
-returns the claimed job and the subscriber whose turn it was, or no row when
-there is no capacity or eligible work.
+Under the queue's transaction advisory lock, check capacity before issuing the
+claim. This keeps the full-pool path independent of the queue and its history.
+The claim takes a fresh attempt ID and the lease duration in seconds and returns
+the job and selected subscriber, or no row when the queue is empty.
 """
 
 from typing import Final
 
+
+WORKER_SLOT_AVAILABLE_SQL: Final = """
+SELECT count(*) < %(worker_count)s AS available
+FROM processing.jobs
+WHERE status IN ('running', 'cancelling')
+"""
 
 CLAIM_NEXT_JOB_SQL: Final = """
 WITH waiting AS (
@@ -27,8 +33,6 @@ WITH waiting AS (
         ORDER BY j.started_at DESC
         LIMIT 1
     ) AS last_served ON true
-    WHERE (SELECT count(*) FROM processing.jobs
-           WHERE status IN ('running', 'cancelling')) < %(worker_count)s
     ORDER BY last_served.started_at NULLS FIRST, waiting.created_at, waiting.id
     LIMIT 1
 )
