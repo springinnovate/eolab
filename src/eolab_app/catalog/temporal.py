@@ -33,13 +33,31 @@ class ArchiveSource(BaseModel):
 
 
 class ArchiveDescription(BaseModel):
-    """Supply the stable catalog identity and display title for an archive."""
+    """Supply the archive identity, title, and optional precision for displaying dates.
+
+    Snapshot labels use year, month, day or timestamp. Calendar aggregates use
+    the covered period preceding their exclusive end. Explicit intervals are
+    identified by their ending timestamp.
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str = Field(pattern=r"\S")
     title: str = Field(pattern=r"\S")
     source: ArchiveSource
+    time_labels: (
+        Literal[
+            "year",
+            "month",
+            "day",
+            "timestamp",
+            "calendar_year",
+            "calendar_month",
+            "calendar_day",
+            "explicit",
+        ]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -525,6 +543,11 @@ def build_temporal_items(
                 "start_datetime": utc_timestamp(cast(int, support_start)),
                 "end_datetime": utc_timestamp(cast(int, support_end)),
                 "eolab:calendar": "proleptic_gregorian",
+                **(
+                    {"eolab:time_labels": archive.description.time_labels}
+                    if archive.description.time_labels
+                    else {}
+                ),
                 "cube:dimensions": {
                     "time": {
                         "type": "temporal",

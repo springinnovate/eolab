@@ -221,6 +221,22 @@ Back up the Docker volumes and keep their names and the database password. Let a
 
 ### Prepare data for the Catalog
 
+#### Make a temporal layer from GeoTIFFs
+
+Put one variable's single-band GeoTIFFs in a dedicated folder. Use Python with Rasterio, NumPy, PyYAML and Pydantic 2 to run the [stack preparation script](scripts/prepare_temporal_stack.py).
+
+```sh
+python scripts/prepare_temporal_stack.py draft rainfall/
+python scripts/prepare_temporal_stack.py build rainfall/stack.yaml --check
+python scripts/prepare_temporal_stack.py build rainfall/stack.yaml
+```
+
+The first command shows dates found in filenames and acquisition or observation tags. Confirm the suggestions, choose what each raster measures, then edit `stack.yaml`. Fill in the variable ID, title and units. The draft keeps conflicting clues beside the affected file. For snapshots choose `year`, `month`, `day` or `timestamp`. For means and totals choose `calendar_year`, `calendar_month`, `calendar_day` or `explicit`. Quote dates such as `"2024"` or `"2024-06"`. Exact timestamps need a timezone. For explicit intervals use e.g. `time: {start: "2024-05-01", end: "2024-10-01"}`; the end is exclusive.
+
+Check the edited manifest, then build it. All observations must share a north-up grid and compatible stored values, units and NoData. Gaps are allowed. The build publishes `catalog.sqlite` and `dataset.yaml` beside the original files and requires a filesystem supporting hard links. Both commands protect existing outputs. To add observations, prepare a complete replacement archive between calculations, retain its dataset ID and rescan. Place the complete folder under the data mount and run a Catalog scan. Choose the layer in Map contents to select dates or press **Play**.
+
+A snapshot labeled `"2024"` uses the start of 2024 UTC for date-range selection. An annual total labeled `"2024"` covers the full calendar year. Both display as **2024** on the map.
+
 <details>
 <summary>Add dataset descriptions, citations, and supporting files</summary>
 

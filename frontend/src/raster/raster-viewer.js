@@ -10,6 +10,7 @@ import { samplingBoxBounds } from "../sampling-box.js";
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
 import { publishRasterSource } from "./api.js";
 import { loadTemporalTimes } from "./temporal-api.js";
+import { observationLabel } from "./observation-label.js";
 import { TemporalControlsView } from "./temporal-controls-view.js";
 import {
     loadRasterStatistics,
@@ -148,6 +149,7 @@ function canRetryRasterStatistics(error) {
  * @property {string} name Dataset title or custom layer name.
  * @property {string} variableLabel Human-readable name of the selected variable.
  * @property {string} variable Catalog variable identifier.
+ * @property {string} [period] Operator-declared period for observation labels.
  * @property {string} time Selected UTC observation, including an unavailable saved selection.
  * @property {string} month Browsed UTC month.
  * @property {string[]} months Ordered populated months from the Catalog.
@@ -2313,6 +2315,7 @@ export function initializeRasterViewer(
                     timeline: (!bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
                         name: record.entry.customName ?? record.state.temporal.item.properties.title ?? record.state.temporal.item.id,
                         variableLabel: record.state.temporal.item.properties["cube:variables"][source.variable]?.description ?? source.variable,
+                        period: record.state.temporal.item.properties["eolab:time_labels"],
                         variable: source.variable, time: source.time, months: record.state.temporal.months,
                         month: record.state.temporal.month, times: record.state.temporal.times,
                         loading: record.state.temporal.loading, error: record.state.temporal.error,
@@ -4688,11 +4691,12 @@ export function initializeRasterViewer(
      */
     function temporalRaster(item, selection, available) {
         const variable = item.properties["cube:variables"][selection.variable];
-        const timeLabel = new Date(selection.time).toLocaleString(undefined, {timeZone: "UTC", year: "numeric",
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+        const timeLabel = observationLabel(selection.time, item.properties["eolab:time_labels"]) ??
+            new Date(selection.time).toLocaleString(undefined, {timeZone: "UTC", year: "numeric",
+                month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"}) + " UTC";
         return {
             source: {collectionId: item.collection, itemId: item.id, ...selection},
-            label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel} UTC`,
+            label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel}`,
             bbox: item.bbox,
             assets: {data: {"raster:bands": [{unit: variable?.unit}]}},
             capabilities: {pixels: available, statistics: available, calculations: available, modelInput: false},
@@ -4708,6 +4712,7 @@ export function initializeRasterViewer(
         temporal.controls.render({
             variables: Object.entries(temporal.item.properties["cube:variables"]).map(([id, value]) => ({id, label: value.description ?? id, units: value.unit})),
             ...temporal.selection, months: temporal.months, month: temporal.month,
+            period: temporal.item.properties["eolab:time_labels"],
             times: temporal.times, loading: temporal.loading, error: temporal.error,
         });
     }

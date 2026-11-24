@@ -7,6 +7,21 @@ import {TemporalScrubber} from "../../src/raster/temporal-scrubber.js";
 const stamps = ["2000-01-02T01:00:00.000Z", "2000-01-02T02:00:00.000Z", "2000-01-05T01:00:00.000Z"];
 const months = ["2000-01", "2000-05"];
 
+test("annual totals show their covered years and navigate using exact interval-end keys", () => {
+    const {controls, widget, layer, calls} = fixture();
+    try {
+        const time = "2025-01-01T00:00:00.000Z";
+        widget.setLayers([{...layer, timeline: {...layer.timeline, period: "calendar_year",
+            months: ["2025-01", "2027-01"], month: "2025-01", times: [time], time}}]);
+        widget.setMapStatus({phase: "complete"}, ["first"]);
+        assert.equal(controls.display.textContent, "On map · 2024");
+        assert.equal(controls.time.getAttribute("aria-valuetext"), "2024");
+        assert.deepEqual(Array.from(controls.month.options, option => option.textContent), ["2024", "2026"]);
+        controls.forward.dispatchEvent(new Event("click"));
+        assert.deepEqual(calls.at(-1), ["rain", "2027-01", "first"]);
+    } finally { widget.destroy(); }
+});
+
 /** Mount the actual timeline control names around a representative irregular, partial month.
  * @param {Object} [actions] Optional callback replacements for playback.
  * @return {Object} Real widget, DOM controls, source snapshot and captured actions.
