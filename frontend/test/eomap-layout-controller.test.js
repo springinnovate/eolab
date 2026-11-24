@@ -274,6 +274,61 @@ function createLayoutFixture() {
     };
 }
 
+for (const kind of ["uploaded raster", "generated vector"]) {
+    test(`restoring ${kind} retains the visitor's collapsed Map contents`, async () => {
+        const fixture = createLayoutFixture();
+        const layout = new EomapLayoutController({documentContext: fixture.document,
+            schedule: fixture.schedule, invalidateMapSize() {}, allowCatalog: false,
+            initialState: {catalog: false, mapContents: false}});
+        const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+        const functions = ["addUploadedRaster", "restoreSavedUpload", "restoreUploadedRaster", "addGeneratedVector"].map(name => {
+            const start = source.indexOf(`    async function ${name}(`);
+            return source.slice(start, source.indexOf("\n    /**", start));
+        }).join("\n");
+        const records = new Map();
+        const dependencies = {
+            onRenderingWorkspaceRequested: () => layout.showWorkspace("map-layers"),
+            getRasterUpload: async id => ({id, name: "Restored raster"}),
+            describeRasterSource: async () => ({bounds: [0, 0, 1, 1], version: "fixture",
+                capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+            rasterVisualization: {showSource: async (_source, _lifecycle, presentation) => {
+                const record = {entry: {key: presentation.key}};
+                records.set(presentation.key, record);
+                return record;
+            }},
+            uploadsDialog: null, mapLayerStackView: {announceStatus() {}},
+            vectorMapLayerAdapter: {publish: async () => ({}), added() {}},
+            mapLayerController: {
+                addLocal: presentation => { const record = {entry: presentation}; records.set(presentation.key, record); return record; },
+                getRecord: key => records.get(key), setVisible() {}, reorder() {}, snapshots: () => [...records.values()],
+            },
+        };
+        const addStart = source.indexOf("            addToMap: async upload =>");
+        const addAction = source.slice(addStart, source.indexOf("            isOnMap:", addStart));
+        const {restoreUpload, restoreRaster, addVector, addUpload} = new Function(...Object.keys(dependencies),
+            "getUploadedLayerKeys", `${functions}\n` +
+            `return {restoreUpload: restoreSavedUpload, restoreRaster: restoreUploadedRaster, addVector: addGeneratedVector,
+                addUpload: ({${addAction}}).addToMap};`)(...Object.values(dependencies), () => []);
+        assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
+        if (kind === "uploaded raster") {
+            assert.ok(await restoreUpload({uploadId: "upload", style: {kind: "raster"}}, () => true));
+        } else {
+            assert.ok(await addVector({}, {}, {key: "result", visible: true, isCurrent: () => true}));
+        }
+        assert.equal(records.size, 1, "The source still restores while the panel is closed");
+        assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
+        if (kind === "uploaded raster") {
+            await addUpload({id: "another-upload", kind: "raster"});
+            assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "true", "Explicit Add reveals controls");
+            fixture.renderingTab.dispatchEvent(new Event("click"));
+            await restoreRaster({key: "undo", label: "Restored raster", index: 0,
+                local: {uploadId: "upload", appearance: {kind: "raster"}}}, () => true);
+            assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "true", "Explicit Undo reveals controls");
+        }
+        layout.destroy();
+    });
+}
+
 test("panel activity sources release independently and disconnect with the layout", () => {
     const fixture = createLayoutFixture();
     const layout = new EomapLayoutController({

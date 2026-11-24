@@ -994,7 +994,10 @@ async function initializeCatalog(
         onItemInfo: inspectRetainedMapLayer,
         restoreRemovedLayer: async (snapshot, isCurrent) => snapshot.local?.kind === "model-output-preview"
             ? outputLayers.restore(snapshot, isCurrent).then(() => {
-                if (isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+                if (isCurrent()) {
+                    mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+                    if (snapshot.local.layerName && mapLayerController.getRecord(snapshot.key)) onRenderingWorkspaceRequested();
+                }
             }) : snapshot.local?.kind === "temporal" ? restoreRemovedTemporal(snapshot, isCurrent)
             : snapshot.local?.kind === "uploaded-vector" ? restoreUploadedVector(snapshot, isCurrent)
             : snapshot.local?.kind === "uploaded-raster" ? restoreUploadedRaster(snapshot, isCurrent)
@@ -1310,6 +1313,7 @@ async function initializeCatalog(
     }
     /** Describe and display an owned raster through ordinary tiles, style and analysis.
      * Reopening, Undo and additional views recheck ownership and availability.
+     * Callers reveal Map contents for explicit user actions; restoration leaves disclosure alone.
      * @param {import("./uploads/api.js").UploadSummary} upload Available raster file.
      * @param {Object} [presentation={}] Restored key, appearance, visibility and current-request callback.
      * @return {Promise<Object|null>} Retained raster record, or null after supersession.
@@ -1335,7 +1339,6 @@ async function initializeCatalog(
             removed: () => {},
         }, {sourceName: upload.name, canAddView: true, ...presentation});
         if (record) {
-            onRenderingWorkspaceRequested();
             mapLayerStackView.announceStatus(`${upload.name} added to map.`);
         }
         return record;
@@ -1351,10 +1354,14 @@ async function initializeCatalog(
         const record = await addUploadedRaster(upload, {key: snapshot.key, label: snapshot.label,
             customName: snapshot.customName, visible: snapshot.visible, opacity: snapshot.opacity,
             isCustom: snapshot.isCustom, appearance: snapshot.local.appearance, isCurrent});
-        if (record) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+        if (record) {
+            mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+            onRenderingWorkspaceRequested();
+        }
     }
     /** Display a generated vector through the same adapter as catalog layers and uploads.
      * The run owner supplies lifecycle actions; this composition function connects them.
+     * The originating user action owns revealing Map contents, independently of attachment.
      * @param {import("./vector/api.js").RunArtifactVectorSource} source Authorized original file metadata.
      * @param {Object} lifecycle Run detail, removal and restoration callbacks.
      * @param {Object} presentation Layer identity, appearance, filter and current-request check.
@@ -1376,7 +1383,6 @@ async function initializeCatalog(
             if (!isCurrent()) return null;
             mapLayerController.setVisible(presentation.key, presentation.visible);
             vectorMapLayerAdapter.added(record);
-            onRenderingWorkspaceRequested();
             return record;
         } catch (error) {
             if (!isCurrent()) return null;
@@ -1460,10 +1466,16 @@ async function initializeCatalog(
     if (!isSharedViewer) {
         uploadsDialog = new UploadsDialog({
             document, appTitle: appGlobalConfiguration.appTitle,
+            /** Display an upload at the user's request and reveal its available controls.
+             * @param {import("./uploads/api.js").UploadSummary} upload Selected private file.
+             * @return {Promise<void>} Completion after attachment and disclosure.
+             * @throws {Error} If metadata, publication or display fails.
+             */
             addToMap: async upload => {
                 if (getUploadedLayerKeys(upload.id).length) return;
-                if (upload.kind === "raster") await addUploadedRaster(await getRasterUpload(upload.id));
-                else await addUploadedVector(await getUpload(upload.id));
+                if (upload.kind === "raster") {
+                    if (await addUploadedRaster(await getRasterUpload(upload.id))) onRenderingWorkspaceRequested();
+                } else await addUploadedVector(await getUpload(upload.id));
             },
             isOnMap: id => getUploadedLayerKeys(id).length > 0,
             removeFromMap: id => { for (const key of getUploadedLayerKeys(id)) mapLayerController.removeKey(key); },
@@ -1637,7 +1649,17 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
-        showOutput: (job, file) => outputLayers.show(job, file),
+        /** Show a requested result and reveal controls when a new generated vector attaches.
+         * @param {Object} job Authorized run snapshot.
+         * @param {Object} file Selected manifest entry.
+         * @return {Promise<void>} Completion after attachment or the output owner's failure feedback.
+         */
+        showOutput: async (job, file) => {
+            const alreadyOnMap = outputLayers.state(job.jobId, file.artifactId, file).onMap;
+            await outputLayers.show(job, file);
+            if (!alreadyOnMap && file.mediaType === "application/geopackage+sqlite3" &&
+                outputLayers.state(job.jobId, file.artifactId, file).onMap) onRenderingWorkspaceRequested();
+        },
         outputState: (jobId, artifactId, file) => outputLayers.state(jobId, artifactId, file),
         /** Capture run displays before their source access is revoked.
          * @param {string} id Model run identity.
