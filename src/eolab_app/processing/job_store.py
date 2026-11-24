@@ -157,11 +157,12 @@ class PostgresJobStore:
             ) from error
 
     def migrate(self) -> None:
-        """Install a fresh Processing schema, or verify an existing layout without DDL.
+        """Install or verify the queue schema and upgrade a supported version 22 queue.
 
-        Fresh installations store version 22 directly. Existing installations of
-        the same layout may have all 22 historical markers. The structure is checked
-        as well because distinct historical Habitat layouts shared marker 22.
+        Version 23 records which owners were served when each job started.
+        Existing version 22 layouts are checked before upgrading because
+        different historical Habitat layouts used the same version marker.
+        An up-to-date database is checked without changing its contents.
 
         Raises:
             UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
@@ -172,6 +173,7 @@ class PostgresJobStore:
             cursor.execute("SELECT to_regnamespace('processing') AS namespace")
             if cursor.fetchone()["namespace"] is None:
                 cursor.execute(resources.joinpath("schema.sql").read_text())
+                cursor.execute(resources.joinpath("schema_23.sql").read_text())
                 return
             try:
                 cursor.execute(
@@ -193,10 +195,12 @@ class PostgresJobStore:
                     "The installed Processing schema is unsupported. "
                     f"Check {mismatch['problem']} before starting this worker."
                 )
-            if versions not in ([22], list(range(1, 23))):
+            if versions in ([22], list(range(1, 23))):
+                cursor.execute(resources.joinpath("schema_23.sql").read_text())
+            elif versions not in ([22, 23], list(range(1, 24))):
                 raise UnsupportedProcessingSchemaError(
                     "The installed Processing schema has an unsupported version history. "
-                    "This worker requires the current version 22 layout."
+                    "This worker requires a supported version 22 or 23 layout."
                 )
 
     def interrupt_unfinished_jobs_on_restart(self) -> int:

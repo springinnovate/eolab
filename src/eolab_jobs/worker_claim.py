@@ -26,14 +26,13 @@ WITH waiting AS (
     SELECT waiting.id, waiting.owner
     FROM waiting
     LEFT JOIN LATERAL (
-        SELECT j.started_at
-        FROM processing.jobs AS j
-        JOIN processing.job_subscribers AS s ON s.job_id = j.id
-        WHERE s.owner = waiting.owner AND j.started_at IS NOT NULL
-        ORDER BY j.started_at DESC
+        SELECT turn.started_at
+        FROM processing.job_turns AS turn
+        WHERE turn.owner = waiting.owner
+        ORDER BY turn.started_at DESC
         LIMIT 1
     ) AS last_served ON true
-    ORDER BY last_served.started_at NULLS FIRST, waiting.created_at, waiting.id
+    ORDER BY last_served.started_at NULLS FIRST, waiting.created_at, waiting.id, waiting.owner
     LIMIT 1
 )
 UPDATE processing.jobs AS job

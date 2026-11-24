@@ -28,6 +28,43 @@ from test_processing_jobs import boundary, store, clip_inputs, HEADERS
 from test_processing_calculations import request_body, ENDPOINT
 
 
+@pytest.mark.parametrize(
+    ("membership", "next_owner"),
+    [("cancel_before", "a"), ("cancel_after", "c"), ("join_after", "a")],
+)
+def test_only_subscribers_present_at_start_take_a_fair_turn(
+    store: PostgresJobStore, membership: str, next_owner: str
+) -> None:
+    """Order later claims by the subscribers actually served at each start.
+
+    Args:
+        store: Disposable PostgreSQL job store.
+        membership: When owner A joins or cancels relative to the shared start.
+        next_owner: Owner due the next turn after C and the shared job have run.
+    """
+    private = PreparedJobPlan({}, {}, operation="test.v1")
+    shared = PreparedJobPlan({}, {}, operation="test.v1", work_key="shared")
+    store.submit("c", "prior", private, "prior")
+    first = store.claim_next_job()
+    assert store.finish(first["id"], first["attempt_id"], None)
+    original = store.submit("b", "shared", shared, "shared")
+    if membership != "join_after":
+        handle = store.submit("a", "shared", shared, "shared")
+        if membership == "cancel_before":
+            store.cancel(handle["id"], "a")
+    started = store.claim_next_job()
+    assert started["id"] == original["job_id"]
+    if membership == "cancel_after":
+        store.cancel(handle["id"], "a")
+    if membership == "join_after":
+        joined = store.submit("a", "shared", shared, "shared")
+        assert joined["job_id"] == started["id"]
+    assert store.finish(started["id"], started["attempt_id"], None)
+    for owner in ("a", "c"):
+        store.submit(owner, "next", private, "next")
+    assert store.claim_next_job()["owner"] == next_owner
+
+
 def test_concurrent_subscribers_share_one_claim_and_published_result(
     store: PostgresJobStore,
 ) -> None:
