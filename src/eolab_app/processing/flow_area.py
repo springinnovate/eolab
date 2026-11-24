@@ -191,6 +191,9 @@ def calculate_flow_area(
 ) -> FlowAreaArtifact:
     """Condition the DEM, trace the requested paths and write a publishable GeoTIFF.
 
+    A one-cell DEM produces a zero mask because its valid starting cell is
+    excluded from the result.
+
     Args:
         sources: Authorized DEM and original vector source with its captured predicate.
         plan: Accepted directions and native result grid.
@@ -244,22 +247,29 @@ def calculate_flow_area(
             )
         valid_count = int(numpy.count_nonzero(valid))
         write_progress(directory, "flow_directions", 0, 0)
-        flow = build_d8_flow_graph(elevations, transform, latlon=latlon)
+        # A one-cell grid has no cells outside its seed; PyFlwDir needs size > 1.
+        flow = (
+            build_d8_flow_graph(elevations, transform, latlon=latlon)
+            if elevations.size > 1
+            else None
+        )
         del elevations
-        if flow.idxs_seq.size != valid_count:
-            raise ProcessingError(
-                "invalid_flow_graph",
-                "Flow directions did not cover all valid DEM cells.",
-            )
-
         traced = numpy.zeros_like(seeds)
-        # Propagate True along the requested routes without counting or summing seeds.
-        if plan.inputs.upstream:
-            write_progress(directory, "flow_upstream", 0, 0)
-            traced |= flow.fillnodata(seeds, nodata=False, direction="up")
-        if plan.inputs.downstream:
-            write_progress(directory, "flow_downstream", 0, 0)
-            traced |= flow.fillnodata(seeds, nodata=False, direction="down", how="max")
+        if flow is not None:
+            if flow.idxs_seq.size != valid_count:
+                raise ProcessingError(
+                    "invalid_flow_graph",
+                    "Flow directions did not cover all valid DEM cells.",
+                )
+            # Propagate True without counting or summing seeds.
+            if plan.inputs.upstream:
+                write_progress(directory, "flow_upstream", 0, 0)
+                traced |= flow.fillnodata(seeds, nodata=False, direction="up")
+            if plan.inputs.downstream:
+                write_progress(directory, "flow_downstream", 0, 0)
+                traced |= flow.fillnodata(
+                    seeds, nodata=False, direction="down", how="max"
+                )
         traced[seeds] = False
         del flow, seeds
 

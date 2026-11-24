@@ -11,6 +11,7 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 
+from catalog_selection_support import write_selection
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.flow_area import (
@@ -250,3 +251,56 @@ def test_flow_plan_rejects_nonsquare_cells(tmp_path: Path) -> None:
         pass
     with pytest.raises(ProcessingError, match="square DEM cells"):
         plan_flow_grid(dem)
+
+
+@pytest.mark.parametrize(
+    "upstream,downstream", [(True, False), (False, True), (True, True)]
+)
+def test_flow_mask_excludes_the_only_dem_cell(
+    tmp_path: Path, upstream: bool, downstream: bool
+) -> None:
+    """Publish a zero mask when the selected cell is the entire elevation grid.
+
+    Args:
+        tmp_path: Disposable native source and output directory.
+        upstream: Whether to trace cells draining into the polygon.
+        downstream: Whether to trace paths leaving the polygon.
+    """
+    dem = tmp_path / "one-cell.tif"
+    transform = from_origin(0, 1, 1, 1)
+    with rasterio.open(
+        dem,
+        "w",
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+    ) as dataset:
+        dataset.write(numpy.array([[100]], dtype="float32"), 1)
+    selection = write_selection(
+        tmp_path / "site.gpkg", [mapping(box(0.2, 0.2, 0.8, 0.8))]
+    )
+    plan = FlowAreaPlan(
+        inputs=FlowAreaInputs(
+            dem=SOURCE,
+            polygon=selection.selection,
+            upstream=upstream,
+            downstream=downstream,
+        ),
+        grid=plan_flow_grid(dem),
+    )
+    directory = tmp_path / "attempt"
+    directory.mkdir()
+    artifact = calculate_flow_area(
+        (dem, selection), plan, directory, RasterAggregateLimits()
+    )
+    with rasterio.open(directory / "result.tif") as result:
+        numpy.testing.assert_array_equal(result.read(1), [[0]])
+        assert result.transform == transform
+        assert result.crs.to_epsg() == 4326
+        assert result.nodata == 255
+        assert result.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+    assert artifact.valid_pixels == 1
