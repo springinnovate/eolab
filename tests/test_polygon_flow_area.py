@@ -19,6 +19,7 @@ from shapely.ops import transform as transform_geometry
 from catalog_selection_support import write_selection
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
+from eolab_app.processing.d8 import build_d8_flow_graph
 from eolab_app.processing.flow_area import (
     FlowAreaInputs,
     FlowAreaPlan,
@@ -372,6 +373,23 @@ def test_flow_traces_across_an_interior_depression_or_flat(
     calculate_flow_area((dem, selection), plan, directory, RasterAggregateLimits())
     with rasterio.open(directory / "result.tif") as result:
         numpy.testing.assert_array_equal(result.read(1)[2], expected)
+
+
+def test_float32_depression_keeps_the_stock_outlet_path() -> None:
+    """Follow the stock Float32 spill path across two equal-height outlets."""
+    spill = 7.293817
+    elevations = numpy.array(
+        [
+            [30, 30, 30, 30],
+            [spill, 0, 2.1081684, 30],
+            [30, 0, 0, spill],
+            [30, 30, 30, 30],
+        ],
+        dtype="float32",
+    )
+    graph = build_d8_flow_graph(elevations, from_origin(0, 4, 1, 1), latlon=False)
+    paths, _ = graph.path(idxs=numpy.array([11]))
+    numpy.testing.assert_array_equal(paths[0], [11, 10, 5, 4])
 
 
 def test_flow_plan_rejects_nonsquare_cells(tmp_path: Path) -> None:

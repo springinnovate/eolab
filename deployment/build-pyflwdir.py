@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from wheel.cli.unpack import unpack
 
 UPSTREAM = "0.6.0"
-VERSION = f"{UPSTREAM}+eolab.1"
+VERSION = f"{UPSTREAM}+eolab.2"
 
 
 def build_precision_wheel(output: Path) -> None:
@@ -67,7 +67,14 @@ def build_precision_wheel(output: Path) -> None:
                 ("np.float32(elevtn[0, 0])", "queue_dtype(elevtn[0, 0])", 1),
                 ("np.float32(elevtn[r, c])", "queue_dtype(elevtn[r, c])", 1),
                 ("np.float32(z1)", "queue_dtype(z1)", 2),
-                ("                z1 += dz", "                z1 = z0", 1),
+                (
+                    "                z1 += dz",
+                    "                if elevtn.itemsize > 4:\n"
+                    "                    z1 = z0  # Preserve the exact wide spill level.\n"
+                    "                else:\n"
+                    "                    z1 += dz",
+                    1,
+                ),
             ),
             "pyflwdir/pyflwdir.py": (
                 (
