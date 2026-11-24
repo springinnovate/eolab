@@ -3,6 +3,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from functools import partial
 import hashlib
 import time
 from contextlib import contextmanager
@@ -38,7 +39,12 @@ from eolab_app.processing.raster_clip import create_clip
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
 from eolab_app.raster.sources import MountedRasterResolver
-from eolab_app.routes.processing import COOKIE, create_processing_router
+from eolab_app.routes.processing import (
+    COOKIE,
+    create_processing_router,
+    get_processing_session_owner_hash,
+)
+from eolab_app.routes.system import create_system_router
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.sources import MountedVectorResolver
@@ -165,6 +171,17 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
     app = FastAPI()
     app.state.vector_items = vector_items
     app.include_router(create_processing_router(service))
+    app.include_router(
+        create_system_router(
+            "test",
+            {},
+            (
+                partial(
+                    get_processing_session_owner_hash, session_ttl_seconds=7 * 86_400
+                ),
+            ),
+        )
+    )
     app.include_router(create_vector_sampling_router(areas))
     with TestClient(app, base_url="https://testserver") as client:
         yield client, worker, path, artifacts, app
@@ -273,9 +290,11 @@ def test_requested_statuses_are_complete_owned_and_independent_of_history(
     )
 
 
-@pytest.mark.parametrize("whole", [False, True])
+@pytest.mark.parametrize(
+    "whole,delay_history", [(False, False), (True, False), (False, True)]
+)
 def test_real_clip_worker_download_ranges_ownership_and_idempotency(
-    boundary: Any, tmp_path: Path, whole: bool
+    boundary: Any, tmp_path: Path, whole: bool, delay_history: bool
 ) -> None:
     """Exercise a complete native clip via PostgreSQL and real HTTP file delivery.
 
@@ -283,6 +302,7 @@ def test_real_clip_worker_download_ranges_ownership_and_idempotency(
         boundary: Real feature-boundary fixture.
         tmp_path: Download validation storage.
         whole: Request the full native grid instead of the fixture rectangle.
+        delay_history: Deliver another tab's initial history headers after completion.
     """
     client, worker, source, artifacts, app = boundary
     plan = {**SOURCE, "wholeRaster": True} if whole else clip_inputs(client)
@@ -293,6 +313,16 @@ def test_real_clip_worker_download_ranges_ownership_and_idempotency(
         == 413
     )
     assert "Set-Cookie" not in plan
+    if delay_history:
+        assert client.get("/api/config").status_code == 200
+        # Hold tab A's actual response out of the shared cookie jar until tab B finishes.
+        with TestClient(
+            app, base_url="https://testserver", cookies=client.cookies
+        ) as tab:
+            delayed = tab.get("/api/processing/jobs")
+        assert delayed.json() == {"jobs": []}
+        assert client.get("/api/config").status_code == 200
+        assert client.get("/api/processing/jobs").json() == {"jobs": []}
     key = uuid4().hex
     job = submitted(client, plan, key)
     identifier = job["jobId"]
@@ -300,6 +330,11 @@ def test_real_clip_worker_download_ranges_ownership_and_idempotency(
     assert asyncio.run(worker.run_once())
     ready = client.get(f"/api/processing/jobs/{identifier}").json()
     assert ready["status"] == "ready", ready
+    if delay_history:
+        assert client.get(ready["result"]["url"]).status_code == 200
+        client.cookies.extract_cookies(delayed)
+        assert client.get(f"/api/processing/jobs/{identifier}").status_code == 200
+        assert submitted(client, plan, key)["jobId"] == identifier
     batch = client.post(
         "/api/processing/jobs/status", json={"jobIds": [identifier]}, headers=HEADERS
     )

@@ -18,7 +18,7 @@ from eolab_app.routes.annotation_sessions import create_annotation_sessions_rout
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from test_annotation_sessions import collection
 from test_browser_identity import DelayedUploadResponse
-from eolab_app.routes.browser_identity import COOKIE
+from eolab_app.routes.browser_identity import COOKIE, establish_browser_identity
 from eolab_app.routes.system import create_system_router
 from eolab_app.routes.uploads import create_uploads_router
 from eolab_app.vector_uploads import VectorUploadStore
@@ -788,7 +788,7 @@ def test_delayed_usage_keeps_shared_contribution_accessible(
     uploads = VectorUploadStore(tmp_path / "uploads", None)
     uploads.initialize()
     app = FastAPI()
-    app.include_router(create_system_router("test", {}))
+    app.include_router(create_system_router("test", {}, (establish_browser_identity,)))
     app.include_router(create_uploads_router(uploads.storage))
     app.include_router(create_annotation_sessions_router(store))
     base = "/api/annotation-sessions"
