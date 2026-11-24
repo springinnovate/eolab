@@ -25,7 +25,30 @@ from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
+from raster_fixture_support import write_source
 from test_prepared_hydrology import prepare_sources
+
+
+def test_packaged_wwf_model_preserves_uint64_population(tmp_path: Path) -> None:
+    """Verify the installed model's native TIFF pixels and floating-point total.
+
+    Args:
+        tmp_path: Directory for the population, coverage and masked GeoTIFFs.
+    """
+    from eolab_app.processing.downstream_runner import load_beneficiaries
+
+    values = np.array([[2**64 - 1, 7]], dtype="uint64")
+    population = write_source(tmp_path / "population.tif", values)
+    coverage = write_source(tmp_path / "coverage.tif", np.ones((1, 2), dtype="uint8"))
+    output = tmp_path / "masked.tif"
+    total = load_beneficiaries().mask_population_with_coverage(
+        population, coverage, output
+    )
+    with rasterio.open(output) as masked:
+        assert masked.dtypes == ("uint64",)
+        np.testing.assert_array_equal(masked.read(1), values)
+        np.testing.assert_array_equal(masked.read_masks(1), [[255, 255]])
+    assert total == float((2**64 - 1) + 7)
 
 
 def scaled_downstream_fixture(
@@ -264,7 +287,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
-        == "eda4acec984ec7b40cb9d745a818773418fa2d68"
+        == "814fa56310ba90d0e9c9631c339b977dcc6f484d"
     )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -417,7 +440,7 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-    assert saved["beneficiariesRevision"] == "eda4acec984ec7b40cb9d745a818773418fa2d68"
+    assert saved["beneficiariesRevision"] == "814fa56310ba90d0e9c9631c339b977dcc6f484d"
     assert (
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
             mode="json"
@@ -428,6 +451,8 @@ def test_closed_edge_policy_records_current_filling_settings(
         "3f577e27deb347cd4520977eb99474fb81e990fc",
         "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9",
         "afb977dd0e923e465958f8b301060c4ff10c8fd7",
+        "eda4acec984ec7b40cb9d745a818773418fa2d68",
+        "f204f4ad6277e381d5bf902da9d5c50655ffbf16",
     ):
         saved["beneficiariesRevision"] = previous_revision
         restored = ClosedEdgeDownstreamNumericalPolicy.model_validate(saved)
