@@ -140,17 +140,31 @@ def test_conflicting_clues_and_declined_dates(tmp_path: Path, answer: str) -> No
     write_frame(tmp_path / "frame_2022.tif", 2)
     write_frame(tmp_path / "frame_2025_02_29.tif", 3)
     write_frame(tmp_path / "undated.tif", 4)
+    for stem in (
+        "snow.2024.12.31",
+        "snow_2024-7-15",
+        "snow_2024-366",
+        "snow_2025-01-02_08-30-42",
+        "snow_20241231T083042Z",
+    ):
+        write_frame(tmp_path / f"{stem}.tif", 5)
     result = run_cli("draft", tmp_path, answers=f"{answer}\nsnapshot\n")
     assert result.returncode == 0, result.stderr
     manifest = tmp_path / "stack.yaml"
     text = manifest.read_text()
     assert "2024" in text and "dataset ACQUISITION_DATE: 2023" in text
-    assert [row["time"] for row in yaml.safe_load(text)["observations"]] == [
-        "2022" if answer == "y" else None,
-        None,
-        None,
-        None,
-    ]
+    proposals = {
+        row["file"]: row["time"] for row in yaml.safe_load(text)["observations"]
+    }
+    assert {name: date for name, date in proposals.items() if date is not None} == (
+        {
+            "frame_2022.tif": "2022",
+            "snow.2024.12.31.tif": "2024-12-31",
+            "snow_20241231T083042Z.tif": "2024-12-31T08:30:42Z",
+        }
+        if answer == "y"
+        else {}
+    )
     assert run_cli("draft", tmp_path).returncode == 1
     assert manifest.read_text() == text
 

@@ -74,7 +74,7 @@ TIMESTAMP = (
 )
 # Match the entire date-shaped token so a bad month cannot become a plausible year.
 FILE_DATE = re.compile(
-    r"(?<![a-zA-Z0-9])([0-9]{4}(?:[-_]?[0-9]{2}){0,2}(?:T[0-9:+-]+Z?)?)(?![a-zA-Z0-9])"
+    r"(?<![a-zA-Z0-9])([0-9]{4,}(?:[-_.][0-9]+)*(?:T[0-9:.+-]+Z?)?)(?![a-zA-Z0-9])"
 )
 
 
@@ -171,7 +171,7 @@ def date_evidence(path: Path) -> dict[str, str]:
     """
     evidence = {}
     for index, token in enumerate(FILE_DATE.findall(path.stem), 1):
-        token = token.replace("_", "-")
+        token = token.replace("_", "-").replace(".", "-")
         token = re.sub(
             r"^(\d{4})(\d{2})(\d{2})?(?=T|$)",
             lambda m: "-".join(filter(None, m.groups())),
