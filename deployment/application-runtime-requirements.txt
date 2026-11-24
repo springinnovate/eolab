@@ -31,6 +31,10 @@ pycparser==3.12 --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec
 # Required by the pinned EcoShard package; pure Python wheel.
 filelock==3.20.0 --hash=sha256:339b4732ffda5cd79b13f4e2711a31b0365ce445d95d243bb996273d072546a2
 
+# Compiler runtime for the precision-preserving PyFlwDir model wheel.
+numba==0.68.1 --hash=sha256:8b33fee239194b9b6cb9b176f3c2563b94e5882fd846748ad0cf960daeee5406
+llvmlite==0.50.0 --hash=sha256:d501e5103076b9a14be885d2574dc2f6793171aa54a853d1244e011d476f1399
+
 # Required by the unchanged WWF beneficiaries workflow; Linux CPython 3.12.
 geopandas==1.1.1 --hash=sha256:589e61aaf39b19828843df16cb90234e72897e2579be236f10eee0d052ad98e8
 packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c

@@ -121,6 +121,7 @@ def selected_raster_area_for_wgs84_bounds(
         dataset,
         selected_bounds,
         coordinate_transform=transform,
+        maximum_output_coordinates=RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
     )
 
 
