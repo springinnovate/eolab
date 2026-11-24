@@ -54,7 +54,8 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-eolab_app = ["static/*", "static/**/*", "processing/*.sql", "processing/recipes/*.yaml", "annotation_sessions/*.sql", "annotation_sessions/admin.*", "saved_maps/*.sql", "planning/*.sql", "drawings/*.sql"]
+eolab_app = ["static/*", "static/**/*", "processing/recipes/*.yaml", "annotation_sessions/*.sql", "annotation_sessions/admin.*", "saved_maps/*.sql", "planning/*.sql", "drawings/*.sql"]
+eolab_jobs = ["schema.sql", "schema_check.sql"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
