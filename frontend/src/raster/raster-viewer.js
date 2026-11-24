@@ -4719,13 +4719,14 @@ export function initializeRasterViewer(
 
     /** Show actual admitted choices and publication feedback in a retained row.
      * @param {Object} record Temporal raster record.
+     * @param {{variable:string,time:string}} [selection] Choice to show while its dates load.
      * @return {void}
      */
-    function renderTemporalControls(record) {
+    function renderTemporalControls(record, selection = record.state.temporal.selection) {
         const temporal = record.state.temporal;
         temporal.controls.render({
             variables: Object.entries(temporal.item.properties["cube:variables"]).map(([id, value]) => ({id, label: value.description ?? id, units: value.unit})),
-            ...temporal.selection, months: temporal.months, month: temporal.month,
+            ...selection, months: temporal.months, month: temporal.month,
             times: temporal.times, loading: temporal.loading, error: temporal.error,
         });
     }
@@ -4814,7 +4815,7 @@ export function initializeRasterViewer(
         }
     }
 
-    /** Load actual choices, retaining a saved or refreshed selection even if absent.
+    /** Keep the current observation while loading dates, then display the admitted selection or its error.
      * @param {Object} record Temporal view.
      * @param {{variable:string,time:string}} selection Requested observation.
      * @param {string|undefined} month Month to browse, or the first admitted month.
@@ -4830,7 +4831,8 @@ export function initializeRasterViewer(
         temporal.times = [];
         if (selection.variable !== temporal.selection.variable) temporal.months = [];
         temporal.month = month ?? temporal.month;
-        selectTemporalObservation(record, selection, false);
+        renderTemporalControls(record, selection);
+        mapLayers.render();
         try {
             const choices = await loadTimes(temporal.item, selection.variable, month, request.signal);
             if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
@@ -4844,21 +4846,18 @@ export function initializeRasterViewer(
                 const day = choices.times.at(-1)?.slice(0, 10);
                 time = choices.times.find(label => label.startsWith(day));
             }
-            if (!time || !choices.times.includes(time)) {
-                temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
+            if (time && choices.times.includes(time)) {
+                selectTemporalObservation(record, {variable: selection.variable, time}, true);
+                await publishTemporalObservation(record, request);
                 return;
             }
-            selectTemporalObservation(record, {variable: selection.variable, time}, true);
-            await publishTemporalObservation(record, request);
+            temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
         } catch (error) {
-            if (!request.signal.aborted) temporal.error = `Could not load observation times: ${error.message}`;
-        } finally {
-            if (!request.signal.aborted && mapLayers.getRecord(record.entry.key) === record) {
-                temporal.loading = false;
-                renderTemporalControls(record);
-                mapLayers.render();
-            }
+            if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
+            temporal.error = `Could not load observation times: ${error.message}`;
         }
+        temporal.loading = false;
+        selectTemporalObservation(record, selection, false);
     }
 
     /** Select an actual timestamp from the row without reloading its month.

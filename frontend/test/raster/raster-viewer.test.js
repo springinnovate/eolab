@@ -6355,9 +6355,14 @@ test("temporal source changes cancel old statistics and exact pixels before acce
 
 test("temporal timestamp changes preserve automatic ranges and refresh an active paired analysis", async () => {
     const paired = [];
-    const fixture = temporalFixture({loadPairedStatistics: (xItem, yItem, _area, signal) => {
-        const deferred = createDeferred(); paired.push({xItem, yItem, signal, ...deferred}); return deferred.promise;
-    }});
+    const february = createDeferred(), months = ["2020-01", "2020-02"];
+    const fixture = temporalFixture({
+        loadTimes: async (_item, _variable, month) => month === "2020-02" ? february.promise :
+            {months, month: "2020-01", times: ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"]},
+        loadPairedStatistics: (xItem, yItem, _area, signal) => {
+            const deferred = createDeferred(); paired.push({xItem, yItem, signal, ...deferred}); return deferred.promise;
+        },
+    });
     try {
         const first = await fixture.viewer.showTemporal(temporalItem());
         await fixture.viewer.showTemporal(temporalItem());
@@ -6378,6 +6383,20 @@ test("temporal timestamp changes preserve automatic ranges and refresh an active
         paired[0].resolve({...pairedStatistics(), marker: "obsolete"});
         await flushPromises();
         assert.equal(fixture.controlsView.pairedStatistics.marker, "current");
+        assert.deepEqual(first.state.rasterStyle, range);
+
+        const changeMonth = fixture.viewer.selectTemporalMonth(first.entry.key, "2020-02", "first");
+        assert.equal(fixture.controlsView.bivariateMode.active, true, "Browsing dates keeps the current pair");
+        assert.equal(fixture.controlsView.pairedStatistics.marker, "current");
+        assert.equal(paired.length, 2);
+        const nextTime = "2020-02-03T06:00:00Z";
+        february.resolve({months, month: "2020-02", times: [nextTime]});
+        await changeMonth;
+        assert.equal(paired.length, 3);
+        assert.equal(paired[2].yItem.source.time, nextTime);
+        paired[2].resolve({...pairedStatistics(), marker: "February"});
+        await flushPromises();
+        assert.equal(fixture.controlsView.pairedStatistics.marker, "February");
         assert.deepEqual(first.state.rasterStyle, range);
     } finally {fixture.destroy();}
 });
