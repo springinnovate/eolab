@@ -280,12 +280,16 @@ test("CSV category opacity survives export, paste and reopening, and incomplete 
   const saved = {catalogItem: {collection: CATALOG_ITEM.collection, id: CATALOG_ITEM.id},
     visible: true, opacity: 1, style: f.adapter.exportSavedState(target)};
   let publishedLayer = saved;
+  let styleEditing = false;
+  const restoredChoices = [];
   const namedMap = new SavedMapViewController({
     view: f.view, namedMapSlug: "category-opacity", restoreSharedMap: true,
     viewerOrigin: ORIGIN, viewerVersion: "test",
+    applyVisitorControls: settings => restoredChoices.push(settings.choices.styleEditing),
     publicationApi: { get: async () => ({ title: "Category opacity", subtitle: "",
-      view: createSavedMapView({ viewer: { origin: ORIGIN, version: "test" },
-        createdAt: "2026-11-16T12:00:00Z", viewport: VIEWPORT, layers: [publishedLayer] }) }) },
+      view: { ...createSavedMapView({ viewer: { origin: ORIGIN, version: "test" },
+        createdAt: "2026-11-16T12:00:00Z", viewport: VIEWPORT, layers: [publishedLayer] }),
+        visitorControls: { version: 1, choices: { styleEditing } } } }) },
     viewport: { snapshot: () => VIEWPORT, restore() {} },
     mapLayers: { retainedRecords: f.records, setLegendIncluded() {},
       commitStaged: staged => f.records.push(...staged.map(({record}) => record)) },
@@ -296,6 +300,11 @@ test("CSV category opacity survives export, paste and reopening, and incomplete 
   assert.deepEqual(f.view.result, {loaded: 1, total: 1, details: []});
   const rendered = JSON.parse(f.records[0].state.layer.wmsParams.vector_style);
   assert.deepEqual(rendered.categorical.rules.map(({label, opacity}) => [label, opacity]), [["Hidden", 0], ["Visible", 1]]);
+  assert.deepEqual(rendered.categorical.rules.map(rule => rule.color), ["#000000", "#abcdef"]);
+  styleEditing = true;
+  await namedMap.restoreStartupView();
+  assert.deepEqual(restoredChoices, [false, true]);
+  assert.deepEqual(JSON.parse(f.records[0].state.layer.wmsParams.vector_style), rendered);
 
   for (const omitted of ["label", "opacity"]) {
     const incomplete = structuredClone(saved);

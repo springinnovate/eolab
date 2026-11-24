@@ -6,6 +6,7 @@ export class MapLayerStyleEditor {
      * @param {Object} dependencies.mapLayers Retained layer controller.
      * @param {Object} dependencies.rasterViewer Raster styling boundary.
      * @param {Object} dependencies.inspection Shared map-side presentation.
+     * @param {()=>boolean} [dependencies.canEditStyle] Whether this map allows the user to change appearance.
      * @param {Object} [dependencies.vectorStyleControls] Vector-owned controls.
      * @param {(key:string)=>Object|null} [dependencies.getVectorStyleTarget]
      * Composition callback returning one narrow vector style target.
@@ -16,6 +17,7 @@ export class MapLayerStyleEditor {
         mapLayers,
         rasterViewer,
         inspection,
+        canEditStyle = () => true,
         vectorStyleControls = { show() {}, hide() {} },
         getVectorStyleTarget = () => null,
         onFilterRequested = () => {},
@@ -24,6 +26,7 @@ export class MapLayerStyleEditor {
         this.mapLayers = mapLayers;
         this.rasterViewer = rasterViewer;
         this.inspection = inspection;
+        this.canEditStyle = canEditStyle;
         this.vectorStyleControls = vectorStyleControls;
         this.getVectorStyleTarget = getVectorStyleTarget;
         this.document = documentContext;
@@ -38,7 +41,7 @@ export class MapLayerStyleEditor {
         this.filterButton = documentContext.querySelector("#filter-styled-vector-layer");
         this.onFilter = () => { if (this.key !== null) onFilterRequested(this.key); };
         this.filterButton?.addEventListener("click", this.onFilter);
-        this.onClose = () => this.close();
+        this.onClose = () => this.close({ focusOpener: false });
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.key === null ||
                 !this.root.contains(this.document.activeElement)) return;
@@ -47,7 +50,7 @@ export class MapLayerStyleEditor {
             this.close();
         };
         this.onOpacity = () => {
-            if (this.key === null || this.opacity.disabled) return;
+            if (!this.canEditStyle() || this.key === null || this.opacity.disabled) return;
             this.mapLayers.setOpacity(this.key, Number(this.opacity.value) / 100);
             this.refresh();
         };
@@ -63,6 +66,7 @@ export class MapLayerStyleEditor {
      * @return {void}
      */
     open(key) {
+        if (!this.canEditStyle()) return;
         if (this.key !== null) this.rasterViewer.closeStyle();
         this.key = key;
         this.opener = this.document.activeElement;
@@ -76,6 +80,10 @@ export class MapLayerStyleEditor {
     /** Refresh the target and its displayed name without activating its tab; redirect active pairs to 2D styles. @return {void} */
     refresh() {
         if (this.key === null) return;
+        if (!this.canEditStyle()) {
+            this.close();
+            return;
+        }
         const layer = this.mapLayers.snapshots().find(
             ({ key }) => key === this.key
         );
@@ -109,8 +117,12 @@ export class MapLayerStyleEditor {
         this.rasterViewer.refreshStyle();
     }
 
-    /** Commit pending style edits and restore focus without closing histograms. @return {void} */
-    close() {
+    /** Commit pending style edits and hide this editor without closing histograms.
+     * @param {Object} [options] Focus after dismissal.
+     * @param {boolean} [options.focusOpener=true] Return focus to the layer action. The tab row focuses the surviving tool itself.
+     * @return {void}
+     */
+    close({ focusOpener = true } = {}) {
         if (this.key === null) return;
         const key = this.key;
         // Clear first: flushing a valid style can trigger a retained-layer render.
@@ -118,6 +130,7 @@ export class MapLayerStyleEditor {
         this.rasterViewer.closeStyle();
         this.vectorStyleControls.hide();
         this.inspection.hideStyle();
+        if (!focusOpener) return;
         const replacement = [...this.document.querySelectorAll('[data-layer-action="style"]')]
             .find((element) => element.dataset.layerKey === key);
         // Prefer the originating shortcut; removed or hidden controls cannot

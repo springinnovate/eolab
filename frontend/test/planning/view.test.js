@@ -16,7 +16,7 @@ function editorState() {
 
 test("real shell controls expose linked role filters and preserve intervention input focus while typing", () => {
     const document = new SummaryControlDocument(), view = new PlanningView(document), events = [];
-    view.bind({onOpen: () => events.push("open"), onFilter: role => events.push(role), onIntervention: (...values) => events.push(values), onSave: () => events.push("save")});
+    view.bind({onOpen: () => events.push("open"), onClose: () => events.push("close"), onFilter: role => events.push(role), onIntervention: (...values) => events.push(values), onSave: () => events.push("save")});
     const state = editorState(); view.render(state, new Map());
     assert.equal(view.title.value, state.draft.title); assert.equal(view.aoi.value, "custom"); assert.equal(view.parcels.value, "custom");
     assert.equal(view.aoiSummary.textContent, "Region is north"); assert.equal(view.parcelSummary.textContent, "Region is north");
@@ -27,7 +27,12 @@ test("real shell controls expose linked role filters and preserve intervention i
     view.form.dispatchEvent(new Event("submit", {cancelable: true}));
     assert.deepEqual(events, ["open", "aoi", "parcels", ["first", "Native forest"], "save"]);
     assert.equal(input.getAttribute("aria-label"), "Intervention 1 name");
-    view.destroy(); view.openButton.dispatchEvent(new Event("click")); assert.equal(events.length, 5);
+    document.querySelector("#close-planning").dispatchEvent(new Event("click"));
+    assert.equal(events.at(-1), "close");
+    view.destroy();
+    view.openButton.dispatchEvent(new Event("click"));
+    view.close.dispatchEvent(new Event("click"));
+    assert.equal(events.length, 6);
 });
 
 test("unavailable saved layer is explicit and save progress disables editing", () => {

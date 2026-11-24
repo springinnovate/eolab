@@ -515,7 +515,8 @@ test("controller copies portable style and layer opacity onto a compatible targe
     adapter.applySavedState = async (record, savedState) => {
         record.state.style = structuredClone(savedState.definition);
     };
-    const controller = new MapLayerController({ leafletMap: map, view });
+    let styleEditing = true;
+    const controller = new MapLayerController({ leafletMap: map, view, canEditStyle: () => styleEditing });
     const source = catalogItem("source");
     const target = catalogItem("target");
     await controller.show(source, adapter);
@@ -538,6 +539,11 @@ test("controller copies portable style and layer opacity onto a compatible targe
     assert.equal(targetClipboard.canPaste, true);
     assert.equal(targetClipboard.sourceLabel, "raster source");
 
+    styleEditing = false;
+    assert.equal(controller.copyStyle(targetKey), false);
+    assert.equal(await controller.pasteStyle(targetKey), false);
+    assert.equal(controller.getLeafletLayer(targetKey).opacity, 0.82);
+    styleEditing = true;
     assert.equal(await controller.pasteStyle(targetKey), true);
     assert.deepEqual(controller.getRecord(targetKey).state.style, { color: "red" });
     assert.equal(controller.getRecord(targetKey).entry.opacity, 0.37);
@@ -786,8 +792,10 @@ test("local layers keep their identity and survive Catalog clearing and restorat
     await controller.show(catalogItem("raster"), catalog);
     controller.clear({preserveLocal: true});
     assert.deepEqual(controller.retainedRecords, [record]);
+    controller.activate(record.entry.key);
     const staged = await controller.stage(catalogItem("restored"), catalog);
     controller.commitStaged([staged]);
+    assert.deepEqual(local.events.at(-1), ["deactivate", record.entry.key, staged.key]);
     assert.equal(controller.retainedRecords.length, 2);
     assert.equal(controller.getRecord(record.entry.key), record);
     controller.setVisible(record.entry.key, false);
@@ -795,6 +803,25 @@ test("local layers keep their identity and survive Catalog clearing and restorat
     assert.equal(record.entry.visible, false);
     assert.equal(record.entry.opacity, 0.4);
     assert.throws(() => controller.addLocal({key: record.entry.key, label: "duplicate"}, local));
+});
+
+test("a failed staged restore preserves the order and active controls of the retained layers", async t => {
+    const view = createView();
+    const controller = new MapLayerController({leafletMap: createMap(), view});
+    t.after(() => controller.destroy());
+    const local = createAdapter("local");
+    const back = controller.addLocal({key: "local:back", label: "Back"}, local);
+    const front = controller.addLocal({key: "local:front", label: "Front"}, local);
+    controller.activate(back.entry.key);
+    const catalog = createAdapter("raster");
+    catalog.added = () => { throw new Error("Attachment failed"); };
+    const staged = await controller.stage(catalogItem("restored"), catalog);
+    const drawingOrder = [back.entry.key, staged.key, front.entry.key];
+    assert.throws(() => controller.commitStaged([staged], {drawingOrder}), /Attachment failed/);
+    assert.deepEqual(controller.retainedRecords, [front, back]);
+    assert.equal(controller.activeKey, back.entry.key);
+    assert.equal(view.activeKey, back.entry.key);
+    assert.ok(controller.getLeafletLayer(front.entry.key).zIndex > controller.getLeafletLayer(back.entry.key).zIndex);
 });
 
 test("local source names update generated labels and groups while preserving custom names and Undo", () => {
