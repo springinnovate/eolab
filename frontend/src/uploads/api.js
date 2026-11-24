@@ -1,10 +1,10 @@
-/** Store, reopen and delete this browser's original polygon and raster files. */
+/** Store, reopen and delete this browser's polygon and raster uploads. */
 
 /**
  * @typedef {Object} VectorUpload
  * @property {string} id Opaque upload identifier.
  * @property {string} name User's display name for the layer.
- * @property {number} size_bytes Original file size.
+ * @property {number} size_bytes Stored GeoPackage size after any GeoJSON conversion.
  * @property {string} created_at Server creation timestamp.
  * @property {string} expires_at Fixed server expiry, seven days after admission.
  * @property {"vector"} kind Uploaded file type.
@@ -20,7 +20,7 @@
  * @property {string} id Opaque upload identifier.
  * @property {"vector"|"raster"} kind Uploaded file type.
  * @property {string} name User's display name.
- * @property {number} size_bytes Original file size.
+ * @property {number} size_bytes Stored file size.
  * @property {string} created_at Server admission timestamp.
  * @property {string} expires_at Fixed server expiry timestamp.
  */
@@ -48,9 +48,9 @@ export async function getUploadStorageSummary(fetchImplementation = globalThis.f
 }
 
 /**
- * Store one GeoPackage and return its admitted layer metadata.
- * The server validates the original file; the browser supplies only its bytes and display name.
- * @param {File} file GeoPackage selected by the user.
+ * Store polygon GeoPackage or GeoJSON and return its admitted layer metadata.
+ * The server validates and prepares the file; the browser supplies its bytes and display name.
+ * @param {File} file GeoPackage or GeoJSON selected by the user.
  * @param {string} name Display name entered by the user.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin HTTP transport.
  * @return {Promise<VectorUpload>} Upload metadata, without paths or browser credentials.
@@ -59,7 +59,7 @@ export async function getUploadStorageSummary(fetchImplementation = globalThis.f
 export async function uploadPolygons(file, name, fetchImplementation = globalThis.fetch) {
     return requestUploads(`?${new URLSearchParams({ name })}`, {
         method: "POST",
-        headers: { "Content-Type": "application/geopackage+sqlite3", "X-EOLab-Uploads": "1" },
+        headers: { "Content-Type": /\.(geojson|json)$/i.test(file.name) ? "application/geo+json" : "application/geopackage+sqlite3", "X-EOLab-Uploads": "1" },
         body: file,
     }, fetchImplementation);
 }
@@ -134,16 +134,16 @@ export async function deleteRasterUpload(uploadId, fetchImplementation = globalT
 
 /** Choose the file admission endpoint from the user's selected extension.
  * Server inspection remains authoritative for format, contents and storage limits.
- * @param {File} file User-selected GeoPackage or GeoTIFF.
+ * @param {File} file User-selected GeoPackage, GeoJSON or GeoTIFF.
  * @param {string} name User's display name.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] Same-origin transport.
  * @return {Promise<UploadSummary|VectorUpload>} Admitted file metadata.
  * @throws {Error} If the file type is unsupported or admission fails.
  */
 export async function uploadFile(file, name, fetchImplementation = globalThis.fetch) {
-    if (/\.gpkg$/i.test(file.name)) return uploadPolygons(file, name, fetchImplementation);
+    if (/\.(gpkg|geojson|json)$/i.test(file.name)) return uploadPolygons(file, name, fetchImplementation);
     if (/\.tiff?$/i.test(file.name)) return uploadRasterMask(file, name, fetchImplementation);
-    throw new Error("Choose a polygon GeoPackage (.gpkg) or raster mask GeoTIFF (.tif or .tiff).");
+    throw new Error("Choose a polygon GeoPackage (.gpkg), GeoJSON (.geojson or .json), or raster mask GeoTIFF (.tif or .tiff).");
 }
 
 /** Delete a manager row through the endpoint that owns its original file.

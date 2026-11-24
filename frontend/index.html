@@ -38,9 +38,9 @@
           </div>
           <div class="timeline-caption">
             <output data-timeline="display" aria-live="off"></output>
+            <p data-timeline="status" role="status"></p>
             <span data-timeline="gap"></span>
           </div>
-          <p data-timeline="status" role="status" hidden></p>
         </section>
         <section id="map-place-search" class="map-place-search" popover="manual" aria-labelledby="map-place-search-heading" hidden>
           <header>
@@ -61,6 +61,14 @@
           </p>
         </section>
       </div>
+      <button
+        class="secondary-button saved-map-view-action"
+        id="show-unavailable-map-layers"
+        data-map-panel
+        type="button"
+        title="Review unavailable saved layers"
+        hidden
+      ><span id="unavailable-map-layers-label">Unavailable layers</span></button>
       <section
         class="control-panel"
         id="control-panel"
@@ -73,6 +81,7 @@
           <p>Changes won't affect visitors until you save. Shared polygon edits are saved separately.</p>
           <label>Map title<input id="published-map-edit-title" required maxlength="160"></label>
           <label>Subtitle<input id="published-map-edit-subtitle" maxlength="240"></label>
+          <fieldset id="published-map-visitor-controls" class="visitor-control-options" disabled></fieldset>
           <p>Fixed URL: <a id="published-map-edit-url" target="_blank" rel="noopener"></a></p>
           <div class="published-map-editor-actions">
             <button id="published-map-save" type="submit" disabled>Save changes for everyone</button>
@@ -145,18 +154,6 @@
                 <path d="M12 11v6M12 7h.01"></path>
               </svg>
               <span class="panel-header-action-label">Status</span>
-            </button>
-            <button
-              class="secondary-button saved-map-view-action"
-              id="show-unavailable-map-layers"
-              type="button"
-              title="Review unavailable saved layers"
-              hidden
-            >
-              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m12 3 10 18H2L12 3Z"></path><path d="M12 9v4m0 4h.01"></path>
-              </svg>
-              <span class="panel-header-action-label" id="unavailable-map-layers-label">Unavailable layers</span>
             </button>
             <button
               class="map-panel-toggle map-panel-collapse"
@@ -512,13 +509,6 @@
                     <button class="secondary-button" id="upload-polygons" type="button">Your uploads</button>
                     <button class="secondary-button" id="draw-private-polygon" type="button" title="Draw a private polygon saved on this device" disabled>Draw polygon</button>
                     <details class="annotation-layer-tools">
-                      <summary>Import polygons</summary>
-                      <div class="annotation-layer-actions" role="group" aria-label="Import polygons">
-                      <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON…</button>
-                      <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import polygons from a GeoJSON file" hidden>
-                      </div>
-                    </details>
-                    <details class="annotation-layer-tools">
                       <summary>Shared layers</summary>
                       <div class="annotation-layer-actions" role="group" aria-label="Shared layers">
                       <button class="secondary-button" id="create-shared-annotation-layer" type="button">Create shared layer…</button>
@@ -652,11 +642,11 @@
         type="button"
         hidden
       >Pixel picker hidden · Press P to show</button>
-      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel
+      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel data-pixel-picker-obstacle
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
-        <section id="map-interaction-tools" aria-label="Map interaction tools">
+        <section id="map-interaction-tools" data-pixel-picker-obstacle aria-label="Map interaction tools" hidden>
           <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
             <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
             <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
@@ -670,7 +660,7 @@
           </div>
           <p id="map-interaction-status" role="status" aria-live="polite"></p>
         </section>
-        <section id="raster-sampling-tool" aria-label="Sample area controls">
+        <section id="raster-sampling-tool" data-pixel-picker-obstacle aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
                 <span id="raster-sampling-area-summary">No raster selected</span>
@@ -749,7 +739,7 @@
               Select a raster to choose its sample area.
             </p>
         </section>
-        <header class="map-panel-header map-tools-header">
+        <header class="map-panel-header map-tools-header" data-pixel-picker-obstacle>
           <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-collapse"
             type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="true"
             aria-label="Collapse map tools" title="Collapse map tools"><span aria-hidden="true">×</span></button>
@@ -757,12 +747,12 @@
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             title="Choose a map tool"><span id="map-tool-name">Choose a tool</span><span aria-hidden="true">▾</span></button>
         </header>
-        <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
+        <div class="map-filter-summary-group" data-pixel-picker-obstacle role="group" aria-labelledby="map-filter-summary-heading">
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
         </div>
       </div>
-      <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
+      <div id="workspace-tool-actions" data-pixel-picker-obstacle popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Planning</strong>
           <button id="open-planning" class="workspace-tool-action" type="button" aria-controls="planning-panel">Planning tools</button>
@@ -787,7 +777,7 @@
           <button id="open-settings" class="workspace-tool-action" type="button" aria-controls="settings-panel">Settings</button>
         </div>
       </div>
-      <aside id="map-inspection" popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
+      <aside id="map-inspection" data-pixel-picker-obstacle popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
         <header class="map-inspection-dock-header">
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
@@ -817,7 +807,7 @@
               <button id="map-inspection-tab-style" class="tool-tab"
                 type="button" role="tab" aria-controls="layer-style-editor"
                 aria-selected="false" tabindex="-1" hidden>Style</button>
-              <button id="map-inspection-tab-settings" class="map-inspection-tab" type="button" role="tab" aria-controls="settings-panel"
+              <button id="map-inspection-tab-settings" class="tool-tab" type="button" role="tab" aria-controls="settings-panel"
                 aria-selected="false" tabindex="-1" hidden>Settings</button>
             </div>
             <button id="map-inspection-all-tabs" class="tool-tab-index" type="button" aria-haspopup="menu" popovertarget="map-inspection-tab-menu"
@@ -895,7 +885,6 @@
                 <label class="models-field" for="models-query">Find a tool<input id="models-query" type="search" placeholder="Search by name or purpose"></label>
                 <p id="models-library-status" class="models-help" role="status"></p>
                 <div id="models-library-items"></div>
-                <button id="models-refresh" class="models-action" type="button">Refresh library</button>
               </div>
               <div id="models-setup" hidden></div>
               <div id="models-run" hidden></div>
@@ -905,7 +894,7 @@
                 <div id="models-runs-list"></div>
                 <button id="models-more" class="models-action" type="button" hidden>Load older runs</button>
               </div>
-              <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
+              <pre id="models-yaml" aria-label="Tool definition (YAML)" tabindex="0" hidden></pre>
             </div>
           </section>
           <section id="raster-series" role="tabpanel" aria-labelledby="open-raster-series-dock" hidden>
@@ -1034,7 +1023,6 @@
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
               <p>Local layers stay on this device until you save them through Planning. Those linked drawings and live shared layers are included in map links; other local drawings are not. Anyone with the link can read the latest saved polygons, but the link does not grant editing permission. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its saved polygons. Choose Download on the layer card to keep a GeoJSON copy.</p>
-              <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
@@ -1115,6 +1103,29 @@
                   <button id="zoom-inspected-vector-feature" class="secondary-button"
                     type="button" aria-controls="map" disabled>Zoom to feature</button>
                 </nav>
+                <details id="vector-feature-field-display" class="vector-field-display" hidden>
+                  <summary>Field display</summary>
+                  <p>Keep <code>field</code> unchanged and enter a friendly label in <code>display_name</code>. Leave the name blank to use the source field name. Names apply to this layer in your map view.</p>
+                  <p>For numeric fields, use <code>number</code> with a unit such as <code>ha</code>, or <code>currency</code> with a code such as <code>USD</code>. Set <code>decimals</code> to control the displayed decimal places. Leave number settings blank for text fields or default display. Save the file as CSV UTF-8.</p>
+                  <div class="vector-field-display-actions">
+                    <button id="download-vector-field-template" class="secondary-button" type="button">Download template</button>
+                    <label for="import-vector-field-formats">Import field formats</label>
+                    <input id="import-vector-field-formats" type="file" accept=".csv,text/csv">
+                  </div>
+                  <p id="vector-field-format-status" role="status"></p>
+                  <div id="vector-field-format-preview" class="vector-field-display-preview" role="region"
+                    aria-labelledby="vector-field-format-caption" tabindex="0" hidden>
+                    <table>
+                      <caption id="vector-field-format-caption">Preview for this feature</caption>
+                      <thead><tr><th scope="col">Source field</th><th scope="col">Current name</th><th scope="col">Preview name</th><th scope="col">Current value</th><th scope="col">Preview value</th></tr></thead>
+                      <tbody id="vector-field-format-rows"></tbody>
+                    </table>
+                  </div>
+                  <div id="vector-field-format-actions" class="vector-field-display-actions" hidden>
+                    <button id="apply-vector-field-formats" class="secondary-button" type="button">Apply formats</button>
+                    <button id="cancel-vector-field-formats" class="secondary-button" type="button">Cancel</button>
+                  </div>
+                </details>
                 <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
               </article>
             </div>
@@ -1139,6 +1150,7 @@
             <div class="vector-plot-context">
               <button id="vector-time-series-features-button" class="summary-text-button" type="button" aria-controls="vector-time-series-features-picker" aria-expanded="false">Features</button>
               <button id="vector-time-series-fields-button" class="summary-text-button" type="button" aria-controls="vector-time-series-fields-picker" aria-expanded="false">Choose fields</button>
+              <button id="vector-time-series-statistics-button" class="summary-text-button" type="button" aria-controls="vector-time-series-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-time-series-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
@@ -1165,21 +1177,40 @@
               <button id="vector-time-series-next-selection" class="secondary-button" type="button"
                 aria-controls="vector-time-series-plots vector-time-series-values" disabled>Next selection <span aria-hidden="true">→</span></button>
             </div>
-            <div id="vector-time-series-plots" class="vector-plot-results">
-              <div class="vector-plot-figure" id="vector-time-series-first">
-                <h3 id="vector-time-series-chart-title"></h3>
-                <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
-                <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+            <div id="vector-time-series-statistics-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Layer stats</strong>
+                <button id="vector-time-series-statistics-done" class="summary-text-button" type="button">Done</button></div>
+              <p class="vector-series-context">Across all features in each source layer.</p>
+              <div class="vector-plot-statistics-choices" role="group" aria-label="Statistics to show">
+                <label><input id="vector-time-series-statistics-mean" type="checkbox"> Mean</label>
+                <label><input id="vector-time-series-statistics-minimum" type="checkbox"> Minimum</label>
+                <label><input id="vector-time-series-statistics-maximum" type="checkbox"> Maximum</label>
               </div>
-              <div id="vector-time-series-extra-charts"></div>
             </div>
-            <div id="vector-time-series-values" hidden>
-              <div id="vector-time-series-table" class="vector-time-series-table" hidden>
-                <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
-                  <thead><tr id="vector-time-series-table-head"></tr></thead>
-                  <tbody id="vector-time-series-table-body"></tbody>
-                </table></div>
+            <div class="vector-plot-comparison">
+              <div class="vector-plot-measurements">
+                <div id="vector-time-series-plots" class="vector-plot-results">
+                  <div class="vector-plot-figure" id="vector-time-series-first">
+                    <h3 id="vector-time-series-chart-title"></h3>
+                    <ul id="vector-time-series-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                    <svg id="vector-time-series-chart" class="vector-time-series-chart" role="group" aria-label="Compared features" hidden></svg>
+                  </div>
+                  <div id="vector-time-series-extra-charts"></div>
+                </div>
+                <div id="vector-time-series-values" hidden>
+                  <div id="vector-time-series-table" class="vector-time-series-table" hidden>
+                    <div class="vector-time-series-table-scroll"><table aria-label="Values across features">
+                      <thead><tr id="vector-time-series-table-head"></tr></thead>
+                      <tbody id="vector-time-series-table-body"></tbody>
+                    </table></div>
+                  </div>
+                </div>
               </div>
+              <aside id="vector-time-series-statistics" class="vector-plot-statistics" aria-labelledby="vector-time-series-statistics-heading" hidden>
+                <h3 id="vector-time-series-statistics-heading">Whole-layer statistics</h3>
+                <p id="vector-time-series-statistics-status" role="status"></p>
+                <div id="vector-time-series-statistics-results" aria-live="polite"></div>
+              </aside>
             </div>
             <p id="vector-time-series-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-time-series-selection" class="vector-time-series-selection" hidden>
@@ -1222,6 +1253,7 @@
             <div class="vector-plot-context">
               <button id="vector-feature-profile-features-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-features-picker" aria-expanded="false">Feature</button>
               <button id="vector-feature-profile-fields-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-fields-picker" aria-expanded="false">Choose fields</button>
+              <button id="vector-feature-profile-statistics-button" class="summary-text-button" type="button" aria-controls="vector-feature-profile-statistics-picker" aria-expanded="false" disabled>Layer stats</button>
             </div>
             <div id="vector-feature-profile-features-picker" class="vector-plot-picker" hidden>
               <div class="vector-plot-picker-heading"><strong>Features at this map click</strong>
@@ -1247,20 +1279,39 @@
               <div id="vector-feature-profile-field-list" class="vector-feature-profile-field-list" role="group" aria-label="Numeric fields to plot"></div>
               <p id="vector-feature-profile-field-empty" class="vector-series-context" hidden>No matching fields.</p>
             </div>
-            <div id="vector-feature-profile-plots" class="vector-plot-results">
-              <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
-                <h3 id="vector-feature-profile-chart-title" hidden></h3>
-                <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
-                <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
+            <div id="vector-feature-profile-statistics-picker" class="vector-plot-picker" hidden>
+              <div class="vector-plot-picker-heading"><strong>Layer stats</strong>
+                <button id="vector-feature-profile-statistics-done" class="summary-text-button" type="button">Done</button></div>
+              <p class="vector-series-context">Across all features in the source layer.</p>
+              <div class="vector-plot-statistics-choices" role="group" aria-label="Statistics to show">
+                <label><input id="vector-feature-profile-statistics-mean" type="checkbox"> Mean</label>
+                <label><input id="vector-feature-profile-statistics-minimum" type="checkbox"> Minimum</label>
+                <label><input id="vector-feature-profile-statistics-maximum" type="checkbox"> Maximum</label>
               </div>
             </div>
-            <div id="vector-feature-profile-values" hidden>
-              <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
-                <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
-                  <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
-                  <tbody id="vector-feature-profile-table-body"></tbody>
-                </table></div>
+            <div class="vector-plot-comparison">
+              <div class="vector-plot-measurements">
+                <div id="vector-feature-profile-plots" class="vector-plot-results">
+                  <div id="vector-feature-profile-figure" class="vector-plot-figure" hidden>
+                    <h3 id="vector-feature-profile-chart-title" hidden></h3>
+                    <ul id="vector-feature-profile-legend" class="series-chart-legend" aria-label="Stacked fields" hidden></ul>
+                    <svg id="vector-feature-profile-chart" class="vector-time-series-chart" role="group" aria-label="Selected fields" hidden></svg>
+                  </div>
+                </div>
+                <div id="vector-feature-profile-values" hidden>
+                  <div id="vector-feature-profile-table" class="vector-time-series-table" hidden>
+                    <div class="vector-time-series-table-scroll"><table aria-label="Selected field values">
+                      <thead><tr><th scope="col">Field</th><th id="vector-feature-profile-x-heading" scope="col">X</th><th scope="col">Value</th></tr></thead>
+                      <tbody id="vector-feature-profile-table-body"></tbody>
+                    </table></div>
+                  </div>
+                </div>
               </div>
+              <aside id="vector-feature-profile-statistics" class="vector-plot-statistics" aria-labelledby="vector-feature-profile-statistics-heading" hidden>
+                <h3 id="vector-feature-profile-statistics-heading">Whole-layer statistics</h3>
+                <p id="vector-feature-profile-statistics-status" role="status"></p>
+                <div id="vector-feature-profile-statistics-results" aria-live="polite"></div>
+              </aside>
             </div>
             <p id="vector-feature-profile-status" class="vector-time-series-status" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-feature-profile-selection" class="vector-time-series-selection" hidden>
@@ -1901,13 +1952,20 @@
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>
           <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
           <p id="publish-map-preview" class="publish-map-url"></p>
-          <p>Shared layers stay live. An administrator can update or delete this published map.</p>
+          <fieldset id="publish-map-visitor-controls" class="visitor-control-options"></fieldset>
+          <p>Shared layers stay live. You'll get a private link to edit this map later.</p>
         </fieldset>
         <div id="publish-map-result" hidden>
-          <label>Shared map link<input id="publish-map-url" readonly></label>
+          <label>Public map link<input id="publish-map-url" readonly></label>
           <div class="saved-map-view-dialog-actions">
             <a id="publish-map-open" target="_blank" rel="noopener">Open shared map</a>
-            <button id="publish-map-copy" type="button" class="secondary-button">Copy link</button>
+            <button id="publish-map-copy" type="button" class="secondary-button">Copy public link</button>
+          </div>
+          <label>Private edit link<input id="publish-map-edit-link" readonly spellcheck="false" aria-describedby="publish-map-edit-help"></label>
+          <p id="publish-map-edit-help">Save this link somewhere private. Anyone with it can edit this map.</p>
+          <div class="saved-map-view-dialog-actions">
+            <a id="publish-map-open-editor" target="_blank" rel="noopener">Open map editor</a>
+            <button id="publish-map-copy-editor" type="button" class="secondary-button">Copy private edit link</button>
           </div>
         </div>
         <p id="publish-map-status" role="status" aria-live="polite"></p>
@@ -1917,6 +1975,25 @@
         </div>
       </form>
     </dialog>
+    <template id="visitor-control-options">
+      <legend>Visitor panels and tools</legend>
+      <label><input type="checkbox" data-visitor-control="workspacePanels"> Workspace panels</label>
+      <fieldset data-visitor-workspace-children>
+        <legend class="visually-hidden">Workspace panels</legend>
+        <label><input type="checkbox" data-visitor-control="catalog"> Catalog</label>
+        <label class="visitor-panel-initial"><input type="checkbox" data-visitor-panel-open="catalog"> Open Catalog when the map loads</label>
+        <label><input type="checkbox" data-visitor-control="mapContents"> Map contents</label>
+        <label class="visitor-panel-initial"><input type="checkbox" data-visitor-panel-open="mapContents"> Open Map contents when the map loads</label>
+      </fieldset>
+      <label><input type="checkbox" data-visitor-control="inspectAndSelect"> Inspect and select</label>
+      <fieldset data-visitor-inspection-children>
+        <legend class="visually-hidden">Inspection tools</legend>
+        <label><input type="checkbox" data-visitor-control="rasterValues"> Pick raster values</label>
+        <label><input type="checkbox" data-visitor-control="featurePicking"> Pick features on the map</label>
+        <label><input type="checkbox" data-visitor-control="histogramBox"> Histogram box</label>
+        <label><input type="checkbox" data-visitor-control="lasso"> Lasso</label>
+      </fieldset>
+    </template>
     <section id="raster-download-sheet" popover="manual" role="dialog" aria-labelledby="raster-download-title raster-download-source">
       <div class="raster-download-scroll">
         <header class="raster-download-heading">

@@ -69,6 +69,16 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
         "visible": True,
         "opacity": 1,
         "calculatedFields": fields,
+        "fieldFormats": {
+            "Density": {
+                "displayName": "Population density",
+                "format": "number",
+                "decimals": 1,
+                "unit": "people/km²",
+            },
+            "Annual cost": {"format": "currency", "currency": "USD", "decimals": 0},
+            "name": {"displayName": "Site name"},
+        },
         "style": {"kind": "vector", "definition": {"graduated": {"field": "Density"}}},
         "filter": {
             "enabled": True,
@@ -109,6 +119,46 @@ def test_calculated_fields_and_private_results_round_trip() -> None:
             CreateSavedMap.model_validate(invalid)
 
 
+@pytest.mark.parametrize(
+    "formats",
+    [
+        None,
+        [],
+        {"": {"format": "number"}},
+        {"area": {"format": "number", "decimals": -1}},
+        {"area": {"format": "number", "unit": None}},
+        {"area": {"format": "number", "unit": "line\nbreak"}},
+        {"area": {"format": "number", "unit": " "}},
+        {"cost": {"format": "currency"}},
+        {"cost": {"format": "currency", "currency": "$"}},
+        {"cost": {"format": "number", "currency": "USD"}},
+        {"cost": {"format": "currency", "currency": "USD", "example": 4000}},
+        {"name": {"displayName": None}},
+        {"name": {"displayName": ""}},
+        {"name": {"displayName": " "}},
+        {"name": {"displayName": " Site name "}},
+        {"name": {"displayName": "line\nbreak"}},
+        {"name": {"displayName": "tab\tname"}},
+        {"name": {"displayName": "x" * 161}},
+        {"name": {"displayName": 123}},
+        {"name": {"displayName": "Site name", "format": None}},
+        {"area": {"displayName": "Area", "decimals": 2}},
+        {"area": {"displayName": "Area", "unit": "ha"}},
+        {"name": {}},
+    ],
+)
+def test_invalid_feature_field_formats(formats: Any) -> None:
+    """Reject malformed inspector display settings before accepting a map.
+
+    Args:
+        formats: Invalid portable field display data.
+    """
+    candidate = map_request()
+    candidate["view"]["layers"][1]["fieldFormats"] = formats
+    with pytest.raises(ValidationError, match="fieldFormats"):
+        CreateSavedMap.model_validate(candidate)
+
+
 def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> None:
     """Persist an opaque raster upload without publishing data or vector predicates."""
     candidate = map_request()
@@ -133,6 +183,10 @@ def test_raster_upload_view_round_trip_preserves_private_source_and_style() -> N
     ):
         CreateSavedMap.model_validate(candidate)
     del layer["calculatedFields"]
+    layer["fieldFormats"] = {"cost": {"format": "currency", "currency": "USD"}}
+    with pytest.raises(ValidationError, match="Field formats require a vector layer"):
+        CreateSavedMap.model_validate(candidate)
+    del layer["fieldFormats"]
     layer["filter"] = {"field": "class", "value": 1}
     with pytest.raises(
         ValidationError, match="Raster uploads do not support vector filters"
@@ -301,14 +355,21 @@ def test_custom_layer_name_round_trip() -> None:
     assert CreateSavedMap.model_validate(candidate).view.layers[0].customName is None
 
 
-def test_subtitle_and_basemap_contract() -> None:
-    """Store an optional subtitle and only a provider ID in saved maps."""
+@pytest.mark.parametrize("basemap_id", ["maptiler", "maptiler-streets"])
+def test_subtitle_and_basemap_contract(basemap_id: str) -> None:
+    """Store an optional subtitle and only a provider ID in saved maps.
+
+    Args:
+        basemap_id: Selected MapTiler basemap identifier.
+    """
     candidate = map_request()
     candidate["subtitle"] = "  Explore habitat  "
-    candidate["view"].update(basemap="maptiler")
+    candidate["view"].update(basemap=basemap_id)
     parsed = CreateSavedMap.model_validate(candidate)
     assert parsed.subtitle == "Explore habitat"
-    assert parsed.view.basemap == "maptiler"
+    assert parsed.view.basemap == basemap_id
+    exported = parsed.model_dump(mode="json", exclude_unset=True)
+    assert exported["view"]["basemap"] == basemap_id
     candidate["subtitle"] = ""
     assert CreateSavedMap.model_validate(candidate).subtitle == ""
     candidate["view"]["basemap"] = "https://tiles.example/secret-key"
@@ -595,6 +656,54 @@ def test_map_legend_preferences_round_trip() -> None:
             invalid["view"]["layers"][index]["legendIncluded"] = value
             with pytest.raises(ValidationError):
                 CreateSavedMap.model_validate(invalid)
+
+
+def test_visitor_controls_validate_and_round_trip() -> None:
+    """Keep inspection-only settings and independent panel choices without filling omissions."""
+    candidate = map_request()
+    for panel_choices, initial_panels in (
+        ({}, None),
+        ({"workspacePanels": True, "catalog": True}, {}),
+        (
+            {"workspacePanels": False, "catalog": True, "mapContents": True},
+            {"catalog": True, "mapContents": False},
+        ),
+    ):
+        candidate["view"]["visitorControls"] = {
+            "version": 1,
+            "choices": {
+                "inspectAndSelect": False,
+                "featurePicking": True,
+                "lasso": True,
+                **panel_choices,
+            },
+            **({"initialPanels": initial_panels} if initial_panels is not None else {}),
+        }
+        saved = CreateSavedMap.model_validate(candidate)
+        assert saved.model_dump(mode="json", exclude_unset=True) == candidate
+        assert saved.view.visitorControls is not None
+        assert saved.view.visitorControls.choices.rasterValues is False
+        assert saved.view.visitorControls.initialPanels.mapContents is False
+    for visitor_controls in (
+        None,
+        {},
+        {"version": 2, "choices": {}},
+        {"version": True, "choices": {}},
+        {"version": 1, "choices": []},
+        {"version": 1, "choices": {"lasso": "true"}},
+        {"version": 1, "choices": {"zoom": True}},
+        {"version": 1, "choices": {}, "unknown": True},
+        {"version": 1, "choices": {}, "initialPanels": None},
+        {"version": 1, "choices": {}, "initialPanels": {"catalog": 1}},
+        {"version": 1, "choices": {}, "initialPanels": {"canvas": True}},
+    ):
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(
+                {
+                    **candidate,
+                    "view": {**candidate["view"], "visitorControls": visitor_controls},
+                }
+            )
 
 
 def test_versioned_raster_appearance_round_trip() -> None:

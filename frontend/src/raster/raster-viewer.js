@@ -10,6 +10,7 @@ import { samplingBoxBounds } from "../sampling-box.js";
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
 import { publishRasterSource } from "./api.js";
 import { loadTemporalTimes } from "./temporal-api.js";
+import { formatObservationTime } from "./observation-time.js";
 import { TemporalControlsView } from "./temporal-controls-view.js";
 import {
     loadRasterStatistics,
@@ -160,6 +161,8 @@ function canRetryRasterStatistics(error) {
 /**
  * @typedef {Object} RasterViewer
  * @property {(enabled:boolean)=>void} setPixelPickingEnabled Enable or hide transient pixel values.
+ * @property {(choices:{rasterValues:boolean,histogramBox:boolean})=>void} setMapInspectionAvailability
+ * Apply this viewer's permission to pick values or create and resize map boxes.
  * @property {(enabled:boolean)=>void} setSamplingBoxPointerEnabled Enable or clear box previews and first-sample guidance.
  * @property {() => void} clear Remove all retained raster interactions.
  * @property {() => void} reset Clear the raster and restore default styling.
@@ -213,7 +216,9 @@ function canRetryRasterStatistics(error) {
  * @typedef {Object} RasterViewerConfiguration
  * @property {string} wmsUrl Browser-facing GeoServer WMS endpoint.
  * @property {Object} leafletMap Initialized Leaflet-compatible map.
+ * @property {() => {lat:number,lng:number}} [getMapCenter] Map focus for center-based sampling.
  * @property {Object} leaflet Leaflet namespace with WMS and polygon factories.
+ * @property {boolean} [inspectionInitiallyEnabled=true] Whether map inspection can run before composition resolves the active tools.
  * @property {(message: string, item: Object) => void} onTileError Reports a
  * layer-specific tile error.
  * @property {(item:Object)=>void} [onTemporalInfo] Open Catalog details for a retained temporal dataset.
@@ -286,8 +291,10 @@ export function initializeRasterViewer(
     {
         wmsUrl,
         leafletMap,
+        getMapCenter = () => leafletMap.getCenter(),
         leaflet,
         onTileError,
+        inspectionInitiallyEnabled = true,
         onTemporalInfo = /** @param {Object} _item Temporal Catalog Item. @return {void} */ (_item) => {},
         onCalculateRequested = /** @param {Object} _item Original raster. @param {Object|null} _area Histogram scope. @param {string} _label View name. @param {string} _key View identity. @return {void} */ (_item, _area, _label, _key) => {},
         onHistogramChange = () => {},
@@ -381,9 +388,12 @@ export function initializeRasterViewer(
     let visibleHistogramSignature = null;
     let clearing = false;
     let mapDragging = false;
-    let pixelPickerEnabled = true;
-    let pointerInspectionEnabled = true;
-    let samplingBoxPointerEnabled = true;
+    let rasterValuePickingAvailable = inspectionInitiallyEnabled;
+    let histogramBoxAvailable = inspectionInitiallyEnabled;
+    let pixelPickingActive = inspectionInitiallyEnabled;
+    let pixelPickerEnabled = inspectionInitiallyEnabled;
+    let pointerInspectionEnabled = inspectionInitiallyEnabled;
+    let samplingBoxPointerEnabled = inspectionInitiallyEnabled;
     let firstSampleHintEnabled = true;
     let hasPlacedSamplingBox = false;
     let rasterCursorPosition = null;
@@ -1827,7 +1837,7 @@ export function initializeRasterViewer(
      * @return {boolean} True until a box is placed, except while drawing or using another sample area or tool.
      */
     function canOfferFirstSample() {
-        return !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && samplingBoxPointerEnabled && !pendingVectorSelection &&
+        return histogramBoxAvailable && !hasPlacedSamplingBox && firstSampleHintEnabled && pointerInspectionEnabled && samplingBoxPointerEnabled && !pendingVectorSelection &&
             initialPolygonSamplingArea() === null && activeRasterItem?.capabilities?.statistics !== false &&
             mapLayers.getRecord(activeLayerKey)?.entry.visible === true;
     }
@@ -3637,21 +3647,19 @@ export function initializeRasterViewer(
                 `Approximately ${presentedWindowSizeKm} km × ` +
                 `${presentedWindowSizeKm} km window selected: ` +
                 `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
-                `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
-                `Click the map again to replace it.${
-                    bivariateMode.active
-                        ? " The paired histogram uses this shared area."
-                        : ""
-                }`;
+                `E ${east.toFixed(3)}, N ${north.toFixed(3)}.` +
+                (histogramBoxAvailable ? " Click the map again to replace it." : "") +
+                (bivariateMode.active ? " The paired histogram uses this shared area." : "");
         } else if ((bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling) !== null) {
             const area = bivariateMode.active ? bivariatePolygonSampling : rasterAnalysis.selectedPolygonSampling;
             nextStatus = `Selected polygons: ${area.filename}. ` +
                 "Polygon boundaries and holes define the histogram selection.";
         } else if (bivariateMode.active) {
-            nextStatus = "Whole-overlap paired histogram selected. " +
-                "Click the map to use one shared WGS 84 window.";
+            nextStatus = "Whole-overlap paired histogram selected." +
+                (histogramBoxAvailable ? " Click the map to use one shared WGS 84 window." : "");
         } else {
-            nextStatus = "Whole-raster histogram selected. Click the map to inspect a location.";
+            nextStatus = "Whole-raster histogram selected." +
+                (histogramBoxAvailable ? " Click the map to inspect a location." : "");
         }
         controlsView.setSampleWindowStatus(
             nextStatus, Boolean(guidance) && !pendingVectorSelection
@@ -3705,8 +3713,8 @@ export function initializeRasterViewer(
      * Explore one composition-owned map position with the current window size.
      *
      * Ordinary mode checks visible extents before selecting a histogram area.
-     * 2D mode also reads both pixel values to highlight their paired histogram
-     * cell, independently of published extents; the pixel API determines coverage.
+     * When value picking is available, 2D mode also reads both pixel values to
+     * highlight their paired histogram cell. The pixel API determines coverage.
      * Catalog-vector analysis returns to ordinary raster scope before selecting
      * a box. Reject noncanonical coordinates before requesting either analysis.
      *
@@ -3735,7 +3743,7 @@ export function initializeRasterViewer(
             pointSamplesController.clear();
             return false;
         }
-        const openHistogram = histogram ?? shouldOpenRasterHistogram(point);
+        const openHistogram = histogramBoxAvailable && (histogram ?? shouldOpenRasterHistogram(point));
         if (openHistogram) {
             if (rasterAnalysis.selectedPolygonSampling !== null) {
                 restoreWholeRasterStatistics();
@@ -3746,7 +3754,9 @@ export function initializeRasterViewer(
                 return true;
             }
         }
-        if (bivariateMode.active) pointSamplesController.sample(rasterPointSampleParticipants(), point);
+        if (bivariateMode.active && rasterValuePickingAvailable) {
+            pointSamplesController.sample(rasterPointSampleParticipants(), point);
+        }
         if (openHistogram) {
             onSelected(getSelectedArea());
         }
@@ -3810,8 +3820,11 @@ export function initializeRasterViewer(
         }
     }
 
-    /** Select a box at the current map center from the sampling-area control. */
+    /** Select a box at the current map focus from the sampling-area control.
+     * @return {void}
+     */
     function useMapCenterForRasterStatistics() {
+        if (!histogramBoxAvailable) return;
         if (!canUseRasterMapInteractions()) {
             renderRasterSamplingAreaControls();
             return;
@@ -3819,16 +3832,17 @@ export function initializeRasterViewer(
         if (vectorSelection && (rasterAnalysis.selectedPolygonSampling?.id === vectorSelection.id || bivariatePolygonSampling?.id === vectorSelection.id)) {
             rasterAnalysis.selectedPolygonSampling = null; bivariatePolygonSampling = null;
         }
-        exploreAt(leafletMap.getCenter());
+        exploreAt(getMapCenter());
     }
 
     /**
      * Apply a side length from the slider, numeric field or map wheel shortcut.
      *
      * @param {string|number} value Candidate side length in kilometers.
-     * @return {boolean} Whether the candidate satisfied the size contract.
+     * @return {boolean} Whether box editing is available and the size was accepted.
      */
     function setRasterSampleWindowSize(value) {
+        if (!histogramBoxAvailable) return false;
         const wasResizing = rasterSampleWindowResizeTimeout !== null;
         const sideLengthKm = Number(value);
         try {
@@ -3885,7 +3899,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleSampleBoxWheel(event) {
-        if (!pointerInspectionEnabled || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+        if (!histogramBoxAvailable || !pointerInspectionEnabled || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
             !event.deltaY || !controlsView.isSamplingBoxSelected() ||
             event.target.closest(".leaflet-control, .leaflet-popup")) {
             boxWheelRemainder = 0;
@@ -4067,11 +4081,38 @@ export function initializeRasterViewer(
         updateFirstSampleHint();
     }
 
+    /**
+     * Apply visitor choices to raster inputs and cancel newly unavailable transient work.
+     * Completed sampling areas remain available to their consumers.
+     * @param {{rasterValues:boolean,histogramBox:boolean}} choices Effective choices from composition.
+     * @return {void}
+     */
+    function setMapInspectionAvailability({ rasterValues, histogramBox }) {
+        if (rasterValuePickingAvailable !== rasterValues) {
+            rasterValuePickingAvailable = rasterValues;
+            if (!rasterValues) {
+                hidePixelPicker();
+                pointSamplesController.clear();
+            }
+        }
+        if (histogramBoxAvailable === histogramBox) return;
+        histogramBoxAvailable = histogramBox;
+        controlsView.setSamplingBoxAvailable?.(histogramBox);
+        if (!histogramBox) {
+            boxWheelRemainder = 0;
+            cancelSampleWindowResize();
+            rasterSampleWindowController.clearPreview();
+        }
+        renderRasterSampleWindowGuidance("");
+        updateFirstSampleHint();
+    }
+
     /** Enable or hide raster pixel sampling for the selected pointer action.
      * @param {boolean} enabled Whether pointer movement should pick raster values.
      * @return {void}
      */
     function setPixelPickingEnabled(enabled) {
+        pixelPickingActive = enabled;
         if (enabled) showPixelPicker();
         else hidePixelPicker();
     }
@@ -4100,11 +4141,12 @@ export function initializeRasterViewer(
         pixelPickerEnabled = false;
         rasterCursorPosition = null;
         cursorSamplesController.clear();
-        cursorValuesView.setEnabled?.(false);
+        cursorValuesView.setEnabled?.(false, pixelPickingActive && rasterValuePickingAvailable);
     }
 
     /** Restore pixel sampling for the next settled map-pointer position. */
     function showPixelPicker() {
+        if (!pixelPickingActive || !rasterValuePickingAvailable) return;
         pixelPickerEnabled = true;
         cursorValuesView.setEnabled?.(true);
     }
@@ -4487,7 +4529,7 @@ export function initializeRasterViewer(
             return;
         }
         const overMapControl = mapEvent.originalEvent?.target?.closest?.(".leaflet-control");
-        if (samplingBoxPointerEnabled && !overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
+        if (histogramBoxAvailable && samplingBoxPointerEnabled && !overMapControl && canUseRasterMapInteractions() && (controlsView.isSamplingBoxSelected() ||
             (canOfferFirstSample() && shouldOpenRasterHistogram(point)))) {
             rasterSampleWindowController.previewAt(mapEvent.latlng);
         } else {
@@ -4647,8 +4689,7 @@ export function initializeRasterViewer(
      */
     function temporalRaster(item, selection, available) {
         const variable = item.properties["cube:variables"][selection.variable];
-        const timeLabel = new Date(selection.time).toLocaleString(undefined, {timeZone: "UTC", year: "numeric",
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+        const timeLabel = formatObservationTime(selection.time);
         return {
             source: {collectionId: item.collection, itemId: item.id, ...selection},
             label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel} UTC`,
@@ -5189,7 +5230,8 @@ export function initializeRasterViewer(
         onHide: hidePixelPicker,
         onShow: showPixelPicker,
     });
-    cursorValuesView.setEnabled?.(true);
+    cursorValuesView.setEnabled?.(pixelPickerEnabled, pixelPickingActive);
+    controlsView.setSamplingBoxAvailable?.(histogramBoxAvailable);
     leafletMap.on("mousemove", handleMapMouseMove);
     leafletMap.on("dragstart", handleMapDragStart);
     leafletMap.on("dragend", handleMapDragEnd);
@@ -5223,6 +5265,7 @@ export function initializeRasterViewer(
         stage,
         syncVisibleLayers,
         setPointerInspectionEnabled,
+        setMapInspectionAvailability,
         setPixelPickingEnabled,
         setSamplingBoxPointerEnabled,
         setFirstSampleHintEnabled,
@@ -5239,11 +5282,11 @@ export function initializeRasterViewer(
         getSelectedArea,
         // Composition reuses these same map-sampling actions from the floating
         // area form; Processing retains its own polygon selection lifecycle.
-        /** Select a geodesic box for area consumers independently of histogram coverage.
+        /** Select a permitted geodesic box for area consumers independently of histogram coverage.
          * @param {{lng:number,lat:number}} [position] Clicked position, defaulting to the map center.
-         * @return {Object|null} Captured samplingBox descriptor, or null near a pole/date line.
+         * @return {Object|null} Captured samplingBox descriptor, or null if disabled or outside its geographic limits.
          */
-        selectSamplingBox: (position = leafletMap.getCenter()) => rasterSampleWindowController.selectAt(position) === null
+        selectSamplingBox: (position = getMapCenter()) => !histogramBoxAvailable || rasterSampleWindowController.selectAt(position) === null
             ? null : rasterSampleWindowController.selectedArea,
         selectWholeRaster: handleClearSampleWindow,
         setSamplingActivity: area => rasterSampleWindowController.setActivityArea(area),

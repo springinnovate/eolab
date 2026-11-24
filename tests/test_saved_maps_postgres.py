@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,7 @@ def store(request: pytest.FixtureRequest) -> SavedMapStore:
 
 
 def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
-    """Persist Catalog and Custom cards through a new store and API instance.
+    """Persist Catalog and Custom presentation through a new store and API instance.
 
     Args:
         store: Empty disposable PostgreSQL store.
@@ -68,10 +69,33 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
     request = map_request()
     request["view"]["layers"][0]["isCustom"] = False
     request["view"]["layers"][1]["isCustom"] = True
+    request["view"]["layers"][1]["fieldFormats"] = {
+        "area_ha": {
+            "displayName": "Habitat area",
+            "format": "number",
+            "decimals": 1,
+            "unit": "ha",
+        },
+        "name": {"displayName": "Site name"},
+    }
+    request["view"]["visitorControls"] = {
+        "version": 1,
+        "choices": {
+            "inspectAndSelect": False,
+            "rasterValues": True,
+            "lasso": True,
+            "workspacePanels": False,
+            "catalog": True,
+            "mapContents": True,
+        },
+        "initialPanels": {"catalog": True, "mapContents": False},
+    }
     with TestClient(app, headers=HEADERS) as client:
         response = client.post(BASE, json=request)
         assert response.status_code == 201, response.text
         original = response.json()
+        edit_token = original.pop("editToken", None)
+        assert isinstance(edit_token, str) and len(edit_token) == 64
         assert original["view"] == request["view"]
         assert response.headers["location"] == BASE + "/amazon-priorities"
         assert response.headers["cache-control"] == "no-store"
@@ -85,6 +109,139 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
     other.include_router(create_saved_maps_router(restarted))
     with TestClient(other) as client:
         assert client.get(BASE + "/amazon-priorities").json() == original
+        edit = client.get(
+            BASE + "/amazon-priorities/edit",
+            headers={"Authorization": f"Bearer {edit_token}"},
+        )
+        assert edit.status_code == 200
+        assert edit.json() == original
+        assert edit.headers["cache-control"] == "no-store"
+    with restarted.transaction() as cursor:
+        cursor.execute("SELECT edit_token_digest FROM saved_maps.maps")
+        assert (
+            cursor.fetchone()["edit_token_digest"]
+            == sha256(edit_token.encode()).digest()
+        )
+
+
+def test_private_edit_link_checks_map_access_and_revision(store: SavedMapStore) -> None:
+    """Save at the public URL with a map-scoped credential and current revision.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    app = FastAPI()
+    app.include_router(create_saved_maps_router(store))
+    app.include_router(create_saved_maps_admin_router(store, "test-admin-password"))
+    client = TestClient(app, headers=HEADERS)
+    request = map_request()
+    url = f"{BASE}/{request['slug']}"
+    editor_url = url + "/edit"
+    published = client.post(BASE, json=request).json()
+    headers = {"Authorization": f"Bearer {published.pop('editToken')}"}
+    second = map_request("second-map")
+    assert client.post(BASE, json=second).status_code == 201
+    other_editor_url = BASE + "/second-map/edit"
+    changes = {**request, "title": "Publisher's new title", "revision": 1}
+    for unauthorized in ({}, {"Authorization": "Bearer " + "0" * 64}):
+        assert client.get(editor_url, headers=unauthorized).status_code == 403
+        assert (
+            client.put(editor_url, headers=unauthorized, json=changes).status_code
+            == 403
+        )
+    assert client.get(other_editor_url, headers=headers).status_code == 403
+    assert (
+        client.put(
+            other_editor_url, headers=headers, json={**second, "revision": 1}
+        ).status_code
+        == 403
+    )
+    admin_url = f"/api/admin/saved-maps/{request['slug']}"
+    assert client.put(admin_url, headers=headers, json=changes).status_code == 401
+    assert client.post(admin_url + "/edit-link", headers=headers).status_code == 401
+    assert client.delete(admin_url, headers=headers).status_code == 401
+    assert client.put(url, headers=headers, json=changes).status_code == 405
+    assert (
+        client.put(
+            editor_url,
+            headers={**headers, "Origin": "https://elsewhere.example"},
+            json=changes,
+        ).status_code
+        == 403
+    )
+    assert client.get(url, headers=headers).json() == published
+
+    saved = client.put(editor_url, headers=headers, json=changes)
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == {**published, "title": changes["title"], "revision": 2}
+    assert client.get(url).json() == saved.json()
+    assert client.put(editor_url, headers=headers, json=changes).status_code == 409
+    assert (
+        client.put(
+            editor_url,
+            headers=headers,
+            json={**changes, "slug": "renamed", "revision": 2},
+        ).status_code
+        == 422
+    )
+    assert client.get(BASE + "/second-map").json()["title"] == second["title"]
+
+
+def test_admin_can_replace_and_revoke_private_edit_links(store: SavedMapStore) -> None:
+    """Invalidate open editors after replacement or revocation, including across Undo.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    app = FastAPI()
+    app.include_router(create_saved_maps_router(store))
+    password = "test-admin-password"
+    app.include_router(create_saved_maps_admin_router(store, password))
+    client = TestClient(app, headers=HEADERS)
+    request = map_request()
+    created = client.post(BASE, json=request).json()
+    old_headers = {"Authorization": f"Bearer {created.pop('editToken')}"}
+    url = BASE + "/amazon-priorities"
+    editor_url = url + "/edit"
+    admin_url = "/api/admin/saved-maps/amazon-priorities"
+    admin = {"auth": ("admin", password), "headers": {"X-EOLab-Admin": "1"}}
+    opened = client.get(editor_url, headers=old_headers).json()
+    assert opened == created
+    replacement = client.post(admin_url + "/edit-link", **admin)
+    assert replacement.status_code == 200
+    assert replacement.headers["cache-control"] == "no-store"
+    new_headers = {"Authorization": f"Bearer {replacement.json()['editToken']}"}
+    assert new_headers != old_headers
+    assert client.get(editor_url, headers=old_headers).status_code == 403
+    assert (
+        client.put(
+            editor_url,
+            headers=old_headers,
+            json={**request, "revision": opened["revision"]},
+        ).status_code
+        == 403
+    )
+    assert client.get(editor_url, headers=new_headers).json() == opened
+    assert client.get(url).json() == opened
+
+    assert client.delete(admin_url, **admin).status_code == 204
+    assert client.get(editor_url, headers=new_headers).status_code == 403
+    assert client.post(admin_url + "/restore", **admin).status_code == 204
+    assert client.get(editor_url, headers=new_headers).json() == {
+        **opened,
+        "revision": 3,
+    }
+    assert client.delete(admin_url + "/edit-link", **admin).status_code == 204
+    assert client.delete(admin_url + "/edit-link", **admin).status_code == 204
+    assert client.get(editor_url, headers=new_headers).status_code == 403
+    assert (
+        client.put(
+            editor_url, headers=new_headers, json={**request, "revision": 3}
+        ).status_code
+        == 403
+    )
+    assert client.get(url).json() == {**opened, "revision": 3}
+    assert client.get(admin_url, **admin).json() == {**opened, "revision": 3}
 
 
 def test_admin_edit_preserves_identity_and_checks_revision(
@@ -114,7 +271,12 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     loaded = client.get(url).json()
     assert loaded["revision"] == 1
     assert client.get("/api/admin/saved-maps").json() == [
-        {"slug": original.slug, "title": original.title, "deletedAt": None}
+        {
+            "slug": original.slug,
+            "title": original.title,
+            "deletedAt": None,
+            "hasEditLink": True,
+        }
     ]
     changes = {
         **request,
@@ -124,6 +286,17 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     }
     changes["view"]["basemap"] = "none"
     changes["view"]["viewport"]["zoom"] = 7
+    changes["view"]["visitorControls"] = {
+        "version": 1,
+        "choices": {
+            "inspectAndSelect": True,
+            "featurePicking": True,
+            "workspacePanels": True,
+            "catalog": False,
+            "mapContents": True,
+        },
+        "initialPanels": {"catalog": True, "mapContents": False},
+    }
     # An in-memory draft has no effect on the public record.
     assert client.get(BASE + "/amazon-priorities").json() == loaded
     saved = client.put(url, json=changes)
@@ -134,6 +307,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     assert saved["revision"] == 2
     assert saved["view"]["layers"] == loaded["view"]["layers"]
     assert saved["view"]["basemap"] == "none"
+    assert saved["view"]["visitorControls"] == changes["view"]["visitorControls"]
     assert saved["subtitle"] == "Updated subtitle"
     assert client.put(url, json=changes).status_code == 409
     assert (
@@ -151,7 +325,12 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     assert client.put(url, json=invalid).status_code == 422
     assert client.get(BASE + "/amazon-priorities").json() == saved
     assert store.list_published_maps() == [
-        {"slug": original.slug, "title": "Corrected map", "deletedAt": None}
+        {
+            "slug": original.slug,
+            "title": "Corrected map",
+            "deletedAt": None,
+            "hasEditLink": True,
+        }
     ]
     assert SavedMapStore(store.conninfo).get_saved_map(original.slug).revision == 2
     assert (
@@ -162,13 +341,15 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     )
 
 
+@pytest.mark.parametrize("private_edit", [False, True])
 def test_drawing_views_persist_through_map_publication_edit_and_restart(
-    store: SavedMapStore,
+    store: SavedMapStore, private_edit: bool
 ) -> None:
     """Save drawing references through ordinary map APIs without reading their source.
 
     Args:
         store: Empty disposable PostgreSQL saved-map store.
+        private_edit: Whether to save with the publisher link instead of administrator access.
     """
     request = map_request("drawn-parcels")
     request["view"] = json.loads(
@@ -181,19 +362,28 @@ def test_drawing_views_persist_through_map_publication_edit_and_restart(
     with TestClient(app, base_url="https://testserver", headers=HEADERS) as client:
         created = client.post(BASE, json=request)
         assert created.status_code == 201, created.text
-        assert created.json()["view"] == request["view"]
-        assert client.get(created.headers["location"]).json() == created.json()
+        published = created.json()
+        edit_token = published.pop("editToken")
+        assert published["view"] == request["view"]
+        assert client.get(created.headers["location"]).json() == published
         replacement = deepcopy(request)
         replacement["view"]["layers"][1]["customName"] = "Edited map view"
         replacement["view"]["layers"][1]["filter"]["rules"] = [
             {"field": "note", "operator": "contains", "value": "restore"}
         ]
-        edited = client.put(
-            "/api/admin/saved-maps/drawn-parcels",
-            headers={"X-EOLab-Admin": "1"},
-            auth=("admin", password),
-            json={**replacement, "revision": 1},
-        )
+        if private_edit:
+            edited = client.put(
+                BASE + "/drawn-parcels/edit",
+                headers={"Authorization": f"Bearer {edit_token}"},
+                json={**replacement, "revision": 1},
+            )
+        else:
+            edited = client.put(
+                "/api/admin/saved-maps/drawn-parcels",
+                headers={"X-EOLab-Admin": "1"},
+                auth=("admin", password),
+                json={**replacement, "revision": 1},
+            )
         assert edited.status_code == 200, edited.text
         assert edited.json()["revision"] == 2
         assert edited.json()["view"] == replacement["view"]
@@ -202,16 +392,21 @@ def test_drawing_views_persist_through_map_publication_edit_and_restart(
     assert restarted.model_dump(mode="json", exclude_unset=True) == edited.json()
 
 
-def test_only_one_concurrent_admin_update_wins(store: SavedMapStore) -> None:
+@pytest.mark.parametrize("private_edit", [False, True])
+def test_only_one_concurrent_map_update_wins(
+    store: SavedMapStore, private_edit: bool
+) -> None:
     """An atomic revision comparison prevents two editors from overwriting each other.
 
     Args:
         store: Empty disposable PostgreSQL store.
+        private_edit: Whether competing editors use the private link.
     """
-    store.create_saved_map(CreateSavedMap.model_validate(map_request()))
+    published = store.create_saved_map(CreateSavedMap.model_validate(map_request()))
+    edit_token = published.editToken if private_edit else None
 
     def save(title: str) -> int:
-        """Return success or conflict for an independent administrator transaction.
+        """Return success or conflict for an independent editor transaction.
 
         Args:
             title: Replacement title for this editor.
@@ -225,6 +420,7 @@ def test_only_one_concurrent_admin_update_wins(store: SavedMapStore) -> None:
                 UpdateSavedMap.model_validate(
                     {**map_request(), "title": title, "revision": 1}
                 ),
+                edit_token=edit_token,
             )
             return 200
         except SavedMapError as error:
@@ -277,7 +473,7 @@ def test_admin_delete_and_restore_preserve_map_and_reserve_url(
     assert client.post(url + "/restore").status_code == 204
     restored = client.get(BASE + "/amazon-priorities").json()
     assert restored == {
-        **original.model_dump(mode="json", exclude_unset=True),
+        **original.model_dump(mode="json", exclude_unset=True, exclude={"editToken"}),
         "revision": 3,
     }
     assert client.post(url + "/restore").status_code == 204
@@ -289,7 +485,7 @@ def test_admin_delete_and_restore_preserve_map_and_reserve_url(
     assert client.post("/api/admin/saved-maps/missing/restore").status_code == 404
 
 
-def test_subtitle_migration_preserves_existing_maps(store: SavedMapStore) -> None:
+def test_additive_schema_changes_preserve_existing_maps(store: SavedMapStore) -> None:
     """Upgrade an existing saved-map table without changing its records.
 
     Args:
@@ -299,9 +495,17 @@ def test_subtitle_migration_preserves_existing_maps(store: SavedMapStore) -> Non
     with store.transaction() as cursor:
         cursor.execute("ALTER TABLE saved_maps.maps DROP COLUMN subtitle")
         cursor.execute("ALTER TABLE saved_maps.maps DROP COLUMN deleted_at")
+        cursor.execute("ALTER TABLE saved_maps.maps DROP COLUMN edit_token_digest")
     store.initialize_schema()
     assert store.get_saved_map("amazon-priorities").subtitle == ""
     assert store.list_published_maps()[0]["deletedAt"] is None
+    assert store.list_published_maps()[0]["hasEditLink"] is False
+    legacy = store.get_saved_map("amazon-priorities")
+    with pytest.raises(SavedMapError) as no_link:
+        store.get_saved_map(legacy.slug, edit_token="0" * 64)
+    assert no_link.value.status == 403
+    edit_token = store.issue_edit_token(legacy.slug)
+    assert store.get_saved_map(legacy.slug, edit_token=edit_token) == legacy
     request = map_request("with-subtitle")
     request["subtitle"] = "Explore habitat"
     store.create_saved_map(CreateSavedMap.model_validate(request))

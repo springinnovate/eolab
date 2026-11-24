@@ -140,6 +140,15 @@ export class RasterSeriesView {
         this.resizeObserver.observe(this.root);
     }
 
+    /** Update both entry points that create a new map box for the series.
+     * @param {boolean} available Whether the viewer can choose a map sampling box.
+     * @return {void}
+     */
+    setMapSamplingBoxAvailable(available) {
+        this.document.querySelector("#raster-series-area-selection").disabled = !available;
+        this.document.querySelector("#raster-series-pick-selection").disabled = !available;
+    }
+
     /**
      * Connect controls to the series owner.
      * @param {Object} actions User actions.
@@ -193,7 +202,9 @@ export class RasterSeriesView {
         });
         this.document.querySelector("#raster-series-sources-done").addEventListener("click", () => openPicker(null, true));
         for (const [choice] of this.areaChoices) {
-            this.document.querySelector("#raster-series-pick-" + choice).addEventListener("click", () => {
+            const pick = this.document.querySelector("#raster-series-pick-" + choice);
+            pick.addEventListener("click", () => {
+                if (pick.disabled) return;
                 openPicker(null, true);
                 if (choice === this.snapshot.area.areaChoice && this.snapshot.area.area) return;
                 actions.onArea(choice);

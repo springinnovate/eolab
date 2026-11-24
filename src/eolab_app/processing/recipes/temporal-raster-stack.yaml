@@ -1,8 +1,8 @@
 schema: eolab.model/v1
 id: temporal-raster-stack
 version: "1.0.0"
-title: Plot a temporal raster stack
-description: Calculate named Raster stack formulas for each available observation in one variable and UTC period. Pixel values use the clicked cell; area formulas use the selected area. The CSV retains exact values, states and coverage without temporal integration or inferred formula units.
+title: Raster statistics over time
+description: Calculate the chosen raster formulas for each observation of one variable in a time period. Compare area statistics or the value at a clicked pixel across time. Produces a CSV of values and valid pixel counts.
 inputs:
   source:
     type: temporal_interval
@@ -25,7 +25,7 @@ steps:
 outputs:
   series:
     type: timeSeries
-    label: Temporal raster stack
+    label: Raster statistics by observation (CSV)
     source: calculate.series
     role: result
     presentation: download

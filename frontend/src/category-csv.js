@@ -1,26 +1,30 @@
-/** Parse category-table CSV files, checking headers, quoting and row limits. */
+/** Read bounded CSV records and interpret category-table columns. */
 
 /** Maximum UTF-8 size of an uploaded category table. */
 export const MAX_CATEGORY_CSV_BYTES = 131072;
 
 /**
- * @typedef {Object} CategoryCsvRecord
+ * @typedef {Object} CsvRecord
  * @property {string[]} fields Decoded CSV cells in source order.
  * @property {number} row One-based physical line where the record starts.
  */
 
 /**
- * Parse CSV records, checking quotes and enforcing the category row limit.
+ * Parse CSV records with an optional data-row limit and UTF-8 byte limit.
  * Empty physical records are ignored. Quoted empty cells and comma-only rows
  * remain records so the table parser can report their missing fields.
  * Quoted line breaks normalize to LF, matching HTML textarea value semantics.
  *
- * @param {string} text Size-checked CSV text with any initial byte-order mark removed.
- * @param {number} maximumCategories Maximum number of data rows allowed by the caller.
- * @return {CategoryCsvRecord[]} Decoded records including the header.
- * @throws {Error} If quoting, line endings, or the category row limit is invalid.
+ * @param {string} text UTF-8 decoded CSV contents, with an optional BOM.
+ * @param {{maxBytes:number,maxRows?:number,rowKind?:string}} limits Import bounds and data-row name.
+ * @return {CsvRecord[]} Decoded records including the header.
+ * @throws {Error} If quoting or line endings are invalid, or the file exceeds either bound.
  */
-function readCategoryCsvRecords(text, maximumCategories) {
+export function readCsvRecords(text, {maxBytes, maxRows = Infinity, rowKind = "data"}) {
+    if (text.length > maxBytes || new TextEncoder().encode(text).byteLength > maxBytes) {
+        throw new Error(`CSV file exceeds ${maxBytes} UTF-8 bytes (${maxBytes / 1024} KiB).`);
+    }
+    if (text.startsWith("\ufeff")) text = text.slice(1);
     const records = [];
     let fields = [];
     let field = "";
@@ -36,8 +40,8 @@ function readCategoryCsvRecords(text, maximumCategories) {
      */
     function finishRecord() {
         if (hasContent) {
-            if (records.length >= maximumCategories + 1) {
-                throw new Error(`CSV row ${recordRow}: import at most ${maximumCategories} category rows.`);
+            if (records.length >= maxRows + 1) {
+                throw new Error(`CSV row ${recordRow}: import at most ${maxRows} ${rowKind} rows.`);
             }
             fields.push(field);
             records.push({ fields, row: recordRow });
@@ -102,7 +106,7 @@ function readCategoryCsvRecords(text, maximumCategories) {
 
 /**
  * Resolve the supported header names without silently ignoring extra columns.
- * @param {CategoryCsvRecord} header First nonempty record.
+ * @param {CsvRecord} header First nonempty record.
  * @return {string[]} Trimmed lowercase column names in CSV order.
  * @throws {Error} If a name is unknown, duplicated, or required but missing.
  */
@@ -135,17 +139,15 @@ function readCategoryCsvColumns(header) {
  *
  * @param {string} text UTF-8 decoded file contents, with an optional BOM.
  * @param {number} maximumCategories Positive maximum number of category rows.
- * @return {{columns:string[],data:CategoryCsvRecord[]}} Validated header and parsed data rows.
+ * @return {{columns:string[],data:CsvRecord[]}} Validated header and parsed data rows.
  * @throws {TypeError} If input is not text.
  * @throws {Error} If syntax, headers or resource limits are invalid.
  */
 export function readCategoryCsvTable(text, maximumCategories) {
     if (typeof text !== "string") throw new TypeError("Categorical CSV input must be text.");
-    if (text.length > MAX_CATEGORY_CSV_BYTES ||
-        new TextEncoder().encode(text).byteLength > MAX_CATEGORY_CSV_BYTES) {
-        throw new Error(`CSV file exceeds ${MAX_CATEGORY_CSV_BYTES} UTF-8 bytes (128 KiB).`);
-    }
-    const records = readCategoryCsvRecords(text.startsWith("\ufeff") ? text.slice(1) : text, maximumCategories);
+    const records = readCsvRecords(text, {
+        maxBytes: MAX_CATEGORY_CSV_BYTES, maxRows: maximumCategories, rowKind: "category",
+    });
     if (records.length === 0) {
         throw new Error("CSV row 1: add a header with value, label, and color columns.");
     }
@@ -157,15 +159,17 @@ export function readCategoryCsvTable(text, maximumCategories) {
 /**
  * Validate one record's width and bind literal cells to the shared headers.
  * Callers interpret each row in order, preserving local error precedence.
- * @param {CategoryCsvRecord} record Current bounded record.
+ * @param {CsvRecord} record Current bounded record.
  * @param {string[]} columns Validated table header.
  * @return {Object<string,string>} Literal cells keyed by supported header.
  * @throws {Error} If row width differs from the header.
  */
-export function categoryCsvCells(record, columns) {
+export function csvCells(record, columns) {
     if (record.fields.length !== columns.length) {
         const column = Math.min(record.fields.length, columns.length) + 1;
         throw new Error(`CSV row ${record.row}, column ${column}: expected ${columns.length} fields to match the header; found ${record.fields.length}.`);
     }
     return Object.fromEntries(columns.map((column, index) => [column, record.fields[index]]));
 }
+
+export { csvCells as categoryCsvCells };

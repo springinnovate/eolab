@@ -44,6 +44,50 @@ function formatPosition(position) {
 }
 
 /**
+ * Choose the readout position beside the picked pixel, preferring the right.
+ * If both sides overlap a tool, try the tool edges and prefer the least overlap.
+ * @param {{clientX:number,clientY:number}} anchor Accepted pick in viewport coordinates.
+ * @param {{width:number,height:number}} size Rendered readout dimensions in CSS pixels.
+ * @param {number} viewportWidth Browser viewport width in CSS pixels.
+ * @param {number} viewportHeight Browser viewport height in CSS pixels.
+ * @param {ReadonlyArray<DOMRect>} panels Visible tool rectangles in viewport coordinates.
+ * @return {{left:number,top:number}} Top-left corner of the readout.
+ */
+function chooseReadoutPosition(anchor, { width, height }, viewportWidth, viewportHeight, panels) {
+    const maxLeft = viewportWidth - width - VIEWPORT_EDGE_PIXELS;
+    const maxTop = viewportHeight - height - VIEWPORT_EDGE_PIXELS;
+    const leftOfPick = anchor.clientX - width - POINTER_OFFSET_PIXELS;
+    const rightOfPick = anchor.clientX + POINTER_OFFSET_PIXELS;
+    const belowPick = anchor.clientY + POINTER_OFFSET_PIXELS;
+    const preferredLeft = rightOfPick <= maxLeft ? rightOfPick : leftOfPick;
+    const preferredTop = belowPick <= maxTop ? belowPick : anchor.clientY - height - POINTER_OFFSET_PIXELS;
+    const candidates = [
+        [preferredLeft, preferredTop],
+        [leftOfPick, preferredTop],
+        ...panels.map(panel => [panel.left - width, preferredTop]),
+        ...panels.map(panel => [preferredLeft, panel.bottom]),
+        ...panels.map(panel => [preferredLeft, panel.top - height]),
+    ];
+    let bestPosition;
+    let leastOverlap = Infinity;
+    for (const [x, y] of candidates) {
+        const left = Math.max(VIEWPORT_EDGE_PIXELS, Math.min(x, maxLeft));
+        const top = Math.max(VIEWPORT_EDGE_PIXELS, Math.min(y, maxTop));
+        const overlap = panels.reduce((area, panel) => {
+            const overlapWidth = Math.max(0, Math.min(left + width, panel.right) - Math.max(left, panel.left));
+            const overlapHeight = Math.max(0, Math.min(top + height, panel.bottom) - Math.max(top, panel.top));
+            return area + overlapWidth * overlapHeight;
+        }, 0);
+        if (overlap === 0) return { left, top };
+        if (overlap < leastOverlap) {
+            leastOverlap = overlap;
+            bestPosition = { left, top };
+        }
+    }
+    return bestPosition;
+}
+
+/**
  * Produce a tab-separated clipboard representation of one picker snapshot.
  *
  * @param {Readonly<RasterCursorValueSnapshot>} snapshot
@@ -75,13 +119,14 @@ export function formatRasterCursorValuesForClipboard(snapshot) {
 /** Present immutable pixel-picker snapshots without owning sampling policy. */
 export class RasterCursorValuesView {
     /**
-     * Resolve the pixel-picker DOM contract.
+     * Connect the readout to its marker, controls and the map panels it must avoid.
      *
      * @param {Document} [documentContext=globalThis.document] Owning document.
      * @param {{writeText:(text:string)=>Promise<void>}|null} [clipboard=null]
      * Clipboard boundary; null resolves it from the owning window when possible.
      * @param {{setTimeout:Function,clearTimeout:Function}} [clock=globalThis]
      * Injectable timer boundary for copy confirmation.
+     * @throws {Error} If a required pixel-picker control is missing.
      */
     constructor(
         documentContext = globalThis.document,
@@ -118,6 +163,8 @@ export class RasterCursorValuesView {
         );
         this.marker = requireRasterControl(documentContext, "#raster-cursor-marker");
         this.pending = requireRasterControl(documentContext, "#raster-cursor-pending");
+        this.placementObstacles = [...documentContext.querySelectorAll("[data-pixel-picker-obstacle]")];
+        this.layoutObserver = null;
         this.pointerPosition = null;
         this.anchorPosition = null;
         this.snapshot = null;
@@ -128,10 +175,11 @@ export class RasterCursorValuesView {
     }
 
     /**
-     * Connect the DOM controls to picker policy owned by the raster viewer.
+     * Bind picker shortcuts and keep the current readout clear as map panels resize.
      *
      * @param {{onHide:()=>void,onShow:()=>void}} handlers Interaction callbacks.
      * @return {void}
+     * @throws {TypeError} If a hide or show callback is missing.
      */
     bind(handlers) {
         if (
@@ -144,10 +192,20 @@ export class RasterCursorValuesView {
         this.handlers = handlers;
         this.restore.addEventListener("click", this.handleRestoreClick);
         this.documentContext.addEventListener("keydown", this.handleKeyDown);
+        if (this.placementObstacles.length) {
+            this.layoutObserver = new this.documentContext.defaultView.ResizeObserver(
+                () => this.#applyPointerPosition()
+            );
+            for (const element of [this.documentContext.documentElement, this.root, ...this.placementObstacles]) {
+                this.layoutObserver.observe(element, { box: "border-box" });
+            }
+        }
     }
 
-    /** Detach picker controls from their event sources. @return {void} */
+    /** Stop handling picker controls and layout changes. @return {void} */
     unbind() {
+        this.layoutObserver?.disconnect();
+        this.layoutObserver = null;
         this.restore.removeEventListener("click", this.handleRestoreClick);
         this.documentContext.removeEventListener("keydown", this.handleKeyDown);
         this.#clearCopyFeedback();
@@ -175,16 +233,17 @@ export class RasterCursorValuesView {
     }
 
     /**
-     * Expose whether the picker is available or intentionally hidden.
+     * Present the picker and its restore prompt for the current map mode.
      *
      * @param {boolean} enabled Whether pointer sampling is enabled.
+     * @param {boolean} [canRestore=true] Whether a hidden picker can resume in this mode.
      * @return {void}
      */
-    setEnabled(enabled) {
+    setEnabled(enabled, canRestore = true) {
         if (typeof enabled !== "boolean") {
             throw new TypeError("Pixel-picker enabled state must be boolean");
         }
-        this.restore.hidden = enabled;
+        this.restore.hidden = enabled || !canRestore;
         if (!enabled) this.clear();
     }
 
@@ -356,31 +415,25 @@ export class RasterCursorValuesView {
         this.#showCopyFeedback();
     }
 
-    /** Place marker and panel at the accepted pick, within the viewport. @return {void} */
+    /** Anchor the marker and prefer a readout to its right when clear of map panels and viewport edges. @return {void} */
     #applyPointerPosition() {
         if (this.anchorPosition === null || this.root.hidden) return;
         const { clientX, clientY } = this.anchorPosition;
         this.marker.style.left = `${clientX}px`;
         this.marker.style.top = `${clientY}px`;
         this.marker.hidden = false;
-        const { width, height } = this.root.getBoundingClientRect();
-        const viewportWidth = this.documentContext.defaultView?.innerWidth ?? 1024;
-        const viewportHeight = this.documentContext.defaultView?.innerHeight ?? 768;
-        let left = clientX + POINTER_OFFSET_PIXELS;
-        let top = clientY + POINTER_OFFSET_PIXELS;
-        if (left + width > viewportWidth - VIEWPORT_EDGE_PIXELS) {
-            left = clientX - width - POINTER_OFFSET_PIXELS;
-        }
-        if (top + height > viewportHeight - VIEWPORT_EDGE_PIXELS) {
-            top = clientY - height - POINTER_OFFSET_PIXELS;
-        }
-        this.root.style.left = `${Math.max(VIEWPORT_EDGE_PIXELS, left)}px`;
-        this.root.style.top = `${Math.max(VIEWPORT_EDGE_PIXELS, top)}px`;
+        const panels = this.placementObstacles.map(element => element.getBoundingClientRect())
+            .filter(panel => panel.right > panel.left && panel.bottom > panel.top);
+        const { left, top } = chooseReadoutPosition(this.anchorPosition, this.root.getBoundingClientRect(),
+            this.documentContext.defaultView?.innerWidth ?? 1024,
+            this.documentContext.defaultView?.innerHeight ?? 768, panels);
+        this.root.style.left = `${left}px`;
+        this.root.style.top = `${top}px`;
     }
 
-    /** Restore pointer sampling from its persistent on-map prompt. */
+    /** Restore pointer sampling when the on-map prompt is available. @return {void} */
     #handleRestoreClick() {
-        this.handlers?.onShow();
+        if (!this.restore.hidden) this.handlers?.onShow();
     }
 
     /**

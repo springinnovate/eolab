@@ -10,6 +10,7 @@ import { annotationSummaryPolygons, filterAnnotationPolygons } from "./annotatio
 import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 import { MapInteractionTools } from "./map-interaction-tools.js";
+import { resolveVisitorControls, visitorInitialPanels, VISITOR_CONTROLS_VERSION } from "./visitor-controls.js";
 import { selectLassoFeatures } from "./vector/lasso.js";
 /**
  * Browser entry point and application composition root for EOLab.
@@ -64,7 +65,6 @@ import {
 } from "./catalog-system-state.js";
 import {
     createSingleWorldMap,
-    observeMapViewportSize,
     getCatalogItemMapBounds,
     getSingleWorldMapBounds,
     formatSingleWorldPosition
@@ -101,7 +101,7 @@ import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
-import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, MAP_LINK_NAME_PATTERN } from "./saved-map-view/api-client.js";
+import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, privateMapEditFromLocation, MAP_LINK_NAME_PATTERN } from "./saved-map-view/api-client.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
@@ -168,11 +168,12 @@ import "./style.css";
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 
-/** Presentation mode only; API permissions and source authorization are unchanged.
+const privateMapEdit = privateMapEditFromLocation(globalThis.location);
+/** Presentation mode. The server authorizes editing separately.
  * Read the named-map URL before choosing authoring or recipient controls.
  * @type {string|null}
  */
-const editableMapSlug = editableMapSlugFromPath(globalThis.location.pathname);
+const editableMapSlug = privateMapEdit?.slug ?? editableMapSlugFromPath(globalThis.location.pathname);
 const namedMapSlug = editableMapSlug ?? namedMapSlugFromPath(globalThis.location.pathname);
 /** @type {boolean} Named maps and older shared links use recipient controls. */
 const isSharedViewer = editableMapSlug === null && (namedMapSlug !== null || new URL(globalThis.location.href).searchParams.get("viewer") === "shared");
@@ -190,24 +191,32 @@ let basemapControl = null;
  * @property {string} wmsUrl Browser-facing WMS endpoint.
  * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {string[]} scanDisplayPaths User-facing directories scanned recursively.
- * @property {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} basemap Background tile settings; optional providers are present only when configured.
+ * @property {import("./basemap-control.js").BasemapConfiguration} basemap Background tile settings.
  * @property {{apiKey:string}} [placeSearch] Browser-visible MapTiler credentials for submitted place searches.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
 
 /**
- * Load application settings and establish the private browser identity.
- * Startup awaits this same-origin response before enabling feature requests.
+ * Load application settings and establish the browser's private ownership cookies.
+ * Browsers with Web Locks serialize this request across tabs until the cookie
+ * headers arrive. Each tab can then load history and use features independently.
  *
  * @return {Promise<AppGlobalConfiguration>} The application settings.
- * @throws {Error} If the settings endpoint does not return a successful response.
+ * @throws {Error} If the settings request fails or returns unreadable JSON.
  */
 async function loadAppGlobalConfiguration() {
-    const configurationResponse = await fetch("/api/config", {
+    /** Fetch the settings and let the browser apply the server's cookie headers.
+     * @return {Promise<Response>} Same-origin configuration response.
+     */
+    const requestConfiguration = () => fetch("/api/config", {
         headers: { Accept: "application/json" },
         credentials: "same-origin",
         cache: "no-store",
     });
+    const locks = window.navigator.locks;
+    const configurationResponse = await (locks
+        ? locks.request("eolab-browser-startup", requestConfiguration)
+        : requestConfiguration());
 
     if (!configurationResponse.ok) {
         throw new Error(
@@ -273,14 +282,25 @@ function placeSamplingTool(map) {
 }
 
 /**
- * Create the map, coordinate guide, sampling control and viewport resize observation.
+ * Create the map and supply the floating panels that cover its canvas.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
- * @return {L.Map} The initialized Leaflet map.
+ * @return {ReturnType<typeof createSingleWorldMap>} The initialized application map.
  */
 function initializeMap(appGlobalConfiguration) {
-    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
-    observeMapViewportSize(leafletMap);
+    const panels = [document.getElementById("control-panel"), document.getElementById("map-inspection")];
+    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; }, panels);
+    const recoveryControl = L.control({position: "bottomleft"});
+    /** Keep saved-layer recovery among map controls, independent of workspace availability.
+     * @return {HTMLElement} Existing recovery button owned by Saved Maps.
+     */
+    recoveryControl.onAdd = () => {
+        const button = document.querySelector("#show-unavailable-map-layers");
+        L.DomEvent.disableClickPropagation(button);
+        L.DomEvent.disableScrollPropagation(button);
+        return button;
+    };
+    recoveryControl.addTo(leafletMap);
     addMapCoordinateGuide(L, leafletMap);
     placeSamplingTool(leafletMap);
 
@@ -299,7 +319,7 @@ function initializeMap(appGlobalConfiguration) {
         );
     }
 
-    updateMapPosition({ latlng: leafletMap.getCenter() });
+    updateMapPosition({ latlng: leafletMap.visibleView.getCenter() });
     leafletMap.on("mousemove", updateMapPosition);
 
     return leafletMap;
@@ -686,6 +706,8 @@ function renderCatalogItemInspector(
  * @param {() => void} [onCatalogWorkspaceRequested=() => {}] Reveals Catalog
  * when retained-layer details are requested.
  * @param {() => void} [onLayoutChange=() => {}] Updates map size after editing-mode layout changes.
+ * @param {(options:import("./eomap-layout-controller.js").WorkspacePanelOptions)=>void}
+ * [onWorkspaceOptionsChange=() => {}] Applies visitor panel choices before restoring sources.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  * @throws {TypeError} If the rendering-workspace callback is not callable.
  */
@@ -697,7 +719,8 @@ async function initializeCatalog(
     mapInspection,
     onRenderingWorkspaceRequested = () => {},
     onCatalogWorkspaceRequested = () => {},
-    onLayoutChange = () => {}
+    onLayoutChange = () => {},
+    onWorkspaceOptionsChange = () => {}
 ) {
     if (
         typeof onRenderingWorkspaceRequested !== "function" ||
@@ -796,7 +819,7 @@ async function initializeCatalog(
             }
             renderCatalogItemInspector(
                 catalogState.selectedItem,
-                catalogState.collectionsDocument.collections,
+                catalogState.collectionsDocument?.collections ?? [],
                 appGlobalConfiguration.scanDisplayPathPrefix
             );
         },
@@ -848,7 +871,11 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let mapInteractionMode = "pixel";
+    let visitorAvailability = resolveVisitorControls(isSharedViewer
+        ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
+    /** @type {Readonly<import("./map-interaction-tools.js").MapPointerActions>} */
+    let mapPointerActions = { rasterValues: false, featurePicking: false, histogramBox: false };
+    let mapLayerEditing = false;
     let rasterVisualization = null;
     let rasterSeries = null;
     /** List each retained temporal dataset once, independent of its displayed observations.
@@ -987,7 +1014,10 @@ async function initializeCatalog(
         onItemInfo: inspectRetainedMapLayer,
         restoreRemovedLayer: async (snapshot, isCurrent) => snapshot.local?.kind === "model-output-preview"
             ? outputLayers.restore(snapshot, isCurrent).then(() => {
-                if (isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+                if (isCurrent()) {
+                    mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+                    if (snapshot.local.layerName && mapLayerController.getRecord(snapshot.key)) onRenderingWorkspaceRequested();
+                }
             }) : snapshot.local?.kind === "temporal" ? restoreRemovedTemporal(snapshot, isCurrent)
             : snapshot.local?.kind === "uploaded-vector" ? restoreUploadedVector(snapshot, isCurrent)
             : snapshot.local?.kind === "uploaded-raster" ? restoreUploadedRaster(snapshot, isCurrent)
@@ -1105,6 +1135,7 @@ async function initializeCatalog(
         }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
+    rasterSeries.setMapSamplingBoxAvailable(visitorAvailability.histogramBox);
     rasterClips = new RasterClipsController({
         api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
             onContextChange: context => presentSamplingContext("raster-clips", context),
@@ -1145,11 +1176,12 @@ async function initializeCatalog(
     void rasterClips.start();
 
     rasterVisualization = initializeRasterViewer({
-        controlsView: rasterControls,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
+        getMapCenter: leafletMap.visibleView.getCenter,
         leaflet: L,
         onTileError: reportMapTileError,
+        inspectionInitiallyEnabled: !isSharedViewer,
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
@@ -1178,6 +1210,7 @@ async function initializeCatalog(
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
     }, {
+        controlsView: rasterControls,
         mapLayerController,
         cursorValuesView: new RasterCursorValuesView(),
         getTemporalItem: identity => catalogItemClient.get(identity),
@@ -1198,10 +1231,8 @@ async function initializeCatalog(
      * @return {void}
      */
     function setLayerEditingMode(editing) {
-        mapFeatureHover?.setEnabled(!editing);
-        mapInteractionMode = editing ? "layer-editing" : (mapInteractionTools?.mode ?? "pixel");
+        mapLayerEditing = editing;
         document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
-        rasterVisualization.setPointerInspectionEnabled(!editing);
         mapInteractionTools?.setEditing(editing);
         onLayoutChange();
     }
@@ -1302,6 +1333,7 @@ async function initializeCatalog(
     }
     /** Describe and display an owned raster through ordinary tiles, style and analysis.
      * Reopening, Undo and additional views recheck ownership and availability.
+     * Callers reveal Map contents for explicit user actions; restoration leaves disclosure alone.
      * @param {import("./uploads/api.js").UploadSummary} upload Available raster file.
      * @param {Object} [presentation={}] Restored key, appearance, visibility and current-request callback.
      * @return {Promise<Object|null>} Retained raster record, or null after supersession.
@@ -1327,7 +1359,6 @@ async function initializeCatalog(
             removed: () => {},
         }, {sourceName: upload.name, canAddView: true, ...presentation});
         if (record) {
-            onRenderingWorkspaceRequested();
             mapLayerStackView.announceStatus(`${upload.name} added to map.`);
         }
         return record;
@@ -1343,10 +1374,14 @@ async function initializeCatalog(
         const record = await addUploadedRaster(upload, {key: snapshot.key, label: snapshot.label,
             customName: snapshot.customName, visible: snapshot.visible, opacity: snapshot.opacity,
             isCustom: snapshot.isCustom, appearance: snapshot.local.appearance, isCurrent});
-        if (record) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+        if (record) {
+            mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+            onRenderingWorkspaceRequested();
+        }
     }
     /** Display a generated vector through the same adapter as catalog layers and uploads.
      * The run owner supplies lifecycle actions; this composition function connects them.
+     * The originating user action owns revealing Map contents, independently of attachment.
      * @param {import("./vector/api.js").RunArtifactVectorSource} source Authorized original file metadata.
      * @param {Object} lifecycle Run detail, removal and restoration callbacks.
      * @param {Object} presentation Layer identity, appearance, filter and current-request check.
@@ -1368,7 +1403,6 @@ async function initializeCatalog(
             if (!isCurrent()) return null;
             mapLayerController.setVisible(presentation.key, presentation.visible);
             vectorMapLayerAdapter.added(record);
-            onRenderingWorkspaceRequested();
             return record;
         } catch (error) {
             if (!isCurrent()) return null;
@@ -1452,10 +1486,16 @@ async function initializeCatalog(
     if (!isSharedViewer) {
         uploadsDialog = new UploadsDialog({
             document, appTitle: appGlobalConfiguration.appTitle,
+            /** Display an upload at the user's request and reveal its available controls.
+             * @param {import("./uploads/api.js").UploadSummary} upload Selected private file.
+             * @return {Promise<void>} Completion after attachment and disclosure.
+             * @throws {Error} If metadata, publication or display fails.
+             */
             addToMap: async upload => {
                 if (getUploadedLayerKeys(upload.id).length) return;
-                if (upload.kind === "raster") await addUploadedRaster(await getRasterUpload(upload.id));
-                else await addUploadedVector(await getUpload(upload.id));
+                if (upload.kind === "raster") {
+                    if (await addUploadedRaster(await getRasterUpload(upload.id))) onRenderingWorkspaceRequested();
+                } else await addUploadedVector(await getUpload(upload.id));
             },
             isOnMap: id => getUploadedLayerKeys(id).length > 0,
             removeFromMap: id => { for (const key of getUploadedLayerKeys(id)) mapLayerController.removeKey(key); },
@@ -1629,7 +1669,17 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
-        showOutput: (job, file) => outputLayers.show(job, file),
+        /** Show a requested result and reveal controls when a new generated vector attaches.
+         * @param {Object} job Authorized run snapshot.
+         * @param {Object} file Selected manifest entry.
+         * @return {Promise<void>} Completion after attachment or the output owner's failure feedback.
+         */
+        showOutput: async (job, file) => {
+            const alreadyOnMap = outputLayers.state(job.jobId, file.artifactId, file).onMap;
+            await outputLayers.show(job, file);
+            if (!alreadyOnMap && file.mediaType === "application/geopackage+sqlite3" &&
+                outputLayers.state(job.jobId, file.artifactId, file).onMap) onRenderingWorkspaceRequested();
+        },
         outputState: (jobId, artifactId, file) => outputLayers.state(jobId, artifactId, file),
         /** Capture run displays before their source access is revoked.
          * @param {string} id Model run identity.
@@ -1888,7 +1938,7 @@ async function initializeCatalog(
     }
     savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
-        viewport: createSavedMapLeafletViewport(leafletMap),
+        viewport: createSavedMapLeafletViewport(leafletMap.visibleView),
         mapLayers: mapLayerController,
         catalogVisualization,
         catalogItems: catalogItemClient,
@@ -1896,12 +1946,24 @@ async function initializeCatalog(
         viewerOrigin: globalThis.location.origin,
         storage: isSharedViewer || editableMapSlug !== null ? null : new SavedMapViewLocalStorage(),
         restoreSharedMap: isSharedViewer,
-        publicationApi: new SavedMapApiClient(),
+        publicationApi: new SavedMapApiClient(undefined, privateMapEdit?.token),
         namedMapSlug,
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
         applyMapHeading,
+        applyVisitorControls: settings => {
+            visitorAvailability = resolveVisitorControls(settings);
+            onWorkspaceOptionsChange({
+                allowCatalog: visitorAvailability.catalog,
+                allowMapContents: visitorAvailability.mapContents,
+                initialState: visitorInitialPanels(settings),
+            });
+            const { rasterValues, histogramBox } = visitorAvailability;
+            rasterVisualization.setMapInspectionAvailability({ rasterValues, histogramBox });
+            rasterSeries.setMapSamplingBoxAvailable(histogramBox);
+            mapInteractionTools?.setAvailability(visitorAvailability);
+        },
         basemap: basemapControl,
         mapLegend,
         initialViewport: {
@@ -2058,6 +2120,7 @@ async function initializeCatalog(
             });
     }
     const vectorTimeSeries = new VectorTimeSeriesController({
+        describeStatisticsSource: describeVectorStatisticsSource,
         onOpenFeature: index => {
             if (index !== null) vectorFeatureInspector.showResult(index);
             openFeaturePlot();
@@ -2082,6 +2145,7 @@ async function initializeCatalog(
         onNavigateSelection: direction => vectorFeatureInspector.navigateSelection(direction),
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({
+        describeStatisticsSource: describeVectorStatisticsSource,
         onCompareFeatures: openFeatureComparison,
         onSelectFeature: index => vectorFeatureInspector.showResult(index),
         onVisibilityChange: (visible, moveFocus) => {
@@ -2103,6 +2167,17 @@ async function initializeCatalog(
     function openFeatureComparison() {
         vectorFeatureProfile.close();
         vectorTimeSeries.open();
+    }
+    /**
+     * Find the original layer and numeric fields behind an inspected vector view.
+     * @param {string} sourceId Retained vector view identity from an observation.
+     * @return {ReturnType<import("./vector/plot-statistics.js").DescribeStatisticsSource>} Path-free source and fields, or null.
+     */
+    function describeVectorStatisticsSource(sourceId) {
+        const record = mapLayerController.getRecord(sourceId);
+        if (record?.adapter !== vectorMapLayerAdapter) return null;
+        const { selection, numericFields } = record.adapter.describeSource(record);
+        return selection ? { selection, fields: numericFields } : null;
     }
     /**
      * Supply the same top-first published vector targets to click and hover queries.
@@ -2132,10 +2207,34 @@ async function initializeCatalog(
                 };
             });
     }
+    /**
+     * Provide the selected vector view's fields and remember inspector label and format changes.
+     * @param {string} key Opaque identity of the inspected map layer view.
+     * @return {import("./vector/feature-field-display.js").FeatureFieldDisplay|null} Settings for a current vector view.
+     */
+    function describeFeatureFieldDisplay(key) {
+        const record = mapLayerController.getRecord(key);
+        if (record?.adapter !== vectorMapLayerAdapter || !record.entry.visible) return null;
+        const source = record.adapter.describeSource(record);
+        const fields = source.fields.map(({name}) => name);
+        const numericFields = source.numericFields.map(({name}) => name);
+        const fieldNames = new Set(fields);
+        const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
+            .filter(([field]) => fieldNames.has(field)));
+        return {fields, numericFields, formats, apply: fieldFormats => {
+            if (mapLayerController.getRecord(key) !== record || !record.entry.visible) return false;
+            const currentFields = new Set(record.adapter.describeSource(record).fields.map(({name}) => name));
+            if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
+            record.fieldFormats = fieldFormats;
+            savedMapViewController.scheduleRemember();
+            return true;
+        }};
+    }
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
         getVisibleTargets: () => visibleVectorInspectionTargets(),
+        getFieldDisplay: describeFeatureFieldDisplay,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
             if (visible) mapInspection.showFeatureInspector({ activate: false });
@@ -2178,39 +2277,44 @@ async function initializeCatalog(
         onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**
-     * Place a histogram box or inspect a map point using the selected tool.
-     * Leaflet emits this event only for a completed click, not a drag-pan.
+     * Dispatch a completed Leaflet map click to the active inspection actions.
      *
      * @param {{latlng:{lng:number,lat:number},containerPoint?:{x:number,y:number}}}
      * event Leaflet map-click shape.
      * @return {void}
      */
     function exploreMap(event) {
-        if (!["pixel", "box"].includes(mapInteractionMode)) return;
+        const { rasterValues, featurePicking, histogramBox } = mapPointerActions;
+        if (!rasterValues && !featurePicking && !histogramBox) return;
         mapInspection.beginMapClick(event.latlng);
-        const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
-        pixelPoint = isCanonicalWgs84Position(position) ? Object.freeze(position) : null;
-        rasterSeries.setPosition(pixelPoint);
         rasterClickSelected = false;
         selectingMapClick = true;
         try {
-            rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
-                histogram: mapInteractionMode === "box",
-                onSelected: area => {
-                    if (area?.kind === "polygonArea") return;
-                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : ["selectedArea", "samplingBox"].includes(area?.kind) ? "Sampling box" : "Sample area");
-                },
-            });
-            if (!rasterClickSelected) {
-                mapInspection.closeHistogram(false);
-                if (mapInteractionMode === "box") {
-                    const box = pixelPoint && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
-                        ? rasterVisualization.selectSamplingBox(event.latlng) : null;
-                    updateRasterSeriesArea(box, box ? "Sampling box" : "");
+            if (rasterValues || histogramBox) {
+                const position = { longitude: event.latlng.lng, latitude: event.latlng.lat };
+                const validPosition = isCanonicalWgs84Position(position);
+                if (visitorAvailability.rasterValues) {
+                    pixelPoint = validPosition ? Object.freeze(position) : null;
+                    rasterSeries.setPosition(pixelPoint);
                 }
+                rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
+                    histogram: histogramBox,
+                    onSelected: area => {
+                        if (area?.kind === "polygonArea") return;
+                        updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : ["selectedArea", "samplingBox"].includes(area?.kind) ? "Sampling box" : "Sample area");
+                    },
+                });
+                if (!rasterClickSelected) {
+                    mapInspection.closeHistogram(false);
+                    if (histogramBox) {
+                        const box = validPosition && mapInspection.activeTool === "raster-series" && rasterSeries.usesMapSamplingBox
+                            ? rasterVisualization.selectSamplingBox(event.latlng) : null;
+                        updateRasterSeriesArea(box, box ? "Sampling box" : "");
+                    }
+                }
+                mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             }
-            mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
-            if (mapInteractionMode === "pixel") {
+            if (featurePicking) {
                 void vectorFeatureInspector.inspect(event);
                 annotations?.inspectAt(event.latlng);
             }
@@ -2273,8 +2377,10 @@ async function initializeCatalog(
                     ...annotations.drawingLayers().filter(layer => layer.drawingLayerId).map(layer => layer.localLayerId)] });
             void annotationSessions.refresh();
         });
+        if (isSharedViewer) await restoringMap;
     }
     mapFeatureHover = new MapFeatureHover(leafletMap, {
+        enabled: false,
         findLocalText: event => {
             const hit = annotations.polygonsAt(event.latlng)[0];
             return hit ? `${hit.layerName}\n${hit.polygon.name}${hit.polygon.contributor ? ` — ${hit.polygon.contributor}` : ""}` : null;
@@ -2286,9 +2392,10 @@ async function initializeCatalog(
             signal,
         }),
     });
-    leafletMap.getContainer().classList.add("leaflet-crosshair");
     mapInteractionTools = new MapInteractionTools({
         documentContext: document, map: leafletMap, leaflet: L,
+        availability: visitorAvailability,
+        editing: mapLayerEditing,
         getTargets: () => mapLayerController.retainedRecords.flatMap(record => {
             if (record.adapter !== vectorMapLayerAdapter) return [];
             const source = record.adapter.describeSource(record);
@@ -2296,12 +2403,13 @@ async function initializeCatalog(
                 selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
         }),
         selectFeatures: selectLassoFeatures,
-        onModeChange: (mode, enabled) => {
-            mapInteractionMode = enabled ? mode : "layer-editing";
-            mapFeatureHover.setEnabled(enabled && mode === "pixel");
-            rasterVisualization.setPointerInspectionEnabled(enabled && ["pixel", "box"].includes(mode));
-            rasterVisualization.setPixelPickingEnabled(enabled && mode === "pixel");
-            rasterVisualization.setSamplingBoxPointerEnabled(enabled && mode === "box");
+        onActionsChange: actions => {
+            mapPointerActions = actions;
+            mapFeatureHover.setEnabled(actions.featurePicking);
+            vectorFeatureInspector.setPickingEnabled(actions.featurePicking);
+            rasterVisualization.setPixelPickingEnabled(actions.rasterValues);
+            rasterVisualization.setSamplingBoxPointerEnabled(actions.histogramBox);
+            rasterVisualization.setPointerInspectionEnabled(actions.rasterValues || actions.histogramBox);
         },
     });
     leafletMap.on("unload", () => mapInteractionTools.dispose());
@@ -2344,15 +2452,17 @@ async function initializeCatalog(
     }
 
     /**
-     * Select one result, show its footprint until details close, and activate
+     * Select a result or retained layer, show its footprint until details close, and activate
      * analysis when it is a Catalog raster.
      *
      * @param {Object} item Catalog Item selected from results or discovery.
      * @param {HTMLElement|null} [requestedButton=null] Optional matching result
      * button when the Item is already present in the current page.
+     * @param {HTMLElement|null} [returnFocusTarget=null] Layer-information opener;
+     * defaults to the matching Catalog result button.
      * @return {void}
      */
-    function selectCatalogItem(item, requestedButton = null) {
+    function selectCatalogItem(item, requestedButton = null, returnFocusTarget = null) {
         catalogMapActions.applyAssessment(item);
         const itemButton = requestedButton ??
             catalogState.resultViews.get(getCatalogItemKey(item))?.detailsButton ?? null;
@@ -2368,7 +2478,7 @@ async function initializeCatalog(
         footprintController.select(item);
         renderCatalogItemInspector(
             item,
-            catalogState.collectionsDocument.collections,
+            catalogState.collectionsDocument?.collections ?? [],
             appGlobalConfiguration.scanDisplayPathPrefix
         );
         const visualization = getCatalogVisualization(item);
@@ -2379,7 +2489,7 @@ async function initializeCatalog(
         }
         updateCatalogMapAction(item);
         catalogPaneControls.showInspector({
-            moveFocus: true, returnFocusTarget: itemButton,
+            moveFocus: true, returnFocusTarget: returnFocusTarget ?? itemButton,
             onDismiss: () => footprintController.clearSelectedFootprint(),
         });
     }
@@ -2730,13 +2840,9 @@ async function initializeCatalog(
      */
     function inspectRetainedMapLayer(item) {
         if (item === null) return;
-        if (isSharedViewer) {
-            renderCatalogItemInspector(item, [], appGlobalConfiguration.scanDisplayPathPrefix);
-            catalogPaneControls.showInspector({ moveFocus: true, returnFocusTarget: document.activeElement });
-            return;
-        }
-        onCatalogWorkspaceRequested();
-        selectCatalogItem(item);
+        const returnFocusTarget = document.activeElement;
+        if (!isSharedViewer) onCatalogWorkspaceRequested();
+        selectCatalogItem(item, null, returnFocusTarget);
     }
 
     catalogLayerZoom.addEventListener("click", () => {
@@ -2748,7 +2854,7 @@ async function initializeCatalog(
     catalogLayerToggle.addEventListener("click", () => {
         void catalogMapActions.toggle(catalogState.selectedItem);
     });
-    if (!isSharedViewer) await loadCatalog(true);
+    if (!isSharedViewer || visitorAvailability.catalog) await loadCatalog(true);
     return refreshCatalogDatasets;
 }
 
@@ -2888,6 +2994,8 @@ async function initializeScanner(refreshCatalog) {
 
 /**
  * Starts the browser application from its runtime contract.
+ * Following another private edit link reloads its credentials and saved draft
+ * together, discarding unsaved changes as ordinary page navigation does.
  *
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
@@ -2904,7 +3012,13 @@ async function startApplication() {
         document.querySelector("#reset-map-view").hidden = true;
         document.querySelector("#copy-map-link").hidden = true;
         if (isSharedViewer) document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Reload to retry, or ask the author for a complete map link.";
-        if (editableMapSlug !== null) document.querySelector("#published-map-editor").hidden = false;
+        if (editableMapSlug !== null) {
+            document.querySelector("#published-map-editor").hidden = false;
+            if (privateMapEdit !== null) {
+                document.querySelector("#published-map-cancel").href = `/maps/${encodeURIComponent(editableMapSlug)}`;
+                window.addEventListener("hashchange", () => window.location.reload());
+            }
+        }
     } else {
         document.querySelector("#copy-map-link-label").textContent = "Publish map";
         document.querySelector("#copy-map-link").title = "Publish a map for others to explore";
@@ -2926,12 +3040,12 @@ async function startApplication() {
             placeFirstSampleHint(leafletMap);
         },
         allowCatalog: !isSharedViewer,
+        allowMapContents: !isSharedViewer,
         allowOperationalStatus: !isSharedViewer,
         workspaceStorage: isSharedViewer || editableMapSlug !== null
             ? null
             : new SavedMapViewLocalStorage(undefined, "eolab.workspace-panels.v1"),
     });
-    if (isSharedViewer) layoutController.showWorkspace("map-layers");
     const mapInspection = new MapInspectionController({
         onLayoutChange: layout => layoutController.setInspectionLayout(layout),
     });
@@ -2955,7 +3069,8 @@ async function startApplication() {
         mapInspection,
         () => layoutController.showWorkspace("map-layers"),
         () => layoutController.showWorkspace("catalog"),
-        () => layoutController.notifyLayoutChange()
+        () => layoutController.notifyLayoutChange(),
+        options => layoutController.setWorkspaceOptions(options)
     );
     if (!isSharedViewer) await initializeScanner(refreshCatalog);
 }

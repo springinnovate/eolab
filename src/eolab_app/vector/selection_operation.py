@@ -1,4 +1,4 @@
-"""Count matching vector features in a Job service execution process."""
+"""Measure original vector features in a Jobs service execution process."""
 
 import asyncio
 from dataclasses import replace
@@ -21,6 +21,11 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 from eolab_app.source_files import SourceFileError, resolve_leased_source_path
+from eolab_app.vector.field_statistics import (
+    VectorFieldStatistics,
+    VectorLayerStatisticsRequest,
+    read_vector_layer_statistics,
+)
 
 if TYPE_CHECKING:
     import httpx2
@@ -119,6 +124,57 @@ class SelectionMeasurementResult(BaseModel):
         if (self.measurements is None) == (self.error is None):
             raise ValueError("Expected measurements or a selection error")
         return self
+
+
+class LayerStatisticsInput(BaseModel):
+    """Whole-layer request and the server-only credentials needed by the worker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    request: VectorLayerStatisticsRequest
+    uploadOwner: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    readLease: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+
+
+class LayerStatisticsResult(BaseModel):
+    """Complete numeric summaries in the order requested by the plot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    summaries: tuple[VectorFieldStatistics, ...]
+
+
+def measure_layer_statistics(inputs: LayerStatisticsInput) -> LayerStatisticsResult:
+    """Reauthorize an original layer and summarize its fields in a native job.
+
+    Args:
+        inputs: Whole-layer fields, source identity and any private credentials.
+
+    Returns:
+        Complete numeric statistics for each requested field.
+
+    Raises:
+        SelectionUnavailableError: If the original source identity has changed.
+        VectorFeatureError: If the original layer or fields cannot be read.
+        VectorUploadError: If the upload is unavailable to the submitted owner.
+    """
+    import httpx2
+    from eolab_app.bounded_vector import _limit_memory
+
+    async def read_statistics() -> LayerStatisticsResult:
+        """Open the original source in the worker and read scalar values only."""
+        source = SelectionMeasurementInput(
+            selection=inputs.request.source,
+            uploadOwner=inputs.uploadOwner,
+            readLease=inputs.readLease,
+        )
+        async with httpx2.AsyncClient(
+            timeout=5, trust_env=False, follow_redirects=False
+        ) as client:
+            resolved = await _open_job_selection(client, source)
+        with _limit_memory():
+            summaries = read_vector_layer_statistics(resolved, inputs.request.fields)
+        return LayerStatisticsResult(summaries=summaries)
+
+    return asyncio.run(read_statistics())
 
 
 def measure_selected_features(

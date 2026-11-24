@@ -64,7 +64,7 @@ export class ModelsView {
         this.getSetupIntegration = getSetupIntegration;
         this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["page", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
-            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
+            "library-items", "library-status", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
         this.tabStrip = new ToolTabStrip(documentContext, "models");
@@ -97,7 +97,7 @@ export class ModelsView {
         this.handlers = handlers;
         this.listeners = [[this.openers[0], "click", handlers.onOpen], [this.openers[1], "click", () => { handlers.onPage("runs"); handlers.onOpen(); }],
             [this.elements.close, "click", handlers.onClose], [this.elements.query, "input", () => handlers.onQuery(this.elements.query.value)],
-            [this.elements.refresh, "click", handlers.onRefresh], [this.elements["refresh-runs"], "click", handlers.onRefreshRuns],
+            [this.elements["refresh-runs"], "click", handlers.onRefreshRuns],
             [this.elements.more, "click", handlers.onMore], [this.elements.recover, "click", handlers.onRetry],
             ...Object.entries(this.navigation).map(([page, node]) => [node, "click", () => handlers.onPage(page)])];
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
@@ -225,7 +225,7 @@ export class ModelsView {
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
         const mapHelp = this.element("p", "", "models-help");
         group.append(vectorGroup, areaDescription, mapHelp);
-        if (input.type === "mask_source") group.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
+        if (input.type === "mask_source") group.append(this.element("p", "All selected polygons or positive raster cells form one combined flow starting area and one overall result. Changing map visibility does not change these choices.", "models-help"));
         return {group, source, choiceHint, sourceOrigin, maskGroup, rasterReason, maskHint, vectorGroup, selectionCard, selectedCount, editFilter,
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
@@ -283,7 +283,7 @@ export class ModelsView {
             parameters[name] = input;
             fields.append(this.field(`models-parameter-${name}`, `${parameter.label}${parameter.unit ? ` (${parameter.unit})` : ""}${parameter.type === "optional_number" ? " — optional" : ""}`, input));
             if (modelHasInput(draft.model, "mask_source") && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
-            if (parameter.type === "summary_expression") fields.append(this.element("p", "a is the selected raster. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10).", "models-help"));
+            if (parameter.type === "summary_expression") fields.append(this.element("p", "a represents the raster values being summarized. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10). stdev uses population standard deviation; areaha returns hectares.", "models-help"));
         }
         const runLabel = "Run tool";
         const run = this.button(runLabel, () => {}, "models-primary"); run.type = "submit";
@@ -304,11 +304,11 @@ export class ModelsView {
      * @return {{root:HTMLDetailsElement,preview:HTMLButtonElement,model:HTMLAnchorElement,run:HTMLAnchorElement,message:HTMLParagraphElement}} Stable disclosure and YAML action controls.
      */
     recipeDetails() {
-        const root = this.element("details", "", "models-details"); root.append(this.element("summary", "Click to inspect the EOlab model recipe"));
+        const root = this.element("details", "", "models-details"); root.append(this.element("summary", "Tool definition (YAML)"));
         const actions = this.element("div", "", "models-actions");
-        const preview = this.button("View Model YAML", this.handlers.onYaml, "models-action");
-        const model = this.element("a", "Download Model YAML"); model.download = "";
-        const run = this.element("a", "Download Run YAML"); run.download = "";
+        const preview = this.button("View tool definition (YAML)", this.handlers.onYaml, "models-action");
+        const model = this.element("a", "Download tool definition (YAML)"); model.download = "";
+        const run = this.element("a", "Download run record (YAML)"); run.download = "";
         const message = this.element("p", "", "models-help");
         actions.append(preview, model, run); root.append(actions, message);
         return {root, preview, model, run, message};
@@ -640,7 +640,7 @@ export class ModelsView {
                 }
                 if (input.type === "habitat_stack") {
                     if (value.kind === "earthEngine") {
-                        list.append(this.element("dt", input.label), this.element("dd", `Original model inputs from Earth Engine · Assessment year ${value.year}`));
+                        list.append(this.element("dt", input.label), this.element("dd", `Prepared Earth Engine rasters · Assessment year ${value.year}`));
                         for (const [field, label] of [["predictorDatasets", "Predictor datasets"], ["responseDatasets", "Observed response datasets"]])
                             list.append(this.element("dt", label), this.element("dd", value[field] == null ? "All configured datasets"
                                 : value[field].map(id => state.habitatDatasetLabels?.get(id) ?? id).join(", ")));
@@ -713,7 +713,9 @@ export class ModelsView {
         }
     }
 
-    /** Present the selected Data tools page, promoting raster creation among search matches.
+    /** Present the selected Data tools page, listing raster creation first when it matches the search.
+     * Update run history only while the Runs list is visible.
+     * Preserve keyboard focus on a run button when other runs are added or removed.
      * An offered retry remains visible and focusable while its request is in progress.
      * @param {Object} state Controller snapshot.
      * @return {void}
@@ -753,32 +755,38 @@ export class ModelsView {
             }));
         }
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
-        this.elements.refresh.disabled = state.loading;
         this.renderSetup(state); this.renderRun(state);
+        if (state.active && state.page === "runs") this.renderRunHistory(state);
+        this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
+    }
+
+    /** Show the latest run names, progress and order, and update the history controls.
+     * @param {Object} state Controller snapshot with ordered runs and pagination state.
+     * @return {void}
+     */
+    renderRunHistory(state) {
         const retainedRuns = new Set(state.runs.map(job => job.jobId));
         for (const [id, card] of this.runCards) {
             if (retainedRuns.has(id)) continue;
             card.root.remove(); this.runCards.delete(id);
         }
-        for (const job of state.runs) {
+        const runList = this.elements["runs-list"];
+        for (const [index, job] of state.runs.entries()) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
                 const root = this.element("article", "", "models-card");
                 const heading = this.element("h3"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId), "models-card-open models-name");
                 heading.append(button);
                 const status = this.element("small", "", "models-help"); root.append(heading, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
-                this.elements["runs-list"].append(root);
+                // Creation time and job ID fix the relative order of the retained cards.
+                runList.insertBefore(root, runList.children[index] ?? null);
             }
             card.button.textContent = job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
             card.status.textContent = `${describeModelProgress(job)} · ${formatModelRunCreatedTime(job)}`;
         }
-        // Move retained nodes only when ordering changes, keeping focus during status reads.
-        const order = state.runs.map(job => job.jobId).join();
-        if (order !== this.runOrder) { this.runOrder = order; for (const job of state.runs) this.elements["runs-list"].append(this.runCards.get(job.jobId).root); }
         this.elements["runs-status"].textContent = state.historyLoading ? "Loading runs…" : state.runs.length ? "Runs belong to this browser session. Closing Data tools does not cancel them." : "No data tool runs in this browser session yet.";
         this.elements.more.hidden = !state.nextCursor; this.elements.more.disabled = state.historyLoading;
         this.elements["refresh-runs"].disabled = state.historyLoading;
-        this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
     }
 
     /** Release the page tab strip and detach the view’s persistent event listeners.

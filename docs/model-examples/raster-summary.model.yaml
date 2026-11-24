@@ -2,8 +2,8 @@
 schema: eolab.model/v1
 id: raster-summary
 version: "1.1.0"
-title: Raster summary
-description: Calculate one scalar expression for an explicit raster and area.
+title: Calculate a raster statistic within an area
+description: Calculate a mean, sum, minimum, maximum, or another summary value from raster pixels within an area you choose—for example, average elevation within a watershed. All selected polygons are treated as one combined area.
 inputs:
   raster:
     type: raster
@@ -14,7 +14,7 @@ inputs:
 parameters:
   summary:
     type: summary_expression
-    label: Summary formula
+    label: Statistic formula
     alias: a
     grammar: eolab.scalar/v1
     default: "sum(a)"
@@ -28,6 +28,7 @@ steps:
       expression: {parameter: summary}
 outputs:
   statistics:
+    label: Raster statistic for the chosen area
     source: calculate.statistics
     role: result
     presentation: table

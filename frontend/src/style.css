@@ -122,7 +122,7 @@ select:hover:not(:disabled) {
   font: var(--font-size-ui)/1.35 var(--font-sans);
 }
 .temporal-scrubber[hidden], .temporal-scrubber [hidden] { display: none; }
-.timeline-settings, .timeline-transport, .timeline-caption { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.timeline-settings, .timeline-transport { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .timeline-settings label { display: grid; min-width: 0; gap: 1px; font-size: 0.75rem; color: var(--text-2); }
 .timeline-settings label:first-child { flex: 1; }
 .timeline-settings label:last-child { flex: 0 1 11rem; }
@@ -135,9 +135,16 @@ select:hover:not(:disabled) {
 .timeline-transport button:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .timeline-transport input { flex: 1; min-width: 0; margin: 0 3px; accent-color: var(--brand); }
 .temporal-scrubber :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.timeline-caption { justify-content: space-between; flex-wrap: wrap; column-gap: 8px; row-gap: 0; font-variant-numeric: tabular-nums; }
-.timeline-caption output { font-weight: 650; }
-.timeline-caption span, .temporal-scrubber p { margin: 0; color: var(--text-2); font-size: 0.75rem; }
+.timeline-caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-caption output { grid-column: 1 / -1; min-block-size: 1lh; font-weight: 650; }
+.timeline-caption p { overflow-wrap: anywhere; }
+.timeline-caption span, .timeline-caption p { margin: 0; color: var(--text-2); font-size: 0.75rem; }
 #map:has(> .temporal-scrubber:not([hidden])) .leaflet-bottom.leaflet-left { bottom: var(--timeline-height); }
 #map:has(> .temporal-scrubber:not([hidden])) .leaflet-bottom .eolab-basemap-control { margin-bottom: var(--timeline-height); }
 #map:has(> .temporal-scrubber:not([hidden])) > #raster-first-sample-hint { bottom: calc(var(--timeline-height) + 24px); }
@@ -1299,7 +1306,9 @@ h5 {
 }
 
 .raster-palette,
-.raster-style-stops label {
+.raster-style-stops label,
+.raster-appearance-mode,
+.raster-category-fields label {
   display: grid;
   gap: 5px;
   color: var(--text-2);
@@ -1318,7 +1327,10 @@ h5 {
 .raster-palette-row .secondary-button { margin: 0; }
 
 .raster-palette select,
-.raster-style-stops input[type="number"] {
+.raster-style-stops input[type="number"],
+.raster-appearance-mode select,
+.raster-category-fields input,
+.raster-category-fields textarea {
   min-width: 0;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -1334,13 +1346,18 @@ h5 {
   align-items: end;
 }
 
-.raster-style-stops label { min-width: 0; }
+.raster-style-stops label,
+.raster-appearance-mode,
+.raster-category-fields label { min-width: 0; }
 .raster-value-override { display: grid; gap: 8px; }
 .raster-value-toggle { display: flex; align-items: center; gap: 8px; }
 .raster-value-toggle input { margin: 0; }
 .raster-value-override .raster-style-stops[hidden] { display: none; }
 .raster-value-override .raster-style-stops > p { grid-column: 1 / -1; }
-.raster-style-stops input[type="number"] { width: 100%; }
+.raster-style-stops input[type="number"],
+.raster-appearance-mode select,
+.raster-category-fields input,
+.raster-category-fields textarea { width: 100%; }
 
 .raster-style-stops input[type="color"] {
   width: 42px;
@@ -1354,28 +1371,6 @@ h5 {
 
 .raster-style-stops [aria-invalid="true"] {
   border-color: var(--status-danger);
-}
-
-.raster-appearance-mode,
-.raster-category-fields label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: 0.7rem;
-  font-weight: 600;
-}
-
-.raster-appearance-mode select,
-.raster-category-fields input,
-.raster-category-fields textarea {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  padding: 7px 8px;
-  color: var(--text-1);
 }
 
 .raster-category-fields textarea {
@@ -2944,6 +2939,16 @@ div.chart-tooltip {
   display: none;
 }
 
+#show-unavailable-map-layers {
+  max-width: min(16rem, calc(100vw - 52px));
+  min-height: 34px;
+  background: var(--surface-2);
+  box-shadow: var(--elevation-control);
+  font-size: var(--font-size-ui);
+}
+
+#show-unavailable-map-layers[hidden] { display: none; }
+
 @container workspace-sidebar (max-width: 520px) {
   .panel-header-actions {
     gap: 6px;
@@ -3228,7 +3233,7 @@ div.chart-tooltip {
     gap: 0.3rem;
 }
 
-#publish-map-dialog input {
+#publish-map-dialog input:not([type="checkbox"]) {
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
@@ -3244,13 +3249,44 @@ div.chart-tooltip {
     display: none;
 }
 
-.panel-content:has(#toggle-catalog-workspace[hidden]) {
+:is(#published-map-editor, #publish-map-dialog) .visitor-control-options {
+    min-width: 0;
+    padding: 0.35rem 0.65rem 0.55rem;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+}
+:is(#published-map-editor, #publish-map-dialog) .visitor-control-options label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    margin: 0.25rem 0;
+}
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
+    min-width: 0;
+    margin: 0;
+    padding: 0 0 0 1.1rem;
+    border: 0;
+}
+
+:is(#published-map-editor, #publish-map-dialog) .visitor-panel-initial {
+    margin-left: 1.1rem;
+}
+
+.panel-content:has(.workspace-disclosure[hidden]) {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .panel-content:has(#toggle-catalog-workspace[hidden]) > #toggle-map-layers,
 .panel-content:has(#toggle-catalog-workspace[hidden]) > #eomap-map-layers-region {
   grid-column: 1;
+}
+
+#app:has(#toggle-catalog-workspace[hidden]) {
+  --workspace-catalog-allocation: 0px;
+}
+
+#app:has(#toggle-map-layers[hidden]) {
+  --workspace-map-layers-allocation: 0px;
 }
 
 .shared-layer-details .catalog-inspector:not([hidden]) {
@@ -4467,6 +4503,8 @@ article.raster-histogram-summary {
 [data-inspection-loading="true"] #vector-feature-result { opacity: 0.35; }
 @keyframes map-inspection-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
+  /* A tab revealed from overflow must accept focus during the same keypress. */
+  .tool-tab { transition-property: none; }
   .tool-tab[data-loading="true"]::after { animation: none; }
 }
 
@@ -4639,6 +4677,24 @@ article.raster-histogram-summary {
 .vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; }
 .vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
 .vector-feature-profile-navigation { grid-template-columns: auto 1fr auto; }
+.vector-field-display { margin-top: 12px; font-size: 0.78rem; }
+.vector-field-display summary { cursor: pointer; font-weight: 600; }
+.vector-field-display p { margin: 8px 0; }
+.vector-field-display p:empty { margin: 0; }
+.vector-field-display-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.vector-field-display-actions[hidden] { display: none; }
+.vector-field-display input { min-width: 0; max-width: 100%; }
+.vector-field-display-preview { max-height: 12rem; overflow: auto; border: 1px solid var(--border-1); }
+.vector-field-display-preview table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.vector-field-display-preview caption,
+.vector-field-display-preview th,
+.vector-field-display-preview td {
+  padding: 4px 6px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.vector-field-display-preview th,
+.vector-field-display-preview td { border-top: 1px solid var(--border-1); }
 .vector-feature-attributes {
   display: grid;
   grid-template-columns: minmax(90px, 0.4fr) minmax(0, 1fr);
@@ -4669,6 +4725,29 @@ article.raster-histogram-summary {
 .vector-series-context { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
 .vector-series-context[hidden] { display: none; }
 .vector-plot-results { min-width: 0; }
+.vector-plot-comparison { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; }
+.vector-plot-measurements { flex: 5 1 15rem; min-width: 0; }
+.vector-plot-statistics-choices { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.vector-plot-statistics-choices label { display: flex; align-items: center; gap: 4px; }
+.vector-plot-statistics {
+  flex: 1 1 8rem;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-small);
+  background: var(--surface-2);
+  font-size: var(--font-size-support);
+  overflow-wrap: anywhere;
+}
+.vector-plot-statistics[hidden], .vector-plot-statistics p:empty { display: none; }
+.vector-plot-statistics h3 { margin: 0; font-size: var(--font-size-ui); }
+.vector-plot-statistics h4 { margin: 8px 0 0; font-size: inherit; }
+.vector-plot-statistics h5 { margin: 6px 0 2px; font-size: inherit; }
+.vector-plot-statistics p { margin: 4px 0 0; color: var(--text-2); }
+.vector-plot-statistics dl { margin: 0; }
+.vector-plot-statistics dl > div { display: flex; justify-content: space-between; gap: 8px; }
+.vector-plot-statistics dt { color: var(--text-2); }
+.vector-plot-statistics dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; }
 .vector-plot-figure { background: var(--surface-2); border: 1px solid var(--border-1); border-radius: var(--radius-small); }
 .vector-plot-figure h3 { margin: 6px 9px 0; font-size: var(--font-size-ui); overflow-wrap: anywhere; }
 #vector-time-series-extra-charts .vector-plot-figure { margin-top: 6px; }
@@ -5404,6 +5483,14 @@ summary:hover > .raster-disclosure-chevron {
   }
 }
 
+#app.is-workspace-unavailable .map-tools-header {
+  max-inline-size: 100%;
+}
+
+#app.is-workspace-unavailable #map {
+  --map-controls-top-clearance: var(--tools-clearance, 0px);
+}
+
 #published-map-editor {
   padding: 12px 16px;
   border-bottom: 2px solid var(--brand);
@@ -5411,7 +5498,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 #published-map-editor p { margin: 6px 0; font-size: 0.9rem; }
 #published-map-editor label { display: block; margin-top: 6px; }
-#published-map-editor input { width: 100%; }
+#published-map-editor input:not([type="checkbox"]) { width: 100%; }
 #published-map-edit-url { overflow-wrap: anywhere; }
 .published-map-editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 

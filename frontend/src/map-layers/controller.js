@@ -82,6 +82,7 @@ function normalizeCustomLayerName(value) {
  * @property {{collection:string,id:string}|null} item Catalog identity, or null for device-owned layers.
  * @property {Object} [style] Catalog owner's saved appearance.
  * @property {Object} [filter] Catalog owner's applied filter.
+ * @property {import("../feature-field-formats.js").FeatureFieldFormats} [fieldFormats] Inspector display settings for this view.
  * @property {Object} [local] Local owner's committed layer contents.
  */
 
@@ -870,7 +871,7 @@ export class MapLayerController {
         }
     }
 
-    /** Capture a layer's presentation so its existing owner can restore it later.
+    /** Capture a layer's presentation and field display so its existing owner can restore the view.
      * @param {string} key Retained layer identity.
      * @return {RemovedMapLayer} Detached data including visibility, order, style and source identity.
      * @throws {Error} If the layer is missing or its owner rejects capture.
@@ -886,13 +887,14 @@ export class MapLayerController {
             ...(entry.legendIncluded === false ? {legendIncluded: false} : {}),
             item: entry.item === null ? null : {collection: entry.item.collection, id: entry.item.id},
             ...(adapter.exportCalculatedFields ? {calculatedFields: adapter.exportCalculatedFields(record)} : {}),
+            ...(record.fieldFormats ? {fieldFormats: record.fieldFormats} : {}),
             ...(entry.item === null ? {local: adapter.copyLayerForUndo(record)}
                 : {style: structuredClone(adapter.exportSavedState(record)),
                     ...(adapter.exportFilterState ? {filter: structuredClone(adapter.exportFilterState(record))} : {})}),
         };
     }
 
-    /** Restore a captured layer through its original owner, including its kind and legend inclusion.
+    /** Restore a captured layer and its duplicate status and presentation through its original owner.
      * @param {RemovedMapLayer} snapshot Captured presentation and source identity.
      * @param {()=>boolean} isCurrent Whether restoration still belongs to the current action.
      * @return {Promise<void>} Completion after owner restoration.
@@ -901,9 +903,11 @@ export class MapLayerController {
     async restoreLayerSnapshot(snapshot, isCurrent) {
         await this.restoreRemovedLayer(snapshot, isCurrent);
         if (isCurrent()) {
-            this.#requireRecord(snapshot.key).entry.legendIncluded = snapshot.legendIncluded !== false;
-            this.#requireRecord(snapshot.key).entry.isCustom = snapshot.isCustom;
-            this.#requireRecord(snapshot.key).isDuplicate = snapshot.isDuplicate === true;
+            const record = this.#requireRecord(snapshot.key);
+            record.entry.legendIncluded = snapshot.legendIncluded !== false;
+            record.entry.isCustom = snapshot.isCustom;
+            record.isDuplicate = snapshot.isDuplicate === true;
+            if (snapshot.fieldFormats) record.fieldFormats = snapshot.fieldFormats;
             this.render();
         }
     }
@@ -1056,7 +1060,7 @@ export class MapLayerController {
         }
     }
 
-    /** Swap a prepared source into the same retained view and map position.
+    /** Swap in a prepared source while retaining the view's map position and field display.
      * @param {Object} previous Record still owned by the caller.
      * @param {ReturnType<MapLayerController["stageLocal"]>} staged Detached replacement from the same adapter.
      * @return {boolean} True when attached, false if the view was superseded.
@@ -1070,6 +1074,7 @@ export class MapLayerController {
         entry.item = null;
         entry.sourceName = record.entry.sourceName;
         record.entry = entry;
+        if (previous.fieldFormats) record.fieldFormats = previous.fieldFormats;
         this.records.set(key, record);
         previous.adapter.removed?.(previous);
         record.adapter.added?.(record, {fitToBounds: false});

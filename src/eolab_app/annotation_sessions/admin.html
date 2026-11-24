@@ -49,5 +49,15 @@
   <button id="cancel-delete" type="button" autofocus>Cancel</button>
   <button id="accept-delete" type="button" class="delete">Delete layer</button>
 </dialog>
+<dialog id="map-edit-link-dialog" aria-labelledby="map-edit-link-title" aria-describedby="map-edit-link-help">
+  <h2 id="map-edit-link-title">Private edit link</h2>
+  <p id="map-edit-link-help">Give this link to the publisher privately. Anyone with it can edit this map.</p>
+  <label>Private edit link<input id="map-edit-link-value" readonly spellcheck="false" autofocus></label>
+  <p id="map-edit-link-status" role="status"></p>
+  <form method="dialog">
+    <button id="copy-map-edit-link" type="button">Copy private edit link</button>
+    <button type="submit">Done</button>
+  </form>
+</dialog>
 </body>
 </html>

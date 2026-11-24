@@ -308,7 +308,7 @@ test("Catalog selection delegates progressive presentation without feature coupl
   assert.match(clearSelection, /catalogPaneControls\.showResults\(\)/);
   assert.match(
     selectItem,
-    /catalogPaneControls\.showInspector\(\{\s*moveFocus: true, returnFocusTarget: itemButton,/,
+    /catalogPaneControls\.showInspector\(\{\s*moveFocus: true, returnFocusTarget: returnFocusTarget \?\? itemButton,/,
   );
   assert.match(
     mainSource,
@@ -321,3 +321,66 @@ test("Catalog selection delegates progressive presentation without feature coupl
   assert.doesNotMatch(appendPage, /leafletMap\.|L\.geoJSON/);
   assert.match(appendPage, /onZoom: item => catalogMapActions\.zoom\(item\)/);
 });
+
+for (const catalogAvailable of [true, false]) {
+  test(`retained-layer details and actions share the displayed item (Catalog=${catalogAvailable})`, () => {
+    const fixture = createCatalogPaneFixture();
+    const dialog = new EventTarget();
+    dialog.open = false;
+    dialog.append = () => {};
+    dialog.showModal = () => { dialog.open = true; };
+    dialog.close = () => { dialog.open = false; };
+    const pane = initializeCatalogPaneControls(fixture.document, () => {}, {detailsDialog: dialog});
+    const opener = new FakeElement({}, fixture.document);
+    opener.isConnected = true;
+    const canopy = {collection: "rasters", id: "canopy"};
+    const parcels = {collection: "vectors", id: "parcels"};
+    const retained = new Set([canopy, parcels]);
+    const actions = [];
+    const state = {collectionsDocument: catalogAvailable ? {collections: []} : null,
+      resultViews: new Map(), selectedItem: null, selectedButton: null};
+    const zoom = new EventTarget(), style = new EventTarget(), toggle = new EventTarget();
+    let displayedItem, actionItem;
+    const dependencies = {
+      document: fixture.document, isSharedViewer: true, catalogState: state,
+      appGlobalConfiguration: {scanDisplayPathPrefix: ""}, catalogPaneControls: pane,
+      catalogMapActionStatus: {textContent: ""},
+      catalogLayerZoom: zoom, catalogLayerStyle: style, catalogLayerToggle: toggle,
+      catalogMapActions: {
+        applyAssessment() {},
+        zoom: item => actions.push(["zoom", item]),
+        style: item => actions.push(["style", item]),
+        toggle: item => { actions.push(["remove", item]); retained.delete(item); },
+      },
+      getCatalogItemKey: item => JSON.stringify([item.collection, item.id]),
+      getCatalogVisualization: () => null,
+      renderCatalogItemInspector: item => { displayedItem = item; },
+      updateCatalogMapAction: item => { actionItem = item; },
+      footprintController: {select() {}, clearSelectedFootprint() {}},
+      rasterVisualization: {deactivateAnalysis() {}, activateAnalysis() {}},
+      onCatalogWorkspaceRequested: () => assert.fail("Layer details must not open Catalog"),
+    };
+    const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+    const selectionStart = source.indexOf("    function selectCatalogItem(");
+    const selectionEnd = source.indexOf("\n    /**", selectionStart);
+    const retainedStart = source.indexOf("    function inspectRetainedMapLayer(");
+    const retainedEnd = source.indexOf("    if (!isSharedViewer || visitorAvailability.catalog) await loadCatalog", retainedStart);
+    const {select, inspect} = new Function(...Object.keys(dependencies),
+      `${source.slice(selectionStart, selectionEnd)}\n${source.slice(retainedStart, retainedEnd)}\n` +
+      "return {select: selectCatalogItem, inspect: inspectRetainedMapLayer};"
+    )(...Object.values(dependencies));
+    if (catalogAvailable) {
+      select(canopy);
+      pane.showResults();
+    }
+    opener.focus();
+    inspect(parcels);
+    assert.equal(displayedItem, parcels);
+    for (const button of [zoom, style, toggle]) button.dispatchEvent(new Event("click"));
+    assert.deepEqual(actions, [["zoom", parcels], ["style", parcels], ["remove", parcels]]);
+    assert.deepEqual([...retained], [canopy]);
+    assert.equal(actionItem, parcels);
+    fixture.closeItemDetails.dispatchEvent(new Event("click"));
+    assert.equal(fixture.document.activeElement, opener);
+  });
+}

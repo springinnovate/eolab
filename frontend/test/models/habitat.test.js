@@ -166,8 +166,8 @@ test("Habitat starts with all datasets selected in collapsed role groups", async
     assert.equal(h.view.setup.fields.getAttribute("aria-labelledby"), "models-setup-heading");
     assert.equal(h.view.setup.label.value, "Ecosystem Condition");
     assert.equal(stack.source.value, "earthEngine");
-    assert.equal(stack.source.parentElement.textContent, "Input configuration");
-    assert.equal(stack.source.children[0].textContent, "Original model inputs (Google Earth Engine)");
+    assert.equal(stack.source.parentElement.textContent, "Input data");
+    assert.equal(stack.source.children[0].textContent, "Prepared Earth Engine rasters");
     assert.equal(stack.manual.hidden, true); assert.equal(stack.manual.disabled, true);
     assert.equal(stack.year.value, "2018");
     const links = stack.root.querySelectorAll("a");
@@ -210,8 +210,8 @@ test("Habitat keeps reference choices and the independent optional output mask i
     assert.equal(mask.root.contains(mask.source), true);
     assert.equal(mask.root.contains(references.source), false);
     assert.equal(mask.root.contains(area.preparationSelection.source), false);
-    assert.equal(mask.source.parentElement.textContent, "Limit output to a raster mask (optional)");
-    assert.equal(mask.hint.textContent, "Only cells equal to 1 receive results.");
+    assert.equal(mask.source.parentElement.textContent, "Output mask (optional)");
+    assert.equal(mask.hint.textContent, "Limits results to cells with a mask value of 1 on the output grid.");
     assert.equal(references.choiceHint.textContent, "Choose either polygon features or a raster for the reference sites.");
     assert.equal(references.choiceHint.hidden, false);
     assert.ok(references.source.getAttribute("aria-describedby").split(" ").includes(references.choiceHint.id));
@@ -474,7 +474,7 @@ test("Habitat keeps raster reference and assessment choices separate through dup
     assert.equal(mask.root.parentElement, h.view.setup.fields);
     assert.equal(mask.root.hidden, false);
     assert.equal(mask.source.value, modelSourceKey(h.context.rasters[4]));
-    assert.equal(mask.source.parentElement.textContent, "Limit output to a raster mask (optional)");
+    assert.equal(mask.source.parentElement.textContent, "Output mask (optional)");
     assert.equal(h.controller.state.draft.model.inputs.habitat_mask.label, "Habitat assessment mask");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-masks").inputs, h.requests[0].inputs);
     h.context.rasters.pop(); h.controller.refreshMapLayers();
@@ -612,7 +612,7 @@ test("Earth Engine runs capture and duplicate dataset choices, year, area and re
     assert.deepEqual(expected.area, {kind: "catalogSelection", selection: preparationSelections[0]});
     assert.deepEqual(expected.preparation, {resampling: {}});
     const summary = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
-    assert.ok(summary.includes("Original model inputs from Earth Engine · Assessment year 2017"));
+    assert.ok(summary.includes("Prepared Earth Engine rasters · Assessment year 2017"));
     assert.ok(summary.includes("Predictor datasets")); assert.ok(summary.includes("MODIS phenology, SRTM landforms"));
     assert.ok(summary.includes("Observed response datasets")); assert.ok(summary.includes("Landsat NDVI"));
     await h.controller.duplicateRun();

@@ -1,7 +1,7 @@
 """Validate named maps and their Catalog, drawing, private and shared references."""
 
 from datetime import datetime, timezone
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, TypedDict
 from uuid import UUID
 
 from pydantic import (
@@ -26,6 +26,9 @@ from eolab_app.map_layer_documents import (
 
 MAX_VIEW_BYTES = 512 * 1024
 MAX_REQUEST_BYTES = MAX_VIEW_BYTES + 4096
+INVALID_MAP_EDIT_LINK = (
+    "This private edit link no longer works. Ask a site administrator for a new link."
+)
 Slug = Annotated[
     str,
     StringConstraints(
@@ -233,12 +236,53 @@ class MapLegendAppearance(MapDocumentPart):
     collapsed: bool
 
 
+class MapVisitorChoices(MapDocumentPart):
+    """Keep the publisher's visitor choices, even beneath a disabled parent.
+
+    An omitted choice in an explicit configuration is disabled. The viewer
+    resolves effective availability without changing these stored values.
+    """
+
+    inspectAndSelect: bool = False
+    rasterValues: bool = False
+    featurePicking: bool = False
+    histogramBox: bool = False
+    lasso: bool = False
+    workspacePanels: bool = False
+    catalog: bool = False
+    mapContents: bool = False
+
+
+class MapVisitorInitialPanels(MapDocumentPart):
+    """Initial panel disclosures, independent of whether visitors may open them.
+
+    Missing entries in an explicit configuration are collapsed. Availability
+    resolves separately, so disabling a parent preserves these choices.
+    """
+
+    catalog: bool = False
+    mapContents: bool = False
+
+
+class MapVisitorControls(MapDocumentPart):
+    """Versioned visitor choices contained in a named map document."""
+
+    version: Annotated[int, Field(ge=1, le=1)]
+    choices: MapVisitorChoices
+    initialPanels: MapVisitorInitialPanels = Field(
+        default_factory=MapVisitorInitialPanels
+    )
+
+
 class SavedMapView(MapDocumentPart):
-    """Portable map JSON with optional legend visibility and collapse preferences.
+    """Portable map JSON with optional legend appearance and visitor controls.
 
     Catalog items, uploads, observations and drawings may appear more than once; each
     entry preserves its place in the layer order and its own appearance.
+    The basemap is stored as a provider ID such as `"maptiler-streets"`.
     Omitting mapLegend leaves the legend visible and expanded.
+    Omitting visitorControls preserves inspection tools and open Map contents,
+    with Catalog unavailable. Explicit settings leave omitted capabilities off.
     """
 
     format: Literal["eolab-map-view"]
@@ -246,8 +290,11 @@ class SavedMapView(MapDocumentPart):
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
-    basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"]
+    basemap: Literal[
+        "detailed", "carto", "maptiler", "maptiler-streets", "outlines", "none"
+    ]
     mapLegend: MapLegendAppearance | None = None
+    visitorControls: MapVisitorControls | None = None
     layers: Annotated[
         list[
             MapLayer
@@ -285,17 +332,19 @@ class SavedMapView(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_map_layers_and_size(self) -> Self:
-        """Validate layer identities, legend preferences and the saved-map size.
+        """Validate layer identities, optional map settings and the saved-map size.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If a polygon view ID or shared layer repeats, explicit legend
+            ValueError: If a polygon view ID or shared layer repeats, explicit map
                 settings are null, or the document exceeds the size limit.
         """
         if "mapLegend" in self.model_fields_set and self.mapLegend is None:
             raise ValueError("Map legend preferences must be an object when supplied.")
+        if "visitorControls" in self.model_fields_set and self.visitorControls is None:
+            raise ValueError("Visitor controls must be an object when supplied.")
         view_ids = [
             layer.filterViewId
             for layer in self.layers
@@ -330,14 +379,44 @@ class CreateSavedMap(MapDocumentPart):
 
 
 class SavedMap(CreateSavedMap):
-    """Stored map with its creation time and revision for administrator updates."""
+    """Stored map with its creation time and revision for concurrent editing."""
 
     createdAt: datetime
     revision: Annotated[int, Field(ge=1, strict=True)] = 1
 
 
+class SavedMapEditToken(MapDocumentPart):
+    """Private edit credential returned only when a link is issued.
+
+    Attributes:
+        editToken: 64 lowercase hexadecimal characters for the link fragment.
+    """
+
+    editToken: str
+
+
+class PublishedSavedMap(SavedMap, SavedMapEditToken):
+    """Newly published map and the private credential for editing that map."""
+
+
+class PublishedMapSummary(TypedDict):
+    """Administrator list entry with deletion and edit-link status.
+
+    Attributes:
+        slug: Fixed public URL name.
+        title: Published map title.
+        deletedAt: When the map was hidden, or None for an active map.
+        hasEditLink: Whether a private edit link has been issued and is not revoked.
+    """
+
+    slug: str
+    title: str
+    deletedAt: datetime | None
+    hasEditLink: bool
+
+
 class UpdateSavedMap(CreateSavedMap):
-    """Replacement map configuration and the revision opened by the administrator."""
+    """Replacement map configuration and the revision opened by the editor."""
 
     revision: Annotated[int, Field(ge=1, strict=True)]
 

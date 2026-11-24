@@ -681,7 +681,7 @@ test("recipe units add a precipitation total without restricting ordinary statis
     await h.controller.chooseTemporalVariable("rain");
     assert.equal(controls.variable.children.find(option => option.value === "rain").disabled, false);
     assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, false);
-    assert.equal(controls.statistic.children.at(-1).textContent, "Precipitation total (cm)");
+    assert.equal(controls.statistic.children.at(-1).textContent, "Total precipitation (cm)");
     controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
     assert.match(controls.reductionHelp.textContent, /rate in mm\/hour.*converted to cm/);
     editExactTime(controls, "start", "2000-01-01T00:10", "change");
@@ -1272,12 +1272,14 @@ test("progress observation preserves setup and explicit cancellation targets jus
 test("Runs history controls load result inputs while preserving unfinished setup", async () => {
     const cursors = [], artifacts = fileManifest();
     const result = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
-    const recent = job({jobId: "2".repeat(32)}), older = job({jobId: "3".repeat(32)});
+    const recent = job({jobId: "2".repeat(32), name: "Recent", createdAt: "2026-10-09T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z"});
+    const older = job({jobId: "3".repeat(32), name: "Older"});
     const view = new ModelsView(new SummaryControlDocument());
     const h = fixture({listModelRuns: async cursor => {
         cursors.push(cursor);
         return {jobs: cursor ? [older, result] : [recent], nextCursor: cursor ? null : "older"};
     }}, view);
+    h.controller.setActive(true);
     h.controller.chooseModel({...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}});
     const draft = h.controller.state.draft;
     h.controller.editDraft({label: "Unfinished summary", parameters: {summary: "mean(a)"}});
@@ -1290,12 +1292,43 @@ test("Runs history controls load result inputs while preserving unfinished setup
     assert.equal(h.controller.state.draft, draft); assert.equal(h.controller.state.page, "setup");
     assert.equal(view.setup.label.value, "Unfinished summary");
     assert.equal(view.setup.parameters.summary.value, "mean(a)");
+
+    const history = h.controller.state.runs;
+    const changedRuns = [];
+    h.controller.onRunChange = run => changedRuns.push(run);
+    view.setup.label.focus();
+    view.setup.label.value = "Updated summary";
+    view.setup.label.dispatchEvent(new Event("input"));
+    assert.deepEqual(changedRuns, [], "typing a run name must not announce changes to saved runs");
+    assert.equal(h.controller.state.runs, history);
+    assert.equal(draft.label, "Updated summary");
+    assert.equal(view.document.activeElement, view.setup.label);
+
     const source = draft.sources.find(value => value.kind === "runArtifact" && value.artifactId === artifacts.files[0].artifactId);
     assert.ok(view.setup.inputs.raster.source.querySelectorAll("option").some(option => option.value === modelSourceKey(source)));
     view.setup.inputs.raster.source.value = modelSourceKey(source);
     view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
     assert.deepEqual(captureModelSubmission(draft, "older-result-input").inputs.raster,
         {kind: "runArtifact", jobId: result.jobId, artifactId: artifacts.files[0].artifactId});
+    assert.equal(h.jobs.tracked.has(result.jobId), true);
+    view.navigation.library.dispatchEvent(new Event("click"));
+    assert.equal(h.jobs.tracked.has(result.jobId), false);
+    view.navigation.setup.dispatchEvent(new Event("click"));
+    assert.equal(h.jobs.tracked.has(result.jobId), true);
+    view.setup.inputs.raster.source.value = modelSourceKey(h.context.rasters[0]);
+    view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
+    assert.equal(h.jobs.tracked.has(result.jobId), false);
+    assert.deepEqual(changedRuns, []);
+    assert.equal(h.controller.state.runs, history);
+
+    const cancelled = job({jobId: recent.jobId, name: recent.name, createdAt: recent.createdAt,
+        updatedAt: "2026-10-10T00:00:00Z", status: "cancelled"});
+    h.jobs.accept(cancelled);
+    assert.deepEqual(changedRuns, [cancelled]);
+    assert.deepEqual([...h.jobs.tracked], [older.jobId]);
+    assert.match(view.runCards.get(recent.jobId).status.textContent, /^Cancelled/);
+    assert.deepEqual(Array.from(view.elements["runs-list"].querySelectorAll("button"), button => button.textContent),
+        [recent.label, older.label, result.label]);
     assert.equal(h.submitted.length, 0);
     h.controller.destroy();
 });

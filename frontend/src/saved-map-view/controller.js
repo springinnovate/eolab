@@ -46,11 +46,13 @@ export class SavedMapViewController {
      * @param {(record:Object)=>Object|null} configuration.exportTemporal Export a temporal selection and raster appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreTemporal Retain an independent temporal row with saved appearance; return its key, including unavailable observations shown with a row error, or null after supersession.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
-     * @param {string|null} [configuration.namedMapSlug] Published map name for a viewer or administrator URL.
+     * @param {string|null} [configuration.namedMapSlug] Published map name for a viewer or editor URL.
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
      * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
+     * @param {(settings:import("../visitor-controls.js").VisitorControls|undefined)=>void}
+     * [configuration.applyVisitorControls] Apply a validated public map's choices before restoring its layers.
      * @param {{snapshot:()=>string,restore:(id:string)=>Promise<string|null>}} [configuration.basemap] Public basemap interface.
      * @param {{snapshot:()=>{visible:boolean,collapsed:boolean},restore:(state:Object)=>void}|null} [configuration.mapLegend] Map legend presentation preferences.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
@@ -86,6 +88,7 @@ export class SavedMapViewController {
         allowPublishing = false,
         publicationDefaults = { title: "", subtitle: "" },
         applyMapHeading = () => {},
+        applyVisitorControls = () => {},
         basemap = { snapshot: () => "detailed", restore: async () => null },
         mapLegend = null,
         clock = () => new Date(),
@@ -133,6 +136,7 @@ export class SavedMapViewController {
         this.allowPublishing = allowPublishing;
         this.publicationDefaults = publicationDefaults;
         this.applyMapHeading = applyMapHeading;
+        this.applyVisitorControls = applyVisitorControls;
         this.basemap = basemap;
         this.mapLegend = mapLegend;
         this.publishingView = null;
@@ -208,17 +212,19 @@ export class SavedMapViewController {
     /**
      * Publish the captured view without replacing an existing named map.
      * A rejected name leaves the form and captured view available for correction.
-     * @param {{title:string,subtitle:string,slug:string}} fields Creator's publication labels.
+     * @param {{title:string,subtitle:string,slug:string,visitorControls:import("../visitor-controls.js").VisitorControls}} fields
+     * Creator's publication labels and visitor choices.
      * @return {Promise<void>} Completion after success or an actionable form error.
      */
-    async publishMap(fields) {
+    async publishMap({ visitorControls, ...fields }) {
         if (this.busy || this.destroyed || this.publishingView === null) return;
         this.#setBusy(true);
         this.view.setPublicationBusy(true);
         try {
-            const saved = await this.publicationApi.create({ ...fields, view: this.publishingView });
+            const view = { ...this.publishingView, visitorControls };
+            const saved = await this.publicationApi.create({ ...fields, view });
             this.publishingView = null;
-            this.view.showPublishedMap(saved.slug);
+            this.view.showPublishedMap(saved.slug, saved.editToken);
         } catch (error) {
             this.view.showPublicationError(asError(error).message);
         } finally {
@@ -244,6 +250,7 @@ export class SavedMapViewController {
                 ? this.publicationApi.getForEditing(this.namedMapSlug)
                 : this.publicationApi.get(this.namedMapSlug));
             if (this.destroyed || generation !== this.restoreGeneration) return;
+            if (!this.editPublishedMap) this.applyVisitorControls(saved.view.visitorControls);
             this.applyMapHeading(saved.title, saved.subtitle);
             this.view.showLoading(saved.view.layers.length);
             const report = await this.#restore(saved.view, generation);
@@ -264,15 +271,16 @@ export class SavedMapViewController {
     /**
      * Capture current map settings and save the draft at its existing published URL.
      * Failures preserve the draft and revision; no shared polygon writes are performed.
-     * @param {{title:string,subtitle:string}} fields Administrator's edited headings.
+     * @param {{title:string,subtitle:string,visitorControls:import("../visitor-controls.js").VisitorControls}} fields
+     * Editor's updated headings and visitor choices.
      * @return {Promise<void>} Completion after saved confirmation or an actionable error.
      */
-    async savePublishedMapChanges(fields) {
+    async savePublishedMapChanges({ visitorControls, ...fields }) {
         if (!this.editPublishedMap || this.editRevision === null || this.busy || this.destroyed) return;
         this.#setBusy(true);
         this.view.setPublishedMapSaving(true);
         try {
-            const view = this.#snapshotCurrentView();
+            const view = { ...this.#snapshotCurrentView(), visitorControls };
             const saved = await this.publicationApi.update(this.namedMapSlug, {
                 ...fields, view, revision: this.editRevision,
             });
@@ -551,7 +559,7 @@ export class SavedMapViewController {
         }
     }
 
-    /** Export a retained record using its source owner's view contract and common presentation.
+    /** Export a retained record with its source reference and map-specific presentation.
      * @param {Object} record Neutral retained-layer record.
      * @return {Object|null} Portable view, or null for an unsaved local source.
      * @throws {Error} If the source owner's saved state cannot be exported.
@@ -564,6 +572,7 @@ export class SavedMapViewController {
         const filter = record.requestedSpatialFilter ?? layer.filter;
         return {...layer, isCustom: record.entry.isCustom,
             ...(record.filterViewId ? {filterViewId: record.filterViewId} : {}),
+            ...(record.fieldFormats && Object.keys(record.fieldFormats).length ? {fieldFormats: record.fieldFormats} : {}),
             ...(filter?.rules?.some(rule => rule.operator === "intersects") ? {filter: viewFilter(filter)} : {}),
             ...(record.entry.legendIncluded === false ? {legendIncluded: false} : {})};
     }
@@ -753,10 +762,11 @@ export class SavedMapViewController {
         const spatial = savedLayer.filter?.rules?.some(rule => rule.operator === "intersects");
         const layer = spatial ? {...savedLayer, filter: waitingForPolygonLayer(savedLayer.filter)} : savedLayer;
         const result = await this.#openLayer(layer, origin, isCurrent, {strictStyle});
-        if (!savedLayer.filterViewId && !spatial) return result;
+        if (!savedLayer.filterViewId && !spatial && !savedLayer.fieldFormats) return result;
         const record = result.staged?.record ?? (result.key ? this.mapLayers.getRecord(result.key) : null);
         if (record && savedLayer.filterViewId) record.filterViewId = savedLayer.filterViewId;
         if (record && spatial && savedLayer.filter.enabled) record.requestedSpatialFilter = savedLayer.filter;
+        if (record && savedLayer.fieldFormats) record.fieldFormats = savedLayer.fieldFormats;
         return result;
     }
 

@@ -65,13 +65,14 @@ function storageSummary(uploads, changes = {}) {
  * @param {typeof fetch} fetcher Upload response provider.
  * @param {(upload:import('../../src/uploads/api.js').VectorUpload)=>Promise<void>} addToMap Map composition callback.
  * @param {Object} [options] Upload listing, deletion and map callbacks.
+ * @param {string} [filename="Café wetlands.gpkg"] User-selected polygon filename.
  * @return {Promise<{dialog:UploadsDialog,document:Object,file:File}>} Selected upload form.
  */
-async function setup(fetcher, addToMap, options = {}) {
+async function setup(fetcher, addToMap, options = {}, filename = "Café wetlands.gpkg") {
     const { dialog, document } = createDialog({ addToMap,
-        upload: (file, name) => uploadPolygons(file, name, fetcher), ...options });
+        upload: (file, name) => uploadFile(file, name, fetcher), ...options });
     await dialog.open();
-    const file = new File(["original GeoPackage bytes"], "Café wetlands.gpkg");
+    const file = new File(["original polygon file bytes"], filename);
     dialog.file.files = [file];
     dialog.file.dispatchEvent(new Event("change"));
     return { dialog, document, file };
@@ -101,7 +102,7 @@ test("raster upload, reopening and deletion use the raster endpoint with the bro
     assert.equal(requests.length, 3);
 });
 
-test("upload form sends the original file and chosen name, then adds the returned record to the map", async () => {
+for (const extension of ["gpkg", "geojson", "JSON"]) test(`upload form sends ${extension} and the chosen name, then adds the returned record to the map`, async () => {
     const admitted = { id: "opaque-upload", name: "Floodplain & wetlands", fields: { label: "str" }, geometry_type: "Polygon" };
     let finishUpload;
     let finishMap;
@@ -113,8 +114,11 @@ test("upload form sends the original file and chosen name, then adds the returne
     }, async upload => {
         mapped = upload;
         return new Promise(resolve => { finishMap = resolve; });
-    });
+    }, {}, `Café wetlands.${extension}`);
     assert.equal(dialog.name.value, "Café wetlands");
+    assert.match(dialog.file.accept, /\.geojson/);
+    assert.match(dialog.file.accept, /\.json/);
+    assert.match(dialog.fileHelp.textContent, /GeoJSON/);
     assert.equal(document.activeElement, dialog.cancel);
     dialog.name.value = " Floodplain & wetlands ";
     const pending = dialog.uploadAndAdd();
@@ -122,7 +126,7 @@ test("upload form sends the original file and chosen name, then adds the returne
     assert.equal(request.options.body, file);
     assert.equal(request.options.credentials, "same-origin");
     assert.equal(request.options.cache, "no-store");
-    assert.deepEqual(request.options.headers, { "Content-Type": "application/geopackage+sqlite3", "X-EOLab-Uploads": "1" });
+    assert.deepEqual(request.options.headers, { "Content-Type": extension === "gpkg" ? "application/geopackage+sqlite3" : "application/geo+json", "X-EOLab-Uploads": "1" });
     assert.equal(dialog.status.textContent, "Uploading file…");
     assert.equal(dialog.progress.hidden, false);
     assert.equal(dialog.cancel.disabled, true);

@@ -4,8 +4,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from hashlib import sha256
 from importlib.resources import files
-from typing import Any
+from secrets import token_hex
+from typing import Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -14,10 +16,32 @@ from pydantic import ValidationError
 
 from eolab_app.saved_maps.models import (
     CreateSavedMap,
+    INVALID_MAP_EDIT_LINK,
+    PublishedMapSummary,
+    PublishedSavedMap,
     SavedMap,
     SavedMapError,
     UpdateSavedMap,
 )
+
+ACTIVE_MAP_CONDITION = (
+    "slug=%(slug)s AND deleted_at IS NULL "
+    "AND (%(edit_token_digest)s::bytea IS NULL OR edit_token_digest=%(edit_token_digest)s)"
+)
+
+
+def _map_edit_token_digest(edit_token: str | None) -> bytes | None:
+    """Hash a private edit token before using it in the saved-map database.
+
+    Args:
+        edit_token: Validated token for one map, or None for an unrestricted lookup.
+
+    Returns:
+        SHA-256 digest, or None when no token check is required.
+    """
+    return (
+        sha256(edit_token.encode("ascii")).digest() if edit_token is not None else None
+    )
 
 
 @dataclass(frozen=True)
@@ -92,14 +116,15 @@ class SavedMapStore:
                 files("eolab_app.saved_maps").joinpath("schema.sql").read_text()
             )
 
-    def create_saved_map(self, request: CreateSavedMap) -> SavedMap:
+    def create_saved_map(self, request: CreateSavedMap) -> PublishedSavedMap:
         """Store a new map without replacing an existing map with the same URL name.
 
         Args:
             request: Validated title, optional subtitle, URL name and map document.
 
         Returns:
-            Stored map, including the database creation timestamp.
+            Stored map with its creation timestamp and newly issued private edit token.
+            Only the digest of the token is stored in the database.
 
         Raises:
             SavedMapError: For a duplicate name, full site capacity or database failure.
@@ -120,37 +145,46 @@ class SavedMapStore:
                     503,
                     "This site's saved-map capacity is full. Contact the site administrator.",
                 )
+            edit_token = token_hex(32)
             cursor.execute(
-                "INSERT INTO saved_maps.maps (slug, title, subtitle, view) VALUES (%s, %s, %s, %s) "
+                "INSERT INTO saved_maps.maps (slug, title, subtitle, view, edit_token_digest) "
+                "VALUES (%s, %s, %s, %s, %s) "
                 'RETURNING slug, title, subtitle, view, revision, created_at AS "createdAt"',
                 (
                     request.slug,
                     request.title,
                     request.subtitle,
                     Jsonb(request.view.model_dump(mode="json", exclude_unset=True)),
+                    _map_edit_token_digest(edit_token),
                 ),
             )
-            return SavedMap.model_validate(cursor.fetchone())
+            return PublishedSavedMap.model_validate(
+                {**cursor.fetchone(), "editToken": edit_token}
+            )
 
-    def get_saved_map(self, slug: str) -> SavedMap:
+    def get_saved_map(self, slug: str, *, edit_token: str | None = None) -> SavedMap:
         """Read an active map by its exact URL name; deleted maps are unavailable.
 
         Args:
             slug: Validated lowercase URL name.
+            edit_token: Require this private edit token to match the map when supplied.
 
         Returns:
             Stored title, subtitle, map document and creation timestamp.
 
         Raises:
-            SavedMapError: If the map is absent or storage cannot be read.
+            SavedMapError: If the map is absent, the token is invalid, or storage cannot be read.
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT slug, title, subtitle, view, revision, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s AND deleted_at IS NULL',
-                (slug,),
+                'SELECT slug, title, subtitle, view, revision, created_at AS "createdAt" '
+                f"FROM saved_maps.maps WHERE {ACTIVE_MAP_CONDITION}",
+                {"slug": slug, "edit_token_digest": _map_edit_token_digest(edit_token)},
             )
             row = cursor.fetchone()
             if row is None:
+                if edit_token is not None:
+                    raise SavedMapError(403, INVALID_MAP_EDIT_LINK)
                 raise SavedMapError(404, "Saved map not found.")
             try:
                 return SavedMap.model_validate(row)
@@ -160,20 +194,63 @@ class SavedMapStore:
                     "This saved map has settings this site cannot open. Ask the map owner for an updated map.",
                 ) from error
 
-    def list_published_maps(self) -> list[dict[str, Any]]:
+    def list_published_maps(self) -> list[PublishedMapSummary]:
         """List active and deleted maps for administration without loading documents.
 
         Returns:
-            Titles, fixed URL names and deletion times, ordered by title and URL name.
+            Titles, fixed URL names, deletion times and whether each map has a
+            private edit link, ordered by title and URL name.
 
         Raises:
             SavedMapError: If storage is unavailable.
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT slug, title, deleted_at AS "deletedAt" FROM saved_maps.maps ORDER BY lower(title), slug'
+                'SELECT slug, title, deleted_at AS "deletedAt", '
+                'edit_token_digest IS NOT NULL AS "hasEditLink" '
+                "FROM saved_maps.maps ORDER BY lower(title), slug"
             )
-            return cursor.fetchall()
+            return cast(list[PublishedMapSummary], cursor.fetchall())
+
+    def issue_edit_token(self, slug: str) -> str:
+        """Issue a new private edit token for an active map and invalidate the old one.
+
+        Args:
+            slug: Fixed URL name of the map selected by a site administrator.
+
+        Returns:
+            New token. Its digest replaces the previous digest without changing
+            the map document or revision.
+
+        Raises:
+            SavedMapError: If the map is absent, deleted, or storage is unavailable.
+        """
+        edit_token = token_hex(32)
+        with self.transaction() as cursor:
+            cursor.execute(
+                "UPDATE saved_maps.maps SET edit_token_digest=%s WHERE slug=%s AND deleted_at IS NULL",
+                (_map_edit_token_digest(edit_token), slug),
+            )
+            if cursor.rowcount == 0:
+                raise SavedMapError(404, "Saved map not found.")
+        return edit_token
+
+    def revoke_edit_token(self, slug: str) -> None:
+        """Invalidate a map's private edit link, including for a deleted map.
+
+        Args:
+            slug: Fixed URL name of the map selected by a site administrator.
+
+        Raises:
+            SavedMapError: If the map does not exist or storage is unavailable.
+        """
+        with self.transaction() as cursor:
+            cursor.execute(
+                "UPDATE saved_maps.maps SET edit_token_digest=NULL WHERE slug=%s",
+                (slug,),
+            )
+            if cursor.rowcount == 0:
+                raise SavedMapError(404, "Saved map not found.")
 
     def migrate_source_revisions(
         self, slug: str, *, apply: bool = False, expected_revision: int | None = None
@@ -301,44 +378,57 @@ class SavedMapStore:
                 (deleted, slug),
             )
 
-    def update_saved_map(self, slug: str, request: UpdateSavedMap) -> SavedMap:
-        """Replace an active map's configuration only if its opened revision is current.
+    def update_saved_map(
+        self, slug: str, request: UpdateSavedMap, *, edit_token: str | None = None
+    ) -> SavedMap:
+        """Replace an active map's configuration if the revision and access still match.
 
         Args:
             slug: Existing map's fixed URL name.
             request: Validated replacement configuration and expected revision.
+            edit_token: Private token required for a publisher's save. Administrators
+                can save with their existing authorization and no token.
 
         Returns:
             Updated map with the same URL and creation time, and a new revision.
 
         Raises:
-            SavedMapError: If missing, renamed, edited elsewhere, or storage fails.
+            SavedMapError: If missing, unauthorized, renamed, edited elsewhere, or storage fails.
         """
         if request.slug != slug:
             raise SavedMapError(422, "A published map's URL cannot be changed.")
+        map_access = {
+            "slug": slug,
+            "edit_token_digest": _map_edit_token_digest(edit_token),
+        }
         with self.transaction() as cursor:
             cursor.execute(
-                "UPDATE saved_maps.maps SET title=%s, subtitle=%s, view=%s, revision=revision+1 "
-                "WHERE slug=%s AND revision=%s AND deleted_at IS NULL "
+                "UPDATE saved_maps.maps SET title=%(title)s, subtitle=%(subtitle)s, "
+                "view=%(view)s, revision=revision+1 "
+                f"WHERE {ACTIVE_MAP_CONDITION} AND revision=%(revision)s "
                 'RETURNING slug, title, subtitle, view, revision, created_at AS "createdAt"',
-                (
-                    request.title,
-                    request.subtitle,
-                    Jsonb(request.view.model_dump(mode="json", exclude_unset=True)),
-                    slug,
-                    request.revision,
-                ),
+                {
+                    **map_access,
+                    "title": request.title,
+                    "subtitle": request.subtitle,
+                    "view": Jsonb(
+                        request.view.model_dump(mode="json", exclude_unset=True)
+                    ),
+                    "revision": request.revision,
+                },
             )
             row = cursor.fetchone()
             if row is not None:
                 return SavedMap.model_validate(row)
             cursor.execute(
-                "SELECT 1 FROM saved_maps.maps WHERE slug=%s AND deleted_at IS NULL",
-                (slug,),
+                f"SELECT 1 FROM saved_maps.maps WHERE {ACTIVE_MAP_CONDITION}",
+                map_access,
             )
             if cursor.fetchone() is None:
+                if edit_token is not None:
+                    raise SavedMapError(403, INVALID_MAP_EDIT_LINK)
                 raise SavedMapError(404, "Saved map not found.")
             raise SavedMapError(
                 409,
-                "This map was changed by another administrator. Reload before editing again.",
+                "This map changed while you were editing it. Reload to see the latest version before saving.",
             )

@@ -1,5 +1,7 @@
 /** Versioned, portable saved-map document validation and construction. */
 import { validateCalculatedFields } from "../calculated-fields.js";
+import { validateFeatureFieldFormats } from "../feature-field-formats.js";
+import { VISITOR_CONTROL_PARENTS, VISITOR_CONTROLS_VERSION } from "../visitor-controls.js";
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
 export const SAVED_MAP_VIEW_SCHEMA_VERSION = 5;
@@ -94,9 +96,11 @@ export function serializeSavedMapView(savedMapView) {
 
 /**
  * Validate and normalize the complete saved-map contract.
+ * Optional visitor choices keep their own version within saved-map version 5.
  *
  * @param {unknown} candidate Untrusted parsed value.
  * @return {Readonly<Object>} Frozen canonical document.
+ * @throws {SavedMapViewValidationError} If a required setting is missing or invalid.
  */
 function validateSavedMapView(candidate) {
     requirePlainObject(candidate, "Saved map");
@@ -114,7 +118,8 @@ function validateSavedMapView(candidate) {
     requireExactKeys(
         candidate,
         ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers", "basemap",
-            ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : [])],
+            ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : []),
+            ...(Object.hasOwn(candidate, "visitorControls") ? ["visitorControls"] : [])],
         "Saved map"
     );
     requirePlainObject(candidate.viewer, "Viewer");
@@ -127,7 +132,7 @@ function validateSavedMapView(candidate) {
     const origin = validateOrigin(candidate.viewer.origin);
     const createdAt = validateTimestamp(candidate.createdAt);
     const viewport = validateViewport(candidate.viewport);
-    if (!["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
+    if (!["detailed", "carto", "maptiler", "maptiler-streets", "outlines", "none"].includes(candidate.basemap)) {
         throw new SavedMapViewValidationError("Saved basemap provider is invalid.");
     }
     if (!Array.isArray(candidate.layers)) {
@@ -145,6 +150,8 @@ function validateSavedMapView(candidate) {
             throw new SavedMapViewValidationError("Map legend visibility and collapse state must be boolean.");
         }
     }
+    const visitorControls = Object.hasOwn(candidate, "visitorControls")
+        ? validateVisitorControls(candidate.visitorControls) : undefined;
     const viewIds = new Set();
     const layers = candidate.layers.map(layer => {
         requirePlainObject(layer, "Saved layer");
@@ -188,6 +195,39 @@ function validateSavedMapView(candidate) {
         basemap: candidate.basemap,
         layers: Object.freeze(layers),
         ...(candidate.mapLegend ? { mapLegend: Object.freeze({ ...candidate.mapLegend }) } : {}),
+        ...(visitorControls === undefined ? {} : { visitorControls }),
+    });
+}
+
+/**
+ * Validate explicitly stored visitor choices, including choices overridden by a parent.
+ * @param {unknown} candidate Untrusted visitor settings from a saved map.
+ * @return {Readonly<import("../visitor-controls.js").VisitorControls>} Frozen version and stored choices.
+ * @throws {SavedMapViewValidationError} If the version, capabilities, or values are invalid.
+ */
+function validateVisitorControls(candidate) {
+    requirePlainObject(candidate, "Visitor controls");
+    requireExactKeys(candidate, ["version", "choices",
+        ...(Object.hasOwn(candidate, "initialPanels") ? ["initialPanels"] : [])], "Visitor controls");
+    if (candidate.version !== VISITOR_CONTROLS_VERSION) {
+        throw new SavedMapViewValidationError("This map uses a visitor controls version this viewer does not support.");
+    }
+    requirePlainObject(candidate.choices, "Visitor choices");
+    for (const [id, enabled] of Object.entries(candidate.choices)) {
+        if (!Object.hasOwn(VISITOR_CONTROL_PARENTS, id) || typeof enabled !== "boolean") {
+            throw new SavedMapViewValidationError("Visitor choices must use supported controls and true or false values.");
+        }
+    }
+    if (Object.hasOwn(candidate, "initialPanels")) {
+        requirePlainObject(candidate.initialPanels, "Visitor initial panels");
+        for (const [id, open] of Object.entries(candidate.initialPanels)) {
+            if (!["catalog", "mapContents"].includes(id) || typeof open !== "boolean") {
+                throw new SavedMapViewValidationError("Visitor initial panels must use Catalog or Map contents and true or false values.");
+            }
+        }
+    }
+    return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }),
+        ...(candidate.initialPanels === undefined ? {} : { initialPanels: Object.freeze({ ...candidate.initialPanels }) }),
     });
 }
 
@@ -281,7 +321,8 @@ function validateLayer(candidate) {
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : []),
             ...(!isTemporal && Object.hasOwn(candidate, "filterViewId") ? ["filterViewId"] : []),
-            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : [])],
+            ...(!isTemporal && Object.hasOwn(candidate, "calculatedFields") ? ["calculatedFields"] : []),
+            ...(!isTemporal && Object.hasOwn(candidate, "fieldFormats") ? ["fieldFormats"] : [])],
         "Saved layer"
     );
     let customName;
@@ -346,6 +387,9 @@ function validateLayer(candidate) {
     if ((isArtifact || Object.hasOwn(candidate, "calculatedFields")) && candidate.style.kind !== "vector") {
         throw new SavedMapViewValidationError("Calculated fields and vector run results require a vector style.");
     }
+    if (Object.hasOwn(candidate, "fieldFormats") && candidate.style.kind !== "vector") {
+        throw new SavedMapViewValidationError("Field formats require a vector layer.");
+    }
     if (isUpload && candidate.style.kind === "raster" && Object.hasOwn(candidate, "filter")) {
         throw new SavedMapViewValidationError("Uploaded raster layers cannot have polygon filters.");
     }
@@ -371,6 +415,7 @@ function validateLayer(candidate) {
         style: structuredClone(candidate.style),
         ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
         ...(Object.hasOwn(candidate, "calculatedFields") ? {calculatedFields: validateCalculatedFields(candidate.calculatedFields)} : {}),
+        ...(Object.hasOwn(candidate, "fieldFormats") ? {fieldFormats: validateFeatureFieldFormats(candidate.fieldFormats)} : {}),
     });
 }
 

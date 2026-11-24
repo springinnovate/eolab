@@ -223,6 +223,7 @@ function createLayoutFixture() {
         panel.addDescendant(child);
     }
     const elements = new Map([
+        ["#map", new FakeLayoutElement()],
         ["#app", app],
         ["#control-panel", panel],
         ["#collapse-panel", collapsePanel],
@@ -271,6 +272,61 @@ function createLayoutFixture() {
         },
         timers,
     };
+}
+
+for (const kind of ["uploaded raster", "generated vector"]) {
+    test(`restoring ${kind} retains the visitor's collapsed Map contents`, async () => {
+        const fixture = createLayoutFixture();
+        const layout = new EomapLayoutController({documentContext: fixture.document,
+            schedule: fixture.schedule, invalidateMapSize() {}, allowCatalog: false,
+            initialState: {catalog: false, mapContents: false}});
+        const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+        const functions = ["addUploadedRaster", "restoreSavedUpload", "restoreUploadedRaster", "addGeneratedVector"].map(name => {
+            const start = source.indexOf(`    async function ${name}(`);
+            return source.slice(start, source.indexOf("\n    /**", start));
+        }).join("\n");
+        const records = new Map();
+        const dependencies = {
+            onRenderingWorkspaceRequested: () => layout.showWorkspace("map-layers"),
+            getRasterUpload: async id => ({id, name: "Restored raster"}),
+            describeRasterSource: async () => ({bounds: [0, 0, 1, 1], version: "fixture",
+                capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+            rasterVisualization: {showSource: async (_source, _lifecycle, presentation) => {
+                const record = {entry: {key: presentation.key}};
+                records.set(presentation.key, record);
+                return record;
+            }},
+            uploadsDialog: null, mapLayerStackView: {announceStatus() {}},
+            vectorMapLayerAdapter: {publish: async () => ({}), added() {}},
+            mapLayerController: {
+                addLocal: presentation => { const record = {entry: presentation}; records.set(presentation.key, record); return record; },
+                getRecord: key => records.get(key), setVisible() {}, reorder() {}, snapshots: () => [...records.values()],
+            },
+        };
+        const addStart = source.indexOf("            addToMap: async upload =>");
+        const addAction = source.slice(addStart, source.indexOf("            isOnMap:", addStart));
+        const {restoreUpload, restoreRaster, addVector, addUpload} = new Function(...Object.keys(dependencies),
+            "getUploadedLayerKeys", `${functions}\n` +
+            `return {restoreUpload: restoreSavedUpload, restoreRaster: restoreUploadedRaster, addVector: addGeneratedVector,
+                addUpload: ({${addAction}}).addToMap};`)(...Object.values(dependencies), () => []);
+        assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
+        if (kind === "uploaded raster") {
+            assert.ok(await restoreUpload({uploadId: "upload", style: {kind: "raster"}}, () => true));
+        } else {
+            assert.ok(await addVector({}, {}, {key: "result", visible: true, isCurrent: () => true}));
+        }
+        assert.equal(records.size, 1, "The source still restores while the panel is closed");
+        assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
+        if (kind === "uploaded raster") {
+            await addUpload({id: "another-upload", kind: "raster"});
+            assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "true", "Explicit Add reveals controls");
+            fixture.renderingTab.dispatchEvent(new Event("click"));
+            await restoreRaster({key: "undo", label: "Restored raster", index: 0,
+                local: {uploadId: "upload", appearance: {kind: "raster"}}}, () => true);
+            assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "true", "Explicit Undo reveals controls");
+        }
+        layout.destroy();
+    });
 }
 
 test("panel activity sources release independently and disconnect with the layout", () => {
@@ -361,6 +417,99 @@ test("shared viewer omits catalog and status while retaining layer and sidebar c
     layout.setControlPanelCollapsed(false);
     assert.equal(fixture.renderingRegion.hidden, false);
     assert.equal(fixture.catalogRegion.hidden, true);
+});
+
+test("unavailable workspaces reject remembered state, clicks and composition requests", () => {
+    for (const allowCatalog of [false, true]) {
+        for (const allowMapContents of [false, true]) {
+            const fixture = createLayoutFixture();
+            const layout = new EomapLayoutController({
+                documentContext: fixture.document, schedule: fixture.schedule,
+                invalidateMapSize() {}, allowCatalog, allowMapContents, allowOperationalStatus: false,
+                workspaceStorage: new SavedMapViewLocalStorage({
+                    getItem: () => '{"catalogOpen":true,"mapLayersOpen":true}',
+                }),
+            });
+            layout.setControlPanelCollapsed(true);
+            for (const [name, allowed, toggle, region] of [
+                ["catalog", allowCatalog, fixture.catalogTab, fixture.catalogRegion],
+                ["map-layers", allowMapContents, fixture.renderingTab, fixture.renderingRegion],
+            ]) {
+                layout.showWorkspace(name, true);
+                assert.equal(toggle.hidden, !allowed);
+                assert.equal(region.hidden, !allowed);
+                if (!allowed) {
+                    toggle.dispatchEvent(new Event("click"));
+                    assert.equal(region.hidden, true);
+                    assert.notEqual(fixture.document.activeElement, toggle);
+                }
+            }
+            if (!allowCatalog && !allowMapContents) {
+                layout.setControlPanelCollapsed(false);
+                fixture.openPanel.dispatchEvent(new Event("click"));
+                assert.equal(fixture.panel.hidden, true);
+                assert.equal(fixture.panel.inert, true);
+                assert.equal(fixture.openPanel.hidden, true);
+            }
+            layout.destroy();
+        }
+    }
+});
+
+test("published initial disclosures override storage and available collapsed panels can reopen", () => {
+    for (const catalog of [false, true]) {
+        for (const mapContents of [false, true]) {
+            const fixture = createLayoutFixture();
+            let reads = 0;
+            const layout = new EomapLayoutController({
+                documentContext: fixture.document, schedule: fixture.schedule, invalidateMapSize() {},
+                initialState: { catalog, mapContents },
+                workspaceStorage: { read() { reads++; return '{"catalogOpen":true,"mapLayersOpen":true}'; }, write() {} },
+            });
+            assert.equal(reads, 0);
+            assert.equal(fixture.catalogRegion.hidden, !catalog);
+            assert.equal(fixture.renderingRegion.hidden, !mapContents);
+            layout.showWorkspace("catalog", true);
+            layout.showWorkspace("map-layers", true);
+            assert.equal(fixture.catalogRegion.hidden, false);
+            assert.equal(fixture.renderingRegion.hidden, false);
+            assert.equal(fixture.document.activeElement, fixture.renderingTab);
+            layout.destroy();
+        }
+    }
+});
+
+test("changing map options preserves child disclosures and moves focus to an available surface", () => {
+    const fixture = createLayoutFixture();
+    const layout = new EomapLayoutController({
+        documentContext: fixture.document, schedule: fixture.schedule, invalidateMapSize() {},
+        initialState: { catalog: true, mapContents: true },
+    });
+    fixture.document.activeElement = fixture.catalogContent;
+    layout.setWorkspaceOptions({ allowCatalog: false, allowMapContents: true });
+    assert.equal(fixture.document.activeElement, fixture.renderingTab);
+    assert.equal(fixture.catalogRegion.hidden, true);
+    layout.setControlPanelCollapsed(true);
+    layout.setWorkspaceOptions({ allowCatalog: false, allowMapContents: true,
+        initialState: { catalog: false, mapContents: true } });
+    assert.equal(fixture.document.activeElement, fixture.collapsePanel,
+        "reapplying a map layout moves focus away from its now-hidden reopen button");
+    layout.setControlPanelCollapsed(true);
+    layout.setWorkspaceOptions({ allowCatalog: false, allowMapContents: false });
+    assert.equal(fixture.document.activeElement, fixture.document.querySelector("#map"));
+    layout.setWorkspaceOptions({ allowCatalog: true, allowMapContents: false,
+        initialState: { catalog: true, mapContents: true } });
+    assert.equal(fixture.panel.hidden, false);
+    assert.equal(fixture.panel.inert, false);
+    assert.equal(fixture.catalogRegion.hidden, false);
+    assert.equal(fixture.renderingRegion.hidden, true);
+    assert.equal(fixture.openPanel.textContent, "Catalog");
+    fixture.catalogTab.focus();
+    layout.setWorkspaceOptions({ allowCatalog: true, allowMapContents: true });
+    assert.equal(fixture.renderingRegion.hidden, false, "availability does not erase initial disclosure choices");
+    assert.equal(fixture.document.activeElement, fixture.catalogTab, "enabling a peer does not steal focus");
+    assert.ok(fixture.timers.every(timer => timer.delay === CONTROL_PANEL_TRANSITION_MILLISECONDS));
+    layout.destroy();
 });
 
 test("inspection layout changes only the changed shell attributes without scheduling resize work", () => {

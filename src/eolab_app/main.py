@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from functools import partial
 from pathlib import Path
 import logging
 import signal
@@ -32,7 +33,10 @@ from eolab_app.routes.saved_maps import (
 from eolab_app.routes.admin_auth import create_administrator_dependency
 from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
-from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.routes.browser_identity import (
+    establish_browser_identity,
+    get_browser_owner_hash,
+)
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.routes.raster_uploads import create_raster_uploads_router
 from eolab_app.raster_uploads import RasterUploadStore
@@ -165,6 +169,7 @@ from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
+from eolab_app.vector.field_statistics_jobs import LayerStatisticsJobs
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.parcel_jobs import ParcelJobs
 from eolab_jobs.client import JobsClient
@@ -312,6 +317,7 @@ def create_app(
         comparison_executor=lambda token: compare_selection_job(vector_jobs, token),
         extent_executor=ExtentJobs(vector_jobs),
         parcel_executor=ParcelJobs(vector_jobs),
+        layer_statistics_executor=LayerStatisticsJobs(vector_jobs),
         uploads=vector_uploads,
         artifact_files=lambda: source_files,
         read_drawing=read_filter_drawing,
@@ -972,6 +978,13 @@ def create_app(
         create_system_router(
             app_global_configuration.app_version,
             app_global_configuration.as_public_dict(),
+            (
+                establish_browser_identity,
+                partial(
+                    get_processing_session_owner_hash,
+                    session_ttl_seconds=processing_session_ttl,
+                ),
+            ),
         )
     )
     application.include_router(create_diagnostics_router(rendering_diagnostics))
