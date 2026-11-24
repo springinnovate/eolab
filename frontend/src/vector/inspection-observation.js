@@ -1,5 +1,7 @@
 /** Describe immutable inspected observations and validate map navigation targets. */
 
+/** @typedef {"inspection"|"labels"} VectorInspectionChange A new inspection or selection, or a display-name edit to the same observations. */
+
 /**
  * Immutable scalar-only record constructed by the feature inspector and passed
  * through composition to chart consumers. Consumers trust this producer contract.

@@ -136,6 +136,25 @@ test("inspection composition delivers distinct observations to both chart consum
   chart.querySelectorAll(".series-chart-point")[0].dispatchEvent(new Event("click"));
   assert.deepEqual(mapActions.slice(1), [{highlight: 0}, {zoom: observations[0].focus}]);
   assert.equal(documentContext.querySelector("#vector-time-series").hidden, false);
+
+  const compareValues = documentContext.querySelector("#vector-time-series-table-body");
+  const profileValues = documentContext.querySelector("#vector-feature-profile-table-body");
+  compareValues.children[1].children[1].children[0].click();
+  profileValues.children[1].children[0].children[0].click();
+  const compareSearch = documentContext.querySelector("#vector-time-series-field-search");
+  const profileSearch = documentContext.querySelector("#vector-feature-profile-field-search");
+  for (const search of [compareSearch, profileSearch]) {
+    search.value = "2000";
+    search.dispatchEvent(new Event("input"));
+  }
+  const renamed = observations.map(result => ({ ...result, layerLabel: "Wetlands" }));
+  inspector.onCurrentObservationChange(renamed[1], {position: 2, total: 2, canPrevious: true, canNext: false}, "labels");
+  inspector.onSampleChange({state: "ready", message: "Ready", observations: renamed}, "labels");
+  assert.deepEqual([compareSearch.value, profileSearch.value], ["2000", "2000"]);
+  assert.equal(compareValues.children[1].children[1].children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(profileValues.children[1].children[0].children[0].getAttribute("aria-pressed"), "true");
+  assert.match(documentContext.querySelector("#vector-time-series-selection-text").textContent, /Wetlands · habitat\.9/);
+  assert.equal(documentContext.querySelector("#vector-feature-profile-selection-text").textContent, "R2000 · 10");
 });
 
 test("a new inspection replaces the prior chart and communicates partial results", t => {

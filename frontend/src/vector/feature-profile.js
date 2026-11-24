@@ -459,15 +459,21 @@ export class VectorFeatureProfileController {
      *
      * @param {VectorInspectionObservation|null} observation Immutable inspector result or null.
      * @param {Object|null} [navigation=null] Inspector-owned result position.
+     * @param {import("./inspection-observation.js").VectorInspectionChange} [change="inspection"]
+     * A layer rename retains the selected measurement, field search and plot visibility.
      * @return {void}
      */
-    setCurrentObservation(observation, navigation = null) {
+    setCurrentObservation(observation, navigation = null, change = "inspection") {
         let normalizedNavigation = null;
         if (observation !== null) {
             normalizedNavigation = normalizeFeatureNavigation(navigation);
         }
         this.currentObservation = observation;
         this.currentNavigation = normalizedNavigation;
+        if (change === "labels") {
+            this.render();
+            return;
+        }
         if (observation === null && !this.panel.hidden) {
             this.onVisibilityChange(false, false);
         }

@@ -25,7 +25,7 @@ function pressEscape(documentContext, origin) {
   return event;
 }
 
-test("renaming a layer updates inspected feature labels without another query", async () => {
+test("renaming a layer updates inspected feature labels without another query", async t => {
   let reads = 0;
   const h = createFixture(async () => {
     reads++;
@@ -35,6 +35,7 @@ test("renaming a layer updates inspected feature labels without another query", 
   });
   await h.controller.inspect(inspectionEvent(12, 24));
   const previousReads = reads;
+  const currentChanges = t.mock.method(h.controller, "onCurrentObservationChange");
   h.targets[0] = { ...h.targets[0], label: "Workshop habitats" };
   h.controller.syncVisibleLayers();
   assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent, "Workshop habitats");
@@ -50,6 +51,7 @@ test("renaming a layer updates inspected feature labels without another query", 
   assert.equal(h.currentObservationChanges.at(-1).layerLabel, "Renamed after dismissal");
   assert.equal(h.sampleChanges.at(-1).observations[0].layerLabel, "Renamed after dismissal");
   assert.equal(h.sampleChangeKinds.at(-1), "labels");
+  assert.equal(currentChanges.mock.calls.at(-1).arguments[2], "labels");
   assert.equal(reads, previousReads);
   h.controller.destroy();
 });

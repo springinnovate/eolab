@@ -291,14 +291,20 @@ export class VectorTimeSeriesController {
      * Replace the map click's observations without discarding the user's field or display choices.
      * @param {import("./inspection-observation.js").VectorInspectionSample} sample
      * Inspector-owned result and progress, including observations retained after dismissal.
+     * @param {import("./inspection-observation.js").VectorInspectionChange} [change="inspection"]
+     * A layer rename retains the selected observation and the field search.
      * @return {void}
      * @throws {TypeError} If the inspection state or message is invalid.
      */
-    setSample(sample) {
+    setSample(sample, change = "inspection") {
         if (!["loading", "ready", "empty", "invalidated", "interrupted"].includes(sample?.state) || typeof sample.message !== "string") {
             throw new TypeError("Invalid vector inspection sample.");
         }
         this.observations = Object.freeze([...sample.observations]);
+        if (change === "labels") {
+            this.render();
+            return;
+        }
         this.sampleState = sample.state;
         this.sampleMessage = sample.message;
         this.failedLayers = sample.failedLayers ?? 0;

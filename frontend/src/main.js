@@ -2244,7 +2244,7 @@ async function initializeCatalog(
             }
         },
         onSampleChange: (sample, change) => {
-            vectorTimeSeries.setSample(sample);
+            vectorTimeSeries.setSample(sample, change);
             vectorFeatureProfile.setFeatureChoices(sample.observations);
             if (change === "labels" || sample.state === "interrupted") return;
             const returned = sample.observations.length;
@@ -2269,8 +2269,8 @@ async function initializeCatalog(
             }
         },
         onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
-        onCurrentObservationChange: (observation, navigation) =>
-            vectorFeatureProfile.setCurrentObservation(observation, navigation),
+        onCurrentObservationChange: (observation, navigation, change) =>
+            vectorFeatureProfile.setCurrentObservation(observation, navigation, change),
         onFeatureProfileRequested: openFeaturePlot,
         onTimeSeriesRequested: openFeatureComparison,
         onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),
