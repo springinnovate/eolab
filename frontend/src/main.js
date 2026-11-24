@@ -281,6 +281,17 @@ function placeSamplingTool(map) {
 function initializeMap(appGlobalConfiguration) {
     const panels = [document.getElementById("control-panel"), document.getElementById("map-inspection")];
     const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; }, panels);
+    const recoveryControl = L.control({position: "bottomleft"});
+    /** Keep saved-layer recovery among map controls, independent of workspace availability.
+     * @return {HTMLElement} Existing recovery button owned by Saved Maps.
+     */
+    recoveryControl.onAdd = () => {
+        const button = document.querySelector("#show-unavailable-map-layers");
+        L.DomEvent.disableClickPropagation(button);
+        L.DomEvent.disableScrollPropagation(button);
+        return button;
+    };
+    recoveryControl.addTo(leafletMap);
     addMapCoordinateGuide(L, leafletMap);
     placeSamplingTool(leafletMap);
 
