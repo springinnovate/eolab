@@ -1578,6 +1578,26 @@ def test_catalog_keeps_the_crs_selected_by_gdal(
         encoding="utf-8",
     )
     assert build_stac_item(tmp_path, source)["properties"]["proj:epsg"] == 4807
+    with (
+        rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
+        rasterio.open(source, GEOREF_SOURCES="INTERNAL") as embedded,
+    ):
+        native_wkt = embedded.crs.to_wkt(version="WKT2_2019")
+    sidecar = source.with_suffix(".tif.aux.xml")
+    sidecar.write_text(
+        f"<PAMDataset><SRS>{native_wkt}</SRS></PAMDataset>", encoding="utf-8"
+    )
+    assert build_stac_item(tmp_path, source)["bbox"][0] == pytest.approx(-4.31 + 1.9233)
+    with rasterio.Env(GDAL_GEOREF_SOURCES="INTERNAL,PAM"):
+        assert build_stac_item(tmp_path, source)["bbox"][0] == pytest.approx(
+            -4.31 + 2.137
+        )
+    sidecar.write_text(
+        '<PAMDataset><PAMRasterBand band="1"><Metadata><MDI key="STATISTICS_MINIMUM">0</MDI>'
+        "</Metadata></PAMRasterBand></PAMDataset>",
+        encoding="utf-8",
+    )
+    assert build_stac_item(tmp_path, source)["bbox"][0] == pytest.approx(-4.31 + 2.137)
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,7 @@ from pyproj import CRS as ProjCRS
 from pyproj.crs.datum import PrimeMeridian
 import rasterio
 from rasterio.crs import CRS
+from rasterio.env import get_gdal_config
 from rasterio.io import DatasetReader
 from tifffile.geodb import GeoKeys
 
@@ -154,15 +155,20 @@ class GeoTiffReader(DatasetReader):
             meridian.longitude * meridian.unit_conversion_factor, radians, rel_tol=1e-13
         ):
             return crs
-        # Catalog indexing also admits GDAL georeferencing sidecars. Embedded
-        # numeric keys describe only the internal CRS.
+        # A catalog sidecar can supply the CRS even when its value equals
+        # GDAL's reading of the embedded keys. Ask GDAL which preferred
+        # external sources supply a CRS before correcting the internal one.
         if len(self.files) > 1:
-            with (
-                rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
-                rasterio.open(self.name, GEOREF_SOURCES="INTERNAL") as embedded,
-            ):
-                if embedded.crs != crs:
-                    return crs
+            priority = (
+                self.options.get("GEOREF_SOURCES")
+                or get_gdal_config("GDAL_GEOREF_SOURCES", normalize=False)
+                or "PAM,INTERNAL"
+            )
+            preferred = priority.upper().partition("INTERNAL")[0].strip(",")
+            if preferred:
+                with rasterio.open(self.name, GEOREF_SOURCES=preferred) as external:
+                    if external.crs is not None:
+                        return crs
         document = definition.to_json_dict()
         horizontal = document
         horizontal = horizontal.get("source_crs", horizontal)
