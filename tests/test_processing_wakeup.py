@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import psycopg
 import pytest
 
-from eolab_app.processing.job_notifications import PostgresJobWakeup
+from eolab_jobs.job_notifications import PostgresJobWakeup
 from eolab_app.processing.worker import serve
 
 

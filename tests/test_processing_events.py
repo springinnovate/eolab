@@ -11,7 +11,7 @@ import psycopg
 import pytest
 
 from eolab_app.processing.job_events import PostgresJobEvents
-from eolab_app.processing.job_notifications import (
+from eolab_jobs.job_notifications import (
     PostgresNotifications,
     JOB_CHANGE_CHANNEL,
 )

@@ -2,6 +2,10 @@
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 
 APPLICATION_SOURCE = Path("src/eolab_app")
@@ -143,17 +147,65 @@ def test_application_root_has_no_generic_shared_module() -> None:
     }.intersection(ROOT_GENERIC_MODULE_NAMES)
 
 
-def test_jobs_client_has_no_application_server_or_operation_dependencies() -> None:
-    """Keep the reusable client importable without service, feature or GIS code."""
-    for path in Path("src/eolab_jobs").rglob("*.py"):
+def test_job_client_and_listener_dependencies() -> None:
+    """Keep client and listener imports and configuration independent of features."""
+    package = Path("src/eolab_jobs")
+    client_dependencies = {
+        "asyncio",
+        "json",
+        "logging",
+        "math",
+        "re",
+        "typing",
+        "uuid",
+        "httpx2",
+        "pydantic",
+        "eolab_jobs",
+    }
+    for path, allowed in (
+        (package / "__init__.py", client_dependencies),
+        (package / "client.py", client_dependencies),
+        (package / "job_notifications.py", sys.stdlib_module_names | {"psycopg"}),
+    ):
         roots = {name.split(".")[0] for name in imported_modules(path)}
-        assert roots <= {
-            "asyncio", "json", "logging", "math", "re", "typing", "uuid",
-            "httpx2", "pydantic", "eolab_jobs",
-        }
+        assert roots <= allowed, path
         assert not reads_process_environment(path)
     assert "eolab_jobs.client" in imported_modules(
         APPLICATION_SOURCE / "vector" / "outline_jobs.py"
+    )
+
+
+@pytest.mark.parametrize(
+    ("module", "unavailable"),
+    [
+        ("eolab_jobs.client", ("psycopg", "psycopg_pool")),
+        ("eolab_jobs.job_notifications", ("httpx2", "pydantic")),
+    ],
+)
+def test_job_client_and_listener_import_independently(
+    module: str, unavailable: tuple[str, ...]
+) -> None:
+    """Load the HTTP client and the PostgreSQL listener with their own dependencies.
+
+    Args:
+        module: Shared job module to import in a fresh interpreter.
+        unavailable: Dependencies used only by the other module.
+    """
+    script = """
+import importlib
+import sys
+
+sys.modules.update(dict.fromkeys((
+    "eolab_app", "job_service", "fiona", "rasterio", "osgeo", "numpy", "pyproj",
+    "shapely", *sys.argv[2:]
+)))
+importlib.import_module(sys.argv[1])
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, module, *unavailable],
+        cwd="src",
+        check=True,
+        timeout=15,
     )
 
 
