@@ -24,20 +24,23 @@ def read_d8_elevations(
     Returns:
         Stored values with the sign of the band scale applied. This preserves
         downhill ordering without applying a uniform offset or scale magnitude.
+        A zero scale gives every valid cell the same routing elevation.
         Calculations that need physical heights must read calibrated elevations.
 
     Raises:
         rasterio.errors.RasterioError: If a native elevation or mask read fails.
     """
     dtype = numpy.result_type(dataset.dtypes[0], numpy.float32)
-    reverse_order = dataset.scales[0] < 0
+    scale = dataset.scales[0]
     elevations = numpy.empty((dataset.height, dataset.width), dtype=dtype)
     for _, window in dataset.block_windows(1):
         values = read_native_raster_block(dataset, window)
         block = elevations[window.toslices()]
         block[:] = values.astype(dtype, copy=False).filled(numpy.nan)
-        if reverse_order:
+        if scale < 0:
             numpy.negative(block, out=block)
+        elif scale == 0:
+            block *= 0
     return elevations
 
 

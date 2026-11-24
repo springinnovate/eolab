@@ -160,6 +160,7 @@ def test_flow_mask_crosses_the_native_longitude_seam(
         ("float32", -182, 1),
         ("float64", 356, 1),
         ("float32", 0, -0.5),
+        ("float32", 0, 0),
     ),
     ids=(
         "float64",
@@ -168,6 +169,7 @@ def test_flow_mask_crosses_the_native_longitude_seam(
         "west-of-dateline",
         "positive-longitudes",
         "negative-scale",
+        "zero-scale",
     ),
 )
 def drainage_corridor(
@@ -180,14 +182,14 @@ def drainage_corridor(
         request: Supplies the storage type, western longitude and band scale.
 
     Returns:
-        A DEM draining east along each valid row and a selection in the middle row.
+        Isolated rows draining east, or flat for a zero scale, with a middle-row seed.
     """
     dtype, west, scale = request.param
     chosen_longitude = (west + 3.5 + 180) % 360 - 180
     other_longitude = (west + 2.5 + 180) % 360 - 180
     dem = tmp_path / "elevation.tif"
     elevations = numpy.full((5, 7), -9999, dtype=dtype)
-    elevations[::2] = numpy.arange(12, -1, -2) / scale
+    elevations[::2] = numpy.arange(12, -1, -2) / (scale or 1)
     elevations[1, :3] = [numpy.nan, numpy.inf, 100]
     mask = numpy.full(elevations.shape, 255, dtype="uint8")
     mask[1, 2] = 0
@@ -208,6 +210,7 @@ def drainage_corridor(
     ):
         dataset.write(elevations, 1)
         dataset.scales = (scale,)
+        dataset.offsets = (100,)
         dataset.write_mask(mask)
 
     vector = tmp_path / "sites.gpkg"
@@ -299,7 +302,10 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
     ):
         expected = numpy.full((5, 7), 255, dtype="uint8")
         expected[::2] = 0
-        expected[2] = expected_corridor
+        # PyFlwDir's deterministic flat row drains to the west edge.
+        expected[2] = (
+            expected_corridor[::-1] if original.scales[0] == 0 else expected_corridor
+        )
         numpy.testing.assert_array_equal(result.read(1), expected)
         assert result.nodata == 255
         assert result.transform == original.transform
