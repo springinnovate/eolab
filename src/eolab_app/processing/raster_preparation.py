@@ -257,6 +257,8 @@ def _write_periodic_longitude_vrt(
 
     The virtual copies reference the original values and alpha band. GDAL can
     read across either seam before computing bilinear or aggregate samples.
+    Rows may have a longitude shear; preserve it while repeating columns whose
+    full width returns to the same longitude and latitude.
 
     Args:
         source: Original raster whose columns cover one full longitude period.
@@ -273,7 +275,9 @@ def _write_periodic_longitude_vrt(
     left, _, right, _ = source.bounds
     center_period = floor((left + right) / (2 * period) + 0.5)
     longitude_origin = affine.c - center_period * period - source.width * affine.a
-    virtual_transform = Affine(affine.a, 0, longitude_origin, 0, affine.e, affine.f)
+    virtual_transform = Affine(
+        affine.a, affine.b, longitude_origin, 0, affine.e, affine.f
+    )
     root = ElementTree.Element(
         "VRTDataset",
         rasterXSize=str(3 * source.width),
@@ -455,7 +459,7 @@ def open_warped_raster(
         _write_masked_source_vrt(source, vrt_path)
         axes = source.transform
         periodic_longitude = False
-        if source.crs.is_geographic and axes.b == axes.d == 0:
+        if source.crs.is_geographic and axes.d == 0:
             period = tau / source.crs.units_factor[1]
             span = abs(axes.a) * source.width
             if isclose(span, period, rel_tol=0, abs_tol=abs(axes.a) * 1e-6):

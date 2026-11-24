@@ -581,6 +581,7 @@ def test_polar_selection_distinguishes_source_and_target_cuts(
 
 @pytest.mark.parametrize("source_left", [0, -180])
 @pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
+@pytest.mark.parametrize("longitude_shear", [0, 0.2])
 @pytest.mark.parametrize(
     ("west", "east", "expected"), [(179.5, 180, 179.25), (-180, -179.5, 179.75)]
 )
@@ -591,13 +592,24 @@ def test_global_bilinear_samples_agree_across_longitude_encodings(
     west: float,
     east: float,
     expected: float,
+    longitude_shear: float,
 ) -> None:
-    """Use the neighboring sample beyond ±180° in either full-world encoding."""
+    """Use periodic neighbors in either longitude encoding, including sheared rows.
+
+    Args:
+        tmp_path: Original source and published calculator output directory.
+        source_left: Equivalent longitude origin of the global input.
+        crs: Geographic or projected output coordinate system.
+        west: Western edge of the analysis area in degrees.
+        east: Eastern edge of the analysis area in degrees.
+        expected: Unshifted seam interpolation for the axis-aligned control.
+        longitude_shear: Longitude displacement per source row.
+    """
     values = (source_left + np.arange(360, dtype="int16")) % 360
     source = write_source(
         tmp_path / "source.tif",
         np.tile(values, (2, 1)),
-        transform=from_origin(source_left, 2, 1, 1),
+        transform=Affine(1, longitude_shear, source_left, 0, -1, 2),
     )
     project = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
     dx, top = project.transform(0.5, 2)
@@ -620,9 +632,19 @@ def test_global_bilinear_samples_agree_across_longitude_encodings(
     assert result.valid_pixels == 2
     with rasterio.open(tmp_path / "result.tif") as output:
         assert output.transform.almost_equals(from_origin(left, top, dx, top / 2))
-        np.testing.assert_allclose(
-            output.read(1), [[expected], [expected]], rtol=0, atol=1e-7
-        )
+        if longitude_shear:
+            rows, columns = np.indices(output.shape, dtype="float64") + 0.5
+            lon, lat = Transformer.from_crs(crs, 4326, always_xy=True).transform(
+                output.transform.c + columns * output.transform.a,
+                output.transform.f + rows * output.transform.e,
+            )
+            source_x = lon - (2 - lat) * longitude_shear
+            expected_values = np.interp(
+                source_x, source_left + np.arange(360) + 0.5, values, period=360
+            )
+        else:
+            expected_values = [[expected], [expected]]
+        np.testing.assert_allclose(output.read(1), expected_values, rtol=0, atol=1e-7)
 
 
 @pytest.mark.parametrize("method", ["nearest", "bilinear", "mean"])
