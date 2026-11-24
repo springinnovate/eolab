@@ -196,7 +196,7 @@ function canRetryRasterStatistics(error) {
  * returning null when its pole/date-line boundary is unsupported.
  * @property {(area:Object|null)=>void} setSamplingActivity Mark the matching committed box or rectangle
  * while a calculation uses it, without changing the selected geometry.
- * @property {(item:Object,selection?:Object,presentation?:Object)=>Promise<Object|null>} showTemporal Retain an independent temporal view.
+ * @property {(item:Object,selection?:{variable:string,time?:string}|null,presentation?:Object)=>Promise<Object|null>} showTemporal Open a temporal variable or exact observation in an independent layer.
  * @property {(key:string,time:string)=>Promise<void>} selectTemporalTime Show an admitted observation in the named view.
  * @property {(key:string,month:string,edge:"first"|"last"|"firstOfLastDay")=>Promise<void>} selectTemporalMonth Browse to an observation at either end of a populated month.
  * @property {(key:string,time:string,signal:AbortSignal)=>Promise<{descriptor:Object,show:()=>void}|null>} prepareTemporalFrame Prepare the selected view's styled observation for playback without changing its source.
@@ -206,7 +206,7 @@ function canRetryRasterStatistics(error) {
  * @property {(item:Object)=>boolean} containsTemporal Whether a temporal view is retained.
  * @property {(item:Object,allowUndo?:boolean)=>void} removeTemporal Remove the topmost view of a dataset.
  * @property {(record:Object)=>Object|null} exportTemporal Copy one temporal selection and appearance for a saved map.
- * @property {(layer:Object,item:Object,isCurrent:()=>boolean)=>Promise<string|null>} restoreTemporal Restore an explicit saved observation.
+ * @property {(layer:Object,item:Object,isCurrent:()=>boolean)=>Promise<string|null>} restoreTemporal Reopen a saved temporal variable or exact observation.
  * @property {() => void} destroy Permanently detach viewer listeners; the
  * viewer must not be reused afterward.
  * @property {boolean} isDisplayed Whether any raster layer is visible.
@@ -2311,7 +2311,7 @@ export function initializeRasterViewer(
                 sourceOrigin: source.kind === "uploadedRaster" ? "upload" : source.kind === "runArtifact" ? "runArtifact" : "catalog",
                 canInfo: record.entry.item !== null || Boolean(record.state.temporal) || Boolean(record.state.lifecycle?.info),
                 ...(record.state.temporal ? {controls: record.state.temporal.controls.element,
-                    timeline: (!bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
+                    timeline: source.time && (!bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
                         name: record.entry.customName ?? record.state.temporal.item.properties.title ?? record.state.temporal.item.id,
                         variableLabel: record.state.temporal.item.properties["cube:variables"][source.variable]?.description ?? source.variable,
                         variable: source.variable, time: source.time, months: record.state.temporal.months,
@@ -4681,18 +4681,18 @@ export function initializeRasterViewer(
         return record;
     }
 
-    /** Build the original-source descriptor for one admitted observation.
+    /** Describe a temporal layer using its Catalog dataset until an observation is selected.
      * @param {Object} item Catalog temporal Item.
-     * @param {{variable:string,time:string}} selection Explicit observation.
+     * @param {{variable:string,time?:string}} selection Variable and optional exact observation time.
      * @param {boolean} available Whether this observation remains admitted.
      * @return {Object} Numerical source and presentation metadata; no rendering identity.
      */
     function temporalRaster(item, selection, available) {
         const variable = item.properties["cube:variables"][selection.variable];
-        const timeLabel = formatObservationTime(selection.time);
+        const label = `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable}`;
         return {
-            source: {collectionId: item.collection, itemId: item.id, ...selection},
-            label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel} UTC`,
+            source: {collectionId: item.collection, itemId: item.id, ...(selection.time ? selection : {})},
+            label: selection.time ? `${label} · ${formatObservationTime(selection.time)} UTC` : label,
             bbox: item.bbox,
             assets: {data: {"raster:bands": [{unit: variable?.unit}]}},
             capabilities: {pixels: available, statistics: available, calculations: available, modelInput: false},
@@ -4721,7 +4721,7 @@ export function initializeRasterViewer(
      * An admitted observation becomes the exact target for subsequent retries.
      * Keeps the row, its area, appearance, visibility and drawing order.
      * @param {Object} record Retained temporal raster.
-     * @param {{variable:string,time:string}} selection Replacement observation.
+     * @param {{variable:string,time?:string}} selection Variable alone before the first date is known, otherwise an exact observation.
      * @param {boolean} available Whether numerical readers may use the selection.
      * @param {Object|null} [publication] Already authorized publication for this exact observation.
      * @return {void}
@@ -4823,7 +4823,7 @@ export function initializeRasterViewer(
         temporal.times = [];
         if (monthChoice && month === undefined) temporal.months = [];
         temporal.month = month ?? temporal.month;
-        selectTemporalObservation(record, selection, false);
+        selectTemporalObservation(record, selection.time ? selection : {variable}, false);
         try {
             const choices = await loadTimes(temporal.item, variable, month, request.signal);
             if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
@@ -4921,18 +4921,20 @@ export function initializeRasterViewer(
     }
 
     /** Retain one independently styled view of a temporal Catalog dataset.
-     * A missing selection uses the first observation in the returned month. Explicit saved
-     * selections remain selected when absent so restoration never substitutes data.
+     * A variable without a saved time opens its first observation in its latest available month.
+     * An exact saved time remains selected even when it is unavailable.
      * @param {Object} item Admitted Catalog temporal Item.
-     * @param {{variable:string,time:string}|null} [selection=null] Explicit observation.
+     * @param {{variable:string,time?:string}|null} [selection=null] Saved variable and optional exact time. A new layer starts with the first variable.
      * @param {Object} [presentation={}] Key for Undo, names, visibility, opacity, appearance, isCustom flag (false for the ordinary Catalog layer) and isCurrent callback.
      * @return {Promise<Object|null>} Retained record, including unavailable rows, or null after cancellation.
      */
     async function showTemporal(item, selection = null, presentation = {}) {
         if (presentation.isCurrent?.() === false) return null;
-        const initial = selection ?? {variable: Object.keys(item.properties["cube:variables"])[0], time: item.properties["cube:dimensions"].time.extent[0]};
-        const temporal = {item, selection: {...initial}, unit: item.properties["cube:variables"][initial.variable]?.unit,
-            months: [], month: initial.time.slice(0, 7), times: [], request: null, loading: true, error: null,
+        const variable = selection?.variable ?? Object.keys(item.properties["cube:variables"])[0];
+        const initial = selection?.time ? {variable, time: selection.time} : {variable};
+        const temporal = {item, selection: initial, unit: item.properties["cube:variables"][variable]?.unit,
+            pendingMonthChoice: initial.time ? undefined : {variable, edge: "first"},
+            months: [], month: initial.time?.slice(0, 7) ?? "", times: [], request: null, loading: true, error: null,
             preserveRange: Boolean(presentation.appearance)};
         let record;
         temporal.controls = temporalControlsFactory({
@@ -4944,7 +4946,7 @@ export function initializeRasterViewer(
         const raster = temporalRaster(item, initial, false);
         record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`, canAddView: true,
             label: raster.label, sourceName: raster.label, isCustom: false, raster, temporal, ...presentation}, rasterMapLayerAdapter);
-        await loadTemporalChoices(record, selection ? undefined : {variable: initial.variable, edge: "first"});
+        await loadTemporalChoices(record);
         if (presentation.isCurrent?.() === false) {
             if (mapLayers.getRecord(record.entry.key) === record) mapLayers.removeKey(record.entry.key);
             return null;
@@ -5011,18 +5013,19 @@ export function initializeRasterViewer(
         }
     }
 
-    /** Capture one temporal observation and its portable map appearance.
+    /** Save the retained observation and its appearance, or just the variable and appearance until its first date is known.
      * @param {Object} record Retained layer from the neutral stack.
      * @return {Object|null} Saved temporal layer, or null for another source owner.
      */
     function exportTemporal(record) {
-        if (!record.state.temporal) return null;
-        return {temporalSource: rasterSourceReference(record.state.item), visible: record.entry.visible,
+        const temporal = record.state.temporal;
+        if (!temporal) return null;
+        return {temporalSource: {collectionId: temporal.item.collection, itemId: temporal.item.id, ...temporal.selection}, visible: record.entry.visible,
             opacity: record.entry.opacity, ...(record.entry.customName ? {customName: record.entry.customName} : {}),
             style: rasterMapLayerAdapter.exportSavedState(record)};
     }
 
-    /** Restore an explicit saved temporal observation through its normal owner.
+    /** Reopen a saved variable at its recorded time or look up its first observation in the latest month.
      * @param {Object} layer Validated temporal saved-layer document.
      * @param {Object} item Current Catalog Item resolved by composition.
      * @param {()=>boolean} isCurrent Whether restoration is still requested.

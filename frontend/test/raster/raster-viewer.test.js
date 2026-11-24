@@ -6180,6 +6180,39 @@ for (const [action, choice, expectedVariable, expectedTime] of [
     });
 }
 
+test("saving a new layer before its first date lookup succeeds reopens the requested variable's latest month", async () => {
+    const january = "2020-01-05T06:00:00.000Z", april = "2020-04-03T19:10:00.000Z";
+    const firstLookup = createDeferred();
+    const lookups = [];
+    const fixture = temporalFixture({loadTimes: async (_item, variable, month) => {
+        lookups.push({variable, month});
+        if (lookups.length === 1) return firstLookup.promise;
+        const selectedMonth = month ?? "2020-04";
+        return {months: ["2020-01", "2020-04"], month: selectedMonth, times: [selectedMonth === "2020-01" ? january : april]};
+    }});
+    try {
+        const item = temporalItem();
+        item.properties["cube:dimensions"].time.extent = [january, april];
+        const adding = fixture.viewer.showTemporal(item);
+        const [row] = fixture.mapLayers.retainedRecords;
+        const saved = parseSavedMapView(serializeSavedMapView(createSavedMapView({
+            viewer: {version: "1", origin: "https://example.test"}, createdAt: april,
+            viewport: {center: {latitude: 0, longitude: 0}, zoom: 3}, layers: [fixture.viewer.exportTemporal(row)],
+        }))).layers[0];
+        firstLookup.reject(new Error("Dates temporarily unavailable"));
+        await adding;
+        assert.deepEqual(saved.temporalSource, {collectionId: item.collection, itemId: item.id, variable: "temperature"});
+        assert.deepEqual(fixture.viewer.exportTemporal(row).temporalSource, saved.temporalSource);
+        assert.equal(row.publication, null);
+        assert.equal(row.state.item.capabilities.pixels, false);
+        const restoredKey = await fixture.viewer.restoreTemporal(saved, item, () => true);
+        const restored = fixture.mapLayers.getRecord(restoredKey);
+        assert.deepEqual(lookups[1], {variable: "temperature", month: undefined});
+        assert.equal(restored.publication.layerName, `eolab:temperature-${april}`);
+        assert.deepEqual(fixture.viewer.exportTemporal(restored).temporalSource, {...saved.temporalSource, time: april});
+    } finally { fixture.destroy(); }
+});
+
 test("saving, copying and undoing removal during a failed variable switch restore the previous observation", async () => {
     const march = "2020-03-22T12:00:00.000Z", april = "2020-04-03T19:10:00.000Z";
     const rainLookup = createDeferred();
