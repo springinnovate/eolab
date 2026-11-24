@@ -662,11 +662,13 @@ def test_filtered_vectors_form_one_mask_without_expanded_seeds(tmp_path: Path) -
 
 
 def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) -> None:
-    """Execute YAML-configured pit filling and publish its results and numerical policy.
+    """Publish the configured pit-filling results and export the run's recorded model revision.
 
     Args:
         tmp_path: Isolated catalog and owned artifact fixtures.
     """
+    from pydantic import ValidationError
+
     from eolab_app.processing.artifacts import LocalJobArtifacts
     from eolab_app.processing.worker import ProcessingWorker
     from eolab_app.processing.native_processes import create_native_process
@@ -843,7 +845,27 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     assert policy["version"] == "hydrology.downstream_beneficiaries.v3"
     assert policy["pitFillSearchLimit"] == 17
     assert policy["pitFillTreatNodataAsClosed"] is True
+    assert policy["beneficiariesRevision"] == provenance["beneficiariesRevision"]
     assert str(tmp_path) not in export_model_job_yaml(ready, run=True).decode()
+
+    # A run finished on a newer build before this installation served the download.
+    recorded_revision = "0123456789abcdef0123456789abcdef01234567"
+    saved_policy = ready["retained_metadata"]["execution"]["numericalPolicy"]
+    saved_policy["beneficiariesRevision"] = recorded_revision
+    exported = parse_yaml(export_model_job_yaml(ready, run=True), run=True)
+    assert (
+        exported["execution"]["numericalPolicy"]["beneficiariesRevision"]
+        == recorded_revision
+    )
+
+    for invalid_revision in (
+        recorded_revision[:7],
+        recorded_revision.upper(),
+        "g" * 40,
+    ):
+        saved_policy["beneficiariesRevision"] = invalid_revision
+        with pytest.raises(ValidationError, match="beneficiariesRevision"):
+            export_model_job_yaml(ready, run=True)
 
 
 def test_cancel_reaps_real_downstream_native_work_before_cleanup(

@@ -659,7 +659,7 @@ def test_map_legend_preferences_round_trip() -> None:
 
 
 def test_visitor_controls_validate_and_round_trip() -> None:
-    """Keep inspection-only settings and independent panel choices without filling omissions."""
+    """Round-trip visitor choices, including missing recipes and disabled parents."""
     candidate = map_request()
     for panel_choices, initial_panels in (
         ({}, None),
@@ -684,6 +684,15 @@ def test_visitor_controls_validate_and_round_trip() -> None:
         assert saved.view.visitorControls is not None
         assert saved.view.visitorControls.choices.rasterValues is False
         assert saved.view.visitorControls.initialPanels.mapContents is False
+    for run_models in (False, True):
+        for ids in ([], ["raster-clip", "missing_model"]):
+            candidate["view"]["visitorControls"] = {
+                "version": 1,
+                "choices": {"runModels": run_models},
+                "modelIds": ids,
+            }
+            saved = CreateSavedMap.model_validate(candidate)
+            assert saved.model_dump(mode="json", exclude_unset=True) == candidate
     for visitor_controls in (
         None,
         {},
@@ -696,6 +705,12 @@ def test_visitor_controls_validate_and_round_trip() -> None:
         {"version": 1, "choices": {}, "initialPanels": None},
         {"version": 1, "choices": {}, "initialPanels": {"catalog": 1}},
         {"version": 1, "choices": {}, "initialPanels": {"canvas": True}},
+        {"version": 1, "choices": {"runModels": "true"}},
+        {"version": 1, "choices": {}, "modelIds": None},
+        {"version": 1, "choices": {}, "modelIds": "raster-clip"},
+        {"version": 1, "choices": {}, "modelIds": ["raster-clip", "raster-clip"]},
+        {"version": 1, "choices": {}, "modelIds": ["../clip"]},
+        {"version": 1, "choices": {}, "modelIds": [42]},
     ):
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(

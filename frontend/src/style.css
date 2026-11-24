@@ -3261,7 +3261,7 @@ div.chart-tooltip {
     gap: 0.4rem;
     margin: 0.25rem 0;
 }
-.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children], [data-visitor-model-children]) {
     min-width: 0;
     margin: 0;
     padding: 0 0 0 1.1rem;

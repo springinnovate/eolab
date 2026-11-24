@@ -1667,6 +1667,7 @@ async function initializeCatalog(
     };
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        allowedModelIds: visitorAvailability.allowedModelIds, recoveryScope: namedMapSlug ?? "",
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
         /** Show a requested result and reveal controls when a new generated vector attaches.
@@ -1951,9 +1952,11 @@ async function initializeCatalog(
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
+        listPublisherModels: () => models.listSetupModels(),
         applyMapHeading,
         applyVisitorControls: settings => {
             visitorAvailability = resolveVisitorControls(settings);
+            models.setAllowedModelIds(visitorAvailability.allowedModelIds);
             onWorkspaceOptionsChange({
                 allowCatalog: visitorAvailability.catalog,
                 allowMapContents: visitorAvailability.mapContents,

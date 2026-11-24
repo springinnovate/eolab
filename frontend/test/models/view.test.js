@@ -149,6 +149,8 @@ test("run history keeps its order and focused button when other runs appear or d
 
 test("tool rows and run cards retain native buttons and focus without rewriting hidden cards during search", t => {
     const h = fixture(), run = job();
+    let descriptionReads = 0;
+    h.state.library = [{...model, get description() { descriptionReads++; return model.description; }}];
     Object.assign(h.state, {page: "runs", runs: [run]}); h.view.render(h.state);
     const runCard = h.view.runCards.get(run.jobId);
     assert.equal(runCard.button.type, "button");
@@ -157,7 +159,9 @@ test("tool rows and run cards retain native buttons and focus without rewriting 
     h.state.page = "library"; h.view.render(h.state);
     assert.doesNotMatch(SUMMARY_MARKUP, /<button\b[^>]*>\s*Refresh library\s*<\/button>/i);
     const libraryButton = h.view.elements["library-items"].children[0];
+    descriptionReads = 0;
     libraryButton.focus(); h.view.render(h.state);
+    assert.equal(descriptionReads, 0, "an unrelated render must not rescan the installed recipes");
     assert.equal(h.view.elements["library-items"].children[0], libraryButton);
     assert.equal(h.doc.activeElement, libraryButton);
     const cardAttributes = t.mock.method(runCard.button, "setAttribute");

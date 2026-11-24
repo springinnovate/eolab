@@ -10,6 +10,7 @@
  * @property {boolean} workspacePanels Allow workspace panels as a group.
  * @property {boolean} catalog Allow visitors to open Catalog.
  * @property {boolean} mapContents Allow visitors to open Map contents.
+ * @property {boolean} runModels Allow visitors to start runs of the selected models.
  */
 
 /** @typedef {{catalog:boolean,mapContents:boolean}} VisitorInitialPanels */
@@ -20,6 +21,8 @@
  * @property {Readonly<Partial<VisitorControlChoices>>} choices Stored availability choices.
  * @property {Readonly<Partial<VisitorInitialPanels>>} [initialPanels] Initial disclosure,
  * independent of availability. Missing entries in an explicit configuration are collapsed.
+ * @property {readonly string[]} [modelIds] Recipe identifiers selected by the publisher,
+ * including unavailable models and choices retained while Run models is off.
  */
 
 export const VISITOR_CONTROLS_VERSION = 1;
@@ -34,6 +37,7 @@ export const VISITOR_CONTROL_PARENTS = Object.freeze({
     workspacePanels: null,
     catalog: "workspacePanels",
     mapContents: "workspacePanels",
+    runModels: null,
 });
 
 /**
@@ -54,15 +58,19 @@ export function visitorControlChoices(settings) {
  * Resolve which visitor capabilities may be used without changing any stored choices.
  * A capability has to be enabled along with every ancestor. Pan is always available.
  * @param {Readonly<VisitorControls>} [settings] Validated choices from one saved map.
- * @return {Readonly<VisitorControlChoices>} Effective capabilities for browser composition.
+ * @return {Readonly<VisitorControlChoices & {allowedModelIds:readonly string[]|null}>}
+ * Effective controls and recipe IDs for new runs. A map without settings offers all
+ * installed models (null). An explicit profile offers only the selected IDs.
  */
 export function resolveVisitorControls(settings) {
     const choices = visitorControlChoices(settings);
-    return Object.freeze(Object.fromEntries(Object.keys(VISITOR_CONTROL_PARENTS).map(id => {
+    const available = Object.fromEntries(Object.keys(VISITOR_CONTROL_PARENTS).map(id => {
         let ancestor = id;
         while (ancestor !== null && choices[ancestor]) ancestor = VISITOR_CONTROL_PARENTS[ancestor];
         return [id, ancestor === null];
-    })));
+    }));
+    const selectedIds = available.runModels ? settings?.modelIds ?? [] : [];
+    return Object.freeze({ ...available, allowedModelIds: settings === undefined ? null : selectedIds });
 }
 
 /**
