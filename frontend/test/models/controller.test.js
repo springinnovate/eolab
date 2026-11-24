@@ -114,7 +114,9 @@ test("published model choices govern search, retained setup and duplication whil
     h.controller.navigate("setup");
     await h.controller.submit();
     assert.equal(h.submitted.length, 0);
-    await h.controller.showRun(job().jobId);
+    const openingRun = h.controller.showRun(job().jobId);
+    assert.equal(view.run.duplicate.hidden, true, "a restricted map waits for the run's identity before offering duplication");
+    await openingRun;
     assert.equal(view.run.title.textContent, job().label);
     assert.equal(view.run.duplicate.hidden, true);
     await h.controller.duplicateRun();

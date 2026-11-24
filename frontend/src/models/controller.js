@@ -171,8 +171,8 @@ export class ModelsController {
     }
 
     /** Check the active map's choice for all installed versions of a recipe.
-     * @param {string} id Recipe identifier.
-     * @return {boolean} Whether a visitor may start this model.
+     * @param {string|undefined} id Recipe identifier, or undefined while run details load.
+     * @return {boolean} Whether the map offers this model. A configured map requires a known ID.
      */
     #allowsModel(id) {
         return this.allowedModelIds === null || this.allowedModelIds.has(id);
@@ -1080,7 +1080,7 @@ export class ModelsController {
         const missingModels = this.libraryLoaded && this.allowedModelIds !== null &&
             [...this.allowedModelIds].some(id => !library.some(model => model.id === id));
         this.view.render({...this.state, library, missingModels, noModelsSelected: this.allowedModelIds?.size === 0,
-            duplicateRestricted: this.state.invocation && !this.#allowsModel(this.state.invocation.model.id),
+            duplicateRestricted: !this.#allowsModel(this.state.invocation?.model.id ?? job?.model.id),
             deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
     }
