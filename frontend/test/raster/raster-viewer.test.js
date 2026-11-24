@@ -6155,6 +6155,26 @@ test("refresh keeps a removed observation explicit and retry recovers publicatio
     } finally {fixture.destroy();}
 });
 
+test("retry after a transient month lookup failure honors the requested playback edge", async t => {
+    const february = ["2024-03-01T00:00:00.000Z"], march = ["2024-03-02T00:00:00.000Z", "2024-03-04T00:00:00.000Z"];
+    let fail = false;
+    const item = temporalItem();
+    item.properties["eolab:time_labels"] = "calendar_day";
+    const h = temporalFixture({getTemporalItem: async () => item, loadTimes: async (_item, _var, month = "2024-02") => {
+        if (fail) throw new Error("Temporarily offline");
+        return {months: ["2024-02", "2024-03"], month, times: month === "2024-02" ? february : march};
+    }});
+    t.after(() => h.destroy());
+    const row = await h.viewer.showTemporal(item);
+    fail = true;
+    await h.viewer.selectTemporalMonth(row.entry.key, "2024-03", "last");
+    fail = false;
+    await h.temporalViews[0].handlers.onRetry();
+    assert.equal(row.state.item.source.time, march[1]);
+    assert.equal(row.state.item.capabilities.calculations, true);
+    assert.equal(row.state.temporal.error, null);
+});
+
 test("removing a temporal row cancels pending publication and cannot resurrect it", async () => {
     const publication = createDeferred();
     let signal;

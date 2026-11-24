@@ -4816,6 +4816,7 @@ export function initializeRasterViewer(
      */
     async function loadTemporalChoices(record, selection, month, edge) {
         const temporal = record.state.temporal;
+        temporal.pendingBrowse = edge === "requested" ? null : {month, edge};
         temporal.request?.abort();
         const request = temporal.request = new AbortController();
         temporal.loading = true;
@@ -4844,6 +4845,7 @@ export function initializeRasterViewer(
                 temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
                 return;
             }
+            temporal.pendingBrowse = null;
             selectTemporalObservation(record, {variable: selection.variable, time}, true);
             await publishTemporalObservation(record, request);
         } catch (error) {
@@ -4865,6 +4867,7 @@ export function initializeRasterViewer(
      */
     async function changeTemporalTime(record, time, publication = null) {
         const temporal = record.state.temporal;
+        temporal.pendingBrowse = null;
         temporal.request?.abort();
         const request = temporal.request = new AbortController();
         temporal.loading = publication === null;
@@ -4940,7 +4943,7 @@ export function initializeRasterViewer(
             onVariableChange: variable => loadTemporalChoices(record, {...temporal.selection, variable}, undefined, "first"),
             onMonthChange: month => loadTemporalChoices(record, temporal.selection, month, "first"),
             onTimeChange: time => changeTemporalTime(record, time),
-            onRetry: () => loadTemporalChoices(record, temporal.selection, temporal.month, "requested"),
+            onRetry: () => retryTemporalChoices(record),
         });
         const raster = temporalRaster(item, initial, false);
         record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`, canAddView: true,
@@ -4951,6 +4954,17 @@ export function initializeRasterViewer(
             return null;
         }
         return mapLayers.getRecord(record.entry.key);
+    }
+
+    /** Retry the unfinished browsing action or reload an already selected exact frame.
+     * @param {Object} record Retained temporal layer with current Catalog metadata.
+     * @return {Promise<void>} Completion of the date lookup and any publication.
+     */
+    function retryTemporalChoices(record) {
+        const {item, selection, pendingBrowse} = record.state.temporal;
+        const {month, edge} = pendingBrowse ?? {
+            month: observationDate(selection.time, item.properties["eolab:time_labels"]).slice(0, 7), edge: "requested"};
+        return loadTemporalChoices(record, selection, month, edge);
     }
 
     /** Refresh metadata and availability for retained temporal views after a server scan.
@@ -4969,8 +4983,7 @@ export function initializeRasterViewer(
                 const item = await getTemporalItem({collection: temporal.item.collection, id: temporal.item.id});
                 if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
                 temporal.item = item;
-                const month = observationDate(temporal.selection.time, item.properties["eolab:time_labels"]).slice(0, 7);
-                await loadTemporalChoices(record, temporal.selection, month, "requested");
+                await retryTemporalChoices(record);
             } catch (error) {
                 if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
                 temporal.loading = false;
