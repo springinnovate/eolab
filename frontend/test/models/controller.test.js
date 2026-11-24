@@ -265,6 +265,84 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     assert.equal(h.submitted.length, 0);
 });
 
+test("Raster calculator keeps formula aliases and captures the chosen output grid", async t => {
+    const calculator = {...model, id: "raster-calculator", title: "Raster calculator", parameters: {}, inputs: {
+        calculation: {type: "raster_formula", label: "Input rasters"},
+        area: {type: "explicit_area", label: "Analysis area"},
+    }};
+    const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+    const h = fixture({discoverModels: async () => [calculator]}, view);
+    t.after(() => h.controller.destroy());
+    const second = {...raster, itemId: "canopy-2020", label: "Canopy cover 2020"};
+    h.context.rasters.push(second);
+    await h.controller.open();
+    h.controller.chooseModel(calculator);
+    const editor = view.setup.inputs.calculation;
+    const change = (control, value, event = "change") => {
+        control.value = value;
+        control.dispatchEvent(new Event(event));
+    };
+    change(editor.rows.get("a").source, modelSourceKey(raster));
+    editor.add.dispatchEvent(new Event("click"));
+    change(editor.rows.get("b").source, modelSourceKey(second));
+    change(editor.rows.get("b").method, "mean");
+    change(editor.formula, "max(0, b - a)", "input");
+    const capture = () => captureModelSubmission(h.controller.state.draft, "calculator-request").inputs.calculation;
+    assert.deepEqual(capture().grid, {kind: "match", alias: "a"});
+    assert.deepEqual(capture().layers.map(({alias, resampling}) => [alias, resampling]), [["a", "nearest"], ["b", "mean"]]);
+    change(editor.grid, "custom-grid");
+    change(editor.crs, "EPSG:6933", "input");
+    change(editor.cellWidth, "30", "input");
+    change(editor.cellHeight, "60", "input");
+    assert.deepEqual(capture().grid, {kind: "custom", crs: "EPSG:6933", pixelSize: [30, 60]});
+    editor.rows.get("b").remove.dispatchEvent(new Event("click"));
+    assert.match(editor.status.textContent, /unknown variable, b/);
+    assert.equal(view.setup.run.disabled, true);
+    editor.add.dispatchEvent(new Event("click"));
+    assert.deepEqual([...editor.rows.keys()], ["a", "c"]);
+    change(editor.rows.get("c").source, modelSourceKey(second));
+    change(editor.formula, "min(a, c)^2", "input");
+    assert.equal(view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.equal(h.submitted[0].inputs.calculation.expression, "min(a, c)^2");
+    assert.deepEqual(h.submitted[0].inputs.calculation.layers.map(row => row.alias), ["a", "c"]);
+});
+
+for (const type of ["raster", "raster_formula"]) test(`${type} observes deletion of a selected completed-run input`, async t => {
+    const recipe = {...model, parameters: {}, inputs: {
+        source: {type, label: "Input raster"}, area: {type: "explicit_area", label: "Analysis area"},
+    }};
+    const completed = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", artifacts: fileManifest()});
+    const selected = {kind: "runArtifact", jobId: completed.jobId, artifactId: completed.artifacts.files[0].artifactId};
+    const deleted = {...completed, status: "deleted", updatedAt: "2098-01-01T00:00:00Z"};
+    const reads = [], view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({
+        listModelRuns: async () => ({jobs: [completed], nextCursor: null}),
+        readJobStatuses: async ids => { reads.push(ids); return {jobs: [deleted], unavailableJobIds: []}; },
+    }, view);
+    t.after(() => { h.controller.destroy(); h.jobs.destroy(); });
+    h.controller.setActive(true);
+    await h.controller.loadRuns();
+    h.controller.chooseModel(recipe);
+    const editor = view.setup.inputs.source;
+    const control = type === "raster_formula" ? editor.rows.get("a").source : editor.source;
+    const choose = source => { control.value = modelSourceKey(source); control.dispatchEvent(new Event("change")); };
+    choose(selected);
+    assert.equal(view.setup.run.disabled, false);
+    choose(raster);
+    assert.equal(h.jobs.tracked.has(completed.jobId), false, "available but unselected files need no observation");
+    choose(selected);
+    await h.jobs.refresh();
+    assert.deepEqual(reads, [[completed.jobId]], "the observer must request this run's authoritative status");
+    assert.equal(h.controller.runSnapshots.get(completed.jobId).status, "deleted");
+    assert.equal(view.setup.run.disabled, true);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "deleted-input"), /unavailable|no longer available/);
+    if (type === "raster_formula") {
+        assert.match(editor.status.textContent, /Raster a is unavailable/);
+        assert.equal(editor.formula.value, "a", "status refresh preserves the formula");
+    }
+});
+
 const periodModel = {...model, id: "regional-period-statistic", parameters: {}, inputs: {
     weather: {type: "temporal_interval", label: "Dataset and period"},
     region: {type: "summary_area", label: "Analysis area"},
@@ -504,10 +582,15 @@ test("temporal setup captures typed inputs in UTC without raster publication or 
 
 test("refresh and map changes preserve the analysis interval; Use this month replaces it explicitly", async () => {
     let item = structuredClone(temporalItem), dates = structuredClone(temporalChoices);
-    const h = await periodFixture({getCatalogItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({getCatalogItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)}, view);
     await h.controller.chooseTemporalVariable("temperature");
     const draft = h.controller.state.draft;
-    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
+    const controls = view.setup.temporal;
+    controls.period.periodMode.value = "times";
+    controls.period.periodMode.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2000-01-01T01:15");
+    editExactTime(controls, "end", "2000-03-04T20:00");
     dates = {months: ["2000-03"], month: "2000-03", times: ["2000-03-12T00:00:00Z"]};
     h.context.temporalDatasets[0] = {...temporalDataset, variable: "rain", visible: false};
     h.controller.refreshMapLayers();
@@ -520,6 +603,35 @@ test("refresh and map changes preserve the analysis interval; Use this month rep
     assert.equal(draft.temporal.endTime, "2000-04-01T00:00");
     assert.equal(draft.temporal.periodMode, "month");
     assert.equal(h.submitted.length, 0);
+    const end = "2025-01-01T00:00:00.000Z";
+    item.properties["eolab:time_labels"] = "calendar_year";
+    dates = {months: ["2024-12"], month: "2024-12", times: [end]};
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(controls.coverage.textContent, "1 observation · 2024");
+    assert.equal(controls.useMonth.textContent, "Use this period");
+    controls.useMonth.dispatchEvent(new Event("click"));
+    assert.equal(draft.temporal.periodMode, "year");
+    let weather = captureModelSubmission(draft, "e".repeat(32)).inputs.weather;
+    assert.equal(weather.startTime, "2024-01-01T00:00:00.000Z");
+    assert.equal(weather.endTime, end);
+    item.properties["eolab:time_labels"] = "explicit";
+    dates.interval_starts = {[end]: "2024-10-12T06:30:07.000Z"};
+    await h.controller.loadTemporalDates(undefined, true);
+    h.controller.useTemporalMonth();
+    weather = captureModelSubmission(draft, "e".repeat(32)).inputs.weather;
+    assert.equal(weather.startTime, dates.interval_starts[end]);
+    assert.equal(weather.endTime, end);
+    Object.assign(item.properties["cube:variables"].temperature, {unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"});
+    await h.controller.loadTemporalDates(undefined, true);
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, false);
+    assert.equal(controls.useMonth.disabled, true);
+    assert.match(controls.availabilityHelp.textContent, /whole UTC hours/);
+    dates.interval_starts[end] = "2024-10-12T06:00:00.000Z";
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(controls.useMonth.disabled, false);
+    controls.useMonth.dispatchEvent(new Event("click"));
+    assert.equal(view.setup.run.disabled, false);
     delete item.properties["cube:variables"].temperature;
     await h.controller.loadTemporalDates(undefined, true);
     assert.equal(draft.temporal.variable, "temperature");

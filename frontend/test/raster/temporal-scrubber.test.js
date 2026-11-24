@@ -7,6 +7,33 @@ import {TemporalScrubber} from "../../src/raster/temporal-scrubber.js";
 const stamps = ["2000-01-02T01:00:00.000Z", "2000-01-02T02:00:00.000Z", "2000-01-05T01:00:00.000Z"];
 const months = ["2000-01", "2000-05"];
 
+test("daily playback groups midnight ends by the covered day when the convention changes", t => {
+    const {controls, widget, layer, calls} = fixture();
+    t.after(() => widget.destroy());
+    const times = ["2024-02-29T23:59:59.000Z", "2024-03-01T00:00:00.000Z", "2024-03-01T00:00:01.000Z"];
+    const timeline = {...layer.timeline, times, time: times[0]};
+    widget.setLayers([{...layer, timeline}]);
+    widget.setLayers([{...layer, timeline: {...timeline, period: "explicit"}}]);
+    controls.stride.value = "day"; controls.stride.dispatchEvent(new Event("change"));
+    controls.forward.dispatchEvent(new Event("click"));
+    assert.deepEqual(calls.at(-1), ["rain", times[2]]);
+});
+
+test("annual totals show their covered years and navigate using exact interval-end keys", () => {
+    const {controls, widget, layer, calls} = fixture();
+    try {
+        const time = "2025-01-01T00:00:00.000Z";
+        widget.setLayers([{...layer, timeline: {...layer.timeline, period: "calendar_year",
+            months: ["2024-12", "2026-12"], month: "2024-12", times: [time], time}}]);
+        widget.setMapStatus({phase: "complete"}, ["first"]);
+        assert.equal(controls.display.textContent, "On map · 2024");
+        assert.equal(controls.time.getAttribute("aria-valuetext"), "2024");
+        assert.deepEqual(Array.from(controls.month.options, option => option.textContent), ["2024", "2026"]);
+        controls.forward.dispatchEvent(new Event("click"));
+        assert.deepEqual(calls.at(-1), ["rain", "2026-12", "first"]);
+    } finally { widget.destroy(); }
+});
+
 /** Mount the actual timeline control names around a representative irregular, partial month.
  * @param {Object} [actions] Optional callback replacements for playback.
  * @return {Object} Real widget, DOM controls, source snapshot and captured actions.

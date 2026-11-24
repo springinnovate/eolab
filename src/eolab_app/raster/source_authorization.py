@@ -137,6 +137,7 @@ class CatalogRasterSourceAuthorizer:
             observations=observations,
             unit=variable["unit"],
             time_support=variable["eolab:time_support"],
+            time_labels=item["properties"].get("eolab:time_labels"),
         )
 
     async def get_time_choices(self, query: TemporalTimeQuery) -> TemporalTimeChoices:

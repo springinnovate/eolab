@@ -744,6 +744,21 @@ test("a previously hidden plot draws at its visible width as soon as it has a va
     assert.equal(chart.getAttribute("hidden"), null);
     assert.equal(chart.getAttribute("viewBox").split(" ")[2], "640");
     assert.equal(chart.querySelectorAll(".series-chart-point").length, 1);
+
+    rows.forEach((row, index) => Object.assign(row, {state: "value", value: index ? 1e308 : -1e308,
+        rawValue: index ? "1e308" : "-1e308"}));
+    view.renderPlots(state);
+    const unavailable = view.cards.get(2);
+    assert.equal(chart.hidden, true, "Finite readings can still exceed the chart's supported range");
+    assert.equal(chart.getAttribute("hidden"), "");
+    assert.equal(unavailable.empty.hidden, false, "An unrepresentable domain must explain the missing chart");
+    assert.match(unavailable.empty.textContent, /range.*too large.*plot.*table.*CSV/i);
+    assert.deepEqual(rows.map(row => row.rawValue), ["-1e308", "1e308"], "Exact results remain available");
+    rows.forEach((row, index) => Object.assign(row, {value: index + 6, rawValue: String(index + 6)}));
+    view.renderPlots(state);
+    assert.equal(chart.getAttribute("hidden"), null);
+    assert.equal(unavailable.empty.hidden, true);
+    assert.equal(chart.querySelectorAll(".series-chart-point").length, 2);
 });
 
 test("temporal plots use actual UTC spacing and retain NoData gaps through presentation changes", () => {

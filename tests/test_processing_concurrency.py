@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 import psycopg
+from psycopg.rows import dict_row
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
@@ -24,22 +25,32 @@ from eolab_app.processing.models import (
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.execution.reusable_process import ReusableProcess
+from eolab_jobs.worker_claim import claim_next_job
 from test_processing_jobs import boundary, store, HEADERS, _paused_clip, clip_inputs
 from test_processing_calculations import ENDPOINT, request_body
 
 
 def claim_from_process(
-    arguments: tuple[str, ProcessingLimits],
+    arguments: tuple[str, ProcessingLimits, bool],
 ) -> dict[str, Any] | None:
     """Claim through an independent Python process and database connection.
 
     Args:
-        arguments: Disposable database address and common capacity settings.
+        arguments: Database address, shared limits and whether to call the shared
+            claim directly instead of using the Processing adapter.
 
     Returns:
         The claimed row, or None when other processes consumed capacity.
     """
-    dsn, limits = arguments
+    dsn, limits, direct = arguments
+    if direct:
+        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                return claim_next_job(
+                    cursor,
+                    worker_count=limits.worker_count,
+                    lease_seconds=limits.lease_seconds,
+                )
     jobs = PostgresJobStore(limits, dsn)
     try:
         jobs.open()
@@ -69,13 +80,24 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     )
     with ProcessPoolExecutor(max_workers=4, mp_context=get_context("spawn")) as workers:
         claims = list(
-            workers.map(claim_from_process, [(store.conninfo, store.limits)] * 8)
+            workers.map(
+                claim_from_process,
+                [
+                    (store.conninfo, store.limits, direct)
+                    for direct in (True, False) * 4
+                ],
+            )
         )
     active = [row for row in claims if row]
     assert len(active) == 2
     assert {row["owner"] for row in active} == {"stack", "visitor"}
     assert visitor["job_id"] in {row["id"] for row in active}
-    assert store.claim_next_job() is None
+    # A full pool can answer even while the subscriber table is unavailable.
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "LOCK TABLE processing.job_subscribers IN ACCESS EXCLUSIVE MODE"
+        )
+        assert store.claim_next_job() is None
     # Cancellation and an expired heartbeat do not release native capacity.
     row = active[0]
     store.cancel(row["id"], row["owner"])
@@ -87,6 +109,34 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     assert store.claim_next_job() is None
     assert store.finish(row["id"], row["attempt_id"], None)
     assert store.claim_next_job() is not None
+
+
+def test_rolled_back_shared_claim_is_available_to_processing(
+    store: PostgresJobStore,
+) -> None:
+    """Release the slot and fair turn when a caller rolls back its outer transaction.
+
+    Args:
+        store: Disposable PostgreSQL queue shared by both claim paths.
+    """
+    queued = store.submit(
+        "owner", "request", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
+    )
+    with psycopg.connect(
+        store.conninfo, autocommit=True, row_factory=dict_row
+    ) as connection:
+        with connection.transaction(force_rollback=True), connection.cursor() as cursor:
+            claim = claim_next_job(cursor, worker_count=1, lease_seconds=20)
+            assert claim["id"] == queued["job_id"]
+            # Earlier worker releases use this same database-wide lock key.
+            with psycopg.connect(store.conninfo) as observer:
+                assert observer.execute(
+                    "SELECT pg_try_advisory_xact_lock(7610329)"
+                ).fetchone() == (False,)
+        turns = connection.execute("SELECT owner FROM processing.job_turns").fetchall()
+        assert turns == []
+    retried = store.claim_next_job()
+    assert retried["id"] == claim["id"] and retried["attempt_id"] != claim["attempt_id"]
 
 
 def test_prepared_job_keeps_its_attempt_without_disk_admission(

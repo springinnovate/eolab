@@ -52,6 +52,24 @@ test("ordinary raster results do not show temporal coverage", () => {
     assert.ok(text.includes("10 × 10 pixels · 90 valid pixels"));
 });
 
+test("reopened period-map and CSV cards label the observations used by the run", () => {
+    const base = {unit: "mm", observationCount: 2,
+        firstObservation: "2024-01-01T00:00:00Z", lastObservation: "2025-01-01T00:00:00Z"};
+    for (const [observationLabels, first, last] of [
+        [{period: "calendar_year"}, "2023", "2024"],
+        [{period: "year"}, "2024", "2025"],
+        [{period: "explicit", explicitStarts: ["2023-09-15T12:00:00Z", "2024-03-01T06:30:45Z"]},
+            "2023-09-15 12:00:00 to 2024-01-01 00:00:00 UTC (end excluded)",
+            "2024-03-01 06:30:45 to 2025-01-01 00:00:00 UTC (end excluded)"],
+    ]) {
+        for (const result of [clipResult, timeSeriesResult]) {
+            const text = getResultCardText({...result, temporalCoverage: {...base, observationLabels}});
+            assert.ok(text.includes(`First observation: ${first}`), text);
+            assert.ok(text.includes(`Last observation: ${last}`), text);
+        }
+    }
+});
+
 test("prepared input coverage shows tile counts and explains gaps only when tiles are missing", () => {
     const full = getResultCardText({...clipResult, preparedInputCoverage: {requiredTiles: 35, cachedTiles: 35, missingTiles: 0}});
     const partial = getResultCardText({...clipResult, preparedInputCoverage: {requiredTiles: 35, cachedTiles: 32, missingTiles: 3}});

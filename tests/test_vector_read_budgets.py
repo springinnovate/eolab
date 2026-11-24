@@ -4,11 +4,11 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
-from shapely.geometry import Polygon, box, mapping
+from shapely.geometry import MultiPolygon, Polygon, box, mapping
 
 from catalog_selection_support import write_selection
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import polygon_records
+from eolab_app.bounded_vector import native_polygon_features, polygon_records
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 
@@ -142,6 +142,30 @@ def test_native_polygon_validation_checks_z_and_canonical_bounds(
     with pytest.raises(GeometryValidationError, match=message):
         with polygon_records(source, (), max_feature_coordinates=None) as records:
             list(records)
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        Polygon([(0, 0), (1, 1), (0, 1), (1, 0), (0, 0)]),
+        MultiPolygon([box(0, 0, 2, 2), box(1, 1, 3, 3)]),
+    ],
+    ids=["crossing-ring", "overlapping-parts"],
+)
+def test_native_topology_is_validated_before_projection(
+    tmp_path: Path, geometry: Polygon | MultiPolygon
+) -> None:
+    """Reject invalid original topology before a projector can merge its parts.
+
+    Args:
+        tmp_path: Original invalid vector directory.
+        geometry: A self-intersecting polygon or overlapping multipart polygon.
+    """
+    source = write_selection(tmp_path / "invalid.gpkg", [mapping(geometry)])
+
+    with pytest.raises(GeometryValidationError, match="valid polygons"):
+        with native_polygon_features(source) as (_, polygons):
+            next(polygons)
 
 
 def test_native_ring_validation_counts_holes_and_preserves_finite_z(

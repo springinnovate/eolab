@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { rasterSourceKey, rasterSourceReference, labeledRasterSource } from "../../src/raster-source.js";
 import { sampleRasterPixel, loadRasterStatistics, loadRasterPairedStatistics } from "../../src/raster/analysis-api.js";
-import { describeRasterSource } from "../../src/raster/source-api.js";
+import { describeRasterSource } from "../../src/raster-source-api.js";
 import { publishRasterSource } from "../../src/raster/api.js";
 import { loadTemporalTimes } from "../../src/raster/temporal-api.js";
 import { calculationIntent, CalculationSessionStorage } from "../../src/processing/calculation-session.js";

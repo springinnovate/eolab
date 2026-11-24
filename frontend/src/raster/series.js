@@ -4,6 +4,7 @@ import { samplingBoxFormula } from "../sampling-box-statistics.js";
 import { vectorSelectionsEqual } from "../selected-area.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
 import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
+import { observationLabel } from "../observation-period.js";
 import { csvParse, csvFormat } from "d3";
 
 const SERIES_STATISTICS = Object.freeze({
@@ -415,7 +416,8 @@ export class RasterSeriesController {
             variable: reference?.variable ?? (sameDataset ? this.temporal.variable : ""),
             loading: false, error: ""});
         this.updateAreaInputs();
-        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal, getTemporalMonthBoundaries(reference.time.slice(0, 7)));
+        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal,
+            snapshot.observationPeriod ?? getTemporalMonthBoundaries(reference.time.slice(0, 7)));
         if (!sameDataset || !this.temporal.item) await this.loadTemporalItem();
         else this.updateAreaInputs();
     }
@@ -819,16 +821,24 @@ export class RasterSeriesController {
     renderTemporalResults() {
         const area = this.areaStatistics, showingPrevious = !!(area.busy && !area.temporalResult && area.previousTemporalResult);
         const result = area.temporalResult ?? (showingPrevious ? area.previousTemporalResult : null);
-        const observations = result?.observations ?? [];
-        const statistics = this.formulas.map(formula => ({...formula, ...this.statisticDisplay.get(formula.id), previousRows: null,
-            rows: observations.map(({time, rows}) => {
-                const capturedLabel = getCapturedStatisticLabel(result, formula);
+        const observations = (result?.observations ?? []).map(({time, start, period, rows}) => {
+            const end = new Date(time), position = start ? new Date(start) : end;
+            const utc = end.toISOString();
+            const label = observationLabel(utc, period, period === "explicit" && start ? position.toISOString() : undefined) ??
+                utc.replace("T", " ").replace(/(\.000)?Z$/, " UTC");
+            return {key: time, xValue: position.getTime(), label, rows};
+        });
+        const statistics = this.formulas.map(formula => {
+            const capturedLabel = getCapturedStatisticLabel(result, formula);
+            const matches = capturedLabel !== undefined;
+            const seriesRows = observations.map(({key, xValue, label, rows}) => {
                 const row = rows.find(value => value.label === capturedLabel);
-                const matches = capturedLabel !== undefined;
-                return {key: time, xValue: Date.parse(time), label: new Date(time).toISOString().replace("T", " ").replace(/(\.000)?Z$/, " UTC"),
+                return {key, xValue, label,
                     statisticId: formula.id, statisticLabel: formula.label || formula.expression, state: !matches ? "waiting" : row?.state === "ok" ? "value" : row?.state ?? "waiting",
                     value: !matches || row?.value == null ? null : Number(row.value), rawValue: matches ? row?.value : null, unit: row?.unit ?? ""};
-            })}));
+            });
+            return {...formula, ...this.statisticDisplay.get(formula.id), previousRows: null, rows: seriesRows};
+        });
         if (showingPrevious) for (const statistic of statistics) {statistic.previousRows = statistic.rows; statistic.rows = [];}
         this.view.render({active: this.active, styleEditingEnabled: this.canEditStyle(), temporal: {...this.temporal,
             variableBound: this.sources.some(source => source.key === this.temporal.viewKey), selectionError: this.temporalSelectionError()},

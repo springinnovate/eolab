@@ -53,6 +53,10 @@ from eolab_app.vector.parcel_models import (
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector.lasso import LassoSelectionResult
+from eolab_app.vector.feature_attributes import (
+    FeatureAttributesRequest,
+    FeatureAttributesResult,
+)
 from eolab_app.vector.spatial_read import SpatialReads, worker_layer
 from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.source_files import (
@@ -473,8 +477,39 @@ class VectorSamplingService:
             feature_ids = tuple(sorted(matches.ids))
             geometry = await read_lasso_highlights(target, feature_ids)
             return LassoSelectionResult(
-                matched=len(feature_ids), featureIds=feature_ids, geometry=geometry
+                matched=len(feature_ids),
+                featureIds=tuple(str(feature_id) for feature_id in feature_ids),
+                geometry=geometry,
             )
+
+    async def read_feature_attributes(
+        self,
+        request: FeatureAttributesRequest,
+        source_owner: str | VectorSourceOwners | None = None,
+    ) -> FeatureAttributesResult:
+        """Authorize selected native IDs and read their original scalar attributes.
+
+        Args:
+            request: Path-free filtered source and unique ordered native-ID text.
+            source_owner: Browser credentials for every private referenced source.
+
+        Returns:
+            Complete identified attributes and the original source descriptor,
+            independently of map visibility or optional display geometry.
+
+        Raises:
+            SelectionUnavailableError: If source identity or access is invalid.
+            VectorUploadError: If the selected upload is unavailable to this browser.
+            SourceFileError: If a private result expires or loses its read lease.
+            VectorFeatureError: If Catalog access, the filter, or the complete
+                bounded attribute read fails.
+            asyncio.CancelledError: After native work stops using its sources.
+        """
+        from eolab_app.vector.feature_attributes import read_feature_attributes
+
+        async with self.open_selection(request.selection, source_owner) as target:
+            native_ids = tuple(int(feature_id) for feature_id in request.featureIds)
+            return await read_feature_attributes(target, native_ids)
 
     @asynccontextmanager
     async def _open_original(

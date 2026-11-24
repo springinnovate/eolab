@@ -11,7 +11,6 @@ import { applySpatialFilter, SpatialFilterViews } from "./vector/spatial-filter.
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 import { MapInteractionTools } from "./map-interaction-tools.js";
 import { resolveVisitorControls, visitorInitialPanels, VISITOR_CONTROLS_VERSION } from "./visitor-controls.js";
-import { selectLassoFeatures } from "./vector/lasso.js";
 /**
  * Browser entry point and application composition root for EOLab.
  *
@@ -127,7 +126,7 @@ import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
 import { ModelsController } from "./models/controller.js";
-import { describeRasterSource } from "./raster/source-api.js";
+import { describeRasterSource } from "./raster-source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
 import { createArtifactPreviewLayer } from "./model-output-preview/leaflet.js";
 import { labeledRasterSource } from "./raster-source.js";
@@ -2172,6 +2171,10 @@ async function initializeCatalog(
             vectorFeatureInspector?.navigateResult(direction),
         onFeatureZoom: zoomInspectedVectorFeature,
     });
+    mapInspection.subscribeActiveTool(tool => {
+        vectorTimeSeries.setActive(tool === "time-series");
+        vectorFeatureProfile.setActive(tool === "feature-profile");
+    });
     /** Show the inspector's current feature and keep following its navigation. @return {void} */
     function openFeaturePlot() {
         vectorTimeSeries.close();
@@ -2221,14 +2224,25 @@ async function initializeCatalog(
                 };
             });
     }
+    /** Return retained original vector views for selection, including hidden layers.
+     * @return {import("./vector/feature-inspector.js").VectorSelectionTarget[]} Path-free sources and applied predicates.
+     */
+    function retainedVectorInspectionTargets() {
+        return mapLayerController.retainedRecords.flatMap(record => {
+            if (record.adapter !== vectorMapLayerAdapter) return [];
+            const source = record.adapter.describeSource(record);
+            return source.selection ? [{key: record.entry.key, label: record.entry.label,
+                selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
+        });
+    }
     /**
-     * Provide the selected vector view's fields and remember inspector label and format changes.
+     * Provide a retained vector view's fields and remember inspector formats, including for hidden views.
      * @param {string} key Opaque identity of the inspected map layer view.
      * @return {import("./vector/feature-field-display.js").FeatureFieldDisplay|null} Settings for a current vector view.
      */
     function describeFeatureFieldDisplay(key) {
         const record = mapLayerController.getRecord(key);
-        if (record?.adapter !== vectorMapLayerAdapter || !record.entry.visible) return null;
+        if (record?.adapter !== vectorMapLayerAdapter) return null;
         const source = record.adapter.describeSource(record);
         const fields = source.fields.map(({name}) => name);
         const numericFields = source.numericFields.map(({name}) => name);
@@ -2236,7 +2250,7 @@ async function initializeCatalog(
         const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
             .filter(([field]) => fieldNames.has(field)));
         return {fields, numericFields, formats, apply: fieldFormats => {
-            if (mapLayerController.getRecord(key) !== record || !record.entry.visible) return false;
+            if (mapLayerController.getRecord(key) !== record) return false;
             const currentFields = new Set(record.adapter.describeSource(record).fields.map(({name}) => name));
             if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
             record.fieldFormats = fieldFormats;
@@ -2248,39 +2262,34 @@ async function initializeCatalog(
         leaflet: L,
         leafletMap,
         getVisibleTargets: () => visibleVectorInspectionTargets(),
+        getSelectionTargets: retainedVectorInspectionTargets,
+        onSelectionDisplayChange: (display, options) => mapInteractionTools?.setSelectionDisplay(display, options),
         getFieldDisplay: describeFeatureFieldDisplay,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
             if (visible) mapInspection.showFeatureInspector({ activate: false });
             else {
                 mapInspection.hideFeatureInspector();
-                mapInspection.setClickResult("feature", null);
             }
         },
-        onSampleChange: (sample, change) => {
-            vectorTimeSeries.setSample(sample, change);
-            vectorFeatureProfile.setFeatureChoices(sample.observations);
-            if (change === "labels" || sample.state === "interrupted") return;
-            const returned = sample.observations.length;
-            const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
-            const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
-            const message = sample.state === "loading"
-                ? `Updating for this click… ${featureCount}`
-                : sample.state === "ready"
-                    ? `${featureCount} across ${layerCount} layer${layerCount === 1 ? "" : "s"}` +
-                        (sample.failedLayers ? ` · ${sample.failedLayers} layer${sample.failedLayers === 1 ? "" : "s"} unavailable` : " · Ready")
-                    : sample.message;
-            mapInspection.setClickResult("feature", {
-                state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
-                message,
-                ...(sample.position ? { position: sample.position } : {}),
-            });
-            if (sample.state === "loading" || sample.state === "ready") {
-                mapInspection.setFeatureResultCount(
-                    sample.observations.length,
-                    { loading: sample.state === "loading" }
-                );
+        onSampleChange: (sample, update) => {
+            if (update !== "labels") {
+                const returned = sample.observations.length;
+                let message = sample.message;
+                if (sample.state === "ready") {
+                    const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
+                    message = `${returned} feature${returned === 1 ? "" : "s"} returned across ${layerCount} layer${layerCount === 1 ? "" : "s"}` +
+                        (sample.failedLayers ? ` · ${sample.failedLayers} layer${sample.failedLayers === 1 ? "" : "s"} unavailable` : " · Ready");
+                }
+                mapInspection.setClickResult("feature", sample.state === "interrupted" ? null : {
+                    state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
+                    message,
+                    position: sample.position ?? null,
+                });
+                mapInspection.setFeatureResultCount(returned, {loading: sample.state === "loading"});
             }
+            vectorTimeSeries.setSample(sample, update);
+            vectorFeatureProfile.setFeatureChoices(sample.observations);
         },
         onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
         onCurrentObservationChange: (observation, navigation, change) =>
@@ -2413,13 +2422,9 @@ async function initializeCatalog(
         documentContext: document, map: leafletMap, leaflet: L,
         availability: visitorAvailability,
         editing: mapLayerEditing,
-        getTargets: () => mapLayerController.retainedRecords.flatMap(record => {
-            if (record.adapter !== vectorMapLayerAdapter) return [];
-            const source = record.adapter.describeSource(record);
-            return source.selection ? [{key: record.entry.key, label: record.entry.label,
-                selection: {...source.selection, filter: record.adapter.exportFilterState(record)}}] : [];
-        }),
-        selectFeatures: selectLassoFeatures,
+        getTargets: retainedVectorInspectionTargets,
+        selectFeatures: (target, polygon, signal) => vectorFeatureInspector.inspectLasso(target, polygon, signal),
+        onClearSelection: () => vectorFeatureInspector.clearSelection(),
         onActionsChange: actions => {
             mapPointerActions = actions;
             mapFeatureHover.setEnabled(actions.featurePicking);
