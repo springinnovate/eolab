@@ -36,6 +36,13 @@ export function isNumericFeatureValue(value) {
  */
 
 /**
+ * A rename preserves each feature's position in the active selection. Restoring a
+ * nonempty history entry also supplies its active feature's zero-based position.
+ * Ordinary inspection results replace the selection without either hint.
+ * @typedef {{kind:"rename"}|{kind:"restore",featureIndex:number}} VectorInspectionUpdate
+ */
+
+/**
  * Test whether a value is a finite WGS 84 longitude/latitude pair.
  *
  * @param {unknown} position Candidate coordinate pair.

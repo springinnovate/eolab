@@ -2250,7 +2250,7 @@ async function initializeCatalog(
                 mapInspection.hideFeatureInspector();
             }
         },
-        onSampleChange: (sample) => {
+        onSampleChange: (sample, update) => {
             const returned = sample.observations.length;
             const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
             const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
@@ -2266,7 +2266,7 @@ async function initializeCatalog(
                 position: sample.position ?? null,
             });
             mapInspection.setFeatureResultCount(sample.observations.length, {loading: sample.state === "loading"});
-            vectorTimeSeries.setSample(sample);
+            vectorTimeSeries.setSample(sample, update);
             vectorFeatureProfile.setFeatureChoices(sample.observations);
         },
         onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),

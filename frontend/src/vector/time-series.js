@@ -347,10 +347,12 @@ export class VectorTimeSeriesController {
      * Retain the inspector's observations for the next visible chart or values table.
      * @param {{state:"loading"|"ready"|"empty"|"invalidated",observations:ReadonlyArray<VectorInspectionObservation>,
      * message:string,failedLayers?:number}} sample Inspector-owned result and progress.
+     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update] Preserve the current reading
+     * on rename or reveal the inspector's saved feature when restoring history.
      * @return {void}
      * @throws {TypeError} If the inspection state or message is invalid.
      */
-    setSample(sample) {
+    setSample(sample, update) {
         if (!["loading", "ready", "empty", "invalidated"].includes(sample?.state) || typeof sample.message !== "string") {
             throw new TypeError("Invalid vector inspection sample.");
         }
@@ -358,13 +360,15 @@ export class VectorTimeSeriesController {
         this.sampleState = sample.state;
         this.sampleMessage = sample.message;
         this.failedLayers = sample.failedLayers ?? 0;
-        this.selected = null;
-        this.firstRow = 0;
-        this.plotAllFeatures = false;
+        if (update?.kind !== "rename") {
+            this.selected = update?.kind === "restore" ? {index:update.featureIndex, field:null} : null;
+            this.firstRow = 0;
+            this.plotAllFeatures = false;
+            this.fields.search.value = "";
+        }
         this.fieldSummary = null;
         this.#orderedComparison = null;
         this.plotPanel.setFeatureChoices(this.observations);
-        this.fields.search.value = "";
         this.render();
     }
 

@@ -16,7 +16,7 @@ import { VectorTimeSeriesController } from "../../src/vector/time-series.js";
  * @param {typeof fetch|null} [fetchImplementation=null] Use the real selection owner when supplied.
  * @return {{inspector:Object,profile:VectorFeatureProfileController,
  * series:VectorTimeSeriesController,documentContext:FakeRasterControlDocument,
- * status:Object,mapActions:({highlight:number}|{zoom:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"]})[],
+ * records:Array<{entry:{label:string}}>,status:Object,mapActions:({highlight:number}|{zoom:import("../../src/vector/inspection-observation.js").VectorInspectionObservation["focus"]})[],
  * selectionDirections:("previous"|"next")[]}}
  * Composed consumers and their presentation outputs.
  */
@@ -87,7 +87,7 @@ function composition(fetchImplementation = null) {
     `let vectorFeatureInspector;\n${source.slice(start, end)}\n` +
     "return {inspector: vectorFeatureInspector, profile: vectorFeatureProfile, series: vectorTimeSeries};"
   )(...Object.values(dependencies));
-  return {...controllers, documentContext, status, mapActions, selectionDirections};
+  return {...controllers, records, documentContext, status, mapActions, selectionDirections};
 }
 
 /**
@@ -275,6 +275,49 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(series.observations.length, 0);
   assert.equal(status.display, null);
 });
+
+for (const action of ["rename", "restore"]) {
+  test(`Compare keeps the correct feature on its sorted page after a layer ${action}`, async t => {
+    let rows = Array.from({length:1002}, (_, i) => ({id:String(i + 1), properties:{x:1002 - i, y:i + 10}}));
+    const {inspector, profile, series, records, documentContext:doc} = composition(async (url, options) =>
+      Response.json(url.endsWith("/lasso") ? {matched:rows.length, featureIds:rows.map(row => row.id), geometry:null} :
+        {selection:JSON.parse(options.body).selection, features:rows}));
+    t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
+    const lasso = () => inspector.inspectLasso(inspector.getSelectionTargets()[0],
+      {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);
+    const control = name => doc.querySelector("#vector-time-series-" + name);
+    await lasso();
+    series.open();
+    series.settings = {xField:"x", yFields:["y"], direction:"ascending", chartType:"scatter"};
+    series.render();
+    const range = control("row-range");
+    range.value = "1000";
+    range.dispatchEvent(new Event("change"));
+    if (action === "rename") {
+      control("values-button").dispatchEvent(new Event("click"));
+      control("table-body").children[0].children[1].children[0].dispatchEvent(new Event("click"));
+      assert.equal(profile.currentObservation.featureId, "1", "The selected table cell is local to Compare");
+      records[0].entry.label = "Renamed watershed";
+      inspector.syncVisibleLayers();
+      assert.equal(range.value, "1000");
+      assert.match(control("selection-text").textContent, /Renamed watershed · 2 · 1001 · y = 11/);
+      assert.equal(control("table-body").children[0].getAttribute("aria-current"), "true");
+    } else {
+      control("chart").querySelectorAll(".series-chart-point")[0].dispatchEvent(new Event("click"));
+      assert.equal(profile.currentObservation.featureId, "2");
+      rows = rows.slice(2);
+      await lasso();
+      assert.equal(range.value, "0", "A replacement starts on the first page");
+      assert.equal(control("selection").hidden, true);
+      inspector.navigateSelection("previous");
+      assert.equal(profile.currentObservation.featureId, "2");
+      assert.equal(range.value, "1000");
+      const mark = control("chart").querySelectorAll(".series-chart-point")[0];
+      assert.equal(mark.getAttribute("aria-pressed"), "true");
+      assert.match(control("selection-text").textContent, /habitat · 2$/);
+    }
+  });
+}
 
 for (const plotName of ["Compare features", "One feature"]) {
   test(`${plotName} rendering errors preserve the completed Lasso selection in Features and history`, async t => {

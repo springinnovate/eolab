@@ -256,7 +256,8 @@ export class VectorFeatureInspectorController {
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
      * Requests presentation changes without knowing the presentation owner.
-     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>)=>void} configuration.onSampleChange
+     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>,
+     * update?:import("./inspection-observation.js").VectorInspectionUpdate)=>void} configuration.onSampleChange
      * Publishes immutable bounded observations through application composition.
      * @param {(navigation:Readonly<{canPrevious:boolean,canNext:boolean}>)=>void}
      * configuration.onSelectionNavigationChange Publishes available directions
@@ -527,7 +528,7 @@ export class VectorFeatureInspectorController {
                 const message = this.#selectionDisplay === null ? this.lastSample.message :
                     formatLassoSelectionStatus(this.#selectionDisplay);
                 this.status.textContent = message;
-                this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers);
+                this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers, {kind:"rename"});
             }
         }
         const visibleSignature = this.#targetSignature(visibleTargets);
@@ -1040,7 +1041,8 @@ export class VectorFeatureInspectorController {
         const message = selection.display === null ? selection.message : formatLassoSelectionStatus(selection.display);
         this.status.textContent = message;
         this.onSelectionDisplayChange(this.#selectionDisplay, options);
-        this.#publishSample(selection.state, selection.results, message, selection.failedLayers);
+        this.#publishSample(selection.state, selection.results, message, selection.failedLayers,
+            selection.state === "ready" ? {kind:"restore", featureIndex:selection.resultIndex} : undefined);
     }
 
     /**
@@ -1087,16 +1089,17 @@ export class VectorFeatureInspectorController {
      * @param {InspectedVectorFeature[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
      * @param {number} [failedLayers=0] Completed layers whose inspection failed.
+     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update] How the existing selection changed.
      * @return {void}
      */
-    #publishSample(state, results, message, failedLayers = 0) {
+    #publishSample(state, results, message, failedLayers = 0, update) {
         this.clearButton.disabled = state !== "loading" && results.length === 0 && this.#selectionHistory.length === 0;
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
         );
         this.lastSample = Object.freeze({ state, observations, message, failedLayers, position: this.#inspectionPosition });
         this.#publishSelectionNavigation();
-        this.onSampleChange(this.lastSample);
+        this.onSampleChange(this.lastSample, update);
     }
 
     /**
