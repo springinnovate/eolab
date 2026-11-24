@@ -403,12 +403,13 @@ def test_attribute_reader_does_not_decode_geometry(
 
 
 def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Keep native and JSON scalars, filter JSON nulls, and omit nonscalar values.
 
     Args:
         tmp_path: Original GeoPackage directory.
+        monkeypatch: Observe whether reading binary fields allocates a hex string.
     """
     path = tmp_path / "scalars.gpkg"
     with fiona.open(
@@ -425,6 +426,8 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
                 "infinite": "float",
                 "date": "date",
                 "blob": "bytes",
+                "empty_blob": "bytes",
+                "null_blob": "bytes",
             },
         },
     ) as dataset:
@@ -437,6 +440,8 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
                     "infinite": float("inf"),
                     "date": "2026-11-23",
                     "blob": b"binary data",
+                    "empty_blob": b"",
+                    "null_blob": None,
                 },
             }
         )
@@ -485,6 +490,7 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
         "missing": None,
         "infinite": None,
         "date": "2026-11-23",
+        "null_blob": None,
         "text": '{"keep":"text"}',
         "json_null": None,
         "json_number": 2.5,
@@ -493,6 +499,35 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
     }
     assert result.features[0].properties["flag"] is True
     assert result.features[0].properties["json_boolean"] is True
+    binary_fields_read_as_text = []
+    get_field_as_string = ogr.Feature.GetFieldAsString
+
+    def record_string_read(feature: ogr.Feature, index: int) -> str:
+        """Record any hex copy produced by the real native accessor.
+
+        Args:
+            feature: Original row containing null, empty and populated binary fields.
+            index: Native field index being read as text.
+
+        Returns:
+            Text from the original GDAL accessor.
+        """
+        if feature.GetFieldType(index) == ogr.OFTBinary:
+            binary_fields_read_as_text.append(feature.GetFieldDefnRef(index).GetName())
+        return get_field_as_string(feature, index)
+
+    monkeypatch.setattr(ogr.Feature, "GetFieldAsString", record_string_read)
+    original = asyncio.run(service.resolve_for_sampling(selection))
+    raw_features = list(
+        iter_original_features(
+            original, None, None, feature_ids=(1,), read_geometry=False
+        )
+    )
+    properties = raw_features[0][1]
+    assert properties["blob"] == b"binary data"
+    assert properties["empty_blob"] == b""
+    assert properties["null_blob"] is None
+    assert binary_fields_read_as_text == []
     for operator, expected_ids in [("present", []), ("missing", [1])]:
         predicate = VectorFilter.model_validate(
             {"rules": [{"field": "json_null", "operator": operator}]}

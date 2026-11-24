@@ -168,6 +168,14 @@ def native_feature_properties(
     try:
         properties = {}
         for index, name, field_type, field_subtype in fields:
+            if field_type == ogr.OFTBinary:
+                # GDAL's generic getter first expands binary fields to hex text.
+                properties[name] = (
+                    bytes(feature.GetFieldAsBinary(index))
+                    if feature.IsFieldSetAndNotNull(index)
+                    else None
+                )
+                continue
             value = feature.GetField(index)
             if value is not None:
                 if field_subtype == ogr.OFSTJSON:
@@ -176,8 +184,6 @@ def native_feature_properties(
                     value = date(*feature.GetFieldAsDateTime(index)[:3]).isoformat()
                 elif field_type == ogr.OFTDateTime:
                     value = feature.GetFieldAsISO8601DateTime(index)
-                elif field_type == ogr.OFTBinary:
-                    value = bytes(feature.GetFieldAsBinary(index))
             properties[name] = value
         return properties
     except (RuntimeError, OSError, json.JSONDecodeError) as error:
