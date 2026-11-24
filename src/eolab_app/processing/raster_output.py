@@ -19,6 +19,39 @@ from eolab_app.processing.model_result_contracts import RasterResultGrid
 from eolab_app.processing.models import ProcessingError
 
 
+def _replace_projection_citation(
+    entries: dict[int, tuple[int, int, int]], source_text: bytes, wkt: str
+) -> tuple[dict[int, tuple[int, int, int]], bytes]:
+    """Pack a new projection citation and the other registered GeoTIFF citations.
+
+    Args:
+        entries: GeoKey IDs mapped to TIFF tag, value count and offset or inline value.
+        source_text: Original ASCII tag bytes addressed by the citation offsets.
+        wkt: Projection definition for the matched output grid.
+
+    Returns:
+        Output directory entries and ASCII tag bytes. Citations that share source
+        bytes also share them in the output. Private source text is omitted.
+    """
+    packed_text = ("ESRI PE String = " + wkt + "|").encode("utf-8")
+    output_entries = {key: entry for key, entry in entries.items() if entry[0] != 34737}
+    output_entries[GeoKeys.PCSCitationGeoKey] = (34737, len(packed_text), 0)
+    citation_ranges = sorted(
+        (offset, offset + size, key)
+        for key, (tag, size, offset) in entries.items()
+        if tag == 34737 and key in GeoKeys and key != GeoKeys.PCSCitationGeoKey
+    )
+    source_end = 0
+    for start, end, key in citation_ranges:
+        # A citation can start inside one already copied from the same tag.
+        copy_from = max(start, source_end)
+        output_offset = len(packed_text) - (copy_from - start)
+        output_entries[key] = (34737, end - start, output_offset)
+        packed_text += source_text[copy_from:end]
+        source_end = max(source_end, end)
+    return output_entries, packed_text
+
+
 def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -> None:
     """Preserve a matched grid's geographic or projected CRS in the GDAL-created COG.
 
@@ -41,7 +74,8 @@ def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -
         tags = source.pages[0].tags
         directory = tags.valueof(34735)
         doubles = list(tags.valueof(34736, ()))
-        citation = tags.valueof(34737, "")
+        ascii_tag = tags.get(34737)
+        source_text = ascii_tag.astuple()[3] if ascii_tag is not None else b""
         decoded = source.pages[0].geotiff_tags
     count = directory[3]
     end = 4 + 4 * count
@@ -50,6 +84,7 @@ def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -
         for key, tag, size, offset in batched(directory[4:end], 4)
     }
     entries[GeoKeys.GTRasterTypeGeoKey] = (0, 1, 1)  # PixelIsArea
+    output_text = source_text
     meridian = crs.prime_meridian
     grid_unit = crs.geodetic_crs.axis_info[0].unit_conversion_factor
     geographic_code = entries.get(GeoKeys.GeographicTypeGeoKey, (0, 1, 32767))[2]
@@ -93,11 +128,10 @@ def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -
                 wkt,
                 count=1,
             )
-            encoded = ("ESRI PE String = " + wkt + "|").encode("utf-8")
-            citation = citation.encode("utf-8")
             entries[GeoKeys.GTModelTypeGeoKey] = (0, 1, 32767)
-            entries[GeoKeys.PCSCitationGeoKey] = (34737, len(encoded), len(citation))
-            citation += encoded
+            entries, output_text = _replace_projection_citation(
+                entries, source_text, wkt
+            )
     # SHORT arrays can follow the entries inside the directory itself.
     shift = 4 * (len(entries) - count)
     keys = [*directory[:3], len(entries)]
@@ -109,8 +143,8 @@ def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -
         tags[34735].overwrite(keys)
         if doubles:
             tags[34736].overwrite(doubles)
-        if citation:
-            tags[34737].overwrite(citation)
+        if output_text:
+            tags[34737].overwrite(output_text)
     if longitude is not None:
         with TiffFile(destination) as output:
             stored = output.pages[0].geotiff_tags.get("GeogPrimeMeridianLongGeoKey")

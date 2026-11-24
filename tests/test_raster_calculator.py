@@ -1496,6 +1496,7 @@ def survey_reference(
         tmp_path: Directory for the reference raster.
         request: Angular unit code, units per degree, optional vertical EPSG code,
             and numeric, ESRI, registered Paris or Clarke datum-shift encoding.
+            Numeric references may include private or shared citation text.
 
     Returns:
         Source path, units per degree, meridian in degrees, and vertical CRS code.
@@ -1503,18 +1504,24 @@ def survey_reference(
     angular_code, factor, vertical, encoding = request.param
     meridian = {
         "numeric": 2.137,
+        "large-private-text": 2.137,
+        "shared-citations": 2.137,
         "helmert": 2.137,
         "esri": -17.123,
         "paris": 2.33722917,
     }[encoding]
-    citation = "GCS Name = Local survey CRS|Primem = Survey prime meridian|"
+    private_text = "x" * 65_399 + "|" if encoding == "large-private-text" else ""
+    geographic_citation = "GCS Name = Local survey CRS|Primem = Survey prime meridian|"
     if encoding == "helmert":
-        citation += "Datum = Survey datum|Ellipsoid = Clarke 1880 (IGN)|"
+        geographic_citation += "Datum = Survey datum|Ellipsoid = Clarke 1880 (IGN)|"
+    if encoding == "shared-citations":
+        geographic_citation += "Comments = " + "x" * 33_200 + "|"
+    citation = private_text + geographic_citation
     keys = [
         (1024, 0, 1, 32767 if encoding == "esri" else 2),
         (1025, 0, 1, 2 if vertical else 1),
         (2048, 0, 1, 32767),
-        (2049, 34737, len(citation), 0),
+        (2049, 34737, len(geographic_citation), len(private_text)),
         (2050, 0, 1, 32767 if encoding == "helmert" else 6326),
         (2051, 0, 1, 8903 if encoding == "paris" else 32767),
         (2054, 0, 1, angular_code),
@@ -1539,7 +1546,17 @@ def survey_reference(
         keys.append((3073, 34737, len(label), len(citation)))
         citation += label
         keys.append((4096, 0, 1, vertical))
-    directory = (1, 1, 1, len(keys), *(value for entry in keys for value in entry))
+    if private_text:
+        keys.append((32768, 34737, len(private_text), 0))
+    if encoding == "shared-citations":
+        keys.append((1026, 34737, len(geographic_citation), 0))
+    directory = (
+        1,
+        1,
+        1,
+        len(keys),
+        *(value for entry in sorted(keys) for value in entry),
+    )
     source = tmp_path / "survey.tif"
     tifffile.imwrite(
         source,
@@ -1680,13 +1697,17 @@ def test_numeric_meridian_locates_reference_and_warped_samples(
         pytest.param((9103, 60, None, "numeric"), id="arcminutes"),
         pytest.param((9105, 1 / 0.9, 5720, "numeric"), id="height"),
         (9105, 1 / 0.9, None, "esri"),
+        pytest.param(
+            (9105, 1 / 0.9, None, "large-private-text"), id="large-private-text"
+        ),
+        pytest.param((9105, 1 / 0.9, None, "shared-citations"), id="shared-citations"),
     ],
     indirect=True,
 )
 def test_published_survey_grid_preserves_numeric_meridian_and_height(
     tmp_path: Path, survey_reference: tuple[Path, float, float, int | None]
 ) -> None:
-    """Publish the surveyed ground positions and retain an optional height reference.
+    """Publish the surveyed ground positions, CRS citations and optional height reference.
 
     Args:
         tmp_path: Calculation directory.
@@ -1711,8 +1732,14 @@ def test_published_survey_grid_preserves_numeric_meridian_and_height(
     )
     result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
     destination = tmp_path / result.filename
-    with tifffile.TiffFile(destination) as output:
+    with (
+        tifffile.TiffFile(source) as reference,
+        tifffile.TiffFile(destination) as output,
+    ):
         keys = output.pages[0].geotiff_tags
+        source_keys = reference.pages[0].geotiff_tags
+        assert keys["GeogCitationGeoKey"] == source_keys["GeogCitationGeoKey"]
+        assert keys.get("GTCitationGeoKey") == source_keys.get("GTCitationGeoKey")
         assert keys["GeogPrimeMeridianLongGeoKey"] == pytest.approx(meridian * factor)
         assert keys.get("VerticalCSTypeGeoKey") == vertical
         assert keys["GTRasterTypeGeoKey"] == 1
