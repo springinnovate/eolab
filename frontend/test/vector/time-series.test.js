@@ -331,6 +331,14 @@ test("categorical and numeric X fields use their expected spacing", () => {
 
 test("loading and invalidation retain settings without a stale chart", () => {
   const h = fixture();
+  const status = h.documentContext.querySelector("#vector-time-series-status");
+  h.controller.setSample({
+    state: "interrupted", observations: observations().slice(0, 2),
+    message: "Inspection stopped before all layers were inspected.", failedLayers: 1,
+  });
+  assert.match(status.textContent, /stopped before all layers/);
+  assert.match(status.textContent, /1 layer could not be inspected/);
+  assert.equal(h.controller.tableBody.children.length, 2);
   h.controller.setSample({
     state: "ready",
     observations: observations(),

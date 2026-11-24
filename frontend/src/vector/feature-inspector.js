@@ -364,7 +364,9 @@ export class VectorFeatureInspectorController {
         this.onClose = () => {
             if (this.abortController !== null) {
                 this.#cancelInspection();
-                this.#publishSample(this.results.length ? "ready" : "empty", this.results, "Feature inspection stopped.");
+                this.#publishSample("interrupted", this.results,
+                    "Inspection stopped before all layers were inspected. Click the map to try again.",
+                    this.lastSample.failedLayers);
             }
             this.clearHighlight();
             this.onInspectionChange(false);
@@ -916,7 +918,7 @@ export class VectorFeatureInspectorController {
     /**
      * Publish the frozen inspection sample and available history directions through composition.
      *
-     * @param {"loading"|"ready"|"empty"|"invalidated"} state Sample state.
+     * @param {import("./inspection-observation.js").VectorInspectionSample["state"]} state Sample state.
      * @param {InspectedVectorFeature[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
      * @param {number} [failedLayers=0] Completed layers whose inspection failed.

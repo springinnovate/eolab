@@ -852,6 +852,35 @@ test("selection history restores the highlighted feature and drops only the repl
   assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
 });
 
+test("closing Features retains partial observations and failed layers when another read is pending", async () => {
+  let finishLastRead;
+  const h = createFixture(async (_url, { body }) => {
+    if (body.get("layers") === "eolab:slow") return new Promise(resolve => { finishLastRead = resolve; });
+    if (body.get("layers") === "eolab:offline") return { ok: false, status: 503 };
+    return { ok: true, json: async () => ({ type: "FeatureCollection", features: [
+      { type: "Feature", geometry: null, properties: { area: 19 } },
+      { type: "Feature", geometry: null, properties: { area: 43 } },
+    ] }) };
+  });
+  for (const name of ["slow", "offline"]) {
+    const target = h.targets[0];
+    h.targets.push({ ...target, sourceId: name, publication: { ...target.publication, layerName: "eolab:" + name } });
+  }
+  const inspection = h.controller.inspect(inspectionEvent(1, 1));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.sampleChanges.at(-1).failedLayers, 1);
+  h.documentContext.querySelector("#close-vector-inspector").dispatchEvent(new Event("click"));
+  const sample = h.sampleChanges.at(-1);
+  assert.equal(sample.state, "interrupted");
+  assert.equal(sample.failedLayers, 1);
+  assert.deepEqual(sample.observations.map(row => row.properties.area), [19, 43]);
+  assert.match(sample.message, /stopped before all layers/i);
+  finishLastRead({ ok: true, json: async () => ({ type: "FeatureCollection", features: [] }) });
+  assert.equal(await inspection, false);
+  assert.equal(h.sampleChanges.at(-1), sample);
+  h.controller.destroy();
+});
+
 test("returning to a completed selection supersedes pending reads and skips failed reads", async () => {
   let finishPending, pendingSignal;
   const h = createFixture(async (_url, { body, signal }) => {

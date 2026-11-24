@@ -17,7 +17,8 @@
 /**
  * Bounded observations and presentation state from one vector inspection.
  * @typedef {Object} VectorInspectionSample
- * @property {"loading"|"ready"|"empty"|"invalidated"} state Inspection status.
+ * @property {"loading"|"ready"|"empty"|"invalidated"|"interrupted"} state
+ * An interrupted inspection retains only observations received before dismissal.
  * @property {ReadonlyArray<VectorInspectionObservation>} observations Features in inspector order.
  * @property {string} message User-facing inspection status.
  * @property {number} failedLayers Inspected layers that returned an error.

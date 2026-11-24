@@ -2246,6 +2246,7 @@ async function initializeCatalog(
         onSampleChange: (sample) => {
             vectorTimeSeries.setSample(sample);
             vectorFeatureProfile.setFeatureChoices(sample.observations);
+            if (sample.state === "interrupted") return;
             const returned = sample.observations.length;
             const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
             const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;

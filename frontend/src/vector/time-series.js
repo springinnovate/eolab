@@ -289,13 +289,13 @@ export class VectorTimeSeriesController {
 
     /**
      * Replace the map click's observations without discarding the user's field or display choices.
-     * @param {{state:"loading"|"ready"|"empty"|"invalidated",observations:ReadonlyArray<VectorInspectionObservation>,
-     * message:string,failedLayers?:number}} sample Inspector-owned result and progress.
+     * @param {import("./inspection-observation.js").VectorInspectionSample} sample
+     * Inspector-owned result and progress, including observations retained after dismissal.
      * @return {void}
      * @throws {TypeError} If the inspection state or message is invalid.
      */
     setSample(sample) {
-        if (!["loading", "ready", "empty", "invalidated"].includes(sample?.state) || typeof sample.message !== "string") {
+        if (!["loading", "ready", "empty", "invalidated", "interrupted"].includes(sample?.state) || typeof sample.message !== "string") {
             throw new TypeError("Invalid vector inspection sample.");
         }
         this.observations = Object.freeze([...sample.observations]);
@@ -304,7 +304,7 @@ export class VectorTimeSeriesController {
         this.failedLayers = sample.failedLayers ?? 0;
         this.selected = null;
         const summary = summarizeVectorTimeSeriesFields(this.observations);
-        if (!this.hasInitialFields && sample.state === "ready" && summary.numericFields.length) {
+        if (!this.hasInitialFields && (sample.state === "ready" || sample.state === "interrupted") && summary.numericFields.length) {
             const date = summary.xFields.find(field => field.count === this.observations.length &&
                 /^(year|survey_year|date|survey_date)$/i.test(field.name));
             if (date) this.settings.xField = date.name;
@@ -336,11 +336,12 @@ export class VectorTimeSeriesController {
         this.plotPanel.fieldButton.textContent = yFields.length > 1 ? yFields.length + " fields" : "Choose fields";
         const count = this.observations.length;
         this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
-        const ready = this.sampleState === "ready";
-        this.statistics.update(this.modeActive && ready ? this.observations : [], yFields);
-        this.openFeature.disabled = !ready || count === 0;
-        this.plotPanel.featureButton.disabled = !ready || count === 0;
-        this.plotPanel.fieldButton.disabled = !ready || (numericFields.length === 0 && !yFields.length);
+        const interrupted = this.sampleState === "interrupted";
+        const canShowResults = this.sampleState === "ready" || interrupted;
+        this.statistics.update(this.modeActive && canShowResults ? this.observations : [], yFields);
+        this.openFeature.disabled = !canShowResults || count === 0;
+        this.plotPanel.featureButton.disabled = !canShowResults || count === 0;
+        this.plotPanel.fieldButton.disabled = !canShowResults || count === 0 || (numericFields.length === 0 && !yFields.length);
         const identity = vectorTimeSeriesPresentation(this.observations,yFields);
         this.heading.textContent = identity?.heading ?? "Compare features";
         this.context.textContent = identity?.context ?? "";
@@ -362,11 +363,11 @@ export class VectorTimeSeriesController {
         this.zoomFeatureButton.hidden = true;
         this.zoomFeatureButton.disabled = true;
         this.featureList.value = "";
-        this.status.textContent = ready ? "" : this.sampleMessage;
-        if (!ready) return;
-        if (yFields.length === 0) {
+        this.status.textContent = canShowResults ? "" : this.sampleMessage;
+        if (!canShowResults) return;
+        if (count && yFields.length === 0) {
             this.status.textContent = numericFields.length ? "Choose a field to plot." : "These features have no numeric fields.";
-        } else {
+        } else if (count) {
             const {rows,plots,xScale} = buildVectorFeatureComparison(this.observations,this.settings);
             const xLabel = choices.get(xField);
             if (chartType === "stacked") {
@@ -376,6 +377,7 @@ export class VectorTimeSeriesController {
             }
             this.#renderTable(rows,yFields,xLabel);
         }
+        if (interrupted) this.status.textContent = [this.sampleMessage, this.status.textContent].filter(Boolean).join(" ");
         if (this.failedLayers) this.status.textContent += (this.status.textContent ? " " : "") +
             this.failedLayers + (this.failedLayers === 1 ? " layer could not be inspected." : " layers could not be inspected.");
         if (this.selected) this.#select(this.selected.index, yFields.includes(this.selected.field) ? this.selected.field : null);
