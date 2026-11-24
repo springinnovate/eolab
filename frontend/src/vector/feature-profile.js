@@ -12,7 +12,6 @@ import { VectorPlotStatistics } from "./plot-statistics.js";
 
 export const FEATURE_PROFILE_TITLE_NONE = "__eolab_no_title__";
 export const FEATURE_PROFILE_TITLE_LAYER = "__eolab_layer_title__";
-const UNAVAILABLE_LOCATION_MESSAGE = "Feature location is unavailable. The map has not moved.";
 
 /**
  * Normalize and validate the inspector-owned position for the current feature.
@@ -388,10 +387,10 @@ export class VectorFeatureProfileController {
             if (!this.nextFeature.disabled) this.onNavigateFeature("next");
         };
         this.onZoomFeature = () => {
-            if (this.currentObservation === null) return;
+            if (this.zoomFeatureButton.disabled) return;
             if (this.onFeatureZoom(this.currentObservation.focus)) return;
             this.zoomFeatureButton.disabled = true;
-            this.status.textContent = UNAVAILABLE_LOCATION_MESSAGE;
+            this.#reportUnavailableLocation();
         };
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();
@@ -558,7 +557,13 @@ export class VectorFeatureProfileController {
         this.#renderTable(profile, settings.chartType === "stacked");
         this.#renderProfileChart(profile, settings, presentation.heading);
         if (this.selectedField !== null) this.#selectField(this.selectedField);
-        if (this.zoomFeatureButton.disabled) this.status.textContent = UNAVAILABLE_LOCATION_MESSAGE;
+        if (this.zoomFeatureButton.disabled) this.#reportUnavailableLocation();
+    }
+
+    /** Add the reason Zoom is disabled to the current plot guidance. @return {void} */
+    #reportUnavailableLocation() {
+        this.status.textContent = [this.status.textContent, "Feature location is unavailable. The map has not moved."]
+            .filter(Boolean).join(" ");
     }
 
     /**

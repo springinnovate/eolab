@@ -689,7 +689,16 @@ test("unavailable feature location leaves the chart usable with a readable expla
   assert.equal(zoom.disabled, true);
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
     "Feature location is unavailable. The map has not moved.");
+  h.documentContext.querySelector("#vector-feature-profile-clear-fields").click();
+  const status = h.documentContext.querySelector("#vector-feature-profile-status");
+  const selectFields = "Select numeric fields to plot from this feature.";
+  const unavailable = "Feature location is unavailable. The map has not moved.";
+  assert.equal(status.textContent, selectFields + " " + unavailable);
+  assert.equal(zoom.disabled, true);
   h.controller.setCurrentObservation(observation({featureId: "corridors.7"}));
   assert.equal(zoom.disabled, false);
+  assert.equal(status.textContent, selectFields);
+  zoom.click();
+  assert.equal(status.textContent, selectFields + " " + unavailable);
   h.controller.destroy();
 });
