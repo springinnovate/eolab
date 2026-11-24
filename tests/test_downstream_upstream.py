@@ -179,6 +179,8 @@ def test_selected_polygon_matches_raster_starts_on_routing_grids(
         "plain",
         "buffer-cutoff",
         "resampled-signed-values",
+        "embedded-mask",
+        "shifted-embedded-mask",
         "uint8-nodata",
         "uint16-nodata",
         "uint16-maximum",
@@ -359,6 +361,32 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
         )
         with rasterio.open(sources.rasters["values"], "w", **profile) as raster:
             raster.write(source_values, 1)
+    if case in {"embedded-mask", "shifted-embedded-mask"}:
+        shifted = case == "shifted-embedded-mask"
+        source_values = np.zeros((4, 6), dtype="float32")
+        source_values[1, :3] = [3, 9, 97]
+        expected_masked_values = np.zeros_like(source_values)
+        if shifted:
+            # The first source column lands in coverage column one.
+            source_values[1, 3:5] = [97, 83]
+            expected_masked_values[1, [1, 2, 4]] = [3, 9, 97]
+        else:
+            expected_masked_values[1, :2] = [3, 9]
+        validity = np.full(source_values.shape, 255, dtype="uint8")
+        validity[1, 2] = 0
+        with rasterio.open(sources.rasters["values"]) as original_values:
+            profile = original_values.meta
+        profile.update(
+            dtype="float32",
+            nodata=83 if shifted else -9999,
+            transform=from_origin(0.75 if shifted else 0, 4, 1, 1),
+        )
+        with (
+            rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True),
+            rasterio.open(sources.rasters["values"], "w", **profile) as raster,
+        ):
+            raster.write(source_values, 1)
+            raster.write_mask(validity)
     reference = tmp_path / "reference"
     reference.mkdir()
     aoi = reference / "reference-area.geojson"
@@ -532,7 +560,7 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
     assert len(rows) == 1
     assert float(artifact.rows[0]["value"]) == float(rows[0]["union_population"])
     if expected_masked_values is not None:
-        expected_total = int(expected_masked_values.sum())
+        expected_total = float(expected_masked_values.sum(dtype=np.float64))
         assert float(rows[0]["union_population"]) == expected_total
         with (wrapped / "result.csv").open(newline="") as stream:
             [row] = csv.DictReader(stream)
