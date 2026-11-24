@@ -357,6 +357,9 @@ test("wide parcel attributes keep their exact values and numeric spacing in both
   assert.ok(Number(origin.getAttribute("x")) < 10, "The reference uses the full chart width");
   assert.ok(Number(origin.getAttribute("y")) > Number(captions.find(label =>
     label.textContent === "Value relative to").getAttribute("y")));
+  const peakLabel = compact.querySelector(".vector-plot-value");
+  assert.ok(Number(peakLabel.getAttribute("y")) - Number(origin.getAttribute("y")) >= 16,
+    "The topmost point's reading must leave one full text line below the reference number");
   series.settings.chartType = "stacked";
   series.render();
   assert.equal(doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point").length, 3);

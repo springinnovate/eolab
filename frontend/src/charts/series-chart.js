@@ -203,8 +203,11 @@ export function renderOrdinalSeriesChart({
     const topYTitle = yAxisLabelPosition === "top";
     const yTitleLines = topYTitle ? yAxisLabel.split("\n") : [yAxisLabel];
     const lineHeight = (axisFontSize ?? 11) + 4;
+    // Give a multiline caption its extra lines and one line of clearance above the highest point label.
+    const extraCaptionHeight = yTitleLines.length > 1 ? yTitleLines.length * lineHeight : 0;
+    height += extraCaptionHeight;
     const margin = {...CHART_MARGIN,
-        top: topYTitle ? lineHeight * yTitleLines.length + 13 : CHART_MARGIN.top,
+        top: topYTitle ? lineHeight + 13 + extraCaptionHeight : CHART_MARGIN.top,
         left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
         bottom: CHART_MARGIN.bottom + fontGrowth * 5};
     if (fitXAxisLabels || axisFontSize !== null) {
