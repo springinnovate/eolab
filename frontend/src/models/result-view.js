@@ -2,16 +2,24 @@
 import { processingArtifactDownloadUrl } from "../processing/api.js";
 import { formatDownloadBytes } from "../processing/presentation.js";
 import { calculationValue } from "../processing/calculation-result-view.js";
+import { observationLabel } from "../observation-period.js";
 
 const RESULT_STATES = {no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
     invalid_arithmetic: "The expression has no defined numeric result.", overflow: "The result exceeded the supported numeric range."};
 
-/** Format an observation's saved timestamp with an explicit UTC timezone.
- * @param {string} timestamp Validated ISO observation timestamp.
- * @return {string} UTC date and time for the completed run.
+/** Describe the first and last observations used by a completed calculation.
+ * @param {Object} coverage Saved UTC keys and any original precision and interval starts.
+ * @param {(tag:string,text:string)=>HTMLElement} element Result card's element factory.
+ * @return {HTMLElement[]} First and last observation labels for a raster or CSV result.
  */
-function formatObservationTime(timestamp) {
-    return new Date(timestamp).toISOString().replace("T", " ").replace(/(?:\.000)?Z$/, " UTC");
+function observationCoverageElements(coverage, element) {
+    const labels = coverage.observationLabels;
+    return [coverage.firstObservation, coverage.lastObservation].map((time, index) => {
+        const end = new Date(time).toISOString(), start = labels?.explicitStarts?.[index];
+        const label = observationLabel(end, labels?.period, start && new Date(start).toISOString()) ??
+            end.replace("T", " ").replace(/(?:\.000)?Z$/, " UTC");
+        return element("span", `${index === 0 ? "First" : "Last"} observation: ${label}`);
+    });
 }
 
 /** Build a raster file card with input coverage when the run records it.
@@ -30,8 +38,7 @@ function rasterCards(result, element) {
         card.append(
             element("span", `Units: ${coverage.unit}`),
             element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
-            element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
-            element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`));
+            ...observationCoverageElements(coverage, element));
     }
     if (result.preparedInputCoverage !== undefined) {
         const {cachedTiles, requiredTiles, missingTiles} = result.preparedInputCoverage;
@@ -83,8 +90,7 @@ function timeSeriesCards(result, element) {
     if (coverage.unit) card.append(element("span", `Units: ${coverage.unit}`));
     card.append(
         element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
-        element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
-        element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`),
+        ...observationCoverageElements(coverage, element),
         element("p", "The CSV contains each calculation's value and valid pixel count for every available observation.", "models-help"));
     return [card];
 }

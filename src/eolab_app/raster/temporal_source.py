@@ -1,7 +1,6 @@
 """Read published GeoTIFF observations and available dates from their catalog."""
 
 import json
-import math
 import sqlite3
 from calendar import monthrange
 from collections.abc import Iterator
@@ -16,6 +15,7 @@ from rasterio.crs import CRS
 import yaml
 
 from eolab_app.raster.errors import RasterAssetError, RasterConflictError
+from eolab_app.raster.geographic_bounds import covers_full_longitude_turn
 from eolab_app.raster.source_models import (
     TemporalIntervalSelection,
     TemporalRasterSelection,
@@ -149,7 +149,7 @@ def get_temporal_observations(
             if not observations:
                 transform = Affine.from_gdal(*json.loads(grid))
                 crs = CRS.from_user_input(projection)
-                cyclic_x = crs.is_geographic and math.isclose(width * transform.a, 360)
+                cyclic_x = covers_full_longitude_turn(crs, width * transform.a)
             observations.append(
                 TemporalObservation(
                     path=raster_path,
@@ -194,6 +194,11 @@ def get_temporal_time_choices(
         RasterAssetError: If the variable is unknown or a source escapes its mount.
         RasterConflictError: If metadata cannot be read or the variable has no observations.
     """
+    period = item["properties"].get("eolab:time_labels")
+    # Keys for prepared intervals are their exclusive ends, at whole-second precision.
+    shift = int(
+        period in {"calendar_year", "calendar_month", "calendar_day", "explicit"}
+    )
     with open_temporal_catalog(item, query, mount) as (_, connection):
         months = tuple(
             month
@@ -205,18 +210,18 @@ def get_temporal_time_choices(
                     SELECT (
                         SELECT valid_time FROM observations
                         WHERE variable = :variable AND valid_time >= CAST(strftime(
-                            '%s', populated_months.first_valid_time, 'unixepoch',
+                            '%s', populated_months.first_valid_time - :shift, 'unixepoch',
                             'start of month', '+1 month'
-                        ) AS INTEGER)
+                        ) AS INTEGER) + :shift
                         ORDER BY valid_time LIMIT 1
                     )
                     FROM populated_months WHERE first_valid_time IS NOT NULL
                 )
-                SELECT strftime('%Y-%m', first_valid_time, 'unixepoch')
+                SELECT strftime('%Y-%m', first_valid_time - :shift, 'unixepoch')
                 FROM populated_months WHERE first_valid_time IS NOT NULL
                 ORDER BY first_valid_time
                 """,
-                {"variable": query.variable},
+                {"variable": query.variable, "shift": shift},
             )
         )
         if not months:
@@ -225,17 +230,29 @@ def get_temporal_time_choices(
             )
         selected_month = query.month if query.month is not None else months[-1]
         year, month = map(int, selected_month.split("-"))
-        start_seconds = datetime(year, month, 1, tzinfo=timezone.utc).timestamp()
+        start_seconds = (
+            datetime(year, month, 1, tzinfo=timezone.utc).timestamp() + shift
+        )
         # The exclusive end of December 9999 is representable in Unix seconds.
         end_seconds = start_seconds + monthrange(year, month)[1] * 86_400
-        times = tuple(
-            observation_datetime(time)
-            .isoformat(timespec="milliseconds")
-            .replace("+00:00", "Z")
-            for (time,) in connection.execute(
-                "SELECT valid_time FROM observations WHERE variable = ? "
-                "AND valid_time >= ? AND valid_time < ? ORDER BY valid_time",
-                (query.variable, start_seconds, end_seconds),
+        start_column = "interval_start" if period == "explicit" else "NULL"
+        times = []
+        interval_starts = {} if period == "explicit" else None
+        for time, start in connection.execute(
+            f"SELECT valid_time, {start_column} FROM observations WHERE variable = ? "
+            "AND valid_time >= ? AND valid_time < ? ORDER BY valid_time",
+            (query.variable, start_seconds, end_seconds),
+        ):
+            label = (
+                observation_datetime(time)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
             )
-        )
-    return TemporalTimeChoices(months, selected_month, times)
+            times.append(label)
+            if interval_starts is not None:
+                interval_starts[label] = (
+                    observation_datetime(start)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z")
+                )
+    return TemporalTimeChoices(months, selected_month, tuple(times), interval_starts)

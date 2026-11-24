@@ -54,6 +54,8 @@ def create_temporal_stack(
     path = directory / "result.csv"
     with path.open("w", encoding="utf-8", newline="") as result:
         writer = csv.writer(result)
+        label_columns = ("time_labels",) if interval.time_labels else ()
+        label_values = (interval.time_labels,) if interval.time_labels else ()
         writer.writerow(
             (
                 "time_utc",
@@ -67,6 +69,7 @@ def create_temporal_stack(
                 "unit",
                 "state",
                 "aggregates",
+                *label_columns,
             )
         )
         for observation, rows in calculate_temporal_observations(
@@ -92,6 +95,7 @@ def create_temporal_stack(
                         row["unit"],
                         row["state"],
                         json.dumps(row["aggregates"], allow_nan=False),
+                        *label_values,
                     )
                 )
     with path.open("rb") as result:

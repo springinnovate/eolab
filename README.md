@@ -103,7 +103,7 @@ Use the timeline at the bottom of the map to drag through a month or press **Pla
 
 *Rainfall at 06:00 UTC on July 1, 2026. A band of rain crosses the tropical Atlantic toward West Africa. Choose another available hour to see how the pattern changes.*
 
-- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each available rate by its recorded interval duration to calculate accumulated depth. Start and end use whole UTC hours.
+- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. Ordinary statistics include the complete value of each overlapping observation. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each mean rate by the seconds its interval overlaps the selected period. A partial interval gives an estimate assuming a constant rate. Start and end use whole UTC hours.
 - **Export area statistics over time (CSV)** calculates a statistic across an area's valid pixels for each available observation, such as mean temperature within a watershed over time. The CSV contains one row per observation, including valid pixel counts.
 - **Raster statistics** plots statistics or formulas across the dates you select. Compare an area average with a value at a clicked point, or download the plotted values as CSV. You choose the calculation dates independently of the hour displayed on the map.
 
@@ -240,6 +240,22 @@ Back up the Docker volumes and keep their names and the database password. Let a
 </details>
 
 ### Prepare data for the Catalog
+
+#### Make a temporal layer from GeoTIFFs
+
+Put one variable's single-band GeoTIFFs in a dedicated folder. Use Python with Rasterio, NumPy, PyYAML and Pydantic 2 to run the [stack preparation script](scripts/prepare_temporal_stack.py).
+
+```sh
+python scripts/prepare_temporal_stack.py draft rainfall/
+python scripts/prepare_temporal_stack.py build rainfall/stack.yaml --check
+python scripts/prepare_temporal_stack.py build rainfall/stack.yaml
+```
+
+The first command shows dates found in filenames and acquisition or observation tags. Confirm the suggestions, choose what each raster measures, then edit `stack.yaml`. Fill in the variable ID, title and units. The draft keeps conflicting clues beside the affected file. For snapshots choose `year`, `month`, `day` or `timestamp`. For means and totals choose `calendar_year`, `calendar_month`, `calendar_day` or `explicit`. Quote dates such as `"2024"` or `"2024-06"`. Exact timestamps need a timezone. For explicit intervals use e.g. `time: {start: "2024-05-01", end: "2024-10-01"}`; the end is exclusive.
+
+Check the edited manifest, then build it. All observations must share a north-up grid and compatible stored values, units and NoData. If a GeoTIFF declares a time operation in its CF `cell_methods` tag, it must match the manifest (`point` for snapshots, `mean` for means, or `sum` for totals). Gaps are allowed. The build publishes `catalog.sqlite` and `dataset.yaml` beside the original files and requires a filesystem supporting hard links. Both commands protect existing outputs. To add observations, prepare a complete replacement archive between calculations, retain its dataset ID and rescan. Place the complete folder under the data mount and run a Catalog scan. Choose the layer in Map contents to select dates or press **Play**.
+
+A snapshot labeled `"2024"` uses the start of 2024 UTC for date-range selection. An annual total labeled `"2024"` covers the full calendar year. Both display as **2024** on the map. In Models, **Use this period** sets the analysis dates from the observations shown. In Raster Statistics, choosing a map layer’s time range starts with its displayed observation.
 
 <details>
 <summary>Add dataset descriptions, citations, and supporting files</summary>

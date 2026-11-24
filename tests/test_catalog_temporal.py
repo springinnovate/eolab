@@ -670,6 +670,7 @@ def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     "failure, message",
     [
         ("grid", "Unsupported raster grid"),
+        ("off-pole", "positive height"),
         ("catalog-escape", "escapes its directory"),
         ("interval", "Invalid time or interval"),
         ("duplicate", "Duplicate observation"),
@@ -697,6 +698,7 @@ def test_invalid_external_metadata_is_reported_without_publishing_an_item(
         with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
             updates = {
                 "grid": "UPDATE coverage SET width = 0",
+                "off-pole": "UPDATE coverage SET transform = '[0, 0.25, 0, 99, 0, -0.001]'",
                 "interval": "UPDATE coverage SET interval_start = interval_end WHERE temporal_type = 'mean'",
                 "duplicate": "INSERT INTO coverage SELECT * FROM coverage LIMIT 1",
                 "variable": "UPDATE coverage SET units = 'different' WHERE rowid = 1",

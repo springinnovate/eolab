@@ -117,16 +117,12 @@ def get_longitude_wrap_width(dataset: RasterDataset) -> float | None:
         dataset: Open source raster with its admitted grid.
 
     Returns:
-        One full grid width in the source CRS's angular units (360 degrees
-        for a global longitude grid), or None when this raster does not wrap
-        across its east/west edge.
+        One full longitude turn in native units, including metres for shifted
+        Web Mercator. A regional raster can occupy only part of that turn.
+        None when selection uses the projected coordinates directly.
     """
-    if (
-        isinstance(dataset, TemporalRasterDataset)
-        and dataset.cyclic_x
-        and dataset.crs.is_geographic
-    ):
-        return abs(dataset.transform.a * dataset.width)
+    if isinstance(dataset, TemporalRasterDataset):
+        return dataset.longitude_wrap_width
     return None
 
 
@@ -144,7 +140,7 @@ def prepare_raster_for_wgs84_bounds(
         dataset: Open source, before window or sample plans have been made.
         selected_bounds: Canonical WGS84 rectangle covering the selection.
     """
-    if get_longitude_wrap_width(dataset) is None:
+    if not isinstance(dataset, TemporalRasterDataset) or not dataset.cyclic_x:
         return
     ring = densified_wgs84_bounds_ring(selected_bounds)
     x, y = _transform_polygon_positions(
@@ -167,7 +163,7 @@ def prepare_raster_for_wgs84_bounds(
     else:
         block_width = dataset.block_shapes[0][1]
         first_column = (math.floor(left) - padding) // block_width * block_width
-    cast(TemporalRasterDataset, dataset).prepare_column_view(first_column)
+    dataset.prepare_column_view(first_column)
 
 
 def _periodic_polygon_copies(
@@ -736,6 +732,8 @@ def _source_window_for_projected_geometries(
         for ring in _polygon_rings(geometry)
         for position in ring
     ]
+    if not projected_positions:
+        raise NoRasterBoundsOverlapError
     inverse_transform = ~dataset.transform
     pixel_positions = tuple(
         inverse_transform * position for position in projected_positions
@@ -1411,7 +1409,7 @@ def selected_raster_area_for_wgs84_polygons(
         ValueError: If projection fails or exceeds coordinate capacity.
         TypeError: If a polygon mapping is malformed.
     """
-    if get_longitude_wrap_width(dataset) is not None:
+    if isinstance(dataset, TemporalRasterDataset) and dataset.cyclic_x:
         if selected_bounds is None:
             positions = [
                 point

@@ -16,6 +16,10 @@ from rasterio.crs import CRS
 from rasterio.enums import MaskFlags
 from rasterio.windows import Window
 
+from eolab_app.raster.geographic_bounds import (
+    WEB_MERCATOR_CRS,
+    WEB_MERCATOR_WORLD_WIDTH,
+)
 from eolab_app.raster.source_contract import mask_invalid_raster_values
 
 
@@ -58,11 +62,13 @@ class ResolvedTemporalInterval:
         time_support: Whether values describe an instant, a mean rate over an
             interval, or an accumulation over an interval. Calculations use this
             distinction to interpret the values without guessing from names.
+        time_labels: Prepared-stack period or snapshot precision for result labels.
     """
 
     observations: tuple[TemporalObservation, ...]
     unit: str
     time_support: Literal["instantaneous", "mean_rate", "accumulation"]
+    time_labels: str | None = None
 
 
 class TemporalRasterDataset:
@@ -97,6 +103,14 @@ class TemporalRasterDataset:
         self.nodatavals = (self.nodata,)
         self.mask_flag_enums = self.native_dataset.mask_flag_enums
         self._update_grid_metadata()
+        self.longitude_wrap_width: float | None = None
+        if self.cyclic_x:
+            self.longitude_wrap_width = self.width * self.transform.a
+        elif self.crs == WEB_MERCATOR_CRS and (
+            self.bounds.left < -WEB_MERCATOR_WORLD_WIDTH / 2
+            or self.bounds.right > WEB_MERCATOR_WORLD_WIDTH / 2
+        ):
+            self.longitude_wrap_width = WEB_MERCATOR_WORLD_WIDTH
 
     @property
     def files(self) -> list[str]:
@@ -252,9 +266,18 @@ class TemporalRasterDataset:
             y: Vertical coordinate in the source CRS.
 
         Returns:
-            Integer row and column. Only cyclic grids wrap columns; other
-            coordinates outside the grid retain out-of-range indexes.
+            Integer row and column in the current view. A shifted Web Mercator
+            grid accepts equivalent eastings one world apart. Points beyond
+            regional coverage retain out-of-range indexes.
         """
+        if (
+            self.longitude_wrap_width is not None
+            and not self.cyclic_x
+            and not self.bounds.left <= x < self.bounds.right
+        ):
+            center = (self.bounds.left + self.bounds.right) / 2
+            turns = round((center - x) / self.longitude_wrap_width)
+            x += turns * self.longitude_wrap_width
         column, row = ~self.transform * (x, y)
         if self.cyclic_x:
             column %= self.width

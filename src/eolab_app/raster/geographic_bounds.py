@@ -7,6 +7,27 @@ from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
 from rasterio.warp import transform_bounds
 
+WEB_MERCATOR_CRS = CRS.from_epsg(3857)
+# EPSG:3857 uses the WGS84 semi-major axis as its spherical radius, in metres.
+WEB_MERCATOR_WORLD_WIDTH = math.tau * 6378137.0
+
+
+def covers_full_longitude_turn(crs: CRS, grid_width: float) -> bool:
+    """Return whether a geographic or Web Mercator grid spans one longitude cycle.
+
+    Args:
+        crs: Native raster coordinate reference system.
+        grid_width: Distance between the western and eastern pixel edges in that CRS.
+
+    Returns:
+        True for a complete turn in native units, including metres in Web Mercator.
+    """
+    if crs.is_geographic:
+        return math.isclose(grid_width * crs.units_factor[1], math.tau)
+    return crs == WEB_MERCATOR_CRS and math.isclose(
+        grid_width, WEB_MERCATOR_WORLD_WIDTH
+    )
+
 
 def transform_bounds_to_wgs84(
     source_crs: CRS,
@@ -29,6 +50,9 @@ def transform_bounds_to_wgs84(
         Geographic and Mercator/equidistant cylindrical systems use PROJ's
         +over control. Other projections retain GDAL's domain handling: +over
         can admit invalid outer corners for non-cylindrical world projections.
+        For geographic grids that reach a native pole, include its valid
+        edge before transforming. If the datum shift moves that pole, retain
+        a conservative full-longitude envelope for the polar strip.
 
     Raises:
         ValueError: If PROJ cannot construct or execute the transformation.
@@ -54,7 +78,34 @@ def transform_bounds_to_wgs84(
         transformer = Transformer.from_crs(
             crs, "EPSG:4326", always_xy=True, force_over=True
         )
-        return transformer.transform_bounds(*source_bounds, densify_pts=densify_points)
+        west, south, east, north = source_bounds
+        polar_edges = []
+        if crs.is_geographic:
+            pole = math.pi / (2 * source_crs.units_factor[1])
+            # GeoTIFF angular units can put 100 grads a few ulps below a pole.
+            low, high = round(south / pole, 14), round(north / pole, 14)
+            if low <= -1 < high:
+                south = -pole
+                polar_edges.append((south, -90.0))
+            if low < 1 <= high:
+                north = pole
+                polar_edges.append((north, 90.0))
+        bounds = transformer.transform_bounds(
+            west, south, east, north, densify_pts=densify_points
+        )
+        if not polar_edges or not all(map(math.isfinite, bounds)):
+            return bounds
+        left, bottom, right, top = bounds
+        for native_lat, wgs84_lat in polar_edges:
+            pole_latitude = transformer.transform(west, native_lat)[1]
+            if not math.isclose(pole_latitude, wgs84_lat, rel_tol=0, abs_tol=1e-12):
+                # A shifted pole can swing through longitudes missed by the sampled edges.
+                left, right = -180.0, 180.0
+            if wgs84_lat < 0:
+                bottom = wgs84_lat
+            else:
+                top = wgs84_lat
+        return left, bottom, right, top
     except ProjError as error:
         raise ValueError("Raster bounds could not be transformed to WGS 84") from error
 
@@ -85,6 +136,9 @@ def normalize_wgs84_bounds(
         raise ValueError("Raster WGS 84 bounds must have positive width")
     if span < 0 or span >= 360:
         west, east = -180.0, 180.0
+    elif -180.0 - 1e-8 <= west < 180.0 and -180.0 < east <= 180.0 + 1e-8:
+        # Computing a pixel edge can carry a regional grid just past the meridian.
+        west, east = max(-180.0, west), min(180.0, east)
     else:
         west = (west + 180.0) % 360.0 - 180.0
         east = west + span
