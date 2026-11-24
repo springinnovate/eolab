@@ -234,7 +234,7 @@ class MapLegendAppearance(MapDocumentPart):
 
 
 class MapVisitorChoices(MapDocumentPart):
-    """Keep the publisher's inspection choices, even beneath a disabled parent.
+    """Keep the publisher's visitor choices, even beneath a disabled parent.
 
     An omitted choice in an explicit configuration is disabled. The viewer
     resolves effective availability without changing these stored values.
@@ -245,6 +245,20 @@ class MapVisitorChoices(MapDocumentPart):
     featurePicking: bool = False
     histogramBox: bool = False
     lasso: bool = False
+    workspacePanels: bool = False
+    catalog: bool = False
+    mapContents: bool = False
+
+
+class MapVisitorInitialPanels(MapDocumentPart):
+    """Initial panel disclosures, independent of whether visitors may open them.
+
+    Missing entries in an explicit configuration are collapsed. Availability
+    resolves separately, so disabling a parent preserves these choices.
+    """
+
+    catalog: bool = False
+    mapContents: bool = False
 
 
 class MapVisitorControls(MapDocumentPart):
@@ -252,6 +266,9 @@ class MapVisitorControls(MapDocumentPart):
 
     version: Annotated[int, Field(ge=1, le=1)]
     choices: MapVisitorChoices
+    initialPanels: MapVisitorInitialPanels = Field(
+        default_factory=MapVisitorInitialPanels
+    )
 
 
 class SavedMapView(MapDocumentPart):
@@ -261,7 +278,8 @@ class SavedMapView(MapDocumentPart):
     entry preserves its place in the layer order and its own appearance.
     The basemap is stored as a provider ID such as `"maptiler-streets"`.
     Omitting mapLegend leaves the legend visible and expanded.
-    Omitting visitorControls preserves the viewer's default inspection tools.
+    Omitting visitorControls preserves inspection tools and open Map contents,
+    with Catalog unavailable. Explicit settings leave omitted capabilities off.
     """
 
     format: Literal["eolab-map-view"]

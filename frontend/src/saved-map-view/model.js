@@ -207,17 +207,28 @@ function validateSavedMapView(candidate) {
  */
 function validateVisitorControls(candidate) {
     requirePlainObject(candidate, "Visitor controls");
-    requireExactKeys(candidate, ["version", "choices"], "Visitor controls");
+    requireExactKeys(candidate, ["version", "choices",
+        ...(Object.hasOwn(candidate, "initialPanels") ? ["initialPanels"] : [])], "Visitor controls");
     if (candidate.version !== VISITOR_CONTROLS_VERSION) {
         throw new SavedMapViewValidationError("This map uses a visitor controls version this viewer does not support.");
     }
     requirePlainObject(candidate.choices, "Visitor choices");
     for (const [id, enabled] of Object.entries(candidate.choices)) {
         if (!Object.hasOwn(VISITOR_CONTROL_PARENTS, id) || typeof enabled !== "boolean") {
-            throw new SavedMapViewValidationError("Visitor choices must use supported tools and true or false values.");
+            throw new SavedMapViewValidationError("Visitor choices must use supported controls and true or false values.");
         }
     }
-    return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }) });
+    if (Object.hasOwn(candidate, "initialPanels")) {
+        requirePlainObject(candidate.initialPanels, "Visitor initial panels");
+        for (const [id, open] of Object.entries(candidate.initialPanels)) {
+            if (!["catalog", "mapContents"].includes(id) || typeof open !== "boolean") {
+                throw new SavedMapViewValidationError("Visitor initial panels must use Catalog or Map contents and true or false values.");
+            }
+        }
+    }
+    return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }),
+        ...(candidate.initialPanels === undefined ? {} : { initialPanels: Object.freeze({ ...candidate.initialPanels }) }),
+    });
 }
 
 /**

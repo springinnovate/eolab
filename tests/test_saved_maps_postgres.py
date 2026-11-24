@@ -79,7 +79,15 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
     }
     request["view"]["visitorControls"] = {
         "version": 1,
-        "choices": {"inspectAndSelect": False, "rasterValues": True, "lasso": True},
+        "choices": {
+            "inspectAndSelect": False,
+            "rasterValues": True,
+            "lasso": True,
+            "workspacePanels": False,
+            "catalog": True,
+            "mapContents": True,
+        },
+        "initialPanels": {"catalog": True, "mapContents": False},
     }
     with TestClient(app, headers=HEADERS) as client:
         response = client.post(BASE, json=request)
@@ -139,7 +147,14 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     changes["view"]["viewport"]["zoom"] = 7
     changes["view"]["visitorControls"] = {
         "version": 1,
-        "choices": {"inspectAndSelect": True, "featurePicking": True},
+        "choices": {
+            "inspectAndSelect": True,
+            "featurePicking": True,
+            "workspacePanels": True,
+            "catalog": False,
+            "mapContents": True,
+        },
+        "initialPanels": {"catalog": True, "mapContents": False},
     }
     # An in-memory draft has no effect on the public record.
     assert client.get(BASE + "/amazon-priorities").json() == loaded
