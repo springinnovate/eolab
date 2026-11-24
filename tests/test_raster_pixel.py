@@ -63,7 +63,7 @@ def test_pixel_reader_reads_only_band_one_and_one_source_cell(
     """Keep each pixel probe bounded to one cell in band 1."""
     dataset = _Dataset()
     monkeypatch.setattr(
-        "eolab_app.raster.pixel.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _, **kwargs: dataset,
     )
     monkeypatch.setattr(

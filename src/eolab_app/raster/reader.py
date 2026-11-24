@@ -33,5 +33,5 @@ def open_raster_data(source: RasterData) -> Iterator[RasterDataset]:
         with TemporalRasterDataset(source) as dataset:
             yield dataset
     else:
-        with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), GeoTiffReader(source) as dataset:
+        with rasterio.Env(), GeoTiffReader(source) as dataset:
             yield dataset

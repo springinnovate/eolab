@@ -1558,7 +1558,12 @@ def test_numeric_meridian_locates_reference_and_warped_samples(
 
 @pytest.mark.parametrize(
     "survey_reference",
-    [(9102, 1, None, False), (9105, 1 / 0.9, 5720, False), (9105, 1 / 0.9, None, True)],
+    [
+        (9102, 1, None, False),
+        (9103, 60, None, False),
+        (9105, 1 / 0.9, 5720, False),
+        (9105, 1 / 0.9, None, True),
+    ],
     indirect=True,
 )
 def test_published_survey_grid_preserves_numeric_meridian_and_height(

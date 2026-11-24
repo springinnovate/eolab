@@ -3,6 +3,7 @@
 import math
 
 from pyproj import CRS as ProjCRS
+import rasterio
 from rasterio.crs import CRS
 from rasterio.io import DatasetReader
 
@@ -25,7 +26,8 @@ class GeoTiffReader(DatasetReader):
             ValueError: If the native geographic metadata cannot be interpreted.
             OSError: If the file's GeoKeys cannot be read.
         """
-        crs = super().read_crs()
+        with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"):
+            crs = super().read_crs()
         if self.driver != "GTiff" or not crs or not crs.is_geographic:
             return crs
         radians_per_unit = crs.units_factor[1]
