@@ -98,6 +98,7 @@ function bindSeriesPointSelection(mark, select) {
  * @param {number} [configuration.height=360] SVG height in screen pixels; explicit tick fonts can add caption space without shrinking the plot.
  * @param {number} [configuration.pointSize=9] Marker diameter in screen pixels.
  * @param {number|null} [configuration.xTickCount=null] Maximum X tick labels; null adapts to chart width.
+ * @param {number} [configuration.xTickLabelLimit] Maximum characters per X tick, defaulting to 18 on compact charts and 28 otherwise.
  * @param {number} [configuration.yTickCount=5] Desired Y tick count, rounded by the numeric scale.
  * @param {boolean} [configuration.fitXAxisLabels=false] Fit the bottom margin to the displayed X ticks and title in a compact plot.
  * @param {number|null} [configuration.axisFontSize=null] Tick font size in screen pixels; axis titles are one pixel larger. Null keeps the caller's CSS.
@@ -128,6 +129,7 @@ export function renderOrdinalSeriesChart({
     height = CHART_HEIGHT,
     pointSize = 9,
     xTickCount = null,
+    xTickLabelLimit = width < 480 ? 18 : 28,
     yTickCount = 5,
     axisFontSize = null,
     fitXAxisLabels = false,
@@ -193,7 +195,11 @@ export function renderOrdinalSeriesChart({
     const eligible = points.map((point, index) => index).filter(index => !xBounds || numericX[index] >= xBounds[0] && numericX[index] <= xBounds[1]);
     const indexes = ordinalTickIndexes(eligible.length, xTickCount ?? (width < 480 ? 4 : 7)).map(index => eligible[index]);
     const fontGrowth = Math.max(0, (axisFontSize ?? 10) - 10);
-    const tickLength = Math.max(0, ...indexes.map(index => formatTickLabel(points[index].xLabel, width < 480 ? 18 : 28).length));
+    /** Return the X tick text used for both layout and display.
+     * @param {number} index Observation index. @return {string} Fitted tick label.
+     */
+    const tickLabel = index => formatTickLabel(points[index].xLabel, xTickLabelLimit);
+    const tickLength = Math.max(0, ...indexes.map(index => tickLabel(index).length));
     const margin = {...CHART_MARGIN,
         top: yAxisLabelPosition === "top" ? Math.max(CHART_MARGIN.top, (axisFontSize ?? 11) + 17) : CHART_MARGIN.top,
         left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
@@ -251,7 +257,7 @@ export function renderOrdinalSeriesChart({
     const yTitleY = topYTitle ? margin.top - 13 : margin.top + plotHeight / 2;
     drawChartAxes(documentContext, chart, {left: margin.left, top: margin.top, width: plotWidth, height: plotHeight},
         {scale: horizontal, values: [...new Set(ticks)], rotation: -35,
-            format: value => formatTickLabel(points[xScale === "numeric" ? numericX.indexOf(value) : value].xLabel, width < 480 ? 18 : 28)},
+            format: value => tickLabel(xScale === "numeric" ? numericX.indexOf(value) : value)},
         {scale: y, values: yTicks, format: formatSeriesNumber}, [
             {text: xAxisLabel, x: margin.left + plotWidth / 2, y: height - 8},
             {text: yAxisLabel, x: yTitleX, y: yTitleY, rotation: topYTitle ? 0 : -90, anchor: topYTitle ? "start" : "middle"},

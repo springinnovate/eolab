@@ -238,6 +238,8 @@ export function renderVectorFieldChart(options) {
     const yOrigin = chartType === "bar" ? undefined : firstWideY?.yValue;
     const {pointElements} = renderOrdinalSeriesChart({
         ...options,
+        // A signed 64-bit coordinate needs up to 20 characters, including its sign.
+        ...(firstWideX ? {xTickLabelLimit:20, axisFontSize:11} : {}),
         points: points.map(point => ({
             original: point,
             xLabel: point.xLabel,

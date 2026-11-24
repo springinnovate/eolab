@@ -258,8 +258,10 @@ test("Lasso attributes feed real scatterplots and remain available after closing
 
 test("wide parcel attributes keep their exact values and numeric spacing in both plots", async t => {
   const base = 9007199254740992n;
+  const minimumInt64 = -(2n ** 63n);
   const rows = [4n, 0n, 1n].map((offset, id) => ({id:String(id), properties:{
     x:{integer:String(base + offset)}, y:{integer:String(-base - 4n + offset)}, code:"9007199254740993",
+    signedCode:{integer:String(minimumInt64 + offset)},
   }}));
   const {inspector, profile, series, documentContext:doc} = composition(async (url, options) =>
     Response.json(url.endsWith("/lasso") ? {matched:3, featureIds:rows.map(row => row.id), geometry:null} :
@@ -294,6 +296,14 @@ test("wide parcel attributes keep their exact values and numeric spacing in both
   const table = doc.querySelector("#vector-time-series-table-body").children;
   assert.deepEqual(table.map(row => row.children[1].children[0].textContent),
     ["-9007199254740996","-9007199254740995","-9007199254740992"]);
+  series.plotPanel.width = 320;
+  series.settings.xField = "signedCode";
+  series.render();
+  const compact = doc.querySelector("#vector-time-series-chart");
+  const ticks = compact.querySelector(".series-chart-x-axis").querySelectorAll("text");
+  assert.deepEqual(ticks.map(tick => tick.textContent), [0n, 1n, 4n].map(offset => String(minimumInt64 + offset)));
+  assert.ok(Number(compact.querySelector(".series-chart-point").getAttribute("cx")) >= 100,
+    "The leftmost rotated integer tick needs room for its sign and all 19 digits");
   series.settings.chartType = "stacked";
   series.render();
   assert.equal(doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point").length, 3);
