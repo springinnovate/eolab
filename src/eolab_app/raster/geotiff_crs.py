@@ -154,6 +154,15 @@ class GeoTiffReader(DatasetReader):
             meridian.longitude * meridian.unit_conversion_factor, radians, rel_tol=1e-13
         ):
             return crs
+        # Catalog indexing also admits GDAL georeferencing sidecars. Embedded
+        # numeric keys describe only the internal CRS.
+        if len(self.files) > 1:
+            with (
+                rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
+                rasterio.open(self.name, GEOREF_SOURCES="INTERNAL") as embedded,
+            ):
+                if embedded.crs != crs:
+                    return crs
         document = definition.to_json_dict()
         horizontal = document
         horizontal = horizontal.get("source_crs", horizontal)

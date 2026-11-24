@@ -1561,6 +1561,26 @@ def survey_reference(
 
 
 @pytest.mark.parametrize(
+    "survey_reference", [(9105, 1 / 0.9, None, "numeric")], indirect=True
+)
+def test_catalog_keeps_the_crs_selected_by_gdal(
+    tmp_path: Path, survey_reference: tuple[Path, float, float, int | None]
+) -> None:
+    """Index the CRS from an authoritative PAM sidecar over different embedded keys.
+
+    Args:
+        tmp_path: Catalog directory containing the source and its sidecar.
+        survey_reference: A TIFF with its own numeric longitude origin.
+    """
+    source, *_ = survey_reference
+    source.with_suffix(".tif.aux.xml").write_text(
+        f"<PAMDataset><SRS>{ProjCRS.from_epsg(4807).to_wkt()}</SRS></PAMDataset>",
+        encoding="utf-8",
+    )
+    assert build_stac_item(tmp_path, source)["properties"]["proj:epsg"] == 4807
+
+
+@pytest.mark.parametrize(
     "survey_reference",
     [
         (9105, 1 / 0.9, None, "numeric"),
