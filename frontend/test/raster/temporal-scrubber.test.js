@@ -45,7 +45,7 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
     const {widget, root, controls, layer, calls} = fixture();
     try {
         assert.equal(controls.display.textContent, "");
-        widget.setMapStatus({phase: "complete"}, new Map([["rain", "first"]]));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
         assert.equal(controls.status.hidden, false, "the loading status keeps its place between frames");
         assert.equal(controls.status.textContent, "");
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC");
@@ -60,12 +60,18 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
         context.mock.timers.tick(100);
         assert.deepEqual(calls, [["rain", stamps[2]]]);
         const changed = {...layer, timeline: {...layer.timeline, time: stamps[2], layerName: "third"}};
-        widget.setMapStatus({phase: "loading"}, new Map([["rain", "first"], ["reference", "third"]]));
+        widget.setMapStatus({phase: "loading"}, new Map([["rain", {variable: "rain", time: stamps[0]}], ["reference", {variable: "rain", time: stamps[2]}]]));
         widget.setLayers([changed]);
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC", "identify the frame still visible");
+        widget.setLayers([changed, {...changed, key: "reference"}]);
+        for (const key of ["reference", "rain"]) {
+            controls.layer.value = key;
+            controls.layer.dispatchEvent(new Event("change"));
+        }
+        assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC", "returning to a pending view restores its drawn time");
         widget.setMapStatus({phase: "loading"}, new Map());
         assert.equal(controls.display.textContent, "", "old tiles cannot confirm a different date");
-        widget.setMapStatus({phase: "complete"}, new Map([["rain", "third"]]));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[2]}]]));
         assert.match(controls.display.textContent, /01-05 01:00/);
         assert.match(controls.gap.textContent, /2000-05/);
         controls.forward.dispatchEvent(new Event("click"));
@@ -96,7 +102,7 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
         };
     }});
     try {
-        widget.setMapStatus({phase: "complete"}, new Map([["rain", "first"]]));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
         controls.play.dispatchEvent(new Event("click"));
         assert.deepEqual(prepared.map(frame => frame.time), stamps.slice(1));
         context.mock.timers.tick(167);
@@ -105,7 +111,7 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]], "publication alone cannot advance playback");
         assert.equal(controls.status.textContent, "Loading raster…");
-        widget.setMapStatus({phase: "complete"}, new Map([["rain", stamps[1]]]));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[1]}]]));
         assert.equal(controls.status.textContent, "");
         controls.play.dispatchEvent(new Event("click"));
         context.mock.timers.tick(1000);
@@ -119,7 +125,7 @@ test("a held drag previews before release and coalesces motion while the first m
     context.mock.timers.enable({apis: ["setTimeout"]});
     const {widget, controls, layer, calls} = fixture();
     try {
-        widget.setMapStatus({phase: "complete"}, new Map([["rain", "first"]]));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
         controls.time.valueAsNumber = Date.parse(stamps[1]);
         controls.time.dispatchEvent(new Event("input"));
         context.mock.timers.tick(40);
@@ -132,7 +138,7 @@ test("a held drag previews before release and coalesces motion while the first m
         controls.time.dispatchEvent(new Event("input"));
         context.mock.timers.tick(500);
         assert.equal(calls.length, 1, "one intermediate frame at a time");
-        widget.setMapStatus({phase: "complete"}, new Map([["rain", "third"]]));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[2]}]]));
         context.mock.timers.tick(70);
         assert.deepEqual(calls.at(-1), ["rain", stamps[1]]);
         controls.time.valueAsNumber = Date.parse(stamps[0]);

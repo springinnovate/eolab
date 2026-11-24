@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CompositeLeafletRenderer } from "../../src/map-layers/composite-leaflet-renderer.js";
+import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 
 /** Flush publication promises and tile status. @return {Promise<void>} Settled microtasks. */
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
@@ -53,10 +54,18 @@ function fixture(create = null) {
             calls.push({ layers, signal });
             return create ? create(layers, signal) : { wmsUrl: "/authorized-plan/wms" };
         } },
-        onStatus: (status, names) => { statuses.push(status); displayed.push(names); },
+        onStatus: (status, views) => {
+            statuses.push(status);
+            displayed.push(Array.from(views.values(), frame => frame.descriptor.layerName));
+            map.onDrawn?.(views);
+        },
     });
     return {
         renderer, map, grids, calls, statuses, displayed,
+        update(layers, options = {}) {
+            const views = new Map(layers.map((descriptor, key) => [String(key), {descriptor, observation: null}]));
+            renderer.update(layers, {...options, views});
+        },
         status: () => statuses.at(-1),
         tile(x = 0, z = 1) {
             const assignments = [];
@@ -70,17 +79,18 @@ function fixture(create = null) {
 
 test("delayed tiles remain loading; transparent PNG counts as successfully loaded", async () => {
     const f = fixture();
-    f.renderer.update([{ layerName: "first", opacity: 0.5 }]);
+    f.update([{ layerName: "first", opacity: 0.5 }]);
     assert.equal(f.status().phase, "preparing");
     await flush();
     const layer = f.grids[0], first = f.tile(), transparent = f.tile(1);
     layer.emit("tileload", { tile: first }); await flush();
     assert.deepEqual(f.status(), { phase: "loading", total: 2, loaded: 1, failed: 0 });
+    assert.deepEqual(f.displayed.at(-1), [], "wait for the first complete observation before offering playback");
     layer.emit("tileload", { tile: transparent }); layer.emit("load"); await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 2, loaded: 2, failed: 0 });
     assert.equal(layer.options.transparent, true);
     assert.equal(layer.options.maxZoom, 22, "composite tiles cover the full map zoom range");
-    f.renderer.update([{ layerName: "first", opacity: 0.5 }]);
+    f.update([{ layerName: "first", opacity: 0.5 }]);
     assert.equal(f.calls.length, 1);
     f.renderer.destroy();
 });
@@ -88,7 +98,7 @@ test("delayed tiles remain loading; transparent PNG counts as successfully loade
 test("a prepared map is hidden until its exact styled stack is selected and pausing releases unused tiles", async () => {
     const f = fixture(), first = [{layerName: "January", opacity: 1}];
     const second = [{layerName: "May", opacity: 0.4}], controller = new AbortController();
-    f.renderer.update(first);
+    f.update(first);
     await flush();
     const t = f.tile();
     f.grids[0].emit("tileload", {tile: t});
@@ -103,7 +113,7 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     staged.emit("tileload", {tile: secondTile});
     await preparing;
     assert.deepEqual(f.displayed.at(-1), ["January"]);
-    f.renderer.update(second, {keepPreviousFrame: true});
+    f.update(second, {keepPreviousFrame: true});
     controller.abort();
     await flush();
     assert.equal(f.calls.length, 2, "the selected grid needs no second map plan");
@@ -113,9 +123,11 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     assert.deepEqual(f.displayed.at(-1), ["May"]);
 
     const third = [{layerName: "June", opacity: 0.4}];
+    f.tile(1); // A pan exposed one more tile of the current May grid.
+    await flush();
     let left, right;
     f.map.onLayerAdd = () => { left = f.tile(); right = f.tile(1); };
-    f.renderer.update(third, {keepPreviousFrame: true});
+    f.update(third, {keepPreviousFrame: true});
     await flush();
     const incoming = f.grids.at(-1);
     f.map.onLayerAdd = null;
@@ -123,6 +135,13 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     assert.ok(f.map.attached.has(staged), "keep the drawn observation until every visible replacement tile is ready");
     assert.equal(incoming.getContainer().style.visibility, "hidden");
     assert.deepEqual(f.displayed.at(-1), ["May"]);
+    f.tile(2); // The new grid also has a pending tile in the destination of the pan.
+    f.map.bounds = {min: {x: 512, y: 0}, max: {x: 768, y: 256}};
+    f.map.emit("moveend"); await flush();
+    assert.deepEqual(f.displayed.at(-1), [], "no May tiles remain in view");
+    f.map.bounds = {min: {x: 0, y: 0}, max: {x: 512, y: 256}};
+    f.map.emit("moveend"); await flush();
+    assert.deepEqual(f.displayed.at(-1), ["May"], "the visible overlap still belongs to May");
     incoming.emit("tileload", {tile: right}); await flush();
     assert.deepEqual([...f.map.attached], [incoming]);
     assert.equal(incoming.getContainer().style.visibility, "");
@@ -131,7 +150,7 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     const unused = new AbortController();
     await f.renderer.prepare([{layerName: "June", opacity: 1}], unused.signal);
     const unusedGrid = f.grids.at(-1);
-    f.renderer.update([{layerName: "June", opacity: 0.5}]);
+    f.update([{layerName: "June", opacity: 0.5}]);
     await flush();
     assert.notEqual(f.grids.at(-1), unusedGrid, "an old opacity cannot be drawn from the buffer");
     unused.abort();
@@ -139,9 +158,54 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     f.renderer.destroy();
 });
 
+test("adding an annotation after a superseded date attaches the grid belonging to the drawn observation", async () => {
+    const f = fixture();
+    const layers = new LeafletLayerSet(f.map, f.renderer);
+    const source = () => ({setZIndex() {}, setOpacity() {}, addTo(map) { map.attached.add(this); }});
+    const jan = source(), feb = source(), note = source();
+    const row = name => ({key: "rain", visible: true, opacity: 1, descriptor: name ? {layerName: name} : null});
+    layers.add("rain", jan, row("Jan"));
+    layers.render([row("Jan")]);
+    await flush();
+    f.grids[0].emit("tileload", {tile: f.tile()}); await flush();
+    f.map.onLayerAdd = () => f.tile();
+    layers.replace("rain", feb, {keepPreviousFrame: true});
+    layers.render([row("Feb")], {keepPreviousFrame: true});
+    await flush();
+    layers.replace("rain", source(), {keepPreviousFrame: true, awaitingPublication: true});
+    layers.render([row(null)], {keepPreviousFrame: true});
+    layers.add("note", note, {visible: true, opacity: 1});
+    layers.render([row(null), {key: "note", visible: true, opacity: 1, descriptor: null}]);
+    assert.deepEqual(f.map.attached, new Set([jan, note]), "the discarded February grid must not be shown as January");
+    layers.clear();
+});
+
+test("reordering duplicate views during a date change keeps drawn publications with their original rows", async () => {
+    const f = fixture();
+    const layers = new LeafletLayerSet(f.map, f.renderer);
+    let drawn;
+    f.map.onDrawn = views => { drawn = new Map(Array.from(views, ([key, frame]) => [key, frame.descriptor.layerName])); };
+    const row = (key, name) => ({key, visible: true, opacity: 1, descriptor: {layerName: name}});
+    const source = () => ({setZIndex() {}, setOpacity() {}});
+    const original = row("original", "Jan"), copy = row("copy", "Feb"), next = row("original", "Feb");
+    for (const entry of [original, copy]) layers.add(entry.key, source(), entry);
+    layers.render([original, copy]); await flush();
+    f.grids[0].emit("tileload", {tile: f.tile()}); await flush();
+    let incoming;
+    f.map.onLayerAdd = () => { incoming = f.tile(); };
+    layers.replace("original", source(), {keepPreviousFrame: true});
+    layers.render([next, copy], {keepPreviousFrame: true}); await flush();
+    layers.render([copy, next]);
+    f.map.emit("moveend"); await flush();
+    assert.deepEqual(drawn, new Map([["original", "Jan"], ["copy", "Feb"]]), "a reorder cannot relabel the old stack");
+    f.grids.at(-1).emit("tileload", {tile: incoming}); await flush();
+    assert.deepEqual(drawn, new Map([["copy", "Feb"], ["original", "Feb"]]));
+    layers.clear();
+});
+
 test("Leaflet load following tileerror cannot claim completion; transient failure recovers", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
-    const f = fixture(); f.renderer.update([{}]); await flush();
+    const f = fixture(); f.update([{}]); await flush();
     const layer = f.grids[0], tile = f.tile();
     layer.emit("tileerror", { tile }); layer.emit("load"); await flush();
     assert.equal(f.status().phase, "retrying");
@@ -153,7 +217,7 @@ test("Leaflet load following tileerror cannot claim completion; transient failur
 });
 
 test("offscreen buffered requests do not prevent visible completion", async () => {
-    const f = fixture(); f.renderer.update([{}]); await flush();
+    const f = fixture(); f.update([{}]); await flush();
     const layer = f.grids[0], tile = f.tile();
     f.tile(3); // Still loading outside the viewport; the grid has not fired load.
     layer.emit("tileload", { tile }); await flush();
@@ -163,7 +227,7 @@ test("offscreen buffered requests do not prevent visible completion", async () =
 
 test("exhausted retries stay incomplete; explicit retry preserves successful neighbors", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
-    const f = fixture(); f.renderer.update([{}]); await flush();
+    const f = fixture(); f.update([{}]); await flush();
     const layer = f.grids[0], failed = f.tile(), good = f.tile(1);
     layer.emit("tileload", { tile: good });
     for (const delay of [1000, 4000, 10000, 15000, 30000, 5000]) {
@@ -183,7 +247,7 @@ test("exhausted retries stay incomplete; explicit retry preserves successful nei
 
 test("pan/zoom excludes buffered tiles and cancels obsolete retries, including tileabort", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
-    const f = fixture(); f.renderer.update([{}]); await flush();
+    const f = fixture(); f.update([{}]); await flush();
     const layer = f.grids[0], old = f.tile(), next = f.tile(2), aborted = f.tile(1);
     layer.emit("tileerror", { tile: old }); layer.emit("tileerror", { tile: aborted });
     layer.emit("tileabort", { tile: aborted });
@@ -202,10 +266,10 @@ test("pan/zoom excludes buffered tiles and cancels obsolete retries, including t
 
 test("replacement removes old pixels immediately and ignores their events/retries", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
-    const f = fixture(); f.renderer.update([{ layerName: "first" }]); await flush();
+    const f = fixture(); f.update([{ layerName: "first" }]); await flush();
     const previous = f.grids[0], tile = f.tile();
     previous.emit("tileerror", { tile });
-    f.renderer.update([{ layerName: "second" }]);
+    f.update([{ layerName: "second" }]);
     assert.equal(f.map.attached.size, 0); await flush();
     previous.emit("tileload", { tile }); previous.emit("load");
     context.mock.timers.tick(60000); await flush();
@@ -223,8 +287,8 @@ test("failed plan is recoverable and late responses cannot replace current layer
         if (count === 2 || count === 4) throw new Error("Plan unavailable");
         return { wmsUrl: "/current" };
     });
-    f.renderer.update([{ layerName: "old" }]);
-    f.renderer.update([{ layerName: "new" }]); await flush();
+    f.update([{ layerName: "old" }]);
+    f.update([{ layerName: "new" }]); await flush();
     assert.equal(f.calls[0].signal.aborted, true);
     assert.equal(f.status().phase, "error");
     assert.equal(f.status().message, "Plan unavailable");
@@ -236,7 +300,7 @@ test("failed plan is recoverable and late responses cannot replace current layer
     const drawn = f.grids[0];
     const firstTile = f.tile();
     drawn.emit("tileload", {tile: firstTile}); await flush();
-    f.renderer.update([{layerName: "next"}], {keepPreviousFrame: true});
+    f.update([{layerName: "next"}], {keepPreviousFrame: true});
     await flush();
     assert.equal(f.status().phase, "error");
     assert.deepEqual([...f.map.attached], [drawn], "a failed date change keeps the displayed frame");

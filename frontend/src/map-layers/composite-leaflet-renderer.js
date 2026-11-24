@@ -5,6 +5,10 @@ import { revealLoadedRasterFrame } from "./raster-frame.js";
 
 /** @typedef {import("./tile-recovery.js").MapTileStatus} MapTileStatus */
 
+/** @typedef {import("./raster-frame.js").MapFrame} MapFrame */
+/** @typedef {{layer:Object,recovery:TileRecovery,status:MapTileStatus}} CompositeGrid */
+/** @typedef {{signature:string,views:Map<string,MapFrame>,layers:Object[],grid:CompositeGrid|null,request:AbortController,status:MapTileStatus}} CompositeFrame */
+
 /** Draw the current composite stack and hand off between observations of the same raster. */
 export class CompositeLeafletRenderer {
     /**
@@ -13,92 +17,85 @@ export class CompositeLeafletRenderer {
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Leaflet map.
      * @param {{create:(layers:Object[],signal:AbortSignal)=>Promise<Object>}} configuration.client Plan client.
-     * @param {(status:MapTileStatus,displayed:string[])=>void} [configuration.onStatus] Current viewport status and layer names whose tiles are fully displayed.
+     * @param {(status:MapTileStatus,displayed:Map<string,MapFrame>)=>void} [configuration.onStatus] Requested tile progress and the views with drawn pixels.
      */
     constructor({ leaflet, leafletMap, client, onStatus = () => {} }) {
         this.leaflet = leaflet;
         this.leafletMap = leafletMap;
         this.client = client;
         this.onStatus = onStatus;
-        this.signature = null;
-        this.layers = [];
-        this.generation = 0;
-        this.abortController = null;
-        this.grid = null;
-        this.previousFrame = null;
+        this.selected = null;
+        this.drawn = null;
         this.prepared = new Map();
-        this.planFailed = false;
         this.destroyed = false;
     }
 
     /**
-     * Draw a new stack. A date step may keep its last complete frame visible
-     * through plan creation and tile loading. Other stack edits clear old pixels immediately.
-     * @param {Object[]} layers Authorized top-first rendering descriptors.
-     * @param {{keepPreviousFrame?:boolean}} [options] Whether only the observation is being replaced.
+     * Draw an authorized stack, retaining the displayed grid during a date change.
+     * @param {Object[]} layers Top-first server rendering descriptors, including opacity.
+     * @param {{keepPreviousFrame?:boolean,views?:Map<string,MapFrame>}} [options] Source grids and observations in this exact stack.
      * @return {void}
      */
-    update(layers, {keepPreviousFrame = false} = {}) {
+    update(layers, {keepPreviousFrame = false, views = new Map()} = {}) {
         if (this.destroyed) return;
         const signature = JSON.stringify(layers);
-        if (signature === this.signature) return;
-        if (keepPreviousFrame && this.previousFrame?.signature === signature) {
-            this.#cancelRequestedGrid();
-            this.grid = this.previousFrame.grid;
-            this.previousFrame = null;
-            this.layers = layers;
-            this.signature = signature;
-            this.grid.recovery.refresh();
+        if (this.selected?.signature === signature) {
+            this.selected.views = views;
+            this.#report();
             return;
         }
-        if (keepPreviousFrame && layers.length && this.grid?.complete && !this.previousFrame) {
-            this.previousFrame = {grid: this.grid, signature: this.signature, layers: this.layers,
-                names: this.layers.map(item => item.layerName)};
-            this.grid = null;
+        if (keepPreviousFrame && !this.drawn && this.selected?.grid?.status.loaded > 0) this.drawn = this.selected;
+        if (this.selected !== this.drawn) this.#release(this.selected);
+        if (!keepPreviousFrame || !layers.length) {
+            this.#release(this.drawn);
+            this.drawn = null;
         }
-        if (!keepPreviousFrame || !layers.length) this.#removePreviousFrame();
-        this.#cancelRequestedGrid();
-        this.signature = signature;
-        this.layers = layers;
-        if (layers.length === 0) { this.#emitStatus("idle"); return; }
+        if (!layers.length) {
+            this.selected = null;
+            this.#report();
+            return;
+        }
+        if (this.drawn?.signature === signature) {
+            this.selected = this.drawn;
+            this.selected.views = views;
+            this.#report();
+            return;
+        }
+        const frame = {layers, signature, views, grid: null, request: new AbortController(),
+            status: {phase: "preparing", total: 0, loaded: 0, failed: 0}};
+        this.selected = frame;
         const staged = this.prepared.get(signature);
         if (staged) {
             staged.detach();
-            this.grid = staged.grid;
-            if (this.previousFrame) this.grid.layer.getContainer().style.visibility = "hidden";
-            else revealLoadedRasterFrame(this.grid.layer);
-            this.grid.recovery.refresh();
+            frame.grid = staged.grid;
+            if (!this.drawn) revealLoadedRasterFrame(frame.grid.layer);
+            frame.grid.recovery.refresh();
             return;
         }
-        const generation = this.generation;
-        const abortController = new AbortController();
-        this.abortController = abortController;
-        this.#emitStatus("preparing");
-        void this.client.create(layers, abortController.signal).then(
-            (plan) => {
-                if (generation !== this.generation || this.destroyed) return;
-                this.abortController = null;
-                this.grid = this.#createGrid(plan);
-                this.grid.layer.addTo(this.leafletMap);
-                if (this.previousFrame) this.grid.layer.getContainer().style.visibility = "hidden";
-                this.grid.recovery.refresh();
+        this.#report();
+        void this.client.create(layers, frame.request.signal).then(
+            plan => {
+                if (frame !== this.selected) return;
+                frame.grid = this.#createGrid(plan);
+                frame.grid.layer.addTo(this.leafletMap);
+                if (this.drawn) frame.grid.layer.getContainer().style.visibility = "hidden";
+                frame.grid.recovery.refresh();
             },
-            (error) => {
-                if (generation !== this.generation || this.destroyed) return;
-                this.abortController = null;
-                this.planFailed = true;
-                this.#emitStatus("error", error instanceof Error
-                    ? error.message : "Map contents could not be prepared.");
+            error => {
+                if (frame !== this.selected) return;
+                frame.status = {...frame.status, phase: "error",
+                    message: error instanceof Error ? error.message : "Map contents could not be prepared."};
+                this.#report();
             },
         );
     }
 
-    /** Return the drawn descriptor at a visible stack position while a later frame is pending.
-     * @param {number} index Position in the top-first visible composite.
-     * @return {Object|undefined} Previous descriptor, if a date replacement is in flight.
+    /** Return the source grid and observation used to draw a row of the displayed composite.
+     * @param {string} key Retained map-layer key.
+     * @return {MapFrame|undefined} Row snapshot from the displayed grid.
      */
-    previousFrameLayer(index) {
-        return this.previousFrame?.layers[index];
+    drawnView(key) {
+        return this.drawn?.views.get(key);
     }
 
     /**
@@ -145,45 +142,34 @@ export class CompositeLeafletRenderer {
      * @return {void}
      */
     retryFailedTiles() {
-        if (this.destroyed) return;
-        if (this.planFailed) {
-            this.signature = null;
-            this.update(this.layers, {keepPreviousFrame: this.previousFrame !== null});
-            return;
-        }
-        this.grid?.recovery.retryFailedTiles();
+        const frame = this.selected;
+        if (!frame) return;
+        if (frame.status.phase === "error") {
+            this.selected = null;
+            this.update(frame.layers, {views: frame.views, keepPreviousFrame: Boolean(this.drawn)});
+        } else frame.grid?.recovery.retryFailedTiles();
     }
 
-    /** Remove the grid, cancel retries, and invalidate plan responses. @return {void} */
+    /** Release both frames and invalidate outstanding plan responses. @return {void} */
     clear() {
-        this.#cancelRequestedGrid();
-        this.#removePreviousFrame();
-        this.signature = null;
-        this.layers = [];
-        this.#emitStatus("idle");
+        if (this.selected !== this.drawn) this.#release(this.selected);
+        this.#release(this.drawn);
+        this.selected = null;
+        this.drawn = null;
+        this.#report();
     }
 
-    /** Cancel the requested plan, grid and retries before accepting a replacement. @return {void} */
-    #cancelRequestedGrid() {
-        this.generation += 1;
-        this.abortController?.abort();
-        this.abortController = null;
-        this.planFailed = false;
-        const grid = this.grid;
-        this.grid = null;
-        if (grid) {
-            grid.recovery.destroy();
-            this.leafletMap.removeLayer(grid.layer);
+    /** Cancel a plan and detach its tile grid when replaced or removed.
+     * @param {CompositeFrame|null} frame Composite to retire.
+     * @return {void}
+     */
+    #release(frame) {
+        if (!frame) return;
+        frame.request.abort();
+        if (frame.grid) {
+            frame.grid.recovery.destroy();
+            this.leafletMap.removeLayer(frame.grid.layer);
         }
-    }
-
-    /** Detach the last complete observation after a handoff or an unrelated stack edit. @return {void} */
-    #removePreviousFrame() {
-        if (!this.previousFrame) return;
-        const {grid} = this.previousFrame;
-        this.previousFrame = null;
-        grid.recovery.destroy();
-        this.leafletMap.removeLayer(grid.layer);
     }
 
     /** Remove tiles and detach the map observer permanently. @return {void} */
@@ -198,7 +184,7 @@ export class CompositeLeafletRenderer {
      * Create the ordinary WMS tile grid for either a visible or an upcoming map.
      * @param {{wmsUrl:string}} plan Authorized WMS plan.
      * @param {(status:MapTileStatus)=>void} [onPrepared] Tile progress before this grid is selected for display.
-     * @return {{layer:Object,recovery:TileRecovery,complete:boolean}} Grid, visible-tile observer and current readiness.
+     * @return {CompositeGrid} Grid and its current visible-tile counts.
      */
     #createGrid(plan, onPrepared) {
         const layer = this.leaflet.tileLayer.wms(plan.wmsUrl, {
@@ -206,27 +192,28 @@ export class CompositeLeafletRenderer {
             transparent: true, version: "1.1.1", noWrap: true,
             maxZoom: 22,
         });
-        const grid = {layer, complete: false};
+        const grid = {layer, status: {phase: "loading", total: 0, loaded: 0, failed: 0}};
         grid.recovery = new TileRecovery(this.leafletMap, layer, status => {
-            grid.complete = status.phase === "complete";
-            if (this.grid === grid) {
-                if (this.previousFrame && grid.complete) {
-                    revealLoadedRasterFrame(layer);
-                    this.#removePreviousFrame();
+            grid.status = status;
+            if (this.selected?.grid === grid) {
+                if (this.drawn !== this.selected && status.phase === "complete") {
+                    if (this.drawn) {
+                        revealLoadedRasterFrame(layer);
+                        this.#release(this.drawn);
+                    }
+                    this.drawn = status.loaded ? this.selected : null;
                 }
-                this.onStatus(status, grid.complete ? this.layers.map(item => item.layerName) : this.previousFrame?.names ?? []);
-            } else if (this.previousFrame?.grid !== grid) onPrepared?.(status);
+                this.#report();
+            } else if (this.drawn?.grid === grid) this.#report();
+            else onPrepared?.(status);
         });
         return grid;
     }
 
-    /**
-     * Report a state that has no grid counts yet.
-     * @param {MapTileStatus["phase"]} phase Preparation or lifecycle state.
-     * @param {string} [message] Optional plan error.
-     * @return {void}
-     */
-    #emitStatus(phase, message) {
-        this.onStatus({ phase, total: 0, loaded: 0, failed: 0, message }, this.previousFrame?.names ?? []);
+    /** Report incoming progress with the rows of the grid that has pixels in this viewport. @return {void} */
+    #report() {
+        const status = this.selected?.grid?.status ?? this.selected?.status ??
+            {phase: "idle", total: 0, loaded: 0, failed: 0};
+        this.onStatus(status, this.drawn?.grid.status.loaded > 0 ? this.drawn.views : new Map());
     }
 }

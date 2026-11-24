@@ -87,8 +87,9 @@ test("Leaflet layer set owns attachment, opacity, order, and cleanup", () => {
 
 test("preparing a date preserves other visible views of the same source, their styles and stack order", async () => {
     const prepared = [], displayed = [];
+    let capturedViews;
     const map = {attached: new Set(), removeLayer(layer) { this.attached.delete(layer); }};
-    const layers = new LeafletLayerSet(map, {clear() {}, update: stack => displayed.push(stack),
+    const layers = new LeafletLayerSet(map, {clear() {}, update(stack, {views}) { displayed.push(stack); capturedViews = views; },
         prepare: async (stack, signal) => prepared.push({stack, signal})});
     const source = {layerName: "dataset:january", styleName: "temperature"};
     const prior = {layerName: "dataset:january", styleName: "threshold"};
@@ -99,8 +100,8 @@ test("preparing a date preserves other visible views of the same source, their s
         {key: "active", visible: true, opacity: 0.45, descriptor: source}]);
     const signal = new AbortController().signal;
     await layers.prepareLayer("active", replacement, signal);
-    assert.deepEqual(layers.displayedCompositePublications([prior.layerName, replacement.layerName]),
-        new Map([["reference", prior.layerName], ["active", replacement.layerName]]));
+    assert.deepEqual(Array.from(capturedViews, ([key, frame]) => [key, frame.descriptor]),
+        [["reference", prior], ["active", source]]);
     assert.deepEqual(prepared, [{stack: [{...prior, opacity: 0.7}, {...replacement, opacity: 0.45}], signal}]);
     assert.deepEqual(displayed.at(-1), [{...prior, opacity: 0.7}, {...source, opacity: 0.45}]);
     layers.clear();
@@ -325,5 +326,15 @@ test("replacing one paired frame reveals it without waiting for an unchanged loa
     assert.equal(unchanged.opacity, .6);
     assert.equal(map.attached.has(first), false);
     assert.equal(map.attached.has(pending), false);
+    const next = createLayer(), nextReference = createLayer();
+    const bothChanged = rendering.map(row => ({...row, descriptor: {layerName: row.key + "-next"}}));
+    layers.replace("first", next, {keepPreviousFrame: true});
+    layers.render([bothChanged[0], rendering[1]]);
+    layers.replace("unchanged", nextReference, {keepPreviousFrame: true});
+    layers.render(bothChanged);
+    next.emit("load");
+    assert.ok(map.attached.has(current) && map.attached.has(unchanged), "keep both drawn axes until both new axes are ready");
+    nextReference.emit("load");
+    assert.deepEqual(map.attached, new Set([next, nextReference]));
     layers.clear();
 });

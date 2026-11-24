@@ -54,7 +54,7 @@
         }}]);
         const loading = root.getBoundingClientRect();
         const playTop = play.getBoundingClientRect().top;
-        timeline.setMapStatus({phase: "complete"}, new Map([["rain", "first"]]));
+        timeline.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: dates[0]}]]));
         const drawn = root.getBoundingClientRect();
         check(drawn.height === loading.height && drawn.top === loading.top && play.getBoundingClientRect().top === playTop,
           "The timeline or its Play button moved when the raster finished loading");

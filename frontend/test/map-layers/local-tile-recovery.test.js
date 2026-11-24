@@ -80,6 +80,24 @@ test("annotation interleaving tracks both catalog grids and recovers a failed im
     f.set.clear();
 });
 
+test("an annotation map keeps already drawn tiles when a pan and a date change overlap", async () => {
+    const f = fixture(), old = f.layers.get("a");
+    old.emit("tileload", {tile: f.tile("a")}); await flush();
+    f.tile("a", 1); await flush();
+    const container = {style: {}, querySelectorAll: () => []};
+    const incoming = {...old, ...evented(), getContainer: () => container};
+    f.layers.set("a", incoming);
+    f.set.replace("a", incoming, {keepPreviousFrame: true});
+    f.set.render(f.rendering.map(row => row.key === "a" ? {...row, descriptor: {layerName: "next"}} : row));
+    const pending = f.tile("a");
+    await flush();
+    assert.ok(f.map.attached.has(old), "the loaded overlap stays visible while the new date loads");
+    incoming.emit("tileload", {tile: pending}); await flush();
+    assert.equal(f.map.attached.has(old), false);
+    assert.ok(f.map.attached.has(incoming));
+    f.set.clear();
+});
+
 test("a view outside catalog layer bounds has no missing tiles or endless loading", async () => {
     const f = fixture();
     await flush();

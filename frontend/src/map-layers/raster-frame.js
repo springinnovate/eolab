@@ -1,3 +1,7 @@
+/** A retained row as it was drawn. The descriptor and date belong to this specific Leaflet layer.
+ * @typedef {{layer:Object,descriptor:Object,observation:{variable:string,time:string}|null}} MapFrame
+ */
+
 /** Show a loaded raster frame at its configured layer opacity on the next paint.
  * Leaflet starts loaded tile images transparent. Mark only images already in
  * this grid so tiles fetched by a later pan keep Leaflet's normal fade.
