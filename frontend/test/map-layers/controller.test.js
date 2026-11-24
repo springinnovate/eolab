@@ -805,6 +805,25 @@ test("local layers keep their identity and survive Catalog clearing and restorat
     assert.throws(() => controller.addLocal({key: record.entry.key, label: "duplicate"}, local));
 });
 
+test("a failed staged restore preserves the order and active controls of the retained layers", async t => {
+    const view = createView();
+    const controller = new MapLayerController({leafletMap: createMap(), view});
+    t.after(() => controller.destroy());
+    const local = createAdapter("local");
+    const back = controller.addLocal({key: "local:back", label: "Back"}, local);
+    const front = controller.addLocal({key: "local:front", label: "Front"}, local);
+    controller.activate(back.entry.key);
+    const catalog = createAdapter("raster");
+    catalog.added = () => { throw new Error("Attachment failed"); };
+    const staged = await controller.stage(catalogItem("restored"), catalog);
+    const drawingOrder = [back.entry.key, staged.key, front.entry.key];
+    assert.throws(() => controller.commitStaged([staged], {drawingOrder}), /Attachment failed/);
+    assert.deepEqual(controller.retainedRecords, [front, back]);
+    assert.equal(controller.activeKey, back.entry.key);
+    assert.equal(view.activeKey, back.entry.key);
+    assert.ok(controller.getLeafletLayer(front.entry.key).zIndex > controller.getLeafletLayer(back.entry.key).zIndex);
+});
+
 test("local source names update generated labels and groups while preserving custom names and Undo", () => {
     const controller = new MapLayerController({leafletMap: createMap(), view: createView()});
     const adapter = createAdapter("output");

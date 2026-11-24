@@ -1361,25 +1361,33 @@ test("saved style updates a staged raster before it is attached", async () => {
 test("restoring a Catalog raster completes both histograms when an upload is already loading", async t => {
     const upload = {source: {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"},
         label: "Survey", bbox: [77, 20, 79, 24], capabilities: {pixels: true, statistics: true}};
-    const pending = createDeferred();
-    const reads = [];
-    const h = visibleLayerFixture(async (item, _area, signal) => {
-        reads.push(signal);
-        if (reads.length === 1) return pending.promise;
-        return item === upload ? EXACT_RASTER_STATISTICS : RASTER_STATISTICS;
-    });
-    t.after(h.destroy);
-    await h.viewer.showSource(upload, {removed() {}});
-    const staged = await h.viewer.stage(createRasterItem("habitat"), {visible: true});
-    h.mapLayers.commitStaged([staged], {fitToBounds: false});
-    pending.resolve(RASTER_STATISTICS);
-    await flushPromises();
+    const catalogRow = ["habitat.tif", "ready", 8000], uploadRow = ["Survey", "ready", 2048];
+    for (const [label, uploadOnTop, catalogVisible, expectedRows, expectedAborts] of [
+        ["Catalog on top", false, true, [catalogRow, uploadRow], [true, false, false]],
+        ["upload on top", true, true, [uploadRow, catalogRow], [false, false]],
+        ["hidden Catalog on top", false, false, [uploadRow], [false]],
+    ]) {
+        await t.test(label, async t => {
+            const pending = createDeferred(), reads = [];
+            const h = visibleLayerFixture(async (item, _area, signal) => {
+                reads.push(signal);
+                if (reads.length === 1) return pending.promise;
+                return item === upload ? EXACT_RASTER_STATISTICS : RASTER_STATISTICS;
+            });
+            t.after(h.destroy);
+            const survey = await h.viewer.showSource(upload, {removed() {}});
+            const habitat = await h.viewer.stage(createRasterItem("habitat"), {visible: catalogVisible});
+            const drawingOrder = uploadOnTop ? [survey.entry.key, habitat.key] : [habitat.key, survey.entry.key];
+            h.mapLayers.commitStaged([habitat], {fitToBounds: false, drawingOrder});
+            pending.resolve(EXACT_RASTER_STATISTICS);
+            await flushPromises();
 
-    assert.deepEqual(h.controlsView.layerHistograms.map(({label, state, statistics}) =>
-        [label, state, statistics?.validSampleCount]), [
-        ["habitat.tif", "ready", 8000], ["Survey", "ready", 2048],
-    ]);
-    assert.equal(reads[0].aborted, true);
+            const rows = h.controlsView.layerHistograms.map(({label, state, statistics}) =>
+                [label, state, statistics?.validSampleCount]);
+            assert.deepEqual(rows, expectedRows);
+            assert.deepEqual(reads.map(signal => signal.aborted), expectedAborts);
+        });
+    }
 });
 
 test("views sharing one Catalog Item keep separate styles and histogram categories", async () => {
