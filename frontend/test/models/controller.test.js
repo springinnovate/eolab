@@ -1343,8 +1343,11 @@ test("Runs history controls load result inputs while preserving unfinished setup
     h.jobs.accept(cancelled);
     assert.deepEqual(changedRuns, [cancelled]);
     assert.deepEqual([...h.jobs.tracked], [older.jobId]);
+    assert.equal(h.controller.state.runs.find(run => run.jobId === recent.jobId).status, "cancelled");
+    assert.equal(h.controller.state.draft, draft);
+    assert.equal(view.setup.label.value, "Updated summary");
     view.navigation.runs.dispatchEvent(new Event("click"));
-    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(view.elements.runs.hidden, false);
     assert.match(view.runCards.get(recent.jobId).status.textContent, /^Cancelled/);
     assert.deepEqual(Array.from(view.elements["runs-list"].querySelectorAll("button"), button => button.textContent),
         [recent.label, older.label, result.label]);
