@@ -119,13 +119,14 @@ test("published-map editing shows fixed URL, explicit save, busy state and retai
     [false, false, true, false, false]);
   assert.equal(children.disabled, true);
   parent.checked = true;
+  controls.querySelector('[data-visitor-control="styleEditing"]').checked = true;
   controls.dispatch("change");
   assert.equal(children.disabled, false);
   el("edit-title").value = "New title";
   el("editor").dispatch("submit", { preventDefault() {} });
   assert.deepEqual(submitted, { title: "New title", subtitle: "Habitat", visitorControls: { version: 1,
     choices: { inspectAndSelect: true, rasterValues: false, featurePicking: true, histogramBox: false, lasso: false,
-      workspacePanels: false, catalog: false, mapContents: false }, initialPanels: { catalog: false, mapContents: false } } });
+      workspacePanels: false, catalog: false, mapContents: false, styleEditing: true }, initialPanels: { catalog: false, mapContents: false } } });
   view.setPublishedMapSaving(true);
   assert.equal(el("cancel").hidden, true);
   assert.equal(el("edit-title").disabled, true);
@@ -167,7 +168,7 @@ test("publication dialog shows separate public and private links after a success
   el("form").dispatch("submit", { preventDefault() {} });
   assert.deepEqual(submitted, { title: "New title", subtitle: "", slug: "my-map", visitorControls: { version: 1,
     choices: { inspectAndSelect: false, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true,
-      workspacePanels: true, catalog: false, mapContents: true }, initialPanels: { catalog: false, mapContents: true } } });
+      workspacePanels: true, catalog: false, mapContents: true, styleEditing: true }, initialPanels: { catalog: false, mapContents: true } } });
   view.setPublicationBusy(true);
   assert.equal(el("fields").disabled, true);
   view.showPublicationError("Name already taken");

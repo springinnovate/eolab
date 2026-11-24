@@ -115,12 +115,12 @@ export function createCatalogResultView({
          * @param {import("./catalog-map-actions.js").CatalogMapActionState} state Current per-Item map action and removal target.
          * @return {void}
          */
-        update({ visualization, supported, retained, removalTarget, canZoom, pendingAction, feedback }) {
+        update({ visualization, supported, retained, removalTarget, canZoom, canStyle, pendingAction, feedback }) {
             onMap.hidden = !retained;
             mapButton.hidden = !supported;
             mapButton.disabled = pendingAction !== null;
-            styleButton.hidden = !retained;
-            styleButton.disabled = pendingAction !== null;
+            styleButton.hidden = !canStyle;
+            styleButton.disabled = !canStyle || pendingAction !== null;
             zoomButton.hidden = !retained;
             zoomButton.disabled = pendingAction !== null || !canZoom;
             zoomButton.title = canZoom ? "Zoom to this item's bounding box."

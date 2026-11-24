@@ -318,6 +318,7 @@ export class VectorFeatureInspectorController {
         this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.onStyleRequested = onStyleRequested;
+        this.styleEditingEnabled = true;
         this.onFilterRequested = onFilterRequested;
         this.filterButton = documentContext.querySelector("#filter-inspected-vector-layer");
         this.onFeatureZoomRequested = onFeatureZoomRequested;
@@ -582,6 +583,17 @@ export class VectorFeatureInspectorController {
         this.status.textContent = message;
         this.#publishSample("empty", [], message);
         this.onInspectionChange(false);
+    }
+
+    /** Update the selected feature's Style shortcut while keeping its values and plots accessible.
+     * @param {boolean} enabled Whether visitors may edit appearance in this map.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.styleEditingEnabled = enabled;
+        const available = enabled && !this.result.hidden;
+        this.styleButton.hidden = !available;
+        this.styleButton.disabled = !available;
     }
 
     /**
@@ -983,8 +995,7 @@ export class VectorFeatureInspectorController {
         this.heading.title = this.heading.textContent;
         this.layerName.textContent = target.label;
         if (this.filterButton) this.filterButton.hidden = false;
-        this.styleButton.hidden = false;
-        this.styleButton.disabled = false;
+        this.setStyleEditingEnabled(this.styleEditingEnabled);
         this.zoomFeatureButton.disabled = false;
         if (this.lastSample) this.status.textContent = this.lastSample.message;
         this.styleButton.setAttribute("aria-label", `Style ${target.label}`);

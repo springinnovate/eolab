@@ -305,25 +305,25 @@ test("map legend preferences round-trip for catalog and shared layers", () => {
 test("visitor controls preserve parent overrides and default only unconfigured maps to the familiar profile", () => {
   const legacy = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-shared.json", import.meta.url), "utf8"));
   const defaults = { inspectAndSelect: true, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true,
-    workspacePanels: true, catalog: false, mapContents: true };
+    workspacePanels: true, catalog: false, mapContents: true, styleEditing: true };
   assert.deepEqual(resolveVisitorControls(parseSavedMapView(JSON.stringify(legacy)).visitorControls), defaults);
   const candidate = { ...legacy, visitorControls: { version: 1, choices: { inspectAndSelect: false, featurePicking: true, lasso: true } } };
   const saved = parseSavedMapView(JSON.stringify(candidate));
   assert.deepEqual(saved, candidate);
   assert.deepEqual(visitorControlChoices(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
-    workspacePanels: false, catalog: false, mapContents: false,
+    workspacePanels: false, catalog: false, mapContents: false, styleEditing: false,
   });
   assert.deepEqual(resolveVisitorControls(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: false, histogramBox: false, lasso: false,
-    workspacePanels: false, catalog: false, mapContents: false,
+    workspacePanels: false, catalog: false, mapContents: false, styleEditing: false,
   });
   const reenabled = parseSavedMapView(JSON.stringify({
-    ...saved, visitorControls: { version: 1, choices: { ...saved.visitorControls.choices, inspectAndSelect: true } },
+    ...saved, visitorControls: { version: 1, choices: { ...saved.visitorControls.choices, inspectAndSelect: true, styleEditing: true } },
   }));
   assert.deepEqual(resolveVisitorControls(reenabled.visitorControls), {
     inspectAndSelect: true, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
-    workspacePanels: false, catalog: false, mapContents: false,
+    workspacePanels: false, catalog: false, mapContents: false, styleEditing: true,
   });
   for (const visitorControls of [null, {}, { version: 2, choices: {} }, { version: true, choices: {} },
     { version: 1, choices: [] }, { version: 1, choices: { lasso: "true" } }, { version: 1, choices: { zoom: true } },

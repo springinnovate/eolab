@@ -515,7 +515,8 @@ test("controller copies portable style and layer opacity onto a compatible targe
     adapter.applySavedState = async (record, savedState) => {
         record.state.style = structuredClone(savedState.definition);
     };
-    const controller = new MapLayerController({ leafletMap: map, view });
+    let styleEditing = true;
+    const controller = new MapLayerController({ leafletMap: map, view, canEditStyle: () => styleEditing });
     const source = catalogItem("source");
     const target = catalogItem("target");
     await controller.show(source, adapter);
@@ -538,6 +539,11 @@ test("controller copies portable style and layer opacity onto a compatible targe
     assert.equal(targetClipboard.canPaste, true);
     assert.equal(targetClipboard.sourceLabel, "raster source");
 
+    styleEditing = false;
+    assert.equal(controller.copyStyle(targetKey), false);
+    assert.equal(await controller.pasteStyle(targetKey), false);
+    assert.equal(controller.getLeafletLayer(targetKey).opacity, 0.82);
+    styleEditing = true;
     assert.equal(await controller.pasteStyle(targetKey), true);
     assert.deepEqual(controller.getRecord(targetKey).state.style, { color: "red" });
     assert.equal(controller.getRecord(targetKey).entry.opacity, 0.37);

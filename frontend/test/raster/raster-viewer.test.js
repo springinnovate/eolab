@@ -1887,6 +1887,18 @@ test("CSV preview commits through the category editor and persists through the e
         h.viewer.openStyle(record.entry.key);
         assert.equal(editor.readStyle().categories[1].label, "Imported forest");
 
+        const pendingImport = createDeferred();
+        select(pendingImport.promise);
+        h.viewer.setStyleEditingEnabled(false);
+        pendingImport.resolve(bytes.buffer);
+        await flushPromises();
+        select();
+        await flushPromises();
+        assert.equal(editor.csvPreview.hidden, true);
+        assert.equal(editor.csvFile.disabled, true);
+        editor.csvApply.dispatchEvent(new Event("click"));
+        assert.deepEqual(record.adapter.exportSavedState(record), restored.layers[0].style);
+        h.viewer.setStyleEditingEnabled(true);
         for (const leave of [() => h.viewer.closeStyle(), () => h.viewer.openStyle("missing"),
             () => h.viewer.clear()]) {
             h.viewer.openStyle(record.entry.key);
@@ -3007,6 +3019,56 @@ test('automatic histograms exclude rasters below the top-16 cap', async () => {
         ['sample-0.tif', ...Array.from({ length: 15 }, (_, index) => `sample-${16 - index}.tif`)],
     );
     h.destroy();
+});
+
+test("published styles survive histogram, palette, category and paired actions while 2D returns values", async () => {
+    const clock = createManualClock(), renderingSelections = [], styleRequests = [];
+    const h = visibleLayerFixture(undefined, {clock}, {styleEditingEnabled: false,
+        onStyleRequested: key => styleRequests.push(key),
+        onBivariateRenderingChange: keys => renderingSelections.push(keys)});
+    h.controlsView.openBivariateStyle = () => styleRequests.push("paired");
+    try {
+        await h.viewer.show(createRasterItem("first"));
+        await h.viewer.show(createRasterItem("second"));
+        await flushPromises();
+        const [x, y] = h.mapLayers.retainedRecords;
+        const saved = structuredClone(x.adapter.exportSavedState(x));
+        saved.continuous = {...saved.continuous, definition: {...saved.continuous.definition,
+            minimumColor: "#112233", midpointColor: "#aabbcc", maximumColor: "#dd9900"}};
+        await x.adapter.applySavedState(x, saved);
+        h.mapLayers.setOpacity(x.entry.key, 0.35);
+        const layer = h.mapLayers.getLeafletLayer(x.entry.key);
+        const ordinary = layer.parameters.env;
+        const actions = h.controlsView.handlers;
+        assert.equal(h.viewer.openStyle(x.entry.key), false);
+        actions.onStyleHistogram(x.entry.key);
+        actions.onAppearanceModeChange("categorical");
+        actions.onCategoricalStyleChange();
+        actions.onPaletteChange();
+        actions.onHistogramPercentiles(x.entry.key, {lower: 10, middle: 45, upper: 80, rescale: true});
+        actions.onBivariateModeChange("bivariate");
+        await flushPromises();
+        assert.equal(h.controlsView.pairedStatistics.pairedSampleCount, 32);
+        assert.equal(h.viewer.openPairedStyle(y.entry.key), false);
+        actions.onBivariatePaletteChange("different");
+        actions.onBivariateSwapAxes();
+        actions.onBivariatePercentileInput("x");
+        clock.flush();
+        assert.deepEqual(styleRequests, []);
+        assert.deepEqual(renderingSelections, []);
+        assert.deepEqual(h.mapLayers.snapshots().map(row => row.roleBadge.label), ["X", "Y"]);
+        assert.equal(layer.parameters.env, ordinary);
+        assert.equal(layer.opacity, 0.35);
+        assert.equal(h.mapLayers.snapshots()[0].effectiveOpacity, 0.35);
+        h.viewer.setStyleEditingEnabled(true);
+        assert.equal(h.viewer.openPairedStyle(x.entry.key), true);
+        assert.deepEqual(styleRequests, ["paired"]);
+        assert.equal(layer.opacity, 1);
+        h.viewer.setStyleEditingEnabled(false);
+        assert.equal(layer.parameters.env, ordinary);
+        assert.equal(layer.opacity, 0.35);
+        assert.equal(h.controlsView.pairedStatistics.pairedSampleCount, 32);
+    } finally { h.destroy(); }
 });
 
 test("selecting 2D opens paired analysis without a map interaction", async () => {

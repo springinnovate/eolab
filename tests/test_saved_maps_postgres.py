@@ -83,6 +83,7 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
         "choices": {
             "inspectAndSelect": False,
             "rasterValues": True,
+            "styleEditing": False,
             "lasso": True,
             "workspacePanels": False,
             "catalog": True,
@@ -292,6 +293,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
             "inspectAndSelect": True,
             "featurePicking": True,
             "workspacePanels": True,
+            "styleEditing": True,
             "catalog": False,
             "mapContents": True,
         },

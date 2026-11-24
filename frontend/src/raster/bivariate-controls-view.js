@@ -527,9 +527,19 @@ export class BivariateRasterControlsView {
      * @return {void}
      */
     openStyle() {
+        if (this.styleRanges.hidden) return;
         this.styleRanges.open = true;
         this.#renderThresholdMarkers();
         this.palette.focus();
+    }
+
+    /** Offer the paired palette and range controls only when visitors can edit styles.
+     * @param {boolean} enabled Whether to allow changes to the paired display.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.styleRanges.hidden = !enabled;
+        if (!enabled) this.styleRanges.open = false;
     }
 
     /**

@@ -56,6 +56,7 @@ function setCaption(element, text) {
 
 /**
  * @typedef {Object} SeriesPresentation
+ * @property {boolean} styleEditingEnabled Whether chart colors, sizes and tick counts may be edited.
  * @property {boolean} active Whether the panel is open.
  * @property {{key:string,label:string,selected:boolean,hasSnapshot?:boolean,temporalDatasetKey?:string,rangeSelected?:boolean}[]} sources Named snapshot choices and temporal-range actions.
  * @property {SeriesValueRow[]} rows Current ordered values for the table.
@@ -627,6 +628,11 @@ export class RasterSeriesView {
             const removeLabel = `Remove ${name}`;
             if (remove.getAttribute("aria-label") !== removeLabel) remove.setAttribute("aria-label", removeLabel);
             for (const input of row.querySelectorAll("input")) {
+                if (input.dataset.field === "color") {
+                    const locked = state.styleEditingEnabled === false;
+                    if (input.disabled !== locked) input.disabled = locked;
+                    if (input.parentElement.hidden !== locked) input.parentElement.hidden = locked;
+                }
                 if (input.dataset.field === "visible") {
                     if (input.checked !== formula.visible) input.checked = formula.visible;
                     const label = `Show ${name} on plot`;

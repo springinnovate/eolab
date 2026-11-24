@@ -516,6 +516,15 @@ export class RasterControlsView {
         this.#bivariateView.setAvailability(canEnter, guidance);
     }
 
+    /** Update style controls embedded in histogram results while keeping the charts interactive.
+     * @param {boolean} enabled Whether a visitor may change the displayed appearance.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.#histogramView.setStyleEditingEnabled(enabled);
+        this.#bivariateView.setStyleEditingEnabled(enabled);
+    }
+
     /**
      * Render explicit bivariate mode, roles, palette, and 2D legend.
      *

@@ -55,12 +55,24 @@ export class RasterPercentileControlsView {
         rescaleText.textContent = "Match the map color scale to these percentiles";
         rescaleLabel.append(this.rescaleInput, rescaleText);
         const help = documentContext.createElement("p");
+        this.rescaleLabel = rescaleLabel;
+        this.rescaleHelp = help;
         help.className = "raster-histogram-rescale-help";
         help.textContent = "Map colors update as you move the sliders.";
         this.status = documentContext.createElement("p");
         this.status.className = "raster-percentile-status";
         this.status.setAttribute("role", "status");
         this.root.append(rescaleLabel, help, this.status);
+    }
+
+    /** Show color matching independently of the sliders used to read percentile estimates.
+     * @param {boolean} enabled Whether this histogram may change the raster's colors.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.rescaleLabel.hidden = !enabled;
+        this.rescaleHelp.hidden = !enabled;
+        if (this.settings) this.#renderValues();
     }
 
     /**
@@ -82,7 +94,7 @@ export class RasterPercentileControlsView {
             const value = String(settings[name]);
             if (this.inputs[name].value !== value) this.inputs[name].value = value;
         }
-        this.rescaleInput.checked = settings.rescale;
+        this.rescaleInput.checked = settings.rescale && !this.rescaleLabel.hidden;
         this.#renderValues();
     }
 
@@ -117,7 +129,7 @@ export class RasterPercentileControlsView {
             lower: Number(this.inputs.lower.value),
             middle: Number(this.inputs.middle.value),
             upper: Number(this.inputs.upper.value),
-            rescale: this.rescaleInput.checked,
+            rescale: !this.rescaleLabel.hidden && this.rescaleInput.checked,
         };
         this.#renderValues();
         this.onInput({ ...this.settings });
@@ -140,10 +152,10 @@ export class RasterPercentileControlsView {
             else this.inputs[name].setAttribute("aria-invalid", "true");
         }
         // A selected checkbox remains operable while its result is unavailable.
-        this.rescaleInput.disabled = !this.settings.rescale && (!this.canRescale || !this.ordered);
+        this.rescaleInput.disabled = this.rescaleLabel.hidden || (!this.settings.rescale && (!this.canRescale || !this.ordered));
         this.status.textContent = !this.ordered
             ? "Choose lower, middle, and upper percentiles in increasing order."
-            : this.message;
+            : this.rescaleLabel.hidden ? "" : this.message;
         this.status.hidden = this.status.textContent === "";
     }
 }

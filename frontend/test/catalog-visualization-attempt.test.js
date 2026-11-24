@@ -88,10 +88,11 @@ class ActionElement extends EventTarget {
  * @param {(item:Object)=>Promise<Object>} [options.prepare] Preparation boundary.
  * @param {(item:Object)=>Promise<Object|null>} [options.show] Publication boundary.
  * @param {Object[]} [options.retained=[]] Initially retained Items.
+ * @param {()=>boolean} [options.canEditStyle] Whether the map permits Style shortcuts.
  * @return {Object} Actions, rendered controls, callback records and external lifecycle helpers.
  */
 function harness({ selectedItem = null, prepare = async (item) => item,
-  show = async () => ({ layerName: "eolab:test" }), retained = [] } = {}) {
+  show = async () => ({ layerName: "eolab:test" }), retained = [], canEditStyle = () => true } = {}) {
   const calls = [], transitions = [];
   const state = { selectedItem, resultViews: new Map() };
   const stack = new MapLayerStack();
@@ -138,6 +139,7 @@ function harness({ selectedItem = null, prepare = async (item) => item,
     remove: item => visualization.remove(item, true),
     getBounds: getCatalogItemMapBounds,
     openStyle: (key, item) => calls.push(["style", key, item]),
+    canEditStyle,
     zoomToBounds: bounds => calls.push(["zoom", bounds, { padding: [24, 24], maxZoom: 9 }]),
     onPrepared: (item, currentVisualization) => {
       transitions.push(["prepared", item, currentVisualization]);
@@ -214,7 +216,7 @@ test("empty startup state does not access map membership or uninitialized featur
   ].map(name => [name, () => { throw new Error(`Startup must not call ${name}`); }]));
   const actions = new CatalogMapActions({ ...commands, getBounds: getCatalogItemMapBounds });
   assert.deepEqual(actions.state(null), {
-    visualization: null, supported: false, retained: false, removalTarget: null, canZoom: false,
+    visualization: null, supported: false, retained: false, removalTarget: null, canZoom: false, canStyle: false,
     pendingAction: null, feedback: null,
   });
 });
@@ -299,6 +301,18 @@ test("Style is absent before adding and after removal, and stale or busy request
   h.calls.length = 0;
   h.style(item);
   assert.deepEqual(h.calls, []);
+});
+
+test("disabled Catalog row and details shortcuts cannot open a retained layer's style", () => {
+  const item = raster("locked"), h = harness({ selectedItem: item, retained: [item], canEditStyle: () => false });
+  const row = h.addRow(item);
+  assert.equal(row.styleButton.hidden, true);
+  assert.equal(h.styleButton.hidden, true);
+  row.styleButton.dispatchEvent(new Event("click"));
+  h.styleButton.dispatchEvent(new Event("click"));
+  h.style(item);
+  assert.deepEqual(h.calls, []);
+  assert.equal(h.zoomButton.hidden, false);
 });
 
 test("pending row Add needs no selection, disables only its Item, and prevents duplicates", async () => {

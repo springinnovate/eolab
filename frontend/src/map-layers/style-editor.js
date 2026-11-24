@@ -6,6 +6,7 @@ export class MapLayerStyleEditor {
      * @param {Object} dependencies.mapLayers Retained layer controller.
      * @param {Object} dependencies.rasterViewer Raster styling boundary.
      * @param {Object} dependencies.inspection Shared map-side presentation.
+     * @param {()=>boolean} [dependencies.canEditStyle] Whether this map allows the user to change appearance.
      * @param {Object} [dependencies.vectorStyleControls] Vector-owned controls.
      * @param {(key:string)=>Object|null} [dependencies.getVectorStyleTarget]
      * Composition callback returning one narrow vector style target.
@@ -16,6 +17,7 @@ export class MapLayerStyleEditor {
         mapLayers,
         rasterViewer,
         inspection,
+        canEditStyle = () => true,
         vectorStyleControls = { show() {}, hide() {} },
         getVectorStyleTarget = () => null,
         onFilterRequested = () => {},
@@ -24,6 +26,7 @@ export class MapLayerStyleEditor {
         this.mapLayers = mapLayers;
         this.rasterViewer = rasterViewer;
         this.inspection = inspection;
+        this.canEditStyle = canEditStyle;
         this.vectorStyleControls = vectorStyleControls;
         this.getVectorStyleTarget = getVectorStyleTarget;
         this.document = documentContext;
@@ -47,7 +50,7 @@ export class MapLayerStyleEditor {
             this.close();
         };
         this.onOpacity = () => {
-            if (this.key === null || this.opacity.disabled) return;
+            if (!this.canEditStyle() || this.key === null || this.opacity.disabled) return;
             this.mapLayers.setOpacity(this.key, Number(this.opacity.value) / 100);
             this.refresh();
         };
@@ -63,6 +66,7 @@ export class MapLayerStyleEditor {
      * @return {void}
      */
     open(key) {
+        if (!this.canEditStyle()) return;
         if (this.key !== null) this.rasterViewer.closeStyle();
         this.key = key;
         this.opener = this.document.activeElement;
@@ -76,6 +80,10 @@ export class MapLayerStyleEditor {
     /** Refresh the target and its displayed name without activating its tab; redirect active pairs to 2D styles. @return {void} */
     refresh() {
         if (this.key === null) return;
+        if (!this.canEditStyle()) {
+            this.close();
+            return;
+        }
         const layer = this.mapLayers.snapshots().find(
             ({ key }) => key === this.key
         );

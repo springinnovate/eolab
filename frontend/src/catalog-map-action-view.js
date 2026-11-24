@@ -20,13 +20,13 @@ import { formatCatalogVisualizationReason } from "./catalog.js";
  * @return {void}
  */
 export function renderCatalogMapAction(elements, item, state) {
-    const { visualization, supported, retained, removalTarget, canZoom, pendingAction, feedback } = state;
+    const { visualization, supported, retained, removalTarget, canZoom, canStyle, pendingAction, feedback } = state;
     elements.container.hidden = !supported;
     elements.container.setAttribute("aria-busy", String(pendingAction !== null));
     elements.toggle.disabled = pendingAction !== null;
     elements.toggle.hidden = false;
-    elements.style.hidden = !retained;
-    elements.style.disabled = pendingAction !== null;
+    elements.style.hidden = !canStyle;
+    elements.style.disabled = !canStyle || pendingAction !== null;
     elements.zoom.hidden = !retained;
     elements.zoom.disabled = pendingAction !== null || !canZoom;
     elements.zoom.title = canZoom ? "Zoom to this item's bounding box."
@@ -44,6 +44,7 @@ export function renderCatalogMapAction(elements, item, state) {
     );
     elements.layerStatus.textContent = [
         formatCatalogVisualizationReason(item, visualization?.metadata?.reason),
-        retained ? "This dataset is on the map. Use Map contents to create a copy with its own style or filter." : "",
+        retained ? (canStyle ? "This dataset is on the map. Use Map contents to create a copy with its own style or filter."
+            : "This dataset is on the map.") : "",
     ].filter((message) => message !== "").join(" ");
 }

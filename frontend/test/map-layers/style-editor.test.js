@@ -4,8 +4,11 @@ import { MapLayerStyleEditor } from '../../src/map-layers/style-editor.js';
 import { MapInspectionController } from '../../src/map-inspection-controller.js';
 import { FakeRasterControlDocument } from '../../test-support/raster/fake-controls-document.js';
 
-/** Build connected style and histogram panels with inspectable layer edits. */
-function fixture() {
+/** Build connected style and histogram panels with inspectable layer edits.
+ * @param {()=>boolean} [canEditStyle] Current map's user style setting.
+ * @return {Object} Editor, inspection dock, map layers and observed actions.
+ */
+function fixture(canEditStyle = () => true) {
     const doc = new FakeRasterControlDocument();
     const events = new EventTarget();
     doc.addEventListener = events.addEventListener.bind(events);
@@ -42,7 +45,7 @@ function fixture() {
     const edits = [];
     const pairedStyleRequests = [];
     const vectorStyleEvents = [];
-    const editor = new MapLayerStyleEditor({ documentContext: doc, inspection,
+    const editor = new MapLayerStyleEditor({ documentContext: doc, inspection, canEditStyle,
         mapLayers: {
             snapshots: () => layers,
             setOpacity(key, value) { layers.find(layer => layer.key === key).opacity = value; edits.push([key, value]); },
@@ -96,7 +99,8 @@ test('one editor keeps its layer identity through reorder and persists opacity o
 });
 
 test('switching result tabs retains the edited raster and its style controls', () => {
-    const h = fixture();
+    let enabled = true;
+    const h = fixture(() => enabled);
     h.editor.open('a');
     h.inspection.showHistogram(1);
     h.doc.querySelector('#map-inspection-tab-style').dispatchEvent(new Event('click'));
@@ -105,8 +109,20 @@ test('switching result tabs retains the edited raster and its style controls', (
     assert.equal(h.editor.title.textContent, 'a.tif');
     assert.equal(h.editor.rasterControls.hidden, false);
     assert.equal(h.editor.opacity.value, '40');
-    h.editor.close();
+    enabled = false;
+    h.editor.opacity.value = '95';
+    h.editor.opacity.dispatchEvent(new Event('input'));
+    h.editor.refresh();
+    h.doc.querySelector('#map-inspection-tab-style').dispatchEvent(new Event('click'));
+    h.editor.open('a');
+    h.editor.open('b');
+    assert.equal(h.root.hidden, true);
+    assert.equal(h.editor.key, null);
+    assert.deepEqual(h.edits, []);
     assert.equal(h.inspection.activeTool, 'histogram');
+    enabled = true;
+    h.editor.open('b');
+    assert.equal(h.inspection.activeTool, 'style');
     h.editor.destroy();
     h.inspection.destroy();
 });

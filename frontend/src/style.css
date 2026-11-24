@@ -3502,6 +3502,9 @@ div.chart-tooltip {
   gap: 6px;
   font-weight: 400;
 }
+.raster-histogram-percentiles .raster-histogram-rescale[hidden] {
+  display: none;
+}
 .raster-histogram-percentiles .raster-histogram-rescale-help,
 .raster-histogram-percentiles .raster-percentile-status {
   margin: 0;

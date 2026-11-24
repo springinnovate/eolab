@@ -105,11 +105,13 @@ export class MapLayerController {
      * @param {(snapshot:RemovedMapLayer,isCurrent:()=>boolean)=>Promise<void>} [configuration.restoreRemovedLayer]
      * Composition callback that restores a snapshot through its owning component.
      * @param {MapLayerStack} [configuration.stack] Pure retained-layer state.
+     * @param {()=>boolean} [configuration.canEditStyle] Whether to offer layer style and clipboard actions.
      * @param {LeafletLayerSet} [configuration.leafletLayers] Keyed Leaflet set.
      */
     constructor({
         leafletMap,
         view = new MapLayerStackView(),
+        canEditStyle = () => true,
         onLayersChange = () => {},
         onOrderChange = () => {},
         onItemZoom = () => {},
@@ -127,6 +129,7 @@ export class MapLayerController {
             );
         }
         this.view = view;
+        this.canEditStyle = canEditStyle;
         this.onLayersChange = onLayersChange;
         this.onOrderChange = onOrderChange;
         this.onItemZoom = onItemZoom;
@@ -148,7 +151,7 @@ export class MapLayerController {
         this.presentationActiveKey = null;
         this.destroyed = false;
         this.view.bind({
-            onStyle: (key) => this.onStyle?.(key),
+            onStyle: (key) => { if (this.canEditStyle()) this.onStyle?.(key); },
             onFilter: (key) => this.onFilter?.(key),
             onCalculateFields: (key) => this.onCalculateFields?.(key),
             onEditGeometry: (key) => this.onEditGeometry?.(key),
@@ -673,6 +676,7 @@ export class MapLayerController {
      * @return {boolean} Whether a style was copied.
      */
     copyStyle(key) {
+        if (!this.canEditStyle()) return false;
         const record = this.#requireRecord(key);
         if (typeof record.adapter.exportSavedState !== "function") {
             this.view.setStatus(
@@ -723,6 +727,7 @@ export class MapLayerController {
      * @return {Promise<boolean>} Whether the complete appearance was applied.
      */
     async pasteStyle(key) {
+        if (!this.canEditStyle()) return false;
         const record = this.#requireRecord(key);
         const availability = this.#styleClipboardSnapshot(record);
         if (!availability.canPaste) {
@@ -737,7 +742,7 @@ export class MapLayerController {
                 record,
                 structuredClone(clipboard.savedState)
             );
-            if (this.records.get(key) !== record) {
+            if (this.records.get(key) !== record || !this.canEditStyle()) {
                 return false;
             }
             this.setOpacity(key, clipboard.opacity);
@@ -1211,6 +1216,7 @@ export class MapLayerController {
                 isCustom: entry.isCustom,
                 ...(entry.group ? {group: entry.group} : {}),
                 sourceName: entry.item === null ? entry.sourceName ?? null : record.adapter.label(entry.item),
+                styleEditingEnabled: this.canEditStyle(),
                 styleClipboard: this.#styleClipboardSnapshot(record),
                 canAddView: entry.item !== null || record.canAddView === true,
                 addingView: this.pendingAdditionalViews.has(entry.key),
