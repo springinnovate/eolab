@@ -430,6 +430,16 @@ test("the inspector heading follows returned IDs and clears with the results", a
     .dispatchEvent(new Event("click"));
   assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
   assert.equal(h.currentObservationChanges.at(-1), plottedFeature, "closing Features keeps the plotted observation");
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const observationBeforeEscape = h.currentObservationChanges.at(-1);
+  const panel = h.documentContext.querySelector("#vector-feature-inspector");
+  panel.append(next);
+  next.focus();
+  const escape = new Event("keydown", { cancelable: true });
+  Object.defineProperty(escape, "key", { value: "Escape" });
+  h.documentContext.dispatchEvent(escape);
+  assert.equal(panel.hidden, true);
+  assert.equal(h.currentObservationChanges.at(-1), observationBeforeEscape, "Escape keeps the same plotted feature");
   h.controller.close();
   assert.equal(heading.textContent, "Feature inspector");
   assert.equal(heading.title, heading.textContent);

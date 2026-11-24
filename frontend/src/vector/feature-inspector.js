@@ -412,7 +412,7 @@ export class VectorFeatureInspectorController {
             }
             event.preventDefault();
             event.stopPropagation();
-            this.close({ moveFocus: true });
+            this.closeButton.click();
         };
         this.closeButton.addEventListener("click", this.onClose);
         this.featureProfileButton.addEventListener(

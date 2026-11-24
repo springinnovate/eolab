@@ -190,6 +190,11 @@ export class FakeRasterControlElement extends EventTarget {
         return { width: 120, height: 48 };
     }
 
+    /** Activate this control unless it is disabled. @return {void} */
+    click() {
+        if (!this.disabled) this.dispatchEvent(new Event("click", { bubbles: true }));
+    }
+
     /** Give this control focus in its fake document. @return {void} */
     focus() {
         if (this.ownerDocument !== null) {
@@ -234,7 +239,6 @@ export class FakeRasterControlDocument extends EventTarget {
             tab.id = id;
             tab.textContent = caption;
             tab.scrollWidth = 110;
-            tab.click = () => { if (!tab.disabled) tab.dispatchEvent(new Event("click")); };
             tab.setAttribute("class", "tool-tab");
             if (closeId) {
                 const item = this.createElement("span");
