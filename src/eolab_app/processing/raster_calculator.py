@@ -555,6 +555,11 @@ def calculate_raster(
         spec.grid,
         valid_pixels,
         None,
+        reference=(
+            sources.rasters[spec.inputs.calculation.grid.alias]
+            if isinstance(spec.inputs.calculation.grid, MatchRasterGrid)
+            else None
+        ),
         output_name="raster",
         description="The raster calculator result",
     )

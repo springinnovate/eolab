@@ -1557,16 +1557,67 @@ def test_numeric_meridian_locates_reference_and_warped_samples(
 
 
 @pytest.mark.parametrize(
-    ("width", "meridian", "geokeys"),
+    "survey_reference",
+    [(9102, 1, None, False), (9105, 1 / 0.9, None, True)],
+    indirect=True,
+)
+def test_published_survey_grid_preserves_numeric_meridian_and_height(
+    tmp_path: Path, survey_reference: tuple[Path, float, float, int | None]
+) -> None:
+    """Publish the surveyed ground positions and retain an optional height reference.
+
+    Args:
+        tmp_path: Calculation directory.
+        survey_reference: Independently encoded reference and native angular scale.
+    """
+    source, factor, meridian, vertical = survey_reference
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(
+            west=-4.308 + meridian, south=48.332, east=-4.181 + meridian, north=48.368
+        ),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    destination = tmp_path / result.filename
+    with tifffile.TiffFile(destination) as output:
+        keys = output.pages[0].geotiff_tags
+        assert keys["GeogPrimeMeridianLongGeoKey"] == pytest.approx(meridian * factor)
+        assert keys.get("VerticalCSTypeGeoKey") == vertical
+        assert keys["GTRasterTypeGeoKey"] == 1
+    with (
+        rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
+        rasterio.open(destination) as result_grid,
+    ):
+        assert result_grid.crs == CRS.from_wkt(spec.grid.crs)
+        assert result_grid.units == (None,)
+        np.testing.assert_array_equal(result_grid.read(1), np.arange(52).reshape(4, 13))
+    assert read_raster_pixel(destination, -4.185 + meridian, 48.335).value == 51
+    assert result.valid_pixels == 52
+
+
+@pytest.mark.parametrize(
+    ("width", "meridian", "geokeys", "unit"),
     [
-        (4, "paris", "ESRI_PE"),
-        (1537, "paris", "ESRI_PE"),
-        (4, "paris", "STANDARD"),
-        (1537, "-17.123", "ESRI_PE"),
+        (4, "paris", "ESRI_PE", "grad"),
+        (1537, "paris", "ESRI_PE", "grad"),
+        (4, "paris", "STANDARD", "grad"),
+        (1537, "-17.123", "ESRI_PE", "grad"),
+        (4, "greenwich", "ESRI_PE", "degree"),
+        (4, "rome", "ESRI_PE", "degree"),
     ],
 )
-def test_published_raster_keeps_custom_prime_meridian_in_grads(
-    tmp_path: Path, width: int, meridian: str, geokeys: str
+def test_published_raster_keeps_reference_longitudes(
+    tmp_path: Path, width: int, meridian: str, geokeys: str, unit: str
 ) -> None:
     """Reuse a published raster without changing its longitude origin or cell values.
 
@@ -1575,15 +1626,19 @@ def test_published_raster_keeps_custom_prime_meridian_in_grads(
         width: Number of columns, exercising single-tile and overview-bearing COGs.
         meridian: A registered meridian name or a custom longitude in degrees.
         geokeys: The reference file's GeoTIFF encoding.
+        unit: Angular unit of the reference grid.
     """
     definition = ProjCRS.from_proj4(
         f"+proj=longlat +datum=WGS84 +pm={meridian}"
     ).to_json_dict()
+    if meridian == "greenwich":
+        definition = ProjCRS.from_user_input("OGC:CRS84").to_json_dict()
+    radians_per_unit = math.pi / 200 if unit == "grad" else math.radians(1)
     for axis in definition["coordinate_system"]["axis"]:
         axis["unit"] = {
             "type": "AngularUnit",
-            "name": "grad",
-            "conversion_factor": math.pi / 200,
+            "name": unit,
+            "conversion_factor": radians_per_unit,
         }
     crs = CRS.from_wkt(ProjCRS.from_json_dict(definition).to_wkt())
     transform = from_origin(-5, 54, 0.001, 0.001)
@@ -1607,9 +1662,19 @@ def test_published_raster_keeps_custom_prime_meridian_in_grads(
     # An admitted file's embedded CRS is the authority for grid matching.
     with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(source) as reference:
         admitted = reference.crs.to_wkt(version="WKT2_2019")
+    if geokeys == "STANDARD":
+        # A numeric GeoKey gives longitude in grads, irrespective of GDAL's
+        # WKT interpretation of the same number.
+        with tifffile.TiffFile(source) as reference:
+            stored_grads = reference.pages[0].geotiff_tags[
+                "GeogPrimeMeridianLongGeoKey"
+            ]
+        expected = ProjCRS.from_wkt(admitted).to_json_dict()
+        expected["datum"]["prime_meridian"]["longitude"] = stored_grads * 0.9
+        admitted = ProjCRS.from_json_dict(expected).to_wkt()
     if (meridian, geokeys) == ("paris", "ESRI_PE"):
         assert CRS.from_wkt(admitted) == crs
-    else:
+    elif meridian != "greenwich":
         assert ProjCRS.from_wkt(admitted).prime_meridian.longitude != 0
     to_wgs84 = Transformer.from_crs(admitted, 4326, always_xy=True)
     west, south = to_wgs84.transform(*transform * (0.25, 2.75))
@@ -1653,6 +1718,19 @@ def test_published_raster_keeps_custom_prime_meridian_in_grads(
                 column,
                 values[0, column],
             )
+        with tifffile.TiffFile(source) as published:
+            pm = ProjCRS.from_wkt(admitted).prime_meridian
+            expected = pm.longitude * pm.unit_conversion_factor / radians_per_unit
+            assert published.pages[0].geotiff_tags.get(
+                "GeogPrimeMeridianLongGeoKey", 0
+            ) == pytest.approx(expected)
+        if width > 512:
+            from osgeo import gdal
+            from osgeo_utils.samples.validate_cloud_optimized_geotiff import validate
+
+            with gdal.ExceptionMgr(), gdal.Open(str(source)) as cog:
+                _, errors, _ = validate(cog, full_check=True)
+            assert errors == []
 
 
 @pytest.mark.parametrize(

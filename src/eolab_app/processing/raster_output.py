@@ -1,91 +1,110 @@
 """Prepare and verify floating-point GeoTIFFs for Processing publication."""
 
 import hashlib
+from itertools import batched
 import math
 from pathlib import Path
-from uuid import uuid4
 
 import numpy as np
 from pyproj import CRS as ProjCRS
 import rasterio
 from rasterio.crs import CRS
 from rasterio.shutil import copy as copy_raster
+from tifffile import TiffFile
+from tifffile.geodb import GeoKeys
 
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.model_result_contracts import RasterResultGrid
 from eolab_app.processing.models import ProcessingError
 
 
-def _encode_geotiff_prime_meridian(crs: str) -> tuple[str, str] | None:
-    """Encode the grid's longitude origin and axis order for the GeoTIFF driver.
+def _copy_geographic_reference_keys(
+    reference: Path, destination: Path, crs: ProjCRS
+) -> None:
+    """Preserve the matched geographic CRS in the GDAL-created COG.
 
-    A registered CRS has an EPSG key. For custom non-degree grids, GDAL's
-    numeric keys and WKT1 citation can each change the meridian's units.
-    Measure that conversion with a one-pixel in-memory TIFF from the installed
-    driver. Adjust only the number sent to the encoder. The completed file
-    must still match the original CRS in full.
+    GeoTIFF stores its CRS in a key directory with separate doubles and text.
+    Only these three TIFF tags describe the CRS. Pixel registration belongs to
+    the new raster and remains PixelIsArea. GDAL can misread numeric meridians
+    in non-degree units, so include its projection citation for those grids too.
 
     Args:
-        crs: CRS of the planned grid, as WKT or an authority code.
-
-    Returns:
-        GeoKey flavor and encoder WKT, or None to use the ordinary COG driver.
+        reference: Original authorized GeoTIFF whose grid the user matched.
+        destination: Attempt-owned COG with its final affine and pixel data.
+        crs: Planned CRS, with the source angular units and any vertical datum.
 
     Raises:
-        pyproj.exceptions.CRSError: If PROJ cannot read the grid's CRS.
-        OSError: If GDAL cannot encode the longitude origin.
+        ValueError: If the source GeoKeys cannot be interpreted.
+        OSError: If metadata cannot be read or written.
+        ProcessingError: If the numeric longitude fails independent readback.
     """
-    definition = ProjCRS.from_user_input(crs)
-    if (
-        not definition.is_geographic
-        or math.isclose(definition.axis_info[0].unit_conversion_factor, math.radians(1))
-        or definition.prime_meridian.longitude == 0
+    with TiffFile(reference) as source:
+        tags = source.pages[0].tags
+        directory = tags.valueof(34735)
+        doubles = list(tags.valueof(34736, ()))
+        citation = tags.valueof(34737, "")
+        decoded = source.pages[0].geotiff_tags
+    count = directory[3]
+    end = 4 + 4 * count
+    entries = {
+        key: (tag, size, offset)
+        for key, tag, size, offset in batched(directory[4:end], 4)
+    }
+    entries[GeoKeys.GTRasterTypeGeoKey] = (0, 1, 1)  # PixelIsArea
+    meridian = crs.prime_meridian
+    grid_unit = crs.axis_info[0].unit_conversion_factor
+    geographic_code = entries.get(GeoKeys.GeographicTypeGeoKey, (0, 1, 32767))[2]
+    longitude = None
+    if meridian.longitude != 0 and geographic_code != crs.geodetic_crs.to_epsg(
+        min_confidence=100
     ):
-        return None
-    document = definition.to_json_dict()
-    if document.get("id", {}).get("authority") == "EPSG":
-        return None
-    from osgeo import gdal, osr
-
-    # Numeric geographic keys decode latitude first. An ESRI citation decodes
-    # longitude first. Preserve the axis order of the admitted grid.
-    flavor = "STANDARD" if definition.axis_info[0].direction == "north" else "ESRI_PE"
-    header = f"/vsimem/{uuid4().hex}.tif"
-    with gdal.ExceptionMgr(), osr.ExceptionMgr():
-        try:
-            driver = gdal.GetDriverByName("GTiff")
-            with driver.Create(
-                header,
-                1,
-                1,
-                1,
-                gdal.GDT_Byte,
-                options=[f"GEOTIFF_KEYS_FLAVOR={flavor}"],
-            ) as sample:
-                sample.SetSpatialRef(osr.SpatialReference(wkt=definition.to_wkt()))
-            with gdal.Open(header) as sample:
-                stored_wkt = sample.GetSpatialRef().ExportToWkt(["FORMAT=WKT2_2019"])
-        except RuntimeError as error:
-            raise OSError(
-                "Could not encode the output GeoTIFF longitude origin"
-            ) from error
-        finally:
-            gdal.Unlink(header)
-    meridian = definition.prime_meridian
-    longitude_radians = meridian.longitude * meridian.unit_conversion_factor
-    decoded = ProjCRS.from_wkt(stored_wkt).prime_meridian
-    stored_radians = decoded.longitude * decoded.unit_conversion_factor
-    if math.isclose(longitude_radians, stored_radians):
-        return flavor, definition.to_wkt()
-    if stored_radians == 0:
-        raise OSError("GDAL discarded the output GeoTIFF longitude origin")
-    geographic = document.get("source_crs", document)
-    # A numeric PROJJSON longitude is in degrees. Undo the observed angular
-    # scale before passing it to this writer; never use it to transform pixels.
-    geographic["datum"]["prime_meridian"]["longitude"] = math.degrees(
-        longitude_radians
-    ) * (longitude_radians / stored_radians)
-    return flavor, ProjCRS.from_json_dict(document).to_wkt()
+        # A projection citation can override the registered geographic code.
+        entries[GeoKeys.GeographicTypeGeoKey] = (0, 1, 32767)
+        longitude = meridian.longitude * meridian.unit_conversion_factor / grid_unit
+        key = GeoKeys.GeogPrimeMeridianLongGeoKey
+        if key in entries:
+            doubles[entries[key][2]] = longitude
+        else:
+            entries[key] = (34736, 1, len(doubles))
+            doubles.append(longitude)
+        entries[GeoKeys.GeogPrimeMeridianGeoKey] = (0, 1, 32767)
+        has_projection_citation = decoded.get(
+            "GTModelTypeGeoKey"
+        ) == 32767 and decoded.get("PCSCitationGeoKey", "").startswith(
+            "ESRI PE String = "
+        )
+        if not math.isclose(grid_unit, math.radians(1)) and not has_projection_citation:
+            # GDAL accepts explicit WKT in its projection-engine citation.
+            # Keep the standard numeric keys authoritative for other readers.
+            encoded = (
+                "ESRI PE String = " + crs.to_wkt(version="WKT2_2019_SIMPLIFIED") + "|"
+            ).encode("utf-8")
+            citation = citation.encode("utf-8")
+            entries[GeoKeys.GTModelTypeGeoKey] = (0, 1, 32767)
+            entries[GeoKeys.PCSCitationGeoKey] = (34737, len(encoded), len(citation))
+            citation += encoded
+    # SHORT arrays can follow the entries inside the directory itself.
+    shift = 4 * (len(entries) - count)
+    keys = [*directory[:3], len(entries)]
+    for key, (tag, size, offset) in sorted(entries.items()):
+        keys.extend((key, tag, size, offset + shift if tag == 34735 else offset))
+    keys.extend(directory[end:])
+    with TiffFile(destination, mode="r+") as output:
+        tags = output.pages[0].tags
+        tags[34735].overwrite(keys)
+        if doubles:
+            tags[34736].overwrite(doubles)
+        if citation:
+            tags[34737].overwrite(citation)
+    if longitude is not None:
+        with TiffFile(destination) as output:
+            stored = output.pages[0].geotiff_tags.get("GeogPrimeMeridianLongGeoKey")
+        if stored != longitude:
+            raise ProcessingError(
+                "invalid_output",
+                "The GeoTIFF did not preserve the grid's longitude origin.",
+                500,
+            )
 
 
 def write_float64_cog(
@@ -95,6 +114,7 @@ def write_float64_cog(
     valid_pixels: int,
     unit: str | None,
     *,
+    reference: Path | None = None,
     output_name: str,
     description: str,
 ) -> ProducedFile:
@@ -108,6 +128,7 @@ def write_float64_cog(
         grid: Expected dimensions, CRS WKT, and affine transform.
         valid_pixels: Expected number of valid pixels at the base resolution.
         unit: Expected band unit, or None for an unlabelled band.
+        reference: Authorized GeoTIFF when matching an existing raster grid.
         output_name: Recipe output name associated with the destination.
         description: File description for output-integrity errors, such as
             "The temporal result".
@@ -118,57 +139,26 @@ def write_float64_cog(
         OSError: If file conversion, verification, or cleanup fails.
     """
     block_size = 512
-    custom_meridian = _encode_geotiff_prime_meridian(grid.crs)
-    if custom_meridian is not None:
-        from osgeo import gdal, osr
-
-        flavor, encoded_crs = custom_meridian
-        # The COG driver does not forward GEOTIFF_KEYS_FLAVOR. Its underlying
-        # GTiff driver creates the same ordered tile layout with COPY_SRC_OVERVIEWS.
-        levels = []
-        factor = 1
-        while max(grid.width, grid.height) > block_size * factor:
-            factor *= 2
-            levels.append(factor)
-        try:
-            with (
-                gdal.ExceptionMgr(),
-                osr.ExceptionMgr(),
-                gdal.Open(str(stage), gdal.GA_Update) as raster,
-            ):
-                if levels:
-                    raster.BuildOverviews("NEAREST", levels)
-                raster.SetSpatialRef(osr.SpatialReference(wkt=encoded_crs))
-                with gdal.GetDriverByName("GTiff").CreateCopy(
-                    str(destination),
-                    raster,
-                    options=[
-                        f"GEOTIFF_KEYS_FLAVOR={flavor}",
-                        "TILED=YES",
-                        f"BLOCKXSIZE={block_size}",
-                        f"BLOCKYSIZE={block_size}",
-                        "COPY_SRC_OVERVIEWS=YES",
-                        "PREDICTOR=3",
-                        "COMPRESS=DEFLATE",
-                        "NUM_THREADS=2",
-                        "BIGTIFF=IF_SAFER",
-                    ],
-                ):
-                    pass
-        except RuntimeError as error:
-            raise OSError(f"Could not write {destination.name}") from error
-    else:
-        copy_raster(
-            stage,
-            destination,
-            driver="COG",
-            BLOCKSIZE=block_size,
-            PREDICTOR="YES",
-            OVERVIEW_RESAMPLING="NEAREST",
-            COMPRESS="DEFLATE",
-            NUM_THREADS="2",
-            BIGTIFF="IF_SAFER",
-        )
+    definition = ProjCRS.from_user_input(grid.crs)
+    copy_keys = (
+        reference is not None
+        and definition.is_geographic
+        and (definition.to_json_dict().get("id", {}).get("authority") != "EPSG")
+    )
+    copy_raster(
+        stage,
+        destination,
+        driver="COG",
+        BLOCKSIZE=block_size,
+        PREDICTOR="YES",
+        OVERVIEW_RESAMPLING="NEAREST",
+        COMPRESS="DEFLATE",
+        NUM_THREADS="2",
+        BIGTIFF="IF_SAFER",
+        GEOTIFF_VERSION="1.0" if copy_keys else "AUTO",
+    )
+    if reference is not None and copy_keys:
+        _copy_geographic_reference_keys(reference, destination, definition)
     with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(destination) as result:
         if (
             result.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") != "COG"
