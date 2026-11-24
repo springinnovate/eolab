@@ -79,7 +79,7 @@ In **Features**, **Plot this feature** graphs numeric fields from one feature. *
 
 Select a mark in a comparison plot to inspect its feature while keeping the plot open. When a feature location is available, selecting a mark also highlights and zooms to it; **Zoom to feature** is available from **Values** too. Attribute-only Lasso results do not supply individual feature locations. Make another selection to update the open plot.
 
-In **Compare features**, use **Previous selection** and **Next selection** to revisit earlier Picker or Lasso selections, including after a selection that found no features. If you go back and select a different set of features, the forward history clears. **Clear selection** removes the results and their history.
+In **Features** or **Compare features**, use **Previous selection** and **Next selection** to revisit Picker or Lasso selections, including after a selection that found no features. Within a selection, **Previous** and **Next** step through its individual features. If you go back and select a different set of features, the forward history clears. **Clear selection** removes the results and their history.
 
 Use **Layer stats** to show the mean, minimum, or maximum of each plotted field beside the selected values. Each statistic uses all numeric values in its original layer, including features outside the current view or filter.
 

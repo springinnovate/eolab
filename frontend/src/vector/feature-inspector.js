@@ -385,6 +385,8 @@ export class VectorFeatureInspectorController {
             () => this.#showAttributes(this.results[this.resultIndex]));
         this.previous = documentContext.querySelector("#previous-vector-feature");
         this.next = documentContext.querySelector("#next-vector-feature");
+        this.previousSelection = documentContext.querySelector("#previous-vector-selection");
+        this.nextSelection = documentContext.querySelector("#next-vector-selection");
         this.results = [];
         this.resultIndex = 0;
         this.highlightLayer = null;
@@ -424,6 +426,8 @@ export class VectorFeatureInspectorController {
         };
         this.onPrevious = () => this.navigateResult("previous");
         this.onNext = () => this.navigateResult("next");
+        this.onPreviousSelection = () => this.navigateSelection("previous");
+        this.onNextSelection = () => this.navigateSelection("next");
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.panel.hidden || !(
                 this.panel.contains(this.document.activeElement) ||
@@ -447,6 +451,8 @@ export class VectorFeatureInspectorController {
         this.zoomFeatureButton.addEventListener("click", this.onZoomFeature);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
+        this.previousSelection.addEventListener("click", this.onPreviousSelection);
+        this.nextSelection.addEventListener("click", this.onNextSelection);
         this.document.addEventListener("keydown", this.onKeydown);
         if (this.filterButton) this.filterButton.hidden = true;
         this.styleButton.hidden = true;
@@ -969,14 +975,17 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Tell composition which directions currently lead to a saved selection.
+     * Enable the available history directions in Features and publish them to the plot.
      * @return {void}
      */
     #publishSelectionNavigation() {
-        this.onSelectionNavigationChange(Object.freeze({
+        const navigation = Object.freeze({
             canPrevious: this.#adjacentSelectionIndex("previous") >= 0,
             canNext: this.#adjacentSelectionIndex("next") >= 0,
-        }));
+        });
+        this.previousSelection.disabled = !navigation.canPrevious;
+        this.nextSelection.disabled = !navigation.canNext;
+        this.onSelectionNavigationChange(navigation);
     }
 
     /**
@@ -994,8 +1003,12 @@ export class VectorFeatureInspectorController {
         const index = this.#adjacentSelectionIndex(direction);
         if (index < 0) return;
 
+        const button = direction === "previous" ? this.previousSelection : this.nextSelection;
+        const opposite = direction === "previous" ? this.nextSelection : this.previousSelection;
+        const wasFocused = this.document.activeElement === button;
         this.#cancelInspection();
         this.#restoreSelection(index, {cancelGesture:true});
+        if (wasFocused && button.disabled && !opposite.disabled) opposite.focus();
     }
 
     /** Present a completed selection from the inspector's existing history.
@@ -1263,6 +1276,8 @@ export class VectorFeatureInspectorController {
         this.zoomFeatureButton.removeEventListener("click", this.onZoomFeature);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);
+        this.previousSelection.removeEventListener("click", this.onPreviousSelection);
+        this.nextSelection.removeEventListener("click", this.onNextSelection);
         this.document.removeEventListener("keydown", this.onKeydown);
     }
 }

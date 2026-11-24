@@ -427,11 +427,14 @@ test("click display IDs never replace a different native feature's Lasso history
 
 test("empty and failed Lasso replacements never leave stale attributes in plots", async t => {
   let outcome = "ready";
+  let reads = 0;
   const h = createFixture(async (url, options) => {
-    if (url.endsWith("/lasso")) return Response.json({matched: outcome === "empty" ? 0 : 1,
-      featureIds: outcome === "empty" ? [] : ["1"], geometry: null});
+    reads++;
+    if (url.endsWith("/lasso")) return Response.json({matched: outcome === "empty" ? 0 : 2,
+      featureIds: outcome === "empty" ? [] : ["1", "2"], geometry: null});
     if (outcome === "error") return Response.json({detail: "This result has expired."}, {status: 410});
-    return Response.json({selection: JSON.parse(options.body).selection, features: [{id: "1", properties: {rank: 1}}]});
+    return Response.json({selection: JSON.parse(options.body).selection,
+      features: [{id: "1", properties: {rank: 1}}, {id: "2", properties: {rank: 2}}]});
   });
   t.after(() => h.controller.destroy());
   const select = () => h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
@@ -441,8 +444,20 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
   assert.equal(h.sampleChanges.at(-1).state, "empty");
   assert.equal(h.currentObservationChanges.at(-1), null);
   assert.equal(h.displays.at(-1).count, 0);
-  h.controller.navigateSelection("previous");
+  const previous = h.documentContext.querySelector("#previous-vector-selection");
+  const next = h.documentContext.querySelector("#next-vector-selection");
+  const compare = h.documentContext.querySelector("#open-vector-time-series");
+  assert.equal(compare.disabled, true);
+  assert.equal(previous.disabled, false);
+  previous.dispatchEvent(new Event("click"));
   assert.equal(h.currentObservationChanges.at(-1).featureId, "1");
+  assert.equal(compare.disabled, false);
+  assert.equal(next.disabled, false);
+  next.dispatchEvent(new Event("click"));
+  assert.equal(h.displays.at(-1).count, 0);
+  assert.equal(next.disabled, true);
+  previous.dispatchEvent(new Event("click"));
+  assert.equal(reads, 3, "History in Features restores both selections without another read");
   outcome = "error";
   await assert.rejects(select(), /expired/);
   assert.equal(h.sampleChanges.at(-1).failedLayers, 1);
