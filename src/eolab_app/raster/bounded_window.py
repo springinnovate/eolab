@@ -627,6 +627,25 @@ def project_wgs84_polygons(
     )
 
 
+def geographic_grid_wkt_in_degrees(wkt: str) -> str:
+    """Express a raster's horizontal geographic coordinates in degrees for GDAL.
+
+    Args:
+        wkt: Geographic or compound grid definition in its original units.
+    Returns:
+        Two-dimensional WKT2 preserving the prime meridian and datum operation.
+    Raises:
+        RuntimeError: If GDAL cannot convert the spatial reference.
+    """
+    from osgeo import osr
+
+    with osr.ExceptionMgr():
+        horizontal = osr.SpatialReference(wkt=wkt)
+        horizontal.StripVertical()
+        horizontal.SetAngularUnits("degree", math.radians(1))
+        return horizontal.ExportToWkt(["FORMAT=WKT2_2019"])
+
+
 def project_geographic_polygons(
     source_crs: CRS | str,
     target_crs: CRS,
@@ -663,10 +682,7 @@ def project_geographic_polygons(
     projected_geometries: list[dict[str, object]] = []
     try:
         if not uses_degrees:
-            with osr.ExceptionMgr():
-                degrees = osr.SpatialReference(wkt=target_wkt)
-                degrees.SetAngularUnits("degree", math.radians(1))
-                target_wkt = degrees.ExportToWkt(["FORMAT=WKT2_2019"])
+            target_wkt = geographic_grid_wkt_in_degrees(target_wkt)
         with osr.ExceptionMgr():
             source = osr.SpatialReference(wkt=source_wkt)
             target = osr.SpatialReference(wkt=target_wkt)

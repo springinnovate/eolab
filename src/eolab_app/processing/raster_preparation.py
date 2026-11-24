@@ -26,6 +26,7 @@ from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.raster.bounded_window import (
+    geographic_grid_wkt_in_degrees,
     grid_boundary_projection,
     project_geographic_polygons,
     project_polygons_to_crs,
@@ -354,7 +355,7 @@ def _write_warped_vrt(
         RasterioError: If GDAL cannot create the virtual warp.
         OSError: If the periodic transformer options cannot be written.
     """
-    from osgeo import gdal, osr
+    from osgeo import gdal
 
     path = masked_path.with_name(f"{masked_path.stem}-warped.vrt")
     warp_source_path = masked_path
@@ -377,10 +378,7 @@ def _write_warped_vrt(
                 # The native longitude-centering transformer expects degrees.
                 # Change only the coordinate units of the virtual source.
                 degree_path = masked_path.with_name(f"{masked_path.stem}-degrees.vrt")
-                with osr.ExceptionMgr():
-                    srs = osr.SpatialReference(wkt=source_wkt)
-                    srs.SetAngularUnits("degree", degree)
-                    source_wkt = srs.ExportToWkt(["FORMAT=WKT2_2019"])
+                source_wkt = geographic_grid_wkt_in_degrees(source_wkt)
                 with gdal.Translate(
                     str(degree_path),
                     str(masked_path),

@@ -1495,26 +1495,37 @@ def survey_reference(
     Args:
         tmp_path: Directory for the reference raster.
         request: Angular unit code, units per degree, optional vertical EPSG code,
-            and numeric, ESRI citation or registered Paris meridian encoding.
+            and numeric, ESRI, registered Paris or Clarke datum-shift encoding.
 
     Returns:
         Source path, units per degree, meridian in degrees, and vertical CRS code.
     """
     angular_code, factor, vertical, encoding = request.param
-    meridian = {"numeric": 2.137, "esri": -17.123, "paris": 2.33722917}[encoding]
+    meridian = {
+        "numeric": 2.137,
+        "helmert": 2.137,
+        "esri": -17.123,
+        "paris": 2.33722917,
+    }[encoding]
     citation = "GCS Name = Local survey CRS|Primem = Survey prime meridian|"
+    if encoding == "helmert":
+        citation += "Datum = Survey datum|Ellipsoid = Clarke 1880 (IGN)|"
     keys = [
         (1024, 0, 1, 32767 if encoding == "esri" else 2),
         (1025, 0, 1, 2 if vertical else 1),
         (2048, 0, 1, 32767),
         (2049, 34737, len(citation), 0),
-        (2050, 0, 1, 6326),
+        (2050, 0, 1, 32767 if encoding == "helmert" else 6326),
         (2051, 0, 1, 8903 if encoding == "paris" else 32767),
         (2054, 0, 1, angular_code),
-        (2056, 0, 1, 7030),
+        (2056, 0, 1, 7011 if encoding == "helmert" else 7030),
     ]
+    doubles = [meridian * factor]
     if encoding != "paris":
         keys.append((2061, 34736, 1, 0))
+    if encoding == "helmert":
+        keys.append((2062, 34736, 3, len(doubles)))
+        doubles.extend((-168, -60, 320))
     if encoding == "esri":
         projection = (
             'ESRI PE String = GEOGCS["Survey",DATUM["D_WGS_1984",'
@@ -1553,7 +1564,7 @@ def survey_reference(
                 False,
             ),
             (34735, "H", len(directory), directory, False),
-            (34736, "d", 1, (meridian * factor,), False),
+            (34736, "d", len(doubles), doubles, False),
             (34737, "s", 0, citation, False),
         ],
     )
@@ -1607,6 +1618,7 @@ def test_catalog_keeps_the_crs_selected_by_gdal(
         (9103, 60, None, "numeric"),
         (9103, 60, None, "paris"),
         (9101, math.pi / 180, None, "paris"),
+        pytest.param((9105, 1 / 0.9, 5720, "helmert"), id="bound-height"),
     ],
     indirect=True,
 )
