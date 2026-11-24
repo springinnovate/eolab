@@ -16,7 +16,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
+BENEFICIARIES_REVISION = "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9"
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 
 PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
@@ -141,12 +141,14 @@ class ClosedEdgeDownstreamNumericalPolicy(HydrologySchema):
 
     The search limit uses EcoShard's exploration cutoff, not an exact count of
     changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    Each saved run keeps the WWF revision that produced its beneficiary values.
     """
 
     version: Literal["hydrology.downstream_beneficiaries.v3"]
-    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
-        BENEFICIARIES_REVISION
-    )
+    beneficiariesRevision: Literal[
+        "3f577e27deb347cd4520977eb99474fb81e990fc",
+        "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9",
+    ] = BENEFICIARIES_REVISION
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
     )

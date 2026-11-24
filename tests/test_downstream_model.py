@@ -264,7 +264,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
-        == "3f577e27deb347cd4520977eb99474fb81e990fc"
+        == "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9"
     )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -417,12 +417,17 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-    assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    assert saved["beneficiariesRevision"] == "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9"
     assert (
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
             mode="json"
         )
         == saved
+    )
+    saved["beneficiariesRevision"] = "3f577e27deb347cd4520977eb99474fb81e990fc"
+    assert (
+        ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).beneficiariesRevision
+        == "3f577e27deb347cd4520977eb99474fb81e990fc"
     )
 
 
