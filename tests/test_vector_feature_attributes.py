@@ -510,7 +510,7 @@ def test_scalar_attributes_preserve_booleans_dates_and_missing_numbers(
         ] == expected_ids
 
 
-@pytest.mark.parametrize("failure", ["output", "features", "deadline"])
+@pytest.mark.parametrize("failure", ["output", "wire-bytes", "features", "deadline"])
 def test_failed_attribute_reads_never_return_partial_rows(
     source: tuple[VectorSamplingService, ResolvedCatalogSelection, tuple[int, ...]],
     monkeypatch: pytest.MonkeyPatch,
@@ -523,7 +523,7 @@ def test_failed_attribute_reads_never_return_partial_rows(
         monkeypatch: Reduce only the relevant read budget.
         failure: The resource boundary exhausted by this case.
     """
-    _service, original, ids = source
+    service, original, ids = source
 
     async def run_in_process(
         target: Callable[..., None], arguments: tuple[Any, ...], timeout: float
@@ -560,6 +560,31 @@ def test_failed_attribute_reads_never_return_partial_rows(
         return results[0]
 
     monkeypatch.setattr(feature_attributes, "run_bounded_process", run_in_process)
+    if failure == "wire-bytes":
+        app = FastAPI()
+        app.include_router(create_vector_sampling_router(service))
+        selection = original.selection.model_dump(mode="json", by_alias=True)
+        selection["filter"] = {
+            "rules": [{"field": "x", "operator": "gt", "value": 1e-5}]
+        }
+        payload = {"selection": selection, "featureIds": [str(ids[0])]}
+        with TestClient(app) as client:
+            response = client.post("/api/vector-sampling/features", json=payload)
+            assert response.status_code == 200, response.text
+            size = len(response.content)
+            monkeypatch.setattr(feature_attributes, "MAX_FEATURE_ATTRIBUTE_BYTES", size)
+            assert (
+                client.post("/api/vector-sampling/features", json=payload).content
+                == response.content
+            )
+            monkeypatch.setattr(
+                feature_attributes, "MAX_FEATURE_ATTRIBUTE_BYTES", size - 1
+            )
+            assert (
+                client.post("/api/vector-sampling/features", json=payload).status_code
+                == 409
+            )
+        return
     if failure == "output":
         monkeypatch.setattr(feature_attributes, "MAX_FEATURE_ATTRIBUTE_BYTES", 1)
     elif failure == "features":

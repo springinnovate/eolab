@@ -1,6 +1,5 @@
 """Read identified feature attributes for inspection without loading map geometry."""
 
-import json
 import math
 from contextlib import closing
 from time import monotonic
@@ -161,19 +160,8 @@ def _read_feature_attributes(
     try:
         with _limit_memory(limits.memory_bytes):
             features: list[FeatureAttributes] = []
-            encoded_size = len(
-                json.dumps(
-                    {
-                        "selection": target.selection.model_dump(
-                            mode="json", by_alias=True
-                        ),
-                        "features": [],
-                    },
-                    ensure_ascii=False,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            )
+            envelope = FeatureAttributesResult(selection=target.selection, features=())
+            encoded_size = len(envelope.model_dump_json(by_alias=True).encode("utf-8"))
             with closing(
                 iter_original_features(
                     target,
