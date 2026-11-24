@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 
 from affine import Affine
+import fiona
 import numpy as np
 from pyproj import CRS as ProjCRS, Transformer
 import pytest
@@ -487,6 +488,53 @@ def test_visible_bounds_enclosing_the_displaced_paris_pole() -> None:
     np.testing.assert_array_equal(
         geometry_mask(projected, expected.shape, transform, invert=True), expected
     )
+
+
+def test_catalog_area_uses_the_geopackages_prime_meridian(tmp_path: Path) -> None:
+    """Read the WGS84 raster columns covered by a signed vector in grads.
+
+    Args:
+        tmp_path: GeoPackage, raster with column-number values, and output directory.
+    """
+    definition = ProjCRS.from_proj4(
+        "+proj=longlat +datum=WGS84 +pm=-17.123"
+    ).to_json_dict()
+    for axis in definition["coordinate_system"]["axis"]:
+        axis["unit"] = {
+            "type": "AngularUnit",
+            "name": "grad",
+            "conversion_factor": math.pi / 200,
+        }
+    with fiona.Env(OSR_WKT_FORMAT="WKT2_2019"):
+        area = write_selection(
+            tmp_path / "survey.gpkg",
+            [mapping(box(0, 50, 0.1, 50.1))],
+            crs=ProjCRS.from_json_dict(definition).to_wkt(),
+        )
+    source = write_source(
+        tmp_path / "columns.tif",
+        np.tile(np.arange(800, dtype="int16"), (12, 1)),
+        transform=from_origin(-18.003, 45.1, 0.01, 0.01),
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    sources = RasterCalculatorSources({"a": source}, area)
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    with rasterio.open(tmp_path / result.filename) as output:
+        np.testing.assert_array_equal(
+            output.read(1, masked=True).compressed(), np.tile(np.arange(88, 97), 9)
+        )
 
 
 @pytest.mark.parametrize("angular_unit", ["degree", "grad"])

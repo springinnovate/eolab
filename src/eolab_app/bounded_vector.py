@@ -218,7 +218,8 @@ def polygon_records(
     filter, projection, cancellation and per-feature work limits. The caller
     owns validation of the selected attributes' domain meaning. A supervised
     caller can supply its own finite time budget; ordinary reads keep the default.
-    Custom projectors receive valid original topology before they transform or
+    Projectors receive the original CRS with explicit angular units and
+    custom projectors receive valid original topology before they transform or
     merge polygon parts. Their output is validated after native projection.
     Filtered GeoPackages scan attributes first and fetch geometry by the native
     feature ID only for matches. Other drivers keep sequential geometry reads;
@@ -255,7 +256,7 @@ def polygon_records(
     ):
         raise ValueError("Vector read timeout must be a positive finite number")
     deadline = None if timeout_seconds is None else monotonic() + timeout_seconds
-    with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
+    with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES", OSR_WKT_FORMAT="WKT2_2019"):
         with ExitStack() as sources:
             dataset = sources.enter_context(_source_collection(resolved))
             fields = {
