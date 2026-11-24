@@ -2026,7 +2026,8 @@ export function initializeRasterViewer(
                 layer === null ||
                 !mapLayers.isAttached(candidate.key)
             ) continue;
-            setRasterWmsStyle(layer, { env: buildRasterStyleEnvironment(style) });
+            const environment = buildRasterStyleEnvironment(style);
+            if (layer.wmsParams.env !== environment) setRasterWmsStyle(layer, {env: environment});
             layer.setOpacity(1);
             setRasterLayerAdditiveBlend(layer, false);
             renderedRecords.push(record);

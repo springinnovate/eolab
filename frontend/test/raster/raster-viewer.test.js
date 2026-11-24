@@ -6248,13 +6248,16 @@ test("temporal timestamp changes preserve automatic ranges and refresh an active
     }});
     try {
         const first = await fixture.viewer.showTemporal(temporalItem());
-        await fixture.viewer.showTemporal(temporalItem());
+        const reference = await fixture.viewer.showTemporal(temporalItem());
         await flushPromises();
         const range = {...first.state.rasterStyle};
         fixture.controlsView.handlers.onBivariateModeChange("bivariate");
         await flushPromises();
         assert.equal(paired.length, 1);
+        const stationary = fixture.mapLayers.getLeafletLayer(reference.entry.key);
+        const redraws = stationary.parameterUpdates.length;
         await fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        assert.equal(stationary.parameterUpdates.length, redraws, "stepping the other axis keeps the reference tiles");
         assert.equal(paired[0].signal.aborted, true);
         assert.equal(fixture.controlsView.bivariateMode.active, true);
         assert.equal(paired.length, 2);
