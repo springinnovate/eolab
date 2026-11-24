@@ -148,7 +148,7 @@ export class TemporalScrubber {
         const layer = this.layers.find(candidate => candidate.key === key) ?? this.layers[0];
         const before = previous?.timeline, next = layer?.timeline;
         const changedView = !next || layer.key !== previous?.key || next.variable !== before?.variable;
-        const crossingMonth = this.action?.month && this.action.month === next?.month;
+        const crossingMonth = this.action?.showing && this.action.month && this.action.month === next?.month;
         if (changedView ||
             (!crossingMonth && (next.month !== before.month || next.times !== before.times ||
                 (next.time !== before.time && this.action?.time !== next.time && this.dragPreview !== next.time)))) this.pause();
@@ -314,15 +314,17 @@ export class TemporalScrubber {
         if (!this.playing || !this.#selectionReady()) return;
         const target = this.#neighbor(1);
         if (!target) return;
-        this.action = target;
+        const action = this.action = {...target, showing: false};
         this.#render();
         const frame = this.#prepare(target);
         try {
             const show = await frame.ready;
-            if (this.action !== target) return;
+            if (this.action !== action) return;
             this.frames.delete(target.time ?? target.month);
-            if (show) show();
-            else if (target.time) await this.actions.selectTime(this.layer.key, target.time);
+            if (show) {
+                action.showing = true;
+                show();
+            } else if (target.time) await this.actions.selectTime(this.layer.key, target.time);
             else {
                 this.pause();
                 this.playbackError = "Could not load the next month. Press Play to retry or choose another month.";
@@ -330,7 +332,7 @@ export class TemporalScrubber {
             }
         } finally {
             frame.controller.abort();
-            if (this.action === target) { this.action = null; this.#render(); }
+            if (this.action === action) { this.action = null; this.#render(); }
         }
     }
 }

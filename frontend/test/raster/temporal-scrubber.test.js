@@ -186,6 +186,17 @@ test("Pause cancels a pending month change and a failed month can be played agai
         await new Promise(resolve => setImmediate(resolve));
         assert.deepEqual(shown, ["May"]);
         assert.deepEqual(calls, []);
+        context.mock.timers.tick(167);
+        const manual = {...layer.timeline, month: months[1], times: [], loading: true};
+        widget.setLayers([{...layer, timeline: manual}]);
+        assert.equal(requests[3].signal.aborted, true, "choosing the same month in Map contents cancels playback");
+        const finalTime = "2000-05-01T00:00:01Z";
+        widget.setLayers([{...layer, timeline: {...manual, times: [finalTime], time: finalTime, loading: false}}]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: finalTime}]]));
+        requests[3].resolve(null);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(controls.status.textContent, "");
+        assert.match(controls.display.textContent, /05-01 00:00:01 UTC/);
     } finally { widget.destroy(); }
 });
 
