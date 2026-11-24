@@ -203,6 +203,26 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     assert not (tmp_path / "dataset.yaml").exists()
 
 
+@pytest.mark.parametrize("key", ["observations", "time"])
+def test_duplicate_manifest_keys(tmp_path: Path, key: str) -> None:
+    """Report the repeated YAML key and line before a row can be overwritten.
+
+    Args:
+        tmp_path: Directory with a reviewed archive manifest.
+        key: Repeated field at the root or within one observation.
+    """
+    manifest = annual_manifest(tmp_path)
+    original = manifest.read_text().splitlines()
+    line = next(
+        i for i, value in enumerate(original) if value.lstrip().startswith(key + ":")
+    )
+    original.insert(line, original[line])
+    manifest.write_text("\n".join(original))
+    result = run_cli("build", manifest, "--check")
+    assert result.returncode == 1
+    assert key in result.stderr and f"line {line + 2}" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("second_start", "valid"), [("2024-02-29", True), ("2024-02-28", False)]
 )

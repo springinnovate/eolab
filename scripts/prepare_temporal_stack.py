@@ -18,6 +18,34 @@ import rasterio
 import yaml
 
 
+class ManifestLoader(yaml.SafeLoader):
+    """Read a reviewed stack without silently replacing repeated fields."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        """Build one field mapping after checking the locations of its keys.
+
+        Args:
+            node: Mapping from the YAML document.
+            deep: Whether to construct nested values immediately.
+
+        Returns:
+            SafeLoader's parsed field values.
+
+        Raises:
+            ValueError: A field was repeated in this mapping.
+        """
+        self.flatten_mapping(node)
+        keys: set[str] = set()
+        for key, _ in node.value:
+            if isinstance(key, yaml.ScalarNode):
+                if key.value in keys:
+                    raise ValueError(
+                        f"Duplicate key {key.value!r} on line {key.start_mark.line + 1}."
+                    )
+                keys.add(key.value)
+        return super().construct_mapping(node, deep)
+
+
 class StackFields(BaseModel):
     """Reject misspelled fields in an operator's reviewed manifest."""
 
@@ -413,7 +441,7 @@ def build_stack(manifest: Path, check: bool) -> None:
         sqlite3.Error: The complete observation index could not be written.
     """
     root = manifest.resolve(strict=True).parent
-    content = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    content = yaml.load(manifest.read_text(encoding="utf-8"), Loader=ManifestLoader)
     try:
         stack = Stack.model_validate(content)
     except ValidationError as error:
