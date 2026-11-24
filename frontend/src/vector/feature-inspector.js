@@ -35,7 +35,7 @@ const MAX_SELECTION_HISTORY_ENTRIES = 20;
  * Retained view identity and path-free original source with its applied predicate.
  * @typedef {{polygon:Object,geometry:Object|null,count:number,label:string}} FeatureSelectionDisplay
  * Optional Lasso display, independent of attributes and plotting eligibility.
- * @typedef {{kind:"click",signature:string}|{kind:"lasso",key:string,selection:Object}} FeatureSelectionContext
+ * @typedef {{kind:"click",signature:string}|{kind:"lasso",key:string,signature:string}} FeatureSelectionContext
  * Source context used to reject stale reads and history after a source or predicate changes.
  * @typedef {{feature:Object,target:{sourceId:string,label:string,primaryGeometry?:string|null,
  * publication?:Object,geometryKind?:string},inspectionPosition:InspectionPosition|null}} InspectedVectorFeature
@@ -517,7 +517,9 @@ export class VectorFeatureInspectorController {
      * @return {void}
      */
     syncVisibleLayers() {
-        const targets = [...this.getSelectionTargets().map(target => ({sourceId: target.key, label: target.label})), ...this.visibleTargets()];
+        const retainedTargets = this.getSelectionTargets();
+        const visibleTargets = this.visibleTargets();
+        const targets = [...retainedTargets.map(target => ({sourceId: target.key, label: target.label})), ...visibleTargets];
         if (this.#refreshResultNames(targets)) {
             if (this.results.length) this.showResult(this.resultIndex);
             this.onSelectionDisplayChange(this.#selectionDisplay);
@@ -528,14 +530,21 @@ export class VectorFeatureInspectorController {
                 this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers);
             }
         }
+        const visibleSignature = this.#targetSignature(visibleTargets);
+        const retainedSignatures = new Map(retainedTargets.map(target => [target.key, JSON.stringify(target.selection)]));
+        /** Check saved acquisition context against the sources from this layer refresh.
+         * @param {FeatureSelectionContext} context Saved selection context. @return {boolean} Whether its sources still match.
+         */
+        const isCurrent = context => context.signature === (context.kind === "click"
+            ? visibleSignature : retainedSignatures.get(context.key));
         let retainedIndex = -1;
         this.#selectionHistory = this.#selectionHistory.filter((selection, index) => {
-            const retained = this.#selectionIsCurrent(selection.context);
+            const retained = isCurrent(selection.context);
             if (retained && index <= this.#selectionHistoryIndex) retainedIndex++;
             return retained;
         });
         this.#selectionHistoryIndex = retainedIndex;
-        if (this.#selectionContext !== null && !this.#selectionIsCurrent(this.#selectionContext)) {
+        if (this.#selectionContext !== null && !isCurrent(this.#selectionContext)) {
             this.#cancelInspection();
             this.clearResults();
             this.#selectionContext = null;
@@ -546,16 +555,6 @@ export class VectorFeatureInspectorController {
             this.#publishSample("invalidated", [], this.status.textContent);
         }
         this.#publishSelectionNavigation();
-    }
-
-    /** Check a saved source context against composition's current sources.
-     * @param {FeatureSelectionContext} context Acquisition context.
-     * @return {boolean} Whether its source and predicate are still available.
-     */
-    #selectionIsCurrent(context) {
-        if (context.kind === "click") return context.signature === this.#targetSignature(this.visibleTargets());
-        return this.getSelectionTargets().some(target => target.key === context.key &&
-            JSON.stringify(target.selection) === JSON.stringify(context.selection));
     }
 
     /**
@@ -681,7 +680,7 @@ export class VectorFeatureInspectorController {
         const generation = this.#cancelInspection();
         const abort = new AbortController();
         this.abortController = abort;
-        this.#selectionContext = {kind: "lasso", key: target.key, selection: structuredClone(target.selection)};
+        this.#selectionContext = {kind: "lasso", key: target.key, signature: JSON.stringify(target.selection)};
         this.#inspectionPosition = null;
         this.#selectionDisplay = null;
         this.clearResults();
@@ -704,7 +703,7 @@ export class VectorFeatureInspectorController {
                 target.selection, selected.featureIds, abort.signal, this.fetchImplementation);
             abort.signal.throwIfAborted();
             const currentTarget = this.getSelectionTargets().find(value => value.key === target.key);
-            if (!this.#selectionIsCurrent(this.#selectionContext)) {
+            if (!currentTarget || JSON.stringify(currentTarget.selection) !== this.#selectionContext.signature) {
                 this.syncVisibleLayers();
                 throw new DOMException("The selected source changed.", "AbortError");
             }

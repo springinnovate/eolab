@@ -458,8 +458,6 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
   assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
     "Restoring zero Lasso matches keeps Previous selection reachable");
   assert.equal(next.disabled, true);
-  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
-    "Returning to the zero-match selection keeps Features and its history controls open");
   previous.dispatchEvent(new Event("click"));
   assert.equal(reads, 3, "History in Features restores both selections without another read");
   outcome = "error";
@@ -496,8 +494,12 @@ test("invalidated Lasso history keeps earlier and later selections on their own 
       for (let position = 2; position > index; position--) h.controller.navigateSelection("previous");
       if (change === "remove") h.selectionTargets.splice(index, 1);
       else h.selectionTargets[index].selection.filter = {rules: [{field: "rank", operator: "gt", value: 9}]};
+      const retained = t.mock.method(h.controller, "getSelectionTargets");
+      const visible = t.mock.method(h.controller, "getVisibleTargets");
       h.controller.syncVisibleLayers();
       h.controller.syncVisibleLayers();
+      assert.equal(retained.mock.callCount(), 2, "Each refresh reads each source list once for the whole history");
+      assert.equal(visible.mock.callCount(), 2);
       assert.equal(h.sampleChanges.at(-1).state, "invalidated");
       assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: index > 0, canNext: index < 2});
       if (index > 0) {
