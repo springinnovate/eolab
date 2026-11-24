@@ -16,7 +16,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-BENEFICIARIES_REVISION = "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9"
+BENEFICIARIES_REVISION = "afb977dd0e923e465958f8b301060c4ff10c8fd7"
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 
 PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
@@ -148,6 +148,7 @@ class ClosedEdgeDownstreamNumericalPolicy(HydrologySchema):
     beneficiariesRevision: Literal[
         "3f577e27deb347cd4520977eb99474fb81e990fc",
         "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9",
+        "afb977dd0e923e465958f8b301060c4ff10c8fd7",
     ] = BENEFICIARIES_REVISION
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
