@@ -8,6 +8,21 @@ from rasterio.crs import CRS
 from rasterio.warp import transform_bounds
 
 
+def covers_full_longitude_turn(crs: CRS, grid_width: float) -> bool:
+    """Return whether a geographic grid covers one complete longitude cycle.
+
+    Args:
+        crs: Native raster CRS defining its angular units.
+        grid_width: Distance between the western and eastern pixel edges in that CRS.
+
+    Returns:
+        True for a complete turn, such as 360 degrees or 400 grads.
+    """
+    return crs.is_geographic and math.isclose(
+        grid_width * crs.units_factor[1], math.tau
+    )
+
+
 def transform_bounds_to_wgs84(
     source_crs: CRS,
     source_bounds: tuple[float, float, float, float],
@@ -85,6 +100,9 @@ def normalize_wgs84_bounds(
         raise ValueError("Raster WGS 84 bounds must have positive width")
     if span < 0 or span >= 360:
         west, east = -180.0, 180.0
+    elif -180.0 - 1e-8 <= west < 180.0 and -180.0 < east <= 180.0 + 1e-8:
+        # Computing a pixel edge can carry a regional grid just past the meridian.
+        west, east = max(-180.0, west), min(180.0, east)
     else:
         west = (west + 180.0) % 360.0 - 180.0
         east = west + span

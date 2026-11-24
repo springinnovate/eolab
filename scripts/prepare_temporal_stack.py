@@ -371,14 +371,19 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                     or not all(map(math.isfinite, grid))
                 ):
                     raise ValueError("Expected a georeferenced north-up grid.")
-                if (
-                    src.crs.is_geographic
-                    and not math.isclose(src.width * grid.a, 360)
-                    and (src.bounds.left < -180 - 1e-8 or src.bounds.right > 180 + 1e-8)
-                ):
-                    raise ValueError(
-                        "Reproject or shift the regional longitude grid into -180 to 180 degrees."
+                if src.crs.is_geographic:
+                    degrees_per_unit = math.degrees(src.crs.units_factor[1])
+                    west, south, east, north = (
+                        edge * degrees_per_unit for edge in src.bounds
                     )
+                    if south >= 90 or north <= -90:
+                        raise ValueError("The geographic grid has no valid latitude.")
+                    if not math.isclose(
+                        src.width * grid.a * degrees_per_unit, 360
+                    ) and (west < -180 - 1e-8 or east > 180 + 1e-8):
+                        raise ValueError(
+                            "Reproject or shift the regional longitude grid into -180 to 180 degrees."
+                        )
                 declared_units = {src.units[0]} if src.units[0] else set()
                 for band in (0, 1):
                     for key, raw_value in src.tags(band).items():

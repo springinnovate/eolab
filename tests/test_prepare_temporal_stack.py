@@ -142,6 +142,7 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
     assert asyncio.run(scan(manager))["errors"] == []
     ((key, item),) = writer.write_session.items.items()
     assert item["properties"]["eolab:time_labels"] == "calendar_year"
+    assert item["bbox"] == pytest.approx([179.6, 0, 180, 1])
     ref = dict(collectionId=key[0], itemId=key[1], variable="rain")
     dates = get_temporal_time_choices(
         item, TemporalTimeQuery(**ref, month="2024-12"), tmp_path
@@ -157,6 +158,68 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
         (frame,) = get_temporal_observations(item, selection, tmp_path)
         with rasterio.open(frame.path) as src:
             assert src.read(1, masked=True).tolist() == [[24, None]]
+
+
+@pytest.mark.parametrize(
+    ("west", "pixel_width", "expected_longitudes", "point", "value"),
+    [
+        (0, 0.01, (2.33651, 2.35451), (2.341, 48.595), 24),
+        (190, 2, (173.33828, 176.93817), (174, 48.595), 24),
+        (0, 200, (-180, 180), (-5, 48.595), 37),
+    ],
+)
+def test_grad_grid_footprint_and_original_pixel(
+    tmp_path: Path,
+    west: float,
+    pixel_width: float,
+    expected_longitudes: tuple[float, float],
+    point: tuple[float, float],
+    value: int,
+) -> None:
+    """Locate a Paris-meridian grid in WGS84 and read its original sample.
+
+    Args:
+        tmp_path: Isolated Catalog mount.
+        west: Left edge in grads relative to the Paris meridian.
+        pixel_width: Cell width in grads; two 200-grad cells circle the globe.
+        expected_longitudes: Western and eastern WGS84 Catalog bounds.
+        point: Requested WGS84 position inside the first or wrapped last cell.
+        value: Original raster sample at the requested position.
+    """
+    from eolab_app.raster.pixel import read_raster_pixel
+    from eolab_app.raster.source_models import TemporalRasterSelection
+    from eolab_app.raster.temporal_source import get_temporal_observations
+    from tests.test_catalog_temporal import create_scanner, scan
+
+    root = tmp_path / "rainfall"
+    root.mkdir()
+    manifest = annual_manifest(root)
+    for path in root.glob("*.tif"):
+        with rasterio.open(path, "r+") as src:
+            src.crs = "EPSG:4807"
+            src.transform = from_origin(west, 54, pixel_width, 0.02)
+            if path.name == "rain_2024.tif":
+                src.write(numpy.array([[24, 37]], dtype="int16"), 1)
+    built = run_cli("build", manifest)
+    assert built.returncode == 0, built.stderr
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["errors"] == []
+    ((key, item),) = writer.write_session.items.items()
+    west_deg, south, east_deg, north = item["bbox"]
+    assert (west_deg, east_deg) == pytest.approx(expected_longitudes, abs=0.0001)
+    assert south < point[1] < north
+    assert item["geometry"]["coordinates"][0][0] == [west_deg, south]
+    axis = item["properties"]["cube:dimensions"]["x"]
+    assert axis["reference_system"] == 4807
+    assert axis["extent"] == pytest.approx(
+        [west + pixel_width / 2, west + 1.5 * pixel_width]
+    )
+    query = TemporalRasterSelection(
+        collectionId=key[0], itemId=key[1], variable="rain", time="2025-01-01T00:00:00Z"
+    )
+    (observation,) = get_temporal_observations(item, query, tmp_path)
+    assert observation.path == root / "rain_2024.tif"
+    assert read_raster_pixel(observation, *point).value == value
 
 
 @pytest.mark.parametrize("answer", ["y", "n"])
@@ -218,10 +281,14 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     stack = yaml.safe_load(manifest.read_text())
     write_frame(tmp_path / "shifted.tif", 1, origin=0.5)
     write_frame(tmp_path / "wrapped.tif", 1, origin=240)
+    write_frame(tmp_path / "off-pole.tif", 1)
+    with rasterio.open(tmp_path / "off-pole.tif", "r+") as src:
+        src.transform = from_origin(1, 99, 1, 1)
     stack["observations"].extend(
         [
             {"file": "shifted.tif", "time": "2023"},
             {"file": "wrapped.tif", "time": "2020"},
+            {"file": "off-pole.tif", "time": "2019"},
             {"file": "short.tif", "time": {"start": "2024-05-01", "end": "2024-10-01"}},
             {"file": "bad.tif", "time": "2025-02-29"},
             {
@@ -236,6 +303,7 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     for message in (
         "shifted.tif: Different transform",
         "wrapped.tif: Reproject or shift the regional longitude grid",
+        "off-pole.tif: The geographic grid has no valid latitude",
         "short.tif: Expected one complete calendar year",
         "bad.tif: day is out of range",
         "duplicate time or overlap",

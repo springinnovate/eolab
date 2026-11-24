@@ -1,7 +1,6 @@
 """Read published GeoTIFF observations and available dates from their catalog."""
 
 import json
-import math
 import sqlite3
 from calendar import monthrange
 from collections.abc import Iterator
@@ -16,6 +15,7 @@ from rasterio.crs import CRS
 import yaml
 
 from eolab_app.raster.errors import RasterAssetError, RasterConflictError
+from eolab_app.raster.geographic_bounds import covers_full_longitude_turn
 from eolab_app.raster.source_models import (
     TemporalIntervalSelection,
     TemporalRasterSelection,
@@ -149,7 +149,7 @@ def get_temporal_observations(
             if not observations:
                 transform = Affine.from_gdal(*json.loads(grid))
                 crs = CRS.from_user_input(projection)
-                cyclic_x = crs.is_geographic and math.isclose(width * transform.a, 360)
+                cyclic_x = covers_full_longitude_turn(crs, width * transform.a)
             observations.append(
                 TemporalObservation(
                     path=raster_path,
