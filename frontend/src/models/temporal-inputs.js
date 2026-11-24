@@ -3,18 +3,18 @@ import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-per
 
 /** Statistics accepted by the temporal_reduction input contract. */
 export const TEMPORAL_STATISTICS = [
-    {value: "mean", label: "Mean"}, {value: "sum", label: "Sum"},
+    {value: "mean", label: "Mean"}, {value: "sum", label: "Sum of observation values"},
     {value: "min", label: "Minimum"}, {value: "max", label: "Maximum"},
     {value: "median", label: "Median"}, {value: "percentile", label: "Percentile"},
-    {value: "stdev", label: "Standard deviation"},
-    {value: "precipitation_total", label: "Precipitation total"},
+    {value: "stdev", label: "Population standard deviation"},
+    {value: "precipitation_total", label: "Total precipitation"},
 ];
 
 /** Spatial statistics accepted by the area_statistic input contract. */
 const AREA_STATISTICS = [
     {value: "mean", label: "Mean"}, {value: "sum", label: "Sum"},
     {value: "min", label: "Minimum"}, {value: "max", label: "Maximum"},
-    {value: "stdev", label: "Population standard deviation"}, {value: "count", label: "Valid-pixel count"},
+    {value: "stdev", label: "Population standard deviation"}, {value: "count", label: "Valid pixels per observation"},
 ];
 
 /** Check whether a variable matches the model's configured precipitation rate units.
@@ -37,7 +37,7 @@ export function getTemporalStatistics(variable, temporal) {
     if (temporal.statisticType === "area_statistic") return AREA_STATISTICS;
     const statistics = TEMPORAL_STATISTICS.filter(choice => choice.value !== "precipitation_total");
     if (supportsPrecipitationTotal(variable, temporal))
-        statistics.push({value: "precipitation_total", label: `Precipitation total (${temporal.precipitation.outputUnit})`});
+        statistics.push({value: "precipitation_total", label: `Total precipitation (${temporal.precipitation.outputUnit})`});
     return statistics;
 }
 
@@ -115,12 +115,13 @@ export function describeTemporalInterval(input) {
  */
 export function describeTemporalReduction(input) {
     const label = TEMPORAL_STATISTICS.find(choice => choice.value === input.reducer).label;
-    return input.reducer === "percentile" ? `${label} ${input.percentile}` : input.reducer === "stdev" ? `${label} (population)` : label;
+    return input.reducer === "percentile" ? `${label} ${input.percentile}` : label;
 }
 
 /** Name a calculated period map using its saved statistic, variable and requested UTC period.
  * Exact calendar months use their month and year. Other periods retain both exact
- * boundaries and state that the end is excluded; current Catalog state is not consulted.
+ * boundaries. Observation inclusion depends on the source's time support;
+ * current Catalog state is not consulted.
  * @param {{variable:string,startTime:string,endTime:string}} input Validated saved temporal_interval input.
  * @param {{reducer:string,percentile?:number}} reduction Validated saved temporal_reduction input.
  * @return {string} Result heading with the statistic, readable variable identifier and requested period.
@@ -130,6 +131,6 @@ export function describeTemporalResult(input, reduction) {
     const month = getTemporalMonthBoundaries(start.slice(0, 7));
     const wholeMonth = Date.parse(start) === Date.parse(`${month.startTime}Z`) && Date.parse(end) === Date.parse(`${month.endTime}Z`);
     const period = wholeMonth ? new Intl.DateTimeFormat(undefined, {month: "long", year: "numeric", timeZone: "UTC"}).format(new Date(start)) :
-        `${start.replace("T", " ").replace(/(?:\.000)?Z$/, "")} → ${end.replace("T", " ").replace(/(?:\.000)?Z$/, "")} UTC · end excluded`;
+        `${start.replace("T", " ").replace(/(?:\.000)?Z$/, "")} → ${end.replace("T", " ").replace(/(?:\.000)?Z$/, "")} UTC`;
     return `${describeTemporalReduction(reduction)} · ${input.variable.replaceAll("_", " ")} · ${period}`;
 }

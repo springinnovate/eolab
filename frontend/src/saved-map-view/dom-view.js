@@ -1,6 +1,6 @@
 /** DOM presentation and browser-link interaction for portable saved maps. */
 import { suggestMapLinkName } from "./api-client.js";
-import { VISITOR_CONTROLS_VERSION, visitorControlChoices } from "../visitor-controls.js";
+import { VISITOR_CONTROLS_VERSION, visitorControlChoices, visitorInitialPanels } from "../visitor-controls.js";
 
 /**
  * Read checked visitor choices including the stored values under a disabled parent.
@@ -12,17 +12,24 @@ function readVisitorControls(fields) {
         version: VISITOR_CONTROLS_VERSION,
         choices: Object.fromEntries([...fields.querySelectorAll("input[data-visitor-control]")]
             .map(input => [input.dataset.visitorControl, input.checked])),
+        initialPanels: Object.fromEntries([...fields.querySelectorAll("input[data-visitor-panel-open]")]
+            .map(input => [input.dataset.visitorPanelOpen, input.checked])),
     };
 }
 
 /**
- * Make child checkboxes editable when Inspect and select is checked.
+ * Enable child inputs only while their parent and panel are available, retaining their values.
  * @param {HTMLFieldSetElement} fields Visitor controls in one form.
  * @return {void}
  */
 function updateVisitorChoiceInputs(fields) {
     fields.querySelector("[data-visitor-inspection-children]").disabled =
         !fields.querySelector('[data-visitor-control="inspectAndSelect"]').checked;
+    fields.querySelector("[data-visitor-workspace-children]").disabled =
+        !fields.querySelector('[data-visitor-control="workspacePanels"]').checked;
+    for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
+        input.disabled = !fields.querySelector(`[data-visitor-control="${input.dataset.visitorPanelOpen}"]`).checked;
+    }
 }
 
 /**
@@ -35,6 +42,10 @@ function showVisitorChoices(fields, settings) {
     const choices = visitorControlChoices(settings);
     for (const input of fields.querySelectorAll("input[data-visitor-control]")) {
         input.checked = choices[input.dataset.visitorControl];
+    }
+    const initialPanels = visitorInitialPanels(settings);
+    for (const input of fields.querySelectorAll("input[data-visitor-panel-open]")) {
+        input.checked = initialPanels[input.dataset.visitorPanelOpen];
     }
     updateVisitorChoiceInputs(fields);
 }
@@ -116,7 +127,7 @@ export class SavedMapViewDomView {
         this.publishCopyEditor = documentContext.querySelector("#publish-map-copy-editor");
         this.publishVisitorControls = documentContext.querySelector("#publish-map-visitor-controls");
         this.editVisitorControls = documentContext.querySelector("#published-map-visitor-controls");
-        const visitorFields = documentContext.querySelector("#visitor-inspection-options");
+        const visitorFields = documentContext.querySelector("#visitor-control-options");
         this.publishVisitorControls.append(visitorFields.content.cloneNode(true));
         this.editVisitorControls.append(visitorFields.content.cloneNode(true));
         this.slugEdited = false;

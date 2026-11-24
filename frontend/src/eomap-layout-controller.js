@@ -1,7 +1,7 @@
 /**
  * EOMap workspace-sidebar presentation controller.
  *
- * This component owns only independent workspace disclosures, the
+ * This component owns only workspace availability, independent disclosures, the
  * operational-status disclosure, whole-sidebar visibility, shared panel opacity, accessible focus
  * behavior, layout classes, and delayed map-size invalidation. It has no
  * knowledge of Catalog Items, map layers, rasters, rendering, APIs, or source
@@ -26,7 +26,8 @@ export const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
  * @property {Element} toggle Workspace disclosure button.
  * @property {Element} panel Semantic panel controlled by the button.
  * @property {Element} scrollElement Workspace's layout-owned scroll element.
- * @property {boolean} isExpanded Whether the panel is currently expanded.
+ * @property {boolean} openWhenAvailable Stored disclosure choice, retained while unavailable.
+ * @property {boolean} isAvailable Whether the visitor may open the panel.
  * @property {() => void} handleClick Bound disclosure listener.
  */
 
@@ -148,12 +149,23 @@ function bindPanelActivity(doc, app) {
 }
 
 /**
+ * @typedef {Object} WorkspacePanelOptions
+ * @property {boolean} allowCatalog Expose the Catalog workspace.
+ * @property {boolean} allowMapContents Expose the Map contents workspace.
+ * @property {{catalog:boolean,mapContents:boolean}} [initialState] Initial disclosure
+ * choices, independent of availability. Omission retains the current disclosures.
+ */
+
+/**
  * @typedef {Object} EomapLayoutDependencies
  * @property {() => void} invalidateMapSize Notifies the map after transitions.
  * @property {Document} [documentContext=globalThis.document] Layout document.
  * @property {(callback: () => void, delay: number) => *} [schedule]
  * Transition scheduler; defaults to the browser timer.
  * @property {boolean} [allowCatalog=true] Expose the catalog workspace.
+ * @property {boolean} [allowMapContents=true] Expose the Map contents workspace.
+ * @property {{catalog:boolean,mapContents:boolean}} [initialState] Published initial
+ * disclosures. When supplied, these take precedence over remembered layout.
  * @property {boolean} [allowOperationalStatus=true] Expose operational diagnostics.
  * @property {{read: () => string|null, write: (value: string) => boolean}|null}
  * [workspaceStorage=null] Optional failure-tolerant storage for panel states.
@@ -177,6 +189,8 @@ export class EomapLayoutController {
         documentContext = globalThis.document,
         schedule = globalThis.setTimeout.bind(globalThis),
         allowCatalog = true,
+        allowMapContents = true,
+        initialState,
         allowOperationalStatus = true,
         workspaceStorage = null,
     }) {
@@ -190,9 +204,11 @@ export class EomapLayoutController {
         this.documentContext = documentContext;
         this.schedule = schedule;
         this.allowCatalog = allowCatalog;
+        this.allowMapContents = allowMapContents;
         this.allowOperationalStatus = allowOperationalStatus;
         this.workspaceStorage = workspaceStorage;
         this.appElement = requireLayoutElement(documentContext, "#app");
+        this.mapElement = requireLayoutElement(documentContext, "#map");
         this.controlPanelElement = requireLayoutElement(
             documentContext,
             "#control-panel"
@@ -205,15 +221,6 @@ export class EomapLayoutController {
             documentContext,
             "#open-panel"
         );
-        const panelName = allowCatalog ? "Catalog & map contents" : "Map contents";
-        this.openPanelButton.textContent = panelName;
-        for (const [button, action] of [
-            [this.collapsePanelButton, "Collapse"], [this.openPanelButton, "Expand"],
-        ]) {
-            const label = `${action} ${panelName}`;
-            button.setAttribute("aria-label", label);
-            button.title = label;
-        }
         this.operationalRegion = requireLayoutElement(
             documentContext,
             "#eomap-operational-status-region"
@@ -254,8 +261,12 @@ export class EomapLayoutController {
             (configuration, index) =>
                 this.#createWorkspaceDisclosure(configuration, index)
         );
-        this.#restoreWorkspacePanels();
-        if (!allowCatalog) this.workspaceDisclosures[0].isExpanded = false;
+        if (initialState) {
+            this.workspaceDisclosures[0].openWhenAvailable = initialState.catalog;
+            this.workspaceDisclosures[1].openWhenAvailable = initialState.mapContents;
+        } else {
+            this.#restoreWorkspacePanels();
+        }
         if (!allowOperationalStatus) this.operationalStatusIsExpanded = false;
         this.#synchronizeOperationalStatusPresentation();
         this.#synchronizeWorkspacePresentation();
@@ -266,6 +277,29 @@ export class EomapLayoutController {
         this.workspaceSizeObserver.observe(this.controlPanelElement);
         this.#measureWorkspaceHeight();
         this.stopPanelActivity = bindPanelActivity(documentContext, this.appElement);
+    }
+
+    /**
+     * Apply one map's panel availability and optional initial disclosures before layer restoration.
+     * Unavailable panels reject every opening request while retaining disclosure choices.
+     * Focus leaves a disabled surface for an available disclosure, the sidebar opener or the map.
+     * @param {WorkspacePanelOptions} options Resolved layout choices from browser composition.
+     * @return {void}
+     */
+    setWorkspaceOptions({ allowCatalog, allowMapContents, initialState }) {
+        this.allowCatalog = allowCatalog;
+        this.allowMapContents = allowMapContents;
+        for (const [index, available] of [allowCatalog, allowMapContents].entries()) {
+            this.workspaceDisclosures[index].isAvailable = available;
+        }
+        if (initialState) {
+            this.workspaceDisclosures[0].openWhenAvailable = initialState.catalog;
+            this.workspaceDisclosures[1].openWhenAvailable = initialState.mapContents;
+            this.controlPanelIsCollapsed = false;
+        }
+        this.#synchronizeWorkspacePresentation();
+        this.#synchronizeControlPanelPresentation();
+        this.#scheduleMapInvalidation();
     }
 
     /**
@@ -298,10 +332,10 @@ export class EomapLayoutController {
         }
         if (typeof saved?.catalogOpen !== "boolean" ||
             typeof saved?.mapLayersOpen !== "boolean") return;
-        const changed = this.workspaceDisclosures[0].isExpanded !== saved.catalogOpen ||
-            this.workspaceDisclosures[1].isExpanded !== saved.mapLayersOpen;
-        this.workspaceDisclosures[0].isExpanded = saved.catalogOpen;
-        this.workspaceDisclosures[1].isExpanded = saved.mapLayersOpen;
+        const changed = this.workspaceDisclosures[0].openWhenAvailable !== saved.catalogOpen ||
+            this.workspaceDisclosures[1].openWhenAvailable !== saved.mapLayersOpen;
+        this.workspaceDisclosures[0].openWhenAvailable = saved.catalogOpen;
+        this.workspaceDisclosures[1].openWhenAvailable = saved.mapLayersOpen;
         if (changed) this.#scheduleMapInvalidation();
     }
 
@@ -311,12 +345,14 @@ export class EomapLayoutController {
      * Workspace and operational disclosure states are retained so reopening
      * restores the user's context. A changed state schedules one map
      * invalidation after the layout transition and moves focus to the
-     * corresponding persistent disclosure control.
+     * corresponding persistent disclosure control. With no available workspace,
+     * the sidebar stays unavailable and this request has no effect.
      *
      * @param {boolean} isCollapsed Whether the sidebar should be collapsed.
      * @return {void}
      */
     setControlPanelCollapsed(isCollapsed) {
+        if (!this.allowCatalog && !this.allowMapContents) return;
         if (isCollapsed === this.controlPanelIsCollapsed) {
             return;
         }
@@ -331,11 +367,12 @@ export class EomapLayoutController {
     }
 
     /**
-     * Ensure one semantic workspace is expanded by its layout-only name.
+     * Expand one available semantic workspace by its layout-only name.
      *
      * This method lets the browser composition root respond to an explicit
      * feature presentation request without giving this controller feature
-     * state or sibling implementation knowledge.
+     * state or sibling implementation knowledge. Unavailable workspaces ignore
+     * the request, including its focus and sidebar-opening effects.
      *
      * @param {"catalog"|"map-layers"} name Workspace name.
      * @param {boolean} [moveFocus=false] Whether its disclosure receives focus.
@@ -343,19 +380,19 @@ export class EomapLayoutController {
      * @throws {RangeError} If the name is outside the static layout contract.
      */
     showWorkspace(name, moveFocus = false) {
-        if (name === "catalog" && !this.allowCatalog) return;
         const index = this.workspaceDisclosures.findIndex(
             ({ configuration }) => configuration.name === name
         );
         if (index < 0) {
             throw new RangeError(`Unknown EOMap workspace: ${name}`);
         }
+        if (!this.workspaceDisclosures[index].isAvailable) return;
         if (this.controlPanelIsCollapsed) {
             this.controlPanelIsCollapsed = false;
             this.#synchronizeControlPanelPresentation();
             this.#scheduleMapInvalidation();
         }
-        const wasExpanded = this.workspaceDisclosures[index].isExpanded;
+        const wasExpanded = this.workspaceDisclosures[index].openWhenAvailable;
         this.#setWorkspaceExpanded(index, true, moveFocus);
         if (!wasExpanded) {
             this.workspaceDisclosures[index].scrollElement.scrollTop = 0;
@@ -490,10 +527,11 @@ export class EomapLayoutController {
             toggle,
             panel,
             scrollElement,
-            isExpanded: toggle.getAttribute("aria-expanded") !== "false",
+            isAvailable: configuration.name === "catalog" ? this.allowCatalog : this.allowMapContents,
+            openWhenAvailable: toggle.getAttribute("aria-expanded") !== "false",
             handleClick: () => this.#setWorkspaceExpanded(
                 index,
-                !this.workspaceDisclosures[index].isExpanded,
+                !this.workspaceDisclosures[index].openWhenAvailable,
                 false
             ),
         };
@@ -525,15 +563,15 @@ export class EomapLayoutController {
             );
         }
         const workspaceDisclosure = this.workspaceDisclosures[index];
-        if (workspaceDisclosure.configuration.name === "catalog" && !this.allowCatalog) return;
-        const stateChanged = workspaceDisclosure.isExpanded !== isExpanded;
-        workspaceDisclosure.isExpanded = isExpanded;
+        if (!workspaceDisclosure.isAvailable) return;
+        const stateChanged = workspaceDisclosure.openWhenAvailable !== isExpanded;
+        workspaceDisclosure.openWhenAvailable = isExpanded;
         this.#synchronizeWorkspacePresentation();
         if (stateChanged) {
             this.#scheduleMapInvalidation();
             this.workspaceStorage?.write(JSON.stringify({
-                catalogOpen: this.workspaceDisclosures[0].isExpanded,
-                mapLayersOpen: this.workspaceDisclosures[1].isExpanded,
+                catalogOpen: this.workspaceDisclosures[0].openWhenAvailable,
+                mapLayersOpen: this.workspaceDisclosures[1].openWhenAvailable,
             }));
         }
         if (moveFocus) {
@@ -542,14 +580,19 @@ export class EomapLayoutController {
     }
 
     /**
-     * Synchronize every independent disclosure and expanded-layout class.
+     * Apply availability to stored disclosures and move focus out of hidden contents.
      *
      * @return {void}
      */
     #synchronizeWorkspacePresentation() {
+        let needsFocus = false;
         for (const workspaceDisclosure of this.workspaceDisclosures) {
-            const { isExpanded } = workspaceDisclosure;
-            workspaceDisclosure.toggle.hidden = workspaceDisclosure.configuration.name === "catalog" && !this.allowCatalog;
+            const { isAvailable, toggle, panel } = workspaceDisclosure;
+            const isExpanded = isAvailable && workspaceDisclosure.openWhenAvailable;
+            const focused = this.documentContext.activeElement;
+            needsFocus ||= (!isAvailable && toggle === focused) || (!isExpanded && panel.contains(focused));
+            workspaceDisclosure.toggle.hidden = !isAvailable;
+            workspaceDisclosure.toggle.disabled = !isAvailable;
             workspaceDisclosure.toggle.setAttribute(
                 "aria-expanded",
                 String(isExpanded)
@@ -563,6 +606,10 @@ export class EomapLayoutController {
                 `is-expanded-${workspaceDisclosure.configuration.name}-workspace`,
                 isExpanded
             );
+        }
+        if (needsFocus) {
+            const target = this.workspaceDisclosures.find(disclosure => disclosure.isAvailable)?.toggle;
+            (target ? this.controlPanelIsCollapsed ? this.openPanelButton : target : this.mapElement).focus();
         }
     }
 
@@ -595,35 +642,58 @@ export class EomapLayoutController {
         );
     }
 
-    /** Synchronize the whole sidebar's accessible presentation. @return {void} */
+    /** Hide an unavailable sidebar and maintain a visible focus/reopen destination. @return {void} */
     #synchronizeControlPanelPresentation() {
+        const focused = this.documentContext.activeElement;
+        const unavailable = !this.allowCatalog && !this.allowMapContents;
+        const collapsed = this.controlPanelIsCollapsed || unavailable;
+        const panelName = this.allowCatalog
+            ? this.allowMapContents ? "Catalog & map contents" : "Catalog"
+            : "Map contents";
+        this.openPanelButton.textContent = panelName;
+        for (const [button, action] of [
+            [this.collapsePanelButton, "Collapse"], [this.openPanelButton, "Expand"],
+        ]) {
+            const label = `${action} ${panelName}`;
+            button.setAttribute("aria-label", label);
+            button.title = label;
+        }
+        this.controlPanelElement.hidden = unavailable;
+        this.appElement.classList.toggle("is-workspace-unavailable", unavailable);
         this.controlPanelElement.classList.toggle(
             "is-collapsed",
-            this.controlPanelIsCollapsed
+            collapsed
         );
         this.appElement.classList.toggle(
             "is-control-panel-collapsed",
-            this.controlPanelIsCollapsed
+            collapsed
         );
         this.controlPanelElement.setAttribute(
             "aria-hidden",
-            String(this.controlPanelIsCollapsed)
+            String(collapsed)
         );
-        if (this.controlPanelIsCollapsed) {
+        if (collapsed) {
             this.controlPanelElement.setAttribute("inert", "");
         } else {
             this.controlPanelElement.removeAttribute("inert");
         }
-        this.controlPanelElement.inert = this.controlPanelIsCollapsed;
+        this.controlPanelElement.inert = collapsed;
         this.collapsePanelButton.setAttribute(
             "aria-expanded",
-            String(!this.controlPanelIsCollapsed)
+            String(!collapsed)
         );
         this.openPanelButton.setAttribute(
             "aria-expanded",
-            String(!this.controlPanelIsCollapsed)
+            String(!collapsed)
         );
-        this.openPanelButton.hidden = !this.controlPanelIsCollapsed;
+        this.openPanelButton.hidden = unavailable || !collapsed;
+        this.openPanelButton.disabled = unavailable;
+        if (collapsed && (this.controlPanelElement.contains(focused) ||
+            (unavailable && focused === this.openPanelButton))) {
+            (unavailable ? this.mapElement : this.openPanelButton).focus();
+        } else if (!collapsed && focused === this.openPanelButton) {
+            this.collapsePanelButton.focus();
+        }
     }
 
     /** Schedule one map resize after the visual transition. @return {void} */
@@ -676,8 +746,8 @@ export class EomapLayoutController {
             return;
         }
         const focusedWorkspaceIndex = this.workspaceDisclosures.findIndex(
-            ({ isExpanded, panel, toggle }) =>
-                isExpanded &&
+            ({ isAvailable, openWhenAvailable, panel, toggle }) =>
+                isAvailable && openWhenAvailable &&
                 (toggle === focusedElement || panel.contains(focusedElement))
         );
         if (focusedWorkspaceIndex >= 0) {

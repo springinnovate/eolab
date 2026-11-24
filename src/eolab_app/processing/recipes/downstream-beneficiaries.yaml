@@ -1,47 +1,47 @@
 schema: eolab.model/v1
 id: downstream-beneficiaries
 version: "4.0.0"
-title: Downstream ecosystem beneficiaries
+title: Map downstream areas and summarize raster values
 description: >-
-  Run the original WWF downstream model from one combined starting mask.
-  The model uses the calculation pixel size and metres-per-pixel setting below,
-  resamples values onto its coverage grid, and includes positive values.
-  Sum reports the original model total; other formulas summarize its masked output.
+  Use the WWF model to trace and buffer downstream flow from a starting area,
+  then calculate a statistic from positive raster values within the resulting area, such as a population total.
+  Values are resampled to the output grid using nearest neighbor.
+  Distance conversion supplies metres per cell for the buffer and straight-line cutoff.
 inputs:
   starting_mask:
     type: mask_source
-    label: Starting mask
+    label: Flow starting area
   values:
     type: raster
-    label: Values to summarize
+    label: Raster values to summarize
 parameters:
   wgs84_pixel_size:
     type: number
-    label: Calculation pixel size
+    label: Routing and output cell size
     unit: degrees
     exclusiveMinimum: 0
     default: 0.008333333333333
   travel_time_pixel_size_m:
     type: number
-    label: Pixel size used for distances
-    unit: m
+    label: Distance conversion
+    unit: m per cell
     exclusiveMinimum: 0
     default: 900
   buffer_m:
     type: number
-    label: Buffer radius
+    label: Buffer radius around downstream flow paths
     unit: m
     minimum: 0
     default: 5000
   cutoff_m:
     type: optional_number
-    label: Maximum straight-line distance
+    label: Maximum straight-line distance from a starting cell
     unit: m
     exclusiveMinimum: 0
     default: null
   summary:
     type: summary_expression
-    label: Summary formula
+    label: Statistic formula
     alias: a
     grammar: eolab.scalar/v1
     default: "sum(a)"
@@ -79,21 +79,25 @@ steps:
       travel_time_pixel_size_m: {parameter: travel_time_pixel_size_m}
 outputs:
   masked_values:
+    label: Positive raster values within the downstream area
     source: analysis.masked_values
     role: result
     presentation: map
     saveEligible: true
   coverage:
+    label: Downstream area including the buffer
     source: analysis.coverage
     role: result
     presentation: map
     saveEligible: true
   statistics:
+    label: Raster statistic for the downstream area
     source: analysis.statistics
     role: result
     presentation: table
     saveEligible: true
   starting_mask:
+    label: Flow starting area
     source: analysis.starting_mask
     role: intermediate
     presentation: map

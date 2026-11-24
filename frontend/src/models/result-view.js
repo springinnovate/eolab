@@ -1,4 +1,4 @@
-/** Present the primary model result with supporting files under Details. */
+/** Present the primary model result with supporting files under Additional outputs. */
 import { processingArtifactDownloadUrl } from "../processing/api.js";
 import { formatDownloadBytes } from "../processing/presentation.js";
 import { calculationValue } from "../processing/calculation-result-view.js";
@@ -57,7 +57,7 @@ function statisticsCards(result, element) {
 }
 
 const AREA_STATISTIC_LABELS = new Map([
-    ["count", "Valid-pixel count"], ["sum", "Sum"], ["mean", "Mean"], ["min", "Minimum"], ["max", "Maximum"],
+    ["count", "Valid pixels per observation"], ["sum", "Sum"], ["mean", "Mean"], ["min", "Minimum"], ["max", "Maximum"],
     ["stdev", "Population standard deviation"],
 ]);
 
@@ -85,7 +85,7 @@ function timeSeriesCards(result, element) {
         element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
         element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
         element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`),
-        element("p", "Download the CSV for values and per-calculation pixel counts.", "models-help"));
+        element("p", "The CSV contains each calculation's value and valid pixel count for every available observation.", "models-help"));
     return [card];
 }
 
@@ -129,7 +129,7 @@ export function renderModelResult(root, result, manifest, element, showOutput) {
     const supporting = manifest.files.filter(file => file !== primary);
     if (supporting.length) {
         const details = element("details", "", "models-details");
-        details.append(element("summary", "Details"));
+        details.append(element("summary", "Additional outputs"));
         for (const file of supporting) {
             const card = element("article", "", "models-result");
             const label = file.displayName ?? (file.role === "provenance" ? "Calculation details" : file.label);

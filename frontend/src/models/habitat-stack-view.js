@@ -24,7 +24,7 @@ export class HabitatStackView {
         this.root.setAttribute("aria-label", input.label);
         this.source = element("select");
         this.source.addEventListener("change", () => handlers.onInput(name, {kind: this.source.value}));
-        this.options(this.source, [{value: "earthEngine", label: "Original model inputs (Google Earth Engine)"},
+        this.options(this.source, [{value: "earthEngine", label: "Prepared Earth Engine rasters"},
             {value: "manual", label: "Choose raster layers"}], "earthEngine");
         const attribution = element("p", "", "models-help");
         const modelLink = element("a", "NHI Terrestrial Integrity Modeling");
@@ -32,7 +32,7 @@ export class HabitatStackView {
         modelLink.target = "_blank"; modelLink.rel = "noopener noreferrer";
         attribution.append(element("span", "Based on "), modelLink);
         this.configurationGroup = element("fieldset", "", "models-input-configuration");
-        this.configurationGroup.setAttribute("aria-label", "Input configuration");
+        this.configurationGroup.setAttribute("aria-label", "Input data");
         this.year = element("select");
         this.year.addEventListener("change", () => handlers.onInput(name, {year: Number(this.year.value)}));
         this.automatic = element("fieldset", "", "models-vector");
@@ -59,9 +59,9 @@ export class HabitatStackView {
         this.automatic.append(this.acquisitionStatus, this.retry);
         this.manual = element("fieldset", "", "models-vector");
         this.manual.setAttribute("aria-label", "Custom raster layers");
-        this.configurationGroup.append(field(`models-${name}-source`, "Input configuration", this.source), this.automatic, this.manual);
+        this.configurationGroup.append(field(`models-${name}-source`, "Input data", this.source), this.automatic, this.manual);
         this.root.append(attribution, this.configurationGroup);
-        this.help = element("p", "Predictors describe the environment; observed responses describe the habitat condition to model. Each selected raster uses its first band.", "models-help");
+        this.help = element("p", "Predictors describe environmental conditions. Observed responses are the ecosystem measurements to compare with the model's expectations. Each selected raster uses its first band.", "models-help");
         this.help.id = `models-${name}-help`;
         this.manual.append(this.help);
         this.groups = {};
@@ -82,7 +82,7 @@ export class HabitatStackView {
             this.categoricalRow = this.categorical.value ? this.predictors.find(row => this.value.predictors[row.index].name === this.categorical.value) : null;
             handlers.onInput(name, {categoricalPredictor: this.categorical.value});
         });
-        const categoryHelp = element("p", "Choose the predictor whose values identify categories, such as habitat types. All other predictors are treated as continuous measurements. Nearest neighbor and mode preserve category values; interpolation can create intermediate values.", "models-help");
+        const categoryHelp = element("p", "Choose the predictor whose values identify categories, such as land-cover classes. All other predictors are treated as continuous measurements. Nearest neighbor and mode preserve category values; interpolation can create intermediate values.", "models-help");
         categoryHelp.id = `models-${name}-categorical-help`;
         this.categorical.setAttribute("aria-describedby", categoryHelp.id);
         this.status = element("p", "", "models-error"); this.status.setAttribute("role", "status");
