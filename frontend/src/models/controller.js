@@ -126,8 +126,8 @@ export class ModelsController {
         this.state.active = active;
         if (!active) this.closeVectorFilter();
         if (active) { this.refreshMapLayers(); this.refreshMapArea(); }
-        for (const job of this.runSnapshots.values()) this.rememberRun(job);
-        this.jobs.schedule(); this.render();
+        this.#updateRunTracking();
+        this.render();
     }
 
     /** Load installed recipes whose inputs this setup form can edit.
@@ -145,11 +145,18 @@ export class ModelsController {
         finally { this.state.loading = false; this.render(); }
     }
 
-    /** Switch pages without discarding setup or cancelling accepted work.
+    /** Switch pages and observe the runs used by the newly visible page.
      * @param {string} page Library, setup, runs or run.
      * @return {void}
      */
-    navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
+    navigate(page) {
+        if (page !== "setup") this.closeVectorFilter();
+        this.revision += 1; this.state.page = page; this.state.error = "";
+        this.#updateRunTracking();
+        if (page === "setup") this.refreshMapArea();
+        this.render();
+        if (page === "runs") void this.loadRuns();
+    }
 
     /** Create a draft with independent manual areas and load model-specific Catalog choices.
      * @param {Object} model Installed recipe chosen by the user.
@@ -161,7 +168,9 @@ export class ModelsController {
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
-        this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusPage();
+        this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
+        this.#updateRunTracking();
+        this.render(); this.view.focusPage();
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
         this.bindModelSetup(draft);
@@ -202,10 +211,21 @@ export class ModelsController {
         if ("raster" in change) input.copiedFromRun = false;
         Object.assign(input, change);
         this.setupSession?.inputChanged(name, change);
-        this.editDraft({});
+        this.#refreshEditedInputs();
     }
 
-    /** Update draft fields without changing a pending or accepted submission.
+    /** Refresh source choices and status tracking after an input or area mode changes.
+     * A pending submission retains its captured sources while the form displays the edit.
+     * @return {void}
+     */
+    #refreshEditedInputs() {
+        this.state.error = "";
+        this.#updateRunTracking();
+        if (this.state.pending) this.render();
+        else this.refreshMapLayers();
+    }
+
+    /** Update the draft name, parameters or temporal settings and render the edited form.
      * Selecting Precipitation total rounds the visible period to whole UTC hours.
      * @param {Object} change Edited model choices, including the statistic or parameters.
      * @return {void}
@@ -218,9 +238,6 @@ export class ModelsController {
             temporal.startTime = snapTemporalHour(temporal.startTime);
             temporal.endTime = snapTemporalHour(temporal.endTime);
         }
-        this.refreshMapLayers();
-        for (const job of this.runSnapshots.values()) this.rememberRun(job);
-        this.jobs.schedule();
         this.state.error = ""; this.render();
     }
 
@@ -339,7 +356,7 @@ export class ModelsController {
         else if (mode === "captured") input.area = structuredClone(input.capturedArea);
         else if (["viewport", "samplingArea", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
         else input.area = null;
-        this.editDraft({});
+        this.#refreshEditedInputs();
     }
 
     /** Refresh a map-linked setup from composition's latest area and viewport.
@@ -632,7 +649,34 @@ export class ModelsController {
         for (const id of ids) void this.api.discardPolygonArea(id).catch(() => {});
     }
 
-    /** Retain authoritative run state while hiding deleted runs from the interface.
+    /** Observe active jobs and the runs shown in the current detail or setup form.
+     * A status response updates one job. A view or input change reconciles previously
+     * tracked jobs with the new selection and reschedules the shared observer.
+     * @param {string|null} [changedJobId=null] Run whose status just arrived, or null after a UI change.
+     * @return {void}
+     */
+    #updateRunTracking(changedJobId = null) {
+        const {active, page, draft, selectedRun} = this.state;
+        const visibleRunIds = new Set();
+        if (active && page === "run" && selectedRun) visibleRunIds.add(selectedRun);
+        if (active && page === "setup" && draft) {
+            for (const {state, field} of getModelRasterFields(draft)) {
+                const id = state[field]?.jobId;
+                if (this.runSnapshots.has(id)) visibleRunIds.add(id);
+            }
+        }
+        const affectedIds = changedJobId === null ? new Set([...this.tracked, ...visibleRunIds]) : [changedJobId];
+        for (const id of affectedIds) {
+            if (visibleRunIds.has(id) || ACTIVE_JOB_STATES.has(this.runSnapshots.get(id)?.status)) {
+                this.jobs.tracked.add(id); this.tracked.add(id);
+            } else {
+                this.jobs.tracked.delete(id); this.tracked.delete(id);
+            }
+        }
+        if (changedJobId === null) this.jobs.schedule();
+    }
+
+    /** Retain an authoritative run, notify map output consumers and order the visible history.
      * @param {Object} job Authoritative run status.
      * @return {void}
      */
@@ -649,10 +693,7 @@ export class ModelsController {
             this.state.yaml = null; this.state.deleteConfirmation = null;
             if (this.state.page === "run") { this.state.page = "runs"; this.view.focusPage("runs"); }
         }
-        if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" &&
-            this.state.draft && getModelRasterFields(this.state.draft).some(({state, field}) => state[field]?.jobId === job.jobId))) {
-            this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
-        } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
+        this.#updateRunTracking(job.jobId);
         this.state.runs = [...this.runSnapshots.values()].filter(value => value.status !== "deleted")
             .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
     }
@@ -937,6 +978,7 @@ export class ModelsController {
             }
         }
         draft.integration?.restoreState(draft, saved.inputs);
+        this.#updateRunTracking();
         this.refreshMapLayers();
         this.render(); this.view.focusPage();
         this.bindModelSetup(draft);
