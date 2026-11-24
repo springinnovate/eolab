@@ -185,6 +185,7 @@ export class RasterSeriesPlotsView {
             change[axis === "x" ? "xBounds" : "bounds"] = bounds;
         }
         for (const [name, input] of Object.entries(elements.appearance)) {
+            if (input.disabled) continue;
             const value = Number(input.value);
             if (!input.value || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max)) {
                 message = `${input.getAttribute("aria-label")}: enter a whole number from ${input.min} to ${input.max}.`;
@@ -216,6 +217,11 @@ export class RasterSeriesPlotsView {
             const added = !this.cards.has(plot.id);
             if (added) this.cards.set(plot.id, this.createPlotCard(plot));
             const elements = this.cards.get(plot.id);
+            for (const input of Object.values(elements.appearance)) {
+                const locked = state.styleEditingEnabled === false;
+                if (input.disabled !== locked) input.disabled = locked;
+                if (input.parentElement.hidden !== locked) input.parentElement.hidden = locked;
+            }
             elements.title.parentElement.hidden = state.plots.length === 1;
             elements.plot = plot;
             if (elements.error.hidden && elements.scale.value !== plot.scale) elements.scale.value = plot.scale;

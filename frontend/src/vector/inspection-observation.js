@@ -1,5 +1,7 @@
 /** Describe immutable inspected observations and validate map navigation targets. */
 
+/** @typedef {"inspection"|"labels"} VectorInspectionChange A new inspection or selection, or a display-name edit to the same observations. */
+
 /**
  * Immutable scalar-only record constructed by the feature inspector and passed
  * through composition to chart consumers. Consumers trust this producer contract.
@@ -27,7 +29,8 @@ export function isNumericFeatureValue(value) {
 /**
  * Bounded observations and presentation state from one vector inspection.
  * @typedef {Object} VectorInspectionSample
- * @property {"loading"|"ready"|"empty"|"invalidated"} state Inspection status.
+ * @property {"loading"|"ready"|"empty"|"invalidated"|"interrupted"} state
+ * An interrupted inspection retains only observations received before dismissal.
  * @property {ReadonlyArray<VectorInspectionObservation>} observations Features in inspector order.
  * @property {string} message User-facing inspection status.
  * @property {number} failedLayers Inspected layers that returned an error.
@@ -39,7 +42,7 @@ export function isNumericFeatureValue(value) {
  * A rename preserves each feature's position in the active selection. Restoring a
  * nonempty history entry also supplies its active feature's zero-based position.
  * Ordinary inspection results replace the selection without either hint.
- * @typedef {{kind:"rename"}|{kind:"restore",featureIndex:number}} VectorInspectionUpdate
+ * @typedef {VectorInspectionChange|{kind:"restore",featureIndex:number}} VectorInspectionUpdate
  */
 
 /**

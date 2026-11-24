@@ -406,6 +406,15 @@ test("categorical and numeric X fields use their expected spacing", () => {
 test("loading and invalidation retain settings without a stale chart", () => {
   const h = fixture();
   h.controller.open();
+  h.documentContext.querySelector("#vector-time-series-values-button").click();
+  const status = h.documentContext.querySelector("#vector-time-series-status");
+  h.controller.setSample({
+    state: "interrupted", observations: observations().slice(0, 2),
+    message: "Inspection stopped before all layers were inspected.", failedLayers: 1,
+  });
+  assert.match(status.textContent, /stopped before all layers/);
+  assert.match(status.textContent, /1 layer could not be inspected/);
+  assert.equal(h.controller.tableBody.children.length, 2);
   h.controller.setSample({
     state: "ready",
     observations: observations(),
@@ -532,7 +541,8 @@ test("chart points identify observations and request selected-feature zoom", () 
 
 test("a point with no map bounds stays selected and another point can still zoom", () => {
   const {controller, documentContext: doc, zoomRequests} = fixture(featureFocus => featureFocus.bounds !== null);
-  controller.setSample({ state: "ready", observations: observations(), message: "Ready" });
+  const sample = { state: "ready", observations: observations(), message: "Ready" };
+  controller.setSample(sample);
   controller.open();
   const marks = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point");
   const selection = doc.querySelector("#vector-time-series-selection-text");
@@ -543,8 +553,12 @@ test("a point with no map bounds stays selected and another point can still zoom
   assert.match(selection.textContent, /risk\.2a.*Feature location is unavailable/);
   assert.equal(zoom.disabled, true);
 
-  marks[2].dispatchEvent(new Event("click"));
-  assert.equal(marks[2].getAttribute("aria-pressed"), "true");
+  controller.setSample({...sample, observations: sample.observations.map(o => ({...o, layerLabel: "Renamed " + o.layerLabel}))}, "labels");
+  assert.equal(zoom.disabled, true);
+  assert.match(selection.textContent, /Renamed .*risk\.2a.*Feature location is unavailable/);
+  const nextMark = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point")[2];
+  nextMark.dispatchEvent(new Event("click"));
+  assert.equal(nextMark.getAttribute("aria-pressed"), "true");
   assert.match(selection.textContent, /risk\.10a/);
   assert.doesNotMatch(selection.textContent, /unavailable/);
   assert.equal(zoom.disabled, false);

@@ -16,7 +16,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
+BENEFICIARIES_REVISION = "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 
 PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
@@ -137,16 +137,18 @@ class DownstreamPlan(HydrologySchema):
 
 
 class ClosedEdgeDownstreamNumericalPolicy(HydrologySchema):
-    """Record closed-edge pit filling before the original WWF MFD calculation.
+    """Record pit-filling settings and the model commit that produced a downstream run.
 
-    The search limit uses EcoShard's exploration cutoff, not an exact count of
-    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    The search limit controls how far EcoShard explores. The number of changed
+    elevations can differ. NoData remains unchanged and MFD retains its edge
+    fallback. Run YAML keeps the full ``wwf_es_beneficiaries`` commit recorded
+    at execution, across upgrades and rollbacks.
     """
 
     version: Literal["hydrology.downstream_beneficiaries.v3"]
-    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
-        BENEFICIARIES_REVISION
-    )
+    beneficiariesRevision: Annotated[
+        str, Field(strict=True, pattern=r"^[a-f0-9]{40}$")
+    ] = BENEFICIARIES_REVISION
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
     )

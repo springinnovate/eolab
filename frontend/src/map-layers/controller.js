@@ -105,11 +105,13 @@ export class MapLayerController {
      * @param {(snapshot:RemovedMapLayer,isCurrent:()=>boolean)=>Promise<void>} [configuration.restoreRemovedLayer]
      * Composition callback that restores a snapshot through its owning component.
      * @param {MapLayerStack} [configuration.stack] Pure retained-layer state.
+     * @param {()=>boolean} [configuration.canEditStyle] Whether to offer layer style and clipboard actions.
      * @param {LeafletLayerSet} [configuration.leafletLayers] Keyed Leaflet set.
      */
     constructor({
         leafletMap,
         view = new MapLayerStackView(),
+        canEditStyle = () => true,
         onLayersChange = () => {},
         onOrderChange = () => {},
         onItemZoom = () => {},
@@ -127,6 +129,7 @@ export class MapLayerController {
             );
         }
         this.view = view;
+        this.canEditStyle = canEditStyle;
         this.onLayersChange = onLayersChange;
         this.onOrderChange = onOrderChange;
         this.onItemZoom = onItemZoom;
@@ -148,7 +151,7 @@ export class MapLayerController {
         this.presentationActiveKey = null;
         this.destroyed = false;
         this.view.bind({
-            onStyle: (key) => this.onStyle?.(key),
+            onStyle: (key) => { if (this.canEditStyle()) this.onStyle?.(key); },
             onFilter: (key) => this.onFilter?.(key),
             onCalculateFields: (key) => this.onCalculateFields?.(key),
             onEditGeometry: (key) => this.onEditGeometry?.(key),
@@ -377,10 +380,12 @@ export class MapLayerController {
      * @param {Object} [options] Batch lifecycle options.
      * @param {boolean} [options.fitToBounds=true] Whether adapter addition hooks
      * may fit the map to an added layer.
+     * @param {string[]} [options.drawingOrder] Every staged and retained key in
+     * final top-first order. Keep any active controls while publishing that order.
      * @return {Object[]} Committed retained records in top-first order.
      * @throws {Error} If Catalog layers remain or the batch is invalid; local layers are preserved.
      */
-    commitStaged(stagedLayers, { fitToBounds = true } = {}) {
+    commitStaged(stagedLayers, { fitToBounds = true, drawingOrder } = {}) {
         if (!Array.isArray(stagedLayers)) {
             throw new TypeError("Staged map layers must be an array.");
         }
@@ -412,6 +417,9 @@ export class MapLayerController {
             keys.add(key);
         }
 
+        const previousOrder = this.stack.entries.map(entry => entry.key);
+        const previousSelection = this.stack.activeKey;
+        const previousPresentation = this.presentationActiveKey;
         try {
             for (const staged of [...stagedLayers].reverse()) {
                 const { record, layer, key } = staged;
@@ -436,6 +444,7 @@ export class MapLayerController {
                     opacity: entry.opacity,
                 });
             }
+            if (drawingOrder !== undefined) this.stack.restoreOrder(drawingOrder);
             this.#applyLeafletOrder();
             for (const { record } of stagedLayers) {
                 record.adapter.added?.(record, { fitToBounds });
@@ -444,11 +453,11 @@ export class MapLayerController {
                     record.adapter.visibilityChanged?.(record, false);
                 }
             }
-            this.presentationActiveKey = this.stack.activeKey;
-            const activeRecord = this.presentationActiveKey === null
-                ? null
-                : this.records.get(this.presentationActiveKey);
-            activeRecord?.adapter.activate?.(activeRecord);
+            if (drawingOrder !== undefined && this.presentationActiveKey !== null) {
+                this.stack.activate(this.presentationActiveKey);
+            } else if (this.stack.activeKey !== null) {
+                this.#activateRecord(drawingOrder?.[0] ?? this.stack.activeKey);
+            }
             for (const entry of [...this.stack.entries].reverse()) {
                 if (entry.visible) {
                     this.leafletLayers.setVisible(entry.key, true);
@@ -460,7 +469,13 @@ export class MapLayerController {
                 if (this.stack.get(key)) this.stack.remove(key);
                 this.records.delete(key);
             }
-            this.presentationActiveKey = null;
+            this.stack.restoreOrder(previousOrder);
+            this.#applyLeafletOrder();
+            if (previousPresentation !== null && this.presentationActiveKey !== previousPresentation) {
+                this.#activateRecord(previousPresentation);
+            }
+            this.presentationActiveKey = previousPresentation;
+            this.stack.activeKey = previousSelection;
             this.render();
             throw error;
         }
@@ -673,6 +688,7 @@ export class MapLayerController {
      * @return {boolean} Whether a style was copied.
      */
     copyStyle(key) {
+        if (!this.canEditStyle()) return false;
         const record = this.#requireRecord(key);
         if (typeof record.adapter.exportSavedState !== "function") {
             this.view.setStatus(
@@ -723,6 +739,7 @@ export class MapLayerController {
      * @return {Promise<boolean>} Whether the complete appearance was applied.
      */
     async pasteStyle(key) {
+        if (!this.canEditStyle()) return false;
         const record = this.#requireRecord(key);
         const availability = this.#styleClipboardSnapshot(record);
         if (!availability.canPaste) {
@@ -737,7 +754,7 @@ export class MapLayerController {
                 record,
                 structuredClone(clipboard.savedState)
             );
-            if (this.records.get(key) !== record) {
+            if (this.records.get(key) !== record || !this.canEditStyle()) {
                 return false;
             }
             this.setOpacity(key, clipboard.opacity);
@@ -1211,6 +1228,7 @@ export class MapLayerController {
                 isCustom: entry.isCustom,
                 ...(entry.group ? {group: entry.group} : {}),
                 sourceName: entry.item === null ? entry.sourceName ?? null : record.adapter.label(entry.item),
+                styleEditingEnabled: this.canEditStyle(),
                 styleClipboard: this.#styleClipboardSnapshot(record),
                 canAddView: entry.item !== null || record.canAddView === true,
                 addingView: this.pendingAdditionalViews.has(entry.key),
@@ -1442,20 +1460,25 @@ export class MapLayerController {
      * @return {Object} Activated record.
      */
     #activate(key, requestedFocus = null) {
+        const record = this.#activateRecord(key);
+        this.render(requestedFocus);
+        return record;
+    }
+
+    /**
+     * Release the previous layer's controls and activate the next layer before rendering the stack.
+     * @param {string} key Retained layer key.
+     * @return {Object} Activated record.
+     */
+    #activateRecord(key) {
         const record = this.#requireRecord(key);
-        const previousRecord = this.presentationActiveKey === null
-            ? null
-            : this.records.get(this.presentationActiveKey) ?? null;
-        if (
-            previousRecord !== null &&
-            previousRecord.entry.key !== record.entry.key
-        ) {
+        const previousRecord = this.records.get(this.presentationActiveKey);
+        if (previousRecord && previousRecord !== record) {
             previousRecord.adapter.deactivate?.(previousRecord, record);
         }
         this.stack.activate(key);
         this.presentationActiveKey = key;
         record.adapter.activate?.(record);
-        this.render(requestedFocus);
         return record;
     }
 

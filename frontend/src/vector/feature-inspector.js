@@ -273,11 +273,11 @@ export class VectorFeatureInspectorController {
      * Requests presentation changes without knowing the presentation owner.
      * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>,
      * update?:import("./inspection-observation.js").VectorInspectionUpdate)=>void} configuration.onSampleChange
-     * Publishes immutable bounded observations through application composition.
+     * Publishes observations and identifies layer renames and history restores for the plots.
      * @param {(navigation:Readonly<{canPrevious:boolean,canNext:boolean}>)=>void}
      * configuration.onSelectionNavigationChange Publishes available directions
      * between completed map selections.
-     * @param {(observation:Readonly<Object>|null,navigation:Readonly<Object>|null)=>void}
+     * @param {(observation:Readonly<import("./inspection-observation.js").VectorInspectionObservation>|null,navigation:Readonly<Object>|null,change:import("./inspection-observation.js").VectorInspectionChange)=>void}
      * configuration.onCurrentObservationChange Publishes the current paged
      * result and its immutable position within the inspector-owned result set.
      * @param {()=>void} configuration.onFeatureProfileRequested Publishes
@@ -368,6 +368,7 @@ export class VectorFeatureInspectorController {
         this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.onStyleRequested = onStyleRequested;
+        this.styleEditingEnabled = true;
         this.onFilterRequested = onFilterRequested;
         this.filterButton = documentContext.querySelector("#filter-inspected-vector-layer");
         this.onFeatureZoomRequested = onFeatureZoomRequested;
@@ -410,7 +411,10 @@ export class VectorFeatureInspectorController {
         this.abortController = null;
         this.requestGeneration = 0;
         this.mapContainer = this.map.getContainer();
-        this.onClose = () => this.close({ moveFocus: true });
+        this.onClose = () => {
+            this.close();
+            this.mapContainer.focus();
+        };
         /** Clear the selected attributes and all derived presentation. @return {void} */
         this.onClear = () => this.clearSelection();
         this.onOpenFeatureProfile = () => {
@@ -445,17 +449,18 @@ export class VectorFeatureInspectorController {
         this.onNext = () => this.navigateResult("next");
         this.onPreviousSelection = () => this.navigateSelection("previous");
         this.onNextSelection = () => this.navigateSelection("next");
+        /** Dismiss Features where Escape was pressed, keeping keyboard panning on the map.
+         * @param {KeyboardEvent} event Original key event, including its originating control.
+         * @return {void}
+         */
         this.onKeydown = (event) => {
-            if (event.key !== "Escape" || this.panel.hidden || !(
-                this.panel.contains(this.document.activeElement) ||
-                this.document.activeElement === this.closeButton ||
-                this.document.activeElement === this.mapContainer
-            )) {
-                return;
-            }
+            if (event.key !== "Escape" || event.defaultPrevented || this.panel.hidden) return;
+            const fromMap = event.target === this.mapContainer;
+            if (!fromMap && event.target !== this.closeButton && !this.panel.contains(event.target)) return;
             event.preventDefault();
             event.stopPropagation();
-            this.close({ moveFocus: true });
+            if (fromMap) this.onClose();
+            else this.closeButton.click();
         };
         this.closeButton.addEventListener("click", this.onClose);
         this.clearButton.addEventListener("click", this.onClear);
@@ -537,13 +542,15 @@ export class VectorFeatureInspectorController {
         const visibleTargets = this.visibleTargets();
         const targets = [...retainedTargets.map(target => ({sourceId: target.key, label: target.label})), ...visibleTargets];
         if (this.#refreshResultNames(targets)) {
-            if (this.results.length) this.showResult(this.resultIndex);
-            this.onSelectionDisplayChange(this.#selectionDisplay);
+            if (this.results.length) this.showResult(this.resultIndex, "labels");
             if (this.lastSample) {
-                const message = this.#selectionDisplay === null ? this.lastSample.message :
-                    formatLassoSelectionStatus(this.#selectionDisplay);
-                this.status.textContent = message;
-                this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers, {kind:"rename"});
+                let message = this.lastSample.message;
+                if (this.#selectionDisplay !== null) {
+                    this.onSelectionDisplayChange(this.#selectionDisplay);
+                    message = formatLassoSelectionStatus(this.#selectionDisplay);
+                    this.status.textContent = message;
+                }
+                this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers, "labels");
             }
         }
         const visibleSignature = this.#targetSignature(visibleTargets);
@@ -613,19 +620,24 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Hide feature details while retaining the completed selection for plots and history.
-     * Cancel an unfinished replacement and restore the last completed selection.
+     * Dismiss Features and its click highlight while retaining selection history and plot values.
+     * Keep partial map-click results. Restore the last completed selection if a Lasso is interrupted.
      *
-     * @param {Object} [options] Close options.
-     * @param {boolean} [options.moveFocus=false] Restore focus to the map.
      * @return {void}
      */
-    close({ moveFocus = false } = {}) {
-        const pending = this.abortController !== null;
-        this.#cancelInspection();
-        if (pending) this.#restoreCompletedSelection();
+    close() {
+        if (this.abortController !== null) {
+            this.#cancelInspection();
+            if (this.#selectionContext.kind === "click" && (this.results.length || this.#selectionHistoryIndex < 0)) {
+                const message = "Inspection stopped before all layers were inspected. Click the map to try again.";
+                this.status.textContent = message;
+                this.#publishSample("interrupted", this.results, message, this.lastSample.failedLayers);
+            } else {
+                this.#restoreCompletedSelection();
+            }
+        }
+        this.clearHighlight();
         this.onInspectionChange(false);
-        if (moveFocus) this.mapContainer.focus();
     }
 
     /** Clear selected features, plots and history, and cancel any unfinished replacement.
@@ -751,6 +763,17 @@ export class VectorFeatureInspectorController {
             // Present the feature even if the comparison plot cannot draw the completed sample.
             if (rows.length) this.showResult(0);
         }
+    }
+
+    /** Update the selected feature's Style shortcut while keeping its values and plots accessible.
+     * @param {boolean} enabled Whether visitors may edit appearance in this map.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.styleEditingEnabled = enabled;
+        const available = enabled && !this.result.hidden;
+        this.styleButton.hidden = !available;
+        this.styleButton.disabled = !available;
     }
 
     /**
@@ -1098,14 +1121,14 @@ export class VectorFeatureInspectorController {
     /**
      * Publish the frozen inspection sample and available history directions through composition.
      *
-     * @param {"loading"|"ready"|"empty"|"invalidated"} state Sample state.
+     * @param {import("./inspection-observation.js").VectorInspectionSample["state"]} state Sample state.
      * @param {InspectedVectorFeature[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
      * @param {number} [failedLayers=0] Completed layers whose inspection failed.
-     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update] How the existing selection changed.
+     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update="inspection"] How the existing selection changed.
      * @return {void}
      */
-    #publishSample(state, results, message, failedLayers = 0, update) {
+    #publishSample(state, results, message, failedLayers = 0, update = "inspection") {
         this.clearButton.disabled = state !== "loading" && results.length === 0 && this.#selectionHistory.length === 0;
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
@@ -1152,9 +1175,11 @@ export class VectorFeatureInspectorController {
      * WMS highlights remain visible through the map's maximum zoom of 22.
      *
      * @param {number} index Zero-based result index.
+     * @param {import("./inspection-observation.js").VectorInspectionChange} [change="inspection"]
+     * A layer rename updates the displayed name and preserves the map highlight and plot selection.
      * @return {void}
      */
-    showResult(index) {
+    showResult(index, change = "inspection") {
         if (this.results.length === 0) {
             return;
         }
@@ -1171,19 +1196,22 @@ export class VectorFeatureInspectorController {
             canPrevious: this.resultIndex > 0,
             canNext: this.resultIndex < this.results.length - 1,
         });
+        this.layerName.textContent = target.label;
+        this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
+        if (change === "labels") {
+            this.onCurrentObservationChange(observation, navigation, change);
+            return;
+        }
         this.result.hidden = false;
         this.heading.textContent = observation.featureId === null
             ? "Feature inspector"
             : `Feature inspector (FID ${observation.featureId})`;
         this.heading.title = this.heading.textContent;
-        this.layerName.textContent = target.label;
         if (this.filterButton) this.filterButton.hidden = false;
-        this.styleButton.hidden = false;
-        this.styleButton.disabled = false;
+        this.setStyleEditingEnabled(this.styleEditingEnabled);
         this.zoomFeatureButton.disabled = observation.focus === null;
         this.zoomFeatureButton.title = observation.focus === null ? "Feature location is unavailable for this selection." : "";
         if (this.lastSample) this.status.textContent = this.lastSample.message;
-        this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;
         this.next.disabled = !navigation.canNext;
@@ -1208,7 +1236,7 @@ export class VectorFeatureInspectorController {
                     this.leaflet.circleMarker(latlng, HIGHLIGHT_STYLE),
             }).addTo(this.map);
         }
-        this.onCurrentObservationChange(observation, navigation);
+        this.onCurrentObservationChange(observation, navigation, change);
     }
 
     /**
@@ -1260,7 +1288,7 @@ export class VectorFeatureInspectorController {
         this.styleButton.setAttribute(
             "aria-label", "Style selected vector layer"
         );
-        this.onCurrentObservationChange(null, null);
+        this.onCurrentObservationChange(null, null, "inspection");
         this.fieldDisplay.show(null);
         this.attributes.replaceChildren();
         this.clearHighlight();

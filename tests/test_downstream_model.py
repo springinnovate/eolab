@@ -1,6 +1,7 @@
 """Reference grids and real Processing boundaries for downstream model execution."""
 
 import asyncio
+import csv
 import json
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -23,9 +24,58 @@ from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamSettings
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.prepared_hydrology import HydrologySources
+from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
+from raster_aggregate_support import LIMITS as AGGREGATE_LIMITS, make_spec
+from raster_fixture_support import write_source
 from test_prepared_hydrology import prepare_sources
+
+
+@pytest.mark.parametrize(
+    ("dtype", "nodata", "samples", "expected"),
+    [
+        ("uint64", None, (2**64 - 1, 7), (2**64 - 1, 7)),
+        ("int64", 2**54, (2**54 - 1, 2**54, 2**54 + 1), (2**54 - 1, 0, 2**54 + 1)),
+    ],
+    ids=("uint64-maximum", "int64-nodata-neighbors"),
+)
+def test_packaged_model_preserves_64bit_population(
+    tmp_path: Path,
+    dtype: str,
+    nodata: int | None,
+    samples: tuple[int, ...],
+    expected: tuple[int, ...],
+) -> None:
+    """Check that the installed wwf_es_beneficiaries wheel retains exact 64-bit pixels.
+
+    Args:
+        tmp_path: Directory for the population, coverage and masked GeoTIFFs.
+        dtype: Native signed or unsigned integer type of the population band.
+        nodata: Value declared missing by the source, if any.
+        samples: Population row inside the coverage grid.
+        expected: Output row with excluded samples set to zero.
+    """
+    from eolab_app.processing.downstream_runner import load_beneficiaries
+
+    values = np.array([samples], dtype=dtype)
+    population = write_source(tmp_path / "population.tif", values, nodata=nodata)
+    coverage = write_source(
+        tmp_path / "coverage.tif", np.ones(values.shape, dtype="uint8")
+    )
+    output = tmp_path / "masked.tif"
+    total = load_beneficiaries().mask_population_with_coverage(
+        population, coverage, output
+    )
+    expected_values = np.array([expected], dtype=dtype)
+    with rasterio.open(output) as masked:
+        assert masked.dtypes == (dtype,)
+        assert masked.nodata == 0
+        np.testing.assert_array_equal(masked.read(1), expected_values)
+        np.testing.assert_array_equal(
+            masked.read_masks(1), np.where(expected_values > 0, 255, 0)
+        )
+    assert total == float(sum(expected))
 
 
 def scaled_downstream_fixture(
@@ -264,7 +314,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
-        == "3f577e27deb347cd4520977eb99474fb81e990fc"
+        == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
     )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -417,13 +467,23 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-    assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    assert saved["beneficiariesRevision"] == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
     assert (
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
             mode="json"
         )
         == saved
     )
+    for previous_revision in (
+        "3f577e27deb347cd4520977eb99474fb81e990fc",
+        "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9",
+        "afb977dd0e923e465958f8b301060c4ff10c8fd7",
+        "eda4acec984ec7b40cb9d745a818773418fa2d68",
+        "f204f4ad6277e381d5bf902da9d5c50655ffbf16",
+    ):
+        saved["beneficiariesRevision"] = previous_revision
+        restored = ClosedEdgeDownstreamNumericalPolicy.model_validate(saved)
+        assert restored.beneficiariesRevision == previous_revision
 
 
 def test_saved_model_settings_reach_downstream_execution(
@@ -535,21 +595,36 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
 
 
 @pytest.mark.parametrize(
-    "formula,expected",
-    [("sum(a)", 24), ("count(a)", 24), ("mean(a)", 1), ("sum(a, where=a > 0)", 24)],
+    "formula,dtype,cells,expected",
+    [
+        ("sum(a)", "int16", [1] * 24, 24),
+        ("count(a)", "int16", [1] * 24, 24),
+        ("mean(a)", "int16", [1] * 24, 1),
+        ("sum(a, where=a > 0)", "int16", [1] * 24, 24),
+        ("sum(a)", "int16", [200, 300], 500),
+        ("sum(a*a)", "int16", [200, 300], 130_000),
+        ("count(a, where=a*a > 50000)", "int16", [200, 300], 1),
+        ("sum(-a)", "uint8", [21, 2, 0, 0, 0, 0] * 4, -92),
+        ("sum(a*a)", "float32", [2.0**67, 2], 2.0**134 + 4),
+        ("sum(a*a)", "float32", [2.0**-83], 2.0**-166),
+    ],
 )
 def test_formulas_summarize_the_original_masked_values_grid(
-    tmp_path: Path, formula: str, expected: float
+    tmp_path: Path, formula: str, dtype: str, cells: list[float], expected: float
 ) -> None:
-    """EOlab formulas read the original model's resampled, masked values output.
+    """Compare downstream rows and CSV values with Raster summary on the same TIFF.
 
     Args:
         tmp_path: Isolated native model sources.
-        formula: Existing scalar grammar expression to evaluate.
-        expected: Reference result across the 24 cells in the upstream output grid.
+        formula: Scalar expression for both summaries.
+        dtype: Stored pixel type of the source and published values raster.
+        cells: Row-major values on the coverage grid, with omitted cells set to zero.
+        expected: Hand-calculated result for the positive cells.
     """
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources", formula=formula)
+    grid = np.zeros((4, 6), dtype=dtype)
+    grid.flat[: len(cells)] = cells
     with rasterio.open(
         sources.rasters["values"],
         "w",
@@ -557,17 +632,35 @@ def test_formulas_summarize_the_original_masked_values_grid(
         width=12,
         height=4,
         count=1,
-        dtype="int16",
-        nodata=-9999,
+        dtype=dtype,
+        nodata=None if dtype == "uint8" else -9999,
         crs="EPSG:4326",
         transform=from_origin(0, 4, 0.5, 1),
     ) as target:
-        target.write(np.ones((4, 12), dtype="int16"), 1)
+        target.write(np.repeat(grid, 2, axis=1), 1)
     spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
-    assert float(artifact.rows[0]["value"]) == expected
+    masked_path = directory / "masked_values.tif"
+    with rasterio.open(masked_path) as masked:
+        assert masked.dtypes == (dtype,)
+        np.testing.assert_array_equal(masked.read(1), grid)
+        np.testing.assert_array_equal(masked.read_masks(1) != 0, grid > 0)
+
+    summary = calculate_raster_statistics_for_area(
+        masked_path, make_spec(masked_path, [formula]), tmp_path, AGGREGATE_LIMITS
+    )
+    reference = summary.rows[0]
+    row = artifact.rows[0]
+    assert float(reference["value"]) == expected
+    assert float(row["value"]) == expected
+    assert row["state"] == reference["state"] == "ok"
+    assert row["aggregates"] == reference["aggregates"]
+    with (directory / "result.csv").open(newline="", encoding="utf-8") as stream:
+        (csv_row,) = csv.DictReader(stream)
+    assert csv_row["value"] == row["value"]
+    assert csv_row["state"] == row["state"]
 
 
 def test_cutoff_is_measured_from_original_seeds(tmp_path: Path) -> None:
@@ -626,11 +719,13 @@ def test_filtered_vectors_form_one_mask_without_expanded_seeds(tmp_path: Path) -
 
 
 def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) -> None:
-    """Execute YAML-configured pit filling and publish its results and numerical policy.
+    """Publish the configured pit-filling results and export the run's recorded model revision.
 
     Args:
         tmp_path: Isolated catalog and owned artifact fixtures.
     """
+    from pydantic import ValidationError
+
     from eolab_app.processing.artifacts import LocalJobArtifacts
     from eolab_app.processing.worker import ProcessingWorker
     from eolab_app.processing.native_processes import create_native_process
@@ -807,7 +902,27 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     assert policy["version"] == "hydrology.downstream_beneficiaries.v3"
     assert policy["pitFillSearchLimit"] == 17
     assert policy["pitFillTreatNodataAsClosed"] is True
+    assert policy["beneficiariesRevision"] == provenance["beneficiariesRevision"]
     assert str(tmp_path) not in export_model_job_yaml(ready, run=True).decode()
+
+    # A run finished on a newer build before this installation served the download.
+    recorded_revision = "0123456789abcdef0123456789abcdef01234567"
+    saved_policy = ready["retained_metadata"]["execution"]["numericalPolicy"]
+    saved_policy["beneficiariesRevision"] = recorded_revision
+    exported = parse_yaml(export_model_job_yaml(ready, run=True), run=True)
+    assert (
+        exported["execution"]["numericalPolicy"]["beneficiariesRevision"]
+        == recorded_revision
+    )
+
+    for invalid_revision in (
+        recorded_revision[:7],
+        recorded_revision.upper(),
+        "g" * 40,
+    ):
+        saved_policy["beneficiariesRevision"] = invalid_revision
+        with pytest.raises(ValidationError, match="beneficiariesRevision"):
+            export_model_job_yaml(ready, run=True)
 
 
 def test_cancel_reaps_real_downstream_native_work_before_cleanup(
@@ -1245,16 +1360,6 @@ def test_native_source_failure_identifies_configured_input(
         )
     monkeypatch.setattr(
         downstream_runner, "load_beneficiaries", Mock(return_value=upstream)
-    )
-    monkeypatch.setattr(
-        downstream_runner,
-        "prepare_starting_inputs",
-        Mock(
-            return_value=(
-                directory / "starting.geojson",
-                sources.rasters["starting_mask"],
-            )
-        ),
     )
     expected_code = (
         "watershed_read_failed" if input_name == "watersheds" else "dem_read_failed"

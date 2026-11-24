@@ -46,12 +46,15 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
     try {
         assert.equal(controls.display.textContent, "");
         widget.setMapStatus({phase: "complete"}, ["first"]);
+        assert.equal(controls.status.hidden, false, "the loading status keeps its place between frames");
+        assert.equal(controls.status.textContent, "");
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC");
         controls.time.valueAsNumber = Date.parse(stamps[1]);
         controls.time.dispatchEvent(new Event("input"));
         controls.time.valueAsNumber = Date.parse("2000-01-04T20:30:00Z");
         controls.time.dispatchEvent(new Event("input"));
         assert.equal(controls.time.getAttribute("aria-valuetext"), "2000-01-05 01:00 UTC");
+        assert.equal(controls.status.textContent, "Loading raster…");
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC");
         controls.time.dispatchEvent(new Event("change"));
         context.mock.timers.tick(100);
@@ -79,6 +82,37 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
     } finally { widget.destroy(); }
 });
 
+test("timeline arrows step from a missing saved month to the nearest populated month", () => {
+    const {widget, controls, layer, calls} = fixture();
+    const missing = {...layer.timeline, month: "2000-02", time: "2000-02-29T12:00:00.000Z",
+        months: ["1999-09", "1999-12", "2000-05", "2000-08"], times: [], layerName: null,
+        error: "The selected observation is no longer available."};
+    try {
+        widget.setLayers([{...layer, timeline: missing}]);
+        assert.deepEqual(calls, []);
+        assert.equal(controls.time.getAttribute("aria-valuetext"), "2000-02-29 12:00 UTC");
+        assert.equal(controls.back.disabled, false);
+        assert.equal(controls.forward.disabled, false);
+        assert.equal(controls.gap.textContent, "Next month · 2000-05");
+        controls.back.dispatchEvent(new Event("click"));
+        controls.forward.dispatchEvent(new Event("click"));
+        controls.stride.value = "day";
+        controls.stride.dispatchEvent(new Event("change"));
+        controls.time.dispatchEvent(Object.assign(new Event("keydown"), {key: "ArrowLeft"}));
+        assert.deepEqual(calls, [["rain", "1999-12", "last"], ["rain", "2000-05", "first"],
+            ["rain", "1999-12", "firstOfLastDay"]]);
+
+        for (const [onlyMonth, disabledButton, enabledButton] of [
+            ["1999-12", "forward", "back"], ["2000-05", "back", "forward"],
+        ]) {
+            widget.setLayers([{...layer, timeline: {...missing, months: [onlyMonth]}}]);
+            assert.equal(controls[disabledButton].disabled, true);
+            assert.equal(controls[enabledButton].disabled, false);
+            assert.equal(controls.time.disabled, false, "the arrow keys can reach the only available month");
+        }
+    } finally { widget.destroy(); }
+});
+
 test("Play waits for actual tile completion, buffers at most two and cancels prepared work on Pause", async context => {
     context.mock.timers.enable({apis: ["setTimeout"]});
     const prepared = [], shown = [];
@@ -98,7 +132,9 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
         assert.deepEqual(shown, [stamps[1]]);
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]], "publication alone cannot advance playback");
+        assert.equal(controls.status.textContent, "Loading raster…");
         widget.setMapStatus({phase: "complete"}, [stamps[1]]);
+        assert.equal(controls.status.textContent, "");
         controls.play.dispatchEvent(new Event("click"));
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]]);

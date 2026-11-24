@@ -12,6 +12,7 @@
     import L from "leaflet";
     import "leaflet/dist/leaflet.css";
     import { createSingleWorldMap } from "../src/map.js";
+    import { TemporalScrubber } from "../src/raster/temporal-scrubber.js";
     import { OnMapLegend } from "../src/map-layers/on-map-legend.js";
     import { initializeCatalogPaneControls } from "../src/catalog-pane-controller.js";
     import { EomapLayoutController } from "../src/eomap-layout-controller.js";
@@ -19,6 +20,7 @@
     import { SavedMapViewLocalStorage } from "../src/saved-map-view/local-storage.js";
     import { MapInspectionController } from "../src/map-inspection-controller.js";
     import { MapLayerStackView } from "../src/map-layers/layer-stack-view.js";
+    import { MapLayerStyleEditor } from "../src/map-layers/style-editor.js";
     import { ModelsController } from "../src/models/controller.js";
     import { ModelsView } from "../src/models/view.js";
     import { ProcessingJobs } from "../src/processing/jobs.js";
@@ -33,6 +35,31 @@
      */
     function check(condition, message) {
       if (!condition) throw new Error(message);
+    }
+
+    /** Check that drawing an observation keeps the timeline and Play button in place.
+     * @returns {void}
+     * @throws {Error} If clearing the loading message moves or resizes the widget.
+     */
+    function checkTimelineLoading() {
+      const root = document.querySelector("#temporal-scrubber");
+      const play = root.querySelector('[data-timeline="play"]');
+      const dates = ["2000-01-02T01:00:00Z", "2000-01-02T02:00:00Z"];
+      const timeline = new TemporalScrubber(root, {
+        selectTime: async () => {}, selectMonth: async () => {}, prepare: async () => null,
+      });
+      try {
+        timeline.setLayers([{key: "rain", visible: true, opacity: 1, timeline: {
+          name: "Rainfall", variable: "rain", variableLabel: "Rain", times: dates, time: dates[0],
+          months: ["2000-01"], month: "2000-01", loading: false, error: null, layerName: "first",
+        }}]);
+        const loading = root.getBoundingClientRect();
+        const playTop = play.getBoundingClientRect().top;
+        timeline.setMapStatus({phase: "complete"}, ["first"]);
+        const drawn = root.getBoundingClientRect();
+        check(drawn.height === loading.height && drawn.top === loading.top && play.getBoundingClientRect().top === playTop,
+          "The timeline or its Play button moved when the raster finished loading");
+      } finally { timeline.destroy(); }
     }
 
     /** Wait for layout and the existing sidebar transition to settle.
@@ -71,16 +98,18 @@
       check(element.scrollTop > 0, `${name}: scroll position did not change`);
     }
 
-    /** Hide the on-map legend with its own ×, then restore it from the active tool's chooser.
+    /** Check map centering between the panels and keyboard access to the legend's hide and restore controls.
      * @param {MapInspectionController} inspection Mounted right panel with the Style tool selected.
      * @returns {void}
-     * @throws {Error} If either action loses its focus target or changes the active tool.
+     * @throws {Error} If the map is off-center or a legend action loses focus or changes the active tool.
      */
     function checkLegendControls(inspection) {
+      const sidebar = document.querySelector("#control-panel");
+      const inspectionPanel = document.querySelector("#map-inspection");
       const map = createSingleWorldMap(L, {
         initialView: {latitude: 0, longitude: 0, zoom: 2},
         basemap: {url: L.Util.emptyImageUrl, attribution: "Test map"},
-      });
+      }, undefined, [sidebar, inspectionPanel]);
       const command = document.querySelector("#toggle-map-legend");
       const menu = document.querySelector("#workspace-tool-actions");
       const legend = new OnMapLegend(L, map, {
@@ -92,8 +121,8 @@
         if (innerWidth >= 1200) {
           map.fitBounds([[0, 0], [0, 0]], {maxZoom: 8, animate: false});
           const x = map.latLngToContainerPoint([0, 0]).x + map.getContainer().getBoundingClientRect().left;
-          const freeLeft = document.querySelector("#control-panel").getBoundingClientRect().right;
-          const freeRight = document.querySelector("#map-inspection").getBoundingClientRect().left;
+          const freeLeft = sidebar.getBoundingClientRect().right;
+          const freeRight = inspectionPanel.getBoundingClientRect().left;
           check(Math.abs(x - (freeLeft + freeRight) / 2) <= 2, "Zoom to layer missed the clear center between the open panels");
         }
         document.querySelector("#toggle-map-inspection-dock").click();
@@ -163,9 +192,9 @@
       }
     }
 
-    /** Tune panel fading through Tools, reopen the controls, and check the result on the map.
+    /** Enable and tune idle panel fading, then check the saved controls and the panels' final opacity.
      * @returns {void}
-     * @throws {Error} If a chosen value, visible panel opacity, or keyboard destination is wrong.
+     * @throws {Error} If a control, saved value, rendered opacity, or keyboard destination is wrong.
      */
     function checkFadeSettings() {
       const app = document.querySelector("#app");
@@ -198,7 +227,8 @@
         command.click();
         check(document.activeElement === panel && panel.getClientRects().length && !menu.matches(":popover-open"),
           "Settings did not open in the dock with keyboard focus");
-        check(toggle.checked && fields.map(field => field.value).join(",") === defaults, "Unexpected fade defaults");
+        check(!toggle.checked && fields.map(field => field.value).join(",") === defaults, "Unexpected fade defaults");
+        toggle.click();
         edit(enterDelay, 0); edit(fadeIn, 0); edit(exitDelay, 3123); edit(fadeOut, 0);
         const slider = opacity.parentElement.querySelector('input[type="range"]');
         edit(slider, 63);
@@ -211,21 +241,24 @@
         const sidebar = document.querySelector("#control-panel");
         check(getComputedStyle(sidebar).transitionDelay.split(", ").includes("3.123s"), "The map ignored the new exit delay");
         toggle.click();
-        check(opacity.matches(":disabled") && getComputedStyle(sidebar).opacity === "1", "Turning fading off left a translucent panel or enabled inputs");
+        check(panel.querySelector("#panel-fade-options input:enabled") === null, "Turning fading off left a fade control enabled");
+        checkPanelOpacity(sidebar, "1");
         unbind();
         unbind = bindPanelFadeSettings(app, storage);
         check(!toggle.checked && opacity.value === "63" && exitDelay.value === "3123", "Reopening lost the saved toggle or values");
         toggle.click(); edit(exitDelay, 0);
-        check(getComputedStyle(sidebar).opacity === "0.63" && getComputedStyle(document.querySelector("#map-inspection")).opacity === "0.63",
-          "Both panels must use the selected idle opacity");
+        checkPanelOpacity(sidebar, "0.63");
+        checkPanelOpacity(document.querySelector("#map-inspection"), "0.63");
         edit(opacity, 101);
         opacity.dispatchEvent(new Event("blur"));
-        check(opacity.value === "63" && getComputedStyle(sidebar).opacity === "0.63", "An invalid edit replaced the last valid opacity");
+        check(opacity.value === "63", "An invalid edit replaced the last valid opacity");
+        checkPanelOpacity(sidebar, "0.63");
         panel.querySelector("#restore-panel-fade-defaults").click();
-        check(toggle.checked && fields.map(field => field.value).join(",") === defaults && storage.read() === null,
+        check(!toggle.checked && fields.map(field => field.value).join(",") === defaults && storage.read() === null,
           "Restoring defaults left a custom preference");
-        panel.querySelector("#close-settings").click();
-        check(document.activeElement === chooser && panel.hidden, "Closing Settings lost keyboard focus");
+        document.querySelector("#close-settings").click();
+        check(document.activeElement === document.querySelector('#map-inspection-tabs [aria-selected="true"]') && panel.hidden,
+          "Closing Settings lost focus on the previous tool");
       } finally {
         unbind();
         storage.clear();
@@ -296,9 +329,9 @@
       check(dock.activeTool === "feature", "A completed histogram changed the foreground tool");
     }
 
-    /** Check the crowded tab row, context menu, shared typography and retained selection.
+    /** Check context, typography and keyboard navigation in the crowded map tab row.
      * @param {MapInspectionController} dock Mounted map inspection panel with the Style editor open.
-     * @returns {Promise<void>} Resolves after switching from model setup back to its peer editor.
+     * @returns {Promise<void>} Resolves after choosing Style from All tabs and moving to Filter with Left Arrow.
      * @throws {Error} If the row wraps, hides the active view, loses context or changes focus on new results.
      */
     async function checkOpenMapViews(dock) {
@@ -324,14 +357,24 @@
       dock.setClickResult("feature", { state: "ready", message: "One survey plot" });
       check(document.activeElement === models && models.getAttribute("aria-selected") === "true",
         "A background result moved focus away from model setup");
-      index.click();
+      index.focus();
+      const modifiedDown = new KeyboardEvent("keydown", { key: "ArrowDown", ctrlKey: true, bubbles: true, cancelable: true });
+      check(index.dispatchEvent(modifiedDown) && document.activeElement === index && !menu.matches(":popover-open"),
+        "Ctrl+Down on All tabs must leave the menu closed and the shortcut available to the browser");
+      index.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
       await settleLayout();
-      const choices = [...menu.querySelectorAll("button:not([hidden])")];
+      const choices = [...menu.querySelectorAll('[role="menuitemradio"]:not([hidden])')];
       check(menu.matches(":popover-open") && choices.length === tabs.length &&
         index.textContent.includes(`(${tabs.length})`), "All tabs count and available views disagree");
       const selected = menu.querySelector('[aria-checked="true"]');
       check(selected.innerText.includes("Ecosystem Condition") && document.activeElement === selected,
         "The menu lost the selected model's name or keyboard focus");
+      selected.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      const planning = choices.find(choice => choice.querySelector("span").textContent === "Planning");
+      check(document.activeElement === planning && dock.activeTool === "models",
+        "Down Arrow from Data tools must focus the next tool row without closing or activating a tool");
+      planning.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+      check(document.activeElement === selected, "Up Arrow must return to the previous tool row");
       const control = getComputedStyle(document.querySelector(".catalog-search input"));
       const supporting = getComputedStyle(document.querySelector(".catalog-search"));
       for (const label of [models, index, selected]) {
@@ -349,13 +392,88 @@
       const style = document.querySelector("#map-inspection-tab-style");
       check(document.activeElement === style && style.getAttribute("aria-selected") === "true" &&
         isReachable(style) && !menu.matches(":popover-open"), "Selecting Style did not return to its visible tab");
+      document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      const filter = document.querySelector("#map-inspection-tab-filter");
+      check(document.activeElement === filter && filter.getAttribute("aria-selected") === "true" &&
+        document.querySelector("#vector-filter-panel").getAttribute("aria-hidden") === "false",
+        "Left Arrow after choosing Style did not focus Filter and open its panel");
+      document.querySelector("#open-settings").click();
+      dock.showPlanning();
+      dock.showRasterClips();
+      const clipTab = document.querySelector("#map-inspection-tab-raster-clips");
+      const tabBar = index.parentElement;
+      tabBar.style.inlineSize = `${clipTab.parentElement.offsetWidth + index.offsetWidth + 2}px`;
+      await settleLayout();
+      check(!isReachable(document.querySelector("#close-settings")) && isReachable(clipTab),
+        "Settings must be in overflow while Download raster clip is selected");
+      index.click();
+      await settleLayout();
+      const closeSettings = menu.querySelector('[role="menuitem"][aria-label="Close Settings"]');
+      check(closeSettings && isReachable(closeSettings), "All tabs must offer an independent Close Settings action");
+      const closeHistogram = menu.querySelector('[aria-label="Close raster histograms"]');
+      closeHistogram.focus();
+      for (const key of ["ArrowDown", "ArrowUp"]) {
+        document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      }
+      check(document.activeElement === closeHistogram,
+        "Passing a tool without a close button must keep keyboard focus in the close column");
+      document.activeElement.click();
+      check(document.querySelector("#map-histogram-panel").hidden && dock.activeTool === "raster-clips",
+        "Closing Histograms after arrow navigation must keep the raster download open");
+      index.click();
+      await settleLayout();
+      document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+      const settingsChoice = [...menu.querySelectorAll('[role="menuitemradio"]')].find(choice =>
+        choice.querySelector("span").textContent === "Settings");
+      check(document.activeElement === settingsChoice, "End must focus Settings in the tool column");
+      settingsChoice.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      check(document.activeElement === closeSettings, "The last overflow close action must be reachable by keyboard");
+      const browserBack = new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true, cancelable: true });
+      check(closeSettings.dispatchEvent(browserBack) && document.activeElement === closeSettings,
+        "All tabs must leave Alt+Left available to the browser and keep focus on the close action");
+      closeSettings.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      check(document.activeElement === settingsChoice, "Left Arrow on the close button must return to its tool");
+      settingsChoice.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      closeSettings.click();
+      check(document.querySelector("#settings-panel").hidden && dock.activeTool === "raster-clips" &&
+        document.activeElement === clipTab && !menu.matches(":popover-open"),
+        "Closing Settings from overflow must preserve the selected raster download");
+      tabBar.style.removeProperty("inline-size");
+      dock.hideRasterClips();
+      for (const inMenu of [false, true]) {
+        dock.showFeatureInspector();
+        document.querySelector("#open-settings").click();
+        await settleLayout();
+        if (inMenu) { index.click(); await settleLayout(); }
+        const closeFeatures = inMenu ? menu.querySelector('[aria-label="Close feature inspector"]')
+          : document.querySelector("#close-vector-inspector");
+        closeFeatures.focus();
+        check(document.activeElement === closeFeatures, "The pending Features close action must accept focus");
+        dock.hideFeatureInspector();
+        dock.setClickResult("feature", null);
+        await settleLayout();
+        const selectedSettings = inMenu ? menu.querySelector('[aria-checked="true"]') : document.querySelector("#map-inspection-tab-settings");
+        check(document.activeElement === selectedSettings && dock.activeTool === "settings" &&
+          menu.matches(":popover-open") === inMenu,
+          `An empty result must return focus to Settings in the ${inMenu ? "open menu" : "tab row"}`);
+        if (inMenu) menu.hidePopover();
+      }
+      dock.showFeatureInspector();
+      const details = document.querySelector("#toggle-vector-inspector-details");
+      details.focus();
+      check(document.activeElement === details, "The Features details control must have focus before the empty result");
+      dock.hideFeatureInspector();
+      dock.setClickResult("feature", null);
+      check(dock.activeTool === "settings" && document.activeElement === document.querySelector("#map-inspection-tab-settings"),
+        "An empty result must return focus from inside Features to the surviving Settings tab");
+      document.querySelector("#close-settings").click();
       dock.hideModels();
       dock.hideAnnotations();
       dock.hidePlanning();
       dock.hideFilter();
     }
 
-    /** Exercise Data tools below the map views, including a crowded row and a retained draft.
+    /** Check keyboard navigation and draft retention across Data tools pages and map views.
      * @param {MapInspectionController} dock Mounted map panel.
      * @returns {Promise<void>} Resolves after checking navigation and returning to the map view.
      * @throws {Error} If the two rows overlap, share selection, or lose access to a page.
@@ -381,17 +499,32 @@
           "Data tools must start immediately below the map tabs");
         check(isReachable(library) && setup.disabled && isReachable(runs),
           "The library or Runs is unreachable, or Setup is enabled before choosing a tool");
-        check(getComputedStyle(mapTab).boxShadow === getComputedStyle(library).boxShadow,
+        check(getComputedStyle(mapTab.parentElement).boxShadow === getComputedStyle(library).boxShadow,
           "The active map view and data page use different selection markers");
         document.querySelector("#models-library-items button").click();
         const name = document.querySelector("#models-setup input");
         name.value = "Watershed draft";
         name.dispatchEvent(new Event("input", { bubbles: true }));
-        row.style.inlineSize = "205px";
+        runs.click();
+        runs.focus();
+        row.style.inlineSize = `${library.offsetWidth + setup.offsetWidth + runs.offsetWidth - 1}px`;
         await settleLayout();
+        check(getComputedStyle(library).visibility === "hidden", "Choose a tool must be in overflow before pressing Home");
+        for (const [key, tab, pageId] of [
+          ["Home", library, "models-library"],
+          ["ArrowRight", setup, "models-setup"],
+        ]) {
+          document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+          check(document.activeElement === tab && tab.getAttribute("aria-selected") === "true" &&
+            !document.getElementById(pageId).hidden,
+            `${key} did not focus ${tab.textContent} and show its page`);
+        }
         const index = document.querySelector("#models-all-tabs");
         check(isReachable(index) && isReachable(setup), "Data tools overflow hid the active Setup tab or its menu");
-        index.click();
+        const modifiedUp = new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true, cancelable: true });
+        check(index.dispatchEvent(modifiedUp) && !document.querySelector("#models-tab-menu").matches(":popover-open"),
+          "Alt+Up on Data tools All tabs must leave the menu closed");
+        index.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
         await settleLayout();
         const menu = document.querySelector("#models-tab-menu");
         const choices = [...menu.querySelectorAll('[role="menuitemradio"]')];
@@ -419,10 +552,10 @@
       }
     }
 
-    /** Check that both panel tabs free map space, retain context, and stay reachable.
+    /** Check panel collapse and restore, then close individual tools from their tabs.
      * @param {MapInspectionController} inspection Mounted map inspection panel.
-     * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
-     * @throws {Error} If either disclosure is obscured or restores the wrong state.
+     * @returns {Promise<void>} Resolves with the Style tab selected after its peers close.
+     * @throws {Error} If a disclosure or tab close is unreachable or restores the wrong tool or focus.
      */
     async function checkPanelDisclosures(inspection) {
       const collapseLeft = document.querySelector("#collapse-panel");
@@ -432,19 +565,22 @@
       const chooser = document.querySelector("#map-tool-chooser");
       const toolName = chooser.querySelector("#map-tool-name");
       check(toolName.textContent === "Choose a tool", "The empty panel has no named tool chooser");
+      inspection.showFeatureInspector();
+      document.querySelector("#close-vector-inspector").focus();
+      inspection.hideFeatureInspector();
+      check(document.activeElement === chooser, "When the last focused tool disappears, focus must return to the chooser");
       const leftButton = collapseLeft.getBoundingClientRect(), rightButton = collapseRight.getBoundingClientRect();
       check(leftButton.width === rightButton.width && leftButton.height === rightButton.height &&
-        leftButton.width === leftButton.height && [collapseLeft, collapseRight].every(button =>
-          button.textContent.trim() === "×" && getComputedStyle(button).borderRadius === "50%"),
-        "The expanded panels have different collapse controls");
+        leftButton.width === leftButton.height && getComputedStyle(collapseRight, "::before").content !== "none" &&
+        !collapseRight.textContent.includes("×"), "Map tools needs a distinct, reachable collapse control");
       collapseLeft.click();
       inspection.showStyle("Land cover");
       await settleLayout();
       check(toolName.textContent === "Style" && isReachable(chooser), "The active tool name cannot open the chooser");
       if (document.querySelector("#map-inspection-all-tabs").hidden) {
-        check(!isReachable(document.querySelector("#map-inspection-tab-style")) &&
-          isReachable(document.querySelector("#map-click-histogram")),
-          "A lone Style tab duplicates its header or loses the Histograms shortcut");
+        check(isReachable(document.querySelector("#map-inspection-tab-style")) &&
+          isReachable(document.querySelector("#close-layer-style")) && isReachable(document.querySelector("#map-click-histogram")),
+          "A lone Style tab lost its close button or the Histograms shortcut");
       }
       check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
       inspection.showRasterClips();
@@ -478,6 +614,37 @@
       check(isReachable(document.querySelector("#close-layer-style")) &&
         document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
         "The style editor did not reopen on Land cover");
+
+      const histogram = document.querySelector("#map-click-histogram");
+      const closeHistogram = document.querySelector("#close-map-histogram");
+      const settings = document.querySelector("#map-inspection-tab-settings");
+      const closeSettings = document.querySelector("#close-settings");
+      check(!isReachable(closeHistogram), "The unopened Histograms shortcut offers a close action");
+      inspection.showHistogram();
+      chooser.click();
+      document.querySelector("#open-settings").click();
+      await settleLayout();
+      for (const [tab, close] of [[histogram, closeHistogram], [settings, closeSettings]]) {
+        const label = tab.getBoundingClientRect(), button = close.getBoundingClientRect();
+        check(isReachable(close) && Math.abs(button.left - label.right) <= 1 &&
+          button.top === label.top && button.right <= tab.parentElement.getBoundingClientRect().right + 1,
+          `The close button for ${tab.textContent} is outside its tab`);
+      }
+      const row = document.querySelector("#map-inspection-tabs");
+      const stops = [...row.querySelectorAll("button")].filter(button =>
+        button.tabIndex >= 0 && !button.disabled && isReachable(button));
+      check(stops[0] === settings && stops[1] === closeSettings,
+        "Keyboard entry must reach the selected Settings tab before any close button");
+      closeSettings.focus();
+      closeSettings.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      check(document.activeElement !== closeSettings && document.activeElement.classList.contains("tool-tab-close") &&
+        settings.getAttribute("aria-selected") === "true", "ArrowLeft on × must reach a background close without switching tools");
+      closeHistogram.click();
+      check(!isReachable(closeHistogram) && settings.getAttribute("aria-selected") === "true" &&
+        document.activeElement === settings, "Closing a background tab interrupted Settings");
+      closeSettings.click();
+      check(document.activeElement === document.querySelector("#map-inspection-tab-style") &&
+        inspection.activeTool === "style", "Closing Settings lost the previously open Style tab");
     }
 
     /** Check where a long catalog filename begins and ends in a rendered Map contents row.
@@ -513,6 +680,34 @@
       view.unbind();
     }
 
+    /** Check that dismissing background Style leaves the layer list at its reading position.
+     * @param {MapInspectionController} inspection Mounted Map tools dock.
+     * @param {HTMLElement} contents Scrollable Map contents with a real layer at the top.
+     * @returns {void}
+     * @throws {Error} If closing Style moves Map contents or loses focus on Settings.
+     */
+    function checkBackgroundStyleClose(inspection, contents) {
+      const opener = contents.querySelector('[data-layer-action="style"]');
+      const editor = new MapLayerStyleEditor({ inspection,
+        mapLayers: { snapshots: () => [{ key: opener.dataset.layerKey, label: "Health costs", visible: true, opacity: 1 }] },
+        rasterViewer: { openStyle: () => true, refreshStyle() {}, closeStyle() {} },
+      });
+      try {
+        opener.focus();
+        editor.open(opener.dataset.layerKey);
+        document.querySelector("#open-settings").click();
+        contents.scrollTop = contents.scrollHeight;
+        const position = contents.scrollTop;
+        check(position > 0, "Map contents needs enough layers to scroll the Style opener out of view");
+        editor.closeButton.click();
+        check(contents.scrollTop === position && document.activeElement.id === "map-inspection-tab-settings",
+          "Closing background Style moved Map contents or lost focus on Settings");
+        document.querySelector("#close-settings").click();
+      } finally {
+        editor.destroy();
+      }
+    }
+
     /** Exercise workspace scrolling, panel disclosures and result navigation at this viewport size.
      * @returns {Promise<void>} Resolves after the current viewport passes.
      * @throws {Error} If markup cannot load or a presentation outcome fails.
@@ -531,6 +726,7 @@
         stylesheet.onerror = () => reject(new Error("Application CSS could not be loaded"));
         document.head.append(stylesheet);
       });
+      checkTimelineLoading();
       const layout = new EomapLayoutController({
         documentContext: document,
         /** No map renderer is mounted in this presentation fixture. @returns {void} */
@@ -572,6 +768,10 @@
       }
       await settleLayout();
       checkMapLayerFilename();
+      const inspection = new MapInspectionController({
+        onLayoutChange: state => layout.setInspectionLayout(state),
+      });
+      checkBackgroundStyleClose(inspection, mapContents);
       const catalogPosition = resultsScroll.scrollTop;
       checkScrollRegion(mapContents, "Map contents");
       check(resultsScroll.scrollTop === catalogPosition, "Scrolling Map contents moves Catalog results");
@@ -594,16 +794,13 @@
       const lastLocation = locations.lastElementChild;
       lastLocation.scrollIntoView({ block: "nearest" });
       check(isReachable(lastLocation), "Last diagnostic location cannot be reached");
-      const inspection = new MapInspectionController({
-        onLayoutChange: state => layout.setInspectionLayout(state),
-      });
       layout.registerPanelActivitySource(document.querySelector("#map-inspection"),
         listener => inspection.subscribeClickResultActivity(listener));
       await checkPanelDisclosures(inspection);
+      await checkDataToolTabs(inspection);
+      await checkOpenMapViews(inspection);
       checkLegendControls(inspection);
       checkFadeSettings();
-      await checkOpenMapViews(inspection);
-      await checkDataToolTabs(inspection);
       checkHistogramResultNavigation(inspection);
       checkMapClickFade(inspection);
       inspection.destroy();

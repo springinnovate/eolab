@@ -578,7 +578,7 @@ test("2D range disclosure lives beside its histogram and markers cannot intercep
   const markup = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
   const section = markup.slice(markup.indexOf('<section class="raster-bivariate-statistics"'))
     .split("</section>")[0];
-  assert.match(section, /<details[^>]*id="raster-bivariate-style-ranges"[^>]*>\s*<summary>Style rasters<\/summary>/);
+  assert.match(section, /<details[^>]*id="raster-bivariate-style-ranges"[^>]*>\s*<summary>Percentiles and colors<\/summary>/);
   assert.doesNotMatch(section.match(/<details[^>]*>/)[0], /\bopen\b/);
   assert.ok(section.indexOf('id="raster-bivariate-style-ranges"') > section.indexOf("</svg>"));
   for (const id of ['raster-bivariate-palette', 'swap-raster-bivariate-axes', 'raster-bivariate-legend']) {
@@ -609,6 +609,11 @@ test('paired style navigation expands the histogram controls and focuses the pal
   assert.equal(view.styleRanges.open, true);
   assert.equal(documentContext.activeElement, view.palette);
   assert.equal(view.statisticsPanel.hidden, false);
+  view.setStyleEditingEnabled(false);
+  assert.equal(view.styleRanges.hidden, false, "Percentiles and the chart color key remain accessible");
+  view.styleRanges.open = false;
+  view.openStyle();
+  assert.equal(view.styleRanges.open, false, "A disabled style shortcut cannot reopen the disclosure");
 });
 
 test("2D log axes align cells, marginal hover bands and markers without new analysis", () => {
@@ -705,9 +710,9 @@ for (const axis of ["x", "y"]) {
         assert.ok(view.rangeControls[axis].values[name].textContent.startsWith(`${expected[index]}%`));
       }
     }
-    view.renderPercentiles(axis, { ...state, applicable: false, invalid: true,
-      message: "These percentiles give the same value. Choose a wider range or another sample." });
-    assert.equal(view.rangeControls[axis].inputs.lower.getAttribute("aria-invalid"), "true");
+    view.renderPercentiles(axis, { ...state, applicable: false, values: { lower: "4", middle: "4", upper: "4" },
+      message: "All three percentiles have the same value." });
+    assert.equal(view.rangeControls[axis].inputs.lower.getAttribute("aria-invalid"), "false");
     assert.match(view.rangeControls[axis].status.textContent, /same value/);
     assert.equal(view.rangeControls[axis].rescale.disabled, false);
     view.unbind();

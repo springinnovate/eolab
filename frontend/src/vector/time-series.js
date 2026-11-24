@@ -253,6 +253,7 @@ export class VectorTimeSeriesController {
         this.observations = [];
         this.settings = {xField: VECTOR_TIME_SERIES_LAYER_LABEL, yFields: [], direction: "ascending", chartType: "bar"};
         this.hasInitialFields = false;
+        /** @type {{index:number,field:string|null,zoomUnavailable:boolean}|null} The chosen reading in this sample. */
         this.selected = null;
         this.pointElements = [];
         this.sampleState = "empty";
@@ -289,12 +290,12 @@ export class VectorTimeSeriesController {
             const index = Number(this.plotPanel.featureList.value);
             this.plotPanel.closePicker();
             if (this.rowRange.value !== "all" && this.observations.length > FEATURES_PER_PAGE) {
-                this.selected = {index, field:null};
+                this.selected = {index, field:null, zoomUnavailable:false};
                 this.render();
             } else this.#select(index, null);
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
-            if (this.selected) this.#zoomToFeature(this.selected.index);
+            if (this.selected) this.#zoomToSelectedFeature();
         }, listen);
         documentContext.addEventListener("keydown", event => {
             if (event.key !== "Escape" || this.panel.hidden || !this.panel.contains(documentContext.activeElement)) return;
@@ -345,23 +346,22 @@ export class VectorTimeSeriesController {
 
     /**
      * Retain the inspector's observations for the next visible chart or values table.
-     * @param {{state:"loading"|"ready"|"empty"|"invalidated",observations:ReadonlyArray<VectorInspectionObservation>,
-     * message:string,failedLayers?:number}} sample Inspector-owned result and progress.
-     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update] Preserve the current reading
+     * @param {import("./inspection-observation.js").VectorInspectionSample} sample Inspector-owned observations and progress.
+     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update="inspection"] Preserve the current reading
      * on rename or reveal the inspector's saved feature when restoring history.
      * @return {void}
      * @throws {TypeError} If the inspection state or message is invalid.
      */
-    setSample(sample, update) {
-        if (!["loading", "ready", "empty", "invalidated"].includes(sample?.state) || typeof sample.message !== "string") {
+    setSample(sample, update = "inspection") {
+        if (!["loading", "ready", "empty", "invalidated", "interrupted"].includes(sample?.state) || typeof sample.message !== "string") {
             throw new TypeError("Invalid vector inspection sample.");
         }
         this.observations = sample.observations;
         this.sampleState = sample.state;
         this.sampleMessage = sample.message;
         this.failedLayers = sample.failedLayers ?? 0;
-        if (update?.kind !== "rename") {
-            this.selected = update?.kind === "restore" ? {index:update.featureIndex, field:null} : null;
+        if (update !== "labels") {
+            this.selected = update === "inspection" ? null : {index:update.featureIndex, field:null, zoomUnavailable:false};
             this.firstRow = 0;
             this.plotAllFeatures = false;
             this.fields.search.value = "";
@@ -375,11 +375,12 @@ export class VectorTimeSeriesController {
     /** Update the dock identity and render only the foreground chart or values table. @return {void} */
     render() {
         const count = this.observations.length;
-        const ready = this.sampleState === "ready";
+        const interrupted = this.sampleState === "interrupted";
+        const canShowResults = this.sampleState === "ready" || interrupted;
         if (this.active) {
             this.fieldSummary ??= summarizeVectorTimeSeriesFields(this.observations);
             const {xFields,numericFields} = this.fieldSummary;
-            if (!this.hasInitialFields && ready && numericFields.length) {
+            if (!this.hasInitialFields && canShowResults && numericFields.length) {
                 const date = xFields.find(field => field.count === count && /^(year|survey_year|date|survey_date)$/i.test(field.name));
                 if (date) this.settings.xField = date.name;
                 const measure = numericFields.find(field => field.name !== date?.name && !/^(id|fid|objectid)$/i.test(field.name));
@@ -388,7 +389,7 @@ export class VectorTimeSeriesController {
             }
         }
         const {xField,yFields,direction,chartType} = this.settings;
-        this.statistics.update(this.active && ready ? this.observations : [], yFields);
+        this.statistics.update(this.active && canShowResults ? this.observations : [], yFields);
         const identity = vectorTimeSeriesPresentation(this.observations,yFields);
         this.heading.textContent = identity?.heading ?? "Compare features";
         this.context.textContent = identity?.context ?? "";
@@ -409,7 +410,7 @@ export class VectorTimeSeriesController {
         this.selection.hidden = true;
         this.zoomFeatureButton.hidden = true;
         this.zoomFeatureButton.disabled = true;
-        this.status.textContent = ready ? "" : this.sampleMessage;
+        this.status.textContent = canShowResults ? "" : this.sampleMessage;
         if (!this.active) return;
         const showPlot = this.plotPanel.values.hidden;
         const firstRow = showPlot && this.plotAllFeatures ? null : this.firstRow;
@@ -429,13 +430,13 @@ export class VectorTimeSeriesController {
             [field.name, field.count === field.total ? "" : field.count + " of " + field.total])), yFields);
         this.plotPanel.fieldButton.textContent = yFields.length > 1 ? yFields.length + " fields" : "Choose fields";
         this.plotPanel.featureButton.textContent = count + (count === 1 ? " feature" : " features");
-        this.openFeature.disabled = !ready || count === 0;
-        this.plotPanel.featureButton.disabled = !ready || count === 0;
-        this.plotPanel.fieldButton.disabled = !ready || (numericFields.length === 0 && !yFields.length);
-        if (!ready) return;
-        if (yFields.length === 0) {
+        this.openFeature.disabled = !canShowResults || count === 0;
+        this.plotPanel.featureButton.disabled = !canShowResults || count === 0;
+        this.plotPanel.fieldButton.disabled = !canShowResults || count === 0 || (numericFields.length === 0 && !yFields.length);
+        if (!canShowResults) return;
+        if (count && yFields.length === 0) {
             this.status.textContent = numericFields.length ? "Choose a field to plot." : "These features have no numeric fields.";
-        } else {
+        } else if (count) {
             if (this.#orderedComparison?.xField !== xField || this.#orderedComparison.direction !== direction) {
                 this.#orderedComparison = orderComparisonRows(this.observations, this.settings);
             }
@@ -452,6 +453,7 @@ export class VectorTimeSeriesController {
                 for (const [index,plot] of plots.entries()) this.#drawField(plot,index,xLabel,xScale,rows.length);
             }
         }
+        if (interrupted) this.status.textContent = [this.sampleMessage, this.status.textContent].filter(Boolean).join(" ");
         if (this.failedLayers) this.status.textContent += (this.status.textContent ? " " : "") +
             this.failedLayers + (this.failedLayers === 1 ? " layer could not be inspected." : " layers could not be inspected.");
         if (this.selected) this.#select(this.selected.index, yFields.includes(this.selected.field) ? this.selected.field : null);
@@ -582,21 +584,18 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Highlight the same feature in every plot and enable its original zoom target.
+     * Highlight the same feature in every plot and preserve its known zoom availability.
      * @param {number} index Original observation position.
      * @param {string|null} field Measurement, or null for selection from the feature picker.
      * @return {void}
      */
     #select(index,field) {
-        const observation = this.observations[index];
-        this.selected = {index,field};
+        const zoomUnavailable = this.selected?.index === index && this.selected.zoomUnavailable;
+        this.selected = {index, field, zoomUnavailable};
         this.plotPanel.syncSelectedFeature();
-        const x = this.settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL ? observation.layerLabel : observation.properties[this.settings.xField];
-        this.selectionText.textContent = this.#identity(observation,index,field,isOrderableValue(x) ? formatScalar(x) : "No value");
         this.selection.hidden = false;
         this.zoomFeatureButton.hidden = false;
-        this.zoomFeatureButton.disabled = observation.focus === null;
-        this.zoomFeatureButton.title = observation.focus === null ? "Feature location is unavailable for this selection." : "";
+        this.#renderSelectedReading();
         for (const [sourceIndex, {row, cells}] of this.tableRows) {
             row.setAttribute("aria-current", String(sourceIndex === index));
             for (const [name, button] of cells) {
@@ -611,6 +610,17 @@ export class VectorTimeSeriesController {
         }
     }
 
+    /** Show the selected reading and its zoom action, including a previously unavailable location. @return {void} */
+    #renderSelectedReading() {
+        const {index, field, zoomUnavailable} = this.selected;
+        const observation = this.observations[index];
+        const x = this.settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL ? observation.layerLabel : observation.properties[this.settings.xField];
+        const reading = this.#identity(observation, index, field, isOrderableValue(x) ? formatScalar(x) : "No value");
+        this.selectionText.textContent = zoomUnavailable ? reading + " · Feature location is unavailable." : reading;
+        this.zoomFeatureButton.disabled = observation.focus === null || zoomUnavailable;
+        this.zoomFeatureButton.title = this.zoomFeatureButton.disabled ? "Feature location is unavailable for this selection." : "";
+    }
+
     /**
      * Select the plotted reading, highlight its feature, and zoom to it.
      * @param {number} index Feature position in the current inspection sample.
@@ -619,19 +629,19 @@ export class VectorTimeSeriesController {
      */
     #selectAndZoomToFeature(index, field) {
         this.#select(index, field);
-        this.#zoomToFeature(index);
+        this.#zoomToSelectedFeature();
     }
 
     /**
      * Highlight the selected feature on the map and fit its bounds.
-     * Report unavailable bounds beside the selected reading.
-     * @param {number} index Position in the current inspection sample.
+     * Remember unavailable bounds for this selection and show them beside the reading.
      * @return {void}
      */
-    #zoomToFeature(index) {
+    #zoomToSelectedFeature() {
+        const {index} = this.selected;
         if (this.onFeatureZoom(this.observations[index].focus, index)) return;
-        this.zoomFeatureButton.disabled = true;
-        this.selectionText.textContent += " · Feature location is unavailable.";
+        this.selected.zoomUnavailable = true;
+        this.#renderSelectedReading();
     }
 
     /**

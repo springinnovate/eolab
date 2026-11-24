@@ -33,9 +33,10 @@ const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{re
  * @param {Map} [data=new Map()] Saved recovery record.
  * @param {(choice:string)=>void} [onAreaChoice] Composed response to a user's area choice.
  * @param {Object|null} [initialArea] Map selection available before opening the panel.
+ * @param {()=>boolean} [canEditStyle] Whether result appearance controls are available.
  * @return {Object} Controllers, captured requests and explicit clock/job completion.
  */
-function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}, initialArea = box(0)) {
+function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}, initialArea = box(0), canEditStyle = () => true) {
     const requests=[],plans=new Map(),server=new Map(),timers=new Map();let serial=0,time=0;
     const clock={setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,delay,at:time+delay});return id;},clearTimeout(id){timers.delete(id);}};
     const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326",storedUnit:null};
@@ -67,7 +68,7 @@ function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}, init
     const calculationRequests=new CalculationRequests({api,jobs,storage,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
     const area=new RasterSeriesCalculations({requests:calculationRequests,clock,readBoxPreview: overrides.readBoxPreview});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
-    const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){},onAreaChoice});
+    const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){},onAreaChoice,canEditStyle});
     controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(initialArea,"First box");
     const tick=async(delay=0)=>{for(const[id,t]of [...timers])if(t.delay===delay){timers.delete(id);t.fn();}await flush();};
     /** Advance the browser clock and execute only callbacks whose deadlines passed.
@@ -351,7 +352,9 @@ test("retrying a failed raster keeps the successful peer's saved result", async 
 });
 
 test("formulas share one job per source, retain exact scalar/unit CSV, and presentation edits do not recalculate",async()=>{
-    const h=fixture();h.controller.addFormula("area");await h.open();
+    let styleEditing = false;
+    const h=fixture({}, new Map(), () => {}, box(0), () => styleEditing);
+    h.controller.addFormula("area");await h.open();
     assert.equal(h.requests.filter(([k])=>k==="submit").length,2);
     assert.equal(h.requests.find(([k])=>k==="submit")[1].calculations.length,2);
     await h.finish();await h.finish("ready",true);
@@ -360,10 +363,14 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     const before=h.requests.length;
     h.view.actions.onOrder("name","reverse");
     h.view.actions.onChartType("scatter");
+    assert.equal(h.view.state.chartType, "bar", "A locked chart keeps its columns");
     h.controller.editFormula(1,{label:"Renamed"});
     h.view.actions.onAddPlot();
     h.view.actions.onStatisticDisplay(2, {plotId:2});
-    h.view.actions.onPlotOptions(2,{scale:"log",bounds:[1,30],xBounds:null});
+    h.view.actions.onPlotOptions(2,{scale:"log",bounds:[1,30],xBounds:null,pointSize:19});
+    h.view.actions.onStatisticDisplay(2,{color:"#123456"});
+    assert.equal(h.view.state.plots[1].pointSize, undefined);
+    assert.equal(h.view.state.statistics[1].color, undefined);
     h.view.actions.onStatisticDisplay(1, {visible:false});
     assert.deepEqual(h.view.state.plots.map(({id,scale})=>({id,scale})),[{id:1,scale:"linear"},{id:2,scale:"log"}]);
     assert.deepEqual(h.view.state.statistics.map(row=>[row.id,row.visible,row.plotId,row.styleIndex]),[[1,false,1,0],[2,true,2,1]]);
@@ -378,6 +385,9 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     assert.match(csv,/"Renamed","mean\(a\)"/);
     assert.match(csv,/"area"/);
     assert.match(csv,/"job_id"/);
+    styleEditing = true;
+    h.view.actions.onChartType("scatter");
+    assert.equal(h.view.state.chartType, "scatter");
     assert.equal(h.requests.length,before);
     h.close();
 });

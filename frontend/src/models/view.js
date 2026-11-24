@@ -460,7 +460,12 @@ export class ModelsView {
      * @return {void}
      */
     renderSetup(state) {
-        const draft = state.draft; if (!draft) return;
+        const draft = state.draft;
+        if (!draft) {
+            if (this.setup) this.elements.setup.replaceChildren();
+            this.setup = null;
+            return;
+        }
         if (this.setup?.id !== draft.id) this.buildSetup(draft);
         const setupControls = this.setup;
         const temporalError = setupControls.temporal?.render(draft.temporal, draft.reduction) ?? "";
@@ -591,7 +596,8 @@ export class ModelsView {
         r.status.textContent = job ? describeModelProgress(job) : "Reading run…";
         r.error.textContent = state.invocationError || job?.error?.message || job?.error?.detail || ""; r.error.hidden = !r.error.textContent;
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
-        r.duplicate.disabled = !state.invocation || Boolean(state.actionBusy);
+        r.duplicate.hidden = Boolean(state.duplicateRestricted);
+        r.duplicate.disabled = !state.invocation || r.duplicate.hidden || Boolean(state.loading || state.libraryError || state.actionBusy);
         r.progress.hidden = job?.status !== "running";
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
@@ -712,7 +718,33 @@ export class ModelsView {
         }
     }
 
-    /** Present the selected Data tools page, promoting raster creation among search matches.
+    /** Update the picker only when the offered recipes or search change. Keep its
+     * existing buttons and keyboard focus when discovery returns equivalent recipes.
+     * @param {Object[]} library Recipes offered by the controller.
+     * @param {string} query Current search text.
+     * @return {void}
+     */
+    renderLibraryItems(library, query) {
+        const search = query.toLowerCase();
+        if (library === this.pickerLibrary && search === this.pickerSearch) return;
+        this.pickerLibrary = library;
+        this.pickerSearch = search;
+        const filtered = library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(search));
+        const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
+        if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
+        const signature = JSON.stringify(filtered);
+        if (signature === this.librarySignature) return;
+        this.librarySignature = signature;
+        this.elements["library-items"].replaceChildren(...filtered.map(model => {
+            const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
+            open.setAttribute("aria-label", `Set up ${model.title}`);
+            return open;
+        }));
+    }
+
+    /** Present the selected Data tools page, listing raster creation first when it matches the search.
+     * Update run history only while the Runs list is visible.
+     * Preserve keyboard focus on a run button when other runs are added or removed.
      * An offered retry remains visible and focusable while its request is in progress.
      * @param {Object} state Controller snapshot.
      * @return {void}
@@ -730,7 +762,8 @@ export class ModelsView {
         });
         this.elements["setup-heading"].hidden = state.page !== "setup";
         this.elements["setup-heading"].textContent = setupTitle;
-        const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
+        const pageError = state.page === "runs" ? state.historyError : state.libraryError;
+        const error = state.error || (state.page === "setup" ? "" : pageError || state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
         this.elements.recovery.hidden = !state.pending;
@@ -739,44 +772,43 @@ export class ModelsView {
         const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
             : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs.`;
         if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
-        const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
-        const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
-        if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
-        const signature = JSON.stringify(filtered);
-        if (signature !== this.librarySignature) {
-            this.librarySignature = signature;
-            this.elements["library-items"].replaceChildren(...filtered.map(model => {
-                const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
-                open.setAttribute("aria-label", `Set up ${model.title}`);
-                return open;
-            }));
-        }
-        this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
+        this.renderLibraryItems(state.library, state.query);
+        let libraryStatus = this.elements["library-items"].children.length || state.libraryError ? "" : "No matching tools.";
+        if (state.noModelsSelected) libraryStatus = "This map offers no models for new runs. Choose Runs to view earlier work.";
+        if (state.missingModels) libraryStatus = "A model selected for this map is unavailable on this site. Ask the map publisher to review the choices.";
+        this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : libraryStatus;
         this.renderSetup(state); this.renderRun(state);
+        if (state.active && state.page === "runs") this.renderRunHistory(state);
+        this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
+    }
+
+    /** Show the latest run names, progress and order, and update the history controls.
+     * @param {Object} state Controller snapshot with ordered runs and pagination state.
+     * @return {void}
+     */
+    renderRunHistory(state) {
         const retainedRuns = new Set(state.runs.map(job => job.jobId));
         for (const [id, card] of this.runCards) {
             if (retainedRuns.has(id)) continue;
             card.root.remove(); this.runCards.delete(id);
         }
-        for (const job of state.runs) {
+        const runList = this.elements["runs-list"];
+        for (const [index, job] of state.runs.entries()) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
                 const root = this.element("article", "", "models-card");
                 const heading = this.element("h3"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId), "models-card-open models-name");
                 heading.append(button);
                 const status = this.element("small", "", "models-help"); root.append(heading, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
-                this.elements["runs-list"].append(root);
+                // Creation time and job ID fix the relative order of the retained cards.
+                runList.insertBefore(root, runList.children[index] ?? null);
             }
             card.button.textContent = job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
             card.status.textContent = `${describeModelProgress(job)} · ${formatModelRunCreatedTime(job)}`;
         }
-        // Move retained nodes only when ordering changes, keeping focus during status reads.
-        const order = state.runs.map(job => job.jobId).join();
-        if (order !== this.runOrder) { this.runOrder = order; for (const job of state.runs) this.elements["runs-list"].append(this.runCards.get(job.jobId).root); }
         this.elements["runs-status"].textContent = state.historyLoading ? "Loading runs…" : state.runs.length ? "Runs belong to this browser session. Closing Data tools does not cancel them." : "No data tool runs in this browser session yet.";
         this.elements.more.hidden = !state.nextCursor; this.elements.more.disabled = state.historyLoading;
         this.elements["refresh-runs"].disabled = state.historyLoading;
-        this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
     }
 
     /** Release the page tab strip and detach the view’s persistent event listeners.

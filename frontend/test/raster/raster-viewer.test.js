@@ -17,6 +17,7 @@ import {
 } from "../../src/raster/raster-viewer.js";
 import { loadRasterStatistics, RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { TemporalControlsView } from "../../src/raster/temporal-controls-view.js";
 import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM } from "../../src/raster/geometry.js";
@@ -1258,7 +1259,8 @@ test("style category changes preserve map scope and never display unmatched cach
 });
 
 test("raster adapter exports and reapplies only validated portable appearance", async () => {
-    const h = visibleLayerFixture();
+    const statistics = createDeferred();
+    const h = visibleLayerFixture(() => statistics.promise);
     await h.viewer.show(createRasterItem("portable"));
     const record = h.mapLayers.retainedRecords[0];
 
@@ -1312,6 +1314,14 @@ test("raster adapter exports and reapplies only validated portable appearance", 
         }),
         /unsupported fields/,
     );
+    const savedAutomaticRange = {
+        ...restoredAppearance,
+        continuous: { ...restoredAppearance.continuous, styleWasEdited: false },
+    };
+    record.adapter.applySavedState(record, savedAutomaticRange);
+    statistics.resolve(RASTER_STATISTICS);
+    await flushPromises();
+    assert.deepEqual(record.adapter.exportSavedState(record), savedAutomaticRange);
     h.destroy();
 });
 
@@ -1346,6 +1356,38 @@ test("saved style updates a staged raster before it is attached", async () => {
     assert.equal(h.leafletMap.layers.has(staged.layer), true);
     assert.equal(staged.layer.opacity, 0.6);
     h.destroy();
+});
+
+test("restoring a Catalog raster completes both histograms when an upload is already loading", async t => {
+    const upload = {source: {kind: "uploadedRaster", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"},
+        label: "Survey", bbox: [77, 20, 79, 24], capabilities: {pixels: true, statistics: true}};
+    const catalogRow = ["habitat.tif", "ready", 8000], uploadRow = ["Survey", "ready", 2048];
+    for (const [label, uploadOnTop, catalogVisible, expectedRows, expectedAborts] of [
+        ["Catalog on top", false, true, [catalogRow, uploadRow], [true, false, false]],
+        ["upload on top", true, true, [uploadRow, catalogRow], [false, false]],
+        ["hidden Catalog on top", false, false, [uploadRow], [false]],
+    ]) {
+        await t.test(label, async t => {
+            const pending = createDeferred(), reads = [];
+            const h = visibleLayerFixture(async (item, _area, signal) => {
+                reads.push(signal);
+                if (reads.length === 1) return pending.promise;
+                return item === upload ? EXACT_RASTER_STATISTICS : RASTER_STATISTICS;
+            });
+            t.after(h.destroy);
+            const survey = await h.viewer.showSource(upload, {removed() {}});
+            const habitat = await h.viewer.stage(createRasterItem("habitat"), {visible: catalogVisible});
+            const drawingOrder = uploadOnTop ? [survey.entry.key, habitat.key] : [habitat.key, survey.entry.key];
+            h.mapLayers.commitStaged([habitat], {fitToBounds: false, drawingOrder});
+            pending.resolve(EXACT_RASTER_STATISTICS);
+            await flushPromises();
+
+            const rows = h.controlsView.layerHistograms.map(({label, state, statistics}) =>
+                [label, state, statistics?.validSampleCount]);
+            assert.deepEqual(rows, expectedRows);
+            assert.deepEqual(reads.map(signal => signal.aborted), expectedAborts);
+        });
+    }
 });
 
 test("views sharing one Catalog Item keep separate styles and histogram categories", async () => {
@@ -1887,6 +1929,18 @@ test("CSV preview commits through the category editor and persists through the e
         h.viewer.openStyle(record.entry.key);
         assert.equal(editor.readStyle().categories[1].label, "Imported forest");
 
+        const pendingImport = createDeferred();
+        select(pendingImport.promise);
+        h.viewer.setStyleEditingEnabled(false);
+        pendingImport.resolve(bytes.buffer);
+        await flushPromises();
+        select();
+        await flushPromises();
+        assert.equal(editor.csvPreview.hidden, true);
+        assert.equal(editor.csvFile.disabled, true);
+        editor.csvApply.dispatchEvent(new Event("click"));
+        assert.deepEqual(record.adapter.exportSavedState(record), restored.layers[0].style);
+        h.viewer.setStyleEditingEnabled(true);
         for (const leave of [() => h.viewer.closeStyle(), () => h.viewer.openStyle("missing"),
             () => h.viewer.clear()]) {
             h.viewer.openStyle(record.entry.key);
@@ -3009,6 +3063,66 @@ test('automatic histograms exclude rasters below the top-16 cap', async () => {
     h.destroy();
 });
 
+test("published styles survive histogram, palette, category and paired actions while 2D returns values", async () => {
+    const clock = createManualClock(), renderingSelections = [], styleRequests = [];
+    const publishedStatistics = createDeferred();
+    const h = visibleLayerFixture(item => item.id === "second" ? publishedStatistics.promise :
+        Promise.resolve(createLayerStatistics(item)), {clock}, {styleEditingEnabled: false,
+        onStyleRequested: key => styleRequests.push(key),
+        onBivariateRenderingChange: keys => renderingSelections.push(keys)});
+    h.controlsView.openBivariateStyle = () => styleRequests.push("paired");
+    try {
+        await h.viewer.show(createRasterItem("first"));
+        await h.viewer.show(createRasterItem("second"));
+        await flushPromises();
+        const [x, y] = h.mapLayers.retainedRecords;
+        assert.deepEqual(y.adapter.snapshot(y).legend.labels, [-4, 3, 20], "A newly added raster uses its measured range");
+        const saved = structuredClone(x.adapter.exportSavedState(x));
+        saved.continuous = {...saved.continuous, definition: {...saved.continuous.definition,
+            minimum: 7, midpoint: 11, maximum: 17,
+            minimumColor: "#112233", midpointColor: "#aabbcc", maximumColor: "#dd9900"}};
+        await x.adapter.applySavedState(x, saved);
+        publishedStatistics.resolve(createLayerStatistics(x.entry.item));
+        await flushPromises();
+        assert.deepEqual(x.adapter.snapshot(x).legend.labels, [7, 11, 17], "Published thresholds survive a late histogram");
+        h.mapLayers.setOpacity(x.entry.key, 0.35);
+        const layer = h.mapLayers.getLeafletLayer(x.entry.key);
+        const ordinary = layer.parameters.env;
+        const actions = h.controlsView.handlers;
+        assert.equal(h.viewer.openStyle(x.entry.key), false);
+        actions.onStyleHistogram(x.entry.key);
+        actions.onAppearanceModeChange("categorical");
+        actions.onCategoricalStyleChange();
+        actions.onPaletteChange();
+        actions.onHistogramPercentiles(x.entry.key, {lower: 10, middle: 45, upper: 80, rescale: true});
+        actions.onBivariateModeChange("bivariate");
+        await flushPromises();
+        assert.equal(h.controlsView.pairedStatistics.pairedSampleCount, 32);
+        assert.equal(h.viewer.openPairedStyle(y.entry.key), false);
+        actions.onBivariatePaletteChange("different");
+        actions.onBivariateSwapAxes();
+        h.controlsView.bivariatePercentiles.x = {lower: 25, middle: 50, upper: 75, rescale: true};
+        actions.onBivariatePercentileInput("x");
+        clock.flush();
+        assert.equal(Number(h.controlsView.bivariateRanges.x.values.lower), 8, "The 25th percentile is still available");
+        assert.equal(h.controlsView.bivariateRanges.x.settings.rescale, false);
+        assert.deepEqual(styleRequests, []);
+        assert.deepEqual(renderingSelections, []);
+        assert.deepEqual(h.mapLayers.snapshots().map(row => row.roleBadge.label), ["X", "Y"]);
+        assert.equal(layer.parameters.env, ordinary);
+        assert.equal(layer.opacity, 0.35);
+        assert.equal(h.mapLayers.snapshots()[0].effectiveOpacity, 0.35);
+        h.viewer.setStyleEditingEnabled(true);
+        assert.equal(h.viewer.openPairedStyle(x.entry.key), true);
+        assert.deepEqual(styleRequests, ["paired"]);
+        assert.equal(layer.opacity, 1);
+        h.viewer.setStyleEditingEnabled(false);
+        assert.equal(layer.parameters.env, ordinary);
+        assert.equal(layer.opacity, 0.35);
+        assert.equal(h.controlsView.pairedStatistics.pairedSampleCount, 32);
+    } finally { h.destroy(); }
+});
+
 test("selecting 2D opens paired analysis without a map interaction", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
@@ -3405,6 +3519,7 @@ test("2D matching rejects pending, failed, invalid and constant samples without 
     reads[2].resolve({ ...pairedStatistics(), scope: "selectedArea", xMinimum: 4, xMaximum: 4 });
     await flushPromises();
     assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
+    assert.equal(h.controlsView.bivariateRanges.x.invalid, false, "Equal estimates are valid percentile readings");
     assert.match(h.controlsView.bivariateRanges.x.message, /same value/);
     assert.equal(h.controlsView.bivariateRanges.y.applicable, true);
     assert.match(h.controlsView.bivariateRanges.y.message, /sample area/);
@@ -6042,7 +6157,9 @@ test("temporal time changes retain the row and style while late publication cann
 });
 
 test("independent temporal views preserve explicit saved selections and reset ranges when units change", async () => {
-    const fixture = temporalFixture();
+    const rainfall = createDeferred();
+    const fixture = temporalFixture({loadStatistics: async (item, area) => item.source.variable === "rain"
+        ? rainfall.promise : createLayerStatistics(item, area)});
     try {
         const first = await fixture.viewer.showTemporal(temporalItem());
         await flushPromises();
@@ -6064,13 +6181,25 @@ test("independent temporal views preserve explicit saved selections and reset ra
         appearance.continuous.definition.minimum = 100;
         appearance.continuous.definition.midpoint = 200;
         appearance.continuous.definition.maximum = 300;
+        appearance.continuous.definition.minimumColor = "#114477";
         appearance.continuous.styleWasEdited = true;
         first.adapter.applySavedState(first, appearance);
+        fixture.mapLayers.reorder(first.entry.key, 0);
+        fixture.controlsView.handlers.onBivariateModeChange("bivariate");
+        assert.equal(fixture.controlsView.bivariateMode.active, true);
         await fixture.temporalViews[0].handlers.onVariableChange("rain");
         await flushPromises();
         assert.equal(first.state.item.source.variable, "rain");
+        assert.equal(fixture.controlsView.bivariateMode.active, false);
+        assert.deepEqual(first.adapter.snapshot(first).legend.labels, [0, 50, 100]);
+        assert.equal(first.adapter.renderDescriptor(first).styleEnvironment, buildRasterStyleEnvironment(DEFAULT_RASTER_STYLE));
         assert.equal(first.state.rasterStyleWasEdited, false);
-        assert.notEqual(first.state.rasterStyle.minimum, 100);
+        const suggestedRange = {minimum: 1147, midpoint: 1151, maximum: 1155};
+        rainfall.resolve({...createLayerStatistics(first.state.item), suggestedRange});
+        await flushPromises();
+        assert.deepEqual(first.adapter.snapshot(first).legend.labels, [1147, 1151, 1155]);
+        assert.equal(first.adapter.renderDescriptor(first).styleEnvironment,
+            buildRasterStyleEnvironment({...DEFAULT_RASTER_STYLE, ...suggestedRange}));
         assert.equal(second.state.item.source.variable, "temperature");
         assert.equal(first.state.item.capabilities.calculations, true);
     } finally {fixture.destroy();}
@@ -6196,6 +6325,44 @@ test("temporal Catalog removal names the topmost matching view after renaming an
 });
 
 
+test("same-minute map choices identify the selected observation in layer titles and pixel results", async () => {
+    const observations = [
+        {time: "2024-02-29T00:00:00.000Z", timeOfDay: "00:00", value: 19},
+        {time: "2024-02-29T00:00:11.000Z", timeOfDay: "00:00:11", value: 201},
+        {time: "2024-02-29T00:00:52.000Z", timeOfDay: "00:00:52", value: 202},
+    ];
+    const clock = createManualClock(), cursorValues = [];
+    const fixture = temporalFixture({
+        clock,
+        loadTimes: async () => ({months: ["2024-02"], month: "2024-02", times: observations.map(row => row.time)}),
+        temporalControlsFactory: handlers => new TemporalControlsView(handlers, new FakeRasterControlDocument()),
+        sampleCursorPixel: async item => ({inBounds: true, value: observations.find(row => row.time === item.source.time).value}),
+        cursorValuesView: {render: snapshot => cursorValues.push(snapshot), clear: () => cursorValues.push(null)},
+    });
+    try {
+        const item = temporalItem();
+        item.properties["cube:dimensions"].time.extent = [observations[0].time, observations.at(-1).time];
+        const record = await fixture.viewer.showTemporal(item);
+        const picker = record.state.temporal.controls.time;
+        for (const [index, {time, timeOfDay, value}] of observations.entries()) {
+            const option = picker.children[index];
+            assert.equal(option.value, time);
+            assert.equal(option.textContent.match(/\d{2}:\d{2}(?::\d{2})?/)?.[0], timeOfDay, option.textContent);
+            picker.value = time;
+            picker.dispatchEvent(new Event("change"));
+            await flushPromises();
+            const title = `Weather · Temperature · ${option.textContent} UTC`;
+            assert.equal(record.entry.label, title);
+            fixture.viewer.exploreAt({lng: 1, lat: 1});
+            fixture.leafletMap.emit("mousemove", {latlng: {lng: 1, lat: 1}, originalEvent: {clientX: 100, clientY: 100}});
+            clock.flush();
+            await flushPromises();
+            const sample = cursorValues.at(-1).samples[0];
+            assert.deepEqual([sample.label, sample.value], [title, value]);
+        }
+    } finally { fixture.destroy(); }
+});
+
 test("temporal source changes cancel old statistics and exact pixels before accepting new values", async () => {
     const statistics = [], pixels = [], cursorValues = [], clock = createManualClock();
     const fixture = temporalFixture({
@@ -6234,9 +6401,14 @@ test("temporal source changes cancel old statistics and exact pixels before acce
 
 test("temporal timestamp changes preserve automatic ranges and refresh an active paired analysis", async () => {
     const paired = [];
-    const fixture = temporalFixture({loadPairedStatistics: (xItem, yItem, _area, signal) => {
-        const deferred = createDeferred(); paired.push({xItem, yItem, signal, ...deferred}); return deferred.promise;
-    }});
+    const february = createDeferred(), months = ["2020-01", "2020-02"];
+    const fixture = temporalFixture({
+        loadTimes: async (_item, _variable, month) => month === "2020-02" ? february.promise :
+            {months, month: "2020-01", times: ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"]},
+        loadPairedStatistics: (xItem, yItem, _area, signal) => {
+            const deferred = createDeferred(); paired.push({xItem, yItem, signal, ...deferred}); return deferred.promise;
+        },
+    });
     try {
         const first = await fixture.viewer.showTemporal(temporalItem());
         await fixture.viewer.showTemporal(temporalItem());
@@ -6257,6 +6429,20 @@ test("temporal timestamp changes preserve automatic ranges and refresh an active
         paired[0].resolve({...pairedStatistics(), marker: "obsolete"});
         await flushPromises();
         assert.equal(fixture.controlsView.pairedStatistics.marker, "current");
+        assert.deepEqual(first.state.rasterStyle, range);
+
+        const changeMonth = fixture.viewer.selectTemporalMonth(first.entry.key, "2020-02", "first");
+        assert.equal(fixture.controlsView.bivariateMode.active, true, "Browsing dates keeps the current pair");
+        assert.equal(fixture.controlsView.pairedStatistics.marker, "current");
+        assert.equal(paired.length, 2);
+        const nextTime = "2020-02-03T06:00:00Z";
+        february.resolve({months, month: "2020-02", times: [nextTime]});
+        await changeMonth;
+        assert.equal(paired.length, 3);
+        assert.equal(paired[2].yItem.source.time, nextTime);
+        paired[2].resolve({...pairedStatistics(), marker: "February"});
+        await flushPromises();
+        assert.equal(fixture.controlsView.pairedStatistics.marker, "February");
         assert.deepEqual(first.state.rasterStyle, range);
     } finally {fixture.destroy();}
 });

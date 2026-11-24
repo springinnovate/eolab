@@ -164,20 +164,24 @@ test("presentation refresh rejects changing the sampled point or numeric result"
     "7.000e+0");
 });
 
-test("pixel picker anchors its marker and readout inside the viewport", () => {
+test("pixel picker anchors its marker and keeps the readout clear of Map tools and viewport edges", () => {
   const documentContext = new FakeRasterControlDocument();
   documentContext.defaultView = { innerWidth: 300, innerHeight: 220 };
+  const toolbar = documentContext.querySelector("#map-interaction-tools");
+  toolbar.setAttribute("data-pixel-picker-obstacle", "");
+  toolbar.getBoundingClientRect = () => ({ left: 210, right: 292, top: 8, bottom: 88 });
   const view = new RasterCursorValuesView(documentContext);
   const root = documentContext.querySelector("#raster-cursor-values");
 
   view.move({ clientX: 290, clientY: 210 });
-  view.render({
+  const snapshot = {
     position: { latitude: 1, longitude: 2 },
     omittedCount: 0,
     samples: [
       { label: "elevation", state: "value", value: 50, errorMessage: "" },
     ],
-  });
+  };
+  view.render(snapshot);
 
   assert.equal(root.style.left, "156px");
   assert.equal(root.style.top, "148px");
@@ -185,6 +189,31 @@ test("pixel picker anchors its marker and readout inside the viewport", () => {
   assert.equal(marker.style.left, "290px");
   assert.equal(marker.style.top, "210px");
   assert.equal(marker.hidden, false);
+
+  view.move({ clientX: 150, clientY: 32 });
+  view.render({ ...snapshot, position: { latitude: 3, longitude: 4 } });
+  assert.equal(root.style.left, "16px", "the readout fits the viewport on the right but overlaps Map tools");
+  assert.equal(root.style.top, "46px");
+  assert.equal(marker.style.left, "150px");
+  assert.equal(marker.style.top, "32px");
+
+  view.move({ clientX: 150, clientY: 100 });
+  view.render({ ...snapshot, position: { latitude: 5, longitude: 4 } });
+  assert.equal(root.style.left, "164px", "the space below the toolbar is clear on the right");
+
+  toolbar.getBoundingClientRect = () => ({ left: 210, right: 292, top: 60, bottom: 110 });
+  view.move({ clientX: 275, clientY: 55 });
+  view.render({ ...snapshot, position: { latitude: 6, longitude: 4 } });
+  assert.ok(parseFloat(root.style.left) + root.getBoundingClientRect().width <= 210,
+    "a pick in a gap between controls clears the next row even when a simple flip still overlaps");
+
+  toolbar.getBoundingClientRect = () => ({ left: 8, right: 292, top: 60, bottom: 110 });
+  view.move({ clientX: 150, clientY: 55 });
+  view.render({ ...snapshot, position: { latitude: 7, longitude: 4 } });
+  assert.ok(parseFloat(root.style.top) >= 110, "the readout clears a toolbar that spans the viewport");
+  assert.ok(parseFloat(root.style.top) + root.getBoundingClientRect().height <= 212);
+  assert.equal(marker.style.top, "55px");
+
   view.clear();
   assert.equal(marker.hidden, true);
 });

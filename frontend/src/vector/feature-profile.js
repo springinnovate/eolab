@@ -327,6 +327,7 @@ export class VectorFeatureProfileController {
         this.zoomFeatureButton = documentContext.querySelector(
             "#zoom-vector-feature-profile-feature"
         );
+        this.zoomFeatureButton.disabled = true;
         this.titleField = documentContext.querySelector(
             "#vector-feature-profile-title-field"
         );
@@ -385,10 +386,10 @@ export class VectorFeatureProfileController {
             if (!this.nextFeature.disabled) this.onNavigateFeature("next");
         };
         this.onZoomFeature = () => {
-            if (this.currentObservation === null) return;
+            if (this.zoomFeatureButton.disabled) return;
             if (this.onFeatureZoom(this.currentObservation.focus)) return;
             this.zoomFeatureButton.disabled = true;
-            this.status.textContent = "Feature location is unavailable. The map has not moved.";
+            this.#reportUnavailableLocation();
         };
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();
@@ -468,9 +469,11 @@ export class VectorFeatureProfileController {
      *
      * @param {VectorInspectionObservation|null} observation Immutable inspector result or null.
      * @param {Object|null} [navigation=null] Inspector-owned result position.
+     * @param {import("./inspection-observation.js").VectorInspectionChange} [change="inspection"]
+     * A layer rename retains the selected measurement, field search and plot visibility.
      * @return {void}
      */
-    setCurrentObservation(observation, navigation = null) {
+    setCurrentObservation(observation, navigation = null, change = "inspection") {
         let normalizedNavigation = null;
         if (observation !== null) {
             normalizedNavigation = normalizeFeatureNavigation(navigation);
@@ -478,6 +481,12 @@ export class VectorFeatureProfileController {
         this.currentObservation = observation;
         this.currentNavigation = normalizedNavigation;
         this.plotPanel.syncSelectedFeature();
+        if (change === "labels") {
+            this.render();
+            return;
+        }
+        this.zoomFeatureButton.disabled = observation === null || observation.focus === null;
+        this.zoomFeatureButton.title = observation?.focus === null ? "Feature location is unavailable for this selection." : "";
         if (observation === null && !this.panel.hidden) {
             this.onVisibilityChange(false, false);
         }
@@ -522,8 +531,6 @@ export class VectorFeatureProfileController {
         this.table.hidden = true;
         this.selection.hidden = true;
         this.status.textContent = "";
-        this.zoomFeatureButton.disabled = this.currentObservation === null || this.currentObservation.focus === null;
-        this.zoomFeatureButton.title = this.currentObservation?.focus === null ? "Feature location is unavailable for this selection." : "";
         this.#renderNavigation();
         const settings = this.#currentSettings();
         this.statistics.update(this.active && this.currentObservation ? [this.currentObservation] : [], settings?.selectedFields ?? []);
@@ -553,10 +560,27 @@ export class VectorFeatureProfileController {
             this.currentObservation,
             settings
         );
+        if (!this.plotPanel.values.hidden) this.#renderTable(profile, settings.chartType === "stacked");
+        this.#renderProfileChart(profile, settings, presentation.heading);
+        if (this.selectedField !== null) this.#selectField(this.selectedField);
+        if (this.zoomFeatureButton.disabled && this.currentObservation.focus !== null) this.#reportUnavailableLocation();
+    }
+
+    /** Add the reason Zoom is disabled to the current plot guidance. @return {void} */
+    #reportUnavailableLocation() {
+        this.status.textContent = [this.status.textContent, "Feature location is unavailable. The map has not moved."]
+            .filter(Boolean).join(" ");
+    }
+
+    /**
+     * Draw the selected measurements or explain why no chart can be shown.
+     * @param {ReturnType<typeof buildVectorFeatureProfile>} profile Ordered fields and values for this feature.
+     * @param {{chartType:"bar"|"line"|"scatter"|"stacked",direction:"ascending"|"descending"}} settings Plot style and field order.
+     * @param {string} heading Display name for the feature in a stacked chart.
+     * @return {void}
+     */
+    #renderProfileChart(profile, settings, heading) {
         const stacked = settings.chartType === "stacked";
-        this.xHeading.hidden = stacked || profile.xScale === "ordinal";
-        this.xHeading.textContent = profile.xAxisLabel;
-        if (!this.plotPanel.values.hidden) this.#renderTable(profile.points);
         if (profile.points.length === 0) {
             this.status.textContent =
                 "Select numeric fields to plot from this feature.";
@@ -569,16 +593,13 @@ export class VectorFeatureProfileController {
         }
         if (profile.missingCount) this.status.textContent = profile.missingCount === 1
             ? "One field has no numeric value." : profile.missingCount + " fields have no numeric value.";
-        if (!this.plotPanel.values.hidden) {
-            if (this.selectedField) this.#selectField(this.selectedField);
-            return;
-        }
+        if (!this.plotPanel.values.hidden) return;
         this.figure.hidden = false;
         const first = profile.points[0].fieldName;
         this.chartTitle.textContent = profile.points.length === 1 ? first :
             profile.xScale === "numeric" ? first + " – " + profile.points.at(-1).fieldName : "";
         this.chartTitle.hidden = stacked || this.chartTitle.textContent === "";
-        const rendered = stacked ? this.#drawStackedProfile(profile.points, presentation.heading)
+        const rendered = stacked ? this.#drawStackedProfile(profile.points, heading)
             : renderVectorFieldChart({
                 documentContext: this.document,
                 chart: this.chart,
@@ -605,7 +626,6 @@ export class VectorFeatureProfileController {
         }
         this.pointElements = rendered.pointElements;
         if (!stacked) labelVectorPlotValues(this.chart, this.pointElements, settings.chartType);
-        if (this.selectedField !== null) this.#selectField(this.selectedField);
     }
 
     /**
@@ -732,11 +752,15 @@ export class VectorFeatureProfileController {
     /**
      * Present selected fields and missing values in an accessible compact table.
      *
-     * @param {Object[]} points Ordered profile points.
+     * @param {ReturnType<typeof buildVectorFeatureProfile>} profile Ordered measurements and their X-axis labels.
+     * @param {boolean} stacked Whether the chart stacks all fields in a single bar.
      * @return {void}
      */
-    #renderTable(points) {
-        for (const point of points) {
+    #renderTable(profile, stacked) {
+        const hideX = stacked || profile.xScale === "ordinal";
+        this.xHeading.hidden = hideX;
+        this.xHeading.textContent = profile.xAxisLabel;
+        for (const point of profile.points) {
             const row = this.document.createElement("tr");
             const field = this.document.createElement("td");
             const button = this.document.createElement("button");
@@ -751,11 +775,11 @@ export class VectorFeatureProfileController {
             value.textContent = point.yValue === null ? "No value" : String(point.yValue);
             const x = this.document.createElement("td");
             x.textContent = point.xLabel;
-            x.hidden = this.xHeading.hidden;
+            x.hidden = hideX;
             row.append(field, x, value);
             this.tableBody.append(row);
         }
-        this.table.hidden = points.length === 0;
+        this.table.hidden = profile.points.length === 0;
     }
 
     /** Release listeners and request removal of retained presentation. @return {void} */

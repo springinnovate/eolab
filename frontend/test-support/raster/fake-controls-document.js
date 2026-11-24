@@ -97,9 +97,12 @@ export class FakeRasterControlElement extends EventTarget {
         for (const child of children.reverse()) this.insertBefore(child, this.children[0] ?? null);
     }
 
-    /** Detach this element from its parent. @return {void} */
+    /** Detach this element and clear focus if it contains the focused control. @return {void} */
     remove() {
-        if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this);
+        if (this.parentNode) {
+            if (this.contains(this.ownerDocument?.activeElement)) this.ownerDocument.activeElement = null;
+            this.parentNode.children = this.parentNode.children.filter(child => child !== this);
+        }
         this.parentNode = null;
     }
 
@@ -187,6 +190,11 @@ export class FakeRasterControlElement extends EventTarget {
         return { width: 120, height: 48 };
     }
 
+    /** Activate this control unless it is disabled. @return {void} */
+    click() {
+        if (!this.disabled) this.dispatchEvent(new Event("click", { bubbles: true }));
+    }
+
     /** Give this control focus in its fake document. @return {void} */
     focus() {
         if (this.ownerDocument !== null) {
@@ -225,13 +233,27 @@ export class FakeRasterControlDocument extends EventTarget {
     mountTabList(markup, listId) {
         const list = this.querySelector(`#${listId}`);
         const contents = markup.split(`id="${listId}"`)[1].split("</div>")[0];
-        for (const [, id, caption] of contents.matchAll(/<button id="([^"]+)"[^>]*>([^<]+)<\/button>/g)) {
+        const tabs = /<button id="([^"]+)" class="tool-tab"[^>]*>([^<]+)<\/button>(?:\s*<button id="([^"]+)" class="tool-tab-close"[^>]*>×<\/button>)?/g;
+        for (const [, id, caption, closeId] of contents.matchAll(tabs)) {
             const tab = this.querySelector(`#${id}`);
             tab.id = id;
             tab.textContent = caption;
             tab.scrollWidth = 110;
-            tab.click = () => { if (!tab.disabled) tab.dispatchEvent(new Event("click")); };
-            list.append(tab);
+            tab.setAttribute("class", "tool-tab");
+            if (closeId) {
+                const item = this.createElement("span");
+                const close = this.querySelector(`#${closeId}`);
+                close.classList.add("tool-tab-close");
+                close.setAttribute("class", "tool-tab-close");
+                item.getBoundingClientRect = () => ({
+                    width: tab.scrollWidth + (tab.getAttribute("data-open") === "true" ? 26 : 0), height: 44,
+                });
+                item.scrollWidth = tab.scrollWidth;
+                item.append(tab, close);
+                list.append(item);
+            } else {
+                list.append(tab);
+            }
         }
         list.getBoundingClientRect = () => ({ width: 1600, height: 44 });
     }
@@ -263,6 +285,16 @@ export class FakeRasterControlDocument extends EventTarget {
             this.elements.get(selector).content ??= {cloneNode: () => this.createElement("details")};
         }
         return this.elements.get(selector);
+    }
+
+    /**
+     * Find registered controls marked with a layout attribute.
+     * @param {string} selector Attribute presence selector, such as `[data-map-panel]`.
+     * @return {FakeRasterControlElement[]} Controls carrying the named attribute.
+     */
+    querySelectorAll(selector) {
+        const attribute = selector.slice(1, -1);
+        return [...this.elements.values()].filter(element => element.getAttribute(attribute) !== null);
     }
 
     /**

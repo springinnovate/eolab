@@ -577,6 +577,16 @@ test("numeric field-name spacing is reflected on the horizontal axis", () => {
   assert.equal(circles.length, bars.length);
   const positions = circles.map(circle => Number(circle.getAttribute("cx")));
   assert.ok(positions[2] - positions[1] > 2 * (positions[1] - positions[0]));
+  const xHeading = h.documentContext.querySelector("#vector-feature-profile-x-heading");
+  const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
+  h.documentContext.querySelector("#vector-feature-profile-values-button").click();
+  for (const [style, hideX] of [["stacked", true], ["bar", false]]) {
+    chartType.value = style;
+    chartType.dispatchEvent(new Event("change"));
+    assert.equal(xHeading.hidden, hideX);
+    assert.deepEqual(table.children.map(row => row.children[1].hidden), [hideX, hideX, hideX]);
+    assert.deepEqual(table.children.map(row => row.children[2].textContent), ["1", "2", "3"]);
+  }
 });
 
 test("per-source rules survive feature navigation and missing values break lines", () => {
@@ -618,6 +628,15 @@ test("per-source rules survive feature navigation and missing values break lines
     .children.find((element) => element.getAttribute("class") === "series-chart-line");
   assert.match(path.getAttribute("d"), /^M/);
   assert.doesNotMatch(path.getAttribute("d"), /L/);
+
+  const missing = observation({ featureId: "corridors.3", properties: { R2000: null, R2001: null } });
+  h.controller.setCurrentObservation(missing);
+  h.documentContext.querySelector("#vector-feature-profile-values-button").click();
+  tableBody.children[0].children[0].children[0].click();
+  h.controller.setCurrentObservation({...missing, layerLabel: "Renamed corridors"}, null, "labels");
+  assert.equal(tableBody.children[0].children[0].children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-selection").hidden, false);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-selection-text").textContent, "R2000 · No value");
 
   h.controller.setCurrentObservation(observation({ sourceId: "catalog|other-corridors" }));
   assert.equal(chartType.value, "bar");
@@ -685,9 +704,10 @@ test("active mode survives empty clicks, reopens, and ends on explicit close", (
 test("unavailable feature location leaves the chart usable with a readable explanation", () => {
   const h = fixture();
   h.controller.onFeatureZoom = () => false;
-  h.controller.setCurrentObservation(observation({
+  const missingBounds = observation({
     focus: Object.freeze({ center: [20, 10], bounds: null }),
-  }));
+  });
+  h.controller.setCurrentObservation(missingBounds);
   h.controller.open();
   const zoom = h.documentContext.querySelector("#zoom-vector-feature-profile-feature");
   zoom.dispatchEvent(new Event("click"));
@@ -695,5 +715,20 @@ test("unavailable feature location leaves the chart usable with a readable expla
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
     "Feature location is unavailable. The map has not moved.");
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-chart").hidden, false);
+  h.controller.setCurrentObservation({...missingBounds, layerLabel: "New layer name"}, null, "labels");
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
+  h.documentContext.querySelector("#vector-feature-profile-clear-fields").click();
+  const status = h.documentContext.querySelector("#vector-feature-profile-status");
+  const selectFields = "Select numeric fields to plot from this feature.";
+  const unavailable = "Feature location is unavailable. The map has not moved.";
+  assert.equal(status.textContent, selectFields + " " + unavailable);
+  assert.equal(zoom.disabled, true);
+  h.controller.setCurrentObservation(observation({featureId: "corridors.7"}));
+  assert.equal(zoom.disabled, false);
+  assert.equal(status.textContent, selectFields);
+  zoom.click();
+  assert.equal(status.textContent, selectFields + " " + unavailable);
   h.controller.destroy();
 });

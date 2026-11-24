@@ -196,18 +196,26 @@ let basemapControl = null;
  */
 
 /**
- * Load application settings and establish the private browser identity.
- * Startup awaits this same-origin response before enabling feature requests.
+ * Load application settings and establish the browser's private ownership cookies.
+ * Browsers with Web Locks serialize this request across tabs until the cookie
+ * headers arrive. Each tab can then load history and use features independently.
  *
  * @return {Promise<AppGlobalConfiguration>} The application settings.
- * @throws {Error} If the settings endpoint does not return a successful response.
+ * @throws {Error} If the settings request fails or returns unreadable JSON.
  */
 async function loadAppGlobalConfiguration() {
-    const configurationResponse = await fetch("/api/config", {
+    /** Fetch the settings and let the browser apply the server's cookie headers.
+     * @return {Promise<Response>} Same-origin configuration response.
+     */
+    const requestConfiguration = () => fetch("/api/config", {
         headers: { Accept: "application/json" },
         credentials: "same-origin",
         cache: "no-store",
     });
+    const locks = window.navigator.locks;
+    const configurationResponse = await (locks
+        ? locks.request("eolab-browser-startup", requestConfiguration)
+        : requestConfiguration());
 
     if (!configurationResponse.ok) {
         throw new Error(
@@ -794,7 +802,12 @@ async function initializeCatalog(
         surpriseRequestGeneration: 0,
     };
 
+    let visitorAvailability = resolveVisitorControls(isSharedViewer
+        ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
+    /** Whether user actions may edit layer or chart appearance in the current map. @return {boolean} */
+    const canEditStyle = () => visitorAvailability.styleEditing;
     const catalogMapActions = new CatalogMapActions({
+        canEditStyle,
         removalTarget: item => catalogVisualization.removalTarget(item),
         prepare: item => catalogVisualization.prepare(item),
         show: item => catalogVisualization.show(item),
@@ -862,8 +875,6 @@ async function initializeCatalog(
     let annotationSessions = null;
     /** @type {Promise<void>} Device polygons ready before saved layers are restored. */
     let annotationsReady;
-    let visitorAvailability = resolveVisitorControls(isSharedViewer
-        ? { version: VISITOR_CONTROLS_VERSION, choices: {} } : undefined);
     /** @type {Readonly<import("./map-interaction-tools.js").MapPointerActions>} */
     let mapPointerActions = { rasterValues: false, featurePicking: false, histogramBox: false };
     let mapLayerEditing = false;
@@ -958,6 +969,7 @@ async function initializeCatalog(
         onLayerStatus: (key, status) => mapLayerController.updateTileStatus(key, status),
     });
     const mapLayerController = new MapLayerController({
+        canEditStyle,
         leafletMap,
         view: mapLayerStackView,
         leafletLayers,
@@ -1109,6 +1121,7 @@ async function initializeCatalog(
     const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi, readBoxPreview: loadSamplingBoxPreview });
     const resultLocator = new RasterResultLocator(document, L, appGlobalConfiguration.basemap);
     rasterSeries = new RasterSeriesController({
+        canEditStyle,
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
         onOpenArea: editProcessingArea,
@@ -1173,6 +1186,7 @@ async function initializeCatalog(
         leaflet: L,
         onTileError: reportMapTileError,
         inspectionInitiallyEnabled: !isSharedViewer,
+        styleEditingEnabled: canEditStyle(),
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
@@ -1658,6 +1672,7 @@ async function initializeCatalog(
     };
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        allowedModelIds: visitorAvailability.allowedModelIds, recoveryScope: namedMapSlug ?? "",
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
         loadTemporalTimes,
         /** Show a requested result and reveal controls when a new generated vector attaches.
@@ -1871,6 +1886,7 @@ async function initializeCatalog(
     });
     const vectorStyleControls = new VectorStyleControls();
     layerStyleEditor = new MapLayerStyleEditor({
+        canEditStyle,
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,
         inspection: mapInspection,
         vectorStyleControls,
@@ -1942,9 +1958,15 @@ async function initializeCatalog(
         editPublishedMap: editableMapSlug !== null,
         allowPublishing: !isSharedViewer && editableMapSlug === null,
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: "" },
+        listPublisherModels: () => models.listSetupModels(),
         applyMapHeading,
         applyVisitorControls: settings => {
             visitorAvailability = resolveVisitorControls(settings);
+            const { styleEditing } = visitorAvailability;
+            rasterVisualization.setStyleEditingEnabled(styleEditing);
+            vectorFeatureInspector.setStyleEditingEnabled(styleEditing);
+            annotations.setStyleEditingEnabled(styleEditing);
+            models.setAllowedModelIds(visitorAvailability.allowedModelIds);
             onWorkspaceOptionsChange({
                 allowCatalog: visitorAvailability.catalog,
                 allowMapContents: visitorAvailability.mapContents,
@@ -2251,27 +2273,27 @@ async function initializeCatalog(
             }
         },
         onSampleChange: (sample, update) => {
-            const returned = sample.observations.length;
-            const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
-            const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
-            const message = sample.state === "loading"
-                ? sample.message
-                : sample.state === "ready"
-                    ? `${featureCount} across ${layerCount} layer${layerCount === 1 ? "" : "s"}` +
-                        (sample.failedLayers ? ` · ${sample.failedLayers} layer${sample.failedLayers === 1 ? "" : "s"} unavailable` : " · Ready")
-                    : sample.message;
-            mapInspection.setClickResult("feature", {
-                state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
-                message,
-                position: sample.position ?? null,
-            });
-            mapInspection.setFeatureResultCount(sample.observations.length, {loading: sample.state === "loading"});
+            if (update !== "labels") {
+                const returned = sample.observations.length;
+                let message = sample.message;
+                if (sample.state === "ready") {
+                    const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
+                    message = `${returned} feature${returned === 1 ? "" : "s"} returned across ${layerCount} layer${layerCount === 1 ? "" : "s"}` +
+                        (sample.failedLayers ? ` · ${sample.failedLayers} layer${sample.failedLayers === 1 ? "" : "s"} unavailable` : " · Ready");
+                }
+                mapInspection.setClickResult("feature", sample.state === "interrupted" ? null : {
+                    state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
+                    message,
+                    position: sample.position ?? null,
+                });
+                mapInspection.setFeatureResultCount(returned, {loading: sample.state === "loading"});
+            }
             vectorTimeSeries.setSample(sample, update);
             vectorFeatureProfile.setFeatureChoices(sample.observations);
         },
         onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
-        onCurrentObservationChange: (observation, navigation) =>
-            vectorFeatureProfile.setCurrentObservation(observation, navigation),
+        onCurrentObservationChange: (observation, navigation, change) =>
+            vectorFeatureProfile.setCurrentObservation(observation, navigation, change),
         onFeatureProfileRequested: openFeaturePlot,
         onTimeSeriesRequested: openFeatureComparison,
         onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),
@@ -2366,6 +2388,8 @@ async function initializeCatalog(
                 if (annotations.updateSharedLayer(id, data)) { vectorSampling.refresh(); summarySampling.refresh(); vectorFilterControls.refresh(); }
             },
         });
+        annotations.setStyleEditingEnabled(canEditStyle());
+        vectorFeatureInspector.setStyleEditingEnabled(canEditStyle());
         annotationsReady = annotationSessions.start({ restoreBindings: false, refreshImmediately: false }).then(async () => {
             await annotations.load({ attachSavedLayers: !isSharedViewer && editableMapSlug === null,
                 sharedLayerIds: annotationSessions.bookmarkedLayerIds() });

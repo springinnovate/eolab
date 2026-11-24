@@ -19,10 +19,14 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 import yaml
 
+from catalog_selection_support import write_selection
+from eolab_app.attribute_filter import VectorFilter
 from eolab_app.processing.downstream_calculation import (
+    calculate_downstream,
     downstream_process_target,
     plan_downstream,
 )
+from eolab_app.processing.downstream_models import VectorStartingMask
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.aggregate_models import AggregateArtifact
 from test_downstream_model import downstream_fixture, scaled_downstream_fixture
@@ -58,11 +62,128 @@ def assert_same_raster(actual: Path, expected: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("polygon_edges", "drain_extents", "seed_columns", "total"),
+    [
+        pytest.param((3.31, 3.69), [(0, 9)], (3,), 20, id="one-cell-corridor"),
+        # The second drainage's centers are a quarter cell farther east.
+        # Its center at 5.75 lies outside the polygon even though 5.5 is inside.
+        pytest.param(
+            (2.125, 5.625),
+            [(0, 4), (4.25, 8.25)],
+            (2, 3, 4),
+            24,
+            id="offset-drainages",
+        ),
+    ],
+)
+def test_selected_polygon_matches_raster_starts_on_routing_grids(
+    tmp_path: Path,
+    polygon_edges: tuple[float, float],
+    drain_extents: list[tuple[float, float]],
+    seed_columns: tuple[int, ...],
+    total: int,
+) -> None:
+    """Compare exact starts, downstream coverage and CSV totals on an eastward corridor.
+
+    Args:
+        tmp_path: Isolated catalog sources and native model outputs.
+        polygon_edges: West and east edges in fractional source columns.
+        drain_extents: West and east edges of each independent terminal drainage.
+        seed_columns: Hand-located centers on the routing grids, in output columns.
+        total: Sum of the positive values downstream of those centers.
+    """
+    pixel_size = 1 / 128
+    grid = from_origin(-61, 13, pixel_size, pixel_size)
+    records = [
+        {
+            "id": sink,
+            "next": 0,
+            "sink": sink,
+            "geometry": mapping(box(*(grid @ (west, 3)), *(grid @ (east, 0)))),
+        }
+        for sink, (west, east) in enumerate(drain_extents, start=1)
+    ]
+    sources, request, limits = downstream_fixture(tmp_path / "inputs", records=records)
+    request = request.model_copy(
+        update={"wgs84_pixel_size": pixel_size, "travel_time_pixel_size_m": 850}
+    )
+    dem = np.full((3, 9), -9999, dtype="float32")
+    dem[1, 1:8] = np.arange(107, 100, -1)
+    values = np.full((3, 9), -9999, dtype="int16")
+    values[1, 1:8] = [9, 4, 2, 0, -9999, 7, 11]
+    starts = np.zeros((3, 9), dtype="int16")
+    starts[1, seed_columns] = 1
+    coverage = np.zeros_like(starts)
+    coverage[1, seed_columns[0] : 8] = 1
+    for name, data in (("dem", dem), ("values", values), ("starting_mask", starts)):
+        with rasterio.open(
+            sources.rasters[name],
+            "w",
+            driver="GTiff",
+            width=9,
+            height=3,
+            count=1,
+            dtype=data.dtype,
+            crs="EPSG:4326",
+            transform=grid,
+            nodata=-9999,
+        ) as dataset:
+            dataset.write(data, 1)
+
+    west, east = polygon_edges
+    selected = box(*(grid @ (west, 1.88)), *(grid @ (east, 1.10)))
+    excluded = box(*(grid @ (1, 2)), *(grid @ (2, 1)))
+    selection = write_selection(
+        tmp_path / "starts.gpkg",
+        [mapping(selected), mapping(excluded)],
+        values=[1, 0],
+        candidate=VectorFilter.model_validate(
+            {
+                "enabled": True,
+                "match": "all",
+                "rules": [{"field": "selected", "operator": "eq", "value": 1}],
+            }
+        ),
+    )
+    polygon_request = request.model_copy(
+        update={
+            "starting_mask": VectorStartingMask(
+                kind="catalogSelection", selection=selection.selection
+            )
+        }
+    )
+    raster_run = tmp_path / "raster"
+    polygon_run = tmp_path / "polygon"
+    for directory, inputs, settings in (
+        (raster_run, sources, request),
+        (polygon_run, replace(sources, starting=selection), polygon_request),
+    ):
+        directory.mkdir()
+        calculate_downstream(
+            inputs, plan_downstream(inputs, settings), directory, limits
+        )
+        with (directory / "result.csv").open(newline="") as stream:
+            assert float(next(csv.DictReader(stream))["value"]) == total
+        for name, expected in (("starting_mask", starts), ("coverage", coverage)):
+            with rasterio.open(directory / f"{name}.tif") as result:
+                assert result.transform == grid
+                np.testing.assert_array_equal(result.read(1), expected)
+        assert len(list(directory.glob("routing_dem_*.tif"))) == len(drain_extents)
+    for name in ("starting_mask.tif", "coverage.tif", "masked_values.tif"):
+        assert_same_raster(polygon_run / name, raster_run / name)
+
+
+@pytest.mark.parametrize(
     "case",
     [
         "plain",
         "buffer-cutoff",
         "resampled-signed-values",
+        "embedded-mask",
+        "shifted-embedded-mask",
+        "uint8-nodata",
+        "uint16-nodata",
+        "uint16-maximum",
         "vector-filter",
         "multiple-drains",
         "virtual-link",
@@ -73,7 +194,7 @@ def assert_same_raster(actual: Path, expected: Path) -> None:
     ],
 )
 def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> None:
-    """The CLI and EOlab return identical results with the same pit-filling options.
+    """Compare CLI and EOlab rasters and totals for the same sources and settings.
 
     The reference prepares canonical HydroBASINS fields and a known AOI itself;
     it does not use EOlab's input conversion or calculation helpers. The original
@@ -216,6 +337,56 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             values = np.arange(-48, 48, dtype="float32").reshape(8, 12)
             values[5, 5] = -9999
             raster.write(values, 1)
+    expected_masked_values = None
+    if case in {"uint8-nodata", "uint16-nodata", "uint16-maximum"}:
+        if case == "uint8-nodata":
+            expected_masked_values = np.zeros((4, 6), dtype="uint8")
+            expected_masked_values[1, 2:4] = [12, 25]
+            source_values = expected_masked_values
+            nodata = 0
+        else:
+            expected_masked_values = np.tile([4, 8, 0, 0, 0, 0], (4, 1)).astype(
+                "uint16"
+            )
+            if case == "uint16-maximum":
+                expected_masked_values[0, 0] = 65535
+            # Column four is missing in the source; the last two are outside it.
+            source_values = expected_masked_values[:, :4].copy()
+            nodata = 61234
+            source_values[:, 3] = nodata
+        with rasterio.open(sources.rasters["values"]) as original_values:
+            profile = original_values.meta
+        profile.update(
+            width=source_values.shape[1], dtype=source_values.dtype, nodata=nodata
+        )
+        with rasterio.open(sources.rasters["values"], "w", **profile) as raster:
+            raster.write(source_values, 1)
+    if case in {"embedded-mask", "shifted-embedded-mask"}:
+        shifted = case == "shifted-embedded-mask"
+        source_values = np.zeros((4, 6), dtype="float32")
+        source_values[1, :3] = [3, 9, 97]
+        expected_masked_values = np.zeros_like(source_values)
+        if shifted:
+            # The first source column lands in coverage column one.
+            source_values[1, 3:5] = [97, 83]
+            expected_masked_values[1, [1, 2, 4]] = [3, 9, 97]
+        else:
+            expected_masked_values[1, :2] = [3, 9]
+        validity = np.full(source_values.shape, 255, dtype="uint8")
+        validity[1, 2] = 0
+        with rasterio.open(sources.rasters["values"]) as original_values:
+            profile = original_values.meta
+        profile.update(
+            dtype="float32",
+            nodata=83 if shifted else -9999,
+            transform=from_origin(0.75 if shifted else 0, 4, 1, 1),
+        )
+        with (
+            rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True),
+            rasterio.open(sources.rasters["values"], "w", **profile) as raster,
+        ):
+            raster.write(source_values, 1)
+            raster.write_mask(validity)
     reference = tmp_path / "reference"
     reference.mkdir()
     aoi = reference / "reference-area.geojson"
@@ -388,6 +559,26 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
         rows = list(csv.DictReader(stream))
     assert len(rows) == 1
     assert float(artifact.rows[0]["value"]) == float(rows[0]["union_population"])
+    if expected_masked_values is not None:
+        expected_total = float(expected_masked_values.sum(dtype=np.float64))
+        assert float(rows[0]["union_population"]) == expected_total
+        with (wrapped / "result.csv").open(newline="") as stream:
+            [row] = csv.DictReader(stream)
+        assert float(row["value"]) == expected_total
+        provenance = json.loads((wrapped / "provenance.json").read_text())
+        assert provenance["upstreamTotal"] == expected_total
+        assert float(provenance["statistics"][0]["value"]) == expected_total
+        with rasterio.open(wrapped / "coverage.tif") as coverage:
+            assert coverage.transform == from_origin(0, 4, 1, 1)
+            np.testing.assert_array_equal(coverage.read(1), np.ones((4, 6)))
+        with rasterio.open(wrapped / "masked_values.tif") as masked:
+            assert masked.dtypes == (expected_masked_values.dtype.name,)
+            assert masked.nodata == 0
+            assert masked.transform == from_origin(0, 4, 1, 1)
+            np.testing.assert_array_equal(masked.read(1), expected_masked_values)
+            np.testing.assert_array_equal(
+                masked.read_masks(1) > 0, expected_masked_values > 0
+            )
     assert not (wrapped / "upstream").exists()
     print(
         f"{case}: direct CLI {direct_seconds:.3f}s; EOlab plan {planning_seconds:.3f}s; plan + wrapper {wrapped_seconds:.3f}s"
