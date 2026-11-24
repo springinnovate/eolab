@@ -44,7 +44,7 @@ export class CompositeLeafletRenderer {
             this.#report();
             return;
         }
-        if (keepPreviousFrame && !this.drawn && this.selected?.grid?.status.loaded > 0) this.drawn = this.selected;
+        if (keepPreviousFrame && !this.drawn && this.selected?.grid?.recovery.hasLoadedTilesInView) this.drawn = this.selected;
         if (this.selected !== this.drawn) this.#release(this.selected);
         if (!keepPreviousFrame || !layers.length) {
             this.#release(this.drawn);
@@ -201,7 +201,7 @@ export class CompositeLeafletRenderer {
                         revealLoadedRasterFrame(layer, this.drawn.grid.layer);
                         this.#release(this.drawn);
                     }
-                    this.drawn = status.loaded ? this.selected : null;
+                    this.drawn = grid.recovery.hasLoadedTilesInView ? this.selected : null;
                 }
                 this.#report();
             } else if (this.drawn?.grid === grid) this.#report();
@@ -214,6 +214,6 @@ export class CompositeLeafletRenderer {
     #report() {
         const status = this.selected?.grid?.status ?? this.selected?.status ??
             {phase: "idle", total: 0, loaded: 0, failed: 0};
-        this.onStatus(status, this.drawn?.grid.status.loaded > 0 ? this.drawn.views : new Map());
+        this.onStatus(status, this.drawn?.grid.recovery.hasLoadedTilesInView ? this.drawn.views : new Map());
     }
 }

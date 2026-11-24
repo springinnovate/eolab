@@ -29,14 +29,16 @@ function evented() {
  */
 function fixture() {
     const statuses = [], layerStatuses = new Map();
+    let displayed;
     const map = Object.assign(evented(), {
         zoom: 1, attached: new Set(), pane: new FakeRasterControlElement(),
         getZoom() { return this.zoom; },
+        getZoomScale(to, from) { return 2 ** (to - from); },
         getPixelBounds: () => ({ min: { x: 0, y: 0 }, max: { x: 512, y: 256 } }),
         removeLayer(layer) { this.attached.delete(layer); layer.getContainer().remove(); },
     });
     const set = new LeafletLayerSet(map, { clear() {}, update() {} }, {
-        onStatus: status => statuses.push(status),
+        onStatus: (status, frames) => { statuses.push(status); displayed = frames; },
         onLayerStatus: (key, status) => layerStatuses.set(key, status),
     });
     const layers = new Map();
@@ -56,7 +58,7 @@ function fixture() {
     const rendering = [...layers.keys()].map(key => ({ key, visible: true, opacity: 1,
         descriptor: key === "annotation" ? null : { layerName: key } }));
     set.render(rendering);
-    return { set, map, layers, rendering, layerStatuses, status: () => statuses.at(-1),
+    return { set, map, layers, rendering, layerStatuses, status: () => statuses.at(-1), displayed: () => displayed,
         tile(key, x = 0) {
             const assignments = [], source = `/tiles/${key}/${x}`;
             const tile = { assignments, get src() { return source; }, set src(value) { assignments.push(value); } };
@@ -95,6 +97,9 @@ test("an annotation map keeps already drawn tiles when a pan and a date change o
     const pending = f.tile("a");
     await flush();
     assert.ok(f.map.attached.has(old), "the loaded overlap stays visible while the new date loads");
+    f.map.zoom = 0; f.tile("a"); f.map.emit("zoomend"); await flush();
+    assert.equal(f.displayed().get("a")?.layer, old, "the retained child tile still shows the previous date after zooming out");
+    f.map.zoom = 1; f.map.emit("zoomend");
     incoming.emit("tileload", {tile: pending}); await flush();
     assert.equal(f.map.attached.has(old), false);
     assert.ok(f.map.attached.has(incoming));

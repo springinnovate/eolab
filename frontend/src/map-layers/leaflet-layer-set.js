@@ -160,7 +160,7 @@ export class LeafletLayerSet {
     replace(key, layer, {keepPreviousFrame = false, awaitingPublication = false} = {}) {
         const record = this.#require(key);
         const retain = Boolean(keepPreviousFrame && record.visible && record.opacity > 0 && record.frame);
-        if (retain && !record.drawnFrame && this.localTileRecovery.get(record.layer)?.status.loaded > 0) {
+        if (retain && !record.drawnFrame && this.localTileRecovery.get(record.layer)?.recovery.hasLoadedTilesInView) {
             record.drawnFrame = record.frame;
         }
         const drawn = record.drawnFrame ?? this.compositeRenderer?.drawnView?.(key) ?? record.frame;
@@ -430,7 +430,7 @@ export class LeafletLayerSet {
                 watch.recovery = new TileRecovery(this.leafletMap, layer, status => {
                     watch.status = status;
                     if (record.layer === layer) {
-                        if (status.phase === "complete" && (status.loaded || this.#heldFrame(record))) this.#revealFrame(record);
+                        if (status.phase === "complete" && (watch.recovery.hasLoadedTilesInView || this.#heldFrame(record))) this.#revealFrame(record);
                         this.tileStatus.onLayerStatus(key, status);
                     }
                     this.#reportLocalTileStatus();
@@ -460,7 +460,7 @@ export class LeafletLayerSet {
         const displayed = new Map();
         for (const {key} of this.rendering) {
             const frame = this.#require(key).drawnFrame;
-            if (frame && this.localTileRecovery.get(frame.layer)?.status.loaded > 0) displayed.set(key, frame);
+            if (frame && this.localTileRecovery.get(frame.layer)?.recovery.hasLoadedTilesInView) displayed.set(key, frame);
         }
         this.tileStatus.onStatus({ phase, total, loaded, failed }, displayed);
     }

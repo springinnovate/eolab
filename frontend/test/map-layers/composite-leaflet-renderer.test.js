@@ -35,6 +35,7 @@ function fixture(create = null) {
         attached: new Set(), pane: new FakeRasterControlElement(), zoom: 1,
         bounds: { min: { x: 0, y: 0 }, max: { x: 512, y: 256 } },
         getZoom() { return this.zoom; },
+        getZoomScale(to, from) { return 2 ** (to - from); },
         getPixelBounds() { return this.bounds; },
         removeLayer(layer) { this.attached.delete(layer); layer.getContainer?.().remove(); },
     });
@@ -145,6 +146,13 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     assert.ok(f.map.attached.has(staged), "keep the drawn observation until every visible replacement tile is ready");
     assert.equal(incoming.getContainer().hidden, true);
     assert.deepEqual(f.displayed.at(-1), ["May"]);
+    f.map.zoom = 2;
+    f.map.bounds = {min: {x: 256, y: 0}, max: {x: 512, y: 256}};
+    f.tile(1, 2);
+    f.map.emit("zoomend"); await flush();
+    assert.equal(f.status().loaded, 0, "the replacement has no loaded tiles at the new zoom");
+    assert.deepEqual(f.displayed.at(-1), ["May"], "May's enlarged tile is still on the map");
+    f.map.zoom = 1;
     f.tile(2); // The new grid also has a pending tile in the destination of the pan.
     f.map.bounds = {min: {x: 512, y: 0}, max: {x: 768, y: 256}};
     f.map.emit("moveend"); await flush();
