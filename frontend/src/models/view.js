@@ -712,8 +712,9 @@ export class ModelsView {
         }
     }
 
-    /** Present the selected Data tools page, promoting raster creation among search matches.
-     * Keep existing run buttons focused as other runs enter or leave the history.
+    /** Present the selected Data tools page, listing raster creation first when it matches the search.
+     * Update run history only while the Runs list is visible.
+     * Preserve keyboard focus on a run button when other runs are added or removed.
      * An offered retry remains visible and focusable while its request is in progress.
      * @param {Object} state Controller snapshot.
      * @return {void}
@@ -754,6 +755,15 @@ export class ModelsView {
         }
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
         this.renderSetup(state); this.renderRun(state);
+        if (state.active && state.page === "runs") this.renderRunHistory(state);
+        this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
+    }
+
+    /** Show the latest run names, progress and order, and update the history controls.
+     * @param {Object} state Controller snapshot with ordered runs and pagination state.
+     * @return {void}
+     */
+    renderRunHistory(state) {
         const retainedRuns = new Set(state.runs.map(job => job.jobId));
         for (const [id, card] of this.runCards) {
             if (retainedRuns.has(id)) continue;
@@ -776,7 +786,6 @@ export class ModelsView {
         this.elements["runs-status"].textContent = state.historyLoading ? "Loading runs…" : state.runs.length ? "Runs belong to this browser session. Closing Data tools does not cancel them." : "No data tool runs in this browser session yet.";
         this.elements.more.hidden = !state.nextCursor; this.elements.more.disabled = state.historyLoading;
         this.elements["refresh-runs"].disabled = state.historyLoading;
-        this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
     }
 
     /** Release the page tab strip and detach the view’s persistent event listeners.
