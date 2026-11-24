@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 import rasterio
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import Affine
-from rasterio.windows import Window
 
 from eolab_app.bounded_vector import PolygonRasterizer
 from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
@@ -225,26 +224,38 @@ def calculate_flow_area(
                 raise ProcessingError(
                     "empty_flow_start", "The selected polygons do not overlap the DEM."
                 ) from error
+            seed_window = polygons.source_window
             with (
                 closing(polygons),
                 temporary_polygon_mask(
-                    dem, Window(0, 0, dem.width, dem.height), polygons, scratch, limits
+                    dem, seed_window, polygons, scratch, limits
                 ) as polygon,
             ):
                 assert (
                     polygon is not None
                 )  # A PolygonRasterizer always supplies a mask.
-                seeds = polygon.read(1).view(numpy.bool_)
+                selected = polygon.read(1).view(numpy.bool_)
+            if not selected.any():
+                raise ProcessingError(
+                    "empty_flow_start",
+                    "No DEM cell centres fall inside the selected polygons.",
+                )
             elevations = read_d8_elevations(dem)
             transform = dem.transform
             latlon = dem.crs.is_geographic
         valid = numpy.isfinite(elevations)
-        seeds &= valid
-        if not seeds.any():
+        selected &= valid[seed_window.toslices()]
+        if not selected.any():
             raise ProcessingError(
                 "empty_flow_start",
                 "No valid DEM cell centres fall inside the selected polygons.",
             )
+        if selected.shape == valid.shape:
+            seeds = selected
+        else:
+            seeds = numpy.zeros_like(valid)
+            seeds[seed_window.toslices()] = selected
+        del selected
         valid_count = int(numpy.count_nonzero(valid))
         write_progress(directory, "flow_directions", 0, 0)
         # A one-cell grid has no cells outside its seed; PyFlwDir needs size > 1.

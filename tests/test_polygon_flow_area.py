@@ -3,6 +3,7 @@
 from importlib.metadata import version
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import fiona
 import numpy
@@ -12,6 +13,7 @@ from numpy.typing import NDArray
 from pyproj import CRS, Transformer
 from rasterio.transform import Affine
 from rasterio.transform import from_origin
+from rasterio.windows import Window
 from shapely import contains_xy, segmentize
 from shapely.geometry import Polygon, box, mapping
 from shapely.ops import transform as transform_geometry
@@ -20,6 +22,7 @@ from catalog_selection_support import write_selection
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.d8 import build_d8_flow_graph
+import eolab_app.processing.flow_area as flow_area
 from eolab_app.processing.flow_area import (
     FlowAreaInputs,
     FlowAreaPlan,
@@ -105,6 +108,36 @@ def test_flow_mask_preserves_projected_source_edges(
     expected[20:40:2, :10] = 1
     expected[20:40:2, 70:] = 1
     numpy.testing.assert_array_equal(result, expected)
+
+
+def test_subpixel_polygon_stops_before_reading_elevations(tmp_path: Path) -> None:
+    """Reject an empty seed window without scanning the surrounding DEM.
+
+    Args:
+        tmp_path: Directory for the original inputs and calculation attempt.
+    """
+    selection = write_selection(
+        tmp_path / "small.gpkg", [mapping(box(3.1, 5.1, 3.2, 5.2))]
+    )
+    with (
+        patch.object(
+            flow_area, "temporary_polygon_mask", wraps=flow_area.temporary_polygon_mask
+        ) as mask,
+        patch.object(
+            flow_area, "read_d8_elevations", wraps=flow_area.read_d8_elevations
+        ) as elevations,
+        pytest.raises(ProcessingError) as rejected,
+    ):
+        _trace_both_directions(
+            tmp_path,
+            numpy.ones((16, 16), dtype="int16"),
+            from_origin(0, 16, 1, 1),
+            "EPSG:4326",
+            selection,
+        )
+    assert rejected.value.code == "empty_flow_start"
+    elevations.assert_not_called()
+    assert mask.call_args.args[1] == Window(2, 9, 3, 3)
 
 
 @pytest.mark.parametrize(
