@@ -462,6 +462,32 @@ def test_polar_area_preserves_membership_in_geographic_reference_crs(
         )
 
 
+@pytest.mark.parametrize("south,north", [(78, 90), (-90, -78)])
+def test_cylindrical_area_with_a_pole_on_its_edge(south: int, north: int) -> None:
+    """Select a longitude strip up to the pole in a cylindrical equal-area CRS.
+
+    Args:
+        south: Southern edge of the selected strip in degrees.
+        north: Northern edge of the selected strip in degrees.
+    """
+    from eolab_app.raster.bounded_window import project_polygons_to_crs
+
+    native = "ESRI:54034"
+    to_native = Transformer.from_crs(4326, native, always_xy=True)
+    rectangle = box(*to_native.transform_bounds(-10, south, 20, north))
+    crs = CRS.from_epsg(4326)
+    transform = from_origin(-180, north, 0.5, 0.75)
+    projected = project_polygons_to_crs(
+        native, crs, (mapping(rectangle),), None, pixel_size=(0.5, 0.75)
+    )
+    rows, cols = np.indices((16, 720), dtype="float64") + 0.5
+    expected = contains_xy(rectangle, *to_native.transform(*transform * (cols, rows)))
+    assert expected.sum() == 960
+    np.testing.assert_array_equal(
+        geometry_mask(projected, expected.shape, transform, invert=True), expected
+    )
+
+
 def test_visible_bounds_enclosing_the_displaced_paris_pole() -> None:
     """Select every NTF grid center inside a WGS84 box around the NTF north pole."""
     crs = CRS.from_epsg(4807)

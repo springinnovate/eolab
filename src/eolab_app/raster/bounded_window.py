@@ -702,7 +702,7 @@ def project_geographic_polygons(
             native = ogr.CreateGeometryFromWkb(polygon.wkb)
             splitter = projector
             poles = [
-                latitude for latitude, point in target_poles if polygon.covers(point)
+                latitude for latitude, point in target_poles if polygon.contains(point)
             ]
             if len(poles) == 1:
                 # A datum shift can move the pole away from the source origin.
