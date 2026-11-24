@@ -1,27 +1,37 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { editableMapSlugFromPath, privateMapEditFromLocation } from "../src/saved-map-view/api-client.js";
 
 /**
  * Run the actual composition startup with feature boundaries replaced by observers.
  * @param {boolean} sharedViewer Whether this is a published-map viewer.
  * @param {number} status Configuration response status.
- * @return {{start:()=>Promise<void>,release:()=>void,calls:Object[]}} Startup and observations.
+ * @param {string} [url="https://viewer.example/"] Browser URL before startup.
+ * @return {{start:()=>Promise<void>,release:()=>void,calls:Object[],browser:EventTarget,location:URL}}
+ * Startup, browser navigation boundary and observations.
  */
-function startup(sharedViewer, status = 200) {
+function startup(sharedViewer, status = 200, url = "https://viewer.example/") {
     const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
     const configurationStart = source.indexOf("async function loadAppGlobalConfiguration()");
     const configurationEnd = source.indexOf("\n/**", configurationStart);
     const applicationStart = source.indexOf("async function startApplication()");
     const applicationEnd = source.indexOf("\nstartApplication();", applicationStart);
     const calls = [];
+    const location = new URL(url);
+    const privateMapEdit = privateMapEditFromLocation(location);
+    const browser = Object.assign(new EventTarget(), {
+        setTimeout,
+        location: Object.assign(location, {reload: () => calls.push({reload: location.href})}),
+    });
     let release;
     const pending = new Promise(resolve => { release = resolve; });
     const dependencies = {
         document: {querySelector: selector => ({selector})},
         isSharedViewer: sharedViewer,
-        editableMapSlug: null,
-        window: {setTimeout},
+        editableMapSlug: privateMapEdit?.slug ?? editableMapSlugFromPath(location.pathname),
+        privateMapEdit,
+        window: browser,
         fetch: async (url, options) => {
             calls.push({url, options});
             await pending;
@@ -60,7 +70,7 @@ function startup(sharedViewer, status = 200) {
         `${source.slice(configurationStart, configurationEnd)}\n` +
         `${source.slice(applicationStart, applicationEnd)}\nreturn startApplication;`
     )(...Object.values(dependencies));
-    return {start, release, calls};
+    return {start, release, calls, browser, location};
 }
 
 for (const sharedViewer of [false, true]) {
@@ -86,5 +96,23 @@ for (const sharedViewer of [false, true]) {
         release();
         await assert.rejects(running, /Runtime configuration returned 503/);
         assert.equal(calls.length, 1);
+    });
+}
+
+for (const [path, sharedViewer, reloads] of [
+    ["/maps/survey/edit", false, true],
+    [`/maps/survey/edit#${"a".repeat(64)}`, false, true],
+    ["/maps/survey", true, false],
+    ["/admin-eolab/maps/survey/edit", false, false],
+    ["/", false, false],
+]) {
+    test(`fragment navigation reopens only private editors (${path})`, async () => {
+        const {start, release, calls, browser, location} = startup(sharedViewer, 200, `https://viewer.example${path}`);
+        const running = start();
+        location.hash = "b".repeat(64);
+        browser.dispatchEvent(new Event("hashchange"));
+        assert.deepEqual(calls.filter(call => "reload" in call), reloads ? [{reload: location.href}] : []);
+        release();
+        await running;
     });
 }
