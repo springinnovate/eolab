@@ -352,7 +352,8 @@ test("retrying a failed raster keeps the successful peer's saved result", async 
 });
 
 test("formulas share one job per source, retain exact scalar/unit CSV, and presentation edits do not recalculate",async()=>{
-    const h=fixture({}, new Map(), () => {}, box(0), () => false);
+    let styleEditing = false;
+    const h=fixture({}, new Map(), () => {}, box(0), () => styleEditing);
     h.controller.addFormula("area");await h.open();
     assert.equal(h.requests.filter(([k])=>k==="submit").length,2);
     assert.equal(h.requests.find(([k])=>k==="submit")[1].calculations.length,2);
@@ -362,6 +363,7 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     const before=h.requests.length;
     h.view.actions.onOrder("name","reverse");
     h.view.actions.onChartType("scatter");
+    assert.equal(h.view.state.chartType, "bar", "A locked chart keeps its columns");
     h.controller.editFormula(1,{label:"Renamed"});
     h.view.actions.onAddPlot();
     h.view.actions.onStatisticDisplay(2, {plotId:2});
@@ -383,6 +385,9 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     assert.match(csv,/"Renamed","mean\(a\)"/);
     assert.match(csv,/"area"/);
     assert.match(csv,/"job_id"/);
+    styleEditing = true;
+    h.view.actions.onChartType("scatter");
+    assert.equal(h.view.state.chartType, "scatter");
     assert.equal(h.requests.length,before);
     h.close();
 });

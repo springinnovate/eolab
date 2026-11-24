@@ -323,6 +323,11 @@ test("pending raster comparisons keep plot setup available without an empty char
 
     assert.equal(h.view.results.hidden, false, "the plot toolbar is reachable while waiting");
     assert.equal(h.view.chartToolbar.hidden, false);
+    const chartStyle = h.document.querySelector("#raster-series-chart-style");
+    assert.equal(chartStyle.hidden, false);
+    h.state.styleEditingEnabled = false;
+    h.draw();
+    assert.equal(chartStyle.hidden, true);
     assert.equal(h.view.addPlot.hidden, false);
     assert.equal(h.view.plots.hidden, true);
     assert.equal(h.view.plotHeading.hidden, true);

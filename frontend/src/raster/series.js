@@ -182,7 +182,11 @@ export class RasterSeriesController {
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
             },
-            onChartType: type => { this.chartType = type; this.render(); },
+            onChartType: type => {
+                if (!this.canEditStyle()) return;
+                this.chartType = type;
+                this.render();
+            },
             onDownload: () => view.downloadCsv(this.exportCsv()),
         });
         this.render();
