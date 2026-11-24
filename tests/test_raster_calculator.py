@@ -38,6 +38,7 @@ from eolab_app.processing.raster_expression import (
     evaluate_pixel_expression,
 )
 from eolab_app.raster.models import Wgs84Bounds
+from eolab_app.raster.pixel import read_raster_pixel
 from catalog_selection_support import write_selection
 from raster_fixture_support import write_source
 from raster_source_support import SOURCE
@@ -1515,6 +1516,14 @@ def test_published_raster_keeps_custom_prime_meridian_in_grads(
             assert output.files == [str(source)]
             assert result.valid_pixels == values.size - 1
             np.testing.assert_array_equal(output.read(1), values)
+        for column in (0, width - 1):
+            longitude, latitude = to_wgs84.transform(*transform * (column + 0.5, 0.5))
+            picked = read_raster_pixel(source, longitude, latitude)
+            assert (picked.row, picked.column, picked.value) == (
+                0,
+                column,
+                values[0, column],
+            )
 
 
 @pytest.mark.parametrize(
