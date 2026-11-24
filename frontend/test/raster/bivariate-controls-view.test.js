@@ -710,9 +710,9 @@ for (const axis of ["x", "y"]) {
         assert.ok(view.rangeControls[axis].values[name].textContent.startsWith(`${expected[index]}%`));
       }
     }
-    view.renderPercentiles(axis, { ...state, applicable: false, invalid: true,
-      message: "These percentiles give the same value. Choose a wider range or another sample." });
-    assert.equal(view.rangeControls[axis].inputs.lower.getAttribute("aria-invalid"), "true");
+    view.renderPercentiles(axis, { ...state, applicable: false, values: { lower: "4", middle: "4", upper: "4" },
+      message: "All three percentiles have the same value." });
+    assert.equal(view.rangeControls[axis].inputs.lower.getAttribute("aria-invalid"), "false");
     assert.match(view.rangeControls[axis].status.textContent, /same value/);
     assert.equal(view.rangeControls[axis].rescale.disabled, false);
     view.unbind();

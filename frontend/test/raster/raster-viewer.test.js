@@ -3486,6 +3486,7 @@ test("2D matching rejects pending, failed, invalid and constant samples without 
     reads[2].resolve({ ...pairedStatistics(), scope: "selectedArea", xMinimum: 4, xMaximum: 4 });
     await flushPromises();
     assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
+    assert.equal(h.controlsView.bivariateRanges.x.invalid, false, "Equal estimates are valid percentile readings");
     assert.match(h.controlsView.bivariateRanges.x.message, /same value/);
     assert.equal(h.controlsView.bivariateRanges.y.applicable, true);
     assert.match(h.controlsView.bivariateRanges.y.message, /sample area/);

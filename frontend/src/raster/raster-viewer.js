@@ -4390,11 +4390,12 @@ export function initializeRasterViewer(
                 const [minimum, midpoint, maximum] = estimates;
                 values = Object.fromEntries(["lower", "middle", "upper"].map((name, index) =>
                     [name, formatRasterPixelValue(estimates[index])]));
-                invalid = !(minimum < midpoint && midpoint < maximum);
-                message = invalid
-                    ? "These percentiles give the same value. Choose a wider range or another sample."
-                    : `Estimated from ${bivariateStatistics.scope === "wholeOverlap" ? "whole overlap" : "the selected sample area"}; only pixels valid in both rasters.`;
-                if (!invalid) ranges[axis] = { minimum, midpoint, maximum };
+                if (minimum < midpoint && midpoint < maximum) {
+                    ranges[axis] = { minimum, midpoint, maximum };
+                    message = `Estimated from pixels valid in both rasters across ${bivariateStatistics.scope === "wholeOverlap" ? "the whole overlap" : "the selected sample area"}.`;
+                } else {
+                    message = "At least two percentiles have the same value in this sample.";
+                }
             }
             controlsView.renderBivariatePercentiles(axis, {
                 values, range: ranges[axis] ?? null, message, invalid, available,
