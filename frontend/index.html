@@ -642,11 +642,11 @@
         type="button"
         hidden
       >Pixel picker hidden · Press P to show</button>
-      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel
+      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel data-pixel-picker-obstacle
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
-        <section id="map-interaction-tools" aria-label="Map interaction tools" hidden>
+        <section id="map-interaction-tools" data-pixel-picker-obstacle aria-label="Map interaction tools" hidden>
           <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
             <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
             <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
@@ -660,7 +660,7 @@
           </div>
           <p id="map-interaction-status" role="status" aria-live="polite"></p>
         </section>
-        <section id="raster-sampling-tool" aria-label="Sample area controls">
+        <section id="raster-sampling-tool" data-pixel-picker-obstacle aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
                 <span id="raster-sampling-area-summary">No raster selected</span>
@@ -739,7 +739,7 @@
               Select a raster to choose its sample area.
             </p>
         </section>
-        <header class="map-panel-header map-tools-header">
+        <header class="map-panel-header map-tools-header" data-pixel-picker-obstacle>
           <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-collapse"
             type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="true"
             aria-label="Collapse map tools" title="Collapse map tools"><span aria-hidden="true">×</span></button>
@@ -747,12 +747,12 @@
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             title="Choose a map tool"><span id="map-tool-name">Choose a tool</span><span aria-hidden="true">▾</span></button>
         </header>
-        <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
+        <div class="map-filter-summary-group" data-pixel-picker-obstacle role="group" aria-labelledby="map-filter-summary-heading">
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
         </div>
       </div>
-      <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
+      <div id="workspace-tool-actions" data-pixel-picker-obstacle popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Planning</strong>
           <button id="open-planning" class="workspace-tool-action" type="button" aria-controls="planning-panel">Planning tools</button>
@@ -777,7 +777,7 @@
           <button id="open-settings" class="workspace-tool-action" type="button" aria-controls="settings-panel">Settings</button>
         </div>
       </div>
-      <aside id="map-inspection" popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
+      <aside id="map-inspection" data-pixel-picker-obstacle popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
         <header class="map-inspection-dock-header">
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
