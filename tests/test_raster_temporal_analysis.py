@@ -31,7 +31,7 @@ from eolab_app.processing.raster_aggregate import (
 )
 from eolab_app.raster.bounded_window import (
     selected_raster_area_for_wgs84_bounds,
-    project_wgs84_polygons,
+    project_raster_polygons,
 )
 from eolab_app.sampling_area import (
     CatalogSelectionSamplingArea,
@@ -369,8 +369,8 @@ def test_periodic_polygon_copies_share_the_geometry_budget(
     }
     with TemporalRasterDataset(cyclic_observation) as dataset:
         with pytest.raises(ValueError, match="projected-coordinate limit"):
-            project_wgs84_polygons(dataset, (polygon,), 5, maximum_output_coordinates=5)
-        copied = project_wgs84_polygons(
+            project_raster_polygons(dataset, (polygon,), 5, maximum_output_coordinates=5)
+        copied = project_raster_polygons(
             dataset, (polygon,), 5, maximum_output_coordinates=None
         )
         assert len(copied) == 2

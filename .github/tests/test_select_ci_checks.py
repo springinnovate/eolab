@@ -180,6 +180,10 @@ class SelectCiChecksTests(unittest.TestCase):
                 {"application", "reproducibility", "processing"},
             ),
             (
+                "deployment/build-pyflwdir.py",
+                {"application", "reproducibility", "processing"},
+            ),
+            (
                 "catalog/migrations/0007_partition_maintenance_locking.sql",
                 {"application", "catalog"},
             ),

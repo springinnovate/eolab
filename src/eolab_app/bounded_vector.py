@@ -37,7 +37,7 @@ from eolab_app.raster.bounded_window import (
     BOUNDED_WGS84_DENSIFY_POINTS,
     NoRasterBoundsOverlapError,
     _polygon_rings,
-    project_wgs84_polygons,
+    project_raster_polygons,
     BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
 )
 from eolab_app.raster.read_cancellation import require_active_raster_read
@@ -195,6 +195,41 @@ def polygon_features(
 
 
 @contextmanager
+def native_polygon_features(
+    resolved: ResolvedCatalogSelection,
+    bbox: tuple[float, float, float, float] | None = None,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+    *,
+    limits: VectorReadLimits | None = VectorReadLimits(),
+) -> Iterator[tuple[CRS, Iterator[dict[str, Any]]]]:
+    """Stream filtered polygons in the CRS that defines their straight edges.
+
+    Args:
+        resolved: Authorized vector and attribute predicate.
+        bbox: Optional native envelope for pruning candidates.
+        cancellation_requested: Optional check between source records.
+        limits: Source-read budgets, or None for unlimited Processing reads.
+
+    Yields:
+        The source CRS and selected polygon mappings valid inside the context.
+
+    Raises:
+        GeometryValidationError: If geometry or read limits are invalid.
+        SelectionUnavailableError: If the vector cannot be opened.
+    """
+    with _native_polygon_records(
+        resolved,
+        (),
+        bbox,
+        cancellation_requested,
+        timeout_seconds=limits.seconds if limits else None,
+        max_features=limits.features if limits else None,
+        max_feature_coordinates=limits.coordinates_per_feature if limits else None,
+    ) as (source_crs, records):
+        yield source_crs, (geometry for geometry, _ in records)
+
+
+@contextmanager
 def polygon_records(
     resolved: ResolvedCatalogSelection,
     property_names: tuple[str, ...],
@@ -236,6 +271,88 @@ def polygon_records(
         GeometryValidationError: If a requested field is missing or geometry/work limits fail.
         SelectionUnavailableError: If a source component cannot be read.
     """
+    with _native_polygon_records(
+        resolved,
+        property_names,
+        bbox,
+        cancellation_requested,
+        timeout_seconds=timeout_seconds,
+        max_features=max_features,
+        max_feature_coordinates=max_feature_coordinates,
+    ) as (source_crs, records):
+        if source_crs == CRS.from_epsg(4326):
+            yield records
+        else:
+            yield (
+                (
+                    _wgs84_polygon(source_crs, geometry, max_feature_coordinates),
+                    attributes,
+                )
+                for geometry, attributes in records
+            )
+
+
+def _wgs84_polygon(
+    source_crs: CRS, geometry: dict[str, Any], max_coordinates: int | None
+) -> dict[str, Any]:
+    """Return a validated WGS84 representation for geographic feature consumers.
+
+    Args:
+        source_crs: Original vector coordinate reference system.
+        geometry: Validated polygon in that system.
+        max_coordinates: Maximum transformed positions, or None for unlimited work.
+
+    Returns:
+        A polygon or multipolygon in canonical longitude and latitude.
+
+    Raises:
+        GeometryValidationError: If the transformation produces invalid geometry.
+    """
+    projected = to_dict(
+        transform_geom(
+            source_crs.to_wkt(), "EPSG:4326", geometry, antimeridian_cutting=False
+        )
+    )
+    _validate_native_polygon_coordinates(
+        projected, max_coordinates, validate_wgs84_bounds=True
+    )
+    if not shape(projected).is_valid:
+        raise GeometryValidationError(
+            "Sampling requires valid polygons; repair the source first"
+        )
+    return projected
+
+
+@contextmanager
+def _native_polygon_records(
+    resolved: ResolvedCatalogSelection,
+    property_names: tuple[str, ...],
+    bbox: tuple[float, float, float, float] | None,
+    cancellation_requested: RasterReadCancellationCheck | None,
+    *,
+    timeout_seconds: float | None,
+    max_features: int | None,
+    max_feature_coordinates: int | None,
+) -> Iterator[tuple[CRS, Iterator[tuple[dict[str, Any], dict[str, Any]]]]]:
+    """Read selected attributes and polygon edges in the original coordinate system.
+
+    Args:
+        resolved: Authorized original source and attribute predicate.
+        property_names: Attribute fields to return with each polygon.
+        bbox: Optional native envelope for pruning feature candidates.
+        cancellation_requested: Optional cancellation predicate.
+        timeout_seconds: Elapsed-time allowance, or None for unlimited reads.
+        max_features: Candidate feature allowance, or None for unlimited reads.
+        max_feature_coordinates: Coordinate allowance per feature, or None.
+
+    Yields:
+        The source CRS and an iterator of valid native geometry/attribute pairs.
+
+    Raises:
+        ValueError: If the elapsed-time allowance is invalid.
+        GeometryValidationError: If a field, feature or work limit is invalid.
+        SelectionUnavailableError: If the authorized vector cannot be read.
+    """
     if timeout_seconds is not None and (
         type(timeout_seconds) not in (int, float)
         or not math.isfinite(timeout_seconds)
@@ -262,6 +379,8 @@ def polygon_records(
                 raise GeometryValidationError(
                     "The catalog vector has no coordinate reference system"
                 )
+            source_crs = CRS.from_user_input(dataset.crs)
+            is_wgs84 = source_crs == CRS.from_epsg(4326)
             candidates = dataset
             if resolved.driver == "GPKG" and resolved.selection.filter.active:
                 filter_fields = required_source_fields(
@@ -285,7 +404,7 @@ def polygon_records(
                 """Yield polygons and requested attributes within the source-read budget.
 
                 Yields:
-                    Validated WGS84 geometry and its original selected attribute values.
+                    Validated native geometry and its selected attribute values.
 
                 Raises:
                     GeometryValidationError: If geometry or actual read work exceeds limits.
@@ -326,26 +445,15 @@ def polygon_records(
                         )
                     raw = to_dict(feature.geometry)
                     _validate_native_polygon_coordinates(
-                        raw, max_feature_coordinates, validate_wgs84_bounds=False
+                        raw, max_feature_coordinates, validate_wgs84_bounds=is_wgs84
                     )
-                    geometry = to_dict(
-                        transform_geom(
-                            dataset.crs, "EPSG:4326", raw, antimeridian_cutting=False
-                        )
-                    )
-                    if (
-                        geometry.get("type") not in {"Polygon", "MultiPolygon"}
-                        or not shape(geometry).is_valid
-                    ):
+                    if not shape(raw).is_valid:
                         raise GeometryValidationError(
                             "Sampling requires valid polygons; repair the source first"
                         )
-                    _validate_native_polygon_coordinates(
-                        geometry, max_feature_coordinates, validate_wgs84_bounds=True
-                    )
-                    yield geometry, {name: properties[name] for name in property_names}
+                    yield raw, {name: properties[name] for name in property_names}
 
-            yield iterate()
+            yield source_crs, iterate()
 
 
 def _validate_native_polygon_coordinates(
@@ -586,6 +694,22 @@ def native_bbox_for_grid(
     return native_bbox_for_wgs84_bounds(resolved, (min(xs), min(ys), max(xs), max(ys)))
 
 
+def selection_edges_are_wgs84(resolved: ResolvedCatalogSelection) -> bool:
+    """Check whether a selection's original straight edges use WGS84 coordinates.
+
+    Args:
+        resolved: Authorized source whose layer metadata can be read.
+
+    Returns:
+        Whether geographic vertex bounds enclose all native polygon edges.
+
+    Raises:
+        SelectionUnavailableError: If the authorized layer cannot be opened.
+    """
+    with _source_collection(resolved) as source:
+        return source.crs.to_epsg() == 4326
+
+
 def native_bbox_for_wgs84_bounds(
     resolved: ResolvedCatalogSelection,
     bounds: tuple[float, float, float, float],
@@ -608,9 +732,8 @@ def native_bbox_for_wgs84_bounds(
         -180 <= west < east <= 180 and -90 <= south < north <= 90 and east - west < 180
     ):
         return None
-    with _source_collection(resolved) as source:
-        if source.crs.to_epsg() != 4326:
-            return None
+    if not selection_edges_are_wgs84(resolved):
+        return None
     return (
         math.nextafter(west, -math.inf),
         math.nextafter(south, -math.inf),
@@ -726,11 +849,13 @@ class PolygonRasterizer:
             left = top = math.inf
             right = bottom = -math.inf
             inverse = ~dataset.transform
-            with polygon_features(
+            with native_polygon_features(
                 filtered_vector,
                 cancellation_requested=cancellation_requested,
                 limits=read_limits,
-            ) as features:
+            ) as (source_crs, features):
+                if dataset.crs == source_crs:
+                    self.densify = 0
                 for geometry in features:
                     # The callback returns True when this work is cancelled.
                     # Stop before allocating/projecting another feature.
@@ -755,7 +880,7 @@ class PolygonRasterizer:
                             raise ProjectedGeometryMemoryError(
                                 "Selected polygons exceed the retained geometry allowance"
                             )
-                    projected_group = self.project(geometry)
+                    projected_group = self.project(geometry, source_crs)
                     # Projection can take time. Check again before walking all
                     # projected coordinates and retaining the feature.
                     require_active_raster_read(cancellation_requested)
@@ -796,6 +921,7 @@ class PolygonRasterizer:
                             )
                         self._retained.append(entry)
                         self.retained_bytes += retained_feature_bytes
+            self.pixel_bounds = (left, top, right, bottom)
             pad = BOUNDED_SOURCE_WINDOW_PADDING_PIXELS
             left, top = max(0, math.floor(left) - pad), max(0, math.floor(top) - pad)
             right, bottom = min(dataset.width, math.ceil(right) + pad), min(
@@ -815,16 +941,19 @@ class PolygonRasterizer:
         self.retained_bytes = 0
         self._closed = True
 
-    def project(self, geometry: dict[str, Any]) -> tuple[dict[str, object], ...]:
-        """Transform one WGS84 polygon feature into the raster coordinate system.
+    def project(
+        self, geometry: dict[str, Any], source_crs: CRS | str = "EPSG:4326"
+    ) -> tuple[dict[str, object], ...]:
+        """Transform the original edges of one feature into the raster CRS.
 
         Args:
-            geometry: GeoJSON polygon geometry in WGS84 longitude/latitude.
+            geometry: Polygon or multipolygon in its source coordinate system.
+            source_crs: CRS in which the polygon's edges are straight.
 
         Returns:
             GeoJSON polygon dictionaries in the raster CRS. Edges are subdivided
-            before projection using the spacing chosen during initialization;
-            polygons are not clipped to the current raster tile.
+            in their native CRS to follow curved edges at this raster's resolution.
+            The resulting geometry covers the complete feature.
 
         Raises:
             ValueError: If projection would exceed the coordinate-count limit.
@@ -833,11 +962,13 @@ class PolygonRasterizer:
         count = sum(len(r) - 1 for r in rings) * (self.densify + 1) + len(rings)
         if self.maximum_coordinates is not None and count > self.maximum_coordinates:
             raise ValueError("A feature exceeds the transformed-coordinate buffer")
-        return project_wgs84_polygons(
+        return project_raster_polygons(
             self.dataset,
             (geometry,),
-            count,
+            self.maximum_coordinates,
+            source_crs=source_crs,
             maximum_output_coordinates=self.maximum_coordinates,
+            initial_edge_points=self.densify,
         )
 
     def iter_projected_polygons(self) -> Iterator[dict[str, object]]:
@@ -924,14 +1055,14 @@ class PolygonRasterizer:
         bbox = native_bbox_for_grid(
             self.filtered_vector, self.dataset.crs, affine, out_shape
         )
-        with polygon_features(
+        with native_polygon_features(
             self.filtered_vector,
             bbox,
             self.cancellation_requested,
             limits=self.read_limits,
-        ) as features:
+        ) as (source_crs, features):
             for geometry in features:
-                projected = self.project(geometry)
+                projected = self.project(geometry, source_crs)
                 feature_mask = geometry_mask(
                     projected,
                     out_shape=out_shape,

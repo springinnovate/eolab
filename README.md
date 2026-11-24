@@ -126,6 +126,18 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 ### Run environmental models
 
+**Upstream and downstream area** traces flow around selected polygons. Choose
+a polygon layer and an elevation raster with square cells. Turn on **Upstream**
+to find cells that drain into the polygons, **Downstream** to follow paths
+leaving them, or both to combine the areas. The calculation fills depressions
+and traces flow within the DEM. Valid DEM cells with centres inside the
+selected polygons start the trace and are excluded from the result.
+
+Choose **Run tool**. In the completed run, **Show on map** displays the mask
+and **Download** saves it as a GeoTIFF. The mask keeps the DEM grid. A value
+of 1 marks traced cells and 0 marks other valid cells. Missing elevation
+remains NoData.
+
 **Map downstream areas and summarize raster values** uses the WWF model to trace and buffer downstream flow from a starting area, then calculates a statistic from positive raster values within the resulting area. For example, sum a population raster to estimate how many people are within the downstream area of a proposed restoration site.
 
 ![A teal downstream footprint near Tawau, Sabah, beside the completed run reporting a population total of 30,799.](docs/images/eolab-model-downstream-beneficiaries.jpg)

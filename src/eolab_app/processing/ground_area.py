@@ -8,17 +8,24 @@ by numerical fractional polygon selection masks. Other grids retain bounded cell
 
 import math
 from typing import Any, Callable
+from collections.abc import Iterator
 
+from affine import Affine
 import numpy as np
 from pyproj import CRS, Transformer
 from pyproj.exceptions import ProjError
+from rasterio.crs import CRS as RasterCRS
 from rasterio.windows import Window, transform as window_transform
 import shapely
 from shapely.geometry import Polygon, box, shape
 from shapely.geometry.base import BaseGeometry
 
 from eolab_app.sampling_box import sampling_box_bounds, tessellate_sampling_box
-from eolab_app.raster.bounded_window import prepare_raster_for_wgs84_bounds
+from eolab_app.raster.bounded_window import (
+    prepare_raster_for_wgs84_bounds,
+    project_polygons_to_crs,
+    project_raster_polygons,
+)
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     GroundAreaPlan,
@@ -26,7 +33,7 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.area_coverage import FractionalAreaCoverage
-from eolab_app.bounded_vector import polygon_features, native_bbox_for_grid
+from eolab_app.bounded_vector import native_polygon_features, native_bbox_for_grid
 
 # lat_ts=0 makes the x domain exactly +/- pi * WGS84's semimajor axis.
 AREA_CRS = "+proj=cea +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +type=crs"
@@ -172,6 +179,63 @@ def transformed_polygon(
     return result
 
 
+def _project_catalog_area_polygons(
+    source_crs: RasterCRS,
+    features: Iterator[dict[str, Any]],
+    limits: RasterAggregateLimits,
+) -> list[BaseGeometry]:
+    """Project selected features once for intersection with the calculation's raster tiles.
+
+    Args:
+        source_crs: Coordinate system in which the vector edges are straight.
+        features: Filtered polygons from the calculation's open catalog selection.
+        limits: Chord tolerance and maximum segment length in equal-area metres.
+
+    Returns:
+        Equal-area geometries in source feature order.
+
+    Raises:
+        ProcessingError: If a polygon cannot form a valid equal-area boundary.
+    """
+    polygons = []
+    for item in features:
+        (projected,) = project_polygons_to_crs(
+            source_crs,
+            AREA_CRS,
+            (item,),
+            None,
+            grid_transform=Affine.identity(),
+            initial_edge_points=0,
+            maximum_error=limits.area_edge_tolerance_metres,
+            maximum_segment=limits.area_max_segment_metres,
+            longitude_period=2 * MAXIMUM_X,
+        )
+        geometry = shape(projected)
+        if not geometry.is_valid:
+            raise ProcessingError(
+                "unsupported_area_crs",
+                "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
+            )
+        polygons.append(geometry)
+    return polygons
+
+
+def _fractional_coverage(geometry: BaseGeometry) -> FractionalAreaCoverage:
+    """Prepare oriented boundary edges for a rectilinear tile's hectare calculation.
+
+    Args:
+        geometry: Nonempty union of the selected polygons relevant to the grid.
+
+    Returns:
+        Coverage calculator including both exterior boundaries and holes.
+    """
+    return FractionalAreaCoverage(
+        np.asarray(ring.coords)
+        for polygon in shapely.get_parts(shapely.orient_polygons(geometry))
+        for ring in [polygon.exterior, *polygon.interiors]
+    )
+
+
 class PixelAreaCalculator:
     """Calculate each raster pixel's area inside the selected region, in hectares.
 
@@ -186,6 +250,7 @@ class PixelAreaCalculator:
         limits: RasterAggregateLimits,
         *,
         planning: bool = False,
+        catalog_pixel_bounds: tuple[float, float, float, float] | None = None,
     ) -> None:
         """Prepare a job's geometry and metadata without reading its raster band.
 
@@ -194,6 +259,7 @@ class PixelAreaCalculator:
             area: Immutable box/polygon selection or whole-raster selection.
             limits: Processing-owned geometry and transformation policy.
             planning: Whether this instance describes a grid before execution.
+            catalog_pixel_bounds: Unpadded column/row bounds of the prepared catalog polygons.
 
         Raises:
             ProcessingError: For unsupported CRS/topology or excessive work.
@@ -203,8 +269,6 @@ class PixelAreaCalculator:
                 dataset, sampling_box_bounds(area.samplingBox)
             )
         self.transform = dataset.transform
-        self.catalog_source = area.resolved if area.kind == "catalogSelection" else None
-        self.dataset = dataset
         self.limits = limits
         crs = CRS.from_user_input(dataset.crs)
         if not (
@@ -270,34 +334,28 @@ class PixelAreaCalculator:
         self.geometry = None
         self.rectangle = None
         self.window = Window(0, 0, dataset.width, dataset.height)
-        if area.kind == "catalogSelection":
-            self.wgs_area = wgs_area
-            # Project one feature at a time to determine the selected pixel bounds.
-            pixel_bounds = [math.inf, math.inf, -math.inf, -math.inf]
-            with polygon_features(self.catalog_source, limits=None) as features:
+        pixel_bounds = catalog_pixel_bounds
+        if area.kind == "catalogSelection" and catalog_pixel_bounds is None:
+            left = top = math.inf
+            right = bottom = -math.inf
+            with native_polygon_features(area.resolved, limits=None) as (
+                source_crs,
+                features,
+            ):
                 for item in features:
-                    projected = transformed_polygon(
-                        shape(item), pixels, WINDOW_TOLERANCE_PIXELS, 64
-                    )
-                    left, top, right, bottom = projected.bounds
-                    pixel_bounds = [
-                        min(pixel_bounds[0], left),
-                        min(pixel_bounds[1], top),
-                        max(pixel_bounds[2], right),
-                        max(pixel_bounds[3], bottom),
-                    ]
-            left, top, right, bottom = pixel_bounds
-            pad = 2 * WINDOW_TOLERANCE_PIXELS
-            x0, y0 = max(0, math.floor(left - pad)), max(0, math.floor(top - pad))
-            x1, y1 = min(dataset.width, math.ceil(right + pad)), min(
-                dataset.height, math.ceil(bottom + pad)
-            )
-            if x0 >= x1 or y0 >= y1:
-                raise ProcessingError(
-                    "no_overlap", "The selected area does not overlap this raster."
-                )
-            self.window = Window(x0, y0, x1 - x0, y1 - y0)
-        elif area.kind != "wholeRaster":
+                    for part in project_raster_polygons(
+                        dataset,
+                        (item,),
+                        None,
+                        source_crs=source_crs,
+                        maximum_output_coordinates=None,
+                    ):
+                        points = shapely.get_coordinates(shape(part))
+                        x, y = inverse * (points[:, 0], points[:, 1])
+                        left, right = min(left, x.min()), max(right, x.max())
+                        top, bottom = min(top, y.min()), max(bottom, y.max())
+            pixel_bounds = (left, top, right, bottom)
+        elif area.kind not in {"wholeRaster", "catalogSelection"}:
             box_ring = None
             if area.kind == "samplingBox":
 
@@ -376,25 +434,25 @@ class PixelAreaCalculator:
                     for g in originals
                 ]
                 pixel_bounds = shapely.total_bounds(native_polygons)
-            if not self.geometry.is_valid:
-                raise ProcessingError(
-                    "area_geometry_limit",
-                    "The selected polygons do not form a valid area. Repair the source polygons.",
-                    413,
-                )
-            left, top, right, bottom = pixel_bounds
+        if pixel_bounds is not None:
             pad = 2 * WINDOW_TOLERANCE_PIXELS
-            x0, y0 = max(0, math.floor(left - pad)), max(0, math.floor(top - pad))
-            x1, y1 = min(dataset.width, math.ceil(right + pad)), min(
-                dataset.height, math.ceil(bottom + pad)
+            lower, upper = np.asarray(pixel_bounds).reshape(2, 2)
+            start, stop = lower - pad, upper + pad
+            if self.rectilinear:
+                # Only the accuracy margin may be clipped to the continuous world.
+                # A selected cell that actually wraps must still fail validation.
+                world = pixels(np.array([[-180.0, -90.0], [180.0, 90.0]]))
+                start = np.minimum(lower, np.maximum(start, world.min(axis=0)))
+                stop = np.maximum(upper, np.minimum(stop, world.max(axis=0)))
+            x0, y0 = max(0, math.floor(start[0])), max(0, math.floor(start[1]))
+            x1, y1 = min(dataset.width, math.ceil(stop[0])), min(
+                dataset.height, math.ceil(stop[1])
             )
             if x0 >= x1 or y0 >= y1:
                 raise ProcessingError(
                     "no_overlap", "The selected area does not overlap this raster."
                 )
             self.window = Window(x0, y0, x1 - x0, y1 - y0)
-            if self.geometry.equals(self.geometry.envelope):
-                self.rectangle = self.geometry.bounds
         geometry_cells = (
             0 if self.rectilinear else int(self.window.width * self.window.height)
         )
@@ -407,6 +465,34 @@ class PixelAreaCalculator:
         # Probe the selected grid domain before accepting work. The per-tile
         # transformation repeats this guard as native footprints are measured.
         self._project_native(self._corners(self.window))
+        self.catalog_index: shapely.STRtree | None = None
+        if area.kind == "catalogSelection" and not planning:
+            bbox = native_bbox_for_grid(
+                area.resolved,
+                dataset.crs,
+                window_transform(self.window, self.transform),
+                (int(self.window.height), int(self.window.width)),
+            )
+            with native_polygon_features(area.resolved, bbox, limits=None) as (
+                source_crs,
+                features,
+            ):
+                polygons = _project_catalog_area_polygons(source_crs, features, limits)
+            if self.rectilinear and len(polygons) > 1:
+                self.catalog_index = shapely.STRtree(polygons)
+            else:
+                self.geometry = shapely.union_all(polygons)
+        if self.geometry is not None:
+            if not self.geometry.is_valid:
+                raise ProcessingError(
+                    "area_geometry_limit",
+                    "The selected polygons do not form a valid area. Repair the source polygons.",
+                    413,
+                )
+            if not self.geometry.is_empty and self.geometry.equals(
+                self.geometry.envelope
+            ):
+                self.rectangle = self.geometry.bounds
         self.axis_x = self.axis_y = None
         self.coverage = None
         if self.rectilinear:
@@ -443,13 +529,12 @@ class PixelAreaCalculator:
                     )
                 )
             )[:, 1]
-            if self.geometry is not None and self.rectangle is None:
-                oriented = shapely.orient_polygons(self.geometry)
-                self.coverage = FractionalAreaCoverage(
-                    np.asarray(ring.coords)
-                    for polygon in shapely.get_parts(oriented)
-                    for ring in [polygon.exterior, *polygon.interiors]
-                )
+            if (
+                self.geometry is not None
+                and not self.geometry.is_empty
+                and self.rectangle is None
+            ):
+                self.coverage = _fractional_coverage(self.geometry)
 
     def _corners(self, window: Window) -> np.ndarray:
         """Construct the closed native footprint of an integral grid window.
@@ -501,57 +586,8 @@ class PixelAreaCalculator:
             ProcessingError: For excessive or unsupported transformed geometry.
         """
         height, width = int(tile.height), int(tile.width)
-        if self.catalog_source is not None:
-            # Union only projected candidates intersecting this tile. Union is
-            # essential for fractional areas: summing features double-counts
-            # overlap. No geometry is persisted or retained between tiles.
-            self.geometry = self.rectangle = self.coverage = None
-            # Corner envelopes prove containment only for a separable grid.
-            # For general projections, keep the conservative predicate stream.
-            footprint = None
-            if self.rectilinear:
-                corners = self._project_native(self._corners(tile))
-                footprint = box(*corners.min(axis=0), *corners.max(axis=0))
-            retained = []
-
-            bbox = native_bbox_for_grid(
-                self.catalog_source,
-                self.dataset.crs,
-                window_transform(tile, self.transform),
-                (height, width),
-            )
-            with polygon_features(self.catalog_source, bbox, limits=None) as features:
-                for item in features:
-                    geometry = transformed_polygon(
-                        shape(item),
-                        lambda p: project_points(p, self.wgs_area),
-                        self.limits.area_edge_tolerance_metres,
-                        self.limits.area_max_segment_metres,
-                    )
-                    if footprint is None or geometry.intersects(footprint):
-
-                        retained.append(geometry)
-            if not retained:
-                return np.zeros((height, width), dtype=np.float64)
-            self.geometry = shapely.union_all(retained)
-            if not self.geometry.is_valid:
-                raise ProcessingError(
-                    "area_geometry_limit",
-                    "Selected polygons do not form a valid area in this tile. Repair the source polygons.",
-                    413,
-                )
-            self.rectangle = (
-                self.geometry.bounds
-                if self.geometry.equals(self.geometry.envelope)
-                else None
-            )
-            if self.rectilinear and self.rectangle is None:
-                oriented = shapely.orient_polygons(self.geometry)
-                self.coverage = FractionalAreaCoverage(
-                    np.asarray(ring.coords)
-                    for polygon in shapely.get_parts(oriented)
-                    for ring in [polygon.exterior, *polygon.interiors]
-                )
+        if self.geometry is not None and self.geometry.is_empty:
+            return np.zeros((height, width), dtype=np.float64)
         if self.rectilinear:
             x, y = int(tile.col_off - self.window.col_off), int(
                 tile.row_off - self.window.row_off
@@ -560,12 +596,23 @@ class PixelAreaCalculator:
             ys = self.axis_y[y : y + height + 1]
             west, east = np.minimum(xs[:-1], xs[1:]), np.maximum(xs[:-1], xs[1:])
             south, north = np.minimum(ys[:-1], ys[1:]), np.maximum(ys[:-1], ys[1:])
-            if self.geometry is None or self.rectangle is not None:
-                if self.rectangle is not None:
-                    west = np.maximum(west, self.rectangle[0])
-                    east = np.minimum(east, self.rectangle[2])
-                    south = np.maximum(south, self.rectangle[1])
-                    north = np.minimum(north, self.rectangle[3])
+            rectangle, coverage = self.rectangle, self.coverage
+            if self.catalog_index is not None:
+                footprint = box(west.min(), south.min(), east.max(), north.max())
+                indices = self.catalog_index.query(footprint, predicate="intersects")
+                if not indices.size:
+                    return np.zeros((height, width), dtype=np.float64)
+                local = shapely.union_all(self.catalog_index.geometries[indices])
+                if local.equals(local.envelope):
+                    rectangle = local.bounds
+                else:
+                    coverage = _fractional_coverage(local)
+            if coverage is None:
+                if rectangle is not None:
+                    west = np.maximum(west, rectangle[0])
+                    east = np.minimum(east, rectangle[2])
+                    south = np.maximum(south, rectangle[1])
+                    north = np.minimum(north, rectangle[3])
                 return (
                     np.maximum(north - south, 0)[:, None]
                     * np.maximum(east - west, 0)[None, :]
@@ -576,7 +623,7 @@ class PixelAreaCalculator:
                 * (east - west)[None, :]
                 / HECTARE_SQUARE_METRES
             )
-            return self.coverage.calculate_cell_coverage(xs, ys) * cell_hectares
+            return coverage.calculate_cell_coverage(xs, ys) * cell_hectares
         areas = np.zeros((height, width), dtype=np.float64)
         for row in range(height):
             for column in range(width):

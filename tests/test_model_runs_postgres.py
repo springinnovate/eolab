@@ -19,6 +19,7 @@ import psycopg
 import pytest
 
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
+from eolab_app.processing import model_runs
 from eolab_app.processing.habitat_models import QueuedHabitat
 from eolab_app.processing.model_run_contracts import ModelRunSpec, RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
@@ -677,6 +678,127 @@ def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     job = response.json()
     assert response.headers["location"] == f"/api/processing/jobs/{job['jobId']}"
     return job
+
+
+@pytest.mark.parametrize("dependency", ["pyflwdir", "numba", "llvmlite"])
+def test_model_worker_rejects_changed_routing_dependencies(
+    model_boundary: Any, monkeypatch: pytest.MonkeyPatch, dependency: str
+) -> None:
+    """Reject an accepted run when the worker's routing dependency version differs.
+
+    Args:
+        model_boundary: Real model HTTP routes, database and worker.
+        monkeypatch: Change installed-version metadata between admission and execution.
+        dependency: Routing engine or compiler package whose version has changed.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    installed_version = model_runs.version
+
+    def changed_version(package: str) -> str:
+        """Report a changed installation for just the selected dependency.
+
+        Args:
+            package: Distribution name requested by the implementation fingerprint.
+
+        Returns:
+            Different version text for the selected package, or its real version.
+        """
+        current = installed_version(package)
+        return current + "+changed" if package == dependency else current
+
+    try:
+        with monkeypatch.context() as versions:
+            versions.setattr(model_runs, "version", changed_version)
+            model_runs.compute_implementation_checksum.cache_clear()
+            assert client.portal.call(worker.run_once)
+            result = client.get(f"/api/processing/jobs/{run['jobId']}").json()
+            assert result["status"] == "failed", result
+            assert result["error"]["code"] == "model_implementation_changed"
+    finally:
+        model_runs.compute_implementation_checksum.cache_clear()
+
+
+def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
+    model_boundary: Any, boundary: Any
+) -> None:
+    """Run, publish and download a known mask through ordinary Processing endpoints.
+
+    Args:
+        model_boundary: Real model HTTP routes, worker and publication service.
+        boundary: Catalog raster with elevations increasing east and south, plus
+            the vector selection API.
+    """
+    vector_client, _, dem_path, _, _ = boundary
+    client, worker, service = model_boundary
+    with rasterio.open(dem_path) as dem:
+        x, y = dem.xy(50, 40)
+        radius = abs(dem.transform.a) / 4
+        crs = dem.crs.to_string()
+    path = dem_path.with_name("flow-site.gpkg")
+    write_geopackage_layer(
+        path,
+        "site",
+        crs=crs,
+        geometry=rectangle(x - radius, y - radius, x + radius, y + radius),
+    )
+    selection = register_selection(vector_client, path)
+    body = model_request(
+        client,
+        "polygon-flow-area",
+        inputs={"dem": SOURCE, "polygon": {"selection": selection, "fields": {}}},
+        parameters={"upstream": True, "downstream": False},
+    )
+    empty = client.post(
+        "/api/processing/model-runs",
+        json={**body, "parameters": {"upstream": False, "downstream": False}},
+        headers=HEADERS,
+    )
+    assert empty.status_code == 422
+    assert empty.json()["detail"] == {
+        "code": "invalid_flow_direction",
+        "message": "Choose at least one flow direction.",
+    }
+    invalid = client.post(
+        "/api/processing/model-runs",
+        json={**body, "parameters": {"upstream": "false", "downstream": True}},
+        headers=HEADERS,
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_model_inputs"
+    run = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    assert ready["result"]["label"] == "Raster mask"
+    assert ready["result"]["validPixels"] == 10_000
+    output = client.get(base + "/artifacts").json()["files"][0]
+    assert (output["name"], output["mediaType"], output["role"]) == (
+        "mask",
+        "image/tiff",
+        "result",
+    )
+    download = client.get(output["url"])
+    assert download.status_code == 200
+    with rasterio.MemoryFile(download.content) as memory, memory.open() as mask:
+        expected = numpy.zeros((100, 100), dtype="uint8")
+        # The ramp's lowest neighbour lies northwest. The seed receives flow
+        # along the southeast diagonal, starting one cell outside the polygon.
+        steps = numpy.arange(1, 50)
+        expected[50 + steps, 40 + steps] = 1
+        numpy.testing.assert_array_equal(mask.read(1), expected)
+        assert mask.nodata == 255
+    run_yaml = parse_yaml(client.get(base + "/run-yaml").content, run=True)
+    assert run_yaml["execution"]["numericalPolicy"]["engine"] == "pyflwdir"
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    rendered_source = client.portal.call(
+        service.resolve_model_artifact, owner, identifier, output["artifactId"]
+    )
+    assert rendered_source.path.read_bytes() == download.content
+    client.cookies.clear()
+    assert client.get(output["url"]).status_code == 404
 
 
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
