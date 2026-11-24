@@ -171,7 +171,9 @@ test("a map recovers only eligible retries and other maps can submit independent
     assert.deepEqual(reopened.submitted, []);
     reopened.controller.chooseModel(clipModel);
     await reopened.controller.submit();
-    reopened.controller.setAllowedModelIds([model.id]);
+    first.storage.setItem(`eolab.models.pending.v1.survey.${clipModel.id}`, "{");
+    reopened.controller.setAllowedModelIds([clipModel.id, model.id]);
+    assert.deepEqual(reopened.controller.state.pending, captured, "an unreadable retry must not hide the next model's request");
     await reopened.controller.submit(true);
     assert.equal(reopened.submitted[0].model.id, clipModel.id);
     assert.deepEqual(reopened.submitted[1], captured);

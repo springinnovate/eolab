@@ -119,7 +119,7 @@ export class ModelsController {
 
     /** Return the tab's retry slot for a recipe. Configured maps keep separate slots
      * so a restricted retry cannot block or overwrite another map or model's work.
-     * @param {string} id Recipe identifier of the original submission.
+     * @param {string|null} id Recipe identifier, or null to read the unrestricted slot.
      * @return {string} Session storage key.
      */
     #recoveryKey(id) {
@@ -132,20 +132,22 @@ export class ModelsController {
      */
     #restorePendingSubmission(finishedKey = null) {
         this.state.pending = null;
-        const keys = this.allowedModelIds === null ? [RECOVERY_KEY] :
-            Array.from(this.allowedModelIds, id => this.#recoveryKey(id));
-        try {
-            for (const key of keys) {
-                if (key === finishedKey) continue;
+        for (const id of this.allowedModelIds ?? [null]) {
+            const key = this.#recoveryKey(id);
+            if (key === finishedKey) continue;
+            try {
                 const value = JSON.parse(this.storage?.getItem(key) ?? "null");
                 if (value && typeof value.requestId === "string" && /^[A-Za-z0-9_-]{16,80}$/.test(value.requestId) &&
-                    value.model && value.inputs && value.parameters && this.#allowsModel(value.model.id) &&
-                    this.#recoveryKey(value.model.id) === key) {
+                    value.model && value.inputs && value.parameters && (id === null || value.model.id === id)) {
                     this.state.pending = value;
-                    break;
+                    return;
                 }
+            } catch (error) {
+                this.state.error = "A saved submission could not be read from this tab. Check Runs before starting it again.";
+                // Malformed JSON affects one recipe. A storage access failure affects the tab.
+                if (!(error instanceof SyntaxError)) return;
             }
-        } catch { this.state.error = "The previous submission could not be read from this tab's storage."; }
+        }
     }
 
     /** Apply a map's new-run choices before setup, retry or duplication can start work.
