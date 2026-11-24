@@ -78,10 +78,13 @@ def _copy_reference_crs_keys(reference: Path, destination: Path, crs: ProjCRS) -
             not math.isclose(grid_unit, math.radians(1))
             or decoded.get("GeogGeodeticDatumGeoKey") != 32767
         ):
-            # GeoTools reads WKT1 in raster x/y order. ESRI's compound form
-            # lets GDAL retain height while GeoTools opens the horizontal image.
-            dialect = "WKT1_ESRI" if crs.is_compound else "WKT1_GDAL"
-            wkt = crs.to_wkt(version=dialect, output_axis_rule=False)
+            # GeoTools reads the horizontal WKT1 in raster x/y order. GDAL's
+            # horizontal dialect retains TOWGS84. The ESRI vertical suffix
+            # preserves the height CRS for GDAL readers of the same file.
+            horizontal = crs.sub_crs_list[0] if crs.is_compound else crs
+            wkt = horizontal.to_wkt(version="WKT1_GDAL", output_axis_rule=False)
+            if crs.is_compound:
+                wkt += "," + crs.sub_crs_list[1].to_wkt(version="WKT1_ESRI")
             # PROJ emits PRIMEM in degrees. The citation readers interpret its
             # number in the geographic angular unit. Edit only the emitted token.
             wkt = re.sub(

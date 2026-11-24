@@ -15,7 +15,7 @@ final class RasterCalculatorGeoTiffTest {
     /** Check the opposite corners of each survey against independent WGS84 positions. */
     @Test
     void readsPublishedGridAtSurveyedCoordinates() throws Exception {
-        for (String name : new String[] {"degrees", "arcminutes", "height", "mercator"}) {
+        for (String name : new String[] {"degrees", "arcminutes", "height", "helmert", "mercator"}) {
             var file = Path.of(System.getenv("EOLAB_CALCULATOR_COGS"), name + ".tif").toFile();
             var reader = new GeoTiffReader(file);
             try {
@@ -27,11 +27,14 @@ final class RasterCalculatorGeoTiffTest {
                 grid.transform(corners, 0, corners, 0, 2);
                 toWgs84.transform(corners, 0, corners, 0, 2);
                 // World Mercator projected coordinates are (500,3500) and (12500,500) metres.
-                double[] expected = name.equals("mercator")
-                        ? new double[] {2.1414915764, 0.0316529301, 2.2492894105, 0.0045218474}
-                        : new double[] {-2.168, 48.365, -2.048, 48.335};
+                double[] expected = switch (name) {
+                    case "mercator" -> new double[] {2.1414915764, 0.0316529301, 2.2492894105, 0.0045218474};
+                    case "helmert" -> new double[] {-2.1688949275, 48.3649022964, -2.0488897222, 48.3349034610};
+                    default -> new double[] {-2.168, 48.365, -2.048, 48.335};
+                };
                 for (int i = 0; i < corners.length; i++) {
-                    assertEquals(expected[i], corners[i], 1e-8, name);
+                    // PROJ and GeoTools implement the datum shift to centimetre agreement.
+                    assertEquals(expected[i], corners[i], name.equals("helmert") ? 1e-7 : 1e-8, name);
                 }
                 assertEquals(0, image.getSampleDouble(0, 0, 0), name);
                 assertEquals(51, image.getSampleDouble(12, 3, 0), name);

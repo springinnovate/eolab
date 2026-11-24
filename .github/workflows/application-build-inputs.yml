@@ -136,6 +136,7 @@ jobs:
               export_cog degrees "$survey[degrees]"
               export_cog arcminutes "$survey[arcminutes]"
               export_cog height "$survey[height]"
+              export_cog helmert tests/test_raster_calculator.py::test_matched_survey_retains_datum_shift_and_height
               export_cog mercator "tests/test_projected_raster_calculator.py::test_matched_mercator_cog_preserves_survey_grid[False]"
             ' 2>&1 | tee artifacts/application-builds/backend-tests.log
       - name: Build and smoke the standalone Job service image

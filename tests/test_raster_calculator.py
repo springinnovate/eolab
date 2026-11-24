@@ -1748,6 +1748,57 @@ def test_published_survey_grid_preserves_numeric_meridian_and_height(
 
 
 @pytest.mark.parametrize(
+    "survey_reference", [(9105, 1 / 0.9, 5720, "helmert")], indirect=True
+)
+def test_matched_survey_retains_datum_shift_and_height(
+    tmp_path: Path, survey_reference: tuple[Path, float, float, int | None]
+) -> None:
+    """Publish and reopen a measured grid requiring both a Helmert shift and a height CRS.
+
+    Args:
+        tmp_path: Directory for the matched COG.
+        survey_reference: Independent Clarke 1880 (IGN) GeoKeys with a three-parameter shift.
+    """
+    source, _, _, vertical = survey_reference
+    to_wgs84 = Transformer.from_crs(
+        "+proj=longlat +ellps=clrk80ign +pm=2.137 +towgs84=-168,-60,320 +type=crs",
+        4326,
+        always_xy=True,
+    )
+    west, south, east, north = to_wgs84.transform_bounds(-4.308, 48.332, -4.181, 48.368)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(west=west, south=south, east=east, north=north),
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, tmp_path, RasterAggregateLimits())
+    with (
+        rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
+        rasterio.open(tmp_path / result.filename) as output,
+    ):
+        published = ProjCRS.from_wkt(output.crs.to_wkt(version="WKT2_2019"))
+        horizontal, height = published.sub_crs_list
+        assert horizontal.is_bound and height.to_epsg() == vertical
+        np.testing.assert_array_equal(output.read(1), np.arange(52).reshape(4, 13))
+        ground = Transformer.from_crs(published, 4326, always_xy=True)
+        for row, column in ((0, 0), (3, 12)):
+            native_x, native_y = output.xy(row, column)
+            expected = to_wgs84.transform(-4.305 + column * 0.01, 48.365 - row * 0.01)
+            assert ground.transform(native_x, native_y) == pytest.approx(
+                expected, abs=1e-8
+            )
+
+
+@pytest.mark.parametrize(
     ("width", "meridian", "geokeys", "unit"),
     [
         (4, "paris", "ESRI_PE", "grad"),
