@@ -860,6 +860,7 @@ export class MapInspectionController {
             this.activationOrder = [];
         }
         const openChanged = shouldOpen !== this.isOpen;
+        const returnFocusToChooser = openChanged && !shouldOpen && this.root.contains(this.document.activeElement);
         this.isOpen = shouldOpen;
         this.#renderDock();
         if (openChanged) {
@@ -874,7 +875,10 @@ export class MapInspectionController {
                     focusedCommand?.focus({ preventScroll: true });
                 }
             }
-            else this.root.hidePopover();
+            else {
+                this.root.hidePopover();
+                if (returnFocusToChooser) this.mapToolsButton.focus();
+            }
             this.#reportLayoutChange();
         }
     }

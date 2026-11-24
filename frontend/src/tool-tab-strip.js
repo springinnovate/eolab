@@ -97,6 +97,7 @@ export class ToolTabStrip {
      * @return {void}
      */
     render(active, { previous, contexts, hidden = false } = {}) {
+        const focusedControl = this.document.activeElement;
         if (previous !== undefined) this.previousTab = previous;
         else if (active !== this.activeTab) this.previousTab = this.activeTab;
         this.activeTab = active;
@@ -125,15 +126,16 @@ export class ToolTabStrip {
             this.menu.hidePopover();
             return;
         }
-        this.#fitTabs();
+        this.#fitTabs(focusedControl);
     }
 
     /**
      * Fit each tab and its close button together, keeping the active tab in the row.
      * Overflowed tabs remain measurable so resizing and font changes can bring them back.
+     * @param {Element|null} [focusedControl] Focus before render changed the availability of any controls.
      * @return {void}
      */
-    #fitTabs() {
+    #fitTabs(focusedControl = this.document.activeElement) {
         if (this.list.hidden) return;
         const width = this.list.getBoundingClientRect().width +
             (this.trigger.hidden ? 0 : this.trigger.getBoundingClientRect().width);
@@ -144,8 +146,9 @@ export class ToolTabStrip {
         ]));
         const totalWidth = Array.from(widths.values()).reduce((sum, value) => sum + value, 0);
         const overflow = totalWidth > width;
-        const hadIndexFocus = this.document.activeElement === this.trigger || this.menu.contains(this.document.activeElement);
-        const focusedItem = available.find(({ container }) => container.contains(this.document.activeElement));
+        const menuHadFocus = this.menu.contains(focusedControl);
+        const focusedItem = this.list.contains(focusedControl) &&
+            this.items.find(({ tab, close }) => focusedControl === tab || focusedControl === close);
         this.count.textContent = String(available.length);
         this.trigger.hidden = !overflow;
         let space = width - (overflow ? this.trigger.getBoundingClientRect().width : 0);
@@ -174,12 +177,15 @@ export class ToolTabStrip {
         this.trigger.title = notice ? `New results in ${unread.join(", ")}` : "";
         if (!overflow) {
             this.menu.hidePopover();
-            if (hadIndexFocus) keyboardTab?.focus();
+            if (menuHadFocus || focusedControl === this.trigger) keyboardTab?.focus();
         } else if (this.menu.matches(":popover-open")) {
             positionToolMenu(this.menu, this.trigger);
-            if (this.document.activeElement?.hidden || this.document.activeElement?.disabled) this.#focusMenuChoice();
+            if (menuHadFocus && (focusedControl.hidden || focusedControl.disabled)) this.#focusMenuChoice();
         }
-        if (focusedItem && !visible.has(focusedItem.tab)) keyboardTab?.focus();
+        if (focusedItem && (!visible.has(focusedItem.tab) || focusedControl.disabled ||
+            (focusedControl === focusedItem.close && focusedItem.tab.getAttribute("data-open") !== "true"))) {
+            keyboardTab?.focus();
+        }
     }
 
     /** Focus the selected menu row or the first available destination. @return {void} */

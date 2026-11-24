@@ -421,6 +421,25 @@
         "Closing Settings from overflow must preserve the selected raster download");
       tabBar.style.removeProperty("inline-size");
       dock.hideRasterClips();
+      for (const inMenu of [false, true]) {
+        dock.showFeatureInspector();
+        document.querySelector("#open-settings").click();
+        await settleLayout();
+        if (inMenu) { index.click(); await settleLayout(); }
+        const closeFeatures = inMenu ? menu.querySelector('[aria-label="Close feature inspector"]')
+          : document.querySelector("#close-vector-inspector");
+        closeFeatures.focus();
+        check(document.activeElement === closeFeatures, "The pending Features close action must accept focus");
+        dock.hideFeatureInspector();
+        dock.setClickResult("feature", null);
+        await settleLayout();
+        const selectedSettings = inMenu ? menu.querySelector('[aria-checked="true"]') : document.querySelector("#map-inspection-tab-settings");
+        check(document.activeElement === selectedSettings && dock.activeTool === "settings" &&
+          menu.matches(":popover-open") === inMenu,
+          `An empty result must return focus to Settings in the ${inMenu ? "open menu" : "tab row"}`);
+        if (inMenu) menu.hidePopover();
+      }
+      document.querySelector("#close-settings").click();
       dock.hideModels();
       dock.hideAnnotations();
       dock.hidePlanning();
@@ -516,6 +535,10 @@
       const chooser = document.querySelector("#map-tool-chooser");
       const toolName = chooser.querySelector("#map-tool-name");
       check(toolName.textContent === "Choose a tool", "The empty panel has no named tool chooser");
+      inspection.showFeatureInspector();
+      document.querySelector("#close-vector-inspector").focus();
+      inspection.hideFeatureInspector();
+      check(document.activeElement === chooser, "When the last focused tool disappears, focus must return to the chooser");
       const leftButton = collapseLeft.getBoundingClientRect(), rightButton = collapseRight.getBoundingClientRect();
       check(leftButton.width === rightButton.width && leftButton.height === rightButton.height &&
         leftButton.width === leftButton.height && getComputedStyle(collapseRight, "::before").content !== "none" &&
