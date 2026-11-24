@@ -224,8 +224,9 @@
         panel.querySelector("#restore-panel-fade-defaults").click();
         check(toggle.checked && fields.map(field => field.value).join(",") === defaults && storage.read() === null,
           "Restoring defaults left a custom preference");
-        panel.querySelector("#close-settings").click();
-        check(document.activeElement === chooser && panel.hidden, "Closing Settings lost keyboard focus");
+        document.querySelector("#close-settings").click();
+        check(document.activeElement === document.querySelector('#map-inspection-tabs [aria-selected="true"]') && panel.hidden,
+          "Closing Settings lost focus on the previous tool");
       } finally {
         unbind();
         storage.clear();
@@ -381,7 +382,7 @@
           "Data tools must start immediately below the map tabs");
         check(isReachable(library) && setup.disabled && isReachable(runs),
           "The library or Runs is unreachable, or Setup is enabled before choosing a tool");
-        check(getComputedStyle(mapTab).boxShadow === getComputedStyle(library).boxShadow,
+        check(getComputedStyle(mapTab.parentElement).boxShadow === getComputedStyle(library).boxShadow,
           "The active map view and data page use different selection markers");
         document.querySelector("#models-library-items button").click();
         const name = document.querySelector("#models-setup input");
@@ -419,10 +420,10 @@
       }
     }
 
-    /** Check that both panel tabs free map space, retain context, and stay reachable.
+    /** Check panel collapse and restore, then close individual tools from their tabs.
      * @param {MapInspectionController} inspection Mounted map inspection panel.
-     * @returns {Promise<void>} Resolves after both panels reopen in this viewport.
-     * @throws {Error} If either disclosure is obscured or restores the wrong state.
+     * @returns {Promise<void>} Resolves with the Style tab selected after its peers close.
+     * @throws {Error} If a disclosure or tab close is unreachable or restores the wrong tool or focus.
      */
     async function checkPanelDisclosures(inspection) {
       const collapseLeft = document.querySelector("#collapse-panel");
@@ -434,17 +435,16 @@
       check(toolName.textContent === "Choose a tool", "The empty panel has no named tool chooser");
       const leftButton = collapseLeft.getBoundingClientRect(), rightButton = collapseRight.getBoundingClientRect();
       check(leftButton.width === rightButton.width && leftButton.height === rightButton.height &&
-        leftButton.width === leftButton.height && [collapseLeft, collapseRight].every(button =>
-          button.textContent.trim() === "×" && getComputedStyle(button).borderRadius === "50%"),
-        "The expanded panels have different collapse controls");
+        leftButton.width === leftButton.height && getComputedStyle(collapseRight, "::before").content !== "none" &&
+        !collapseRight.textContent.includes("×"), "Map tools needs a distinct, reachable collapse control");
       collapseLeft.click();
       inspection.showStyle("Land cover");
       await settleLayout();
       check(toolName.textContent === "Style" && isReachable(chooser), "The active tool name cannot open the chooser");
       if (document.querySelector("#map-inspection-all-tabs").hidden) {
-        check(!isReachable(document.querySelector("#map-inspection-tab-style")) &&
-          isReachable(document.querySelector("#map-click-histogram")),
-          "A lone Style tab duplicates its header or loses the Histograms shortcut");
+        check(isReachable(document.querySelector("#map-inspection-tab-style")) &&
+          isReachable(document.querySelector("#close-layer-style")) && isReachable(document.querySelector("#map-click-histogram")),
+          "A lone Style tab lost its close button or the Histograms shortcut");
       }
       check(isReachable(expandLeft) && isReachable(collapseRight), "One panel covers the other panel's button");
       inspection.showRasterClips();
@@ -478,6 +478,28 @@
       check(isReachable(document.querySelector("#close-layer-style")) &&
         document.querySelector("#map-inspection-tab-style").getAttribute("aria-label") === "Style Land cover",
         "The style editor did not reopen on Land cover");
+
+      const histogram = document.querySelector("#map-click-histogram");
+      const closeHistogram = document.querySelector("#close-map-histogram");
+      const settings = document.querySelector("#map-inspection-tab-settings");
+      const closeSettings = document.querySelector("#close-settings");
+      check(!isReachable(closeHistogram), "The unopened Histograms shortcut offers a close action");
+      inspection.showHistogram();
+      chooser.click();
+      document.querySelector("#open-settings").click();
+      await settleLayout();
+      for (const [tab, close] of [[histogram, closeHistogram], [settings, closeSettings]]) {
+        const label = tab.getBoundingClientRect(), button = close.getBoundingClientRect();
+        check(isReachable(close) && Math.abs(button.left - label.right) <= 1 &&
+          button.top === label.top && button.right <= tab.parentElement.getBoundingClientRect().right + 1,
+          `The close button for ${tab.textContent} is outside its tab`);
+      }
+      closeHistogram.click();
+      check(!isReachable(closeHistogram) && settings.getAttribute("aria-selected") === "true" &&
+        document.activeElement === settings, "Closing a background tab interrupted Settings");
+      closeSettings.click();
+      check(document.activeElement === document.querySelector("#map-inspection-tab-style") &&
+        inspection.activeTool === "style", "Closing Settings lost the previously open Style tab");
     }
 
     /** Check where a long catalog filename begins and ends in a rendered Map contents row.

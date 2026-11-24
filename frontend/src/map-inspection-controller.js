@@ -33,6 +33,7 @@ export class MapInspectionController {
         this.panels = documentContext.querySelector("#map-inspection-panels");
         this.toolName = documentContext.querySelector("#map-tool-name");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
+        this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.tabStrip = new ToolTabStrip(documentContext, "map-inspection");
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
         this.mapToolsButton = documentContext.querySelector("#map-tool-chooser");
@@ -180,6 +181,27 @@ export class MapInspectionController {
             const tool = this.tools.find(({ tab }) => tab === event.currentTarget);
             if (tool !== undefined) this.#activateTool(tool.name);
         };
+        /** Focus the surviving tool after its peer's close handler finishes.
+         * @param {MouseEvent} event Click bubbling from the map tab row.
+         * @return {void}
+         */
+        this.onTabCloseClick = event => {
+            if (!event.target.classList.contains("tool-tab-close")) return;
+            const target = this.activeTool ? this.#tool(this.activeTool).tab : this.mapToolsButton;
+            target.focus();
+        };
+        /** Let Escape dismiss a tool from its close button just as it does from its panel.
+         * @param {KeyboardEvent} event Key pressed in the map tab row.
+         * @return {void}
+         */
+        this.onTabCloseKey = event => {
+            if (event.key !== "Escape" || !event.target.classList.contains("tool-tab-close")) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.target.click();
+        };
+        this.tabList.addEventListener("click", this.onTabCloseClick);
+        this.tabList.addEventListener("keydown", this.onTabCloseKey);
         this.onToggleFeatureDetails = () =>
             this.setFeatureInspectorExpanded(this.featureDetails.hidden);
         this.onKeydown = (event) => {
@@ -868,7 +890,7 @@ export class MapInspectionController {
     }
 
     /**
-     * Show the active tool in the header chooser and fit its available peer views on the tab strip.
+     * Show the active tool in the chooser and give each open tool a close action on its tab.
      * Raster destinations retain their existing open actions. Passive results update labels
      * without moving keyboard focus or changing the chosen foreground tool.
      * Feature context follows the displayed inspection, including when it predates the latest click.
@@ -897,8 +919,8 @@ export class MapInspectionController {
         for (const { name, panel, tab, resultTab } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
-            tab.hidden = resultTab ? false : !open ||
-                (name === "style" && this.activeTool === "raster-series");
+            tab.hidden = !resultTab && !open;
+            tab.setAttribute("data-open", String(open));
             panel.setAttribute("data-map-inspection-active", String(active));
             panel.setAttribute(
                 "aria-hidden", String(!active || this.minimized)
@@ -912,11 +934,9 @@ export class MapInspectionController {
                 (name === "feature" ? featureClickLabel : ""),
         ]));
         const previous = this.activationOrder.at(-2);
-        const loneToolTitle = tool && !tool.resultTab && !this.hasClick && this.#openTools().length === 1
-            ? this.mapToolsButton : null;
         this.tabStrip.render(tool?.tab ?? null, {
             previous: previous ? this.#tool(previous).tab : null,
-            contexts, hidden: this.minimized, titleButton: loneToolTitle,
+            contexts, hidden: this.minimized,
         });
         if (active !== this.reportedActiveTool) {
             this.#setClickResultActivity(false);
@@ -992,6 +1012,8 @@ export class MapInspectionController {
         this.minimized = false;
         this.setFeatureInspectorExpanded(true);
         this.#synchronize();
+        this.tabList.removeEventListener("click", this.onTabCloseClick);
+        this.tabList.removeEventListener("keydown", this.onTabCloseKey);
         this.tabStrip.destroy();
         this.activityListeners.clear();
         this.#clickResultActivityListeners.clear();

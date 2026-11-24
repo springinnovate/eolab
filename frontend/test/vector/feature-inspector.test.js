@@ -48,7 +48,6 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
   documentContext.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
   documentContext.querySelector("#vector-feature-inspector").hidden = true;
-  documentContext.querySelector("#map-inspection-tab-bar").append(documentContext.querySelector("#close-vector-inspector"));
   documentContext.querySelector("#vector-feature-result").hidden = true;
   documentContext.querySelector("#open-vector-time-series").disabled = true;
   documentContext.querySelector("#open-vector-feature-profile").disabled = true;
@@ -426,8 +425,12 @@ test("the inspector heading follows returned IDs and clears with the results", a
   assert.equal(heading.textContent, "Feature inspector (FID 0)");
   assert.equal(heading.title, heading.textContent);
 
+  const plottedFeature = h.currentObservationChanges.at(-1);
   h.documentContext.querySelector("#close-vector-inspector")
     .dispatchEvent(new Event("click"));
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
+  assert.equal(h.currentObservationChanges.at(-1), plottedFeature, "closing Features keeps the plotted observation");
+  h.controller.close();
   assert.equal(heading.textContent, "Feature inspector");
   assert.equal(heading.title, heading.textContent);
   h.controller.destroy();

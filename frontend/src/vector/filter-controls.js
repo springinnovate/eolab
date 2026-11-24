@@ -48,7 +48,7 @@ export class VectorFilterControls {
             match: "vector-filter-match", status: "vector-filter-status", applied: "vector-filter-applied",
             count: "vector-filter-count", zoomButton: "vector-filter-zoom", cancelZoomButton: "vector-filter-zoom-cancel",
             zoomStatus: "vector-filter-zoom-status", add: "vector-filter-add", clear: "vector-filter-clear",
-            closeButton: "close-vector-filter", applyButton: "vector-filter-apply", cancelButton: "vector-filter-cancel", help: "vector-filter-help"};
+            closeButton: host ? "close-vector-filter" : "close-map-vector-filter", applyButton: "vector-filter-apply", cancelButton: "vector-filter-cancel", help: "vector-filter-help"};
         for (const [name, id] of Object.entries(controls)) {
             this[name] = host ? this.root.querySelector(`#${id}`) : documentContext.querySelector(`#${id}`);
             if (host) this[name].id = `${host.id}-${name}`;
@@ -57,6 +57,7 @@ export class VectorFilterControls {
             this.root.id = `${host.id}-panel`; this.root.className = "vector-filter-inline";
             this.root.setAttribute("role", "group"); this.root.removeAttribute("aria-labelledby");
             this.root.setAttribute("aria-label", "Filter features");
+            this.closeButton.hidden = false;
             this.title.hidden = this.applied.hidden = this.count.hidden = true;
             host.replaceChildren(this.root);
         }

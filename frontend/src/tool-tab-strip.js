@@ -20,7 +20,8 @@ export class ToolTabStrip {
      * Pair each existing tab with a persistent menu item that activates the same button.
      * @param {Document} documentContext Document containing this row's controls.
      * @param {string} idPrefix Shared ID prefix for the -tabs list, -all-tabs button,
-     * -tab-count label and -tab-menu popover. Each tab's owner handles its click.
+     * -tab-count label and -tab-menu popover. Each list child is a tab button or a
+     * group containing the tab and its owner's close button.
      */
     constructor(documentContext, idPrefix) {
         this.document = documentContext;
@@ -30,11 +31,11 @@ export class ToolTabStrip {
         this.menu = documentContext.querySelector(`#${idPrefix}-tab-menu`);
         this.activeTab = null;
         this.previousTab = null;
-        this.loneToolTitle = null;
         this.visibleTabs = [];
         this.events = new AbortController();
         const options = { signal: this.events.signal };
-        this.items = Array.from(this.list.children, tab => {
+        this.items = Array.from(this.list.children, container => {
+            const tab = container.querySelector(".tool-tab") ?? container;
             const choice = documentContext.createElement("button");
             choice.type = "button";
             choice.tabIndex = -1;
@@ -48,7 +49,7 @@ export class ToolTabStrip {
                 this.#activateTab(tab);
             }, options);
             tab.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
-            return { tab, choice, label, detail };
+            return { container, tab, choice, label, detail };
         });
         this.menu.addEventListener("keydown", event => this.#handleNavigationKey(event, true), options);
         this.menu.addEventListener("toggle", event => {
@@ -66,7 +67,7 @@ export class ToolTabStrip {
         const ResizeObserverClass = documentContext.defaultView.ResizeObserver;
         this.observer = ResizeObserverClass && new ResizeObserverClass(() => this.#fitTabs());
         this.observer?.observe(this.list);
-        for (const { tab } of this.items) this.observer?.observe(tab);
+        for (const { container } of this.items) this.observer?.observe(container);
     }
 
     /**
@@ -77,18 +78,16 @@ export class ToolTabStrip {
      * When omitted, use the previously selected tab.
      * @param {Map<HTMLButtonElement,string>} [options.contexts] Descriptions for menu entries.
      * @param {boolean} [options.hidden=false] Dismiss the overflow menu while the row is inactive.
-     * @param {HTMLButtonElement|null} [options.titleButton=null] Header already naming the
-     * sole active view when its peer tabs fit.
      * @return {void}
      */
-    render(active, { previous, contexts, hidden = false, titleButton = null } = {}) {
+    render(active, { previous, contexts, hidden = false } = {}) {
         if (previous !== undefined) this.previousTab = previous;
         else if (active !== this.activeTab) this.previousTab = this.activeTab;
         this.activeTab = active;
-        this.loneToolTitle = titleButton;
         this.list.hidden = hidden;
         const first = this.items.find(({ tab }) => !tab.hidden && !tab.disabled);
-        for (const { tab, choice, label, detail } of this.items) {
+        for (const { container, tab, choice, label, detail } of this.items) {
+            container.hidden = tab.hidden;
             tab.setAttribute("aria-selected", String(tab === active));
             tab.tabIndex = tab === (active ?? first?.tab) ? 0 : -1;
             choice.hidden = tab.hidden;
@@ -109,9 +108,8 @@ export class ToolTabStrip {
     }
 
     /**
-     * Fit complete labels in DOM order. When only one tool is open, its header title
-     * suffices alongside the default shortcuts. In overflow the active tab always stays visible.
-     * Overflowed buttons remain measurable so resizing and font changes can bring them back.
+     * Fit each tab and its close button together, keeping the active tab in the row.
+     * Overflowed tabs remain measurable so resizing and font changes can bring them back.
      * @return {void}
      */
     #fitTabs() {
@@ -120,22 +118,20 @@ export class ToolTabStrip {
             (this.trigger.hidden ? 0 : this.trigger.getBoundingClientRect().width);
         if (!width) return;
         const available = this.items.filter(({ tab }) => !tab.hidden);
-        const widths = new Map(available.map(({ tab }) => [
-            tab, Math.max(tab.scrollWidth, tab.getBoundingClientRect().width),
+        const widths = new Map(available.map(({ tab, container }) => [
+            tab, Math.max(container.scrollWidth, container.getBoundingClientRect().width),
         ]));
         const totalWidth = Array.from(widths.values()).reduce((sum, value) => sum + value, 0);
-        const loneTabWidth = this.loneToolTitle ? widths.get(this.activeTab) : 0;
-        const overflow = totalWidth - loneTabWidth > width;
-        const headerOnlyTab = this.loneToolTitle && !overflow ? this.activeTab : null;
+        const overflow = totalWidth > width;
         const hadIndexFocus = this.document.activeElement === this.trigger || this.menu.contains(this.document.activeElement);
-        const hadTitleTabFocus = headerOnlyTab && this.document.activeElement === headerOnlyTab;
+        const focusedItem = available.find(({ container }) => container.contains(this.document.activeElement));
         this.count.textContent = String(available.length);
         this.trigger.hidden = !overflow;
         let space = width - (overflow ? this.trigger.getBoundingClientRect().width : 0);
         const priority = new Set([this.activeTab, this.previousTab, ...this.visibleTabs, ...widths.keys()]);
         const visible = new Set();
         for (const tab of priority) {
-            if (!widths.has(tab) || tab === headerOnlyTab) continue;
+            if (!widths.has(tab)) continue;
             const tabWidth = widths.get(tab);
             if (!overflow || tab === this.activeTab || tabWidth <= space) {
                 visible.add(tab);
@@ -145,10 +141,10 @@ export class ToolTabStrip {
         this.visibleTabs = Array.from(widths.keys()).filter(tab => visible.has(tab));
         const keyboardTab = visible.has(this.activeTab) ? this.activeTab : this.visibleTabs.find(tab => !tab.disabled);
         const unread = [];
-        for (const { tab } of available) {
+        for (const { tab, container } of available) {
             const outside = !visible.has(tab);
             tab.tabIndex = tab === keyboardTab ? 0 : -1;
-            tab.setAttribute("data-overflow", String(outside));
+            container.setAttribute("data-overflow", String(outside));
             if (outside && tab.getAttribute("data-unread") === "true") unread.push(tab.textContent);
         }
         const notice = unread.length ? `, new results in ${unread.join(", ")}` : "";
@@ -157,11 +153,12 @@ export class ToolTabStrip {
         this.trigger.title = notice ? `New results in ${unread.join(", ")}` : "";
         if (!overflow) {
             this.menu.hidePopover();
-            if (hadIndexFocus || hadTitleTabFocus) (this.loneToolTitle ?? keyboardTab)?.focus();
+            if (hadIndexFocus) keyboardTab?.focus();
         } else if (this.menu.matches(":popover-open")) {
             positionToolMenu(this.menu, this.trigger);
             if (this.document.activeElement?.hidden || this.document.activeElement?.disabled) this.#focusMenuChoice();
         }
+        if (focusedItem && !visible.has(focusedItem.tab)) keyboardTab?.focus();
     }
 
     /** Focus the selected menu row or the first available destination. @return {void} */
@@ -196,8 +193,7 @@ export class ToolTabStrip {
             }
             return;
         }
-        const headerOnlyTab = this.loneToolTitle && this.trigger.hidden ? this.activeTab : null;
-        const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled && (inMenu || tab !== headerOnlyTab));
+        const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled);
         const current = enabled.findIndex(item => (inMenu ? item.choice : item.tab) === event.target);
         let next;
         if (event.key === "Home") next = 0;

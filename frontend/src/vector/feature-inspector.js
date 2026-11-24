@@ -358,7 +358,18 @@ export class VectorFeatureInspectorController {
         this.requestGeneration = 0;
         this.sampleTargetSignature = null;
         this.mapContainer = this.map.getContainer();
-        this.onClose = () => this.close({ moveFocus: true });
+        /** Dismiss the Features tab and stop outstanding reads. Keep the observations
+         * and navigation already available to open plots. @return {void}
+         */
+        this.onClose = () => {
+            if (this.abortController !== null) {
+                this.#cancelInspection();
+                this.#publishSample(this.results.length ? "ready" : "empty", this.results, "Feature inspection stopped.");
+            }
+            this.clearHighlight();
+            this.onInspectionChange(false);
+            this.mapContainer.focus();
+        };
         this.onOpenFeatureProfile = () => {
             if (!this.featureProfileButton.disabled) {
                 this.onFeatureProfileRequested();
