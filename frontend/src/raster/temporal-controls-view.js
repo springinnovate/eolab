@@ -35,7 +35,7 @@ export class TemporalControlsView {
      * @param {(variable:string)=>void} handlers.onVariableChange Select a variable.
      * @param {(month:string)=>void} handlers.onMonthChange Browse an available month.
      * @param {(time:string)=>void} handlers.onTimeChange Show an available observation.
-     * @param {()=>void} handlers.onRetry Refresh choices and retry the explicit selection.
+     * @param {()=>void} handlers.onRetry Reload dates for the pending month choice or the selected observation.
      * @param {Document} [documentContext=globalThis.document] Owning document.
      */
     constructor(handlers, documentContext = globalThis.document) {
