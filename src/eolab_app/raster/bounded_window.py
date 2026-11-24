@@ -10,13 +10,22 @@ import numpy as np
 from pyproj import CRS as ProjCRS
 from pyproj import Transformer
 from pyproj.crs import BoundCRS
+from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
 from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
-from shapely import get_parts, union_all
-from shapely.affinity import translate
-from shapely.geometry import box, mapping, shape
+from shapely import from_wkb, get_parts, union_all, voronoi_polygons
+from shapely.affinity import scale, translate
+from shapely.errors import GEOSException
+from shapely.geometry import LinearRing, MultiPoint, Point, Polygon, box, mapping, shape
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import split
 
+from eolab_app.projected_boundary import (
+    Position,
+    ProjectPositions,
+    tessellate_projected_ring,
+)
 from eolab_app.sampling_box import (
     Wgs84SamplingBox,
     sampling_box_bounds,
@@ -30,6 +39,7 @@ BOUNDED_WGS84_DENSIFY_POINTS = 21
 BOUNDED_SOURCE_WINDOW_PADDING_PIXELS = 1
 SAMPLING_BOX_MAXIMUM_ERROR_PIXELS = 0.01
 POLYGON_EDGE_ERROR_PIXELS = 0.0001
+POLYGON_BOUNDARY_MAXIMUM_ERROR_PIXELS = 0.001
 
 
 class NoRasterBoundsOverlapError(ValueError):
@@ -943,6 +953,321 @@ def _sample_cut_meridians(
             result.append(end)
         sampled.append(tuple(result))
     return tuple(sampled)
+
+
+@lru_cache(maxsize=8)
+def _grid_transformer(source: CRS, target: CRS, *, unwrap: bool) -> Transformer:
+    """Return a PROJ boundary transform with explicit prime-meridian units.
+
+    Args:
+        source: Coordinate system of the original boundary.
+        target: Coordinate system of the grid being tested.
+        unwrap: Keep longitudes continuous across the target antimeridian.
+
+    Returns:
+        A cached transformer in conventional x/y order.
+
+    Raises:
+        ValueError: If PROJ cannot create the coordinate operation.
+    """
+    try:
+        return Transformer.from_crs(
+            source.to_wkt(version="WKT2_2019"),
+            target.to_wkt(version="WKT2_2019"),
+            always_xy=True,
+            force_over=unwrap,
+        )
+    except ProjError as error:
+        raise ValueError("Selection could not be projected") from error
+
+
+def grid_boundary_projection(source: CRS | str, target: CRS) -> ProjectPositions:
+    """Return the PROJ operation used to refine a boundary in the target grid.
+
+    Geographic targets use continuous longitudes for edge refinement. Their
+    final geometry can then be split at the antimeridian by GDAL. Projected
+    targets use their normal coordinate domain; the boundary refinement checks
+    continuity so a cut cannot become a chord through the wrong area.
+
+    Args:
+        source: CRS in which the original boundary edges are defined.
+        target: CRS of the calculation grid.
+
+    Returns:
+        Batch callback returning target positions for boundary accuracy tests.
+
+    Raises:
+        ValueError: If a coordinate operation cannot be created or evaluated.
+    """
+    source_crs = CRS.from_user_input(source)
+    transformer = _grid_transformer(source_crs, target, unwrap=target.is_geographic)
+
+    def project(positions: tuple[Position, ...]) -> tuple[Position, ...]:
+        """Project boundary probes through the target coordinate domain.
+
+        Args:
+            positions: Nonempty batch of source positions supplied by refinement.
+
+        Returns:
+            Target coordinates in the same order as the supplied positions.
+
+        Raises:
+            ValueError: If PROJ cannot transform a source position.
+        """
+        xs, ys = zip(*positions, strict=True)
+        try:
+            x, y = transformer.transform(xs, ys, errcheck=True)
+        except ProjError as error:
+            raise ValueError("Selection could not be projected") from error
+        return tuple(zip(x, y, strict=True))
+
+    return project
+
+
+def _refine_polygon_rings(
+    rings: tuple[tuple[Position, ...], ...],
+    source_crs: CRS | str,
+    target_crs: CRS,
+    pixel_size: tuple[float, float],
+) -> tuple[tuple[Position, ...], ...]:
+    """Subdivide straight edges to the polygon tolerance in destination pixels.
+
+    Args:
+        rings: Closed polygon rings in the source CRS.
+        source_crs: Coordinate system of the original edges.
+        target_crs: Coordinate system in which the polygons will be rasterized.
+        pixel_size: Positive target X and Y pixel sizes.
+
+    Returns:
+        Rings with source positions added where the projected edges curve.
+
+    Raises:
+        ValueError: If an edge cannot be projected to the required tolerance.
+    """
+    x_size, y_size = pixel_size
+    project = grid_boundary_projection(source_crs, target_crs)
+
+    def project_pixels(positions: tuple[Position, ...]) -> tuple[Position, ...]:
+        """Return the projected pixel coordinates of the supplied source positions."""
+        return tuple((x / x_size, y / y_size) for x, y in project(positions))
+
+    return tuple(
+        tessellate_projected_ring(
+            ring,
+            project_pixels,
+            maximum_error_pixels=POLYGON_BOUNDARY_MAXIMUM_ERROR_PIXELS,
+            check_continuity=target_crs.is_projected,
+        )
+        for ring in rings
+    )
+
+
+def geographic_grid_wkt_in_degrees(wkt: str) -> str:
+    """Express a raster's horizontal geographic coordinates in degrees for GDAL.
+
+    Args:
+        wkt: Geographic or compound grid definition in its original units.
+    Returns:
+        Two-dimensional WKT2 preserving the prime meridian and datum operation.
+    Raises:
+        RuntimeError: If GDAL cannot convert the spatial reference.
+    """
+    from osgeo import osr
+
+    with osr.ExceptionMgr():
+        horizontal = osr.SpatialReference(wkt=wkt)
+        horizontal.StripVertical()
+        horizontal.SetAngularUnits("degree", math.radians(1))
+        return horizontal.ExportToWkt(["FORMAT=WKT2_2019"])
+
+
+def project_geographic_polygons(
+    source_crs: CRS | str,
+    target_crs: CRS,
+    geometries: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    """Return geographic polygons with split seams and preserved holes.
+
+    Restore the geographic target's angular units after splitting. The temporary
+    degree CRS retains its datum and prime meridian; source edges must already
+    be refined to the caller's accuracy before this final transformation. Split
+    rings independently so a hole enclosing a pole remains separate from its
+    shell. For a ring enclosing one target pole, apply the datum operation
+    first, then let GDAL cut the cap on that datum's stereographic plane.
+    A ring containing both poles is divided between them before the two cuts.
+    GEOS subtracts each part's holes before joining the resulting parts.
+
+    Args:
+        source_crs: Coordinate system of the refined source polygons.
+        target_crs: Geographic output coordinate system, in any angular unit.
+        geometries: Refined polygons, including their holes.
+
+    Returns:
+        Polygon mappings in target_crs, split at its longitude boundary.
+
+    Raises:
+        ValueError: If GDAL cannot transform or split the polygons.
+    """
+    from osgeo import gdal, ogr, osr
+
+    to_degrees = target_crs.units_factor[1] / math.radians(1)
+    uses_degrees = math.isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12)
+    source_wkt = CRS.from_user_input(source_crs).to_wkt(version="WKT2_2019")
+    target_wkt = target_crs.to_wkt(version="WKT2_2019")
+    projected_geometries: list[dict[str, object]] = []
+    try:
+        if not uses_degrees:
+            target_wkt = geographic_grid_wkt_in_degrees(target_wkt)
+        with osr.ExceptionMgr():
+            source = osr.SpatialReference(wkt=source_wkt)
+            target = osr.SpatialReference(wkt=target_wkt)
+            source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            coordinates = osr.CoordinateTransformation(source, target)
+            projector = ogr.GeomTransformer(coordinates, ["WRAPDATELINE=YES"])
+        target_poles: list[tuple[float, Point]] = []
+        if source.IsProjected() or not source.IsSameGeogCS(target):
+            # A pole outside the source projection has no location to test.
+            with osr.ExceptionMgr(useExceptions=False), gdal.quiet_errors():
+                reverse = coordinates.GetInverse()
+                if reverse is not None:
+                    for latitude in (-90.0, 90.0):
+                        x, y, _, _, error = reverse.TransformPointWithErrorCode(
+                            0, latitude, 0, 0
+                        )
+                        if error == 0:
+                            target_poles.append((latitude, Point(x, y)))
+
+        def split_ring(ring: LinearRing) -> BaseGeometry:
+            """Project one refined ring and cut it at the target's longitude seam.
+
+            Args:
+                ring: Exterior or hole in the original coordinate system.
+
+            Returns:
+                A valid shell or set of shell pieces in target degrees.
+
+            Raises:
+                ValueError: If GDAL cannot produce a valid geographic ring.
+                RuntimeError: If a native coordinate operation fails.
+            """
+            polygon = Polygon(ring)
+            poles = [
+                latitude for latitude, point in target_poles if polygon.contains(point)
+            ]
+            if len(poles) == 2:
+                # Bisect in source coordinates so each piece contains at most one pole.
+                bisector = voronoi_polygons(
+                    MultiPoint([point for _, point in target_poles]),
+                    extend_to=polygon,
+                    only_edges=True,
+                )
+                parts = split(polygon, bisector).geoms
+                if len(parts) < 2:
+                    raise ValueError("Selection could not be split between the poles")
+                return union_all([split_ring(piece.exterior) for piece in parts])
+            native = ogr.CreateGeometryFromWkb(polygon.wkb)
+            splitter = projector
+            if len(poles) == 1:
+                # A datum shift can move the pole away from the source origin.
+                # Transform the vertices through the requested datum operation
+                # before using a stereographic plane just for GDAL's cap cut.
+                with osr.ExceptionMgr(), ogr.ExceptionMgr():
+                    polar = target.Clone()
+                    polar.SetPS(poles[0], 0, 1, 0, 0)
+                    to_polar = osr.CoordinateTransformation(target, polar)
+                    native.Transform(coordinates)
+                    native.Transform(to_polar)
+                    # GDAL cuts a stereographic cap at the seam and pole itself.
+                    splitter = ogr.GeomTransformer(to_polar.GetInverse())
+            # GDAL may report a failed intermediate cut and still return a
+            # valid final cap. Check the geometry it returns.
+            with ogr.ExceptionMgr(useExceptions=False):
+                transformed = splitter.Transform(native)
+            if transformed is None:
+                raise ValueError("Selection could not be projected")
+            projected = from_wkb(bytes(transformed.ExportToWkb()))
+            if not projected.is_valid:
+                raise ValueError("Selection could not be projected")
+            return projected
+
+        for geometry in geometries:
+            original = shape(geometry)
+            polygons = (
+                original.geoms if original.geom_type == "MultiPolygon" else (original,)
+            )
+            parts = []
+            for polygon in polygons:
+                shell = split_ring(polygon.exterior)
+                holes = [split_ring(hole) for hole in polygon.interiors]
+                parts.append(shell.difference(union_all(holes)))
+            projected = union_all(parts)
+            if not uses_degrees:
+                projected = scale(
+                    projected,
+                    xfact=1 / to_degrees,
+                    yfact=1 / to_degrees,
+                    origin=(0, 0),
+                )
+            if (
+                projected.geom_type not in {"Polygon", "MultiPolygon"}
+                or projected.is_empty
+                or not projected.is_valid
+            ):
+                raise ValueError("Selection could not be projected")
+            projected_geometries.append(mapping(projected))
+    except (RuntimeError, GEOSException) as error:
+        raise ValueError("Selection could not be projected") from error
+    return tuple(projected_geometries)
+
+
+def project_polygons_to_output_grid(
+    source_crs: CRS | str,
+    target_crs: CRS,
+    geometries: tuple[dict[str, object], ...],
+    pixel_size: tuple[float, float],
+) -> tuple[dict[str, object], ...]:
+    """Project an area to one north-up output grid, preserving its native edges.
+
+    Args:
+        source_crs: Coordinate system in which the polygon edges are straight.
+        target_crs: Coordinate system of the output grid.
+        geometries: Validated polygons in the source CRS, including any holes.
+        pixel_size: Positive X/Y cell sizes for refining edges to one
+            thousandth of an output pixel.
+
+    Returns:
+        Polygons in grid coordinates. Geographic polygons split at the target
+        antimeridian. Parts that meet in a projected grid are joined.
+
+    Raises:
+        ValueError: If an edge crosses a projected map cut, cannot meet the
+            requested accuracy, or the projected area is invalid.
+    """
+    if CRS.from_user_input(source_crs) == target_crs:
+        return geometries
+    rings = tuple(ring for geometry in geometries for ring in _polygon_rings(geometry))
+    refined = _refine_polygon_rings(rings, source_crs, target_crs, pixel_size)
+    if target_crs.is_geographic:
+        return project_geographic_polygons(
+            source_crs, target_crs, _with_polygon_rings(geometries, refined)
+        )
+    projected_rings = _project_polygon_rings(refined, source_crs, target_crs, transform)
+    result = []
+    for geometry in _with_polygon_rings(geometries, projected_rings):
+        polygon = shape(geometry)
+        if polygon.geom_type == "MultiPolygon":
+            try:
+                polygon = union_all(polygon.geoms)
+            except GEOSException as error:
+                raise ValueError(
+                    "Projected polygon parts could not be joined"
+                ) from error
+            geometry = mapping(polygon)
+        if polygon.is_empty or not polygon.is_valid:
+            raise ValueError("Selection could not be projected")
+        result.append(geometry)
+    return tuple(result)
 
 
 def project_polygons_to_crs(

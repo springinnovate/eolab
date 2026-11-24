@@ -3,26 +3,27 @@ FROM maven:3.9.11-eclipse-temurin-17@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14f
 WORKDIR /build
 
 COPY geoserver/reader-assessment/pom.xml ./pom.xml
-RUN mvn --batch-mode --no-transfer-progress dependency:go-offline
+# All three modules resolve from Maven Central and the OSGeo repository in their POMs.
+RUN mvn --batch-mode --no-transfer-progress --ignore-transitive-repositories dependency:go-offline
 
 COPY geoserver/reader-assessment/src/ ./src/
 COPY geoserver/epsg_overrides.properties /epsg_overrides.properties
 COPY tests/fixtures/vectors/ /tests/fixtures/vectors/
-RUN mvn --batch-mode --no-transfer-progress package
+RUN mvn --batch-mode --no-transfer-progress --ignore-transitive-repositories package
 
 
 FROM maven:3.9.11-eclipse-temurin-17@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82 AS imagen-nodata-builder
 
 WORKDIR /build
 COPY geoserver/imagen-nodata-fix/ ./
-RUN mvn --batch-mode --no-transfer-progress clean verify
+RUN mvn --batch-mode --no-transfer-progress --ignore-transitive-repositories clean verify
 
 
 FROM maven:3.9.11-eclipse-temurin-17@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82 AS longitude-wrap-builder
 
 WORKDIR /build
 COPY geoserver/longitude-wrap-fix/ ./
-RUN mvn --batch-mode --no-transfer-progress clean verify
+RUN mvn --batch-mode --no-transfer-progress --ignore-transitive-repositories clean verify
 
 
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558

@@ -680,6 +680,48 @@ def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     return job
 
 
+def test_raster_calculator_publishes_an_owned_geotiff(model_boundary: Any) -> None:
+    """Submit, execute and download a two-binding formula through model Runs."""
+
+    client, worker, _ = model_boundary
+    body = model_request(client, "raster-calculator", label="Canopy gain")
+    body["inputs"].pop("raster")
+    body["inputs"]["calculation"] = {
+        "layers": [
+            {"alias": "a", "source": SOURCE, "resampling": "nearest"},
+            {"alias": "b", "source": SOURCE, "resampling": "mean"},
+        ],
+        "expression": "max(0, b - a) + 2",
+        "grid": {"kind": "match", "alias": "a"},
+    }
+    job = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    base = f"/api/processing/jobs/{job['jobId']}"
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    result = ready["result"]
+    assert result["validPixels"] == 6400
+    download = client.get(result["url"])
+    assert download.status_code == 200
+    with rasterio.MemoryFile(download.content) as file, file.open() as output:
+        assert output.crs.to_epsg() == 4326
+        assert output.transform == rasterio.transform.from_origin(0.1, 9.9, 0.01, 0.01)
+        numpy.testing.assert_array_equal(output.read(1), numpy.full((80, 80), 2.0))
+    invocation = client.get(base + "/invocation")
+    assert invocation.status_code == 200, invocation.text
+    assert invocation.json()["inputs"] == body["inputs"]
+    provenance_download = client.get(result["provenanceUrl"])
+    assert provenance_download.status_code == 200, provenance_download.text
+    provenance = provenance_download.json()
+    assert provenance["grid"]["transform"] == result["grid"]["transform"]
+    assert (
+        provenance["inputs"]["calculation"]["expression"]
+        == body["inputs"]["calculation"]["expression"]
+    )
+    client.cookies.clear()
+    assert client.get(result["url"]).status_code == 404
+
+
 @pytest.mark.parametrize("dependency", ["pyflwdir", "numba", "llvmlite"])
 def test_model_worker_rejects_changed_routing_dependencies(
     model_boundary: Any, monkeypatch: pytest.MonkeyPatch, dependency: str

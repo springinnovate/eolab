@@ -4,7 +4,7 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
-import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer } from "./inputs.js";
+import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer, isModelSpatialInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
@@ -237,6 +237,7 @@ export class ModelsView {
      * @return {void}
      */
     buildSetup(draft) {
+        for (const controls of Object.values(this.setup?.inputs ?? {})) controls.dispose?.();
         const form = this.element("form", "", "models-form");
         const fields = this.element("fieldset"); fields.setAttribute("aria-labelledby", "models-setup-heading");
         const description = this.element("p", draft.model.description, "models-help"); fields.append(description);
@@ -267,7 +268,7 @@ export class ModelsView {
                 fields.append(inputs[name].root);
             }
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
-            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
+            else if (isModelSpatialInput(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
         }
         if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
@@ -385,7 +386,7 @@ export class ModelsView {
             areaChoices.push(...value.polygonGroups.map(group => ({value: `polygonGroup:${group.id}`,
                 label: group.name, group: "Polygon groups"})));
         }
-        if (references || input.type === "summary_area") {
+        if (modelSupportsArea(input.type, {kind: "polygonArea"})) {
             areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
         if (usesRasterOrVector) {
@@ -489,7 +490,7 @@ export class ModelsView {
             if (setupControls.inputs[name]?.renderModelInput) inputsReady = setupControls.inputs[name].renderModelInput(draft, state) && inputsReady;
             else if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
-            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
+            else if (isModelSpatialInput(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
         }
         for (const [name, input] of Object.entries(setupControls.parameters)) {
             if (input.type === "checkbox") input.checked = draft.parameters[name];
@@ -831,6 +832,7 @@ export class ModelsView {
      * @return {void}
      */
     destroy() {
+        for (const controls of Object.values(this.setup?.inputs ?? {})) controls.dispose?.();
         this.tabStrip.destroy();
         for (const [node, event, callback] of this.listeners) node.removeEventListener(event, callback);
     }

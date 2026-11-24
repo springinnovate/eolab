@@ -126,6 +126,12 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 </details>
 
+### Calculate a raster from several layers
+
+Open **Tools → Data tools → Raster calculator**. Add rasters from Map contents or completed runs and use the assigned variables in a formula such as `max(0, b - a)`. Choose a resampling method for each input, an analysis area, and an output grid. Matching a raster uses its projection, cell size, and grid alignment. Custom cell sizes use the chosen projection’s units.
+
+The calculator includes cells whose centers fall inside the analysis area. Cells with missing formula inputs or undefined arithmetic are blank. In **Runs**, select **Show on map** or **Download** to use the GeoTIFF.
+
 ### Run environmental models
 
 **Upstream and downstream area** traces flow around selected polygons. Choose

@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, updateClipPolygonGroup } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
@@ -634,13 +634,13 @@ export class ModelsController {
     }
 
     /** Combine map inputs with this session's published raster results.
-     * Request committed drawn layers only for Ecosystem Condition setup.
+     * Request committed drawn layers for recipes that support them.
      * @param {Object} model Recipe whose input contract controls eligible choices.
      * @return {Object} Existing map context with available completed-run inputs.
      */
     inputContext(model) {
-        const context = this.getContext({includeDrawnPolygons: model.id === "habitat-condition"});
-        const acceptsResults = Object.values(model.inputs).some(input => ["raster", "optional_raster", "habitat_references", "habitat_stack"].includes(input.type));
+        const context = this.getContext({includeDrawnPolygons: modelSupportsDrawnAreas(model)});
+        const acceptsResults = Object.values(model.inputs).some(input => ["raster", "optional_raster", "habitat_references", "habitat_stack", "raster_formula"].includes(input.type));
         const choices = [...(context.rasters ?? []).filter(source => acceptsResults || source.kind !== "runArtifact"),
             ...(acceptsResults ? modelResultSources([...this.runSnapshots.values()]) : [])];
         return {...context, rasters: [...new Map(choices.map(source => [modelSourceKey(source), source])).values()]};
@@ -657,7 +657,7 @@ export class ModelsController {
         const draft = this.state.draft;
         if (!draft || this.destroyed || this.state.submitting || this.state.pending) return;
         const context = this.inputContext(draft.model);
-        draft.drawnPolygonLayers = draft.model.id === "habitat-condition" ? context.drawnPolygonLayers ?? [] : [];
+        draft.drawnPolygonLayers = modelSupportsDrawnAreas(draft.model) ? context.drawnPolygonLayers ?? [] : [];
         if (draft.temporal) {
             draft.temporal.datasets = structuredClone(context.temporalDatasets ?? []);
             if (draft.temporal.datasetKey && !draft.temporal.datasets.some(source => modelSourceKey(source) === draft.temporal.datasetKey)) {
@@ -680,7 +680,7 @@ export class ModelsController {
             const definition = draft.model.inputs[name], type = definition.type;
             const handler = getModelInputHandler(type);
             if (handler) { handler.refresh(input, definition, context); continue; }
-            if (!["summary_area", "clip_area", "mask_source", "habitat_references"].includes(type)) continue;
+            if (!isModelSpatialInput(type)) continue;
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
             if (type === "clip_area") {
@@ -797,8 +797,7 @@ export class ModelsController {
         const visibleRunIds = new Set();
         if (active && page === "run" && selectedRun) visibleRunIds.add(selectedRun);
         if (active && page === "setup" && draft) {
-            for (const {state, field} of getModelRasterFields(draft)) {
-                const id = state[field]?.jobId;
+            for (const {jobId: id} of getModelRasterSources(draft)) {
                 if (this.runSnapshots.has(id)) visibleRunIds.add(id);
             }
         }
@@ -1105,7 +1104,7 @@ export class ModelsController {
                 definition.type === "habitat_references" && saved.inputs[name].kind === "raster") {
                 input.area = null; input.areaMode = "raster";
                 input.maskRaster = structuredClone(saved.inputs[name].source);
-            } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(definition.type)) {
+            } else if (isModelSpatialInput(definition.type)) {
                 const value = saved.inputs[name];
                 input.area = definition.type === "habitat_references" && value.kind === "vector"
                     ? {kind: "catalogSelection", selection: structuredClone(value.selection)} : structuredClone(value);

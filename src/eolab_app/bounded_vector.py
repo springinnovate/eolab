@@ -368,7 +368,9 @@ def _native_polygon_records(
     ):
         raise ValueError("Vector read timeout must be a positive finite number")
     deadline = None if timeout_seconds is None else monotonic() + timeout_seconds
-    with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
+    with fiona.Env(
+        OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES", OSR_WKT_FORMAT="WKT2_2019"
+    ):
         with ExitStack() as sources:
             dataset = sources.enter_context(_source_collection(resolved))
             fields = {

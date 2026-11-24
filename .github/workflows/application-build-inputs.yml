@@ -112,8 +112,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          install -d -m 0777 "$RUNNER_TEMP/calculator-cogs"
           docker run --rm --user 65534:65534 --entrypoint sh \
             --mount "type=bind,src=$PWD,dst=/repository,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/calculator-cogs,dst=/interop" \
             eolab-build-inputs:2 -ec '
               python -m venv --system-site-packages /tmp/check
               /tmp/check/bin/python -m pip install --no-cache-dir pytest==8.4.2
@@ -124,6 +126,18 @@ jobs:
               /tmp/check/bin/python -m pytest -o pythonpath=services/jobs -p no:cacheprovider \
                 --ignore=tests/test_reusable_process.py \
                 --basetemp=/tmp/eolab-build-tests -ra --tb=short
+              # Give the deployed Java reader fresh outputs from the installed calculator.
+              export_cog() {
+                /tmp/check/bin/python -m pytest "$2" -o pythonpath=services/jobs \
+                  -p no:cacheprovider --basetemp="/tmp/cog-$1" -q
+                find "/tmp/cog-$1" -type f -name result.tif -exec cp {} "/interop/$1.tif" \;
+              }
+              survey=tests/test_raster_calculator.py::test_published_survey_grid_preserves_numeric_meridian_and_height
+              export_cog degrees "$survey[degrees]"
+              export_cog arcminutes "$survey[arcminutes]"
+              export_cog height "$survey[height]"
+              export_cog helmert tests/test_raster_calculator.py::test_matched_survey_retains_datum_shift_and_height
+              export_cog mercator "tests/test_projected_raster_calculator.py::test_matched_mercator_cog_preserves_survey_grid[False]"
             ' 2>&1 | tee artifacts/application-builds/backend-tests.log
       - name: Build and smoke the standalone Job service image
         if: steps.changes.outputs.application == 'true'
@@ -152,7 +166,12 @@ jobs:
           docker run --rm --network none eolab-build-inputs:frontend npm test
       - name: Native GeoServer extension and categorical rendering fixtures
         if: steps.changes.outputs.application == 'true'
-        run: docker build --target reader-assessment-builder -f Dockerfile.geoserver -t eolab-build-inputs:geoserver-extension .
+        run: |
+          docker build --target reader-assessment-builder -f Dockerfile.geoserver -t eolab-build-inputs:geoserver-extension .
+          docker run --rm --network none --env EOLAB_CALCULATOR_COGS=/interop \
+            --mount "type=bind,src=$RUNNER_TEMP/calculator-cogs,dst=/interop,readonly" \
+            eolab-build-inputs:geoserver-extension \
+            mvn --offline --batch-mode --no-transfer-progress -Dtest=RasterCalculatorGeoTiffTest test
 
       - name: Verify native longitude wrapping correction
         if: steps.changes.outputs.application == 'true'

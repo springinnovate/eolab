@@ -69,6 +69,7 @@ def write_selection(
         driver="GPKG",
         layer="polygons",
         crs=crs,
+        CRS_WKT_EXTENSION="YES",
         schema={"geometry": "Unknown", "properties": {"selected": "int64"}},
     ) as dataset:
         for index, geometry in enumerate(geometries):

@@ -768,7 +768,7 @@ def test_pixel_reader_requests_only_band_one_and_its_source_cell(
     """Keep pixel probing independent and bounded to one source cell."""
     dataset = _PixelDataset()
     monkeypatch.setattr(
-        "eolab_app.raster.pixel.rasterio.open", lambda _, **kwargs: dataset
+        "eolab_app.raster.reader.GeoTiffReader", lambda _, **kwargs: dataset
     )
     monkeypatch.setattr("eolab_app.raster.pixel.transform", lambda *_: ([10], [20]))
 
@@ -802,7 +802,7 @@ def test_pixel_reader_rejects_unsigned_dependencies_and_oversized_blocks(
     else:
         dataset.block_shapes = ((10000, 10000),)
     monkeypatch.setattr(
-        "eolab_app.raster.pixel.rasterio.open", lambda _, **kwargs: dataset
+        "eolab_app.raster.reader.GeoTiffReader", lambda _, **kwargs: dataset
     )
     with pytest.raises(ValueError, match="sidecars|memory limit"):
         read_raster_pixel(Path("raster.tif"), 0, 0)
@@ -815,7 +815,7 @@ def test_pixel_reader_treats_an_unprojectable_position_as_outside(
     """Do not pass non-finite projected coordinates to Rasterio indexing."""
     dataset = _PixelDataset()
     monkeypatch.setattr(
-        "eolab_app.raster.pixel.rasterio.open", lambda _, **kwargs: dataset
+        "eolab_app.raster.reader.GeoTiffReader", lambda _, **kwargs: dataset
     )
     monkeypatch.setattr(
         "eolab_app.raster.pixel.transform",
@@ -846,7 +846,7 @@ def test_raster_statistics_exact_read_filters_nodata_and_nonfinite_values(
         nodata=99,
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
 
@@ -890,7 +890,7 @@ def test_histogram_window_separates_values_in_one_original_bin(
         numpy.array([[0, 10000, 10001, 10001], [10002, 1000000, 99, numpy.nan]]),
         path, block_shape=(2, 4), nodata=99,
     )
-    monkeypatch.setattr("eolab_app.raster.statistics.rasterio.open", lambda _: dataset)
+    monkeypatch.setattr("eolab_app.raster.reader.GeoTiffReader", lambda _: dataset)
     authorizer = _SourceAuthorizer()
     service = RasterStatisticsService(RasterSourceAccess(authorizer), 1, 32)
     identity = {"collectionId": "eolab-mounted-geotiffs", "itemId": ITEM_ID}
@@ -929,7 +929,7 @@ def test_raster_statistics_broad_source_uses_fixed_sample_grid(
         block_shape=(32, 32),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
 
@@ -984,7 +984,7 @@ def test_raster_statistics_supports_safe_long_strips(
         block_shape=(1, 4_320),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
 
@@ -1020,7 +1020,7 @@ def test_raster_statistics_rejects_unsafe_native_block_before_pixel_io(
         block_shape=(4_096, 4_096),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
 
@@ -1385,7 +1385,7 @@ def test_catalog_selection_sample_grid_masks_a_large_interior_hole(
         block_shape=(32, 32),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
     outer_bounds = (-8.0, -4.0, 8.0, 4.0)
@@ -1466,7 +1466,7 @@ def test_statistics_reject_external_sidecars_and_missing_crs(
         extra_files=(Path("unsafe.tif.ovr"),),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: sidecar,
     )
     with pytest.raises(ValueError, match="external GDAL sidecars"):
@@ -1475,7 +1475,7 @@ def test_statistics_reject_external_sidecars_and_missing_crs(
 
     missing_crs = _NativeStatisticsDataset(values, source_path, crs=None)
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: missing_crs,
     )
     with pytest.raises(ValueError, match="valid source CRS"):
@@ -1508,7 +1508,7 @@ def test_statistics_reject_non_finite_affine_before_native_reads(
         transform=Affine(non_finite_coefficient, 0, 0, 0, -1, 2),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
 
@@ -1536,7 +1536,7 @@ def test_statistics_reject_affine_with_non_finite_inverse(
         transform=Affine(1e-320, 0, 0, 0, -1, 2),
     )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _: dataset,
     )
 

@@ -145,7 +145,7 @@ def describe_projected_grid(
             raise ValueError(
                 "Choose a geographic or projected coordinate system for the raster grid."
             )
-        source = CRS(dataset.crs)
+        source = CRS.from_wkt(dataset.crs.to_wkt(version="WKT2_2019"))
         x_axis, y_axis = target.axis_info[:2]
         if x_axis.unit_name != y_axis.unit_name:
             raise ValueError("Choose a coordinate system with matching X and Y units.")
@@ -231,13 +231,14 @@ def describe_raster_data(
                 bounds = None
         except (ValueError, rasterio.errors.RasterioError):
             bounds = None
+        authority = dataset.crs.to_authority(confidence_threshold=100)
         metadata = {
             "bounds": bounds,
             "width": dataset.width,
             "height": dataset.height,
             "bands": dataset.count,
             "dtype": dataset.dtypes[0],
-            "crs": dataset.crs.to_string(),
+            "crs": ":".join(authority) if authority else dataset.crs.to_wkt(version="WKT2_2019"),
             "transform": tuple(dataset.transform)[:6],
             "nodata": nodata if nodata is None or math.isfinite(nodata) else None,
             "capabilities": {
