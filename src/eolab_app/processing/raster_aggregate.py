@@ -218,8 +218,10 @@ def prepare_raster_area_tools(
                 dataset,
                 area,
                 limits,
-                catalog_window=(
-                    selection_window if area.kind == "catalogSelection" else None
+                catalog_pixel_bounds=(
+                    selected_polygons.pixel_bounds
+                    if isinstance(selected_polygons, PolygonRasterizer)
+                    else None
                 ),
             )
             raster_window = pixel_area_calculator.window
@@ -409,13 +411,13 @@ def plan_aggregate(
                 planning_area = AggregateArea(kind="bounds", bounds=area.bounds)
             pixel_only = functions == {"pixelValue"}
             raster_window = pixel_window
-            catalog_window = None
+            catalog_pixel_bounds = None
             if not pixel_only:
                 raster_window, polygons = get_raster_window_and_mask_source(
                     dataset, planning_area, limits
                 )
                 if isinstance(polygons, PolygonRasterizer):
-                    catalog_window = raster_window
+                    catalog_pixel_bounds = polygons.pixel_bounds
                     polygons.close()
             needs_ground_area = any(
                 node.op == "areaha" for root in roots for node in walk(root)
@@ -427,7 +429,7 @@ def plan_aggregate(
                     planning_area,
                     limits,
                     planning=True,
-                    catalog_window=catalog_window,
+                    catalog_pixel_bounds=catalog_pixel_bounds,
                 )
             if pixel_area_calculator is not None:
                 raster_window = pixel_area_calculator.window

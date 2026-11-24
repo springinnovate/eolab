@@ -921,6 +921,7 @@ class PolygonRasterizer:
                             )
                         self._retained.append(entry)
                         self.retained_bytes += retained_feature_bytes
+            self.pixel_bounds = (left, top, right, bottom)
             pad = BOUNDED_SOURCE_WINDOW_PADDING_PIXELS
             left, top = max(0, math.floor(left) - pad), max(0, math.floor(top) - pad)
             right, bottom = min(dataset.width, math.ceil(right) + pad), min(

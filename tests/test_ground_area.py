@@ -503,6 +503,36 @@ def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:
         make_spec(wrapped, ["areaha(a>0)"])
 
 
+@pytest.mark.parametrize(
+    ("grid_west", "west", "east"),
+    [(176, 179.2, 179.8), (176, 179.2, 180), (-182, -180, -179.2)],
+)
+def test_catalog_hectares_at_longitude_limit(
+    tmp_path: Path, grid_west: float, west: float, east: float
+) -> None:
+    """Measure selected cells up to the longitude limit on a grid crossing it.
+
+    Args:
+        tmp_path: Directory for the value raster, polygon and results.
+        grid_west: Raster's left edge in degrees east.
+        west: Selected polygon's left edge.
+        east: Selected polygon's right edge.
+    """
+    polygon = box(west, 1.2, east, 1.8)
+    area = write_aggregate_area(tmp_path / "selection.gpkg", [mapping(polygon)])
+    path = write_source(
+        tmp_path / "grid.tif",
+        np.ones((3, 6), dtype="uint8"),
+        transform=from_origin(grid_west, 3, 1, 1),
+    )
+    spec = make_spec(path, ["count(a) + 0 * areaha(a>0)", "areaha(a>0)"], area)
+    result = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
+    assert float(result.rows[0]["value"]) == 1
+    assert float(result.rows[1]["value"]) == pytest.approx(
+        reference_area(polygon), rel=1e-8
+    )
+
+
 def test_area_results_do_not_depend_on_source_blocks_or_processing_tiles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

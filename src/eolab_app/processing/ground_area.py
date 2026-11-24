@@ -191,7 +191,7 @@ class PixelAreaCalculator:
         limits: RasterAggregateLimits,
         *,
         planning: bool = False,
-        catalog_window: Window | None = None,
+        catalog_pixel_bounds: tuple[float, float, float, float] | None = None,
     ) -> None:
         """Prepare a job's geometry and metadata without reading its raster band.
 
@@ -200,7 +200,7 @@ class PixelAreaCalculator:
             area: Immutable box/polygon selection or whole-raster selection.
             limits: Processing-owned geometry and transformation policy.
             planning: Whether this instance describes a grid before execution.
-            catalog_window: Window from the calculation's prepared catalog polygons.
+            catalog_pixel_bounds: Unpadded column/row bounds of the prepared catalog polygons.
 
         Raises:
             ProcessingError: For unsupported CRS/topology or excessive work.
@@ -276,9 +276,9 @@ class PixelAreaCalculator:
 
         self.geometry = None
         self.rectangle = None
-        self.window = catalog_window or Window(0, 0, dataset.width, dataset.height)
-        pixel_bounds = None
-        if area.kind == "catalogSelection" and catalog_window is None:
+        self.window = Window(0, 0, dataset.width, dataset.height)
+        pixel_bounds = catalog_pixel_bounds
+        if area.kind == "catalogSelection" and catalog_pixel_bounds is None:
             left = top = math.inf
             right = bottom = -math.inf
             with native_polygon_features(self.catalog_source, limits=None) as (
@@ -386,11 +386,18 @@ class PixelAreaCalculator:
             if self.geometry.equals(self.geometry.envelope):
                 self.rectangle = self.geometry.bounds
         if pixel_bounds is not None:
-            left, top, right, bottom = pixel_bounds
             pad = 2 * WINDOW_TOLERANCE_PIXELS
-            x0, y0 = max(0, math.floor(left - pad)), max(0, math.floor(top - pad))
-            x1, y1 = min(dataset.width, math.ceil(right + pad)), min(
-                dataset.height, math.ceil(bottom + pad)
+            lower, upper = np.asarray(pixel_bounds).reshape(2, 2)
+            start, stop = lower - pad, upper + pad
+            if self.rectilinear:
+                # Only the accuracy margin may be clipped to the continuous world.
+                # A selected cell that actually wraps must still fail validation.
+                world = pixels(np.array([[-180.0, -90.0], [180.0, 90.0]]))
+                start = np.minimum(lower, np.maximum(start, world.min(axis=0)))
+                stop = np.maximum(upper, np.minimum(stop, world.max(axis=0)))
+            x0, y0 = max(0, math.floor(start[0])), max(0, math.floor(start[1]))
+            x1, y1 = min(dataset.width, math.ceil(stop[0])), min(
+                dataset.height, math.ceil(stop[1])
             )
             if x0 >= x1 or y0 >= y1:
                 raise ProcessingError(
