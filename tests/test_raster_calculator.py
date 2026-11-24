@@ -1494,26 +1494,28 @@ def survey_reference(
 
     Args:
         tmp_path: Directory for the reference raster.
-        request: Angular unit code, units per degree, optional vertical EPSG code, and citation choice.
+        request: Angular unit code, units per degree, optional vertical EPSG code,
+            and numeric, ESRI citation or registered Paris meridian encoding.
 
     Returns:
         Source path, units per degree, meridian in degrees, and vertical CRS code.
     """
-    angular_code, factor, vertical, esri = request.param
-    meridian = -17.123 if esri else 2.137
+    angular_code, factor, vertical, encoding = request.param
+    meridian = {"numeric": 2.137, "esri": -17.123, "paris": 2.33722917}[encoding]
     citation = "GCS Name = Local survey CRS|Primem = Survey prime meridian|"
     keys = [
-        (1024, 0, 1, 32767 if esri else 2),
+        (1024, 0, 1, 32767 if encoding == "esri" else 2),
         (1025, 0, 1, 2 if vertical else 1),
         (2048, 0, 1, 32767),
         (2049, 34737, len(citation), 0),
         (2050, 0, 1, 6326),
-        (2051, 0, 1, 32767),
+        (2051, 0, 1, 8903 if encoding == "paris" else 32767),
         (2054, 0, 1, angular_code),
         (2056, 0, 1, 7030),
-        (2061, 34736, 1, 0),
     ]
-    if esri:
+    if encoding != "paris":
+        keys.append((2061, 34736, 1, 0))
+    if encoding == "esri":
         projection = (
             'ESRI PE String = GEOGCS["Survey",DATUM["D_WGS_1984",'
             'SPHEROID["WGS_1984",6378137,298.257223563]],'
@@ -1560,7 +1562,12 @@ def survey_reference(
 
 @pytest.mark.parametrize(
     "survey_reference",
-    [(9105, 1 / 0.9, None, False), (9103, 60, None, False)],
+    [
+        (9105, 1 / 0.9, None, "numeric"),
+        (9103, 60, None, "numeric"),
+        (9103, 60, None, "paris"),
+        (9101, math.pi / 180, None, "paris"),
+    ],
     indirect=True,
 )
 def test_numeric_meridian_locates_reference_and_warped_samples(
@@ -1617,10 +1624,10 @@ def test_numeric_meridian_locates_reference_and_warped_samples(
 @pytest.mark.parametrize(
     "survey_reference",
     [
-        (9102, 1, None, False),
-        (9103, 60, None, False),
-        (9105, 1 / 0.9, 5720, False),
-        (9105, 1 / 0.9, None, True),
+        (9102, 1, None, "numeric"),
+        (9103, 60, None, "numeric"),
+        (9105, 1 / 0.9, 5720, "numeric"),
+        (9105, 1 / 0.9, None, "esri"),
     ],
     indirect=True,
 )

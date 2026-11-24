@@ -7,9 +7,11 @@ import math
 import os
 
 from pyproj import CRS as ProjCRS
+from pyproj.crs.datum import PrimeMeridian
 import rasterio
 from rasterio.crs import CRS
 from rasterio.io import DatasetReader
+from tifffile.geodb import GeoKeys
 
 
 @cache
@@ -49,14 +51,15 @@ def _geotiff_library() -> ctypes.CDLL:
     return library
 
 
-def _numeric_meridian(path: str) -> float | None:
-    """Read a user-defined longitude GeoKey without loading the TIFF tile index.
+def _geokey_meridian_radians(path: str, radians_per_unit: float) -> float | None:
+    """Read the Greenwich longitude of a custom geographic CRS from its GeoKeys.
 
     Args:
         path: Local GeoTIFF opened by GDAL.
+        radians_per_unit: Radians per angular unit of the geodetic base.
     Returns:
-        Meridian in the file's angular units, or None when GDAL has a registered
-        geographic CRS, an explicit projection citation, or no numeric key.
+        Longitude in radians from the registered meridian or numeric longitude.
+        None leaves GDAL's registered CRS or explicit projection citation in force.
     Raises:
         OSError: If the native TIFF reader cannot open the file.
     """
@@ -73,19 +76,37 @@ def _numeric_meridian(path: str) -> float | None:
             return None
         try:
             code = ctypes.c_ushort()
-            library.GTIFKeyGetSHORT(keys, 2048, ctypes.byref(code), 0, 1)
+            library.GTIFKeyGetSHORT(
+                keys, GeoKeys.GeographicTypeGeoKey, ctypes.byref(code), 0, 1
+            )
             if code.value != 32767:
                 return None
-            library.GTIFKeyGetSHORT(keys, 1024, ctypes.byref(code), 0, 1)
-            if code.value == 32767:
+            if (
+                library.GTIFKeyGetSHORT(
+                    keys, GeoKeys.GTModelTypeGeoKey, ctypes.byref(code), 0, 1
+                )
+                and code.value == 32767
+            ):
                 prefix = b"ESRI PE String = "
                 citation = ctypes.create_string_buffer(len(prefix) + 1)
-                library.GTIFKeyGetASCII(keys, 3073, citation, len(citation))
+                library.GTIFKeyGetASCII(
+                    keys, GeoKeys.PCSCitationGeoKey, citation, len(citation)
+                )
                 if citation.value == prefix:
                     return None
+            if (
+                library.GTIFKeyGetSHORT(
+                    keys, GeoKeys.GeogPrimeMeridianGeoKey, ctypes.byref(code), 0, 1
+                )
+                and 1024 <= code.value < 32767
+            ):
+                meridian = PrimeMeridian.from_epsg(code.value)
+                return meridian.longitude * meridian.unit_conversion_factor
             longitude = ctypes.c_double()
-            if library.GTIFKeyGetDOUBLE(keys, 2061, ctypes.byref(longitude), 0, 1):
-                return longitude.value
+            if library.GTIFKeyGetDOUBLE(
+                keys, GeoKeys.GeogPrimeMeridianLongGeoKey, ctypes.byref(longitude), 0, 1
+            ):
+                return longitude.value * radians_per_unit
             return None
         finally:
             library.GTIFFree(keys)
@@ -118,12 +139,11 @@ class GeoTiffReader(DatasetReader):
         radians_per_unit = crs.units_factor[1]
         if math.isclose(radians_per_unit, math.radians(1)):
             return crs
-        longitude = _numeric_meridian(self.name)
-        if longitude is None:
+        radians = _geokey_meridian_radians(self.name, radians_per_unit)
+        if radians is None:
             return crs
         definition = ProjCRS.from_wkt(crs.to_wkt(version="WKT2_2019"))
         meridian = definition.prime_meridian
-        radians = longitude * radians_per_unit
         if math.isclose(
             meridian.longitude * meridian.unit_conversion_factor, radians, rel_tol=1e-13
         ):
