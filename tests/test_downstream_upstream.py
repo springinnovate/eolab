@@ -19,10 +19,14 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 import yaml
 
+from catalog_selection_support import write_selection
+from eolab_app.attribute_filter import VectorFilter
 from eolab_app.processing.downstream_calculation import (
+    calculate_downstream,
     downstream_process_target,
     plan_downstream,
 )
+from eolab_app.processing.downstream_models import VectorStartingMask
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.aggregate_models import AggregateArtifact
 from test_downstream_model import downstream_fixture, scaled_downstream_fixture
@@ -55,6 +59,118 @@ def assert_same_raster(actual: Path, expected: Path) -> None:
         )
         np.testing.assert_array_equal(left.read(), right.read())
         np.testing.assert_array_equal(left.read_masks(), right.read_masks())
+
+
+@pytest.mark.parametrize(
+    ("polygon_edges", "drain_extents", "seed_columns", "total"),
+    [
+        pytest.param((3.31, 3.69), [(0, 9)], (3,), 20, id="one-cell-corridor"),
+        # The second drainage's centers are a quarter cell farther east.
+        # Its center at 5.75 lies outside the polygon even though 5.5 is inside.
+        pytest.param(
+            (2.125, 5.625),
+            [(0, 4), (4.25, 8.25)],
+            (2, 3, 4),
+            24,
+            id="offset-drainages",
+        ),
+    ],
+)
+def test_selected_polygon_matches_raster_starts_on_routing_grids(
+    tmp_path: Path,
+    polygon_edges: tuple[float, float],
+    drain_extents: list[tuple[float, float]],
+    seed_columns: tuple[int, ...],
+    total: int,
+) -> None:
+    """Compare exact starts, downstream coverage and CSV totals on an eastward corridor.
+
+    Args:
+        tmp_path: Isolated catalog sources and native model outputs.
+        polygon_edges: West and east edges in fractional source columns.
+        drain_extents: West and east edges of each independent terminal drainage.
+        seed_columns: Hand-located centers on the routing grids, in output columns.
+        total: Sum of the positive values downstream of those centers.
+    """
+    pixel_size = 1 / 128
+    grid = from_origin(-61, 13, pixel_size, pixel_size)
+    records = [
+        {
+            "id": sink,
+            "next": 0,
+            "sink": sink,
+            "geometry": mapping(box(*(grid @ (west, 3)), *(grid @ (east, 0)))),
+        }
+        for sink, (west, east) in enumerate(drain_extents, start=1)
+    ]
+    sources, request, limits = downstream_fixture(tmp_path / "inputs", records=records)
+    request = request.model_copy(
+        update={"wgs84_pixel_size": pixel_size, "travel_time_pixel_size_m": 850}
+    )
+    dem = np.full((3, 9), -9999, dtype="float32")
+    dem[1, 1:8] = np.arange(107, 100, -1)
+    values = np.full((3, 9), -9999, dtype="int16")
+    values[1, 1:8] = [9, 4, 2, 0, -9999, 7, 11]
+    starts = np.zeros((3, 9), dtype="int16")
+    starts[1, seed_columns] = 1
+    coverage = np.zeros_like(starts)
+    coverage[1, seed_columns[0] : 8] = 1
+    for name, data in (("dem", dem), ("values", values), ("starting_mask", starts)):
+        with rasterio.open(
+            sources.rasters[name],
+            "w",
+            driver="GTiff",
+            width=9,
+            height=3,
+            count=1,
+            dtype=data.dtype,
+            crs="EPSG:4326",
+            transform=grid,
+            nodata=-9999,
+        ) as dataset:
+            dataset.write(data, 1)
+
+    west, east = polygon_edges
+    selected = box(*(grid @ (west, 1.88)), *(grid @ (east, 1.10)))
+    excluded = box(*(grid @ (1, 2)), *(grid @ (2, 1)))
+    selection = write_selection(
+        tmp_path / "starts.gpkg",
+        [mapping(selected), mapping(excluded)],
+        values=[1, 0],
+        candidate=VectorFilter.model_validate(
+            {
+                "enabled": True,
+                "match": "all",
+                "rules": [{"field": "selected", "operator": "eq", "value": 1}],
+            }
+        ),
+    )
+    polygon_request = request.model_copy(
+        update={
+            "starting_mask": VectorStartingMask(
+                kind="catalogSelection", selection=selection.selection
+            )
+        }
+    )
+    raster_run = tmp_path / "raster"
+    polygon_run = tmp_path / "polygon"
+    for directory, inputs, settings in (
+        (raster_run, sources, request),
+        (polygon_run, replace(sources, starting=selection), polygon_request),
+    ):
+        directory.mkdir()
+        calculate_downstream(
+            inputs, plan_downstream(inputs, settings), directory, limits
+        )
+        with (directory / "result.csv").open(newline="") as stream:
+            assert float(next(csv.DictReader(stream))["value"]) == total
+        for name, expected in (("starting_mask", starts), ("coverage", coverage)):
+            with rasterio.open(directory / f"{name}.tif") as result:
+                assert result.transform == grid
+                np.testing.assert_array_equal(result.read(1), expected)
+        assert len(list(directory.glob("routing_dem_*.tif"))) == len(drain_extents)
+    for name in ("starting_mask.tif", "coverage.tif", "masked_values.tif"):
+        assert_same_raster(polygon_run / name, raster_run / name)
 
 
 @pytest.mark.parametrize(

@@ -108,33 +108,19 @@ def write_watershed_view(
     return target
 
 
-def prepare_starting_inputs(
-    sources: "DownstreamSources",
-    spec: DownstreamPlan,
-    starting: BaseGeometry,
-    directory: Path,
-) -> tuple[Path, Path]:
-    """Write the selected AOI and adapt vector starts to the model's raster input.
-
-    Raster masks pass through unchanged. A filtered vector becomes a binary
-    raster on the chosen calculation grid. The upstream function remains
-    responsible for its condition expression, warping and partition masking.
+def write_starting_area(starting: BaseGeometry, directory: Path) -> Path:
+    """Write the selected area used to find watersheds and rasterize vector starts.
 
     Args:
-        sources: Authorized raster or filtered-vector starting input.
-        spec: Captured model settings, including the upstream grid resolution.
-        starting: Validated WGS84 geometry from the existing selection reader.
+        starting: WGS84 geometry of the filtered features or positive raster cells.
         directory: Private per-run input directory.
 
     Returns:
-        AOI GeoJSON path and original or rasterized starting-mask path.
+        Path to the selected area's GeoJSON.
 
     Raises:
-        ProcessingError: If rasterization cannot create a nonempty grid.
-        OSError: If the prepared AOI cannot be written.
+        OSError: If the selected area cannot be written.
     """
-    from osgeo import gdal
-
     starting_area_path = directory / "starting-area.geojson"
     starting_area_path.write_text(
         json.dumps(
@@ -147,33 +133,45 @@ def prepare_starting_inputs(
         ),
         encoding="utf-8",
     )
-    if sources.starting is None:
-        return starting_area_path, sources.rasters["starting_mask"]
+    return starting_area_path
+
+
+def rasterize_starting_area(
+    starting_area_path: Path, flow_direction_path: Path, directory: Path
+) -> Path:
+    """Mark the centers of this drainage's routing cells inside the selected polygons.
+
+    Args:
+        starting_area_path: GeoJSON containing the authorized, filtered WGS84 polygons.
+        flow_direction_path: WWF flow-direction raster defining this drainage's grid.
+        directory: Private workspace for this drainage.
+
+    Returns:
+        Path to a tiled byte raster with selected cells set to one and zero as NoData.
+
+    Raises:
+        RuntimeError: If GDAL cannot read the inputs or write the starting mask.
+    """
+    from osgeo import gdal
+
     starting_mask_path = directory / "starting-mask.tif"
-    starting_mask_dataset = gdal.Rasterize(
-        str(starting_mask_path),
-        str(starting_area_path),
-        format="GTiff",
-        outputSRS="EPSG:4326",
-        xRes=spec.inputs.wgs84_pixel_size,
-        yRes=spec.inputs.wgs84_pixel_size,
-        burnValues=[1],
-        noData=0,
-        outputType=gdal.GDT_Byte,
-        creationOptions=["TILED=YES", "COMPRESS=LZW", "BIGTIFF=YES"],
-    )
-    if (
-        starting_mask_dataset is None
-        or starting_mask_dataset.RasterXSize < 1
-        or starting_mask_dataset.RasterYSize < 1
+    with (
+        gdal.ExceptionMgr(),
+        gdal.OpenEx(str(flow_direction_path), gdal.OF_RASTER) as grid,
+        gdal.GetDriverByName("GTiff").Create(
+            str(starting_mask_path),
+            grid.RasterXSize,
+            grid.RasterYSize,
+            1,
+            gdal.GDT_Byte,
+            options=["TILED=YES", "COMPRESS=LZW", "BIGTIFF=YES"],
+        ) as mask,
     ):
-        raise ProcessingError(
-            "empty_starting_mask",
-            "The starting area is smaller than the selected calculation pixel size.",
-            422,
-        )
-    starting_mask_dataset = None
-    return starting_area_path, starting_mask_path
+        mask.SetGeoTransform(grid.GetGeoTransform())
+        mask.SetSpatialRef(grid.GetSpatialRef())
+        mask.GetRasterBand(1).SetNoDataValue(0)
+        gdal.Rasterize(mask, str(starting_area_path), burnValues=[1])
+    return starting_mask_path
 
 
 def summarize_downstream_covered_values(
@@ -185,8 +183,8 @@ def summarize_downstream_covered_values(
     """Summarize raster values inside the downstream coverage produced by the WWF model.
 
     ``sum(a)`` reports the exact float returned by the original model. Optional
-    formulas are explicitly postprocessing: they read the model's output grid
-    and NoData convention without changing its coverage or masked values.
+    formulas evaluate the model's masked output cells in Float64, using the
+    same arithmetic precision as Raster summary.
 
     Args:
         covered_values_path: Complete values raster masked by downstream coverage.
@@ -214,7 +212,7 @@ def summarize_downstream_covered_values(
             else None
         )
         for _, window in dataset.block_windows(1):
-            values = dataset.read(1, window=window, masked=True)
+            values = dataset.read(1, window=window, masked=True, out_dtype="float64")
             valid_covered_pixels = ~np.ma.getmaskarray(values) & np.isfinite(
                 values.data
             )
@@ -275,12 +273,11 @@ def run_original_downstream(
 ) -> AggregateArtifact:
     """Call the pinned model's existing functions in its original calculation order.
 
-    EOlab supplies authorized inputs and runs the same functions sequentially in
-    its supervised native process. No upstream numerical function is replaced or
-    patched. Pit filling ignores NoData exits using the saved pit-search cutoff;
-    subsequent MFD routing is unchanged. Only complete declared files remain for
-    normal artifact publication. Routing and coverage progress counts completed
-    terminal drainage groups.
+    EOlab supplies authorized inputs and rasterizes vector starts on each
+    drainage's flow-direction grid. The WWF functions run sequentially in the
+    supervised native process. Pit filling ignores NoData exits using the saved
+    pit-search cutoff before MFD routing. Only complete declared files remain
+    for publication. Routing and coverage progress counts completed drainage groups.
 
     Args:
         sources: Authorized paths and immutable vector selections.
@@ -305,9 +302,7 @@ def run_original_downstream(
     model_working_directory = directory / "upstream"
     model_working_directory.mkdir()
     write_progress(directory, "preparing_starting_mask", 0, 0)
-    starting_area_path, starting_mask_path = prepare_starting_inputs(
-        sources, spec, starting, model_working_directory
-    )
+    starting_area_path = write_starting_area(starting, model_working_directory)
     watershed_view_path = write_watershed_view(sources, spec, model_working_directory)
     try:
         watershed_partitions_by_sink = (
@@ -335,7 +330,7 @@ def run_original_downstream(
         partition_directory = model_working_directory / identifier
         partition_directory.mkdir()
         partition_dem_path = str(partition_directory / "dem.tif")
-        flow_direction_path = str(partition_directory / "flow.tif")
+        flow_direction_path = partition_directory / "flow.tif"
         write_progress(
             directory,
             "routing_downstream",
@@ -360,9 +355,16 @@ def run_original_downstream(
         beneficiaries_model.calc_flow_dir(
             partition_dem_path,
             partition_directory,
-            flow_direction_path,
+            str(flow_direction_path),
             max_pixel_fill_count=spec.inputs.settings.pit_fill_search_limit,
             treat_nodata_as_closed=PIT_FILL_TREAT_NODATA_AS_CLOSED,
+        )
+        starting_mask_path = (
+            sources.rasters["starting_mask"]
+            if sources.starting is None
+            else rasterize_starting_area(
+                starting_area_path, flow_direction_path, partition_directory
+            )
         )
         partition_downstream_coverage_path = partition_directory / "coverage.tif"
         write_progress(
@@ -374,7 +376,7 @@ def run_original_downstream(
         )
         beneficiaries_model.calculate_downstream_coverage_from_conditional_raster(
             partition_vector_path,
-            Path(flow_direction_path),
+            flow_direction_path,
             starting_mask_path,
             "starting",
             "value > 0",

@@ -38,9 +38,9 @@
           </div>
           <div class="timeline-caption">
             <output data-timeline="display" aria-live="off"></output>
+            <p data-timeline="status" role="status"></p>
             <span data-timeline="gap"></span>
           </div>
-          <p data-timeline="status" role="status" hidden></p>
         </section>
         <section id="map-place-search" class="map-place-search" popover="manual" aria-labelledby="map-place-search-heading" hidden>
           <header>
@@ -642,11 +642,11 @@
         type="button"
         hidden
       >Pixel picker hidden · Press P to show</button>
-      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel
+      <button id="open-map-tools" class="map-panel-toggle map-panel-toggle--right map-panel-opener" data-map-panel data-pixel-picker-obstacle
         type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="false"
         aria-label="Expand map tools" title="Expand map tools" hidden>Map tools</button>
       <div id="map-tools-toolbar" class="map-tool-openers" data-map-panel role="region" aria-label="Map tools">
-        <section id="map-interaction-tools" aria-label="Map interaction tools" hidden>
+        <section id="map-interaction-tools" data-pixel-picker-obstacle aria-label="Map interaction tools" hidden>
           <div class="map-interaction-strip" role="group" aria-label="Map interaction mode">
             <button type="button" data-map-mode="pan" aria-pressed="false">Pan</button>
             <button type="button" data-map-mode="pixel" aria-pressed="true">Pixel picker</button>
@@ -660,7 +660,7 @@
           </div>
           <p id="map-interaction-status" role="status" aria-live="polite"></p>
         </section>
-        <section id="raster-sampling-tool" aria-label="Sample area controls">
+        <section id="raster-sampling-tool" data-pixel-picker-obstacle aria-label="Sample area controls">
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
                 <span id="raster-sampling-area-summary">No raster selected</span>
@@ -739,7 +739,7 @@
               Select a raster to choose its sample area.
             </p>
         </section>
-        <header class="map-panel-header map-tools-header">
+        <header class="map-panel-header map-tools-header" data-pixel-picker-obstacle>
           <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-collapse"
             type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="true"
             aria-label="Collapse map tools" title="Collapse map tools"><span aria-hidden="true">×</span></button>
@@ -747,12 +747,12 @@
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             title="Choose a map tool"><span id="map-tool-name">Choose a tool</span><span aria-hidden="true">▾</span></button>
         </header>
-        <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
+        <div class="map-filter-summary-group" data-pixel-picker-obstacle role="group" aria-labelledby="map-filter-summary-heading">
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
         </div>
       </div>
-      <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
+      <div id="workspace-tool-actions" data-pixel-picker-obstacle popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Planning</strong>
           <button id="open-planning" class="workspace-tool-action" type="button" aria-controls="planning-panel">Planning tools</button>
@@ -777,7 +777,7 @@
           <button id="open-settings" class="workspace-tool-action" type="button" aria-controls="settings-panel">Settings</button>
         </div>
       </div>
-      <aside id="map-inspection" popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
+      <aside id="map-inspection" data-pixel-picker-obstacle popover="manual" aria-labelledby="map-tool-name" aria-describedby="map-inspection-context">
         <header class="map-inspection-dock-header">
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
@@ -807,7 +807,7 @@
               <button id="map-inspection-tab-style" class="tool-tab"
                 type="button" role="tab" aria-controls="layer-style-editor"
                 aria-selected="false" tabindex="-1" hidden>Style</button>
-              <button id="map-inspection-tab-settings" class="map-inspection-tab" type="button" role="tab" aria-controls="settings-panel"
+              <button id="map-inspection-tab-settings" class="tool-tab" type="button" role="tab" aria-controls="settings-panel"
                 aria-selected="false" tabindex="-1" hidden>Settings</button>
             </div>
             <button id="map-inspection-all-tabs" class="tool-tab-index" type="button" aria-haspopup="menu" popovertarget="map-inspection-tab-menu"
@@ -1993,6 +1993,12 @@
         <label><input type="checkbox" data-visitor-control="histogramBox"> Histogram box</label>
         <label><input type="checkbox" data-visitor-control="lasso"> Lasso</label>
       </fieldset>
+      <label><input type="checkbox" data-visitor-control="runModels"> Run models</label>
+      <fieldset data-visitor-model-children>
+        <legend class="visually-hidden">Models visitors can run</legend>
+        <div data-visitor-model-list></div>
+      </fieldset>
+      <p data-visitor-model-status role="status" hidden></p>
     </template>
     <section id="raster-download-sheet" popover="manual" role="dialog" aria-labelledby="raster-download-title raster-download-source">
       <div class="raster-download-scroll">
