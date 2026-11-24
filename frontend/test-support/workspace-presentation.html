@@ -296,9 +296,9 @@
       check(dock.activeTool === "feature", "A completed histogram changed the foreground tool");
     }
 
-    /** Check the crowded tab row, context menu, shared typography and retained selection.
+    /** Check context, typography and keyboard navigation in the crowded map tab row.
      * @param {MapInspectionController} dock Mounted map inspection panel with the Style editor open.
-     * @returns {Promise<void>} Resolves after switching from model setup back to its peer editor.
+     * @returns {Promise<void>} Resolves after choosing Style from All tabs and moving to Filter with Left Arrow.
      * @throws {Error} If the row wraps, hides the active view, loses context or changes focus on new results.
      */
     async function checkOpenMapViews(dock) {
@@ -349,13 +349,18 @@
       const style = document.querySelector("#map-inspection-tab-style");
       check(document.activeElement === style && style.getAttribute("aria-selected") === "true" &&
         isReachable(style) && !menu.matches(":popover-open"), "Selecting Style did not return to its visible tab");
+      document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      const filter = document.querySelector("#map-inspection-tab-filter");
+      check(document.activeElement === filter && filter.getAttribute("aria-selected") === "true" &&
+        document.querySelector("#vector-filter-panel").getAttribute("aria-hidden") === "false",
+        "Left Arrow after choosing Style did not focus Filter and open its panel");
       dock.hideModels();
       dock.hideAnnotations();
       dock.hidePlanning();
       dock.hideFilter();
     }
 
-    /** Exercise Data tools below the map views, including a crowded row and a retained draft.
+    /** Check keyboard navigation and draft retention across Data tools pages and map views.
      * @param {MapInspectionController} dock Mounted map panel.
      * @returns {Promise<void>} Resolves after checking navigation and returning to the map view.
      * @throws {Error} If the two rows overlap, share selection, or lose access to a page.
@@ -387,8 +392,20 @@
         const name = document.querySelector("#models-setup input");
         name.value = "Watershed draft";
         name.dispatchEvent(new Event("input", { bubbles: true }));
+        runs.click();
+        runs.focus();
         row.style.inlineSize = "205px";
         await settleLayout();
+        check(getComputedStyle(library).visibility === "hidden", "Choose a tool must be in overflow before pressing Home");
+        for (const [key, tab, pageId] of [
+          ["Home", library, "models-library"],
+          ["ArrowRight", setup, "models-setup"],
+        ]) {
+          document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+          check(document.activeElement === tab && tab.getAttribute("aria-selected") === "true" &&
+            !document.getElementById(pageId).hidden,
+            `${key} did not focus ${tab.textContent} and show its page`);
+        }
         const index = document.querySelector("#models-all-tabs");
         check(isReachable(index) && isReachable(setup), "Data tools overflow hid the active Setup tab or its menu");
         index.click();
@@ -600,10 +617,10 @@
       layout.registerPanelActivitySource(document.querySelector("#map-inspection"),
         listener => inspection.subscribeClickResultActivity(listener));
       await checkPanelDisclosures(inspection);
+      await checkDataToolTabs(inspection);
+      await checkOpenMapViews(inspection);
       checkLegendControls(inspection);
       checkFadeSettings();
-      await checkOpenMapViews(inspection);
-      await checkDataToolTabs(inspection);
       checkHistogramResultNavigation(inspection);
       checkMapClickFade(inspection);
       inspection.destroy();
