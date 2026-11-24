@@ -216,6 +216,7 @@ export class VectorTimeSeriesController {
         this.observations = [];
         this.settings = {xField: VECTOR_TIME_SERIES_LAYER_LABEL, yFields: [], direction: "ascending", chartType: "bar"};
         this.hasInitialFields = false;
+        /** @type {{index:number,field:string|null,zoomUnavailable:boolean}|null} The chosen reading in this sample. */
         this.selected = null;
         this.pointElements = [];
         this.sampleState = "empty";
@@ -246,7 +247,7 @@ export class VectorTimeSeriesController {
             this.plotPanel.closePicker();
         }, listen);
         this.zoomFeatureButton.addEventListener("click", () => {
-            if (this.selected) this.#zoomToFeature(this.selected.index);
+            if (this.selected) this.#zoomToSelectedFeature();
         }, listen);
         documentContext.addEventListener("keydown", event => {
             if (event.key !== "Escape" || this.panel.hidden || !this.panel.contains(documentContext.activeElement)) return;
@@ -502,20 +503,18 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Highlight the same feature in every plot and enable its original zoom target.
+     * Highlight the same feature in every plot and preserve its known zoom availability.
      * @param {number} index Original observation position.
      * @param {string|null} field Measurement, or null for selection from the feature picker.
      * @return {void}
      */
     #select(index,field) {
-        const observation = this.observations[index];
-        this.selected = {index,field};
+        const zoomUnavailable = this.selected?.index === index && this.selected.zoomUnavailable;
+        this.selected = {index, field, zoomUnavailable};
         this.featureList.value = String(index);
-        const x = this.settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL ? observation.layerLabel : observation.properties[this.settings.xField];
-        this.selectionText.textContent = this.#identity(observation,index,field,isOrderableValue(x) ? formatScalar(x) : "No value");
         this.selection.hidden = false;
         this.zoomFeatureButton.hidden = false;
-        this.zoomFeatureButton.disabled = false;
+        this.#renderSelectedReading();
         for (const [sourceIndex, {row, cells}] of this.tableRows) {
             row.setAttribute("aria-current", String(sourceIndex === index));
             for (const [name, button] of cells) {
@@ -530,6 +529,16 @@ export class VectorTimeSeriesController {
         }
     }
 
+    /** Show the selected reading and its zoom action, including a previously unavailable location. @return {void} */
+    #renderSelectedReading() {
+        const {index, field, zoomUnavailable} = this.selected;
+        const observation = this.observations[index];
+        const x = this.settings.xField === VECTOR_TIME_SERIES_LAYER_LABEL ? observation.layerLabel : observation.properties[this.settings.xField];
+        const reading = this.#identity(observation, index, field, isOrderableValue(x) ? formatScalar(x) : "No value");
+        this.selectionText.textContent = zoomUnavailable ? reading + " · Feature location is unavailable." : reading;
+        this.zoomFeatureButton.disabled = zoomUnavailable;
+    }
+
     /**
      * Select the plotted reading, highlight its feature, and zoom to it.
      * @param {number} index Feature position in the current inspection sample.
@@ -538,19 +547,19 @@ export class VectorTimeSeriesController {
      */
     #selectAndZoomToFeature(index, field) {
         this.#select(index, field);
-        this.#zoomToFeature(index);
+        this.#zoomToSelectedFeature();
     }
 
     /**
      * Highlight the selected feature on the map and fit its bounds.
-     * Report unavailable bounds beside the selected reading.
-     * @param {number} index Position in the current inspection sample.
+     * Remember unavailable bounds for this selection and show them beside the reading.
      * @return {void}
      */
-    #zoomToFeature(index) {
+    #zoomToSelectedFeature() {
+        const {index} = this.selected;
         if (this.onFeatureZoom(this.observations[index].focus, index)) return;
-        this.zoomFeatureButton.disabled = true;
-        this.selectionText.textContent += " · Feature location is unavailable.";
+        this.selected.zoomUnavailable = true;
+        this.#renderSelectedReading();
     }
 
     /**

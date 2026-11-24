@@ -665,9 +665,10 @@ test("active mode survives empty clicks, reopens, and ends on explicit close", (
 test("unavailable feature location leaves the chart usable with a readable explanation", () => {
   const h = fixture();
   h.controller.onFeatureZoom = () => false;
-  h.controller.setCurrentObservation(observation({
+  const missingBounds = observation({
     focus: Object.freeze({ center: [20, 10], bounds: null }),
-  }));
+  });
+  h.controller.setCurrentObservation(missingBounds);
   h.controller.open();
   const zoom = h.documentContext.querySelector("#zoom-vector-feature-profile-feature");
   zoom.dispatchEvent(new Event("click"));
@@ -675,5 +676,11 @@ test("unavailable feature location leaves the chart usable with a readable expla
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
     "Feature location is unavailable. The map has not moved.");
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-chart").hidden, false);
+  h.controller.setCurrentObservation({...missingBounds, layerLabel: "New layer name"}, null, "labels");
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
+  h.controller.setCurrentObservation(observation({featureId: "corridors.7"}));
+  assert.equal(zoom.disabled, false);
   h.controller.destroy();
 });

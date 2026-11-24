@@ -464,7 +464,8 @@ test("chart points identify observations and request selected-feature zoom", () 
 
 test("a point with no map bounds stays selected and another point can still zoom", () => {
   const {controller, documentContext: doc, zoomRequests} = fixture(featureFocus => featureFocus.bounds !== null);
-  controller.setSample({ state: "ready", observations: observations(), message: "Ready" });
+  const sample = { state: "ready", observations: observations(), message: "Ready" };
+  controller.setSample(sample);
   const marks = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point");
   const selection = doc.querySelector("#vector-time-series-selection-text");
   const zoom = doc.querySelector("#zoom-vector-time-series-feature");
@@ -474,8 +475,12 @@ test("a point with no map bounds stays selected and another point can still zoom
   assert.match(selection.textContent, /risk\.2a.*Feature location is unavailable/);
   assert.equal(zoom.disabled, true);
 
-  marks[2].dispatchEvent(new Event("click"));
-  assert.equal(marks[2].getAttribute("aria-pressed"), "true");
+  controller.setSample({...sample, observations: sample.observations.map(o => ({...o, layerLabel: "Renamed " + o.layerLabel}))}, "labels");
+  assert.equal(zoom.disabled, true);
+  assert.match(selection.textContent, /Renamed .*risk\.2a.*Feature location is unavailable/);
+  const nextMark = doc.querySelector("#vector-time-series-chart").querySelectorAll(".series-chart-point")[2];
+  nextMark.dispatchEvent(new Event("click"));
+  assert.equal(nextMark.getAttribute("aria-pressed"), "true");
   assert.match(selection.textContent, /risk\.10a/);
   assert.doesNotMatch(selection.textContent, /unavailable/);
   assert.equal(zoom.disabled, false);

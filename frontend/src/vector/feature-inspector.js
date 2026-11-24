@@ -991,24 +991,27 @@ export class VectorFeatureInspectorController {
             canPrevious: this.resultIndex > 0,
             canNext: this.resultIndex < this.results.length - 1,
         });
+        this.layerName.textContent = target.label;
+        this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
+        if (change === "labels") {
+            this.onCurrentObservationChange(observation, navigation, change);
+            return;
+        }
         this.result.hidden = false;
         this.heading.textContent = observation.featureId === null
             ? "Feature inspector"
             : `Feature inspector (FID ${observation.featureId})`;
         this.heading.title = this.heading.textContent;
-        this.layerName.textContent = target.label;
         if (this.filterButton) this.filterButton.hidden = false;
         this.styleButton.hidden = false;
         this.styleButton.disabled = false;
         this.zoomFeatureButton.disabled = false;
         if (this.lastSample) this.status.textContent = this.lastSample.message;
-        this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;
         this.next.disabled = !navigation.canNext;
         this.featureProfileButton.disabled = !Object.values(observation.properties).some(Number.isFinite);
         this.onCurrentObservationChange(observation, navigation, change);
-        if (change === "labels") return;
         this.#showAttributes(this.results[this.resultIndex]);
         this.clearHighlight();
         if (typeof feature.id === "string" && feature.id.length > 0) {

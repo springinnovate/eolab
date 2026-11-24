@@ -12,6 +12,7 @@ import { VectorPlotStatistics } from "./plot-statistics.js";
 
 export const FEATURE_PROFILE_TITLE_NONE = "__eolab_no_title__";
 export const FEATURE_PROFILE_TITLE_LAYER = "__eolab_layer_title__";
+const UNAVAILABLE_LOCATION_MESSAGE = "Feature location is unavailable. The map has not moved.";
 
 /**
  * Normalize and validate the inspector-owned position for the current feature.
@@ -329,6 +330,7 @@ export class VectorFeatureProfileController {
         this.zoomFeatureButton = documentContext.querySelector(
             "#zoom-vector-feature-profile-feature"
         );
+        this.zoomFeatureButton.disabled = true;
         this.titleField = documentContext.querySelector(
             "#vector-feature-profile-title-field"
         );
@@ -389,7 +391,7 @@ export class VectorFeatureProfileController {
             if (this.currentObservation === null) return;
             if (this.onFeatureZoom(this.currentObservation.focus)) return;
             this.zoomFeatureButton.disabled = true;
-            this.status.textContent = "Feature location is unavailable. The map has not moved.";
+            this.status.textContent = UNAVAILABLE_LOCATION_MESSAGE;
         };
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();
@@ -474,6 +476,7 @@ export class VectorFeatureProfileController {
             this.render();
             return;
         }
+        this.zoomFeatureButton.disabled = observation === null;
         if (observation === null && !this.panel.hidden) {
             this.onVisibilityChange(false, false);
         }
@@ -524,7 +527,6 @@ export class VectorFeatureProfileController {
         this.table.hidden = true;
         this.selection.hidden = true;
         this.status.textContent = "";
-        this.zoomFeatureButton.disabled = this.currentObservation === null;
         this.#renderNavigation();
         const settings = this.#currentSettings();
         this.statistics.update(this.modeActive && this.currentObservation ? [this.currentObservation] : [], settings?.selectedFields ?? []);
@@ -556,6 +558,7 @@ export class VectorFeatureProfileController {
         this.#renderTable(profile.points);
         this.#renderProfileChart(profile, settings, presentation.heading);
         if (this.selectedField !== null) this.#selectField(this.selectedField);
+        if (this.zoomFeatureButton.disabled) this.status.textContent = UNAVAILABLE_LOCATION_MESSAGE;
     }
 
     /**

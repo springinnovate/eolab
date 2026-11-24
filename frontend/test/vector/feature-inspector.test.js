@@ -1217,6 +1217,11 @@ test("unavailable feature location keeps attributes and explains the rejected zo
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "Feature location is unavailable. The map has not moved.");
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "Selected parcel");
+  h.targets[0] = {...h.targets[0], label: "Renamed parcels"};
+  h.controller.syncVisibleLayers();
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
   h.controller.destroy();
 });
 
