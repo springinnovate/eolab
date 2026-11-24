@@ -694,6 +694,22 @@ def native_bbox_for_grid(
     return native_bbox_for_wgs84_bounds(resolved, (min(xs), min(ys), max(xs), max(ys)))
 
 
+def selection_edges_are_wgs84(resolved: ResolvedCatalogSelection) -> bool:
+    """Check whether a selection's original straight edges use WGS84 coordinates.
+
+    Args:
+        resolved: Authorized source whose layer metadata can be read.
+
+    Returns:
+        Whether geographic vertex bounds enclose all native polygon edges.
+
+    Raises:
+        SelectionUnavailableError: If the authorized layer cannot be opened.
+    """
+    with _source_collection(resolved) as source:
+        return source.crs.to_epsg() == 4326
+
+
 def native_bbox_for_wgs84_bounds(
     resolved: ResolvedCatalogSelection,
     bounds: tuple[float, float, float, float],
@@ -716,9 +732,8 @@ def native_bbox_for_wgs84_bounds(
         -180 <= west < east <= 180 and -90 <= south < north <= 90 and east - west < 180
     ):
         return None
-    with _source_collection(resolved) as source:
-        if source.crs.to_epsg() != 4326:
-            return None
+    if not selection_edges_are_wgs84(resolved):
+        return None
     return (
         math.nextafter(west, -math.inf),
         math.nextafter(south, -math.inf),

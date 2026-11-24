@@ -3,7 +3,7 @@
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.raster_input import raster_source_filename_prefix
 
-from eolab_app.bounded_vector import PolygonRasterizer
+from eolab_app.bounded_vector import PolygonRasterizer, selection_edges_are_wgs84
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -404,21 +404,30 @@ def plan_aggregate(
                 area.kind == "catalogSelection"
                 and dataset.crs.to_epsg() in {4326, 3857, 6933}
                 and dataset.transform.b == dataset.transform.d == 0
+                and selection_edges_are_wgs84(area.resolved)
             ):
                 planning_area = AggregateArea(kind="bounds", bounds=area.bounds)
             pixel_only = functions == {"pixelValue"}
             raster_window = pixel_window
+            catalog_window = None
             if not pixel_only:
-                raster_window, _ = get_raster_window_and_mask_source(
+                raster_window, polygons = get_raster_window_and_mask_source(
                     dataset, planning_area, limits
                 )
+                if isinstance(polygons, PolygonRasterizer):
+                    catalog_window = raster_window
+                    polygons.close()
             needs_ground_area = any(
                 node.op == "areaha" for root in roots for node in walk(root)
             )
             pixel_area_calculator = None
             if needs_ground_area:
                 pixel_area_calculator = PixelAreaCalculator(
-                    dataset, planning_area, limits, planning=True
+                    dataset,
+                    planning_area,
+                    limits,
+                    planning=True,
+                    catalog_window=catalog_window,
                 )
             if pixel_area_calculator is not None:
                 raster_window = pixel_area_calculator.window
