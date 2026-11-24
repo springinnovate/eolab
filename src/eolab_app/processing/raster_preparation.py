@@ -336,7 +336,8 @@ def _write_warped_vrt(
     than one period, so set its native CENTER_LONG option in the serialized warp.
     Convert non-degree geographic coordinates to degrees in a virtual source
     because the native longitude-centering operation requires those units.
-    Preserve the target prime meridian's angular unit in the saved transformer.
+    Preserve both coordinate systems, including their prime meridian units,
+    when GDAL serializes the reprojection transformer as WKT1.
 
     Args:
         source: Open virtual source supplying its CRS and affine transform.
@@ -367,6 +368,7 @@ def _write_warped_vrt(
     try:
         with gdal.ExceptionMgr(), gdal.config_option("OSR_WKT_FORMAT", "WKT2_2019"):
             degree = radians(1)
+            source_wkt = source.crs.to_wkt(version="WKT2_2019")
             target_wkt = grid.crs.to_wkt(version="WKT2_2019")
             to_degrees = (
                 source.crs.units_factor[1] / degree if source.crs.is_geographic else 1
@@ -376,16 +378,14 @@ def _write_warped_vrt(
                 # Change only the coordinate units of the virtual source.
                 degree_path = masked_path.with_name(f"{masked_path.stem}-degrees.vrt")
                 with osr.ExceptionMgr():
-                    srs = osr.SpatialReference(
-                        wkt=source.crs.to_wkt(version="WKT2_2019")
-                    )
+                    srs = osr.SpatialReference(wkt=source_wkt)
                     srs.SetAngularUnits("degree", degree)
-                    degree_wkt = srs.ExportToWkt(["FORMAT=WKT2_2019"])
+                    source_wkt = srs.ExportToWkt(["FORMAT=WKT2_2019"])
                 with gdal.Translate(
                     str(degree_path),
                     str(masked_path),
                     format="VRT",
-                    outputSRS=degree_wkt,
+                    outputSRS=source_wkt,
                     outputGeotransform=[
                         value * to_degrees for value in source.transform.to_gdal()
                     ],
@@ -409,17 +409,16 @@ def _write_warped_vrt(
                 warpOptions=warp_options,
             ):
                 pass
-            explicit_angular_units = grid.crs.is_geographic and not isclose(
-                grid.crs.units_factor[1], degree
-            )
-            if not (center_periodic_longitudes or explicit_angular_units):
-                return path
             tree = ElementTree.parse(path)
-            # GDAL serializes the transformer's target as WKT1 even when the
-            # VRT grid uses WKT2. Keep the angular unit on its prime meridian.
-            target_srs = tree.find(".//ReprojectionTransformer/TargetSRS")
-            if explicit_angular_units and target_srs is not None:
-                target_srs.text = target_wkt
+            reprojection = tree.find(".//ReprojectionTransformer")
+            if reprojection is None:
+                if center_periodic_longitudes:
+                    raise RuntimeError("GDAL omitted the periodic source transformer")
+                return path
+            for tag, wkt in (("SourceSRS", source_wkt), ("TargetSRS", target_wkt)):
+                node = reprojection.find(tag)
+                if node is not None:
+                    node.text = wkt
             if center_periodic_longitudes:
                 center_x, center_y = grid.transform * (grid.width / 2, grid.height / 2)
                 longitude, _ = Transformer.from_crs(
@@ -432,9 +431,6 @@ def _write_warped_vrt(
                         source.width / 2,
                         source.height / 2,
                     )
-                reprojection = tree.find(".//ReprojectionTransformer")
-                if reprojection is None:
-                    raise RuntimeError("GDAL omitted the periodic source transformer")
                 options = reprojection.find("Options")
                 if options is None:
                     options = ElementTree.SubElement(reprojection, "Options")

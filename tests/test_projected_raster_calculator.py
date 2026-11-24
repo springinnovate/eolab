@@ -6,9 +6,26 @@ from pathlib import Path
 import numpy as np
 from pyproj import Transformer
 import pytest
+import rasterio
 import tifffile
 
+from eolab_app.processing.aggregate_models import RasterAggregateLimits
+from eolab_app.processing.raster_calculator import (
+    RasterCalculatorSources,
+    calculate_raster,
+    plan_calculator_grid,
+)
+from eolab_app.processing.raster_calculator_models import (
+    CustomRasterGrid,
+    MatchRasterGrid,
+    QueuedRasterCalculator,
+    RasterCalculatorRequest,
+    RasterFormulaInput,
+    RasterFormulaLayer,
+)
+from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.pixel import read_raster_pixel
+from raster_source_support import SOURCE
 
 
 @pytest.fixture
@@ -87,4 +104,64 @@ def test_projected_base_meridian_locates_original_cell(survey_mercator: Path) ->
             row,
             column,
             13 * row + column,
+        )
+
+
+def calculate_survey_grid(
+    directory: Path, reference: Path, grid: CustomRasterGrid | MatchRasterGrid
+) -> Path:
+    """Copy the survey samples onto the requested grid over its measured footprint.
+
+    Args:
+        directory: Existing directory for the result.
+        reference: Four-by-thirteen Mercator raster at 2.137 degrees east.
+        grid: Requested calculator output grid.
+    Returns:
+        Published single-band COG from the ordinary calculator workflow.
+    """
+    bounds = Wgs84Bounds(west=2.1371, south=0.0001, east=2.2536, north=0.0361)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=grid,
+        ),
+        selectedBounds=bounds,
+    )
+    sources = RasterCalculatorSources({"a": reference}, None)
+    spec = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, spec, directory, RasterAggregateLimits())
+    return directory / result.filename
+
+
+@pytest.mark.parametrize("survey_mercator", [False, True], indirect=True)
+def test_warp_uses_projected_base_meridian(
+    survey_mercator: Path, tmp_path: Path
+) -> None:
+    """Check every WGS84 output cell against an independent World Mercator lookup.
+
+    Args:
+        survey_mercator: Numeric or citation-based custom Mercator input.
+        tmp_path: Directory for the WGS84 result.
+    """
+    grid = CustomRasterGrid(kind="custom", crs="EPSG:4326", pixelSize=(0.01, 0.01))
+    path = calculate_survey_grid(tmp_path, survey_mercator, grid)
+    mercator = Transformer.from_crs(4326, 3395, always_xy=True)
+    with rasterio.open(path) as output:
+        values = output.read(1)
+        rows, columns = np.indices(values.shape)
+        lon, lat = output.transform * (columns + 0.5, rows + 0.5)
+        x, y = mercator.transform(lon - 2.137, lat)
+        source_col = np.floor(x / 1000).astype(int)
+        source_row = np.floor((4000 - y) / 1000).astype(int)
+        inside = (
+            (source_col >= 0) & (source_col < 13) & (source_row >= 0) & (source_row < 4)
+        )
+        assert np.count_nonzero(inside) >= 35
+        np.testing.assert_array_equal(
+            values, np.where(inside, 13 * source_row + source_col, np.nan)
         )
