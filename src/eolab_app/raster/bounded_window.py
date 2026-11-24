@@ -467,6 +467,8 @@ def _densify_polygon_rings(
             ),
         )
     )
+    if densify_points == 0:
+        return rings
     denominator = densify_points + 1
     densified: list[tuple[tuple[float, float], ...]] = []
     for ring in rings:
@@ -782,8 +784,9 @@ def project_polygons_to_crs(
     all_rings = tuple(
         ring for geometry in geometries for ring in _polygon_rings(geometry)
     )
+    same_crs = CRS.from_user_input(source_crs) == CRS.from_user_input(target_crs)
     densified_rings = _densify_polygon_rings(
-        all_rings, maximum_coordinates, initial_edge_points
+        all_rings, maximum_coordinates, 0 if same_crs else initial_edge_points
     )
     if grid_transform is not None:
         densified_rings = _refine_raster_rings(
@@ -797,7 +800,7 @@ def project_polygons_to_crs(
             longitude_period,
         )
     vertex_crs = source_crs
-    if CRS.from_user_input(source_crs).is_projected and source_crs != target_crs:
+    if CRS.from_user_input(source_crs).is_projected and not same_crs:
         # GDAL cuts whole polygons at the antimeridian and reconstructs polar
         # interiors, including holes. A longitude chosen per vertex cannot do that.
         sampled = _with_polygon_rings(geometries, densified_rings)

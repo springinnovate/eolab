@@ -854,6 +854,8 @@ class PolygonRasterizer:
                 cancellation_requested=cancellation_requested,
                 limits=read_limits,
             ) as (source_crs, features):
+                if dataset.crs == source_crs:
+                    self.densify = 0
                 for geometry in features:
                     # The callback returns True when this work is cancelled.
                     # Stop before allocating/projecting another feature.

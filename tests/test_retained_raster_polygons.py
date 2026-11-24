@@ -190,7 +190,7 @@ def test_preparation_limits_and_cancellation_release_prior_features(
             selected,
             20,
             lambda: cancelled,
-            max_retained_polygon_bytes=8000 if failure == "budget" else 100000,
+            max_retained_polygon_bytes=6500 if failure == "budget" else 100000,
         )
     assert calls == (1 if failure == "budget" else 2)
     assert all(reader.retained_bytes == 0 for reader in readers)
@@ -243,12 +243,13 @@ def test_retained_masks_do_not_reopen_sources_and_remain_cancellable(
 
 
 def test_processing_retains_polygons_without_memory_estimates(tmp_path: Path) -> None:
-    """Raster buffers leave only their remaining memory for retained polygons.
+    """Keep native polygon vertices unchanged in an unlimited Processing read.
 
     Args:
         tmp_path: Isolated raster/vector files.
     """
-    selected = write_selection(tmp_path / "selected.gpkg", [mapping(box(1, 1, 4, 4))])
+    polygon = box(1, 1, 4, 4)
+    selected = write_selection(tmp_path / "selected.gpkg", [mapping(polygon)])
     path = write_source(
         tmp_path / "raster.tif",
         np.ones((8, 8), dtype="uint8"),
@@ -269,7 +270,8 @@ def test_processing_retains_polygons_without_memory_estimates(tmp_path: Path) ->
             limits,
             measure_hectares=plan.grid.groundArea is not None,
         )
-        assert list(tools.selected_polygons.iter_projected_polygons())
+        (prepared,) = tools.selected_polygons.iter_projected_polygons()
+        assert tuple(prepared["coordinates"][0]) == tuple(polygon.exterior.coords)
         tools.selected_polygons.close()
 
 
