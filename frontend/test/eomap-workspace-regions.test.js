@@ -81,6 +81,16 @@ function requireElementRange(identifier) {
     throw new Error(`Required markup element is not closed: ${identifier}`);
 }
 
+test("saved-layer recovery stays outside every capability-disabled workspace", () => {
+    const recovery = requireElementRange("show-unavailable-map-layers");
+    for (const id of ["control-panel", "map-tools-toolbar", "map-inspection"]) {
+        const workspace = requireElementRange(id);
+        assert.ok(recovery.end <= workspace.start || recovery.start >= workspace.end,
+            `Unavailable layers must remain reachable when ${id} is hidden or inert`);
+    }
+    assert.equal(countMarkupId("show-unavailable-map-layers"), 1);
+});
+
 test("one sidebar owns the workspace disclosures and compact status", () => {
     const panel = requireElementRange("control-panel");
     const operationalStatus = requireElementRange(

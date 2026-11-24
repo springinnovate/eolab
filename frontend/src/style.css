@@ -2932,6 +2932,16 @@ div.chart-tooltip {
   display: none;
 }
 
+#show-unavailable-map-layers {
+  max-width: min(16rem, calc(100vw - 52px));
+  min-height: 34px;
+  background: var(--surface-2);
+  box-shadow: var(--elevation-control);
+  font-size: var(--font-size-ui);
+}
+
+#show-unavailable-map-layers[hidden] { display: none; }
+
 @container workspace-sidebar (max-width: 520px) {
   .panel-header-actions {
     gap: 6px;
