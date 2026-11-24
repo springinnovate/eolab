@@ -318,6 +318,8 @@ def _write_warped_vrt(
 
     Use one dataset-aware transformer for every source and resampling method.
     GDAL handles geographic longitude wrapping, rotated grids and alpha masks.
+    Sample the interior of periodic views when estimating source windows:
+    sampling only their perimeter can miss valid pixels near longitude cuts.
     Its grid-sampled horizontal scale keeps repeated longitude periods from
     being mistaken for a coarser source resolution when choosing the kernel.
     Center interpolated and aggregate periodic views on the output so scale
@@ -349,6 +351,8 @@ def _write_warped_vrt(
     sample_periodic_scale = periodic_longitude and resampling == Resampling.bilinear
     center_periodic_longitudes = periodic_longitude and resampling != Resampling.nearest
     warp_options = ["UNIFIED_SRC_NODATA=NO"]
+    if periodic_longitude:
+        warp_options.append("SAMPLE_GRID=YES")
     if sample_periodic_scale:
         warp_options.append("XSCALE=FROM_GRID_SAMPLING")
     try:

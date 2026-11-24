@@ -120,6 +120,50 @@ def test_nearest_projection_uses_exact_source_centers(
             numpy.testing.assert_array_equal(result.read(1), expected)
 
 
+@pytest.mark.parametrize("prime_meridian", ["greenwich", "paris"])
+@pytest.mark.parametrize("source_left", [-180, 0])
+def test_global_nearest_warp_keeps_coverage_across_prime_meridians(
+    tmp_path: Path, prime_meridian: str, source_left: int
+) -> None:
+    """Retain every source center when the warp crosses a longitude cut.
+
+    Args:
+        tmp_path: Original raster and temporary preparation directory.
+        prime_meridian: Geographic source's longitude origin.
+        source_left: Start of the full-period source grid in its own CRS.
+    """
+    crs = CRS.from_string(f"+proj=longlat +datum=WGS84 +pm={prime_meridian}")
+    values = numpy.arange(480 * 48, dtype="int32").reshape(48, 480)
+    source = write_source(
+        tmp_path / "source.tif",
+        values,
+        transform=from_origin(source_left, 90, 0.75, 0.0375),
+        crs=crs.to_wkt(),
+    )
+    grid = RasterGrid(
+        CRS.from_epsg(4326), from_origin(-180, 89.8875, 0.75, 0.0375), 480, 17
+    )
+    rows, columns = numpy.indices((grid.height, grid.width), dtype="float64") + 0.5
+    x, y = Transformer.from_crs(grid.crs, crs, always_xy=True).transform(
+        grid.transform.c + columns * grid.transform.a,
+        grid.transform.f + rows * grid.transform.e,
+    )
+    source_columns = numpy.floor(((x - source_left) % 360) / 0.75).astype(int)
+    source_rows = numpy.floor((90 - y) / 0.0375).astype(int)
+    with prepare_raster_stack(
+        {"a": (source, Resampling.nearest)},
+        grid,
+        (),
+        tmp_path,
+        LIMITS,
+        all_touched=False,
+    ) as paths:
+        with rasterio.open(paths["a"]) as result:
+            numpy.testing.assert_array_equal(
+                result.read(1), values[source_rows, source_columns]
+            )
+
+
 def test_regional_wrap_preserves_non_degree_georeferencing(tmp_path: Path) -> None:
     """Prepare a shifted region expressed in grads on its original datum."""
     crs = CRS.from_epsg(4807)
