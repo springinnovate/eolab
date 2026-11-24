@@ -2314,8 +2314,7 @@ export function initializeRasterViewer(
                 sourceOrigin: source.kind === "uploadedRaster" ? "upload" : source.kind === "runArtifact" ? "runArtifact" : "catalog",
                 canInfo: record.entry.item !== null || Boolean(record.state.temporal) || Boolean(record.state.lifecycle?.info),
                 ...(record.state.temporal ? {controls: record.state.temporal.controls.element,
-                    observationPeriod: record.state.item.capabilities.calculations ? observationPeriod(source.time, source.time,
-                        record.state.temporal.item.properties["eolab:time_labels"], record.state.temporal.intervalStarts) : null,
+                    observationPeriod: record.state.item.observationPeriod,
                     timeline: (!bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
                         name: record.entry.customName ?? record.state.temporal.item.properties.title ?? record.state.temporal.item.id,
                         variableLabel: record.state.temporal.item.properties["cube:variables"][source.variable]?.description ?? source.variable,
@@ -4697,10 +4696,12 @@ export function initializeRasterViewer(
      */
     function temporalRaster(item, selection, available, starts) {
         const variable = item.properties["cube:variables"][selection.variable];
-        const timeLabel = observationLabel(selection.time, item.properties["eolab:time_labels"], starts) ??
+        const period = item.properties["eolab:time_labels"];
+        const timeLabel = observationLabel(selection.time, period, starts) ??
             `${formatObservationTime(selection.time)} UTC`;
         return {
             source: {collectionId: item.collection, itemId: item.id, ...selection},
+            observationPeriod: available ? observationPeriod(selection.time, selection.time, period, starts) : null,
             label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel}`,
             bbox: item.bbox,
             assets: {data: {"raster:bands": [{unit: variable?.unit}]}},
@@ -4908,7 +4909,7 @@ export function initializeRasterViewer(
         const times = temporal?.times;
         if (!times?.includes(time)) return null;
         const selection = {variable: temporal.selection.variable, time};
-        const publication = await publishRaster(temporalRaster(temporal.item, selection, true), undefined, signal);
+        const publication = await publishRaster(temporalRaster(temporal.item, selection, true, temporal.intervalStarts), undefined, signal);
         /** @return {boolean} Whether the original view and admitted month still own this frame. */
         const current = () => !signal.aborted && mapLayers.getRecord(key) === record && temporal.times === times;
         if (!current()) return null;

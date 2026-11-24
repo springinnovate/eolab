@@ -6197,6 +6197,23 @@ test("temporal Catalog removal names the topmost matching view after renaming an
 });
 
 
+test("switching explicit intervals commits pending style with its original frame", async t => {
+    const item = temporalItem(), clock = createManualClock();
+    item.properties["eolab:time_labels"] = "explicit";
+    const ends = {"2024-02": "2024-03-01T00:00:00.000Z", "2024-03": "2024-04-01T00:00:00.000Z"};
+    const h = temporalFixture({clock, loadTimes: async (_item, _variable, month = "2024-02") =>
+        ({months: Object.keys(ends), month, times: [ends[month]], interval_starts: {[ends[month]]: month + "-07T01:14:02.000Z"}})});
+    t.after(() => h.destroy());
+    const row = await h.viewer.showTemporal(item);
+    h.viewer.openStyle(row.entry.key);
+    h.controlsView.style = {...h.controlsView.style, midpointOpacity: 0.25};
+    h.controlsView.handlers.onStyleInput(false);
+    await h.temporalViews[0].handlers.onMonthChange("2024-03");
+    assert.equal(row.state.temporal.selection.time, ends["2024-03"]);
+    assert.equal(row.state.rasterStyle.midpointOpacity, 0.25);
+    assert.equal(h.mapLayers.snapshots()[0].observationPeriod.startTime, "2024-03-07T01:14:02");
+});
+
 test("restoring a leap-day raster uses its covered month, label and analysis bounds", async t => {
     const item = temporalItem(), time = "2024-03-01T00:00:00.000Z", months = [];
     item.properties["eolab:time_labels"] = "calendar_day";
