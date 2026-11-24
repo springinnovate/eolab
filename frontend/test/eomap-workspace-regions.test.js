@@ -451,11 +451,27 @@ test("analysis destinations share one compact navigation above the selected resu
         assert.ok(control.source.includes(`>${caption}</button>`));
     }
     assert.ok(navigation.end < histogram.start);
-    for (const id of ["close-map-histogram", "close-raster-series", "close-vector-inspector"]) {
-        const close = requireElementRange(id);
-        assert.equal(countMarkupId(id), 1);
-        assert.ok(close.start > navigation.start && close.end < navigation.end, `${id} is in the common result header`);
-        assert.match(close.source, /analysis-result-close/);
+    const tabs = requireElementRange("map-inspection-tabs");
+    for (const [tabId, closeId] of [
+        ["map-click-histogram", "close-map-histogram"],
+        ["open-raster-series-dock", "close-raster-series"],
+        ["map-inspection-tab-feature", "close-vector-inspector"],
+        ["map-inspection-tab-models", "models-close"],
+        ["map-inspection-tab-planning", "close-planning"],
+        ["map-inspection-tab-annotations", "close-annotations"],
+        ["map-inspection-tab-raster-clips", "raster-clips-close"],
+        ["map-inspection-tab-time-series", "close-vector-time-series"],
+        ["map-inspection-tab-feature-profile", "close-vector-feature-profile"],
+        ["map-inspection-tab-filter", "close-map-vector-filter"],
+        ["map-inspection-tab-style", "close-layer-style"],
+        ["map-inspection-tab-settings", "close-settings"],
+    ]) {
+        const tab = requireElementRange(tabId);
+        const close = requireElementRange(closeId);
+        assert.equal(countMarkupId(closeId), 1);
+        assert.ok(tab.end <= close.start && close.end < tabs.end &&
+            MARKUP.slice(tab.end, close.start).trim() === "", `${closeId} must be directly beside ${tabId}`);
+        assert.match(close.source, /aria-label="Close [^"]+"/);
     }
     assert.doesNotMatch(requireElementRange("raster-series").source, /About Raster statistics|map-histogram-toolbar/);
     assert.doesNotMatch(navigation.source, /<strong/);
@@ -582,7 +598,8 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     assert.match(chooser, /aria-controls="workspace-tool-actions"/);
     for (const id of ["collapse-panel", "toggle-map-inspection-dock"]) {
         assert.match(requireElementRange(id).source, /class="map-panel-toggle map-panel-collapse"/);
-        assert.match(requireElementRange(id).source, /<span aria-hidden="true">×<\/span><\/button>$/);
+        if (id === "collapse-panel") assert.match(requireElementRange(id).source, /<span aria-hidden="true">×<\/span>/);
+        else assert.doesNotMatch(requireElementRange(id).source, /×/);
     }
     for (const [id, action] of [["toggle-map-inspection-dock", "Collapse"], ["open-map-tools", "Expand"]]) {
         const button = requireElementRange(id).source;
@@ -603,15 +620,14 @@ test("supporting analysis controls preserve native buttons, clear names and disc
         ["close-vector-time-series", "Close feature comparison"],
         ["close-vector-feature-profile", "Close feature plot"],
         ["close-map-histogram", "Close raster histograms"],
-        ["close-vector-filter", null],
+        ["close-map-vector-filter", "Close filter editor"],
         ["close-layer-style", "Close style editor"],
     ]) {
         const {source} = requireElementRange(id);
         assert.match(source, /^<button\b[^>]*\btype="button"/, `${id} remains keyboard-operable`);
         assert.equal(countMarkupId(id), 1);
         if (accessibleName) assert.ok(source.includes(`aria-label="${accessibleName}"`), `${id} names its panel`);
-        if (id === "close-vector-filter" || id === "close-layer-style") assert.match(source, />Close<\/button>$/);
-        else assert.match(source, />(?:×|&times;)<\/button>$/);
+        assert.match(source, />×<\/button>$/);
         assert.doesNotMatch(source, /\btabindex="-1"|\sdisabled(?:\s|>)/, `${id} remains reachable`);
     }
 });

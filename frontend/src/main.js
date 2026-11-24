@@ -2246,9 +2246,10 @@ async function initializeCatalog(
                 mapInspection.setClickResult("feature", null);
             }
         },
-        onSampleChange: (sample) => {
-            vectorTimeSeries.setSample(sample);
+        onSampleChange: (sample, change) => {
+            vectorTimeSeries.setSample(sample, change);
             vectorFeatureProfile.setFeatureChoices(sample.observations);
+            if (change === "labels" || sample.state === "interrupted") return;
             const returned = sample.observations.length;
             const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
             const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
@@ -2271,8 +2272,8 @@ async function initializeCatalog(
             }
         },
         onSelectionNavigationChange: navigation => vectorTimeSeries.setSelectionNavigation(navigation),
-        onCurrentObservationChange: (observation, navigation) =>
-            vectorFeatureProfile.setCurrentObservation(observation, navigation),
+        onCurrentObservationChange: (observation, navigation, change) =>
+            vectorFeatureProfile.setCurrentObservation(observation, navigation, change),
         onFeatureProfileRequested: openFeaturePlot,
         onTimeSeriesRequested: openFeatureComparison,
         onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),

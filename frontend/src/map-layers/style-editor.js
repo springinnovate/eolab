@@ -38,7 +38,7 @@ export class MapLayerStyleEditor {
         this.filterButton = documentContext.querySelector("#filter-styled-vector-layer");
         this.onFilter = () => { if (this.key !== null) onFilterRequested(this.key); };
         this.filterButton?.addEventListener("click", this.onFilter);
-        this.onClose = () => this.close();
+        this.onClose = () => this.close({ focusOpener: false });
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.key === null ||
                 !this.root.contains(this.document.activeElement)) return;
@@ -109,8 +109,12 @@ export class MapLayerStyleEditor {
         this.rasterViewer.refreshStyle();
     }
 
-    /** Commit pending style edits and restore focus without closing histograms. @return {void} */
-    close() {
+    /** Commit pending style edits and hide this editor without closing histograms.
+     * @param {Object} [options] Focus after dismissal.
+     * @param {boolean} [options.focusOpener=true] Return focus to the layer action. The tab row focuses the surviving tool itself.
+     * @return {void}
+     */
+    close({ focusOpener = true } = {}) {
         if (this.key === null) return;
         const key = this.key;
         // Clear first: flushing a valid style can trigger a retained-layer render.
@@ -118,6 +122,7 @@ export class MapLayerStyleEditor {
         this.rasterViewer.closeStyle();
         this.vectorStyleControls.hide();
         this.inspection.hideStyle();
+        if (!focusOpener) return;
         const replacement = [...this.document.querySelectorAll('[data-layer-action="style"]')]
             .find((element) => element.dataset.layerKey === key);
         // Prefer the originating shortcut; removed or hidden controls cannot

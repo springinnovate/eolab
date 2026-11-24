@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { MapLayerStyleEditor } from '../../src/map-layers/style-editor.js';
 import { MapInspectionController } from '../../src/map-inspection-controller.js';
 import { FakeRasterControlDocument } from '../../test-support/raster/fake-controls-document.js';
@@ -13,10 +14,10 @@ function fixture() {
     doc.dispatchEvent = events.dispatchEvent.bind(events);
     const root = doc.querySelector('#layer-style-editor');
     root.hidden = true;
-    root.append(doc.querySelector('#close-layer-style'));
+    root.append(doc.querySelector('#layer-style-opacity'));
     const histogram = doc.querySelector('#map-histogram-panel');
     histogram.hidden = true;
-    doc.querySelector('#map-inspection-tab-bar').append(doc.querySelector('#close-map-histogram'));
+    doc.mountTabList(readFileSync(new URL('../../index.html', import.meta.url), 'utf8'), 'map-inspection-tabs');
     doc.querySelector('#vector-feature-inspector').hidden = true;
     doc.querySelector('#vector-time-series').hidden = true;
     doc.querySelector('#vector-feature-profile').hidden = true;
@@ -79,6 +80,7 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     h.setLayers([...h.layers].reverse());
     h.editor.refresh();
     assert.equal(h.editor.title.textContent, 'a.tif');
+    h.editor.opacity.focus();
     h.editor.opacity.value = '65';
     h.editor.opacity.dispatchEvent(new Event('input'));
     assert.deepEqual(h.edits, [['a', 0.65]]);
@@ -226,7 +228,8 @@ test('Escape closes only the focused map tool while its neighbour stays usable',
     assert.equal(h.editor.key, 'a');
     assert.equal(h.surface.open, true);
     h.inspection.showHistogram();
-    h.editor.closeButton.focus();
+    h.doc.querySelector('#map-inspection-tab-style').click();
+    h.editor.opacity.focus();
     escape();
     assert.equal(h.histogram.hidden, false);
     assert.equal(h.root.hidden, true);
