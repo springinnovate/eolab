@@ -31,6 +31,7 @@ from eolab_app.processing.raster_aggregate import (
     calculate_raster_statistics_for_area,
     plan_statistics_grid,
 )
+from eolab_app.processing.temporal_coverage import ObservationLabels
 from eolab_app.processing.temporal_grid import (
     plan_temporal_calculation_grid,
     plan_temporal_grid,
@@ -99,6 +100,7 @@ def calculate_series(
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
+        observationLabels=ObservationLabels.from_interval(source),
     )
     artifact = create_temporal_series(source, spec, directory, limits)
     with (directory / "result.csv").open(encoding="utf-8", newline="") as stream:
@@ -157,9 +159,16 @@ def test_series_leaves_unused_native_metadata_for_its_consumers(
     assert requested == [str(observation.path)]
 
 
-@pytest.mark.parametrize("statistic", ["count", "sum", "mean", "min", "max", "stdev"])
+@pytest.mark.parametrize(
+    ("statistic", "time_labels"),
+    [(name, None) for name in ("count", "sum", "mean", "min", "max", "stdev")]
+    + [("mean", "timestamp")],
+)
 def test_series_matches_each_observations_valid_cells(
-    interval: ResolvedTemporalInterval, tmp_path: Path, statistic: AreaStatistic
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    statistic: AreaStatistic,
+    time_labels: str | None,
 ) -> None:
     """Export each available date independently, preserving gaps and scalar values.
 
@@ -167,8 +176,10 @@ def test_series_matches_each_observations_valid_cells(
         interval: Gapped TIFF observations containing NoData and nonfinite values.
         tmp_path: Isolated result root.
         statistic: Each supported statistic from the shared scalar engine.
+        time_labels: Optional prepared observation precision to retain in the export.
     """
     directory = tmp_path / "result"
+    interval = replace(interval, time_labels=time_labels)
     spec, artifact, rows = calculate_series(
         interval, statistic, AggregateArea(kind="wholeRaster"), directory
     )
@@ -186,6 +197,7 @@ def test_series_matches_each_observations_valid_cells(
     assert [row["time_utc"] for row in rows] == [
         observation.time.isoformat() for observation in interval.observations
     ]
+    assert [row.get("time_labels") for row in rows] == [time_labels] * len(rows)
     assert all(row["state"] == "ok" and row["unit"] == spec.unit for row in rows)
     if statistic == "count":
         assert [row["value"] for row in rows] == ["4", "4", "6"]
@@ -205,6 +217,7 @@ def test_series_matches_each_observations_valid_cells(
     assert provenance["weighting"] == "equal_valid_pixel"
     assert provenance["temporalAggregation"] == "none"
     assert len(provenance["observations"]) == len(rows)
+    assert provenance.get("observationLabels", {}).get("period") == time_labels
 
 
 def test_series_combines_multiple_native_tiles(
