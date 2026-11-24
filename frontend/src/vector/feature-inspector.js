@@ -222,6 +222,7 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null, formats
 export class VectorFeatureInspectorController {
     /** @type {FeatureSelection[]} */
     #selectionHistory = [];
+    /** @type {number} Saved selection index, or the entry before an unfinished or invalidated view. */
     #selectionHistoryIndex = -1;
     /** @type {InspectionPosition|null} */
     #inspectionPosition = null;
@@ -505,10 +506,13 @@ export class VectorFeatureInspectorController {
             this.onSelectionDisplayChange(this.#selectionDisplay);
             if (this.lastSample) this.#publishSample(this.lastSample.state, this.results, this.lastSample.message, this.lastSample.failedLayers);
         }
-        const selected = this.#selectionHistory[this.#selectionHistoryIndex];
-        this.#selectionHistory = this.#selectionHistory.filter(selection => this.#selectionIsCurrent(selection.context));
-        const retainedIndex = this.#selectionHistory.indexOf(selected);
-        this.#selectionHistoryIndex = retainedIndex < 0 ? this.#selectionHistory.length - 1 : retainedIndex;
+        let retainedIndex = -1;
+        this.#selectionHistory = this.#selectionHistory.filter((selection, index) => {
+            const retained = this.#selectionIsCurrent(selection.context);
+            if (retained && index <= this.#selectionHistoryIndex) retainedIndex++;
+            return retained;
+        });
+        this.#selectionHistoryIndex = retainedIndex;
         if (this.#selectionContext !== null && !this.#selectionIsCurrent(this.#selectionContext)) {
             this.#cancelInspection();
             this.clearResults();
@@ -582,13 +586,7 @@ export class VectorFeatureInspectorController {
     close({ moveFocus = false } = {}) {
         const pending = this.abortController !== null;
         this.#cancelInspection();
-        if (pending) {
-            if (this.#selectionHistoryIndex >= 0) this.#restoreSelection(this.#selectionHistoryIndex);
-            else {
-                this.clearResults();
-                this.#publishSample("empty", [], "Feature inspection cancelled.");
-            }
-        }
+        if (pending) this.#restoreCompletedSelection();
         this.onInspectionChange(false);
         if (moveFocus) this.mapContainer.focus();
     }
@@ -621,16 +619,27 @@ export class VectorFeatureInspectorController {
         this.#pickingEnabled = enabled;
         if (enabled || this.abortController === null || this.#selectionContext?.kind !== "click") return;
         this.#cancelInspection();
+        this.#restoreCompletedSelection();
+        if (this.#selectionHistoryIndex < 0) this.onInspectionChange(false);
+    }
+
+    /** Restore the preceding completed selection after cancelling a replacement.
+     * Keep forward history available when no earlier completed selection remains.
+     * @return {void}
+     */
+    #restoreCompletedSelection() {
         if (this.#selectionHistoryIndex >= 0) {
             this.#restoreSelection(this.#selectionHistoryIndex);
             return;
         }
+        this.#selectionContext = null;
         this.#inspectionPosition = null;
+        this.#selectionDisplay = null;
+        this.onSelectionDisplayChange(null);
         this.clearResults();
         const message = "Feature inspection cancelled.";
         this.status.textContent = message;
         this.#publishSample("empty", [], message);
-        this.onInspectionChange(false);
     }
 
     /**
@@ -661,8 +670,7 @@ export class VectorFeatureInspectorController {
         const cancel = () => {
             if (generation !== this.requestGeneration) return;
             this.#cancelInspection();
-            if (this.#selectionHistoryIndex >= 0) this.#restoreSelection(this.#selectionHistoryIndex);
-            else this.clearSelection();
+            this.#restoreCompletedSelection();
         };
         signal.addEventListener("abort", cancel, {once: true});
         try {
@@ -932,8 +940,9 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Locate an adjacent saved selection. If a click is unfinished or failed,
-     * going back restores the last displayed completed selection.
+     * Locate a saved selection before or after the current history position.
+     * An unfinished, failed or invalidated view lies after its preceding retained
+     * entry, so Previous restores that entry and Next preserves forward navigation.
      *
      * @param {"previous"|"next"} direction History direction.
      * @return {number} Index of the destination, or -1 if unavailable.
@@ -942,7 +951,7 @@ export class VectorFeatureInspectorController {
         const index = this.#selectionHistoryIndex;
         const displayingSavedSelection = this.#selectionHistory[index]?.results === this.results;
         if (direction === "previous") return displayingSavedSelection ? index - 1 : index;
-        return displayingSavedSelection && index + 1 < this.#selectionHistory.length ? index + 1 : -1;
+        return index + 1 < this.#selectionHistory.length ? index + 1 : -1;
     }
 
     /**

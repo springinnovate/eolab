@@ -417,6 +417,78 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
   assert.equal(h.selectionNavigation.at(-1).canPrevious, false);
 });
 
+test("invalidated Lasso history keeps earlier and later selections on their own sides", async t => {
+  for (const change of ["remove", "filter"]) for (const index of [0, 1, 2]) {
+    await t.test(`${change} selection ${index + 1}`, async t => {
+      const h = createFixture(async (url, options) => {
+        const {selection} = JSON.parse(options.body);
+        const id = selection.itemId;
+        return Response.json(url.endsWith("/lasso")
+          ? {matched: 1, featureIds: [id], geometry: null}
+          : {selection, features: [{id, properties: {rank: Number(id)}}]});
+      });
+      t.after(() => h.controller.destroy());
+      const original = h.selectionTargets[0];
+      h.selectionTargets.splice(0, 1, ...["1", "2", "3"].map(id => ({
+        key: `catalog|${id}`, label: `Layer ${id}`, selection: {...original.selection, itemId: id},
+      })));
+      for (const target of h.selectionTargets) {
+        await h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+      }
+      for (let position = 2; position > index; position--) h.controller.navigateSelection("previous");
+      if (change === "remove") h.selectionTargets.splice(index, 1);
+      else h.selectionTargets[index].selection.filter = {rules: [{field: "rank", operator: "gt", value: 9}]};
+      h.controller.syncVisibleLayers();
+      h.controller.syncVisibleLayers();
+      assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+      assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: index > 0, canNext: index < 2});
+      if (index > 0) {
+        h.controller.navigateSelection("previous");
+        assert.equal(h.currentObservationChanges.at(-1).properties.rank, index);
+      }
+      if (index < 2) {
+        h.controller.navigateSelection("next");
+        assert.equal(h.currentObservationChanges.at(-1).properties.rank, index + 2);
+      }
+    });
+  }
+});
+
+test("cancelling after the first history entry expires preserves forward selections", async t => {
+  for (const action of ["abort", "close"]) await t.test(action, async t => {
+    let finishRead;
+    let pending = false;
+    const h = createFixture(async (url, options) => {
+      const {selection} = JSON.parse(options.body);
+      const response = Response.json(url.endsWith("/lasso")
+        ? {matched: 1, featureIds: ["1"], geometry: null}
+        : {selection, features: [{id: "1", properties: {name: selection.itemId}}]});
+      if (pending && url.endsWith("/features")) return new Promise(resolve => { finishRead = () => resolve(response); });
+      return response;
+    });
+    t.after(() => h.controller.destroy());
+    const original = h.selectionTargets[0];
+    h.selectionTargets.push({key: "catalog|later", label: "Later layer", selection: {...original.selection, itemId: "later"}});
+    for (const target of h.selectionTargets) {
+      await h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+    }
+    h.controller.navigateSelection("previous");
+    h.selectionTargets.shift();
+    h.controller.syncVisibleLayers();
+    pending = true;
+    const abort = new AbortController();
+    const reading = h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, abort.signal);
+    await new Promise(setImmediate);
+    if (action === "abort") abort.abort();
+    else h.controller.close();
+    finishRead();
+    await assert.rejects(reading, {name: "AbortError"});
+    assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: false, canNext: true});
+    h.controller.navigateSelection("next");
+    assert.equal(h.currentObservationChanges.at(-1).properties.name, "later");
+  });
+});
+
 test("feature queries keep the clicked location across Mercator zooms and map sizes", async () => {
   const circumference = 2 * Math.PI * 6378137;
   const h = createFixture(async (_url, { body }) => {
