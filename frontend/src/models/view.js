@@ -718,6 +718,30 @@ export class ModelsView {
         }
     }
 
+    /** Update the picker only when the offered recipes or search change. Keep its
+     * existing buttons and keyboard focus when discovery returns equivalent recipes.
+     * @param {Object[]} library Recipes offered by the controller.
+     * @param {string} query Current search text.
+     * @return {void}
+     */
+    renderLibraryItems(library, query) {
+        const search = query.toLowerCase();
+        if (library === this.pickerLibrary && search === this.pickerSearch) return;
+        this.pickerLibrary = library;
+        this.pickerSearch = search;
+        const filtered = library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(search));
+        const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
+        if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
+        const signature = JSON.stringify(filtered);
+        if (signature === this.librarySignature) return;
+        this.librarySignature = signature;
+        this.elements["library-items"].replaceChildren(...filtered.map(model => {
+            const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
+            open.setAttribute("aria-label", `Set up ${model.title}`);
+            return open;
+        }));
+    }
+
     /** Present the selected Data tools page, listing raster creation first when it matches the search.
      * Update run history only while the Runs list is visible.
      * Preserve keyboard focus on a run button when other runs are added or removed.
@@ -748,19 +772,8 @@ export class ModelsView {
         const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
             : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs.`;
         if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
-        const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
-        const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
-        if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
-        const signature = JSON.stringify(filtered);
-        if (signature !== this.librarySignature) {
-            this.librarySignature = signature;
-            this.elements["library-items"].replaceChildren(...filtered.map(model => {
-                const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
-                open.setAttribute("aria-label", `Set up ${model.title}`);
-                return open;
-            }));
-        }
-        let libraryStatus = filtered.length || state.libraryError ? "" : "No matching tools.";
+        this.renderLibraryItems(state.library, state.query);
+        let libraryStatus = this.elements["library-items"].children.length || state.libraryError ? "" : "No matching tools.";
         if (state.noModelsSelected) libraryStatus = "This map offers no models for new runs. Choose Runs to view earlier work.";
         if (state.missingModels) libraryStatus = "A model selected for this map is unavailable on this site. Ask the map publisher to review the choices.";
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : libraryStatus;
