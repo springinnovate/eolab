@@ -10,7 +10,7 @@ import httpx2
 import pytest
 
 import eolab_app.main as application_module
-from eolab_app.routes.browser_identity import COOKIE
+from eolab_app.routes.browser_identity import COOKIE, establish_browser_identity
 from eolab_app.routes.system import create_system_router
 from eolab_app.routes.uploads import create_uploads_router
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
@@ -103,7 +103,11 @@ def test_configuration_establishes_private_uncached_identity(
         cookie: Absent, valid, or malformed incoming ownership token.
     """
     app = FastAPI()
-    app.include_router(create_system_router("test", {"appTitle": "Test"}))
+    app.include_router(
+        create_system_router(
+            "test", {"appTitle": "Test"}, (establish_browser_identity,)
+        )
+    )
     client = TestClient(app, base_url="https://testserver")
     if cookie is not None:
         client.cookies.set(COOKIE, cookie, domain="testserver.local", path="/")
@@ -147,7 +151,7 @@ def test_delayed_usage_keeps_uploaded_file_accessible(
     uploads = VectorUploadStore(tmp_path / "uploads", None)
     uploads.initialize()
     app = FastAPI()
-    app.include_router(create_system_router("test", {}))
+    app.include_router(create_system_router("test", {}, (establish_browser_identity,)))
     app.include_router(create_uploads_router(uploads.storage))
     app.include_router(create_vector_uploads_router(uploads))
 
