@@ -132,6 +132,14 @@ def test_flow_mask_preserves_projected_source_edges(
             id="polar-cap",
         ),
         pytest.param(
+            box(-1e6, -1e6, 1e6, 1e6),
+            "EPSG:6931",
+            "EPSG:4326",
+            from_origin(-180, 90, 1, 1),
+            (20, 360),
+            id="polar-equal-area-cap",
+        ),
+        pytest.param(
             Polygon(
                 box(-1e6, -1e6, 1e6, 1e6).exterior.coords,
                 [box(-4e5, -4e5, 4e5, 4e5).exterior.coords],

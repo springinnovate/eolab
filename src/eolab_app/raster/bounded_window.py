@@ -499,6 +499,28 @@ def _edge_transformer(source_crs: CRS | str, target_crs: CRS | str) -> Transform
     return Transformer.from_crs(source_crs, target_crs, always_xy=True, force_over=True)
 
 
+@lru_cache(maxsize=64)
+def _polar_stereographic_frame(source_crs: CRS | str) -> CRS | None:
+    """Choose the stereographic frame GDAL uses to cut pole-centred polygons.
+
+    Args:
+        source_crs: Projected CRS in which the original edges have been sampled.
+
+    Returns:
+        A north or south polar stereographic CRS for projections centred on
+        a pole, or None when the source can go directly to geographic coordinates.
+    """
+    operation = ProjCRS(source_crs).coordinate_operation
+    if operation is not None:
+        for parameter in operation.params:
+            # EPSG latitude of natural origin or latitude of projection centre.
+            if str(parameter.code) in {"8801", "8811"}:
+                latitude = parameter.value * parameter.unit_conversion_factor
+                if math.isclose(abs(latitude), math.pi / 2, rel_tol=0, abs_tol=1e-12):
+                    return CRS.from_epsg(3413 if latitude > 0 else 3031)
+    return None
+
+
 def _refine_raster_rings(
     rings: tuple[tuple[tuple[float, float], ...], ...],
     source_crs: CRS | str,
@@ -774,17 +796,18 @@ def project_polygons_to_crs(
             maximum_segment,
             longitude_period,
         )
+    vertex_crs = source_crs
     if CRS.from_user_input(source_crs).is_projected and source_crs != target_crs:
         # GDAL cuts whole polygons at the antimeridian and reconstructs polar
         # interiors, including holes. A longitude chosen per vertex cannot do that.
+        sampled = _with_polygon_rings(geometries, densified_rings)
+        polar_frame = _polar_stereographic_frame(source_crs)
+        if polar_frame is not None and polar_frame != source_crs:
+            sampled = tuple(transform_geom(source_crs, polar_frame, sampled))
         geometries = tuple(
-            transform_geom(
-                source_crs,
-                "EPSG:4326",
-                _with_polygon_rings(geometries, densified_rings),
-            )
+            transform_geom(polar_frame or source_crs, "EPSG:4326", sampled)
         )
-        source_crs = "EPSG:4326"
+        vertex_crs = "EPSG:4326"
         densified_rings = tuple(
             ring for geometry in geometries for ring in _polygon_rings(geometry)
         )
@@ -796,7 +819,7 @@ def project_polygons_to_crs(
     x = [point[0] for ring in densified_rings for point in ring]
     y = [point[1] for ring in densified_rings for point in ring]
     projected_x, projected_y = _transform_polygon_positions(
-        source_crs,
+        vertex_crs,
         target_crs,
         x,
         y,

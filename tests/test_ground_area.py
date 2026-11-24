@@ -206,6 +206,38 @@ def test_native_selection_count_and_hectares_use_the_same_boundary(
     )
 
 
+@pytest.mark.parametrize(("crs", "north"), [("EPSG:6931", 90), ("EPSG:6932", -70)])
+def test_polar_catalog_hectares_include_the_pole(
+    tmp_path: Path, crs: str, north: int
+) -> None:
+    """Measure a polar cap against its original ellipsoidal equal-area rectangle.
+
+    Args:
+        tmp_path: Directory for the vector, raster and published table.
+        crs: North or south polar equal-area CRS.
+        north: Top latitude of the geographic grid covering the cap.
+    """
+    polygon = box(-1e6, -1e6, 1e6, 1e6)
+    vector = write_selection(tmp_path / "cap.gpkg", [mapping(polygon)], crs=crs)
+    area = AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(vector)["bbox"],
+        catalogSelection=vector.selection,
+        resolved=vector,
+    )
+    path = write_source(
+        tmp_path / "polar.tif",
+        np.ones((20, 72), dtype="uint8"),
+        transform=from_origin(-180, north, 5, 1),
+    )
+    result = calculate_raster_statistics_for_area(
+        path, make_spec(path, ["areaha(a > 0)"], area), tmp_path, LIMITS
+    )
+    assert float(result.rows[0]["value"]) == pytest.approx(
+        polygon.area / 10_000, rel=2e-6
+    )
+
+
 def test_polygon_union_holes_and_fractional_edges(tmp_path: Path) -> None:
     """Overlapping polygons count once and holes retain fractional exclusions.
 
