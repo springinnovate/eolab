@@ -8,11 +8,13 @@ by numerical fractional polygon selection masks. Other grids retain bounded cell
 
 import math
 from typing import Any, Callable
+from collections.abc import Iterator
 
 from affine import Affine
 import numpy as np
 from pyproj import CRS, Transformer
 from pyproj.exceptions import ProjError
+from rasterio.crs import CRS as RasterCRS
 from rasterio.windows import Window, transform as window_transform
 import shapely
 from shapely.geometry import Polygon, box, shape
@@ -177,6 +179,47 @@ def transformed_polygon(
     return result
 
 
+def _catalog_equal_area_union(
+    source_crs: RasterCRS,
+    features: Iterator[dict[str, Any]],
+    limits: RasterAggregateLimits,
+) -> BaseGeometry:
+    """Project selected features once and combine overlapping parts for hectare measurements.
+
+    Args:
+        source_crs: Coordinate system in which the vector edges are straight.
+        features: Filtered polygons from the calculation's open catalog selection.
+        limits: Chord tolerance and maximum segment length in equal-area metres.
+
+    Returns:
+        The union for this calculation, empty when no features qualify.
+
+    Raises:
+        ProcessingError: If a polygon cannot form a valid equal-area boundary.
+    """
+    polygons = []
+    for item in features:
+        (projected,) = project_polygons_to_crs(
+            source_crs,
+            AREA_CRS,
+            (item,),
+            None,
+            grid_transform=Affine.identity(),
+            initial_edge_points=0,
+            maximum_error=limits.area_edge_tolerance_metres,
+            maximum_segment=limits.area_max_segment_metres,
+            longitude_period=2 * MAXIMUM_X,
+        )
+        geometry = shape(projected)
+        if not geometry.is_valid:
+            raise ProcessingError(
+                "unsupported_area_crs",
+                "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
+            )
+        polygons.append(geometry)
+    return shapely.union_all(polygons)
+
+
 class PixelAreaCalculator:
     """Calculate each raster pixel's area inside the selected region, in hectares.
 
@@ -210,8 +253,6 @@ class PixelAreaCalculator:
                 dataset, sampling_box_bounds(area.samplingBox)
             )
         self.transform = dataset.transform
-        self.catalog_source = area.resolved if area.kind == "catalogSelection" else None
-        self.dataset = dataset
         self.limits = limits
         crs = CRS.from_user_input(dataset.crs)
         if not (
@@ -281,7 +322,7 @@ class PixelAreaCalculator:
         if area.kind == "catalogSelection" and catalog_pixel_bounds is None:
             left = top = math.inf
             right = bottom = -math.inf
-            with native_polygon_features(self.catalog_source, limits=None) as (
+            with native_polygon_features(area.resolved, limits=None) as (
                 source_crs,
                 features,
             ):
@@ -377,14 +418,6 @@ class PixelAreaCalculator:
                     for g in originals
                 ]
                 pixel_bounds = shapely.total_bounds(native_polygons)
-            if not self.geometry.is_valid:
-                raise ProcessingError(
-                    "area_geometry_limit",
-                    "The selected polygons do not form a valid area. Repair the source polygons.",
-                    413,
-                )
-            if self.geometry.equals(self.geometry.envelope):
-                self.rectangle = self.geometry.bounds
         if pixel_bounds is not None:
             pad = 2 * WINDOW_TOLERANCE_PIXELS
             lower, upper = np.asarray(pixel_bounds).reshape(2, 2)
@@ -416,6 +449,29 @@ class PixelAreaCalculator:
         # Probe the selected grid domain before accepting work. The per-tile
         # transformation repeats this guard as native footprints are measured.
         self._project_native(self._corners(self.window))
+        if area.kind == "catalogSelection" and not planning:
+            bbox = native_bbox_for_grid(
+                area.resolved,
+                dataset.crs,
+                window_transform(self.window, self.transform),
+                (int(self.window.height), int(self.window.width)),
+            )
+            with native_polygon_features(area.resolved, bbox, limits=None) as (
+                source_crs,
+                features,
+            ):
+                self.geometry = _catalog_equal_area_union(source_crs, features, limits)
+        if self.geometry is not None:
+            if not self.geometry.is_valid:
+                raise ProcessingError(
+                    "area_geometry_limit",
+                    "The selected polygons do not form a valid area. Repair the source polygons.",
+                    413,
+                )
+            if not self.geometry.is_empty and self.geometry.equals(
+                self.geometry.envelope
+            ):
+                self.rectangle = self.geometry.bounds
         self.axis_x = self.axis_y = None
         self.coverage = None
         if self.rectilinear:
@@ -452,7 +508,11 @@ class PixelAreaCalculator:
                     )
                 )
             )[:, 1]
-            if self.geometry is not None and self.rectangle is None:
+            if (
+                self.geometry is not None
+                and not self.geometry.is_empty
+                and self.rectangle is None
+            ):
                 oriented = shapely.orient_polygons(self.geometry)
                 self.coverage = FractionalAreaCoverage(
                     np.asarray(ring.coords)
@@ -510,70 +570,8 @@ class PixelAreaCalculator:
             ProcessingError: For excessive or unsupported transformed geometry.
         """
         height, width = int(tile.height), int(tile.width)
-        if self.catalog_source is not None:
-            # Union only projected candidates intersecting this tile. Union is
-            # essential for fractional areas: summing features double-counts
-            # overlap. No geometry is persisted or retained between tiles.
-            self.geometry = self.rectangle = self.coverage = None
-            # Corner envelopes prove containment only for a separable grid.
-            # For general projections, keep the conservative predicate stream.
-            footprint = None
-            if self.rectilinear:
-                corners = self._project_native(self._corners(tile))
-                footprint = box(*corners.min(axis=0), *corners.max(axis=0))
-            retained = []
-
-            bbox = native_bbox_for_grid(
-                self.catalog_source,
-                self.dataset.crs,
-                window_transform(tile, self.transform),
-                (height, width),
-            )
-            with native_polygon_features(self.catalog_source, bbox, limits=None) as (
-                source_crs,
-                features,
-            ):
-                for item in features:
-                    (projected,) = project_polygons_to_crs(
-                        source_crs,
-                        AREA_CRS,
-                        (item,),
-                        None,
-                        grid_transform=Affine.identity(),
-                        initial_edge_points=0,
-                        maximum_error=self.limits.area_edge_tolerance_metres,
-                        maximum_segment=self.limits.area_max_segment_metres,
-                        longitude_period=2 * MAXIMUM_X,
-                    )
-                    geometry = shape(projected)
-                    if not geometry.is_valid:
-                        raise ProcessingError(
-                            "unsupported_area_crs",
-                            "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
-                        )
-                    if footprint is None or geometry.intersects(footprint):
-                        retained.append(geometry)
-            if not retained:
-                return np.zeros((height, width), dtype=np.float64)
-            self.geometry = shapely.union_all(retained)
-            if not self.geometry.is_valid:
-                raise ProcessingError(
-                    "area_geometry_limit",
-                    "Selected polygons do not form a valid area in this tile. Repair the source polygons.",
-                    413,
-                )
-            self.rectangle = (
-                self.geometry.bounds
-                if self.geometry.equals(self.geometry.envelope)
-                else None
-            )
-            if self.rectilinear and self.rectangle is None:
-                oriented = shapely.orient_polygons(self.geometry)
-                self.coverage = FractionalAreaCoverage(
-                    np.asarray(ring.coords)
-                    for polygon in shapely.get_parts(oriented)
-                    for ring in [polygon.exterior, *polygon.interiors]
-                )
+        if self.geometry is not None and self.geometry.is_empty:
+            return np.zeros((height, width), dtype=np.float64)
         if self.rectilinear:
             x, y = int(tile.col_off - self.window.col_off), int(
                 tile.row_off - self.window.row_off
