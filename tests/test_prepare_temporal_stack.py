@@ -109,6 +109,10 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
     manifest = annual_manifest(root)
     stack = yaml.safe_load(manifest.read_text())
     write_frame(root / "rain_2025.tif", 25)
+    # A decimal-resolution window ending at 180 can round its east edge upward.
+    for path in root.glob("*.tif"):
+        with rasterio.open(path, "r+") as src:
+            src.transform = from_origin(-180 + 3596 * 0.1, 1, 0.2, 1)
     # Operators may enter a different spelling on case-insensitive filesystems.
     (root / "frames").mkdir()
     stack["observations"][1]["file"] = (

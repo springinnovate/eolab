@@ -374,7 +374,7 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                 if (
                     src.crs.is_geographic
                     and not math.isclose(src.width * grid.a, 360)
-                    and (src.bounds.left < -180 or src.bounds.right > 180)
+                    and (src.bounds.left < -180 - 1e-8 or src.bounds.right > 180 + 1e-8)
                 ):
                     raise ValueError(
                         "Reproject or shift the regional longitude grid into -180 to 180 degrees."
