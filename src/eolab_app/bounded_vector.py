@@ -195,6 +195,41 @@ def polygon_features(
 
 
 @contextmanager
+def native_polygon_features(
+    resolved: ResolvedCatalogSelection,
+    bbox: tuple[float, float, float, float] | None = None,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+    *,
+    limits: VectorReadLimits | None = VectorReadLimits(),
+) -> Iterator[tuple[CRS, Iterator[dict[str, Any]]]]:
+    """Stream filtered polygons in the CRS that defines their straight edges.
+
+    Args:
+        resolved: Authorized vector and attribute predicate.
+        bbox: Optional native envelope for pruning candidates.
+        cancellation_requested: Optional check between source records.
+        limits: Source-read budgets, or None for unlimited Processing reads.
+
+    Yields:
+        The source CRS and selected polygon mappings valid inside the context.
+
+    Raises:
+        GeometryValidationError: If geometry or read limits are invalid.
+        SelectionUnavailableError: If the vector cannot be opened.
+    """
+    with _native_polygon_records(
+        resolved,
+        (),
+        bbox,
+        cancellation_requested,
+        timeout_seconds=limits.seconds if limits else None,
+        max_features=limits.features if limits else None,
+        max_feature_coordinates=limits.coordinates_per_feature if limits else None,
+    ) as (source_crs, records):
+        yield source_crs, (geometry for geometry, _ in records)
+
+
+@contextmanager
 def polygon_records(
     resolved: ResolvedCatalogSelection,
     property_names: tuple[str, ...],
@@ -799,7 +834,11 @@ class PolygonRasterizer:
             left = top = math.inf
             right = bottom = -math.inf
             inverse = ~dataset.transform
-            with self._native_features() as (source_crs, features):
+            with native_polygon_features(
+                filtered_vector,
+                cancellation_requested=cancellation_requested,
+                limits=read_limits,
+            ) as (source_crs, features):
                 for geometry in features:
                     # The callback returns True when this work is cancelled.
                     # Stop before allocating/projecting another feature.
@@ -883,34 +922,6 @@ class PolygonRasterizer:
             self._retained.clear()
         self.retained_bytes = 0
         self._closed = True
-
-    @contextmanager
-    def _native_features(
-        self, bbox: tuple[float, float, float, float] | None = None
-    ) -> Iterator[tuple[CRS, Iterator[dict[str, Any]]]]:
-        """Read filtered polygon edges for projection directly onto the raster grid.
-
-        Args:
-            bbox: Optional native envelope to restrict candidate features.
-
-        Yields:
-            The vector CRS and an iterator over its selected native polygons.
-
-        Raises:
-            GeometryValidationError: If geometry or read limits are invalid.
-            SelectionUnavailableError: If the vector cannot be opened.
-        """
-        limits = self.read_limits
-        with _native_polygon_records(
-            self.filtered_vector,
-            (),
-            bbox,
-            self.cancellation_requested,
-            timeout_seconds=limits.seconds if limits else None,
-            max_features=limits.features if limits else None,
-            max_feature_coordinates=limits.coordinates_per_feature if limits else None,
-        ) as (source_crs, records):
-            yield source_crs, (geometry for geometry, _ in records)
 
     def project(
         self, geometry: dict[str, Any], source_crs: CRS | str = "EPSG:4326"
@@ -1026,7 +1037,12 @@ class PolygonRasterizer:
         bbox = native_bbox_for_grid(
             self.filtered_vector, self.dataset.crs, affine, out_shape
         )
-        with self._native_features(bbox) as (source_crs, features):
+        with native_polygon_features(
+            self.filtered_vector,
+            bbox,
+            self.cancellation_requested,
+            limits=self.read_limits,
+        ) as (source_crs, features):
             for geometry in features:
                 projected = self.project(geometry, source_crs)
                 feature_mask = geometry_mask(

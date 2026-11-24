@@ -9,6 +9,7 @@ by numerical fractional polygon selection masks. Other grids retain bounded cell
 import math
 from typing import Any, Callable
 
+from affine import Affine
 import numpy as np
 from pyproj import CRS, Transformer
 from pyproj.exceptions import ProjError
@@ -18,7 +19,11 @@ from shapely.geometry import Polygon, box, shape
 from shapely.geometry.base import BaseGeometry
 
 from eolab_app.sampling_box import sampling_box_bounds, tessellate_sampling_box
-from eolab_app.raster.bounded_window import prepare_raster_for_wgs84_bounds
+from eolab_app.raster.bounded_window import (
+    prepare_raster_for_wgs84_bounds,
+    project_polygons_to_crs,
+    project_raster_polygons,
+)
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     GroundAreaPlan,
@@ -26,7 +31,7 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.area_coverage import FractionalAreaCoverage
-from eolab_app.bounded_vector import polygon_features, native_bbox_for_grid
+from eolab_app.bounded_vector import native_polygon_features, native_bbox_for_grid
 
 # lat_ts=0 makes the x domain exactly +/- pi * WGS84's semimajor axis.
 AREA_CRS = "+proj=cea +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +type=crs"
@@ -186,6 +191,7 @@ class PixelAreaCalculator:
         limits: RasterAggregateLimits,
         *,
         planning: bool = False,
+        catalog_window: Window | None = None,
     ) -> None:
         """Prepare a job's geometry and metadata without reading its raster band.
 
@@ -194,6 +200,7 @@ class PixelAreaCalculator:
             area: Immutable box/polygon selection or whole-raster selection.
             limits: Processing-owned geometry and transformation policy.
             planning: Whether this instance describes a grid before execution.
+            catalog_window: Window from the calculation's prepared catalog polygons.
 
         Raises:
             ProcessingError: For unsupported CRS/topology or excessive work.
@@ -269,35 +276,29 @@ class PixelAreaCalculator:
 
         self.geometry = None
         self.rectangle = None
-        self.window = Window(0, 0, dataset.width, dataset.height)
-        if area.kind == "catalogSelection":
-            self.wgs_area = wgs_area
-            # Project one feature at a time to determine the selected pixel bounds.
-            pixel_bounds = [math.inf, math.inf, -math.inf, -math.inf]
-            with polygon_features(self.catalog_source, limits=None) as features:
+        self.window = catalog_window or Window(0, 0, dataset.width, dataset.height)
+        pixel_bounds = None
+        if area.kind == "catalogSelection" and catalog_window is None:
+            left = top = math.inf
+            right = bottom = -math.inf
+            with native_polygon_features(self.catalog_source, limits=None) as (
+                source_crs,
+                features,
+            ):
                 for item in features:
-                    projected = transformed_polygon(
-                        shape(item), pixels, WINDOW_TOLERANCE_PIXELS, 64
-                    )
-                    left, top, right, bottom = projected.bounds
-                    pixel_bounds = [
-                        min(pixel_bounds[0], left),
-                        min(pixel_bounds[1], top),
-                        max(pixel_bounds[2], right),
-                        max(pixel_bounds[3], bottom),
-                    ]
-            left, top, right, bottom = pixel_bounds
-            pad = 2 * WINDOW_TOLERANCE_PIXELS
-            x0, y0 = max(0, math.floor(left - pad)), max(0, math.floor(top - pad))
-            x1, y1 = min(dataset.width, math.ceil(right + pad)), min(
-                dataset.height, math.ceil(bottom + pad)
-            )
-            if x0 >= x1 or y0 >= y1:
-                raise ProcessingError(
-                    "no_overlap", "The selected area does not overlap this raster."
-                )
-            self.window = Window(x0, y0, x1 - x0, y1 - y0)
-        elif area.kind != "wholeRaster":
+                    for part in project_raster_polygons(
+                        dataset,
+                        (item,),
+                        None,
+                        source_crs=source_crs,
+                        maximum_output_coordinates=None,
+                    ):
+                        points = shapely.get_coordinates(shape(part))
+                        x, y = inverse * (points[:, 0], points[:, 1])
+                        left, right = min(left, x.min()), max(right, x.max())
+                        top, bottom = min(top, y.min()), max(bottom, y.max())
+            pixel_bounds = (left, top, right, bottom)
+        elif area.kind not in {"wholeRaster", "catalogSelection"}:
             box_ring = None
             if area.kind == "samplingBox":
 
@@ -382,6 +383,9 @@ class PixelAreaCalculator:
                     "The selected polygons do not form a valid area. Repair the source polygons.",
                     413,
                 )
+            if self.geometry.equals(self.geometry.envelope):
+                self.rectangle = self.geometry.bounds
+        if pixel_bounds is not None:
             left, top, right, bottom = pixel_bounds
             pad = 2 * WINDOW_TOLERANCE_PIXELS
             x0, y0 = max(0, math.floor(left - pad)), max(0, math.floor(top - pad))
@@ -393,8 +397,6 @@ class PixelAreaCalculator:
                     "no_overlap", "The selected area does not overlap this raster."
                 )
             self.window = Window(x0, y0, x1 - x0, y1 - y0)
-            if self.geometry.equals(self.geometry.envelope):
-                self.rectangle = self.geometry.bounds
         geometry_cells = (
             0 if self.rectilinear else int(self.window.width * self.window.height)
         )
@@ -520,16 +522,29 @@ class PixelAreaCalculator:
                 window_transform(tile, self.transform),
                 (height, width),
             )
-            with polygon_features(self.catalog_source, bbox, limits=None) as features:
+            with native_polygon_features(self.catalog_source, bbox, limits=None) as (
+                source_crs,
+                features,
+            ):
                 for item in features:
-                    geometry = transformed_polygon(
-                        shape(item),
-                        lambda p: project_points(p, self.wgs_area),
-                        self.limits.area_edge_tolerance_metres,
-                        self.limits.area_max_segment_metres,
+                    (projected,) = project_polygons_to_crs(
+                        source_crs,
+                        AREA_CRS,
+                        (item,),
+                        None,
+                        grid_transform=Affine.identity(),
+                        initial_edge_points=0,
+                        maximum_error=self.limits.area_edge_tolerance_metres,
+                        maximum_segment=self.limits.area_max_segment_metres,
+                        longitude_period=2 * MAXIMUM_X,
                     )
+                    geometry = shape(projected)
+                    if not geometry.is_valid:
+                        raise ProcessingError(
+                            "unsupported_area_crs",
+                            "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
+                        )
                     if footprint is None or geometry.intersects(footprint):
-
                         retained.append(geometry)
             if not retained:
                 return np.zeros((height, width), dtype=np.float64)

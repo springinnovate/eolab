@@ -13,15 +13,18 @@ from pyproj import Geod, Transformer
 import pytest
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import from_origin
+from shapely import contains_xy, segmentize
 from shapely.geometry import Polygon, box, mapping
+from shapely.ops import transform as transform_geometry
 
+from eolab_app.bounded_vector import selection_summary
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 import eolab_app.processing.raster_aggregate as kernel
 from raster_aggregate_support import LIMITS, make_spec
 from raster_fixture_support import write_source
-from catalog_selection_support import write_aggregate_area
+from catalog_selection_support import write_aggregate_area, write_selection
 
 
 def reference_area(polygon: Polygon, crs: str = "EPSG:4326") -> float:
@@ -140,6 +143,53 @@ def test_partial_cell_sliver_is_area_even_when_center_is_outside(
     assert provenance["grid"]["groundArea"]["edgeToleranceMetres"] == 0.1
     rows = list(csv.DictReader((tmp_path / "result.csv").open(newline="")))
     assert rows[0]["unit"] == "ha" and rows[2]["unit"] == ""
+
+
+def test_native_selection_count_and_hectares_use_the_same_boundary(
+    tmp_path: Path,
+) -> None:
+    """Check mixed formulas against native membership and an equal-area intersection.
+
+    Args:
+        tmp_path: Directory for the vector, value raster and published tables.
+    """
+    polygon = box(3e6, 2e6, 5e6, 4e6)
+    vector = write_selection(
+        tmp_path / "area.gpkg", [mapping(polygon)], crs="EPSG:3035"
+    )
+    area = AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(vector)["bbox"],
+        catalogSelection=vector.selection,
+        resolved=vector,
+    )
+    grid = from_origin(0, 60, 0.05, 0.05)
+    path = write_source(
+        tmp_path / "values.tif", np.ones((100, 200), dtype="uint8"), transform=grid
+    )
+    inverse = Transformer.from_crs(4326, 3035, always_xy=True)
+    rows, columns = np.indices((100, 200)) + 0.5
+    x, y = grid * (columns, rows)
+    expected_count = int(contains_xy(polygon, *inverse.transform(x, y)).sum())
+    footprint = transform_geometry(
+        inverse.transform, segmentize(box(0, 55, 10, 60), 0.001)
+    )
+    expected_hectares = polygon.intersection(footprint).area / 10_000
+
+    numeric = calculate_raster_statistics_for_area(
+        path, make_spec(path, ["count(a)"], area), tmp_path, LIMITS
+    )
+    mixed = calculate_raster_statistics_for_area(
+        path,
+        make_spec(path, ["count(a) + 0 * areaha(a > 0)", "areaha(a > 0)"], area),
+        tmp_path,
+        LIMITS,
+    )
+    assert (int(numeric.rows[0]["value"]), float(mixed.rows[0]["value"])) == (
+        expected_count,
+        expected_count,
+    )
+    assert float(mixed.rows[1]["value"]) == pytest.approx(expected_hectares, rel=2e-6)
 
 
 def test_polygon_union_holes_and_fractional_edges(tmp_path: Path) -> None:

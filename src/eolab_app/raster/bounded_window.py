@@ -505,6 +505,9 @@ def _refine_raster_rings(
     target_crs: CRS | str,
     grid_transform: Affine,
     maximum_coordinates: int | None,
+    maximum_error: float,
+    maximum_segment: float,
+    longitude_period: float | None,
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
     """Bisect native edges whose projected quarter points deviate from the pixel chord.
 
@@ -514,6 +517,10 @@ def _refine_raster_rings(
         target_crs: Destination grid's coordinate system.
         grid_transform: Pixel-to-map affine, including rotation and skew.
         maximum_coordinates: Maximum retained positions across the rings, or None.
+        maximum_error: Maximum chord deviation measured in grid units.
+        maximum_segment: Maximum chord length in grid units, or infinity.
+        longitude_period: Full longitude turn in destination x units for a
+            cylindrical projection. Geographic CRSs supply their own period.
 
     Returns:
         Source-coordinate rings refined to the destination pixel tolerance.
@@ -521,10 +528,13 @@ def _refine_raster_rings(
     Raises:
         ValueError: If projection, numerical convergence or coordinate capacity fails.
     """
-    if CRS.from_user_input(source_crs) == CRS.from_user_input(target_crs):
+    if math.isinf(maximum_segment) and CRS.from_user_input(
+        source_crs
+    ) == CRS.from_user_input(target_crs):
         return rings
     transformer = _edge_transformer(source_crs, target_crs)
     frame = _longitude_frame(target_crs)
+    period = math.tau / abs(frame[0]) if frame is not None else longitude_period
     inverse = ~grid_transform
     to_pixels = np.array([[inverse.a, inverse.d], [inverse.b, inverse.e]])
     fractions = np.array([0, 0.25, 0.5, 0.75, 1])[None, :, None]
@@ -541,8 +551,8 @@ def _refine_raster_rings(
                     edges[:-1, None, :] + np.diff(edges, axis=0)[:, None, :] * fractions
                 )
                 x, y = transformer.transform(probes[:, :, 0], probes[:, :, 1])
-                if frame is not None:
-                    x = np.unwrap(x, period=math.tau / abs(frame[0]), axis=1)
+                if period is not None:
+                    x = np.unwrap(x, period=period, axis=1)
                 mapped = np.stack((x, y), axis=-1)
                 if not np.isfinite(mapped).all():
                     raise ValueError("Selection could not be projected")
@@ -557,8 +567,8 @@ def _refine_raster_rings(
                 )
                 error = np.linalg.norm(tested - along[:, :, None] * chord, axis=2)
                 split[start : start + len(edges) - 1] = np.any(
-                    error > POLYGON_EDGE_ERROR_PIXELS, axis=1
-                )
+                    error > maximum_error, axis=1
+                ) | (length_squared[:, 0] > maximum_segment**2)
             if not split.any():
                 break
             count += int(split.sum())
@@ -719,6 +729,9 @@ def project_polygons_to_crs(
     *,
     grid_transform: Affine | None = None,
     initial_edge_points: int = BOUNDED_WGS84_DENSIFY_POINTS,
+    maximum_error: float = POLYGON_EDGE_ERROR_PIXELS,
+    maximum_segment: float = math.inf,
+    longitude_period: float | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Densify and project polygons without depending on raster coverage.
 
@@ -731,6 +744,10 @@ def project_polygons_to_crs(
         coordinate_transform: Injectable transformation between coordinate systems.
         grid_transform: If given, refine projected chords to destination pixel accuracy.
         initial_edge_points: Initial intermediate samples per original edge.
+        maximum_error: Chord deviation in grid units when a grid is given.
+        maximum_segment: Maximum chord length on that grid, or infinity.
+        longitude_period: Full turn in destination x units for a cylindrical
+            accuracy grid. Used only to measure chords across a longitude cut.
 
     Returns:
         Separate polygon mappings in the requested CRS, preserving holes and
@@ -748,7 +765,14 @@ def project_polygons_to_crs(
     )
     if grid_transform is not None:
         densified_rings = _refine_raster_rings(
-            densified_rings, source_crs, target_crs, grid_transform, maximum_coordinates
+            densified_rings,
+            source_crs,
+            target_crs,
+            grid_transform,
+            maximum_coordinates,
+            maximum_error,
+            maximum_segment,
+            longitude_period,
         )
     if CRS.from_user_input(source_crs).is_projected and source_crs != target_crs:
         # GDAL cuts whole polygons at the antimeridian and reconstructs polar
@@ -764,6 +788,11 @@ def project_polygons_to_crs(
         densified_rings = tuple(
             ring for geometry in geometries for ring in _polygon_rings(geometry)
         )
+        if (
+            maximum_coordinates is not None
+            and sum(map(len, densified_rings)) > maximum_coordinates
+        ):
+            raise ValueError("Selection exceeds the transformed-geometry limit")
     x = [point[0] for ring in densified_rings for point in ring]
     y = [point[1] for ring in densified_rings for point in ring]
     projected_x, projected_y = _transform_polygon_positions(

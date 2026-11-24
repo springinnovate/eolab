@@ -186,9 +186,8 @@ def prepare_raster_area_tools(
 ) -> RasterAreaTools:
     """Prepare the final window, selected polygons and optional hectare calculator.
 
-    For formulas requiring area measurement, use the hectare calculator's window,
-    matching its cached pixel coordinates. Other formulas use the ordinary
-    selection window. Both retain their existing projection and boundary rules.
+    Catalog formulas share the window prepared from the native polygon edges.
+    Hectare formulas intersect the polygon with each cell inside that window.
 
     Args:
         dataset: Open, validated raster; it must remain open while tools are used.
@@ -215,7 +214,14 @@ def prepare_raster_area_tools(
     try:
         pixel_area_calculator = None
         if measure_hectares:
-            pixel_area_calculator = PixelAreaCalculator(dataset, area, limits)
+            pixel_area_calculator = PixelAreaCalculator(
+                dataset,
+                area,
+                limits,
+                catalog_window=(
+                    selection_window if area.kind == "catalogSelection" else None
+                ),
+            )
             raster_window = pixel_area_calculator.window
         else:
             raster_window = selection_window
