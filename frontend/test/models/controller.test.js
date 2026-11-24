@@ -15,9 +15,10 @@ import { model, raster, area, invocation, selection, job, clipModel, seriesModel
 /** Compose the real controller and observer with controllable boundary responses.
  * @param {Object} [overrides={}] API behavior replacements.
  * @param {Object|null} [viewOverride=null] Optional real view for boundary tests.
+ * @param {Object} [visitorOptions={}] Published-map model choices and tab recovery scope.
  * @return {Object} Component and recorded user-visible effects.
  */
-function fixture(overrides = {}, viewOverride = null) {
+function fixture(overrides = {}, viewOverride = null, visitorOptions = {}) {
     const values = new Map(); const submitted = []; const cancelled = []; const filterRequests = []; const mapFilters = [];
     const api = {discoverModels: async () => [model], listModelRuns: async () => ({jobs: [], nextCursor: null}),
         getJob: async () => job(), readModelInvocation: async () => structuredClone(invocation),
@@ -31,7 +32,7 @@ function fixture(overrides = {}, viewOverride = null) {
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusPage: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const tabContext = { label: "" };
-    const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
+    const controller = new ModelsController({api, jobs, view, storage, clock, ...visitorOptions, getContext: () => context,
         onViewLabel: label => { tabContext.label = label; },
         getCatalogItem: source => api.getCatalogItem(source),
         loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
@@ -82,6 +83,132 @@ test("Raster clip captures every polygon group member and its own filter", async
         kind: "polygonGroup", name: "River basins",
         members: [north, south].map(({label, selection}) => ({label, selection})),
     });
+});
+
+test("published model choices govern search, retained setup and duplication while accepted runs stay accessible", async t => {
+    const newer = {...model, version: "2.0.0", title: "New summary", definitionSha256: "b".repeat(64)};
+    const recipes = [model, clipModel, newer];
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => recipes}, view, {allowedModelIds: [model.id], recoveryScope: "survey"});
+    t.after(() => h.controller.destroy());
+    let finishDiscovery;
+    h.api.discoverModels = () => new Promise(resolve => { finishDiscovery = resolve; });
+    const opening = h.controller.open();
+    await h.controller.showRun(job().jobId);
+    assert.equal(view.run.duplicate.disabled, true, "a linked run must wait for its recipe to be checked");
+    await h.controller.duplicateRun();
+    assert.equal(view.elements.error.textContent, "");
+    finishDiscovery(recipes);
+    await opening;
+    assert.equal(view.run.duplicate.disabled, false);
+    h.controller.navigate("library");
+    h.api.discoverModels = async () => recipes;
+    const libraryTitles = () => view.elements["library-items"].children.map(button => button.textContent);
+    assert.deepEqual(libraryTitles(), [model.title, newer.title]);
+    recipes.push(seriesModel);
+    await h.controller.loadLibrary();
+    view.elements.query.value = clipModel.title;
+    view.elements.query.dispatchEvent(new Event("input"));
+    assert.deepEqual(libraryTitles(), []);
+    view.elements.query.value = "";
+    view.elements.query.dispatchEvent(new Event("input"));
+    assert.deepEqual(libraryTitles(), [model.title, newer.title]);
+    view.elements["library-items"].children[1].dispatchEvent(new Event("click"));
+    const previousRunButton = view.setup.run;
+    h.controller.setAllowedModelIds([]);
+    assert.equal(h.controller.state.page, "library");
+    assert.equal(view.navigation.setup.disabled, true);
+    assert.equal(view.document.activeElement, view.navigation.library);
+    assert.match(view.elements["library-status"].textContent, /no models for new runs/);
+    previousRunButton.dispatchEvent(new Event("click"));
+    h.controller.chooseModel(newer);
+    h.controller.navigate("setup");
+    await h.controller.submit();
+    assert.equal(h.submitted.length, 0);
+    const openingRun = h.controller.showRun(job().jobId);
+    assert.equal(view.run.duplicate.hidden, true, "a restricted map waits for the run's identity before offering duplication");
+    await openingRun;
+    assert.equal(view.run.title.textContent, job().label);
+    assert.equal(view.run.duplicate.hidden, true);
+    await h.controller.duplicateRun();
+    assert.equal(h.controller.state.page, "run");
+    await h.controller.cancelRun();
+    assert.deepEqual(h.cancelled, [job().jobId]);
+    h.controller.setAllowedModelIds([model.id, "retired-tool"]);
+    assert.match(view.elements["library-status"].textContent, /unavailable.*publisher/);
+    assert.equal(view.run.duplicate.hidden, false);
+    await h.controller.duplicateRun();
+    assert.equal(h.controller.state.draft.model.version, model.version);
+    await h.controller.submit();
+    assert.deepEqual(h.submitted.map(request => request.model.id), [model.id]);
+
+    h.controller.navigate("library");
+    const previousVersionButton = view.elements["library-items"].children[1];
+    previousVersionButton.dispatchEvent(new Event("click"));
+    h.controller.setActive(false);
+    recipes.splice(recipes.indexOf(newer), 1);
+    await h.controller.open();
+    assert.equal(h.controller.state.page, "library", "reopening Data tools leaves setup for a version the site removed");
+    assert.match(view.elements.error.textContent, /no longer available/i);
+    previousVersionButton.dispatchEvent(new Event("click"));
+    await h.controller.submit();
+    assert.equal(view.navigation.setup.disabled, true);
+    assert.equal(h.submitted.length, 1);
+});
+
+test("reopening Data tools clears recovered discovery and history errors on their respective pages", async t => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => { throw new Error("Service offline"); },
+        listModelRuns: async () => { throw new Error("History offline"); }}, view, {allowedModelIds: [model.id]});
+    t.after(() => h.controller.destroy());
+    await h.controller.open();
+    assert.match(view.elements.error.textContent, /Service offline/);
+    h.controller.setActive(false);
+    h.api.discoverModels = async () => [model];
+    await h.controller.open();
+    assert.equal(view.elements["library-items"].children[0].textContent, model.title);
+    assert.equal(view.elements.error.textContent, "");
+    h.controller.navigate("runs");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(view.elements.error.textContent, /History offline/);
+    h.api.listModelRuns = async () => ({jobs: [job()], nextCursor: null});
+    await h.controller.loadRuns();
+    assert.equal(view.elements["runs-list"].children.length, 1);
+    assert.equal(view.elements.error.textContent, "");
+});
+
+test("a map recovers only eligible retries and other maps can submit independently in the same tab", async t => {
+    const options = {allowedModelIds: [model.id], recoveryScope: "survey"};
+    const first = fixture({submitModelRun: async () => { throw new TypeError("Connection lost"); }}, null, options);
+    t.after(() => first.controller.destroy());
+    first.controller.chooseModel(model);
+    await first.controller.submit();
+    const captured = structuredClone(first.controller.state.pending);
+    const view = new ModelsView(new SummaryControlDocument());
+    const second = fixture({}, view, {allowedModelIds: [model.id], recoveryScope: "field-trip"});
+    t.after(() => second.controller.destroy());
+    second.controller.storage = first.storage;
+    second.controller.start();
+    assert.equal(view.elements.recovery.hidden, true);
+    await second.controller.submit(true);
+    assert.equal(second.submitted.length, 0);
+    second.controller.chooseModel(model);
+    await second.controller.submit();
+    assert.equal(second.submitted.length, 1);
+    const reopened = fixture({}, null, {...options, allowedModelIds: [clipModel.id]});
+    t.after(() => reopened.controller.destroy());
+    reopened.controller.storage = first.storage;
+    reopened.controller.start();
+    await reopened.controller.submit(true);
+    assert.deepEqual(reopened.submitted, []);
+    reopened.controller.chooseModel(clipModel);
+    await reopened.controller.submit();
+    first.storage.setItem(`eolab.models.pending.v1.survey.${clipModel.id}`, "{");
+    reopened.controller.setAllowedModelIds([clipModel.id, model.id]);
+    assert.deepEqual(reopened.controller.state.pending, captured, "an unreadable retry must not hide the next model's request");
+    await reopened.controller.submit(true);
+    assert.equal(reopened.submitted[0].model.id, clipModel.id);
+    assert.deepEqual(reopened.submitted[1], captured);
 });
 
 test("Models navigation retains an unfinished setup and focuses actual model and run names", async t => {
@@ -1256,6 +1383,12 @@ test("Runs history controls load result inputs while preserving unfinished setup
     assert.match(view.runCards.get(recent.jobId).status.textContent, /^Cancelled/);
     assert.deepEqual(Array.from(view.elements["runs-list"].querySelectorAll("button"), button => button.textContent),
         [recent.label, older.label, result.label]);
+    view.navigation.setup.dispatchEvent(new Event("click"));
+    view.setup.inputs.raster.source.value = modelSourceKey(source);
+    view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
+    assert.equal(h.jobs.tracked.has(result.jobId), true);
+    h.controller.setAllowedModelIds([]);
+    assert.deepEqual([...h.jobs.tracked], [older.jobId], "closing a restricted setup releases its finished input and keeps active runs");
     assert.equal(h.submitted.length, 0);
     h.controller.destroy();
 });

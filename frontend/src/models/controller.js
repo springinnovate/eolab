@@ -35,6 +35,10 @@ export class ModelsController {
      * @param {()=>void} dependencies.closeVectorFilter Close the composed inline editor.
      * @param {(source:Object,area:Object)=>Promise<Object|null>} dependencies.applyMapFilter Commit checked features to their vector view before updating its rendering; display failure must not block analysis.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
+     * @param {readonly string[]|null} [dependencies.allowedModelIds=null] Recipe IDs this map
+     * offers for new runs. Null offers every installed recipe supported by setup.
+     * @param {string} [dependencies.recoveryScope=""] Published map identifier for recovering
+     * its selected recipes' unconfirmed submissions in this tab.
      * @param {()=>void} dependencies.onOpen Open the composed Analysis panel.
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
      * @param {(label:string)=>void} [dependencies.onViewLabel] Present the current page, selected model or run name in the workspace.
@@ -50,22 +54,27 @@ export class ModelsController {
     constructor({api, jobs, view, getContext, getCatalogItem, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {}, onViewLabel = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
+        allowedModelIds = null, recoveryScope = "",
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", ""), getSetupIntegration = getModelSetupIntegration}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
         Object.assign(this, {getCatalogItem, loadTemporalTimes});
         this.getSetupIntegration = getSetupIntegration;
+        this.allowedModelIds = allowedModelIds === null ? null : new Set(allowedModelIds);
+        this.recoveryScope = recoveryScope;
+        this.installedModels = null;
         this.outputState = outputState;
         this.onRunChange = onRunChange;
         this.onViewLabel = onViewLabel;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
         this.deletions = new Map();
-        this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
-            runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
+        this.state = {page: "library", active: false, library: [], missingModels: false, loading: false, libraryError: "", error: "", query: "", draft: null,
+            runs: [], nextCursor: null, historyLoading: false, historyError: "", selectedRun: null, invocation: null, invocationError: "", yaml: null,
             habitatDatasetLabels: null,
             pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
         this.vectorSelectionRequests = new Map();
-        this.pendingPolygonAreaIds = [];
+        /** @type {Map<string,string[]>} Uploaded polygon IDs owned by each retry slot in this tab. */
+        this.pendingPolygonAreas = new Map();
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
@@ -103,20 +112,112 @@ export class ModelsController {
      * @return {void}
      */
     start() {
-        try {
-            const value = JSON.parse(this.storage?.getItem(RECOVERY_KEY) ?? "null");
-            if (value && typeof value.requestId === "string" && /^[A-Za-z0-9_-]{16,80}$/.test(value.requestId) && value.model && value.inputs && value.parameters) {
-                this.state.pending = value;
-            }
-        } catch { this.state.error = "The previous submission could not be read from this tab's storage."; }
+        this.#restorePendingSubmission();
         void this.recoverDeletions();
         this.render();
     }
 
-    /** Open the retained Models page and refresh its library and history.
+    /** Return the tab's retry slot for a recipe. Configured maps keep separate slots
+     * so a restricted retry cannot block or overwrite another map or model's work.
+     * @param {string|null} id Recipe identifier, or null to read the unrestricted slot.
+     * @return {string} Session storage key.
+     */
+    #recoveryKey(id) {
+        return this.allowedModelIds === null ? RECOVERY_KEY : `${RECOVERY_KEY}.${this.recoveryScope}.${id}`;
+    }
+
+    /** Find the first permitted unconfirmed request in this tab without submitting it.
+     * @param {string|null} [finishedKey=null] Ignore the completed request if storage cleanup failed.
      * @return {void}
      */
-    open() { this.onOpen(); void this.loadLibrary(); void this.loadRuns(); }
+    #restorePendingSubmission(finishedKey = null) {
+        this.state.pending = null;
+        for (const id of this.allowedModelIds ?? [null]) {
+            const key = this.#recoveryKey(id);
+            if (key === finishedKey) continue;
+            try {
+                const value = JSON.parse(this.storage?.getItem(key) ?? "null");
+                if (value && typeof value.requestId === "string" && /^[A-Za-z0-9_-]{16,80}$/.test(value.requestId) &&
+                    value.model && value.inputs && value.parameters && (id === null || value.model.id === id)) {
+                    this.state.pending = value;
+                    return;
+                }
+            } catch (error) {
+                this.state.error = "A saved submission could not be read from this tab. Check Runs before starting it again.";
+                // Malformed JSON affects one recipe. A storage access failure affects the tab.
+                if (!(error instanceof SyntaxError)) return;
+            }
+        }
+    }
+
+    /** Apply a map's new-run choices before setup, retry or duplication can start work.
+     * Close superseded input editors and restore any permitted retry in this tab.
+     * @param {readonly string[]|null} ids Allowed recipe identifiers, or null for unrestricted setup.
+     * @return {void}
+     */
+    setAllowedModelIds(ids) {
+        this.allowedModelIds = ids === null ? null : new Set(ids);
+        this.#restorePendingSubmission();
+        this.#updateSetupLibrary();
+        this.render();
+    }
+
+    /** Check the active map's choice for all installed versions of a recipe.
+     * @param {string|undefined} id Recipe identifier, or undefined while run details load.
+     * @return {boolean} Whether the map offers this model. A configured map requires a known ID.
+     */
+    #allowsModel(id) {
+        return this.allowedModelIds === null || this.allowedModelIds.has(id);
+    }
+
+    /** Return the offered recipe with the exact version and definition used by a setup or run.
+     * @param {{id:string,version:string,definitionSha256:string}} recipe Captured model identity.
+     * @return {Object|undefined} Matching installed recipe, when available on this map.
+     */
+    #findSetupVersion(recipe) {
+        return this.state.library.find(model => model.id === recipe.id && model.version === recipe.version &&
+            model.definitionSha256 === recipe.definitionSha256);
+    }
+
+    /** Check a model choice against the map and, once loaded, the current recipe library.
+     * @param {{id:string,version:string,definitionSha256:string}} recipe Model chosen for setup.
+     * @return {boolean} Whether this version can open or retain an editable setup.
+     */
+    #canSetUp(recipe) {
+        return this.installedModels === null ? this.#allowsModel(recipe.id) : Boolean(this.#findSetupVersion(recipe));
+    }
+
+    /** Update the picker after discovery or a map choice changes. Close a superseded
+     * draft through normal navigation so its input jobs stop being observed.
+     * @return {void}
+     */
+    #updateSetupLibrary() {
+        const installed = this.installedModels ?? [];
+        const allowed = this.allowedModelIds;
+        const library = allowed === null ? installed : installed.filter(model => allowed.has(model.id));
+        this.state.library = library;
+        this.state.missingModels = this.installedModels !== null && allowed !== null &&
+            new Set(library.map(model => model.id)).size < allowed.size;
+
+        const draft = this.state.draft;
+        if (!draft || this.#canSetUp(draft.model)) return;
+        this.#discardSetup();
+        if (this.state.page !== "setup") return;
+        this.state.yaml = null;
+        this.navigate("library");
+        if (this.#allowsModel(draft.model.id)) {
+            this.state.error = `This version of ${draft.model.title} is no longer available. Choose a tool from the library.`;
+        }
+        if (this.state.active) this.view.focusPage();
+    }
+
+    /** Open the retained Models page and refresh its library and history.
+     * @return {Promise<void>} Completion of the library and history refresh requested here.
+     */
+    async open() {
+        this.onOpen();
+        await Promise.all([this.loadLibrary(), this.loadRuns()]);
+    }
 
     /** Change visibility and refresh a map-linked setup without changing server work.
      * @param {boolean} active Whether Models is the visible Analysis tool.
@@ -130,18 +231,28 @@ export class ModelsController {
         this.render();
     }
 
+    /** Discover the installed recipe versions that Data tools can set up.
+     * Publisher settings use these same choices before applying a map's selection.
+     * @return {Promise<Object[]>} Installed recipe documents with supported input types.
+     * @throws {Error} If model discovery fails.
+     */
+    async listSetupModels() {
+        return (await this.api.discoverModels()).filter(model =>
+            Object.values(model.inputs).every(input => supportsModelInput(input.type)));
+    }
+
     /** Load installed recipes whose inputs this setup form can edit.
      * Other recipes remain available through the API and existing run history.
      * @return {Promise<void>}
      */
     async loadLibrary() {
         if (this.state.loading) return;
-        this.state.loading = true; this.render();
+        this.state.loading = true; this.state.libraryError = ""; this.render();
         try {
-            this.state.library = (await this.api.discoverModels()).filter(model =>
-                Object.values(model.inputs).every(input => supportsModelInput(input.type)));
+            this.installedModels = await this.listSetupModels();
+            this.#updateSetupLibrary();
         }
-        catch (error) { this.state.error = `Data tools unavailable: ${error.message}`; }
+        catch (error) { this.state.libraryError = `Data tools unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
     }
 
@@ -150,12 +261,28 @@ export class ModelsController {
      * @return {void}
      */
     navigate(page) {
-        if (page !== "setup") this.closeVectorFilter();
-        this.revision += 1; this.state.page = page; this.state.error = "";
+        if (page === "setup" && !this.state.draft) return;
+        if (page !== "setup" && this.state.draft) this.closeVectorFilter();
+        this.revision += 1;
+        this.state.page = page;
+        this.state.error = "";
         this.#updateRunTracking();
         if (page === "setup") this.refreshMapArea();
         this.render();
         if (page === "runs") void this.loadRuns();
+    }
+
+    /** Dispose the draft and cancel its input requests before replacing or closing setup.
+     * @return {void}
+     */
+    #discardSetup() {
+        this.setupSession?.dispose();
+        this.setupSession = null;
+        this.closeVectorFilter();
+        this.cancelVectorSelections();
+        this.temporalAbort?.abort();
+        this.temporalRevision += 1;
+        this.state.draft = null;
     }
 
     /** Create a draft with independent manual areas and load model-specific Catalog choices.
@@ -163,10 +290,9 @@ export class ModelsController {
      * @return {void}
      */
     chooseModel(model) {
-        this.setupSession?.dispose();
-        this.closeVectorFilter();
-        this.cancelVectorSelections(); this.revision += 1;
-        this.temporalAbort?.abort(); this.temporalRevision += 1;
+        if (!this.#canSetUp(model)) return;
+        this.revision += 1;
+        this.#discardSetup();
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         this.#updateRunTracking();
@@ -576,7 +702,7 @@ export class ModelsController {
         this.render();
     }
 
-    /** Submit once, or recover an uncertain response using its original request ID and inputs.
+    /** Start an allowed model or retry its unconfirmed request with the original ID and inputs.
      * Upload drawn polygons only after capturing the whole setup. Release temporary
      * inputs when preparation fails or admission is rejected. Accepted and uncertain
      * requests keep their references for the input store's ordinary lifetime.
@@ -586,6 +712,9 @@ export class ModelsController {
     async submit(retry = false) {
         if (this.state.submitting || this.state.pending && !retry) return;
         const draft = this.state.draft; const revision = this.revision;
+        const model = retry ? this.state.pending?.model : draft?.model;
+        if (!model || !this.#allowsModel(model.id)) return;
+        const recoveryKey = this.#recoveryKey(model.id);
         const uploadedPolygonAreaIds = [];
         this.state.error = "";
         try {
@@ -606,7 +735,7 @@ export class ModelsController {
                             const area = await this.api.uploadPolygonArea(layer.polygons);
                             reference = area.polygonArea;
                             uploadedPolygonAreaIds.push(reference.id);
-                            if (this.destroyed || revision !== this.revision) return;
+                            if (this.destroyed || revision !== this.revision || draft !== this.state.draft) return;
                             references.set(layer.key, reference);
                         }
                         submission.inputs[name] = {kind: "polygonArea", reference};
@@ -615,22 +744,21 @@ export class ModelsController {
             }
             const serialized = JSON.stringify(submission);
             if (new TextEncoder().encode(serialized).length > 16384) throw new Error("Tool inputs exceed the 16 KiB submission limit.");
-            this.storage.setItem(RECOVERY_KEY, serialized);
-            if (!retry) this.pendingPolygonAreaIds = uploadedPolygonAreaIds.splice(0);
+            this.storage.setItem(recoveryKey, serialized);
+            if (uploadedPolygonAreaIds.length) this.pendingPolygonAreas.set(recoveryKey, uploadedPolygonAreaIds.splice(0));
             this.state.pending = submission; this.state.submitting = true; this.render();
             const job = await this.api.submitModelRun(submission);
-            this.state.pending = null;
-            this.pendingPolygonAreaIds = [];
-            try { this.storage.removeItem(RECOVERY_KEY); } catch { /* The saved ID still safely recovers this same accepted run. */ }
+            this.pendingPolygonAreas.delete(recoveryKey);
+            this.#finishRecovery(recoveryKey);
             this.rememberRun(job); this.jobs.accept(job);
             if (revision === this.revision) await this.showRun(job.jobId);
         } catch (error) {
             // A definite rejection allows editing. Transport/5xx failures retain
             // the exact request because the server may already have accepted it.
             if (error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500) {
-                this.discardPolygonAreas(this.pendingPolygonAreaIds);
-                this.pendingPolygonAreaIds = [];
-                this.state.pending = null; try { this.storage?.removeItem(RECOVERY_KEY); } catch { /* Retry identity remains harmless. */ }
+                this.discardPolygonAreas(this.pendingPolygonAreas.get(recoveryKey) ?? []);
+                this.pendingPolygonAreas.delete(recoveryKey);
+                this.#finishRecovery(recoveryKey);
             }
             if (revision === this.revision && !this.destroyed)
                 this.state.error = error.message;
@@ -638,6 +766,15 @@ export class ModelsController {
             this.discardPolygonAreas(uploadedPolygonAreaIds);
             this.state.submitting = false; this.render();
         }
+    }
+
+    /** Remove a settled retry and offer the next permitted request, if any.
+     * @param {string} key Tab storage slot of the completed or definitely rejected request.
+     * @return {void}
+     */
+    #finishRecovery(key) {
+        try { this.storage?.removeItem(key); } catch { /* Retrying the same request ID is idempotent. */ }
+        this.#restorePendingSubmission(key);
     }
 
     /** Release polygon uploads made by this tab after an abandoned or rejected submission.
@@ -714,7 +851,7 @@ export class ModelsController {
     async loadRuns(more = false) {
         if (this.state.historyLoading) return;
         const revision = ++this.historyRevision;
-        this.state.historyLoading = true; this.render();
+        this.state.historyLoading = true; this.state.historyError = ""; this.render();
         try {
             const page = await this.api.listModelRuns(more ? this.state.nextCursor : null);
             if (revision !== this.historyRevision || this.destroyed) return;
@@ -723,7 +860,7 @@ export class ModelsController {
                 if (!current || current.updatedAt <= job.updatedAt) this.rememberRun(job);
             }
             this.state.nextCursor = page.nextCursor; this.jobs.schedule();
-        } catch (error) { this.state.error = `Data tool runs unavailable: ${error.message}`; }
+        } catch (error) { this.state.historyError = `Data tool runs unavailable: ${error.message}`; }
         finally { this.state.historyLoading = false; this.refreshMapLayers(); this.render(); }
     }
 
@@ -931,21 +1068,20 @@ export class ModelsController {
         finally { notice.busy = false; this.scheduleDeletions(); this.render(); }
     }
 
-    /** Copy a saved run's inputs into editable setup, including dataset and polygon choices.
-     * The exact recipe must remain available. Choosing a vector view explicitly
+    /** Copy a permitted run's inputs into editable setup, including dataset and polygon choices.
+     * The map must offer the recipe ID and its exact version and checksum must be installed.
+     * Choosing a vector view explicitly
      * switches a captured area to that view's current filter. Registered setup
      * integrations restore their own values before asynchronous choices reload.
      * @return {Promise<void>} Completion after the copied setup loads its current source choices.
      */
     async duplicateRun() {
-        const saved = this.state.invocation; if (!saved) return;
-        const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
-            value.definitionSha256 === saved.model.definitionSha256);
+        const saved = this.state.invocation;
+        if (!saved || this.state.loading || this.state.libraryError || !this.#allowsModel(saved.model.id)) return;
+        const model = this.#findSetupVersion(saved.model);
         if (!model) { this.state.error = "This tool version is not available in setup. Its YAML remains available until metadata expires."; this.render(); return; }
-        this.setupSession?.dispose();
-        this.closeVectorFilter();
-        this.cancelVectorSelections(); this.revision += 1;
-        this.temporalAbort?.abort(); this.temporalRevision += 1;
+        this.revision += 1;
+        this.#discardSetup();
         const draft = createModelDraft(model, this.inputContext(model), this.newId(), this.getSetupIntegration(model));
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
@@ -998,7 +1134,7 @@ export class ModelsController {
         this.render();
     }
 
-    /** Render the current Data tools page and publish its display name to the workspace.
+    /** Present the map's allowed setup recipes alongside the browser's session-owned runs.
      * @return {void}
      */
     render() {
@@ -1008,7 +1144,9 @@ export class ModelsController {
             library: "Choose a tool", setup: this.state.draft?.model.title ?? "Setup",
             runs: "Runs", run: job?.label ?? "Data tool run",
         }[this.state.page]);
-        this.view.render({...this.state, deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
+        this.view.render({...this.state, noModelsSelected: this.allowedModelIds?.size === 0,
+            duplicateRestricted: !this.#allowsModel(this.state.invocation?.model.id ?? job?.model.id),
+            deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
     }
 
