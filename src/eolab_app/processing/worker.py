@@ -31,7 +31,7 @@ from eolab_app.raster.source_models import (
     TemporalIntervalSelection,
 )
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
-from eolab_app.processing.model_operations import get_model_operation
+from eolab_app.processing import model_operations
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
@@ -315,7 +315,7 @@ class ProcessingWorker:
         Raises:
             ProcessingError: If authorization or planning fails, or the attempt is cancelled.
         """
-        operation = get_model_operation(calculation.operation)
+        operation = model_operations.get_model_operation(calculation.operation)
         if not await asyncio.to_thread(
             self.jobs.heartbeat,
             row["id"],
@@ -376,7 +376,7 @@ class ProcessingWorker:
                 409,
             )
         calculation_operation = model.calculation.operation if model else operation
-        handler = get_model_operation(calculation_operation)
+        handler = model_operations.get_model_operation(calculation_operation)
         calculation = handler.parse_specification(
             model.calculation if model else row["spec"]
         )
@@ -515,7 +515,7 @@ class ProcessingWorker:
         self._stopped_attempt = None
 
     async def run_once(self) -> bool:
-        """Acknowledge stopped work, then claim and fully supervise one attempt.
+        """Acknowledge stopped work, then claim and supervise an installed operation.
 
         A failed terminal write retains the exact stopped attempt for the next
         call. Claims and cleanup continue to respect its durable running state
@@ -529,7 +529,10 @@ class ProcessingWorker:
             asyncio.CancelledError: After stopping native work on worker shutdown.
         """
         await self._finish_stopped_attempt()
-        row = await asyncio.to_thread(self.jobs.claim_next_job)
+        row = await asyncio.to_thread(
+            self.jobs.claim_next_job,
+            supported_operations=[MODEL_OPERATION, *model_operations.OPERATIONS],
+        )
         if row is None:
             return False
         if "_spatialFilterDrawings" in row["spec"]:
@@ -562,7 +565,7 @@ class ProcessingWorker:
             artifact = task.result()
             reusable_results = None
             if row["spec"]["operation"] != MODEL_OPERATION:
-                handler = get_model_operation(row["spec"]["operation"])
+                handler = model_operations.get_model_operation(row["spec"]["operation"])
                 if handler.reusable is not None:
                     reusable_results = handler.reusable(
                         handler.prepared_type.model_validate(row["spec"]), artifact

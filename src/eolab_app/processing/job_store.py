@@ -1112,19 +1112,26 @@ class PostgresJobStore:
             )
             return cursor.fetchone()
 
-    def claim_next_job(self) -> dict[str, Any] | None:
-        """Claim the next session's queued job when a worker slot is available.
+    def claim_next_job(
+        self, *, supported_operations: list[str] | None = None
+    ) -> dict[str, Any] | None:
+        """Claim the next eligible session's job when a shared worker slot is available.
 
         Sessions are served by their most recent start, with newcomers first. Each
-        session's oldest pending subscription goes first, including requests to join
-        shared work. A shared start serves all sessions subscribed at that time.
+        session's oldest compatible subscription goes first, including requests to
+        join shared work. A shared start serves all sessions subscribed at that time.
         Running and cancelling jobs retain their slots until native exit is confirmed.
         A lost heartbeat never releases capacity. Container replacement interrupts
         unfinished jobs only after the previous worker and its native children stop.
         There is no execution deadline, memory reservation or disk admission gate.
 
+        Args:
+            supported_operations: Operation IDs the worker can execute. An empty list
+                claims nothing. None selects across all operations.
+
         Returns:
-            Claimed job with a new attempt token, or None when no worker slot/job is free.
+            Claimed job with a new attempt token, or None when no slot or eligible
+            job is available.
 
         Raises:
             ProcessingError: If the database cannot complete the claim.
@@ -1135,6 +1142,7 @@ class PostgresJobStore:
                 cursor,
                 worker_count=self.limits.worker_count,
                 lease_seconds=self.limits.lease_seconds,
+                supported_operations=supported_operations,
             )
 
     def heartbeat(

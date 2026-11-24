@@ -20,6 +20,7 @@ WITH waiting AS (
     FROM processing.jobs AS j
     JOIN processing.job_subscribers AS s ON s.job_id = j.id
     WHERE j.status = 'queued' AND s.status IS NULL
+      AND (%(supported_operations)s::text[] IS NULL OR j.operation = ANY(%(supported_operations)s))
     ORDER BY s.owner, s.created_at, s.id
 ), next_job AS (
     SELECT waiting.id, waiting.owner, clock_timestamp() AS started_at
@@ -57,9 +58,13 @@ def lock_job_queue(cursor: psycopg.Cursor[dict[str, Any]]) -> None:
 
 
 def claim_next_job(
-    cursor: psycopg.Cursor[dict[str, Any]], *, worker_count: int, lease_seconds: int
+    cursor: psycopg.Cursor[dict[str, Any]],
+    *,
+    worker_count: int,
+    lease_seconds: int,
+    supported_operations: list[str] | None,
 ) -> dict[str, Any] | None:
-    """Claim one fair turn and a worker slot in the same transaction.
+    """Claim a compatible job for the next session under the shared worker limit.
 
     An idle connection commits the claim on return. Inside an existing transaction
     the caller controls the final commit or rollback, including the recorded turn.
@@ -69,10 +74,12 @@ def claim_next_job(
         cursor: Dictionary-row cursor on the queue database at read committed isolation.
         worker_count: Shared limit on running and cancelling jobs.
         lease_seconds: Initial lease duration measured from the recorded start.
+        supported_operations: Operation IDs this worker can execute. An empty list
+            claims nothing. None selects across all operations.
 
     Returns:
         The running job row with its selected owner and new attempt ID, or None
-        when the pool is full or no subscribed job is waiting.
+        when the pool is full or no compatible subscribed job is waiting.
 
     Raises:
         psycopg.Error: If PostgreSQL cannot lock, select or update the queue.
@@ -84,6 +91,10 @@ def claim_next_job(
             return None
         cursor.execute(
             _CLAIM_NEXT_JOB_SQL,
-            {"attempt_id": uuid4().hex, "lease_seconds": lease_seconds},
+            {
+                "attempt_id": uuid4().hex,
+                "lease_seconds": lease_seconds,
+                "supported_operations": supported_operations,
+            },
         )
         return cursor.fetchone()
