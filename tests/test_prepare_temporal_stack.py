@@ -211,6 +211,26 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     assert not (tmp_path / "dataset.yaml").exists()
 
 
+def test_measurements_with_identical_units(tmp_path: Path) -> None:
+    """Keep different declared measurements out of one indexed variable.
+
+    Args:
+        tmp_path: Archive containing equally sized rasters with matching units.
+    """
+    manifest = annual_manifest(tmp_path)
+    first, second = sorted(tmp_path.glob("*.tif"))
+    with rasterio.open(first, "r+") as src:
+        src.update_tags(standard_name="precipitation_amount")
+    assert run_cli("build", manifest, "--check").returncode == 0
+    with rasterio.open(second, "r+") as src:
+        src.update_tags(1, standard_name="runoff_amount")
+    result = run_cli("build", manifest)
+    assert result.returncode == 1
+    for clue in (first.name, second.name, "precipitation_amount", "runoff_amount"):
+        assert clue in result.stderr
+    assert not (tmp_path / "dataset.yaml").exists()
+
+
 @pytest.mark.parametrize("key", ["observations", "time"])
 def test_duplicate_manifest_keys(tmp_path: Path, key: str) -> None:
     """Report the repeated YAML key and line before a row can be overwritten.

@@ -337,6 +337,7 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
         )
     errors = []
     reference = None
+    measurement_sources: dict[str, str] = {}
     rows = []
     intervals = []
     for obs in stack.observations:
@@ -375,6 +376,10 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                     raise ValueError(
                         f"Band units {src.units[0]!r} differ from {var.units!r}."
                     )
+                for band in (0, 1):
+                    standard_name = src.tags(band).get("standard_name", "").strip()
+                    if standard_name:
+                        measurement_sources.setdefault(standard_name, obs.file)
                 if src.scales[0] != 1 or src.offsets[0] != 0:
                     raise ValueError(
                         "Convert packed values to their declared units before indexing."
@@ -426,6 +431,13 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                 )
         except (OSError, ValueError, OverflowError, RuntimeError) as error:
             errors.append(f"{obs.file}: {error}")
+    if len(measurement_sources) > 1:
+        errors.append(
+            "Conflicting standard_name measurements: "
+            + ", ".join(
+                f"{name!r} in {file}" for name, file in measurement_sources.items()
+            )
+        )
     previous = None
     for start, end, name in sorted(intervals):
         if previous and (start < previous[0] or end == previous[0]):
