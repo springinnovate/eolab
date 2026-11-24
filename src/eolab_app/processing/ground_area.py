@@ -179,12 +179,12 @@ def transformed_polygon(
     return result
 
 
-def _catalog_equal_area_union(
+def _project_catalog_area_polygons(
     source_crs: RasterCRS,
     features: Iterator[dict[str, Any]],
     limits: RasterAggregateLimits,
-) -> BaseGeometry:
-    """Project selected features once and combine overlapping parts for hectare measurements.
+) -> list[BaseGeometry]:
+    """Project selected features once for intersection with the calculation's raster tiles.
 
     Args:
         source_crs: Coordinate system in which the vector edges are straight.
@@ -192,7 +192,7 @@ def _catalog_equal_area_union(
         limits: Chord tolerance and maximum segment length in equal-area metres.
 
     Returns:
-        The union for this calculation, empty when no features qualify.
+        Equal-area geometries in source feature order.
 
     Raises:
         ProcessingError: If a polygon cannot form a valid equal-area boundary.
@@ -217,7 +217,23 @@ def _catalog_equal_area_union(
                 "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
             )
         polygons.append(geometry)
-    return shapely.union_all(polygons)
+    return polygons
+
+
+def _fractional_coverage(geometry: BaseGeometry) -> FractionalAreaCoverage:
+    """Prepare oriented boundary edges for a rectilinear tile's hectare calculation.
+
+    Args:
+        geometry: Nonempty union of the selected polygons relevant to the grid.
+
+    Returns:
+        Coverage calculator including both exterior boundaries and holes.
+    """
+    return FractionalAreaCoverage(
+        np.asarray(ring.coords)
+        for polygon in shapely.get_parts(shapely.orient_polygons(geometry))
+        for ring in [polygon.exterior, *polygon.interiors]
+    )
 
 
 class PixelAreaCalculator:
@@ -449,6 +465,7 @@ class PixelAreaCalculator:
         # Probe the selected grid domain before accepting work. The per-tile
         # transformation repeats this guard as native footprints are measured.
         self._project_native(self._corners(self.window))
+        self.catalog_index: shapely.STRtree | None = None
         if area.kind == "catalogSelection" and not planning:
             bbox = native_bbox_for_grid(
                 area.resolved,
@@ -460,7 +477,11 @@ class PixelAreaCalculator:
                 source_crs,
                 features,
             ):
-                self.geometry = _catalog_equal_area_union(source_crs, features, limits)
+                polygons = _project_catalog_area_polygons(source_crs, features, limits)
+            if self.rectilinear and len(polygons) > 1:
+                self.catalog_index = shapely.STRtree(polygons)
+            else:
+                self.geometry = shapely.union_all(polygons)
         if self.geometry is not None:
             if not self.geometry.is_valid:
                 raise ProcessingError(
@@ -513,12 +534,7 @@ class PixelAreaCalculator:
                 and not self.geometry.is_empty
                 and self.rectangle is None
             ):
-                oriented = shapely.orient_polygons(self.geometry)
-                self.coverage = FractionalAreaCoverage(
-                    np.asarray(ring.coords)
-                    for polygon in shapely.get_parts(oriented)
-                    for ring in [polygon.exterior, *polygon.interiors]
-                )
+                self.coverage = _fractional_coverage(self.geometry)
 
     def _corners(self, window: Window) -> np.ndarray:
         """Construct the closed native footprint of an integral grid window.
@@ -580,12 +596,23 @@ class PixelAreaCalculator:
             ys = self.axis_y[y : y + height + 1]
             west, east = np.minimum(xs[:-1], xs[1:]), np.maximum(xs[:-1], xs[1:])
             south, north = np.minimum(ys[:-1], ys[1:]), np.maximum(ys[:-1], ys[1:])
-            if self.geometry is None or self.rectangle is not None:
-                if self.rectangle is not None:
-                    west = np.maximum(west, self.rectangle[0])
-                    east = np.minimum(east, self.rectangle[2])
-                    south = np.maximum(south, self.rectangle[1])
-                    north = np.minimum(north, self.rectangle[3])
+            rectangle, coverage = self.rectangle, self.coverage
+            if self.catalog_index is not None:
+                footprint = box(west.min(), south.min(), east.max(), north.max())
+                indices = self.catalog_index.query(footprint, predicate="intersects")
+                if not indices.size:
+                    return np.zeros((height, width), dtype=np.float64)
+                local = shapely.union_all(self.catalog_index.geometries[indices])
+                if local.equals(local.envelope):
+                    rectangle = local.bounds
+                else:
+                    coverage = _fractional_coverage(local)
+            if coverage is None:
+                if rectangle is not None:
+                    west = np.maximum(west, rectangle[0])
+                    east = np.minimum(east, rectangle[2])
+                    south = np.maximum(south, rectangle[1])
+                    north = np.minimum(north, rectangle[3])
                 return (
                     np.maximum(north - south, 0)[:, None]
                     * np.maximum(east - west, 0)[None, :]
@@ -596,7 +623,7 @@ class PixelAreaCalculator:
                 * (east - west)[None, :]
                 / HECTARE_SQUARE_METRES
             )
-            return self.coverage.calculate_cell_coverage(xs, ys) * cell_hectares
+            return coverage.calculate_cell_coverage(xs, ys) * cell_hectares
         areas = np.zeros((height, width), dtype=np.float64)
         for row in range(height):
             for column in range(width):

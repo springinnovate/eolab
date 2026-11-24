@@ -11,6 +11,8 @@ from affine import Affine
 import numpy as np
 from pyproj import Geod, Transformer
 import pytest
+import rasterio
+from rasterio.windows import Window
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import array_bounds, from_origin
 from shapely import contains_xy, segmentize
@@ -19,6 +21,8 @@ from shapely.ops import transform as transform_geometry
 
 from eolab_app.bounded_vector import selection_summary
 from eolab_app.processing.aggregate_models import AggregateArea
+from eolab_app.processing.area_coverage import FractionalAreaCoverage
+from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 import eolab_app.processing.raster_aggregate as kernel
@@ -619,6 +623,59 @@ def test_area_results_do_not_depend_on_source_blocks_or_processing_tiles(
             assert measured == pytest.approx(baseline, rel=1e-11)
             assert counts == baseline_counts
         assert spec.grid.groundArea.estimatedGeometryCells == 0
+
+
+def test_hectare_tiles_only_process_nearby_field_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Count overlapping field and corridor areas once with local work per tile.
+
+    Args:
+        tmp_path: Directory for the native raster and catalog polygons.
+        monkeypatch: Observe how many projected edges enter each coverage calculation.
+    """
+    fields = [box(i * 0.01 + 0.002, 1.002, i * 0.01 + 0.008, 1.008) for i in range(24)]
+    corridor = box(0, 1.004, 0.24, 1.006)
+    region = write_aggregate_area(
+        tmp_path / "fields.gpkg", list(map(mapping, [*fields, corridor]))
+    )
+    path = write_source(
+        tmp_path / "grid.tif",
+        np.ones((4, 96), dtype="uint8"),
+        transform=from_origin(0, 1.01, 0.0025, 0.0025),
+    )
+    edge_counts = []
+    calculate = FractionalAreaCoverage.calculate_cell_coverage
+
+    def measure(
+        coverage: FractionalAreaCoverage, xs: np.ndarray, ys: np.ndarray
+    ) -> np.ndarray:
+        """Count boundary edges and return the production tile's coverage fractions.
+
+        Args:
+            coverage: Prepared area boundary.
+            xs: Equal-area column edges.
+            ys: Equal-area row edges.
+
+        Returns:
+            Fraction covered in each tile cell.
+        """
+        edge_counts.append(len(coverage.edges))
+        return calculate(coverage, xs, ys)
+
+    monkeypatch.setattr(FractionalAreaCoverage, "calculate_cell_coverage", measure)
+    with rasterio.open(path) as dataset:
+        calculator = PixelAreaCalculator(dataset, region, LIMITS)
+        measured = sum(
+            calculator.calculate_hectares(Window(x, 0, 4, 4)).sum()
+            for x in range(0, 96, 4)
+        )
+    expected = sum(
+        reference_area(field) - reference_area(field.intersection(corridor))
+        for field in fields
+    )
+    assert measured == pytest.approx(expected + reference_area(corridor), rel=1e-8)
+    assert edge_counts and max(edge_counts) < 32
 
 
 @pytest.mark.parametrize("crs", ["EPSG:3857", "EPSG:6933"])
