@@ -23,7 +23,22 @@ from eolab_app.processing.models import ProcessingError
 from raster_source_support import SOURCE
 
 
-@pytest.fixture(params=("float64", "float32"))
+@pytest.fixture(
+    params=(
+        ("float64", 0),
+        ("float32", 0),
+        ("float32", 178),
+        ("float32", -182),
+        ("float64", 356),
+    ),
+    ids=(
+        "float64",
+        "float32",
+        "east-of-dateline",
+        "west-of-dateline",
+        "positive-longitudes",
+    ),
+)
 def drainage_corridor(
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> tuple[Path, ResolvedCatalogSelection]:
@@ -31,13 +46,16 @@ def drainage_corridor(
 
     Args:
         tmp_path: Disposable directory for admitted native inputs.
-        request: Supplies the storage type used for the elevation band.
+        request: Supplies the elevation storage type and native western longitude.
 
     Returns:
         A DEM draining east along each valid row and a selection in the middle row.
     """
+    dtype, west = request.param
+    chosen_longitude = (west + 3.5 + 180) % 360 - 180
+    other_longitude = (west + 2.5 + 180) % 360 - 180
     dem = tmp_path / "elevation.tif"
-    elevations = numpy.full((5, 7), -9999, dtype=request.param)
+    elevations = numpy.full((5, 7), -9999, dtype=dtype)
     elevations[::2] = numpy.arange(12, -1, -2)
     elevations[1, :3] = [numpy.nan, numpy.inf, 100]
     mask = numpy.full(elevations.shape, 255, dtype="uint8")
@@ -53,7 +71,7 @@ def drainage_corridor(
             count=1,
             dtype=elevations.dtype,
             crs="EPSG:4326",
-            transform=from_origin(0, 5, 1, 1),
+            transform=from_origin(west, 5, 1, 1),
             nodata=-9999,
         ) as dataset,
     ):
@@ -71,13 +89,17 @@ def drainage_corridor(
     ) as layer:
         layer.write(
             {
-                "geometry": mapping(box(3.2, 2.2, 3.8, 3.8)),
+                "geometry": mapping(
+                    box(chosen_longitude - 0.3, 2.2, chosen_longitude + 0.3, 3.8)
+                ),
                 "properties": {"site": "chosen"},
             }
         )
         layer.write(
             {
-                "geometry": mapping(box(2.2, 4.2, 2.8, 4.8)),
+                "geometry": mapping(
+                    box(other_longitude - 0.3, 4.2, other_longitude + 0.3, 4.8)
+                ),
                 "properties": {"site": "other"},
             }
         )
@@ -139,13 +161,16 @@ def test_flow_mask_counts_connected_cells_outside_selected_polygon(
         (dem, selection), plan, directory, RasterAggregateLimits()
     )
 
-    with rasterio.open(directory / "result.tif") as result:
+    with (
+        rasterio.open(dem) as original,
+        rasterio.open(directory / "result.tif") as result,
+    ):
         expected = numpy.full((5, 7), 255, dtype="uint8")
         expected[::2] = 0
         expected[2] = expected_corridor
         numpy.testing.assert_array_equal(result.read(1), expected)
         assert result.nodata == 255
-        assert result.transform == from_origin(0, 5, 1, 1)
+        assert result.transform == original.transform
         assert result.crs.to_epsg() == 4326
         assert result.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
     assert artifact.valid_pixels == 21

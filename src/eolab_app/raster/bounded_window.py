@@ -4,6 +4,7 @@ import math
 from collections.abc import Callable, Sequence
 from typing import cast
 
+from pyproj import CRS as ProjCRS
 from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
@@ -94,31 +95,54 @@ def _periodic_polygon_copies(
     geometries: tuple[dict[str, object], ...],
     maximum_output_coordinates: int | None,
 ) -> tuple[dict[str, object], ...]:
-    """Place polygon copies inside one cyclic view without repeating its cells.
+    """Place equivalent polygon longitudes over the raster's existing coverage.
+
+    Native geographic rasters keep their original grid, including regional
+    grids crossing the date line and grids using positive longitudes. Temporal
+    rasters retain their admitted cyclic or noncyclic longitude policy.
 
     Args:
-        dataset: Open source whose request-local column view is already chosen.
+        dataset: Open source whose native grid or temporal column view is fixed.
         geometries: Projected Polygon or MultiPolygon mappings.
         maximum_output_coordinates: Coordinate capacity including translated
             copies, or None for caller-supervised unlimited geometry.
 
     Returns:
         Polygons translated by complete longitude periods where they meet the
-        view. Rasterizing their union includes seam-crossing cell portions once.
+        grid. A polygon with no overlapping longitude copy is retained outside
+        the grid so callers can report an ordinary no-overlap result.
+        Rasterizing the union includes overlapping cell portions once.
 
     Raises:
         ValueError: If periodic copies exceed the caller's coordinate capacity.
     """
     period = get_longitude_wrap_width(dataset)
+    if (
+        period is None
+        and not isinstance(dataset, TemporalRasterDataset)
+        and dataset.crs.is_geographic
+    ):
+        longitude_axis = next(
+            axis
+            for axis in ProjCRS(dataset.crs).axis_info
+            if axis.direction in {"east", "west"}
+        )
+        period = math.tau / longitude_axis.unit_conversion_factor
     if period is None:
         return geometries
+    grid_left, grid_right = sorted((dataset.bounds.left, dataset.bounds.right))
     copies: list[dict[str, object]] = []
     output_coordinates = 0
     for geometry in geometries:
         longitudes = [point[0] for ring in _polygon_rings(geometry) for point in ring]
         left, right = min(longitudes), max(longitudes)
-        first = math.ceil((dataset.bounds.left - right) / period)
-        last = math.floor((dataset.bounds.right - left) / period)
+        first = math.ceil((grid_left - right) / period)
+        last = math.floor((grid_right - left) / period)
+        shifts = [
+            shift
+            for shift in range(first, last + 1)
+            if right + shift * period > grid_left and left + shift * period < grid_right
+        ] or [0]
         if geometry["type"] == "Polygon":
             polygons = (
                 cast(Sequence[Sequence[tuple[float, float]]], geometry["coordinates"]),
@@ -128,13 +152,8 @@ def _periodic_polygon_copies(
                 Sequence[Sequence[Sequence[tuple[float, float]]]],
                 geometry["coordinates"],
             )
-        for shift in range(first, last + 1):
+        for shift in shifts:
             offset = shift * period
-            if (
-                right + offset <= dataset.bounds.left
-                or left + offset >= dataset.bounds.right
-            ):
-                continue
             output_coordinates += len(longitudes)
             if (
                 maximum_output_coordinates is not None
