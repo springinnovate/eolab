@@ -67,13 +67,47 @@ test("a failed optional outline neither mutates nor invalidates the analysis des
     assert.equal(overlay.layer, null);
 });
 
+test("showing an area draws the filtered polygon and zooms to its original bounds on request", async t => {
+    const ring = [[10, 30], [14, 30], [10, 32], [10, 30]];
+    const geometry = {type: "FeatureCollection", features: [
+        {type: "Feature", properties: {}, geometry: {type: "Polygon", coordinates: [ring]}},
+    ]};
+    const fitted = [], drawn = [], removed = [];
+    const map = {fitBounds: bounds => fitted.push(bounds), removeLayer: layer => removed.push(layer)};
+    const layer = {addTo: () => layer};
+    const overlay = new VectorSelectionOverlay(map, {geoJSON: (shape, options) => {
+        drawn.push(shape); assert.equal(options.interactive, false); return layer;
+    }});
+    t.mock.method(globalThis, "fetch", async (_url, options) => {
+        assert.deepEqual(JSON.parse(options.body), selection);
+        return Response.json({geometry, bbox: [9, 29, 15, 33]});
+    });
+    await overlay.load({selection});
+    assert.deepEqual(fitted, []);
+    await overlay.load({selection}, {fitBounds: true});
+    assert.deepEqual(fitted, [[[29, 9], [33, 15]]]);
+    assert.deepEqual(drawn, [geometry, geometry]);
+    overlay.clear();
+    assert.deepEqual(removed, [layer, layer]);
+    t.mock.method(globalThis, "fetch", async () => Response.json({geometry: {type: "FeatureCollection", features: []}, bbox: [0, 0, 0, 0]}));
+    assert.equal(await overlay.load({selection}, {fitBounds: true}), undefined);
+    assert.deepEqual(drawn, [geometry, geometry]);
+    assert.equal(fitted.length, 1);
+});
+
 test("a late outline response cannot redraw a superseded selection", async (t) => {
     let finish;
     t.mock.method(globalThis, "fetch", () => new Promise(resolve => { finish = resolve; }));
-    const overlay = new VectorSelectionOverlay({}, { geoJSON() { assert.fail("Stale response was drawn"); } });
-    const pending = overlay.load({ selection });
+    const calls = [];
+    const layer = {addTo: () => layer};
+    const map = {fitBounds: () => calls.push("zoom")};
+    const overlay = new VectorSelectionOverlay(map, {geoJSON() { calls.push("draw"); return layer; }});
+    const pending = overlay.load({ selection }, {fitBounds: true});
     overlay.clear();
-    finish({ ok: true, json: async () => ({ geometry: { type: "FeatureCollection", features: [] } }) });
+    finish({ ok: true, json: async () => ({ geometry: { type: "FeatureCollection", features: [
+        {type: "Feature", properties: {}, geometry: {type: "Polygon", coordinates: [[[1, 2], [3, 2], [1, 4], [1, 2]]]}},
+    ]}, bbox: [1, 2, 3, 4] }) });
     await pending;
+    assert.deepEqual(calls, []);
     assert.equal(overlay.layer, null);
 });

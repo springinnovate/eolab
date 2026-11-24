@@ -1674,6 +1674,16 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         allowedModelIds: visitorAvailability.allowedModelIds, recoveryScope: namedMapSlug ?? "",
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
+        /** Zoom to the chosen polygons and keep their outline visible while the user works on the map.
+         * @param {Object} selection Exact Catalog asset, layer and feature filter.
+         * @param {AbortSignal} signal Cancel a pending outline or remove it after display.
+         * @return {Promise<boolean>} Whether the selected polygons could be displayed.
+         */
+        showAreaOutline: async (selection, signal) => {
+            const outline = new VectorSelectionOverlay(leafletMap, L);
+            signal.addEventListener("abort", () => outline.clear(), {once: true});
+            return Boolean(await outline.load({selection}, {fitBounds: true}));
+        },
         loadTemporalTimes,
         /** Show a requested result and reveal controls when a new generated vector attaches.
          * @param {Object} job Authorized run snapshot.

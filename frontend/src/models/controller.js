@@ -29,6 +29,7 @@ export class ModelsController {
      * @param {Object} dependencies.view Models view.
      * @param {(options?:{includeDrawnPolygons?:boolean})=>Object & {drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} dependencies.getContext Catalog and map choices, with optional detached drawn polygons.
      * @param {(identity:{collectionId:string,itemId:string},signal?:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read an exact Catalog Item for input metadata and display titles.
+     * @param {import("./model-setup.js").ModelSetupDependencies["showAreaOutline"]} dependencies.showAreaOutline Show a model's chosen polygon through map composition.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
@@ -51,13 +52,13 @@ export class ModelsController {
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      * @param {(model:Object)=>import("./model-setup.js").ModelSetupIntegration|null} [dependencies.getSetupIntegration] Resolve the installed setup adapter.
      */
-    constructor({api, jobs, view, getContext, getCatalogItem, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getCatalogItem, showAreaOutline, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {}, onViewLabel = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         allowedModelIds = null, recoveryScope = "",
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", ""), getSetupIntegration = getModelSetupIntegration}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
-        Object.assign(this, {getCatalogItem, loadTemporalTimes});
+        Object.assign(this, {getCatalogItem, showAreaOutline, loadTemporalTimes});
         this.getSetupIntegration = getSetupIntegration;
         this.allowedModelIds = allowedModelIds === null ? null : new Set(allowedModelIds);
         this.recoveryScope = recoveryScope;
@@ -319,7 +320,7 @@ export class ModelsController {
     bindModelSetup(draft) {
         const current = () => !this.destroyed && this.state.draft === draft;
         this.setupSession = draft.integration?.createSession(draft, {
-            api: this.api, getCatalogItem: this.getCatalogItem,
+            api: this.api, getCatalogItem: this.getCatalogItem, showAreaOutline: this.showAreaOutline,
             render: () => { if (current()) this.render(); },
             closeInputEditor: () => { if (current()) this.closeVectorFilter(); },
         }) ?? null;

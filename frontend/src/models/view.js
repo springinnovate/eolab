@@ -244,8 +244,10 @@ export class ModelsView {
         const label = this.element("input"); label.type = "text"; label.required = true;
         label.addEventListener("input", () => this.handlers.onEdit({label: label.value}));
         fields.append(this.field("models-run-label", "Run name", label));
-        const nameHelp = this.element("p", "Date and time are added automatically.", "models-help");
-        nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
+        if (draft.integration?.showRunNameHelp !== false) {
+            const nameHelp = this.element("p", "Date and time are added automatically.", "models-help");
+            nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
+        }
         const temporal = draft.temporal ? new TemporalModelInputsView({element: this.element.bind(this), field: this.field.bind(this),
             button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers,
             Object.values(draft.model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type)).label) : null;
@@ -347,7 +349,7 @@ export class ModelsView {
             controls.reason.textContent = [value.raster.kind === "uploadedRaster" ? "Uploaded by you · Raster mask" : "",
                 value.copiedFromRun ? "Copied from the original run; choose another raster to change it." : ""].filter(Boolean).join(". ");
         } else {
-            controls.reason.textContent = optional ? "Leave None selected to run without this optional input." : acceptsResults
+            controls.reason.textContent = optional ? "" : acceptsResults
                 ? "Choose a raster from Map contents or a completed run. Results do not need to be shown on the map."
                 : sources.length ? "Choose a raster from Map contents." : "Add a raster to Map contents to use this tool.";
         }
@@ -459,11 +461,12 @@ export class ModelsView {
         controls.vectorStatus.textContent = value.selecting ? "You can edit the filter while this check runs." : value.selectionError || "";
         controls.mapFilterStatus.textContent = value.mapFilterMessage ?? "";
         const wholeRaster = value.areaMode === "whole" && value.area?.kind === "wholeRaster";
-        controls.areaDescription.hidden = value.areaMode === "vector" && Boolean(vectorSource) || usesRasterOrVector && value.areaMode === "raster" ||
-            wholeRaster && !value.selectionError;
-        controls.areaDescription.textContent = value.selectionError || (value.areaMode === "vector" && !vectorSource
-            ? references ? "Choose reference sites above." : input.type === "mask_source" ? "Choose a starting area above." : "Choose an analysis area above." : "") ||
-            `${describeModelArea(value.area)}${value.areaMode === "captured" ? ` · ${value.areaDescription}` : ""}`;
+        const needsVector = value.areaMode === "vector" && !vectorSource;
+        controls.areaDescription.textContent = value.selectionError || (needsVector
+            ? references ? "" : input.type === "mask_source" ? "Choose a starting area above." : "Choose an analysis area above."
+            : `${describeModelArea(value.area)}${value.areaMode === "captured" ? ` · ${value.areaDescription}` : ""}`);
+        controls.areaDescription.hidden = !controls.areaDescription.textContent || value.areaMode === "vector" && Boolean(vectorSource) ||
+            usesRasterOrVector && value.areaMode === "raster" || wholeRaster && !value.selectionError;
         const areaReady = usesRasterOrVector && value.areaMode === "raster" ? rasterReady : Boolean(value.area);
         return areaReady && !value.selecting && !value.filterEditing;
     }
