@@ -1,6 +1,6 @@
 /** Present temporal period and statistic choices inside the existing Models form. */
 import { modelSourceKey } from "./inputs.js";
-import { getTemporalStatistics, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
+import { getTemporalStatistics, temporalSelectionError, captureTemporalReduction, hasWholeHourBoundaries } from "./temporal-inputs.js";
 import { TemporalPeriodView } from "../temporal-period-view.js";
 import { observationLabel, observationMonthLabel } from "../observation-period.js";
 
@@ -111,6 +111,11 @@ export class TemporalModelInputsView {
         this.options(this.month, (choices?.months ?? []).map(value => ({value, label: observationMonthLabel(value, period)})), choices?.month ?? "");
         this.month.disabled = temporal.loading || !choices?.months.length;
         this.useMonth.disabled = temporal.loading || !choices?.times.length;
+        if (precipitation && !this.useMonth.disabled && choices.interval_starts &&
+            !hasWholeHourBoundaries(choices.interval_starts[choices.times[0]], choices.times.at(-1))) {
+            this.useMonth.disabled = true;
+            this.availabilityHelp.textContent = "These observations start or end between whole UTC hours. Choose whole-hour analysis dates for Total precipitation.";
+        }
         this.refresh.disabled = temporal.loading || !temporal.datasetKey;
         this.availability.hidden = !temporal.datasetKey;
         const label = time => observationLabel(time, period, choices.interval_starts) ?? formatUtcTime(time);

@@ -416,6 +416,17 @@ test("refresh and map changes preserve the analysis interval; Use this month rep
     weather = captureModelSubmission(draft, "e".repeat(32)).inputs.weather;
     assert.equal(weather.startTime, dates.interval_starts[end]);
     assert.equal(weather.endTime, end);
+    Object.assign(item.properties["cube:variables"].temperature, {unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"});
+    await h.controller.loadTemporalDates(undefined, true);
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, false);
+    assert.equal(controls.useMonth.disabled, true);
+    assert.match(controls.availabilityHelp.textContent, /whole UTC hours/);
+    dates.interval_starts[end] = "2024-10-12T06:00:00.000Z";
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(controls.useMonth.disabled, false);
+    controls.useMonth.dispatchEvent(new Event("click"));
+    assert.equal(view.setup.run.disabled, false);
     delete item.properties["cube:variables"].temperature;
     await h.controller.loadTemporalDates(undefined, true);
     assert.equal(draft.temporal.variable, "temperature");
