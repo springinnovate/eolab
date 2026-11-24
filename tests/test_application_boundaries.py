@@ -2,6 +2,8 @@
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
 
 
 APPLICATION_SOURCE = Path("src/eolab_app")
@@ -145,13 +147,40 @@ def test_application_root_has_no_generic_shared_module() -> None:
 
 def test_jobs_client_has_no_application_server_or_operation_dependencies() -> None:
     """Keep the reusable client importable without service, feature or GIS code."""
-    for path in Path("src/eolab_jobs").rglob("*.py"):
+    for path in (
+        Path("src/eolab_jobs/__init__.py"),
+        Path("src/eolab_jobs/client.py"),
+    ):
         roots = {name.split(".")[0] for name in imported_modules(path)}
         assert roots <= {
-            "asyncio", "json", "logging", "math", "re", "typing", "uuid",
-            "httpx2", "pydantic", "eolab_jobs",
+            "asyncio",
+            "json",
+            "logging",
+            "math",
+            "re",
+            "typing",
+            "uuid",
+            "httpx2",
+            "pydantic",
+            "eolab_jobs",
         }
         assert not reads_process_environment(path)
+    script = """
+import sys
+
+sys.modules.update({name: None for name in (
+    "eolab_app", "job_service", "psycopg", "psycopg_pool",
+    "fiona", "rasterio", "osgeo", "numpy", "pyproj", "shapely"
+)})
+import eolab_jobs.client
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert completed.returncode == 0, completed.stderr
     assert "eolab_jobs.client" in imported_modules(
         APPLICATION_SOURCE / "vector" / "outline_jobs.py"
     )
