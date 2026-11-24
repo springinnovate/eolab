@@ -309,12 +309,51 @@ test("Lasso reads exact attributes from a hidden source with click picking disab
   h.controller.syncVisibleLayers();
   assert.equal(h.currentObservationChanges.at(-1).layerLabel, "Hidden parcels");
   assert.equal(h.displays.at(-1).label, "Hidden parcels");
+  assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
+    "3 features selected in Hidden parcels. Map highlights are unavailable; attributes and plots are ready.");
+  assert.equal(h.sampleChanges.at(-1).message, h.documentContext.querySelector("#vector-feature-status").textContent);
   assert.equal(h.controller.results.length, 3);
   h.selectionTargets.splice(0);
   h.controller.syncVisibleLayers();
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
   assert.equal(h.controller.results.length, 0);
   assert.equal(h.displays.at(-1), null);
+});
+
+test("renaming Lasso layers refreshes active and restored status without another read", async t => {
+  for (const count of [0, 1]) await t.test(`${count} selected`, async t => {
+    let reads = 0;
+    const h = createFixture(async (url, options) => {
+      reads++;
+      const {selection} = JSON.parse(options.body);
+      const ids = selection.itemId === "other" ? ["2"] : count ? ["1"] : [];
+      return Response.json(url.endsWith("/lasso") ? {matched: ids.length, featureIds: ids, geometry: null}
+        : {selection, features: ids.map(id => ({id, properties: {rank: Number(id)}}))});
+    });
+    t.after(() => h.controller.destroy());
+    const original = h.selectionTargets[0];
+    h.selectionTargets.push({key: "catalog|other", label: "Other layer", selection: {...original.selection, itemId: "other"}});
+    for (const target of h.selectionTargets) {
+      await h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+    }
+    const completedReads = reads;
+    original.label = h.targets[0].label = "Renamed parcels";
+    h.controller.syncVisibleLayers();
+    h.controller.navigateSelection("previous");
+    for (const label of ["Renamed parcels", "Latest parcels"]) {
+      original.label = h.targets[0].label = label;
+      h.controller.syncVisibleLayers();
+      const message = `${count} feature${count === 1 ? "" : "s"} selected in ${label}.` +
+        (count ? " Map highlights are unavailable; attributes and plots are ready." : "");
+      assert.equal(h.displays.at(-1).label, label);
+      assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent, message);
+      assert.equal(h.sampleChanges.at(-1).message, message);
+      h.controller.navigateSelection("next");
+      h.controller.navigateSelection("previous");
+      assert.equal(h.sampleChanges.at(-1).message, message);
+    }
+    assert.equal(reads, completedReads);
+  });
 });
 
 test("cancelled Lasso restores the completed selection and Clear rejects late attributes", async t => {

@@ -49,6 +49,16 @@ const MAX_SELECTION_HISTORY_ENTRIES = 20;
  */
 
 /**
+ * Describe completed Lasso results using the layer's current display name.
+ * @param {FeatureSelectionDisplay} display Selected count, layer name and optional highlight geometry.
+ * @return {string} Selection status for Features and retained history.
+ */
+function formatLassoSelectionStatus({count, label, geometry}) {
+    return `${count} feature${count === 1 ? "" : "s"} selected in ${label}.` +
+        (count && geometry === null ? " Map highlights are unavailable; attributes and plots are ready." : "");
+}
+
+/**
  * Format elapsed inspection time without implying unavailable precision.
  *
  * @param {number} elapsedMilliseconds Monotonic elapsed milliseconds.
@@ -501,10 +511,15 @@ export class VectorFeatureInspectorController {
      */
     syncVisibleLayers() {
         const targets = [...this.getSelectionTargets().map(target => ({sourceId: target.key, label: target.label})), ...this.visibleTargets()];
-        if (this.#refreshResultNames(targets) && this.results.length) {
-            this.showResult(this.resultIndex);
+        if (this.#refreshResultNames(targets)) {
+            if (this.results.length) this.showResult(this.resultIndex);
             this.onSelectionDisplayChange(this.#selectionDisplay);
-            if (this.lastSample) this.#publishSample(this.lastSample.state, this.results, this.lastSample.message, this.lastSample.failedLayers);
+            if (this.lastSample) {
+                const message = this.#selectionDisplay === null ? this.lastSample.message :
+                    formatLassoSelectionStatus(this.#selectionDisplay);
+                this.status.textContent = message;
+                this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers);
+            }
         }
         let retainedIndex = -1;
         this.#selectionHistory = this.#selectionHistory.filter((selection, index) => {
@@ -694,8 +709,7 @@ export class VectorFeatureInspectorController {
             this.#selectionDisplay = {polygon, geometry: selected.geometry, count: selected.matched, label: currentTarget.label};
             this.#updateTimeSeriesAction(rows.length);
             if (rows.length) this.showResult(0);
-            this.status.textContent = `${rows.length} feature${rows.length === 1 ? "" : "s"} selected in ${currentTarget.label}.` +
-                (rows.length && selected.geometry === null ? " Map highlights are unavailable; attributes and plots are ready." : "");
+            this.status.textContent = formatLassoSelectionStatus(this.#selectionDisplay);
             this.#finishSelection(rows.length ? "ready" : "empty", this.status.textContent);
         } catch (error) {
             if (generation === this.requestGeneration && error.name !== "AbortError") {
@@ -994,19 +1008,20 @@ export class VectorFeatureInspectorController {
         this.#inspectionPosition = selection.position;
         this.#selectionContext = selection.context;
         this.#selectionDisplay = selection.display;
+        this.results = selection.results;
+        this.#refreshResultNames([...this.getSelectionTargets().map(target => ({sourceId: target.key, label: target.label})), ...this.visibleTargets()]);
         if (selection.state === "ready") {
-            this.results = selection.results;
-            this.#refreshResultNames([...this.getSelectionTargets().map(target => ({sourceId: target.key, label: target.label})), ...this.visibleTargets()]);
             this.showResult(selection.resultIndex);
             this.#updateTimeSeriesAction(this.results.length);
         } else {
             this.clearResults();
             this.results = selection.results;
         }
-        this.status.textContent = selection.message;
+        const message = selection.display === null ? selection.message : formatLassoSelectionStatus(selection.display);
+        this.status.textContent = message;
         this.onInspectionChange(selection.state === "ready");
         this.onSelectionDisplayChange(this.#selectionDisplay);
-        this.#publishSample(selection.state, selection.results, selection.message, selection.failedLayers);
+        this.#publishSample(selection.state, selection.results, message, selection.failedLayers);
     }
 
     /**
