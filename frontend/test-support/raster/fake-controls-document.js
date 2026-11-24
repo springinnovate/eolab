@@ -266,6 +266,16 @@ export class FakeRasterControlDocument extends EventTarget {
     }
 
     /**
+     * Find registered controls marked with a layout attribute.
+     * @param {string} selector Attribute presence selector, such as `[data-map-panel]`.
+     * @return {FakeRasterControlElement[]} Controls carrying the named attribute.
+     */
+    querySelectorAll(selector) {
+        const attribute = selector.slice(1, -1);
+        return [...this.elements.values()].filter(element => element.getAttribute(attribute) !== null);
+    }
+
+    /**
      * Create one fake HTML element.
      *
      * @param {string} tagName HTML tag used by native-control event binding.
