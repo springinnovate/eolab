@@ -366,6 +366,9 @@ runpy.run_path(sys.argv[1])['build_stack'](Path(sys.argv[2]), False)
     assert result.returncode == 0, result.stderr
     assert list(tmp_path.rglob("dataset.yaml")) == [tmp_path / "dataset.yaml"]
     assert index.read_bytes() == original
+    manifest.write_text("incomplete: true")
+    assert "Archive output already exists" in run_cli("build", manifest).stderr
+    assert "Field required" in run_cli("build", manifest, "--check").stderr
 
 
 @pytest.mark.parametrize(

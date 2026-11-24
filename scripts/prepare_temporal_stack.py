@@ -468,6 +468,11 @@ def build_stack(manifest: Path, check: bool) -> None:
         sqlite3.Error: The complete observation index could not be written.
     """
     root = manifest.resolve(strict=True).parent
+    descriptor = root / "dataset.yaml"
+    if not check and descriptor.exists():
+        raise FileExistsError(
+            "Archive output already exists. Build in a new dedicated directory."
+        )
     content = yaml.load(manifest.read_text(encoding="utf-8"), Loader=ManifestLoader)
     try:
         stack = Stack.model_validate(content)
@@ -491,11 +496,6 @@ def build_stack(manifest: Path, check: bool) -> None:
         print(f"Validated {len(rows)} observations.")
         return
     catalog = root / "catalog.sqlite"
-    descriptor = root / "dataset.yaml"
-    if descriptor.exists():
-        raise FileExistsError(
-            "Archive output already exists. Build in a new dedicated directory."
-        )
     with TemporaryDirectory(dir=root) as temp:
         index = Path(temp) / catalog.name
         with closing(sqlite3.connect(index)) as db, db:
