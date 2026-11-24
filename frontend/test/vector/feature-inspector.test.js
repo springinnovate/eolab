@@ -13,6 +13,18 @@ import { normalizeVectorStyle } from "../../src/vector/style.js";
 const POLYGON_STYLE = normalizeVectorStyle({ geometryKind: "polygon", fillColor: "#228b22", fillOpacity: 0.6,
   strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 1 });
 
+/** Deliver Escape to the fake document with the control where the key was pressed.
+ * @param {FakeRasterControlDocument} documentContext Document with the delegated keyboard listener.
+ * @param {EventTarget} origin Original keyboard event target.
+ * @return {Event} Dispatched event for checking whether dismissal handled it.
+ */
+function pressEscape(documentContext, origin) {
+  const event = new Event("keydown", { bubbles: true, cancelable: true });
+  Object.defineProperties(event, { key: { value: "Escape" }, target: { value: origin } });
+  documentContext.dispatchEvent(event);
+  return event;
+}
+
 test("renaming a layer updates inspected feature labels without another query", async () => {
   let reads = 0;
   const h = createFixture(async () => {
@@ -448,9 +460,7 @@ test("the inspector heading follows returned IDs and clears with the results", a
   const panel = h.documentContext.querySelector("#vector-feature-inspector");
   panel.append(next);
   next.focus();
-  const escape = new Event("keydown", { cancelable: true });
-  Object.defineProperty(escape, "key", { value: "Escape" });
-  h.documentContext.dispatchEvent(escape);
+  pressEscape(h.documentContext, next);
   assert.equal(panel.hidden, true);
   assert.equal(h.currentObservationChanges.at(-1), observationBeforeEscape, "Escape keeps the same plotted feature");
   h.controller.close();
@@ -1079,7 +1089,7 @@ test("a newer click owns presentation and closing does not disable later inspect
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
 });
 
-test("Escape on the result-header close button cancels inspection and clears the feature", async () => {
+test("Escape dismisses a pending inspection and keeps map-originated focus on the map", async () => {
   let signal;
   const h = createFixture((_url, options) => {
     signal = options.signal;
@@ -1091,9 +1101,7 @@ test("Escape on the result-header close button cancels inspection and clears the
   const close = h.documentContext.querySelector("#close-vector-inspector");
   assert.equal(h.documentContext.querySelector("#vector-feature-inspector").contains(close), false);
   close.focus();
-  const event = new Event("keydown", { cancelable: true });
-  Object.defineProperty(event, "key", { value: "Escape" });
-  h.documentContext.dispatchEvent(event);
+  const event = pressEscape(h.documentContext, close);
   await pending;
   assert.equal(event.defaultPrevented, true);
   assert.equal(signal.aborted, true);
@@ -1101,6 +1109,18 @@ test("Escape on the result-header close button cancels inspection and clears the
   assert.equal(h.documentContext.querySelector("#vector-feature-result").hidden, true);
   assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
   assert.equal(h.documentContext.activeElement, h.mapContainer);
+  const nextInspection = h.controller.inspect(inspectionEvent(3, 4));
+  const survivingTab = h.documentContext.createElement("button");
+  close.addEventListener("click", () => survivingTab.focus());
+  h.mapContainer.focus();
+  const plotControl = h.documentContext.createElement("button");
+  assert.equal(pressEscape(h.documentContext, plotControl).defaultPrevented, false,
+    "an Escape from another tool still belongs to it after it returns focus to the map");
+  assert.equal(signal.aborted, false);
+  pressEscape(h.documentContext, h.mapContainer);
+  assert.equal(await nextInspection, false);
+  assert.equal(h.documentContext.activeElement, h.mapContainer, "the dock must not take focus from the map");
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
   h.controller.destroy();
 });
 

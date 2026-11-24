@@ -402,17 +402,18 @@ export class VectorFeatureInspectorController {
         };
         this.onPrevious = () => this.navigateResult("previous");
         this.onNext = () => this.navigateResult("next");
+        /** Dismiss Features where Escape was pressed, keeping keyboard panning on the map.
+         * @param {KeyboardEvent} event Original key event, including its originating control.
+         * @return {void}
+         */
         this.onKeydown = (event) => {
-            if (event.key !== "Escape" || this.panel.hidden || !(
-                this.panel.contains(this.document.activeElement) ||
-                this.document.activeElement === this.closeButton ||
-                this.document.activeElement === this.mapContainer
-            )) {
-                return;
-            }
+            if (event.key !== "Escape" || event.defaultPrevented || this.panel.hidden) return;
+            const fromMap = event.target === this.mapContainer;
+            if (!fromMap && event.target !== this.closeButton && !this.panel.contains(event.target)) return;
             event.preventDefault();
             event.stopPropagation();
-            this.closeButton.click();
+            if (fromMap) this.onClose();
+            else this.closeButton.click();
         };
         this.closeButton.addEventListener("click", this.onClose);
         this.featureProfileButton.addEventListener(
