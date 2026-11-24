@@ -10,6 +10,8 @@ import rasterio
 from affine import Affine
 from rasterio.crs import CRS
 from rasterio.features import geometry_mask
+from rasterio.transform import from_origin
+from rasterio.windows import Window
 from rasterio.windows import transform as window_transform
 from shapely.affinity import translate
 from shapely.geometry import MultiPolygon, Polygon, box, mapping
@@ -30,6 +32,41 @@ from eolab_app.sampling_area import (
     PolygonInputSamplingArea,
     SelectedBoundsSamplingArea,
 )
+
+
+@pytest.mark.parametrize(("width", "west"), [(360, -180), (361, -180.5), (360, 0)])
+def test_full_longitude_bounds_include_every_native_column(
+    tmp_path: Path, width: int, west: float
+) -> None:
+    """Include both seam samples on point-registered global grids exactly once.
+
+    Args:
+        tmp_path: Directory for a real global GeoTIFF.
+        width: Number of distinct native columns.
+        west: Longitude at the raster's left edge.
+    """
+    path = tmp_path / "full-longitude.tif"
+    values = np.arange(3 * width, dtype="int16").reshape(3, width)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=3,
+        width=width,
+        count=1,
+        dtype="int16",
+        crs="EPSG:4326",
+        transform=from_origin(west, 1.5, 1, 1),
+    ) as dataset:
+        dataset.write(values, 1)
+    bounds = (-180, -1, 180, 1)
+    with rasterio.open(path) as dataset:
+        selected = select_area(dataset, "bounds", bounds, (), None)
+        assert selected.source_window == Window(0, 0, width, 3)
+    stats = read_raster_statistics(path, SelectedBoundsSamplingArea(bounds))
+    assert stats.valid_sample_count == values.size
+    assert stats.sample_minimum == 0
+    assert stats.sample_maximum == values.size - 1
 
 
 @pytest.fixture

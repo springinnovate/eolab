@@ -136,13 +136,9 @@ def _periodic_polygon_copies(
     for geometry in geometries:
         longitudes = [point[0] for ring in _polygon_rings(geometry) for point in ring]
         left, right = min(longitudes), max(longitudes)
-        first = math.ceil((grid_left - right) / period)
-        last = math.floor((grid_right - left) / period)
-        shifts = [
-            shift
-            for shift in range(first, last + 1)
-            if right + shift * period > grid_left and left + shift * period < grid_right
-        ] or [0]
+        first = math.floor((grid_left - right) / period) + 1
+        last = math.ceil((grid_right - left) / period) - 1
+        shifts = range(first, last + 1) if first <= last else range(1)
         if geometry["type"] == "Polygon":
             polygons = (
                 cast(Sequence[Sequence[tuple[float, float]]], geometry["coordinates"]),
@@ -217,6 +213,8 @@ def selected_raster_area_for_wgs84_bounds(
     dataset: RasterDataset,
     selected_bounds: CanonicalWgs84Bounds,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+    *,
+    maximum_output_coordinates: int | None = None,
 ) -> SelectedRasterArea:
     """Project a WGS 84 rectangle and bound it in source-pixel space.
 
@@ -229,6 +227,8 @@ def selected_raster_area_for_wgs84_bounds(
         selected_bounds: Canonical west, south, east, north WGS 84 bounds.
         coordinate_transform: CRS transformation collaborator, injectable for
             deterministic boundary tests.
+        maximum_output_coordinates: Caller budget for longitude copies of the
+            rectangle, or None for unlimited Processing reads.
 
     Returns:
         Projected selection polygon and integer source-pixel envelope.
@@ -254,7 +254,7 @@ def selected_raster_area_for_wgs84_bounds(
     geometries = _periodic_polygon_copies(
         dataset,
         ({"type": "Polygon", "coordinates": [projected_ring]},),
-        2 * len(projected_ring),
+        maximum_output_coordinates,
     )
     return SelectedRasterArea(
         source_window=_source_window_for_projected_geometries(dataset, geometries),
