@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, suggestMapLinkName } from "../../src/saved-map-view/api-client.js";
+import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, privateMapEditFromLocation, suggestMapLinkName } from "../../src/saved-map-view/api-client.js";
 import { createSavedMapView } from "../../src/saved-map-view/model.js";
 
 const view = createSavedMapView({
@@ -9,6 +9,7 @@ const view = createSavedMapView({
   basemap: "none", layers: [],
 });
 const record = { slug: "amazon", title: "Amazon", subtitle: "Priorities", view };
+const editToken = "a".repeat(64);
 
 test("admin editing uses a separate authenticated API, fixed slug and revision", async () => {
   const calls = [];
@@ -31,6 +32,32 @@ test("admin editing uses a separate authenticated API, fixed slug and revision",
   await assert.rejects(client.update("amazon", record), /Reload/);
 });
 
+test("private editing sends the fragment as a bearer token only to its editor API", async () => {
+  const location = new URL(`https://viewer.example/maps/amazon/edit#${editToken}`);
+  assert.deepEqual(privateMapEditFromLocation(location), { slug: "amazon", token: editToken });
+  assert.equal(privateMapEditFromLocation(new URL(`/maps/amazon#${editToken}`, location)), null);
+  const incomplete = privateMapEditFromLocation(new URL(`/maps/amazon/edit?token=${editToken}`, location));
+  assert.deepEqual(incomplete, { slug: "amazon", token: "" });
+  const incompleteClient = new SavedMapApiClient(() => assert.fail("must not fetch"), incomplete.token);
+  await assert.rejects(incompleteClient.getForEditing("amazon"), /private edit link is incomplete/);
+  const calls = [];
+  const client = new SavedMapApiClient(async (url, options) => {
+    calls.push({ url, ...options });
+    return Response.json({ ...record, revision: options.method === "PUT" ? 2 : 1 });
+  }, privateMapEditFromLocation(location).token);
+  assert.equal((await client.getForEditing("amazon")).revision, 1);
+  assert.equal((await client.update("amazon", { ...record, revision: 1 })).revision, 2);
+  assert.deepEqual(await client.get("amazon"), record);
+  for (const call of calls.slice(0, 2)) {
+    assert.equal(call.url, "/api/saved-maps/amazon/edit");
+    assert.equal(call.headers.Authorization, `Bearer ${editToken}`);
+    assert.equal(call.headers["X-EOLab-Admin"], undefined);
+  }
+  assert.deepEqual(JSON.parse(calls[1].body), { ...record, revision: 1 });
+  assert.equal(calls[2].url, "/api/saved-maps/amazon");
+  assert.equal(calls[2].headers, undefined);
+});
+
 test("browser fetch is called without rebinding its receiver to the API client", async () => {
   const client = new SavedMapApiClient(function (url) {
     assert.equal(this, undefined);
@@ -44,9 +71,11 @@ test("publish and retrieve preserve headings and provider ID through the same-si
   const calls = [];
   const client = new SavedMapApiClient(async (url, options) => {
     calls.push({ url, ...options });
-    return new Response(JSON.stringify(record), { status: options.method === "POST" ? 201 : 200 });
+    return options.method === "POST"
+      ? Response.json({ ...record, editToken }, { status: 201 })
+      : Response.json({ ...record, editToken });
   });
-  assert.deepEqual(await client.create(record), record);
+  assert.deepEqual(await client.create(record), { ...record, editToken });
   assert.deepEqual(await client.get("amazon"), record);
   assert.equal(calls[0].url, "/api/saved-maps");
   assert.equal(calls[0].headers["X-EOLab-Saved-Maps"], "1");

@@ -81,6 +81,16 @@ function requireElementRange(identifier) {
     throw new Error(`Required markup element is not closed: ${identifier}`);
 }
 
+test("saved-layer recovery stays outside every capability-disabled workspace", () => {
+    const recovery = requireElementRange("show-unavailable-map-layers");
+    for (const id of ["control-panel", "map-tools-toolbar", "map-inspection"]) {
+        const workspace = requireElementRange(id);
+        assert.ok(recovery.end <= workspace.start || recovery.start >= workspace.end,
+            `Unavailable layers must remain reachable when ${id} is hidden or inert`);
+    }
+    assert.equal(countMarkupId("show-unavailable-map-layers"), 1);
+});
+
 test("one sidebar owns the workspace disclosures and compact status", () => {
     const panel = requireElementRange("control-panel");
     const operationalStatus = requireElementRange(
@@ -234,7 +244,11 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
         ["raster-clips", "raster-clips-panel"],
         ["annotations", "annotations-panel"],
         ["style", "layer-style-editor"],
+        ["settings", "settings-panel"],
     ]) {
+        const button = requireElementRange(`map-inspection-tab-${tab}`).source;
+        const classes = button.match(/\bclass="([^"]*)"/)?.[1] ?? "";
+        assert.ok(classes.split(/\s+/).includes("tool-tab"), `${tab} must use the shared tab styles`);
         assert.match(
             inspection.source,
             new RegExp(`id="map-inspection-tab-${tab}"[\\s\\S]*?role="tab"[\\s\\S]*?aria-controls="${panelId}"`)
@@ -352,7 +366,7 @@ test("composition forwards compatible map areas and closes inspection when no ra
 test("map-layer Info can reveal Catalog through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /onCatalogWorkspaceRequested\(\);\s*selectCatalogItem\(item\);/
+        /if \(!isSharedViewer\) onCatalogWorkspaceRequested\(\);\s*selectCatalogItem\(item, null, returnFocusTarget\);/
     );
     assert.match(
         COMPOSITION_SOURCE,

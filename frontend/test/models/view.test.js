@@ -15,7 +15,7 @@ function fixture() {
     const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Input", "Area", "Vector", "EditFilter", "Submit", "Retry", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete", "TemporalDataset", "TemporalVariable", "TemporalMonth", "UseTemporalMonth", "RefreshTemporal", "TemporalEdit"]
         .map(name => [`on${name}`, (...values) => actions.push([name, ...values])]));
     view.bind(callbacks);
-    const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
+    const state = {active: true, page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
         runs: [], selectedRun: null, pending: null, error: "", yaml: null};
     view.render(state); return {doc, view, state, actions};
 }
@@ -149,32 +149,56 @@ test("raster choices separate map layers from completed runs and explain unavail
     assert.match(h.view.setup.inputs.raster.reason.textContent, /do not need to be shown on the map/);
 });
 
-test("removed history entries leave the DOM while unrelated run cards retain their controls", () => {
+test("run history keeps its order and focused button when other runs appear or disappear", () => {
     const h = fixture(), first = job(), second = job({jobId: "2".repeat(32), label: "Another run"});
+    const older = job({jobId: "0".repeat(32), name: "Earlier survey"});
+    const newer = job({jobId: "3".repeat(32), name: "Latest survey"});
     Object.assign(h.state, {page: "runs", runs: [first, second]}); h.view.render(h.state);
     const retained = h.view.runCards.get(second.jobId).button;
-    h.state.runs = [second]; h.view.render(h.state);
+    retained.focus();
+    for (const runs of [[first, second, older], [newer, first, second, older], [newer, second, older], [second]]) {
+        h.state.runs = runs;
+        h.view.render(h.state);
+        const buttons = h.view.elements["runs-list"].querySelectorAll("button");
+        assert.deepEqual(buttons.map(button => button.textContent), runs.map(run => run.label));
+        assert.equal(h.doc.activeElement?.textContent, second.label);
+    }
     assert.equal(h.view.runCards.has(first.jobId), false);
     assert.equal(h.view.elements["runs-list"].children.length, 1);
     assert.equal(h.view.runCards.get(second.jobId).button, retained);
+    h.doc.activeElement.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["Run", second.jobId]);
     h.state.runs = []; h.view.render(h.state);
     assert.equal(h.view.elements["runs-list"].children.length, 0);
     assert.match(h.view.elements["runs-status"].textContent, /No data tool runs/);
 });
 
-test("tool rows and run cards retain native buttons, navigation and focus", () => {
+test("tool rows and run cards retain native buttons and focus without rewriting hidden cards during search", t => {
     const h = fixture(), run = job();
-    Object.assign(h.state, {page: "library", runs: [run]}); h.view.render(h.state);
+    Object.assign(h.state, {page: "runs", runs: [run]}); h.view.render(h.state);
+    const runCard = h.view.runCards.get(run.jobId);
+    assert.equal(runCard.button.type, "button");
+    runCard.button.dispatchEvent(new Event("click"));
+
+    h.state.page = "library"; h.view.render(h.state);
     assert.doesNotMatch(SUMMARY_MARKUP, /<button\b[^>]*>\s*Refresh library\s*<\/button>/i);
     const libraryButton = h.view.elements["library-items"].children[0];
-    const runCard = h.view.runCards.get(run.jobId);
-    assert.equal(libraryButton.type, "button"); assert.equal(runCard.button.type, "button");
-    assert.equal(libraryButton.getAttribute("aria-label"), `Set up ${model.title}`);
-    libraryButton.dispatchEvent(new Event("click")); runCard.button.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.actions.slice(-2), [["Choose", model], ["Run", run.jobId]]);
     libraryButton.focus(); h.view.render(h.state);
     assert.equal(h.view.elements["library-items"].children[0], libraryButton);
     assert.equal(h.doc.activeElement, libraryButton);
+    const cardAttributes = t.mock.method(runCard.button, "setAttribute");
+    // The fixture uses plain properties for text and title. Catch even writes of the same value.
+    for (const [node, field] of [[runCard.button, "textContent"], [runCard.button, "title"], [runCard.status, "textContent"]]) {
+        Object.defineProperty(node, field, {writable: false});
+    }
+    h.view.elements.query.focus();
+    h.state.query = model.title.slice(0, 4); h.view.render(h.state);
+    assert.equal(cardAttributes.mock.callCount(), 0, "search must leave the hidden run button untouched");
+    assert.equal(h.doc.activeElement, h.view.elements.query);
+    assert.equal(libraryButton.type, "button");
+    assert.equal(libraryButton.getAttribute("aria-label"), `Set up ${model.title}`);
+    libraryButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions, [["Run", run.jobId], ["Choose", model]]);
 });
 
 test("raster creation leads matching tools without changing discovery order or selecting a tool", () => {
@@ -374,10 +398,11 @@ test("the inline run name survives progress updates and closes only after a succ
 test("run and output headings show complete names with separate download actions", () => {
     const h = fixture(), artifacts = fileManifest();
     const ready = job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts});
-    Object.assign(h.state, {page: "run", selectedRun: ready.jobId, runs: [ready]}); h.view.render(h.state);
+    Object.assign(h.state, {page: "runs", runs: [ready]}); h.view.render(h.state);
     const card = h.view.runCards.get(ready.jobId);
     assert.equal(card.button.textContent, ready.label); assert.equal(card.button.title, ready.label);
     assert.equal(card.button.getAttribute("aria-label"), ready.label); assert.match(card.status.textContent, /2026-10-08 00:00:00/);
+    Object.assign(h.state, {page: "run", selectedRun: ready.jobId}); h.view.render(h.state);
     assert.equal(h.view.run.title.textContent, ready.label);
     assert.equal(h.view.elements.run.querySelectorAll("summary").some(summary => summary.textContent === "Full name"), false);
     const fileCards = [h.view.run.result.children[0], ...h.view.run.result.children[1].children.slice(1)];
@@ -404,15 +429,27 @@ test("run history shows distinct complete names and refreshes a renamed run with
     assert.equal(secondButton.textContent, second.label);
     assert.notEqual(firstButton.textContent, secondButton.textContent);
     firstButton.focus();
-    const renamed = job({...first, name: "Cuba biomass"});
+    const renamed = job({...first, name: "Cuba biomass", status: "running", progress: {description: "Measuring biomass"}});
     h.state.runs = [renamed, second]; h.view.render(h.state);
     assert.equal(h.view.runCards.get(first.jobId).button, firstButton);
     assert.equal(h.doc.activeElement, firstButton);
     assert.equal(firstButton.textContent, `Cuba biomass · ${first.nameTimestamp}`);
     assert.equal(firstButton.title, renamed.label);
     assert.equal(firstButton.getAttribute("aria-label"), renamed.label);
+    assert.match(h.view.runCards.get(first.jobId).status.textContent, /^Measuring biomass… ·/);
     firstButton.dispatchEvent(new Event("click"));
     assert.deepEqual(h.actions.at(-1), ["Run", first.jobId]);
+
+    h.state.page = "setup"; h.view.render(h.state);
+    const cancelled = job({...renamed, name: "Estuary survey", status: "cancelled"});
+    const newest = job({jobId: "3".repeat(32), name: "New survey", createdAt: "2026-10-09T00:00:00Z"});
+    h.state.runs = [newest, cancelled, second]; h.view.render(h.state);
+    h.state.page = "runs"; h.view.render(h.state);
+    assert.deepEqual(h.view.elements["runs-list"].querySelectorAll("button").map(button => button.textContent),
+        [newest.label, cancelled.label, second.label]);
+    assert.equal(firstButton.title, cancelled.label);
+    assert.equal(firstButton.getAttribute("aria-label"), cancelled.label);
+    assert.match(h.view.runCards.get(first.jobId).status.textContent, /^Cancelled ·/);
 });
 
 test("file cards show independent opt-in map actions and display loading and map inclusion", () => {
@@ -489,8 +526,8 @@ test("model stages without a description use a running label while lifecycle sta
 test("run and history progress render descriptions as text and keep unknown totals indeterminate", () => {
     const h = fixture(), description = '<img src=x onerror="alert(1)">';
     const run = job({status: "running", progress: {phase: "unfamiliar_stage", description, completed: 1, total: 4, unit: "regions"}});
-    Object.assign(h.state, {page: "run", selectedRun: run.jobId, runs: [run]});
-    h.view.render(h.state);
+    Object.assign(h.state, {page: "runs", runs: [run]}); h.view.render(h.state);
+    Object.assign(h.state, {page: "run", selectedRun: run.jobId}); h.view.render(h.state);
     const status = h.view.run.status, historyStatus = h.view.runCards.get(run.jobId).status;
     assert.equal(status.textContent, `${description} · 1 of 4 regions`);
     assert.equal(historyStatus.textContent, `${description} · 1 of 4 regions · 2026-10-08 00:00:00`);
@@ -501,10 +538,12 @@ test("run and history progress render descriptions as text and keep unknown tota
     h.view.run.progress.setAttribute("value", "1");
     run.progress = {phase: "another_unfamiliar_stage", description: "Checking <strong>habitat</strong>"};
     h.view.render(h.state);
-    assert.equal(h.view.run.status, status); assert.equal(h.view.runCards.get(run.jobId).status, historyStatus);
+    assert.equal(h.view.run.status, status);
     assert.equal(status.textContent, "Checking <strong>habitat</strong>…");
-    assert.equal(historyStatus.textContent, "Checking <strong>habitat</strong>… · 2026-10-08 00:00:00");
     assert.equal(h.view.run.progress.hidden, false); assert.equal(h.view.run.progress.getAttribute("value"), null);
+    h.state.page = "runs"; h.view.render(h.state);
+    assert.equal(h.view.runCards.get(run.jobId).status, historyStatus);
+    assert.equal(historyStatus.textContent, "Checking <strong>habitat</strong>… · 2026-10-08 00:00:00");
 });
 
 

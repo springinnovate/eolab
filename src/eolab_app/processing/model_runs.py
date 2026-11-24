@@ -124,11 +124,10 @@ def build_model_download_filename(
 def compute_implementation_checksum() -> str:
     """Compute a checksum of the installed backend code and numerical libraries.
 
-    The checksum includes EOlab's Python source files and the installed versions
-    of its numerical libraries, including the routing engine and compiler
-    runtime. It is cached for the process lifetime. The API saves it when
-    accepting a run; the worker compares it before execution to avoid silently
-    running that request with different software.
+    The checksum includes Python source files in ``eolab_app`` and ``eolab_jobs``
+    and the installed versions of numerical libraries, including the routing
+    engine and compiler runtime. Each process caches the checksum. The API saves
+    it when accepting a run and the worker compares it before execution.
 
     Returns:
         A SHA-256 hexadecimal checksum, not a Git commit or model version.
@@ -138,9 +137,8 @@ def compute_implementation_checksum() -> str:
         PackageNotFoundError: If required package version metadata is unavailable.
     """
     digest = hashlib.sha256()
-    # Identify the installed package as a build artifact; do not import or
-    # inspect sibling services to determine whether a model may execute.
-    pending = [("", files("eolab_app"))]
+    # Include the package name so same-named files have distinct paths in the digest.
+    pending = [(name, files(name)) for name in ("eolab_app", "eolab_jobs")]
     while pending:
         prefix, directory = pending.pop()
         for path in sorted(directory.iterdir(), key=lambda item: item.name):

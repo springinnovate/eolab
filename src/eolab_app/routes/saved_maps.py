@@ -4,27 +4,101 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 import logging
+import re
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.routing import APIRoute
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.responses import JSONResponse
 
 from eolab_app.map_layer_documents import MapDrawingLayer
 from eolab_app.saved_maps.models import (
     CreateSavedMap,
+    INVALID_MAP_EDIT_LINK,
     MapAnnotationLayer,
     MapUploadLayer,
     MapVectorArtifactLayer,
     MAX_REQUEST_BYTES,
+    PublishedMapSummary,
+    PublishedSavedMap,
     SavedMap,
+    SavedMapEditToken,
     SavedMapError,
     Slug,
     UpdateSavedMap,
 )
 from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.routes.admin_auth import create_administrator_dependency
+
+
+def require_map_edit_token(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(HTTPBearer(auto_error=False))
+    ],
+) -> str:
+    """Read the private map edit credential from the Authorization header.
+
+    Args:
+        credentials: Bearer credentials supplied by the private editor.
+
+    Returns:
+        The well-formed token to check against this map in storage.
+
+    Raises:
+        SavedMapError: If the token is absent or malformed.
+    """
+    if credentials is None or not re.fullmatch(
+        r"[0-9a-f]{64}", credentials.credentials
+    ):
+        raise SavedMapError(403, INVALID_MAP_EDIT_LINK)
+    return credentials.credentials
+
+
+def require_same_site_map_write(request: Request, message: str) -> None:
+    """Reject a saved-map write initiated by a different site.
+
+    Args:
+        request: Incoming publication or private edit request.
+        message: User-facing instruction if the request is cross-site.
+
+    Raises:
+        HTTPException: If the request came from another site.
+    """
+    origin = request.headers.get("origin")
+    if request.headers.get("sec-fetch-site") == "cross-site" or (
+        origin and urlsplit(origin).netloc != request.url.netloc
+    ):
+        raise HTTPException(403, message)
+
+
+def validate_site_local_layers(payload: CreateSavedMap, request: Request) -> None:
+    """Keep site-local layer references tied to the site that owns them.
+
+    Args:
+        payload: Map document to publish or save.
+        request: HTTP request identifying the site.
+
+    Raises:
+        HTTPException: If a local layer reference belongs to another site.
+    """
+    if any(
+        isinstance(
+            layer,
+            (
+                MapAnnotationLayer,
+                MapDrawingLayer,
+                MapUploadLayer,
+                MapVectorArtifactLayer,
+            ),
+        )
+        for layer in payload.view.layers
+    ) and (urlsplit(payload.view.viewer.origin).netloc != request.url.netloc):
+        raise HTTPException(
+            422,
+            "Saved drawings, shared layers, uploads and run results must belong to this EOLab site.",
+        )
 
 
 class SavedMapRoute(APIRoute):
@@ -162,7 +236,7 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
     @router.post(
         "",
         status_code=201,
-        response_model=SavedMap,
+        response_model=PublishedSavedMap,
         response_model_exclude_unset=True,
         responses={
             403: {"description": "Browser request came from another origin."},
@@ -175,7 +249,7 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
         request: Request,
         response: Response,
         x_eolab_saved_maps: Annotated[str, Header(pattern="^1$")],
-    ) -> SavedMap:
+    ) -> PublishedSavedMap:
         """Publish a new named map. Anyone with the link can read it.
 
         Args:
@@ -185,34 +259,16 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
             x_eolab_saved_maps: Must be 1; a browser preflight safeguard, not a credential.
 
         Returns:
-            Created map. Reusing a URL name never overwrites its contents.
+            Created map and its private edit token. Reusing a URL name never
+            overwrites its contents or returns the existing token.
 
         Raises:
             HTTPException: If a browser submits from another origin or a site-local
                 layer reference belongs to another site.
             SavedMapError: If the name is taken, capacity is full or storage fails.
         """
-        origin = request.headers.get("origin")
-        if request.headers.get("sec-fetch-site") == "cross-site" or (
-            origin and urlsplit(origin).netloc != request.url.netloc
-        ):
-            raise HTTPException(403, "Create saved maps from this site.")
-        if any(
-            isinstance(
-                layer,
-                (
-                    MapAnnotationLayer,
-                    MapDrawingLayer,
-                    MapUploadLayer,
-                    MapVectorArtifactLayer,
-                ),
-            )
-            for layer in payload.view.layers
-        ) and (urlsplit(payload.view.viewer.origin).netloc != request.url.netloc):
-            raise HTTPException(
-                422,
-                "Saved drawings, shared layers, uploads and run results must belong to this EOLab site.",
-            )
+        require_same_site_map_write(request, "Create saved maps from this site.")
+        validate_site_local_layers(payload, request)
         result = store.create_saved_map(payload)
         response.headers["Location"] = f"/api/saved-maps/{result.slug}"
         return result
@@ -237,11 +293,60 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
         """
         return store.get_saved_map(slug)
 
+    @router.get(
+        "/{slug}/edit", response_model=SavedMap, response_model_exclude_unset=True
+    )
+    def load_private_map_editor(
+        slug: Slug, edit_token: Annotated[str, Depends(require_map_edit_token)]
+    ) -> SavedMap:
+        """Load the current map revision for the holder of its private edit link.
+
+        Args:
+            slug: Fixed URL name of the published map.
+            edit_token: Bearer token supplied by the private edit link.
+
+        Returns:
+            Current map and revision, without any edit or contribution credentials.
+
+        Raises:
+            SavedMapError: If the link is inactive or storage is unavailable.
+        """
+        return store.get_saved_map(slug, edit_token=edit_token)
+
+    @router.put(
+        "/{slug}/edit", response_model=SavedMap, response_model_exclude_unset=True
+    )
+    def save_private_map_changes(
+        slug: Slug,
+        payload: UpdateSavedMap,
+        request: Request,
+        edit_token: Annotated[str, Depends(require_map_edit_token)],
+    ) -> SavedMap:
+        """Save changes to one map using its private edit link and current revision.
+
+        Args:
+            slug: Existing map's fixed URL name.
+            payload: Replacement configuration and revision opened for editing.
+            request: Origin used to check the write and any site-local layer references.
+            edit_token: Bearer token supplied by the private edit link.
+
+        Returns:
+            Updated map and revision at the same public URL.
+
+        Raises:
+            HTTPException: If the write or site-local layers belong to another site.
+            SavedMapError: If the link is inactive, the name or revision changed,
+                or storage is unavailable.
+        """
+        require_same_site_map_write(request, "Save map changes from this site.")
+        validate_site_local_layers(payload, request)
+        return store.update_saved_map(slug, payload, edit_token=edit_token)
+
     return router
 
 
 def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRouter:
-    """Expose authenticated editing and reversible deletion of published maps.
+    """Expose administrator editing, edit-link management and reversible deletion.
 
     Args:
         store: Saved-map storage initialized by the existing public router.
@@ -258,11 +363,11 @@ def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRo
     )
 
     @router.get("")
-    def list_maps() -> list[dict[str, Any]]:
+    def list_maps() -> list[PublishedMapSummary]:
         """List active and deleted published maps for the admin page.
 
         Returns:
-            Map titles, URL names and deletion times, without layer documents.
+            Map titles, URL names, deletion times and whether an edit link exists.
 
         Raises:
             SavedMapError: If storage is unavailable.
@@ -302,23 +407,39 @@ def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRo
             HTTPException: If site-local layer references belong to another site.
             SavedMapError: If missing, renamed, stale, or storage is unavailable.
         """
-        if any(
-            isinstance(
-                layer,
-                (
-                    MapAnnotationLayer,
-                    MapDrawingLayer,
-                    MapUploadLayer,
-                    MapVectorArtifactLayer,
-                ),
-            )
-            for layer in payload.view.layers
-        ) and (urlsplit(payload.view.viewer.origin).netloc != request.url.netloc):
-            raise HTTPException(
-                422,
-                "Saved drawings, shared layers, uploads and run results must belong to this EOLab site.",
-            )
+        validate_site_local_layers(payload, request)
         return store.update_saved_map(slug, payload)
+
+    @router.post("/{slug}/edit-link", response_model=SavedMapEditToken)
+    def issue_map_edit_link(slug: Slug) -> SavedMapEditToken:
+        """Create a private edit link for an active map, replacing any previous link.
+
+        Args:
+            slug: Fixed URL name of the map selected by the administrator.
+
+        Returns:
+            New private token to share with the publisher.
+
+        Raises:
+            SavedMapError: If the map is absent, deleted, or storage is unavailable.
+        """
+        return SavedMapEditToken(editToken=store.issue_edit_token(slug))
+
+    @router.delete("/{slug}/edit-link", status_code=204)
+    def revoke_map_edit_link(slug: Slug) -> Response:
+        """Disable the private edit link while retaining the published map.
+
+        Args:
+            slug: Fixed URL name of the map selected by the administrator.
+
+        Returns:
+            Empty success response, including when the link was already revoked.
+
+        Raises:
+            SavedMapError: If the map does not exist or storage is unavailable.
+        """
+        store.revoke_edit_token(slug)
+        return Response(status_code=204)
 
     @router.delete("/{slug}", status_code=204)
     def delete_map(slug: Slug) -> Response:
