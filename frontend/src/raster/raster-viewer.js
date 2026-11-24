@@ -4732,7 +4732,7 @@ export function initializeRasterViewer(
     }
 
     /** Replace source identity and discard results from the previous observation.
-     * Keeps the row, its area, appearance, visibility and drawing order.
+     * Keeps the row, area and drawing order. A change of units ends the pair and resets its appearance.
      * @param {Object} record Retained temporal raster.
      * @param {{variable:string,time:string}} selection Replacement observation.
      * @param {boolean} available Whether numerical readers may use the selection.
@@ -4743,14 +4743,17 @@ export function initializeRasterViewer(
         const session = record.state, temporal = session.temporal;
         cancelHistogramStyleUpdate(session.key);
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
+        const unit = temporal.item.properties["cube:variables"][selection.variable]?.unit;
+        const unitsChanged = unit !== temporal.unit;
+        if (unitsChanged && bivariateMode.contains(session.key)) {
+            leaveBivariateMode("The variable's units changed. Choose the two rasters again for a 2D comparison.", false);
+        }
         if (activeLayerKey === session.key) deactivateActiveLayer();
         cancelLayerHistogramRequest(session);
         pointSamplesController.clear();
         cursorSamplesController.clear();
         const oldAnalysis = session.analysis;
-        const unit = temporal.item.properties["cube:variables"][selection.variable]?.unit;
-        if (unit !== temporal.unit) {
-            if (bivariateMode.contains(session.key)) leaveBivariateMode("The variable's units changed. Choose the two rasters again for a 2D comparison.", false);
+        if (unitsChanged) {
             session.appearanceMode = "continuous";
             session.categoricalStyle = null;
             session.rasterStyle = {...DEFAULT_RASTER_STYLE};

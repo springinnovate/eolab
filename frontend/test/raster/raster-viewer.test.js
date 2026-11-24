@@ -6125,7 +6125,9 @@ test("temporal time changes retain the row and style while late publication cann
 });
 
 test("independent temporal views preserve explicit saved selections and reset ranges when units change", async () => {
-    const fixture = temporalFixture();
+    const rainfall = createDeferred();
+    const fixture = temporalFixture({loadStatistics: async (item, area) => item.source.variable === "rain"
+        ? rainfall.promise : createLayerStatistics(item, area)});
     try {
         const first = await fixture.viewer.showTemporal(temporalItem());
         await flushPromises();
@@ -6147,13 +6149,25 @@ test("independent temporal views preserve explicit saved selections and reset ra
         appearance.continuous.definition.minimum = 100;
         appearance.continuous.definition.midpoint = 200;
         appearance.continuous.definition.maximum = 300;
+        appearance.continuous.definition.minimumColor = "#114477";
         appearance.continuous.styleWasEdited = true;
         first.adapter.applySavedState(first, appearance);
+        fixture.mapLayers.reorder(first.entry.key, 0);
+        fixture.controlsView.handlers.onBivariateModeChange("bivariate");
+        assert.equal(fixture.controlsView.bivariateMode.active, true);
         await fixture.temporalViews[0].handlers.onVariableChange("rain");
         await flushPromises();
         assert.equal(first.state.item.source.variable, "rain");
+        assert.equal(fixture.controlsView.bivariateMode.active, false);
+        assert.deepEqual(first.adapter.snapshot(first).legend.labels, [0, 50, 100]);
+        assert.equal(first.adapter.renderDescriptor(first).styleEnvironment, buildRasterStyleEnvironment(DEFAULT_RASTER_STYLE));
         assert.equal(first.state.rasterStyleWasEdited, false);
-        assert.notEqual(first.state.rasterStyle.minimum, 100);
+        const suggestedRange = {minimum: 1147, midpoint: 1151, maximum: 1155};
+        rainfall.resolve({...createLayerStatistics(first.state.item), suggestedRange});
+        await flushPromises();
+        assert.deepEqual(first.adapter.snapshot(first).legend.labels, [1147, 1151, 1155]);
+        assert.equal(first.adapter.renderDescriptor(first).styleEnvironment,
+            buildRasterStyleEnvironment({...DEFAULT_RASTER_STYLE, ...suggestedRange}));
         assert.equal(second.state.item.source.variable, "temperature");
         assert.equal(first.state.item.capabilities.calculations, true);
     } finally {fixture.destroy();}
