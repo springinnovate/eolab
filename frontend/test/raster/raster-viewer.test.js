@@ -3023,7 +3023,9 @@ test('automatic histograms exclude rasters below the top-16 cap', async () => {
 
 test("published styles survive histogram, palette, category and paired actions while 2D returns values", async () => {
     const clock = createManualClock(), renderingSelections = [], styleRequests = [];
-    const h = visibleLayerFixture(undefined, {clock}, {styleEditingEnabled: false,
+    const publishedStatistics = createDeferred();
+    const h = visibleLayerFixture(item => item.id === "second" ? publishedStatistics.promise :
+        Promise.resolve(createLayerStatistics(item)), {clock}, {styleEditingEnabled: false,
         onStyleRequested: key => styleRequests.push(key),
         onBivariateRenderingChange: keys => renderingSelections.push(keys)});
     h.controlsView.openBivariateStyle = () => styleRequests.push("paired");
@@ -3032,10 +3034,15 @@ test("published styles survive histogram, palette, category and paired actions w
         await h.viewer.show(createRasterItem("second"));
         await flushPromises();
         const [x, y] = h.mapLayers.retainedRecords;
+        assert.deepEqual(y.adapter.snapshot(y).legend.labels, [-4, 3, 20], "A newly added raster uses its measured range");
         const saved = structuredClone(x.adapter.exportSavedState(x));
         saved.continuous = {...saved.continuous, definition: {...saved.continuous.definition,
+            minimum: 7, midpoint: 11, maximum: 17,
             minimumColor: "#112233", midpointColor: "#aabbcc", maximumColor: "#dd9900"}};
         await x.adapter.applySavedState(x, saved);
+        publishedStatistics.resolve(createLayerStatistics(x.entry.item));
+        await flushPromises();
+        assert.deepEqual(x.adapter.snapshot(x).legend.labels, [7, 11, 17], "Published thresholds survive a late histogram");
         h.mapLayers.setOpacity(x.entry.key, 0.35);
         const layer = h.mapLayers.getLeafletLayer(x.entry.key);
         const ordinary = layer.parameters.env;

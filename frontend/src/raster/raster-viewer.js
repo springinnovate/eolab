@@ -484,6 +484,7 @@ export function initializeRasterViewer(
             publishedRaster,
             appearanceMode: "continuous",
             categoricalStyle: null,
+            hasSavedAppearance: false,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
@@ -511,6 +512,7 @@ export function initializeRasterViewer(
             key: `analysis:${rasterSourceKey(item)}`,
             item,
             label: getRasterDisplayName(item),
+            hasSavedAppearance: false,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
@@ -532,10 +534,12 @@ export function initializeRasterViewer(
      */
     function adoptRasterInteractionState(target, source) {
         target.analysis = source.analysis;
+        target.histogramPercentiles = { ...source.histogramPercentiles, rescale: false };
+        if (target.hasSavedAppearance && !styleEditingEnabled) return;
         target.rasterStyle = { ...source.rasterStyle };
         target.paletteName = source.paletteName;
         target.rasterStyleWasEdited = source.rasterStyleWasEdited;
-        target.histogramPercentiles = { ...source.histogramPercentiles, rescale: false };
+        target.hasSavedAppearance = source.hasSavedAppearance;
     }
 
     /**
@@ -1562,16 +1566,9 @@ export function initializeRasterViewer(
         session.analysis.rasterStatistics = statistics;
         session.analysis.rasterStatisticsIsApplicable = true;
         session.histogramPercentileError = "";
-        if (styleEditingEnabled && samplingArea.kind === "wholeRaster" && session.appearanceMode !== "categorical") {
-            const style = deriveInitialRasterStyleFromStatistics(
-                session.rasterStyle, statistics, session.rasterStyleWasEdited || session.temporal?.preserveRange === true
-            );
-            if (style !== null) {
-                applySessionStyle(session, style, session.paletteName, false);
-                if (editingLayerKey === session.key) {
-                    controlsView.setStyle(style, session.paletteName);
-                }
-            }
+        if (samplingArea.kind === "wholeRaster") {
+            const rangeChanged = initializeRasterRange(session, statistics);
+            if (rangeChanged && editingLayerKey === session.key) controlsView.setStyle(session.rasterStyle, session.paletteName);
         }
         scheduleHistogramStyleUpdate(session);
         renderLayerStack();
@@ -2243,6 +2240,7 @@ export function initializeRasterViewer(
                 session.appearanceMode = appearance.mode; session.categoricalStyle = appearance.categorical;
                 session.rasterStyle = appearance.continuous.definition; session.paletteName = appearance.continuous.paletteName;
                 session.rasterStyleWasEdited = appearance.continuous.styleWasEdited;
+                session.hasSavedAppearance = true;
             }
             if (analysisSession !== null) {
                 adoptRasterInteractionState(session, analysisSession);
@@ -2413,6 +2411,7 @@ export function initializeRasterViewer(
             session.categoricalStyle = appearance.categorical;
             applySessionStyle(session, appearance.continuous.definition,
                 appearance.continuous.paletteName, appearance.continuous.styleWasEdited);
+            session.hasSavedAppearance = true;
             if (bivariateMode.contains(session.key) && appearance.mode === "categorical") {
                 leaveBivariateMode("2D comparison is not available for categorical layers.");
             }
@@ -3337,33 +3336,18 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Apply the initial whole-raster range unless a manual edit superseded it.
-     *
-     * @param {Object} statistics Validated whole-raster statistics.
-     * @return {boolean} Whether the bounded initial range was applied.
+     * Set a continuous raster's initial color thresholds from its whole-raster statistics.
+     * Retain manual edits, ranges shared across dates, and saved appearances on locked maps.
+     * @param {Object} session Active, background or detached raster session.
+     * @param {Object} statistics Validated whole-raster distribution.
+     * @return {boolean} Whether new thresholds were applied.
      */
-    function applyInitialWholeRasterStyle(statistics) {
-        if (!styleEditingEnabled || activeAppearanceIsCategorical() || mapLayers.getRecord(activeLayerKey)?.state.temporal?.preserveRange) return false;
-        const initialStyle = deriveInitialRasterStyleFromStatistics(
-            rasterStyle,
-            statistics,
-            rasterStyleWasEdited
-        );
-        if (initialStyle === null) {
-            return false;
-        }
-        rasterStyle = initialStyle;
-        const session = activeDetachedRasterSession() ??
-            mapLayers.getRecord(activeLayerKey)?.state;
-        if (session) applySessionStyle(
-            session, rasterStyle, activePaletteName, rasterStyleWasEdited
-        );
-        // A retained raster changes the composite descriptor, while detached
-        // Catalog analysis has no map presentation to invalidate.
-        if (session && !isActiveAnalysisRaster()) {
-            renderLayerStack();
-        }
-        presentActiveStyle(rasterStyle, activePaletteName);
+    function initializeRasterRange(session, statistics) {
+        if (session.appearanceMode === "categorical" || session.temporal?.preserveRange ||
+            (session.hasSavedAppearance && !styleEditingEnabled)) return false;
+        const style = deriveInitialRasterStyleFromStatistics(session.rasterStyle, statistics, session.rasterStyleWasEdited);
+        if (style === null) return false;
+        applySessionStyle(session, style, session.paletteName, false);
         return true;
     }
 
@@ -3491,10 +3475,13 @@ export function initializeRasterViewer(
      */
     function renderWholeRasterStatistics(statistics) {
         storeRasterStatisticsResult(rasterAnalysis, statistics, "wholeRaster");
-        const initialRangeApplied = hasSelectedRasterSamplingArea()
-            ? false
-            : applyInitialWholeRasterStyle(statistics);
         if (!hasSelectedRasterSamplingArea()) {
+            const session = activeDetachedRasterSession() ?? requireLayerSession(activeLayerKey);
+            const initialRangeApplied = initializeRasterRange(session, statistics);
+            if (initialRangeApplied) {
+                if (!isActiveAnalysisRaster()) renderLayerStack();
+                presentActiveStyle(rasterStyle, activePaletteName);
+            }
             renderRasterStatistics(statistics, initialRangeApplied);
         }
         refreshActiveSessionPresentation();
@@ -4767,6 +4754,7 @@ export function initializeRasterViewer(
             session.rasterStyle = {...DEFAULT_RASTER_STYLE};
             session.paletteName = DEFAULT_RASTER_PALETTE_NAME;
             session.rasterStyleWasEdited = false;
+            session.hasSavedAppearance = false;
             temporal.preserveRange = false;
         } else if (oldAnalysis.wholeRasterStatisticsState === "ready") {
             temporal.preserveRange = true;
