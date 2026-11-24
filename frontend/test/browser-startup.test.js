@@ -22,6 +22,7 @@ function startup(sharedViewer, status = 200, url = "https://viewer.example/") {
     const privateMapEdit = privateMapEditFromLocation(location);
     const browser = Object.assign(new EventTarget(), {
         setTimeout,
+        navigator: {},
         location: Object.assign(location, {reload: () => calls.push({reload: location.href})}),
     });
     let release;
@@ -98,6 +99,40 @@ for (const sharedViewer of [false, true]) {
         assert.equal(calls.length, 1);
     });
 }
+
+test("two tabs wait for the first configuration response before sending the next request", async () => {
+    const first = startup(false);
+    const second = startup(true);
+    const queues = new Map();
+    const locks = {
+        /** Queue callbacks from both tabs that request the same exclusive lock.
+         * @param {string} name Origin-scoped lock name.
+         * @param {()=>Promise<Response>} acquire Request to run while holding the lock.
+         * @return {Promise<Response>} Result of this tab's configuration request.
+         */
+        request(name, acquire) {
+            const held = (queues.get(name) ?? Promise.resolve()).then(acquire);
+            queues.set(name, held.catch(() => {}));
+            return held;
+        },
+    };
+    first.browser.navigator.locks = locks;
+    second.browser.navigator.locks = locks;
+    const opening = [first.start(), second.start()];
+    try {
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(first.calls[0]?.url, "/api/config");
+        assert.equal(second.calls.length, 0);
+        first.release();
+        await opening[0];
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(second.calls[0]?.url, "/api/config");
+    } finally {
+        first.release();
+        second.release();
+        await Promise.all(opening);
+    }
+});
 
 for (const [path, sharedViewer, reloads] of [
     ["/maps/survey/edit", false, true],

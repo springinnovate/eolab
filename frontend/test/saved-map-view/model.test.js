@@ -305,32 +305,45 @@ test("map legend preferences round-trip for catalog and shared layers", () => {
 test("visitor controls preserve parent overrides and default only unconfigured maps to the familiar profile", () => {
   const legacy = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-shared.json", import.meta.url), "utf8"));
   const defaults = { inspectAndSelect: true, rasterValues: true, featurePicking: true, histogramBox: true, lasso: true,
-    workspacePanels: true, catalog: false, mapContents: true, styleEditing: true };
+    workspacePanels: true, catalog: false, mapContents: true, styleEditing: true, runModels: true, allowedModelIds: null };
   assert.deepEqual(resolveVisitorControls(parseSavedMapView(JSON.stringify(legacy)).visitorControls), defaults);
   const candidate = { ...legacy, visitorControls: { version: 1, choices: { inspectAndSelect: false, featurePicking: true, lasso: true } } };
   const saved = parseSavedMapView(JSON.stringify(candidate));
   assert.deepEqual(saved, candidate);
   assert.deepEqual(visitorControlChoices(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
-    workspacePanels: false, catalog: false, mapContents: false, styleEditing: false,
+    workspacePanels: false, catalog: false, mapContents: false, styleEditing: false, runModels: false,
   });
   assert.deepEqual(resolveVisitorControls(saved.visitorControls), {
     inspectAndSelect: false, rasterValues: false, featurePicking: false, histogramBox: false, lasso: false,
-    workspacePanels: false, catalog: false, mapContents: false, styleEditing: false,
+    workspacePanels: false, catalog: false, mapContents: false, styleEditing: false, runModels: false, allowedModelIds: [],
   });
   const reenabled = parseSavedMapView(JSON.stringify({
     ...saved, visitorControls: { version: 1, choices: { ...saved.visitorControls.choices, inspectAndSelect: true, styleEditing: true } },
   }));
   assert.deepEqual(resolveVisitorControls(reenabled.visitorControls), {
     inspectAndSelect: true, rasterValues: false, featurePicking: true, histogramBox: false, lasso: true,
-    workspacePanels: false, catalog: false, mapContents: false, styleEditing: true,
+    workspacePanels: false, catalog: false, mapContents: false, styleEditing: true, runModels: false, allowedModelIds: [],
   });
   for (const visitorControls of [null, {}, { version: 2, choices: {} }, { version: true, choices: {} },
     { version: 1, choices: [] }, { version: 1, choices: { lasso: "true" } }, { version: 1, choices: { zoom: true } },
     { version: 1, choices: {}, unknown: true }, { version: 1, choices: {}, initialPanels: null },
     { version: 1, choices: {}, initialPanels: { catalog: 1 } },
-    { version: 1, choices: {}, initialPanels: { canvas: true } }]) {
+    { version: 1, choices: {}, initialPanels: { canvas: true } },
+    ...[null, "raster-clip", ["raster-clip", "raster-clip"], ["../clip"], [42]].map(modelIds => ({version: 1, choices: {}, modelIds}))]) {
     assert.throws(() => parseSavedMapView(JSON.stringify({ ...candidate, visitorControls })), /visitor/i);
+  }
+});
+
+test("a saved model selection survives disabling its parent, including an unavailable recipe", () => {
+  const original = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-catalog.json", import.meta.url), "utf8"));
+  for (const modelIds of [[], ["raster-clip"], ["raster-clip", "retired-tool"]]) {
+    for (const runModels of [true, false]) {
+      const visitorControls = {version: 1, choices: {runModels}, modelIds};
+      const saved = parseSavedMapView(serializeSavedMapView({...original, visitorControls}));
+      assert.deepEqual(saved.visitorControls, visitorControls);
+      assert.deepEqual(resolveVisitorControls(saved.visitorControls).allowedModelIds, runModels ? modelIds : []);
+    }
   }
 });
 

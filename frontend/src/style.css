@@ -122,7 +122,7 @@ select:hover:not(:disabled) {
   font: var(--font-size-ui)/1.35 var(--font-sans);
 }
 .temporal-scrubber[hidden], .temporal-scrubber [hidden] { display: none; }
-.timeline-settings, .timeline-transport, .timeline-caption { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.timeline-settings, .timeline-transport { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .timeline-settings label { display: grid; min-width: 0; gap: 1px; font-size: 0.75rem; color: var(--text-2); }
 .timeline-settings label:first-child { flex: 1; }
 .timeline-settings label:last-child { flex: 0 1 11rem; }
@@ -135,9 +135,16 @@ select:hover:not(:disabled) {
 .timeline-transport button:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .timeline-transport input { flex: 1; min-width: 0; margin: 0 3px; accent-color: var(--brand); }
 .temporal-scrubber :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.timeline-caption { justify-content: space-between; flex-wrap: wrap; column-gap: 8px; row-gap: 0; font-variant-numeric: tabular-nums; }
-.timeline-caption output { font-weight: 650; }
-.timeline-caption span, .temporal-scrubber p { margin: 0; color: var(--text-2); font-size: 0.75rem; }
+.timeline-caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-caption output { grid-column: 1 / -1; min-block-size: 1lh; font-weight: 650; }
+.timeline-caption p { overflow-wrap: anywhere; }
+.timeline-caption span, .timeline-caption p { margin: 0; color: var(--text-2); font-size: 0.75rem; }
 #map:has(> .temporal-scrubber:not([hidden])) .leaflet-bottom.leaflet-left { bottom: var(--timeline-height); }
 #map:has(> .temporal-scrubber:not([hidden])) .leaflet-bottom .eolab-basemap-control { margin-bottom: var(--timeline-height); }
 #map:has(> .temporal-scrubber:not([hidden])) > #raster-first-sample-hint { bottom: calc(var(--timeline-height) + 24px); }
@@ -3254,7 +3261,7 @@ div.chart-tooltip {
     gap: 0.4rem;
     margin: 0.25rem 0;
 }
-.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children], [data-visitor-model-children]) {
     min-width: 0;
     margin: 0;
     padding: 0 0 0 1.1rem;
@@ -4502,6 +4509,8 @@ article.raster-histogram-summary {
 [data-inspection-loading="true"] #vector-feature-result { opacity: 0.35; }
 @keyframes map-inspection-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
+  /* A tab revealed from overflow must accept focus during the same keypress. */
+  .tool-tab { transition-property: none; }
   .tool-tab[data-loading="true"]::after { animation: none; }
 }
 

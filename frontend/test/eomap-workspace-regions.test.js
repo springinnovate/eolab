@@ -244,7 +244,11 @@ test("Map contents owns compact rows; the bounded map-tool dock owns styling", (
         ["raster-clips", "raster-clips-panel"],
         ["annotations", "annotations-panel"],
         ["style", "layer-style-editor"],
+        ["settings", "settings-panel"],
     ]) {
+        const button = requireElementRange(`map-inspection-tab-${tab}`).source;
+        const classes = button.match(/\bclass="([^"]*)"/)?.[1] ?? "";
+        assert.ok(classes.split(/\s+/).includes("tool-tab"), `${tab} must use the shared tab styles`);
         assert.match(
             inspection.source,
             new RegExp(`id="map-inspection-tab-${tab}"[\\s\\S]*?role="tab"[\\s\\S]*?aria-controls="${panelId}"`)
