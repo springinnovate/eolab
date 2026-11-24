@@ -1955,12 +1955,9 @@ async function initializeCatalog(
             visitorAvailability = resolveVisitorControls(settings);
             const { styleEditing } = visitorAvailability;
             rasterVisualization.setStyleEditingEnabled(styleEditing);
-            layerStyleEditor.refresh();
             vectorFeatureInspector.setStyleEditingEnabled(styleEditing);
             annotations.setStyleEditingEnabled(styleEditing);
-            rasterSeries.render();
             mapLayerController.render();
-            refreshCatalogMapAction();
             onWorkspaceOptionsChange({
                 allowCatalog: visitorAvailability.catalog,
                 allowMapContents: visitorAvailability.mapContents,
