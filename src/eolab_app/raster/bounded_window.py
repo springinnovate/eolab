@@ -41,10 +41,25 @@ class NoRasterBoundsOverlapError(ValueError):
 
 @lru_cache(maxsize=8)
 def _grid_transformer(source: CRS, target: CRS, *, unwrap: bool) -> Transformer:
-    """Return the reusable PROJ operation for this CRS pair and longitude mode."""
+    """Return a PROJ boundary transform with explicit prime-meridian units.
+
+    Args:
+        source: Coordinate system of the original boundary.
+        target: Coordinate system of the grid being tested.
+        unwrap: Keep longitudes continuous across the target antimeridian.
+
+    Returns:
+        A cached transformer in conventional x/y order.
+
+    Raises:
+        ValueError: If PROJ cannot create the coordinate operation.
+    """
     try:
         return Transformer.from_crs(
-            source.to_wkt(), target.to_wkt(), always_xy=True, force_over=unwrap
+            source.to_wkt(version="WKT2_2019"),
+            target.to_wkt(version="WKT2_2019"),
+            always_xy=True,
+            force_over=unwrap,
         )
     except ProjError as error:
         raise ValueError("Selection could not be projected") from error
@@ -638,15 +653,15 @@ def project_geographic_polygons(
 
     to_degrees = target_crs.units_factor[1] / math.radians(1)
     uses_degrees = math.isclose(to_degrees, 1, rel_tol=0, abs_tol=1e-12)
-    source_wkt = CRS.from_user_input(source_crs).to_wkt()
-    target_wkt = target_crs.to_wkt()
+    source_wkt = CRS.from_user_input(source_crs).to_wkt(version="WKT2_2019")
+    target_wkt = target_crs.to_wkt(version="WKT2_2019")
     projected_geometries: list[dict[str, object]] = []
     try:
         if not uses_degrees:
             with osr.ExceptionMgr():
                 degrees = osr.SpatialReference(wkt=target_wkt)
                 degrees.SetAngularUnits("degree", math.radians(1))
-                target_wkt = degrees.ExportToWkt()
+                target_wkt = degrees.ExportToWkt(["FORMAT=WKT2_2019"])
         with osr.ExceptionMgr():
             source = osr.SpatialReference(wkt=source_wkt)
             target = osr.SpatialReference(wkt=target_wkt)

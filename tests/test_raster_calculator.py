@@ -1270,6 +1270,97 @@ def test_custom_grid_accepts_equivalent_crs_in_published_tiff(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
+    ("width", "meridian", "geokeys"),
+    [
+        (4, "paris", "ESRI_PE"),
+        (1537, "paris", "ESRI_PE"),
+        (4, "paris", "STANDARD"),
+        (1537, "-17.123", "ESRI_PE"),
+    ],
+)
+def test_published_raster_keeps_custom_prime_meridian_in_grads(
+    tmp_path: Path, width: int, meridian: str, geokeys: str
+) -> None:
+    """Reuse a published raster without changing its longitude origin or cell values.
+
+    Args:
+        tmp_path: Reference GeoTIFF and two independent calculator runs.
+        width: Number of columns, exercising single-tile and overview-bearing COGs.
+        meridian: A registered meridian name or a custom longitude in degrees.
+        geokeys: The reference file's GeoTIFF encoding.
+    """
+    definition = ProjCRS.from_proj4(
+        f"+proj=longlat +datum=WGS84 +pm={meridian}"
+    ).to_json_dict()
+    for axis in definition["coordinate_system"]["axis"]:
+        axis["unit"] = {
+            "type": "AngularUnit",
+            "name": "grad",
+            "conversion_factor": math.pi / 200,
+        }
+    crs = CRS.from_wkt(ProjCRS.from_json_dict(definition).to_wkt())
+    transform = from_origin(-5, 54, 0.001, 0.001)
+    values = np.arange(3 * width, dtype="float64").reshape(3, width)
+    values[1, 1] = np.nan
+    source = tmp_path / "reference.tif"
+    with rasterio.open(
+        source,
+        "w",
+        driver="GTiff",
+        width=width,
+        height=3,
+        count=1,
+        dtype="float64",
+        crs=crs,
+        transform=transform,
+        nodata=np.nan,
+        GEOTIFF_KEYS_FLAVOR=geokeys,
+    ) as reference:
+        reference.write(values, 1)
+    # An admitted file's embedded CRS is the authority for grid matching.
+    with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"), rasterio.open(source) as reference:
+        admitted = reference.crs.to_wkt(version="WKT2_2019")
+    if (meridian, geokeys) == ("paris", "ESRI_PE"):
+        assert CRS.from_wkt(admitted) == crs
+    else:
+        assert ProjCRS.from_wkt(admitted).prime_meridian.longitude != 0
+    to_wgs84 = Transformer.from_crs(admitted, 4326, always_xy=True)
+    west, south = to_wgs84.transform(*transform * (0.25, 2.75))
+    east, north = to_wgs84.transform(*transform * (width - 0.25, 0.25))
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="a",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(west=west, south=south, east=east, north=north),
+    )
+    for run in ("first", "reuse"):
+        directory = tmp_path / run
+        directory.mkdir()
+        sources = RasterCalculatorSources({"a": source}, None)
+        spec = plan_calculator_grid(
+            sources, QueuedRasterCalculator(request=request, polygonArea=None)
+        )
+        assert CRS.from_wkt(spec.grid.crs) == CRS.from_wkt(admitted)
+        result = calculate_raster(sources, spec, directory, RasterAggregateLimits())
+        source = directory / "result.tif"
+        with (
+            rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
+            rasterio.open(source, GEOREF_SOURCES="INTERNAL") as output,
+        ):
+            assert output.crs == CRS.from_wkt(admitted)
+            assert output.transform == transform
+            assert output.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+            assert output.overviews(1) == ([] if width == 4 else [2, 4])
+            assert output.files == [str(source)]
+            assert result.valid_pixels == values.size - 1
+            np.testing.assert_array_equal(output.read(1), values)
+
+
+@pytest.mark.parametrize(
     ("method", "expected"),
     [
         ("nearest", [[6, 12], [7, 16]]),

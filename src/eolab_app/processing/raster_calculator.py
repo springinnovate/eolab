@@ -323,7 +323,10 @@ def plan_calculator_grid(
     required = referenced_rasters(request.calculation)
     if isinstance(choice, MatchRasterGrid):
         required.add(choice.alias)
-        with rasterio.open(sources.rasters[choice.alias]) as reference:
+        with (
+            rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"),
+            rasterio.open(sources.rasters[choice.alias]) as reference,
+        ):
             axes = reference.transform
             if axes.b != 0 or axes.d != 0 or axes.a <= 0 or axes.e >= 0:
                 raise ProcessingError(
@@ -371,7 +374,7 @@ def plan_calculator_grid(
         inputs=request,
         polygonArea=queued.polygonArea,
         grid=RasterResultGrid(
-            crs=crs.to_wkt(),
+            crs=crs.to_wkt(version="WKT2_2019"),
             transform=tuple(grid.transform)[:6],
             width=grid.width,
             height=grid.height,
