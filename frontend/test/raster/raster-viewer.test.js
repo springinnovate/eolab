@@ -6274,6 +6274,39 @@ test("temporal timestamp changes preserve automatic ranges and refresh an active
 });
 
 
+test("paired statistics keep both displayed colors while the lower date is being published", async () => {
+    const publication = createDeferred(), nextTime = "2020-01-01T02:00:00Z";
+    const f = temporalFixture({
+        publishRaster: async item => item.source.time === nextTime ? publication.promise : {layerName: "first-date", bbox: item.bbox},
+        loadPairedStatistics: async (_x, y) => {
+            const stats = pairedStatistics();
+            if (y.source.time === nextTime) {
+                stats.yMinimum += 10; stats.yMaximum += 10;
+                stats.histogram.yEdges = stats.histogram.yEdges.map(value => value + 10);
+            }
+            return stats;
+        },
+    });
+    try {
+        const lower = await f.viewer.showTemporal(temporalItem());
+        const upper = await f.viewer.showTemporal(temporalItem());
+        f.controlsView.handlers.onBivariateModeChange("bivariate");
+        await flushPromises();
+        f.controlsView.bivariatePercentiles.y.rescale = true;
+        f.controlsView.handlers.onBivariatePercentileInput("y");
+        const stationary = f.mapLayers.getLeafletLayer(upper.entry.key);
+        const redraws = stationary.parameterUpdates.length;
+        const changing = f.temporalViews[0].handlers.onTimeChange(nextTime);
+        await flushPromises();
+        assert.equal(stationary.container.style.mixBlendMode, "plus-lighter",
+            "new statistics must preserve the held comparison until publication");
+        publication.resolve({layerName: "next-date", bbox: lower.state.item.bbox});
+        await changing;
+        assert.equal(stationary.parameterUpdates.length, redraws);
+        assert.equal(stationary.container.style.mixBlendMode, "plus-lighter");
+    } finally {f.destroy();}
+});
+
 test("temporal histogram and paired presentation offer ordinary Processing calculations", async () => {
     const fixture = temporalFixture({
         publishRaster: async item => ({layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90]}),

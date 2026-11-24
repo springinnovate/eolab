@@ -2013,41 +2013,19 @@ export function initializeRasterViewer(
         const candidates = getBivariatePairCandidates();
         if (candidates === null) return;
         const presentation = getBivariatePresentation();
-        const renderedRecords = [];
-        for (const [candidate, style] of [
-            [candidates.xCandidate, presentation.xStyle],
-            [candidates.yCandidate, presentation.yStyle],
-        ]) {
-            const record = mapLayers.getRecord(candidate.key);
-            const layer = mapLayers.getLeafletLayer(candidate.key);
-            if (
-                record === null ||
-                record.publication === null ||
-                layer === null ||
-                !mapLayers.isAttached(candidate.key)
-            ) continue;
-            const environment = buildRasterStyleEnvironment(style);
-            if (layer.wmsParams.env !== environment) setRasterWmsStyle(layer, {env: environment});
+        // Drawing order includes a retained raster while its next date is being published.
+        const grids = mapLayers.retainedRecords
+            .filter(({entry}) => bivariateMode.contains(entry.key) && mapLayers.isAttached(entry.key))
+            .map(record => ({record, layer: mapLayers.getLeafletLayer(record.entry.key)}))
+            .filter(({layer}) => layer?.getContainer?.());
+        for (const [index, {record, layer}] of grids.entries()) {
+            if (record.publication !== null) {
+                const style = record.entry.key === candidates.xCandidate.key ? presentation.xStyle : presentation.yStyle;
+                const environment = buildRasterStyleEnvironment(style);
+                if (layer.wmsParams.env !== environment) setRasterWmsStyle(layer, {env: environment});
+            }
             layer.setOpacity(1);
-            setRasterLayerAdditiveBlend(layer, false);
-            renderedRecords.push(record);
-        }
-        const topRecord = renderedRecords.length === 2
-            ? mapLayers.retainedRecords.find(
-                /**
-                 * Find the top attached pair renderer for additive blending.
-                 * @param {Object} record Retained record in top-first stack order.
-                 * @return {boolean} Whether the attached layer belongs to the pair.
-                 */
-                (record) => bivariateMode.contains(record.entry.key) &&
-                    mapLayers.isAttached(record.entry.key)
-            )
-            : undefined;
-        if (topRecord !== undefined) {
-            setRasterLayerAdditiveBlend(
-                mapLayers.getLeafletLayer(topRecord.entry.key),
-                true
-            );
+            setRasterLayerAdditiveBlend(layer, grids.length === 2 && index === 0);
         }
         controlsView.renderBivariateMode?.({
             active: true,
