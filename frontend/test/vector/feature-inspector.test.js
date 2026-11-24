@@ -285,7 +285,8 @@ test("Lasso reads exact attributes from a hidden source with click picking disab
     return {ok: true, json: async () => url.endsWith("/lasso")
       ? {matched: 3, featureIds: ids, geometry: null}
       : {selection: body.selection, features: ids.map((id, index) => ({id,
-        properties: {name: ["First CO2", "Second CO2", "Café"][index], x: index + 1, y: index === 1 ? null : 8 - index}}))}};
+        properties: {name: ["First CO2", "Second CO2", "Café"][index], x: index + 1, y: index === 1 ? null : 8 - index,
+          geometry: "terrace", bbox: 4.5, the_geom: "ridge", boundedBy: 0}}))}};
   });
   t.after(() => h.controller.destroy());
   h.targets.splice(0);
@@ -296,6 +297,9 @@ test("Lasso reads exact attributes from a hidden source with click picking disab
   assert.equal(sample.position, null);
   assert.deepEqual(sample.observations.map(row => [row.featureId, row.properties.x, row.properties.y, row.focus]),
     [[ids[0], 1, 8, null], [ids[1], 2, null, null], [ids[2], 3, 6, null]]);
+  assert.deepEqual(h.documentContext.querySelector("#vector-feature-attributes").children.map(cell => cell.textContent),
+    ["Feature ID", "-7", "name", "First CO2", "x", "1", "y", "8",
+      "geometry", "terrace", "bbox", "4.5", "the_geom", "ridge", "boundedBy", "0"]);
   assert.deepEqual(requests.map(request => request.url), ["/api/vector-sampling/lasso", "/api/vector-sampling/features"]);
   assert.deepEqual(requests[1].body.featureIds, ids);
   assert.equal(h.wmsHighlights.length, 0);
@@ -669,9 +673,12 @@ test("attribute formatting is bounded and excludes the geometry field", () => {
   assert.deepEqual(vectorFeatureAttributes({ id: "parcels.1", properties: {
     geometry: "not displayed",
     bbox: [0, 0, 1, 1],
+    the_geom: "map geometry",
+    boundedBy: "map bounds",
+    parcel_shape: "declared geometry",
     habitat: "wetland",
     rank: 2,
-  } }, "geometry"), [
+  } }, "parcel_shape"), [
     { name: "Feature ID", value: "parcels.1" },
     { name: "habitat", value: "wetland" },
     { name: "rank", value: "2" },

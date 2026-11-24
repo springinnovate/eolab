@@ -24,6 +24,7 @@ const TIME_SERIES_AVAILABLE_HELP =
 const TIME_SERIES_UNAVAILABLE_HELP =
     "Select at least two features with Picker or Lasso to compare their fields.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
+const WMS_GEOMETRY_FIELDS = new Set(["geometry", "the_geom", "boundedBy", "bbox"]);
 const MAX_SELECTION_HISTORY_ENTRIES = 20;
 
 /**
@@ -216,20 +217,20 @@ export function formatVectorFeatureAttribute(value, format) {
 }
 
 /**
- * Return inspector labels and formatted values without changing source properties or including geometry metadata.
+ * Format the fields shown in Features. Lasso supplies original scalar attributes.
+ * Map clicks can also supply WMS geometry fields, which are omitted from the list.
  *
- * @param {Object} feature Validated GeoJSON Feature.
- * @param {string|null} primaryGeometry Catalog-declared geometry field.
+ * @param {{id?:string|number|null,properties:Record<string,unknown>}} feature Original or WMS feature properties and ID.
+ * @param {string|null} [primaryGeometry=null] Catalog-declared WMS geometry field.
  * @param {import("../feature-field-formats.js").FeatureFieldFormats} [formats] Labels and numeric display settings for this view.
+ * @param {FeatureSelectionContext["kind"]} [selectionKind="click"] How the inspector acquired these properties.
  * @return {{name:string,value:string}[]} Bounded display attributes.
  */
-export function vectorFeatureAttributes(feature, primaryGeometry = null, formats = DEFAULT_FIELD_FORMATS) {
-    const geometryNames = new Set(
-        [primaryGeometry, "geometry", "the_geom", "boundedBy", "bbox"]
-            .filter((name) => typeof name === "string")
-    );
+export function vectorFeatureAttributes(
+    feature, primaryGeometry = null, formats = DEFAULT_FIELD_FORMATS, selectionKind = "click"
+) {
     const attributes = Object.entries(feature.properties)
-        .filter(([name]) => !geometryNames.has(name))
+        .filter(([name]) => selectionKind === "lasso" || (name !== primaryGeometry && !WMS_GEOMETRY_FIELDS.has(name)))
         .map(([name, value]) => {
             const format = Object.hasOwn(formats, name) ? formats[name] : undefined;
             return {name: format?.displayName ?? name, value: formatVectorFeatureAttribute(value, format)};
@@ -1219,7 +1220,9 @@ export class VectorFeatureInspectorController {
         const display = this.getFieldDisplay(target.sourceId);
         this.fieldDisplay.show(display && {...display, sourceId: target.sourceId, properties: feature.properties});
         this.attributes.replaceChildren();
-        const entries = vectorFeatureAttributes(feature, target.primaryGeometry, display?.formats);
+        const entries = vectorFeatureAttributes(
+            feature, target.primaryGeometry, display?.formats, this.#selectionContext.kind
+        );
         if (entries.length === 0) {
             const term = this.document.createElement("dt");
             term.textContent = "Attributes";
