@@ -406,6 +406,18 @@
       await settleLayout();
       const closeSettings = menu.querySelector('[role="menuitem"][aria-label="Close Settings"]');
       check(closeSettings && isReachable(closeSettings), "All tabs must offer an independent Close Settings action");
+      const closeHistogram = menu.querySelector('[aria-label="Close raster histograms"]');
+      closeHistogram.focus();
+      for (const key of ["ArrowDown", "ArrowUp"]) {
+        document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      }
+      check(document.activeElement === closeHistogram,
+        "Passing a tool without a close button must keep keyboard focus in the close column");
+      document.activeElement.click();
+      check(document.querySelector("#map-histogram-panel").hidden && dock.activeTool === "raster-clips",
+        "Closing Histograms after arrow navigation must keep the raster download open");
+      index.click();
+      await settleLayout();
       document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
       const settingsChoice = [...menu.querySelectorAll('[role="menuitemradio"]')].find(choice =>
         choice.querySelector("span").textContent === "Settings");

@@ -206,7 +206,7 @@ export class ToolTabStrip {
 
     /**
      * Switch tabs or move between their close buttons along the strip. In All tabs,
-     * move vertically between tool rows and horizontally between a tool and its close action.
+     * move vertically within the current column and horizontally between a tool and its close action.
      * @param {KeyboardEvent} event Key pressed on a tab or a menu item.
      * @param {boolean} inMenu Whether the key came from the open menu.
      * @return {void}
@@ -238,8 +238,9 @@ export class ToolTabStrip {
         let controls;
         if (inMenu) {
             const closeColumn = event.target.getAttribute("role") === "menuitem";
-            controls = enabled.map(({ choice, menuClose }) =>
-                closeColumn && menuClose && !menuClose.hidden && !menuClose.disabled ? menuClose : choice);
+            controls = closeColumn
+                ? enabled.map(item => item.menuClose).filter(button => button && !button.hidden && !button.disabled)
+                : enabled.map(item => item.choice);
         } else if (onClose) {
             controls = enabled.filter(({ tab, close }) => close && this.visibleTabs.includes(tab) && tab.getAttribute("data-open") === "true")
                 .map(item => item.close);
