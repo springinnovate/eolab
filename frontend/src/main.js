@@ -941,12 +941,17 @@ async function initializeCatalog(
     leafletMap.once("unload", () => timeline.destroy());
     /** Present tile progress and tell the timeline which publication has drawn for each view.
      * @param {import("./map-layers/tile-recovery.js").MapTileStatus} status Current viewport progress.
-     * @param {Map<string,import("./map-layers/raster-frame.js").MapFrame>} displayed Drawn grid and observation by view key.
+     * @param {Map<string,import("./map-layers/raster-frame.js").ViewportFrame>} displayed Frames drawn or outside the viewport, by view key.
      * @return {void}
      */
     function presentMapStatus(status, displayed) {
         mapRenderStatus.update(status);
-        timeline.setMapStatus(status, new Map(Array.from(displayed, ([key, frame]) => [key, frame.observation])));
+        const observations = new Map();
+        for (const [key, frame] of displayed) {
+            if (frame.observation) observations.set(key, frame.outsideViewport
+                ? {...frame.observation, outsideViewport: true} : frame.observation);
+        }
+        timeline.setMapStatus(status, observations);
     }
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,

@@ -58,7 +58,7 @@ function fixture(create = null) {
         } },
         onStatus: (status, views) => {
             statuses.push(status);
-            displayed.push(Array.from(views.values(), frame => frame.descriptor.layerName));
+            displayed.push([...views.values()].filter(frame => !frame.outsideViewport).map(frame => frame.descriptor.layerName));
             map.onDrawn?.(views);
         },
     });
@@ -240,6 +240,11 @@ test("offscreen buffered requests do not prevent visible completion", async () =
     f.tile(3); // Still loading outside the viewport; the grid has not fired load.
     layer.emit("tileload", { tile }); await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 1, loaded: 1, failed: 0 });
+    let views;
+    f.map.onDrawn = next => { views = next; };
+    f.map.bounds = {min: {x: 512, y: 0}, max: {x: 768, y: 256}};
+    f.map.emit("moveend"); await flush();
+    assert.equal(views.get("0")?.outsideViewport, true, "the composite finished without any tiles in this viewport");
     f.renderer.destroy();
 });
 

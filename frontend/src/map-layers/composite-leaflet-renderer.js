@@ -6,6 +6,7 @@ import { revealLoadedRasterFrame } from "./raster-frame.js";
 /** @typedef {import("./tile-recovery.js").MapTileStatus} MapTileStatus */
 
 /** @typedef {import("./raster-frame.js").MapFrame} MapFrame */
+/** @typedef {import("./raster-frame.js").ViewportFrame} ViewportFrame */
 /** @typedef {{layer:Object,recovery:TileRecovery,status:MapTileStatus}} CompositeGrid */
 /** @typedef {{signature:string,views:Map<string,MapFrame>,layers:Object[],grid:CompositeGrid|null,request:AbortController,status:MapTileStatus}} CompositeFrame */
 
@@ -17,7 +18,7 @@ export class CompositeLeafletRenderer {
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Leaflet map.
      * @param {{create:(layers:Object[],signal:AbortSignal)=>Promise<Object>}} configuration.client Plan client.
-     * @param {(status:MapTileStatus,displayed:Map<string,MapFrame>)=>void} [configuration.onStatus] Requested tile progress and the views with drawn pixels.
+     * @param {(status:MapTileStatus,displayed:Map<string,ViewportFrame>)=>void} [configuration.onStatus] Tile progress and the frames drawn or outside the viewport.
      */
     constructor({ leaflet, leafletMap, client, onStatus = () => {} }) {
         this.leaflet = leaflet;
@@ -214,6 +215,14 @@ export class CompositeLeafletRenderer {
     #report() {
         const status = this.selected?.grid?.status ?? this.selected?.status ??
             {phase: "idle", total: 0, loaded: 0, failed: 0};
-        this.onStatus(status, this.drawn?.grid.recovery.hasLoadedTilesInView ? this.drawn.views : new Map());
+        if (this.drawn?.grid.recovery.hasLoadedTilesInView) {
+            this.onStatus(status, this.drawn.views);
+        } else {
+            const views = new Map();
+            if (status.phase === "complete" && status.total === 0) {
+                for (const [key, frame] of this.selected.views) views.set(key, {...frame, outsideViewport: true});
+            }
+            this.onStatus(status, views);
+        }
     }
 }

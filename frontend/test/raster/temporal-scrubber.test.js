@@ -103,6 +103,10 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
     }});
     try {
         widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
+        widget.setMapStatus({phase: "loading"}, new Map([["rain", {variable: "rain", time: stamps[0], outsideViewport: true}]]));
+        assert.equal(controls.status.textContent, "", "an empty viewport has no pending raster");
+        assert.equal(controls.display.textContent, "");
+        assert.equal(controls.play.disabled, false, "a user can play through an observation outside the viewport");
         controls.play.dispatchEvent(new Event("click"));
         assert.deepEqual(prepared.map(frame => frame.time), stamps.slice(1));
         context.mock.timers.tick(167);

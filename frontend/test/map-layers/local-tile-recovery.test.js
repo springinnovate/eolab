@@ -110,8 +110,15 @@ test("an annotation map keeps already drawn tiles when a pan and a date change o
 
 test("a view outside catalog layer bounds has no missing tiles or endless loading", async () => {
     const f = fixture();
+    const observation = {variable: "wind", time: "2026-07-01T12:00:00Z"};
+    f.set.render(f.rendering.map(row => row.key === "a" ? {...row, observation} : row));
     await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 0, loaded: 0, failed: 0 });
+    assert.equal(f.displayed().get("a")?.outsideViewport, true, "the selected raster is outside the viewport");
+    f.layers.get("b").emit("tileload", {tile: f.tile("b")}); await flush();
+    assert.equal(f.status().loaded, 1);
+    assert.deepEqual(f.displayed().get("a").observation, observation);
+    assert.equal(f.displayed().get("a").outsideViewport, true, "another raster's visible tile does not change this row's status");
     f.set.clear();
 });
 

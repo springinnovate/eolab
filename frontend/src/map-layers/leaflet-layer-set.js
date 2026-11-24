@@ -4,6 +4,7 @@ import { TileRecovery } from "./tile-recovery.js";
 import { revealLoadedRasterFrame } from "./raster-frame.js";
 
 /** @typedef {import("./raster-frame.js").MapFrame} MapFrame */
+/** @typedef {import("./raster-frame.js").ViewportFrame} ViewportFrame */
 
 const INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT = 1;
 
@@ -15,8 +16,8 @@ export class LeafletLayerSet {
      * @param {{removeLayer:(layer:Object)=>void}} leafletMap Leaflet map.
      * @param {{update:(layers:Object[],options?:{keepPreviousFrame:boolean,views:Map<string,MapFrame>})=>void,clear:()=>void,prepare:(layers:Object[],signal:AbortSignal)=>Promise<void>,drawnView:(key:string)=>MapFrame|undefined}|null}
      * [compositeRenderer=null] Optional ordinary-map composite renderer.
-     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:Map<string,MapFrame>)=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
-     * [tileStatus=null] Optional feedback for independent grids beside local layers.
+     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:Map<string,ViewportFrame>)=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
+     * [tileStatus=null] Independent grid progress and the frames drawn or outside the viewport.
      */
     constructor(leafletMap, compositeRenderer = null, tileStatus = null) {
         this.leafletMap = leafletMap;
@@ -459,8 +460,15 @@ export class LeafletLayerSet {
             : failed ? "incomplete" : "complete";
         const displayed = new Map();
         for (const {key} of this.rendering) {
-            const frame = this.#require(key).drawnFrame;
-            if (frame && this.localTileRecovery.get(frame.layer)?.recovery.hasLoadedTilesInView) displayed.set(key, frame);
+            const record = this.#require(key), frame = record.drawnFrame;
+            if (frame && this.localTileRecovery.get(frame.layer)?.recovery.hasLoadedTilesInView) {
+                displayed.set(key, frame);
+            } else {
+                const status = this.localTileRecovery.get(record.layer)?.status;
+                if (record.frame && status?.phase === "complete" && status.total === 0) {
+                    displayed.set(key, {...record.frame, outsideViewport: true});
+                }
+            }
         }
         this.tileStatus.onStatus({ phase, total, loaded, failed }, displayed);
     }

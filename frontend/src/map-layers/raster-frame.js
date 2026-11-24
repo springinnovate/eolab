@@ -2,6 +2,10 @@
  * @typedef {{layer:Object,descriptor:Object,observation:{variable:string,time:string}|null}} MapFrame
  */
 
+/** A frame reported to the timeline. An outside-viewport frame has finished without drawing tiles here.
+ * @typedef {MapFrame & {outsideViewport?:boolean}} ViewportFrame
+ */
+
 /** Show a ready raster in the outgoing grid's position at its configured opacity.
  * In Chromium, removing the drawn grid while its replacement is elsewhere in
  * the pane can expose the basemap for one paint. Position the replacement while
