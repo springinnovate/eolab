@@ -32,6 +32,10 @@ from eolab_app.processing.flow_area import (
 from eolab_app.processing.models import ProcessingError
 from raster_source_support import SOURCE
 
+EQUAL_EARTH_HALF_WIDTH = Transformer.from_crs(
+    4326, 8859, always_xy=True, force_over=True
+).transform(330, 0)[0]
+
 
 def _trace_both_directions(
     directory: Path,
@@ -143,6 +147,33 @@ def test_subpixel_polygon_stops_before_reading_elevations(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("polygon", "vector_crs", "dem_crs", "grid", "shape"),
     [
+        pytest.param(
+            box(
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(-32, -0.3),
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(-28, 0.3),
+            ),
+            "EPSG:3857",
+            "EPSG:8859",
+            from_origin(
+                -EQUAL_EARTH_HALF_WIDTH,
+                EQUAL_EARTH_HALF_WIDTH / 360,
+                EQUAL_EARTH_HALF_WIDTH / 180,
+                EQUAL_EARTH_HALF_WIDTH / 180,
+            ),
+            (1, 360),
+            id="equal-earth-asia-pacific-seam",
+        ),
+        pytest.param(
+            box(
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(-35, 20),
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(-25, 70),
+            ),
+            "EPSG:3857",
+            "EPSG:8859",
+            from_origin(14450000, 5310000, 10000, 10000),
+            (12, 40),
+            id="curved-map-edge",
+        ),
         pytest.param(
             box(
                 *Transformer.from_crs(4326, 3832, always_xy=True).transform(178, 10),

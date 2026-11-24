@@ -206,6 +206,36 @@ def test_native_selection_count_and_hectares_use_the_same_boundary(
     )
 
 
+def test_catalog_hectares_cross_the_vector_prime_meridian_cut(tmp_path: Path) -> None:
+    """Measure the part of a Pacific-prime-meridian polygon on a WGS84 grid.
+
+    Args:
+        tmp_path: Directory for the native vector, raster and result table.
+    """
+    vector = write_selection(
+        tmp_path / "pacific.gpkg",
+        [mapping(box(-2, 1.2, 2, 1.8))],
+        crs="+proj=longlat +datum=WGS84 +pm=180 +type=crs",
+    )
+    area = AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(vector)["bbox"],
+        catalogSelection=vector.selection,
+        resolved=vector,
+    )
+    path = write_source(
+        tmp_path / "raster.tif",
+        np.ones((1, 5), dtype="uint8"),
+        transform=from_origin(175, 2, 1, 1),
+    )
+    spec = make_spec(path, ["count(a) + 0 * areaha(a > 0)", "areaha(a > 0)"], area)
+    result = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
+    assert float(result.rows[0]["value"]) == 2
+    assert float(result.rows[1]["value"]) == pytest.approx(
+        reference_area(box(178, 1.2, 180, 1.8)), rel=1e-8
+    )
+
+
 @pytest.mark.parametrize(("crs", "north"), [("EPSG:6931", 90), ("EPSG:6932", -70)])
 def test_polar_catalog_hectares_include_the_pole(
     tmp_path: Path, crs: str, north: int
