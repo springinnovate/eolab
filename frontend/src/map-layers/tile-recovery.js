@@ -130,17 +130,19 @@ export class TileRecovery {
      * @return {boolean} Whether the tile is currently visible.
      */
     isVisible(record) {
-        return record.coords.z === Math.round(this.map.getZoom()) && this.#intersectsViewport(record.coords, 1);
+        const zoom = this.map.getZoom();
+        return record.coords.z === Math.round(zoom) && this.#intersectsViewport(record.coords, zoom);
     }
 
     /** Test a tile's footprint in the viewport's pixel coordinates.
-     * @param {{x:number,y:number}} coords Tile column and row at its native zoom.
-     * @param {number} scale Ratio of viewport pixels to tile pixels at that zoom.
+     * @param {{x:number,y:number,z:number}} coords Tile column, row and native zoom.
+     * @param {number} zoom Current map zoom, including fractional steps.
      * @return {boolean} Whether the scaled tile overlaps the viewport.
      */
-    #intersectsViewport({x, y}, scale) {
+    #intersectsViewport({x, y, z}, zoom) {
         const bounds = this.map.getPixelBounds();
         const size = this.layer.getTileSize();
+        const scale = zoom === z ? 1 : this.map.getZoomScale(zoom, z);
         const width = size.x * scale, height = size.y * scale;
         return x * width < bounds.max.x && (x + 1) * width > bounds.min.x &&
             y * height < bounds.max.y && (y + 1) * height > bounds.min.y;
@@ -166,7 +168,7 @@ export class TileRecovery {
             const loaded = tiles.filter(record => record.phase === "loaded").length;
             const zoom = this.map.getZoom();
             this.hasLoadedTilesInView = loaded > 0 || records.some(({coords, phase}) => phase === "loaded" &&
-                coords.z !== Math.round(zoom) && this.#intersectsViewport(coords, this.map.getZoomScale(zoom, coords.z)));
+                coords.z !== Math.round(zoom) && this.#intersectsViewport(coords, zoom));
             const failed = tiles.filter(record => record.phase === "failed").length;
             const retrying = tiles.some(record => record.phase === "retrying");
             const pending = tiles.length - loaded - failed;

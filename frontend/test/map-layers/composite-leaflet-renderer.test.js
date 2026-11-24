@@ -134,6 +134,14 @@ test("a prepared map is hidden until its exact styled stack is selected and paus
     assert.deepEqual(f.displayed.at(-1), ["May"]);
 
     const third = [{layerName: "June", opacity: 0.4}];
+    f.map.zoom = 1.4;
+    f.map.bounds = {min: {x: 280, y: 0}, max: {x: 320, y: 100}};
+    f.map.emit("zoomend"); await flush();
+    assert.equal(f.status().loaded, 1, "the enlarged current-level May tile covers this fractional-zoom viewport");
+    assert.deepEqual(f.displayed.at(-1), ["May"]);
+    f.map.zoom = 1;
+    f.map.bounds = {min: {x: 0, y: 0}, max: {x: 512, y: 256}};
+    f.map.emit("zoomend");
     f.tile(1); // A pan exposed one more tile of the current May grid.
     await flush();
     let left, right;
