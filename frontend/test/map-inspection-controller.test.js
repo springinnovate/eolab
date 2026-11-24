@@ -585,7 +585,8 @@ test("All tabs keeps the active and previous views in a crowded row and opens th
     h.controller.showModels();
     const model = h.doc.querySelector("#map-inspection-tab-models");
     const index = h.doc.querySelector("#map-inspection-all-tabs");
-    const choices = h.doc.querySelector("#map-inspection-tab-menu").children.filter(row => !row.hidden);
+    const choices = h.doc.querySelector("#map-inspection-tab-menu").children.filter(row =>
+        !row.hidden && row.getAttribute("role") === "menuitemradio");
     assert.equal(index.getAttribute("aria-label"), "All tabs (5)");
     assert.equal(model.parentElement.getAttribute("data-overflow"), "false");
     assert.equal(h.histogramTab.parentElement.getAttribute("data-overflow"), "false");

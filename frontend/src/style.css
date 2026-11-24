@@ -4461,7 +4461,8 @@ article.raster-histogram-summary {
   content: ""; position: absolute; inset-block-start: 3px; inset-inline-end: 5px;
   width: 6px; height: 6px; border-radius: 50%; background: var(--brand);
 }
-.tool-tab-menu { font-size: var(--font-size-ui); }
+.tool-tab-menu { grid-template-columns: minmax(0, 1fr) auto; font-size: var(--font-size-ui); }
+.tool-tab-menu [role="menuitemradio"] { grid-column: 1; }
 .tool-tab-menu button {
   position: relative;
   display: grid;
@@ -4478,6 +4479,7 @@ article.raster-histogram-summary {
 }
 .tool-tab-menu button:is(:hover, :focus-visible):not(:disabled) { background: var(--surface-hover); }
 .tool-tab-menu button:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.tool-tab-menu .tool-tab-menu-close { grid-column: 2; min-width: 32px; padding: 4px 8px; place-content: center; font-size: 1.1rem; }
 .tool-tab-menu button[aria-checked="true"]::after {
   content: "✓" / ""; position: absolute; inset: 6px 8px auto auto; color: var(--brand-press);
 }
@@ -4488,6 +4490,7 @@ article.raster-histogram-summary {
 .tool-tab-menu [hidden] { display: none; }
 @media (pointer: coarse) {
   .tool-tab, .tool-tab-close, .tool-tab-index, .tool-tab-menu button { min-height: 44px; min-width: 44px; }
+  .tool-tab-menu .tool-tab-menu-close { min-width: 44px; }
 }
 
 .map-inspection-panels {

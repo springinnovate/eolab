@@ -358,7 +358,7 @@
         "A background result moved focus away from model setup");
       index.click();
       await settleLayout();
-      const choices = [...menu.querySelectorAll("button:not([hidden])")];
+      const choices = [...menu.querySelectorAll('[role="menuitemradio"]:not([hidden])')];
       check(menu.matches(":popover-open") && choices.length === tabs.length &&
         index.textContent.includes(`(${tabs.length})`), "All tabs count and available views disagree");
       const selected = menu.querySelector('[aria-checked="true"]');
@@ -386,6 +386,27 @@
       check(document.activeElement === filter && filter.getAttribute("aria-selected") === "true" &&
         document.querySelector("#vector-filter-panel").getAttribute("aria-hidden") === "false",
         "Left Arrow after choosing Style did not focus Filter and open its panel");
+      document.querySelector("#open-settings").click();
+      dock.showPlanning();
+      dock.showRasterClips();
+      const clipTab = document.querySelector("#map-inspection-tab-raster-clips");
+      const tabBar = index.parentElement;
+      tabBar.style.inlineSize = `${clipTab.parentElement.offsetWidth + index.offsetWidth + 2}px`;
+      await settleLayout();
+      check(!isReachable(document.querySelector("#close-settings")) && isReachable(clipTab),
+        "Settings must be in overflow while Download raster clip is selected");
+      index.click();
+      await settleLayout();
+      const closeSettings = menu.querySelector('[role="menuitem"][aria-label="Close Settings"]');
+      check(closeSettings && isReachable(closeSettings), "All tabs must offer an independent Close Settings action");
+      document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+      check(document.activeElement === closeSettings, "The last overflow close action must be reachable by keyboard");
+      closeSettings.click();
+      check(document.querySelector("#settings-panel").hidden && dock.activeTool === "raster-clips" &&
+        document.activeElement === clipTab && !menu.matches(":popover-open"),
+        "Closing Settings from overflow must preserve the selected raster download");
+      tabBar.style.removeProperty("inline-size");
+      dock.hideRasterClips();
       dock.hideModels();
       dock.hideAnnotations();
       dock.hidePlanning();

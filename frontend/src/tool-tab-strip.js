@@ -17,7 +17,7 @@ export function positionToolMenu(menu, button) {
 /** Keep the active and recent views visible in a tab row and expose overflow through All tabs. */
 export class ToolTabStrip {
     /**
-     * Pair each existing tab with a persistent menu item that activates the same button.
+     * Pair each tab with menu actions that activate it or use its existing close button.
      * @param {Document} documentContext Document containing this row's controls.
      * @param {string} idPrefix Shared ID prefix for the -tabs list, -all-tabs button,
      * -tab-count label and -tab-menu popover. Each list child is a tab button or a
@@ -49,9 +49,23 @@ export class ToolTabStrip {
                 this.menu.hidePopover();
                 this.#activateTab(tab);
             }, options);
+            const menuClose = close && documentContext.createElement("button");
+            if (menuClose) {
+                menuClose.type = "button";
+                menuClose.tabIndex = -1;
+                menuClose.className = "tool-tab-menu-close";
+                menuClose.setAttribute("role", "menuitem");
+                menuClose.setAttribute("aria-label", close.getAttribute("aria-label"));
+                menuClose.textContent = "×";
+                menuClose.addEventListener("click", () => {
+                    this.menu.hidePopover();
+                    close.click();
+                }, options);
+                this.menu.append(menuClose);
+            }
             tab.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
             close?.addEventListener("keydown", event => this.#handleNavigationKey(event, false), options);
-            return { container, tab, close, choice, label, detail };
+            return { container, tab, close, choice, menuClose, label, detail };
         });
         this.menu.addEventListener("keydown", event => this.#handleNavigationKey(event, true), options);
         this.menu.addEventListener("toggle", event => {
@@ -88,13 +102,17 @@ export class ToolTabStrip {
         this.activeTab = active;
         this.list.hidden = hidden;
         const first = this.items.find(({ tab }) => !tab.hidden && !tab.disabled);
-        for (const { container, tab, close, choice, label, detail } of this.items) {
+        for (const { container, tab, close, choice, menuClose, label, detail } of this.items) {
             container.hidden = tab.hidden;
             tab.setAttribute("aria-selected", String(tab === active));
             tab.tabIndex = tab === (active ?? first?.tab) ? 0 : -1;
             if (close) close.tabIndex = tab === active ? 0 : -1;
             choice.hidden = tab.hidden;
             choice.disabled = tab.disabled;
+            if (menuClose) {
+                menuClose.hidden = tab.hidden || tab.getAttribute("data-open") !== "true";
+                menuClose.disabled = close.disabled;
+            }
             choice.setAttribute("aria-checked", String(tab === active));
             label.textContent = tab.textContent;
             const context = contexts?.get(tab);
@@ -199,10 +217,15 @@ export class ToolTabStrip {
         }
         const enabled = this.items.filter(({ tab }) => !tab.hidden && !tab.disabled);
         const onClose = !inMenu && event.target.classList.contains("tool-tab-close");
-        const controls = onClose
-            ? enabled.filter(({ tab, close }) => close && this.visibleTabs.includes(tab) && tab.getAttribute("data-open") === "true")
-                .map(item => item.close)
-            : enabled.map(item => inMenu ? item.choice : item.tab);
+        let controls;
+        if (inMenu) {
+            controls = Array.from(this.menu.children).filter(button => !button.hidden && !button.disabled);
+        } else if (onClose) {
+            controls = enabled.filter(({ tab, close }) => close && this.visibleTabs.includes(tab) && tab.getAttribute("data-open") === "true")
+                .map(item => item.close);
+        } else {
+            controls = enabled.map(item => item.tab);
+        }
         const current = controls.indexOf(event.target);
         if (current === -1) return;
         let next;
