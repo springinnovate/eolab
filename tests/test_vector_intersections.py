@@ -96,19 +96,18 @@ def test_filtered_source_uses_exact_geometry_and_includes_boundary_contact(tmp_p
     assert match_features(target, {str(UUID(int=1)): ()}, _spatial_rule()).counts == {"matched": 0, "total": 6}
 
 
-@pytest.mark.parametrize("as_target", [True, False])
-def test_curved_geopackage_polygons_keep_their_intersection_membership(
-    tmp_path: Path, as_target: bool
-) -> None:
-    """Read a native curved polygon as either an original target or a boundary.
+def _write_native_geometry(path: Path, wkt: str) -> ResolvedCatalogSelection:
+    """Write an original feature whose native type is unavailable in Shapely.
 
     Args:
-        tmp_path: Temporary directory for the two native GeoPackages.
-        as_target: Compare the curved original against a linear boundary if true.
+        path: Temporary GeoPackage for the selected layer.
+        wkt: Original geometry in GDAL's well-known text format.
+
+    Returns:
+        A resolved selection containing the feature at native ID 1.
     """
     from osgeo import gdal, ogr, osr
 
-    path = tmp_path / "curves.gpkg"
     with (
         gdal.ExceptionMgr(),
         ogr.ExceptionMgr(),
@@ -117,30 +116,82 @@ def test_curved_geopackage_polygons_keep_their_intersection_membership(
     ):
         crs = osr.SpatialReference()
         assert crs.ImportFromEPSG(4326) == 0
-        layer = dataset.CreateLayer("features", crs, ogr.wkbCurvePolygon)
+        geometry = ogr.CreateGeometryFromWkt(wkt)
+        layer = dataset.CreateLayer("features", crs, geometry.GetGeometryType())
         feature = ogr.Feature(layer.GetLayerDefn())
-        geometry = ogr.CreateGeometryFromWkt(
-            "CURVEPOLYGON (CIRCULARSTRING (1 0, 0 1, -1 0, 0 -1, 1 0))"
-        )
         assert feature.SetGeometry(geometry) == 0
         assert layer.CreateFeature(feature) == 0
-    curved = resolve_vector_file_selection(
+    return resolve_vector_file_selection(
         path,
         UploadedSelection(
             uploadId=UUID(int=2), layerName="features", filter=VectorFilter()
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "CURVEPOLYGON (CIRCULARSTRING (1 0, 0 1, -1 0, 0 -1, 1 0))",
+        "TRIANGLE Z ((0 0 7, 2 0 7, 0 2 7, 0 0 7))",
+        "TIN (((-4 -4,-3 -4,-4 -3,-4 -4)),((0 0,2 0,0 2,0 0)))",
+        "POLYHEDRALSURFACE (((-4 -4,-3 -4,-4 -3,-4 -4)),((0 0,2 0,0 2,0 0)))",
+    ],
+    ids=["curved-polygon", "triangle-z", "tin", "polyhedral-surface"],
+)
+@pytest.mark.parametrize("as_target", [True, False])
+def test_native_geopackage_surfaces_keep_their_intersection_membership(
+    tmp_path: Path, as_target: bool, wkt: str
+) -> None:
+    """Read a native polygonal surface as either an original target or a boundary.
+
+    Args:
+        tmp_path: Temporary directory for the two native GeoPackages.
+        as_target: Compare the native surface against a linear boundary if true.
+        wkt: Native surface with a part intersecting the first linear polygon.
+    """
+    surface = _write_native_geometry(tmp_path / "surface.gpkg", wkt)
     linear = _write_layer(
         tmp_path / "linear.gpkg",
         [
-            (box(0.7, 0.6, 0.8, 0.7), "intersects the arc"),
+            (box(0.7, 0.6, 0.8, 0.7), "intersects the surface"),
             (box(2, 2, 3, 3), "outside"),
         ],
         geometry_type="Polygon",
     )
-    target, boundary = (curved, linear) if as_target else (linear, curved)
+    target, boundary = (surface, linear) if as_target else (linear, surface)
     matches = match_features(target, {str(UUID(int=1)): boundary}, _spatial_rule())
     assert matches.ids == {1}
+
+
+def test_measured_native_surface_keeps_only_spatial_coordinates(tmp_path: Path) -> None:
+    """Keep the original elevation when converting measured vertices to GeoJSON."""
+    from eolab_app.feature_intersection import iter_original_features
+
+    surface = _write_native_geometry(
+        tmp_path / "measured.gpkg",
+        "TRIANGLE ZM ((0 0 7 10,2 0 8 20,0 2 9 30,0 0 7 10))",
+    )
+    [(_, _, polygon)] = list(iter_original_features(surface, None, None))
+    assert list(polygon.exterior.coords) == [(0, 0, 7), (2, 0, 8), (0, 2, 9), (0, 0, 7)]
+
+
+def test_mixed_collection_keeps_nested_surfaces_and_points(tmp_path: Path) -> None:
+    """Select an original collection by either part, and exclude the empty gap."""
+    collection = _write_native_geometry(
+        tmp_path / "collection.gpkg",
+        "GEOMETRYCOLLECTION (POINT (4 4), GEOMETRYCOLLECTION "
+        "(TRIANGLE ((0 0,2 0,0 2,0 0))))",
+    )
+    for area, expected in [
+        (box(0.7, 0.6, 0.8, 0.7), {1}),
+        (box(3.9, 3.9, 4.1, 4.1), {1}),
+        (box(2, 2, 3, 3), set()),
+    ]:
+        assert (
+            match_features(collection, {}, VectorFilter(), required_area=area).ids
+            == expected
+        )
 
 
 @pytest.mark.parametrize("as_target", [True, False])

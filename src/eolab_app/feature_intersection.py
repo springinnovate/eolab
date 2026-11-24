@@ -6,14 +6,14 @@ from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, 
 from contextlib import ExitStack, closing, contextmanager
 from dataclasses import replace
 from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import fiona
 from fiona.transform import transform_geom
 from pyproj import Transformer
-from shapely import STRtree, get_num_coordinates
+from shapely import STRtree, from_wkb, get_num_coordinates
 from shapely.errors import GEOSException
-from shapely.geometry import shape
+from shapely.geometry import GeometryCollection, shape
 from shapely.geometry.base import BaseGeometry
 
 from eolab_app.bounded_geometry import GeometryValidationError
@@ -30,6 +30,10 @@ from eolab_app.catalog_selection import (
     VectorSelection,
 )
 from eolab_app.polygon_areas import SummaryPolygon
+
+if TYPE_CHECKING:
+    from osgeo import ogr
+
 
 IntersectionLayer = ResolvedCatalogSelection | tuple[SummaryPolygon, ...]
 """An authorized original vector layer or committed WGS84 drawings, in browser order."""
@@ -306,6 +310,45 @@ def match_features(
         raise GeometryValidationError("The layer geometries could not be compared in WGS84.") from error
 
 
+def native_spatial_geometry(geometry: "ogr.Geometry") -> BaseGeometry:
+    """Read an OGR geometry as points, lines or polygons in its native CRS.
+
+    Args:
+        geometry: Borrowed feature geometry, possibly a curve, surface or
+            collection. Spatial coordinates include elevation when present.
+
+    Returns:
+        A Shapely geometry with all parts and holes. Measured ordinates are
+        omitted, as the spatial transforms and GeoJSON consumers use XYZ.
+    """
+    from osgeo import ogr
+
+    if geometry.IsMeasured():
+        geometry = geometry.Clone()
+        geometry.SetMeasured(False)
+    if geometry.HasCurveGeometry():
+        geometry = geometry.GetLinearGeometry()
+    kind = geometry.GetGeometryName()
+    # These conversions take ownership of their argument.
+    if kind == "TRIANGLE":
+        geometry = ogr.ForceToPolygon(geometry.Clone())
+    elif kind in {"TIN", "POLYHEDRALSURFACE"}:
+        geometry = ogr.ForceToMultiPolygon(geometry.Clone())
+    try:
+        return from_wkb(bytes(geometry.ExportToIsoWkb()))
+    except GEOSException:
+        if kind != "GEOMETRYCOLLECTION":
+            raise
+        # Most collections can be decoded in one call. Convert members
+        # individually when a collection contains a native surface type.
+        return GeometryCollection(
+            [
+                native_spatial_geometry(geometry.GetGeometryRef(index))
+                for index in range(geometry.GetGeometryCount())
+            ]
+        )
+
+
 def iter_original_features(
     layer: IntersectionLayer,
     limits: VectorReadLimits | None,
@@ -341,7 +384,6 @@ def iter_original_features(
         return
     from datetime import date
     from osgeo import gdal, ogr
-    from shapely import from_wkb
     from shapely.geometry import mapping
 
     # GDAL's FID accessor is signed 64-bit on every platform. Fiona's C-long
@@ -426,11 +468,8 @@ def iter_original_features(
                 ):
                     continue
                 native_geometry = feature.GetGeometryRef() if read_geometry else None
-                if native_geometry is not None and native_geometry.HasCurveGeometry():
-                    # Fiona linearized curved features before passing them to Shapely.
-                    native_geometry = native_geometry.GetLinearGeometry()
                 geometry = (
-                    from_wkb(bytes(native_geometry.ExportToIsoWkb()))
+                    native_spatial_geometry(native_geometry)
                     if native_geometry is not None
                     else None
                 )
