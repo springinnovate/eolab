@@ -326,7 +326,9 @@ test("published drafts ignore personal autosave and only write on explicit save"
   const loaded = { slug: "amazon", title: "Original", subtitle: "", revision: 1, view: emptySavedMap(10, 20, 6) };
   const visitorControls = { version: 1, choices: { inspectAndSelect: false, lasso: true,
     workspacePanels: false, catalog: true, mapContents: true }, initialPanels: { catalog: true, mapContents: false } };
+  let finishDiscovery;
   const controller = createController({ view, storage, editPublishedMap: true, namedMapSlug: "amazon",
+    listPublisherModels: () => new Promise(resolve => { finishDiscovery = resolve; }),
     viewerVersion: "0.6.0", viewerOrigin: loaded.view.viewer.origin,
     publicationApi: {
       async getForEditing(slug) { assert.equal(slug, "amazon"); return loaded; },
@@ -342,7 +344,9 @@ test("published drafts ignore personal autosave and only write on explicit save"
     viewport: { snapshot: () => position, restore(value) { position = value; } },
     catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
   });
-  await controller.restoreStartupView();
+  const opening = controller.restoreStartupView();
+  await flushAsyncWork();
+  assert.ok(view.editor, "a slow model list must not block editing the map");
   assert.equal(view.editor.complete, true);
   position = emptySavedMap(30, 40, 8).viewport;
   controller.scheduleRemember();
@@ -363,6 +367,8 @@ test("published drafts ignore personal autosave and only write on explicit save"
   assert.ok(submissions.every(({ request }) => request.view.visitorControls === visitorControls));
   assert.deepEqual(headings.at(-1), ["Changed again", ""]);
   assert.match(view.editStatus, /Saved/);
+  finishDiscovery([]);
+  await opening;
   controller.destroy();
   assert.deepEqual(storage.writes, []);
 });
@@ -402,6 +408,7 @@ for (const keepAvailableLayer of [true, false]) test(`published map saves curren
 
 test("publication captures once and preserves that view while correcting a duplicate name", async () => {
   const view = createView(), submissions = [];
+  let finishDiscovery;
   let current = emptySavedMap(10, 20, 6).viewport;
   Object.assign(view, {
     showPublicationForm(defaults) { this.defaults = defaults; },
@@ -410,6 +417,7 @@ test("publication captures once and preserves that view while correcting a dupli
     showPublishedMap(slug) { this.published = slug; },
   });
   const controller = createController({ view, allowPublishing: true,
+    listPublisherModels: () => new Promise(resolve => { finishDiscovery = resolve; }),
     viewport: { snapshot: () => current }, mapLayers: { retainedRecords: [] },
     viewerVersion: "0.6.0", viewerOrigin: "https://viewer.example",
     publicationDefaults: { title: "Site", subtitle: "Explore" },
@@ -420,9 +428,10 @@ test("publication captures once and preserves that view while correcting a dupli
       return candidate;
     } },
   });
-  await controller.openPublicationDialog();
+  const opening = controller.openPublicationDialog();
+  assert.deepEqual(view.defaults, { title: "Site", subtitle: "Explore" }, "the author can edit while discovery is pending");
   current = emptySavedMap(0, 0, 2).viewport;
-  const visitorControls = { version: 1, choices: { inspectAndSelect: false, rasterValues: true, featurePicking: true } };
+  const visitorControls = { version: 1, choices: { inspectAndSelect: false, rasterValues: true, featurePicking: true, runModels: false }, modelIds: [] };
   await controller.publishMap({ title: "New title", subtitle: "", slug: "taken", visitorControls });
   assert.match(view.publicationError, /already in use/);
   await controller.publishMap({ title: "New title", subtitle: "", slug: "new-name", visitorControls });
@@ -433,6 +442,8 @@ test("publication captures once and preserves that view while correcting a dupli
   assert.deepEqual(submissions[1].view.viewport, emptySavedMap(10, 20, 6).viewport);
   assert.equal(submissions[1].view.basemap, "none");
   assert.equal(submissions[1].subtitle, "");
+  finishDiscovery([]);
+  await opening;
 });
 
 test("named URLs take precedence over private state, restore basemap and copy the original link", async () => {

@@ -137,21 +137,17 @@ class DownstreamPlan(HydrologySchema):
 
 
 class ClosedEdgeDownstreamNumericalPolicy(HydrologySchema):
-    """Record the pit-filling policy and model revision used by a downstream run.
+    """Record pit-filling settings and the model commit that produced a downstream run.
 
-    The search limit uses EcoShard's exploration cutoff, not an exact count of
-    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
-    Each saved run keeps the ``wwf_es_beneficiaries`` revision that produced its values.
+    The search limit controls how far EcoShard explores. The number of changed
+    elevations can differ. NoData remains unchanged and MFD retains its edge
+    fallback. Run YAML keeps the full ``wwf_es_beneficiaries`` commit recorded
+    at execution, across upgrades and rollbacks.
     """
 
     version: Literal["hydrology.downstream_beneficiaries.v3"]
-    beneficiariesRevision: Literal[
-        "3f577e27deb347cd4520977eb99474fb81e990fc",
-        "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9",
-        "afb977dd0e923e465958f8b301060c4ff10c8fd7",
-        "eda4acec984ec7b40cb9d745a818773418fa2d68",
-        "f204f4ad6277e381d5bf902da9d5c50655ffbf16",
-        "814fa56310ba90d0e9c9631c339b977dcc6f484d",
+    beneficiariesRevision: Annotated[
+        str, Field(strict=True, pattern=r"^[a-f0-9]{40}$")
     ] = BENEFICIARIES_REVISION
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION

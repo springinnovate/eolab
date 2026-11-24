@@ -10,6 +10,7 @@ import { samplingBoxBounds } from "../sampling-box.js";
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
 import { publishRasterSource } from "./api.js";
 import { loadTemporalTimes } from "./temporal-api.js";
+import { formatObservationTime } from "./observation-time.js";
 import { TemporalControlsView } from "./temporal-controls-view.js";
 import {
     loadRasterStatistics,
@@ -4688,8 +4689,7 @@ export function initializeRasterViewer(
      */
     function temporalRaster(item, selection, available) {
         const variable = item.properties["cube:variables"][selection.variable];
-        const timeLabel = new Date(selection.time).toLocaleString(undefined, {timeZone: "UTC", year: "numeric",
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+        const timeLabel = formatObservationTime(selection.time);
         return {
             source: {collectionId: item.collection, itemId: item.id, ...selection},
             label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel} UTC`,
