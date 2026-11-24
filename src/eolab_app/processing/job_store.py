@@ -166,7 +166,7 @@ class PostgresJobStore:
             UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
             ProcessingError: If the database is temporarily unavailable.
         """
-        resources = files("eolab_app.processing")
+        resources = files("eolab_jobs")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute("SELECT to_regnamespace('processing') AS namespace")
             if cursor.fetchone()["namespace"] is None:
