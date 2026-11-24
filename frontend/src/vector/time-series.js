@@ -389,7 +389,8 @@ export class VectorTimeSeriesController {
             }
         }
         const {xField,yFields,direction,chartType} = this.settings;
-        this.statistics.update(this.active && canShowResults ? this.observations : [], yFields);
+        this.statistics.update(this.active && canShowResults ? this.observations : [], yFields,
+            this.active && this.sampleState === "loading");
         const identity = vectorTimeSeriesPresentation(this.observations,yFields);
         this.heading.textContent = identity?.heading ?? "Compare features";
         this.context.textContent = identity?.context ?? "";
