@@ -152,6 +152,7 @@ def test_conflicting_clues_and_declined_dates(tmp_path: Path, answer: str) -> No
         "snow_2024-7-15",
         "snow_2024-366",
         "snow_2025-01-02_08-30-42",
+        "snow_2024-12-31T08h30m",
         "snow_20241231T083042Z",
     ):
         write_frame(tmp_path / f"{stem}.tif", 5)

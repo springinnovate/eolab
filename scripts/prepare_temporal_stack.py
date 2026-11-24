@@ -103,7 +103,8 @@ TIMESTAMP = (
 )
 # Match the entire date-shaped token so a bad month cannot become a plausible year.
 FILE_DATE = re.compile(
-    r"(?<![a-zA-Z0-9])([0-9]{4,}(?:[-_.][0-9]+)*(?:T[0-9:.+-]+Z?)?)(?![a-zA-Z0-9])"
+    r"(?<![a-zA-Z0-9])([0-9]{4,}(?:[-_.][0-9]+)*(?:T[a-zA-Z0-9:.+-]+)?)"
+    r"(?![a-zA-Z0-9]|[-_.][0-9])"
 )
 
 
