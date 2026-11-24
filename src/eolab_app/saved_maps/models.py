@@ -251,6 +251,7 @@ class MapVisitorChoices(MapDocumentPart):
     workspacePanels: bool = False
     catalog: bool = False
     mapContents: bool = False
+    styleEditing: bool = False
     runModels: bool = False
 
 
@@ -307,7 +308,7 @@ class SavedMapView(MapDocumentPart):
     entry preserves its place in the layer order and its own appearance.
     The basemap is stored as a provider ID such as `"maptiler-streets"`.
     Omitting mapLegend leaves the legend visible and expanded.
-    Omitting visitorControls preserves all Data tools, inspection tools and open Map contents,
+    Omitting visitorControls preserves style editing, all Data tools, inspection tools and open Map contents,
     with Catalog unavailable. Explicit settings leave omitted capabilities off.
     """
 

@@ -503,7 +503,7 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
     mapLayers: { retainedRecords: records,
       setCustomLayer(key, value) { records.find(record => record.entry.key === key).entry.isCustom = value; },
       setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
-      commitStaged(staged) { records.unshift(...staged.map(s => s.record)); }, restoreOrder(keys) { ordered.push(keys); } },
+      commitStaged(staged, {drawingOrder}) { records.unshift(...staged.map(s => s.record)); ordered.push(drawingOrder); } },
     mapLegend: { snapshot: () => legendPreferences, restore(value) { legendPreferences = value; } },
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear() { records.splice(0, records.length, ...records.filter(r => r.entry.item === null)); },
@@ -1630,10 +1630,10 @@ test("upload references survive autosave and links with their field formats, app
   const restarted = createController({ view: restoredView, storage,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { restore() {} }, catalogVisualization: { clear() {} },
-    mapLayers: { retainedRecords: records, commitStaged() {}, getRecord: key => records.find(record => record.entry.key === key),
+    mapLayers: { retainedRecords: records, commitStaged(_layers, {drawingOrder}) { order.push(drawingOrder); },
+      getRecord: key => records.find(record => record.entry.key === key),
       setCustomLayer(key, value) { assert.equal(key, record.entry.key); record.entry.isCustom = value; },
-      setLegendIncluded(key, included) { assert.equal(key, record.entry.key); assert.equal(included, false); },
-      restoreOrder(keys) { order.push(keys); } },
+      setLegendIncluded(key, included) { assert.equal(key, record.entry.key); assert.equal(included, false); } },
     restoreUpload: async (layer, isCurrent) => {
       assert.equal(isCurrent(), true); restored.push(layer); records.push({entry: {...record.entry}}); return record.entry.key;
     },
@@ -1688,9 +1688,8 @@ test("removing a restored upload while another layer loads does not discard the 
   const controller = createController({ view, storage,
     viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
     viewport: { restore() {} }, catalogVisualization: { clear() {} },
-    mapLayers: { retainedRecords: records, commitStaged() {},
-      setLegendIncluded(key) { assert.ok(records.some(record => record.entry.key === key), "only retained layers receive legend changes"); },
-      restoreOrder(keys) { ordered.push(keys); } },
+    mapLayers: { retainedRecords: records, commitStaged(_layers, {drawingOrder}) { ordered.push(drawingOrder); },
+      setLegendIncluded(key) { assert.ok(records.some(record => record.entry.key === key), "only retained layers receive legend changes"); } },
     restoreUpload: async layer => {
       if (layer.uploadId === later.uploadId) await waiting;
       const key = `local:upload:${layer.uploadId}`;
@@ -1755,9 +1754,12 @@ test("temporal views restore independently in mixed map order and retain unavail
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
       setCustomLayer(key, value) { records.find(record => record.entry.key === key).entry.isCustom = value; },
-      commitStaged(staged) { records.push(...staged.map(value => value.record)); },
-      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
-      restoreOrder(keys) { order.push(keys); records.sort((a, b) => keys.indexOf(a.entry.key) - keys.indexOf(b.entry.key)); } },
+      commitStaged(staged, {drawingOrder}) {
+        records.push(...staged.map(value => value.record));
+        order.push(drawingOrder);
+        records.sort((a, b) => drawingOrder.indexOf(a.entry.key) - drawingOrder.indexOf(b.entry.key));
+      },
+      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; } },
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear() { records.length = 0; }, prepare: async item => item,
       stage: async (item, presentation) => ({ record: { entry: { item, ...presentation },

@@ -61,6 +61,9 @@ test("renaming an open filter keeps its draft and updates its panel and tab name
         inspection: { showFilter() { opened++; }, hideFilter() {},
             updateLayerEditorName(editor, name) { names.push([editor, name]); } },
     });
+    const opener = doc.createElement("button");
+    opener.isConnected = true;
+    opener.focus();
     controls.open("quakes");
     const rule = controls.rules.children[0];
     target.label = "Recent earthquakes";
@@ -69,6 +72,8 @@ test("renaming an open filter keeps its draft and updates its panel and tab name
     assert.deepEqual(names.at(-1), ["filter", target.label]);
     assert.equal(controls.rules.children[0], rule);
     assert.equal(opened, 1);
+    controls.closeButton.click();
+    assert.notEqual(doc.activeElement, opener, "the dock restores focus after closing a map Filter tab");
     controls.destroy();
 });
 

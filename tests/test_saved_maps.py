@@ -661,9 +661,11 @@ def test_map_legend_preferences_round_trip() -> None:
 def test_visitor_controls_validate_and_round_trip() -> None:
     """Round-trip visitor choices, including missing recipes and disabled parents."""
     candidate = map_request()
-    for panel_choices, initial_panels in (
+    for choices, initial_panels in (
         ({}, None),
         ({"workspacePanels": True, "catalog": True}, {}),
+        ({"styleEditing": False}, None),
+        ({"styleEditing": True}, None),
         (
             {"workspacePanels": False, "catalog": True, "mapContents": True},
             {"catalog": True, "mapContents": False},
@@ -675,7 +677,7 @@ def test_visitor_controls_validate_and_round_trip() -> None:
                 "inspectAndSelect": False,
                 "featurePicking": True,
                 "lasso": True,
-                **panel_choices,
+                **choices,
             },
             **({"initialPanels": initial_panels} if initial_panels is not None else {}),
         }
@@ -700,6 +702,7 @@ def test_visitor_controls_validate_and_round_trip() -> None:
         {"version": True, "choices": {}},
         {"version": 1, "choices": []},
         {"version": 1, "choices": {"lasso": "true"}},
+        {"version": 1, "choices": {"styleEditing": 1}},
         {"version": 1, "choices": {"zoom": True}},
         {"version": 1, "choices": {}, "unknown": True},
         {"version": 1, "choices": {}, "initialPanels": None},

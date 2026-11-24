@@ -1,5 +1,7 @@
 /** Describe immutable inspected observations and validate map navigation targets. */
 
+/** @typedef {"inspection"|"labels"} VectorInspectionChange A new inspection or selection, or a display-name edit to the same observations. */
+
 /**
  * Immutable scalar-only record constructed by the feature inspector and passed
  * through composition to chart consumers. Consumers trust this producer contract.
@@ -17,7 +19,8 @@
 /**
  * Bounded observations and presentation state from one vector inspection.
  * @typedef {Object} VectorInspectionSample
- * @property {"loading"|"ready"|"empty"|"invalidated"} state Inspection status.
+ * @property {"loading"|"ready"|"empty"|"invalidated"|"interrupted"} state
+ * An interrupted inspection retains only observations received before dismissal.
  * @property {ReadonlyArray<VectorInspectionObservation>} observations Features in inspector order.
  * @property {string} message User-facing inspection status.
  * @property {number} failedLayers Inspected layers that returned an error.

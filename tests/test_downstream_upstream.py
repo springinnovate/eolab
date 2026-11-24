@@ -179,6 +179,11 @@ def test_selected_polygon_matches_raster_starts_on_routing_grids(
         "plain",
         "buffer-cutoff",
         "resampled-signed-values",
+        "embedded-mask",
+        "shifted-embedded-mask",
+        "uint8-nodata",
+        "uint16-nodata",
+        "uint16-maximum",
         "vector-filter",
         "multiple-drains",
         "virtual-link",
@@ -189,7 +194,7 @@ def test_selected_polygon_matches_raster_starts_on_routing_grids(
     ],
 )
 def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> None:
-    """The CLI and EOlab return identical results with the same pit-filling options.
+    """Compare CLI and EOlab rasters and totals for the same sources and settings.
 
     The reference prepares canonical HydroBASINS fields and a known AOI itself;
     it does not use EOlab's input conversion or calculation helpers. The original
@@ -332,6 +337,56 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             values = np.arange(-48, 48, dtype="float32").reshape(8, 12)
             values[5, 5] = -9999
             raster.write(values, 1)
+    expected_masked_values = None
+    if case in {"uint8-nodata", "uint16-nodata", "uint16-maximum"}:
+        if case == "uint8-nodata":
+            expected_masked_values = np.zeros((4, 6), dtype="uint8")
+            expected_masked_values[1, 2:4] = [12, 25]
+            source_values = expected_masked_values
+            nodata = 0
+        else:
+            expected_masked_values = np.tile([4, 8, 0, 0, 0, 0], (4, 1)).astype(
+                "uint16"
+            )
+            if case == "uint16-maximum":
+                expected_masked_values[0, 0] = 65535
+            # Column four is missing in the source; the last two are outside it.
+            source_values = expected_masked_values[:, :4].copy()
+            nodata = 61234
+            source_values[:, 3] = nodata
+        with rasterio.open(sources.rasters["values"]) as original_values:
+            profile = original_values.meta
+        profile.update(
+            width=source_values.shape[1], dtype=source_values.dtype, nodata=nodata
+        )
+        with rasterio.open(sources.rasters["values"], "w", **profile) as raster:
+            raster.write(source_values, 1)
+    if case in {"embedded-mask", "shifted-embedded-mask"}:
+        shifted = case == "shifted-embedded-mask"
+        source_values = np.zeros((4, 6), dtype="float32")
+        source_values[1, :3] = [3, 9, 97]
+        expected_masked_values = np.zeros_like(source_values)
+        if shifted:
+            # The first source column lands in coverage column one.
+            source_values[1, 3:5] = [97, 83]
+            expected_masked_values[1, [1, 2, 4]] = [3, 9, 97]
+        else:
+            expected_masked_values[1, :2] = [3, 9]
+        validity = np.full(source_values.shape, 255, dtype="uint8")
+        validity[1, 2] = 0
+        with rasterio.open(sources.rasters["values"]) as original_values:
+            profile = original_values.meta
+        profile.update(
+            dtype="float32",
+            nodata=83 if shifted else -9999,
+            transform=from_origin(0.75 if shifted else 0, 4, 1, 1),
+        )
+        with (
+            rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True),
+            rasterio.open(sources.rasters["values"], "w", **profile) as raster,
+        ):
+            raster.write(source_values, 1)
+            raster.write_mask(validity)
     reference = tmp_path / "reference"
     reference.mkdir()
     aoi = reference / "reference-area.geojson"
@@ -504,6 +559,26 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
         rows = list(csv.DictReader(stream))
     assert len(rows) == 1
     assert float(artifact.rows[0]["value"]) == float(rows[0]["union_population"])
+    if expected_masked_values is not None:
+        expected_total = float(expected_masked_values.sum(dtype=np.float64))
+        assert float(rows[0]["union_population"]) == expected_total
+        with (wrapped / "result.csv").open(newline="") as stream:
+            [row] = csv.DictReader(stream)
+        assert float(row["value"]) == expected_total
+        provenance = json.loads((wrapped / "provenance.json").read_text())
+        assert provenance["upstreamTotal"] == expected_total
+        assert float(provenance["statistics"][0]["value"]) == expected_total
+        with rasterio.open(wrapped / "coverage.tif") as coverage:
+            assert coverage.transform == from_origin(0, 4, 1, 1)
+            np.testing.assert_array_equal(coverage.read(1), np.ones((4, 6)))
+        with rasterio.open(wrapped / "masked_values.tif") as masked:
+            assert masked.dtypes == (expected_masked_values.dtype.name,)
+            assert masked.nodata == 0
+            assert masked.transform == from_origin(0, 4, 1, 1)
+            np.testing.assert_array_equal(masked.read(1), expected_masked_values)
+            np.testing.assert_array_equal(
+                masked.read_masks(1) > 0, expected_masked_values > 0
+            )
     assert not (wrapped / "upstream").exists()
     print(
         f"{case}: direct CLI {direct_seconds:.3f}s; EOlab plan {planning_seconds:.3f}s; plan + wrapper {wrapped_seconds:.3f}s"
