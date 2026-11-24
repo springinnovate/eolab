@@ -422,7 +422,6 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                         last,
                         None,
                         first,
-                        last,
                         {
                             "snapshot": "instant",
                             "mean": "mean",
@@ -503,13 +502,15 @@ def build_stack(manifest: Path, check: bool) -> None:
             db.executescript("""
                 CREATE TABLE frames (variable TEXT, name TEXT, units TEXT, path TEXT,
                     band INTEGER, valid_time INTEGER, reference_time INTEGER,
-                    interval_start INTEGER, interval_end INTEGER, temporal_type TEXT,
+                    interval_start INTEGER, temporal_type TEXT,
                     dtype TEXT, nodata, crs TEXT, transform TEXT, height INTEGER, width INTEGER,
                     PRIMARY KEY (variable, valid_time));
-                CREATE VIEW observations AS SELECT * FROM frames;
+                CREATE VIEW observations AS SELECT variable, name, units, path, band,
+                    valid_time, reference_time, interval_start, valid_time AS interval_end,
+                    temporal_type, dtype, nodata, crs, transform, height, width FROM frames;
             """)
             db.executemany(
-                "INSERT INTO frames VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
+                "INSERT INTO frames VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
             )
         description = {
             "id": stack.id,

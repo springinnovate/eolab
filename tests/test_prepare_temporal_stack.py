@@ -124,6 +124,15 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
     assert built.returncode == 0, built.stderr
     with closing(sqlite3.connect(root / "catalog.sqlite")) as db:
         assert ("rain_2024.tif",) in list(db.execute("SELECT path FROM observations"))
+        plan = db.execute(
+            "EXPLAIN QUERY PLAN SELECT path FROM observations WHERE variable=? "
+            "AND interval_start < ? AND interval_end > ? ORDER BY valid_time",
+            ("rain", 1735689600, 1704067200),
+        )
+        assert any(
+            "valid_time>?" in detail or "interval_end>?" in detail
+            for *_, detail in plan
+        )
     assert run_cli("build", manifest).returncode == 1
     manager, writer = create_scanner(tmp_path)
     assert asyncio.run(scan(manager))["errors"] == []
