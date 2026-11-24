@@ -39,14 +39,23 @@ test("generated vectors retain ordinary styling, filters and run ownership acros
         restoreRemovedLayer: (snapshot, isCurrent) => outputs.restore(snapshot, isCurrent)});
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
     const composition = main.slice(main.indexOf("async function addGeneratedVector("), main.indexOf("/** Restore an upload view"));
+    let reveals = 0;
+    const reveal = () => { reveals++; };
     const addVector = new Function("vectorMapLayerAdapter", "mapLayerController", "onRenderingWorkspaceRequested",
-        `${composition}; return addGeneratedVector;`)(adapter, layers, () => {});
+        `${composition}; return addGeneratedVector;`)(adapter, layers, reveal);
     outputs = new ModelOutputLayers({api: {getJob: async () => run}, clock: {setTimeout() {}, clearTimeout() {}},
         describeVector: async () => metadata, addVector,
         removeLayer: key => layers.removeKey(key), updateLayer: (key, presentation) => layers.updateLocalPresentation(key, presentation),
         refreshLayers: () => layers.render(), openRun: id => inspected.push(id), onChange() {},
         read: async () => { throw Error("Generated vectors must not use the preview reader"); }});
-    await outputs.show(run, file);
+    const showStart = main.indexOf("        showOutput:");
+    const showAction = main.slice(showStart, main.indexOf("        outputState:", showStart));
+    const showOutput = new Function("outputLayers", "onRenderingWorkspaceRequested",
+        `return ({${showAction}}).showOutput;`)(outputs, reveal);
+    await showOutput(run, file);
+    assert.equal(reveals, 1, "The explicit result action reveals Map contents");
+    await showOutput(run, file);
+    assert.equal(reveals, 1, "An already displayed result does not reopen a panel");
     const key = artifactLayerKey(run.jobId, file.artifactId), record = layers.getRecord(key);
     assert.equal(record.adapter, adapter);
     assert.equal(record.entry.group.id, run.jobId);
@@ -75,6 +84,7 @@ test("generated vectors retain ordinary styling, filters and run ownership acros
     assert.deepEqual(adapter.describeStyle(restored).style, edited);
     assert.deepEqual(adapter.exportFilterState(restored), predicate);
     assert.equal(restored.entry.group.id, run.jobId);
+    assert.equal(reveals, 1, "Source restoration itself does not own workspace disclosure");
     outputs.updateRun({...run, status: "deleted", updatedAt: "2099-01-02T00:00:00Z"});
     assert.equal(layers.retainedRecords.length, 0);
     assert.equal(outputs.layers.size, 0);
