@@ -23,7 +23,7 @@ WITH waiting AS (
     WHERE j.status = 'queued' AND s.status IS NULL
     ORDER BY s.owner, j.created_at, j.id
 ), next_job AS (
-    SELECT waiting.id, waiting.owner
+    SELECT waiting.id, waiting.owner, clock_timestamp() AS started_at
     FROM waiting
     LEFT JOIN LATERAL (
         SELECT turn.started_at
@@ -37,8 +37,8 @@ WITH waiting AS (
 )
 UPDATE processing.jobs AS job
 SET status = 'running', attempt_id = %(attempt_id)s,
-    lease_until = now() + %(lease_seconds)s * interval '1 second',
-    started_at = clock_timestamp(), updated_at = now()
+    lease_until = next_job.started_at + %(lease_seconds)s * interval '1 second',
+    started_at = next_job.started_at, updated_at = next_job.started_at
 FROM next_job
 WHERE job.id = next_job.id
 RETURNING job.*, next_job.owner

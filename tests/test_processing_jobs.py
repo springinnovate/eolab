@@ -3,6 +3,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import timedelta
 from functools import partial
 import hashlib
 import time
@@ -507,6 +508,9 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
         )
     assert sum(claim is not None for claim in claims) == 1
     claim = next(claim for claim in claims if claim)
+    assert claim["lease_until"] - claim["started_at"] == timedelta(
+        seconds=store.limits.lease_seconds
+    )
     assert not store.heartbeat(claim["id"], "stale-token", {})
     assert not store.finish(claim["id"], "stale-token", Artifact(1, "x", "x.tif"))
     store.cancel(claim["id"], "owner")
