@@ -330,27 +330,22 @@ def test_scan_admits_partial_months_without_reading_weather_pixels(
         "not a separate raster", encoding="utf-8"
     )
     opened: list[Path] = []
-    native_open = rasterio.open
+    initialize_reader = rasterio.io.DatasetReader.__init__
 
-    def record_open(path: Path, *args: Any, **kwargs: Any) -> rasterio.io.DatasetReader:
-        """Read the ordinary TIFF; admission must not open observation files.
+    def record_open(
+        reader: rasterio.io.DatasetReader, *args: Any, **kwargs: Any
+    ) -> None:
+        """Record the actual file opened by Rasterio or its GeoTIFF reader subclass.
 
         Args:
-            path: Source requested by the admission handler.
-            *args: Native positional open arguments.
+            reader: Native dataset reader under construction.
+            *args: Native file and positional open arguments.
             **kwargs: Native keyword open arguments.
-
-        Returns:
-            Rasterio's real dataset reader.
-
-        Raises:
-            AssertionError: If admission attempts to open a weather array.
         """
-        assert Path(path) == tmp_path / "ordinary.tif"
-        opened.append(Path(path))
-        return native_open(path, *args, **kwargs)
+        initialize_reader(reader, *args, **kwargs)
+        opened.append(Path(reader.name))
 
-    monkeypatch.setattr(rasterio, "open", record_open)
+    monkeypatch.setattr(rasterio.io.DatasetReader, "__init__", record_open)
     manager, writer = create_scanner(tmp_path)
     status = asyncio.run(scan(manager))
     assert status["failed"] == 0
