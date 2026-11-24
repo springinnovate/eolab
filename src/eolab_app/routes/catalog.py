@@ -215,7 +215,11 @@ def create_catalog_router(
             )
         return {"item": copy_public_catalog_metadata(item)}
 
-    @router.post("/temporal-times", response_model=TemporalTimeChoices)
+    @router.post(
+        "/temporal-times",
+        response_model=TemporalTimeChoices,
+        response_model_exclude_none=True,
+    )
     async def get_temporal_times(
         body: TemporalTimeQuery, request: Request, response: Response
     ) -> TemporalTimeChoices:

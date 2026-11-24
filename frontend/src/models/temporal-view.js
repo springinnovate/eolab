@@ -2,12 +2,13 @@
 import { modelSourceKey } from "./inputs.js";
 import { getTemporalStatistics, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
 import { TemporalPeriodView } from "../temporal-period-view.js";
+import { observationLabel, observationMonthLabel } from "../observation-period.js";
 
 /** Format an available observation label without using the browser's timezone.
  * @param {string} time Catalog timestamp.
  * @return {string} Human-readable date and time including UTC.
  */
-function observationLabel(time) {
+function formatUtcTime(time) {
     return new Date(time).toLocaleString(undefined, {timeZone: "UTC", dateStyle: "medium", timeStyle: "long"});
 }
 
@@ -24,7 +25,7 @@ export class TemporalModelInputsView {
      * @param {(key:string)=>void} handlers.onTemporalDataset Choose a retained Catalog dataset.
      * @param {(variable:string)=>void} handlers.onTemporalVariable Choose its variable.
      * @param {(month:string)=>void} handlers.onTemporalMonth Browse availability without changing dates.
-     * @param {()=>void} handlers.onUseTemporalMonth Explicitly set the calendar-month period.
+     * @param {()=>void} handlers.onUseTemporalMonth Apply the period covered by the displayed group.
      * @param {()=>void} handlers.onRefreshTemporal Refresh guidance while preserving dates.
      * @param {(change:Object)=>void} handlers.onTemporalEdit Edit entry mode and UTC period boundaries.
      * @param {(change:Object)=>void} handlers.onEdit Edit the statistic choice.
@@ -55,7 +56,7 @@ export class TemporalModelInputsView {
         this.refresh = button("Refresh dates", handlers.onRefreshTemporal, "models-action");
         const actions = element("div", "", "models-actions"); actions.append(this.useMonth, this.refresh);
         this.availabilityHelp = element("p", "", "models-help");
-        this.availability.append(field("models-temporal-month", "Browse month", this.month), this.coverage, actions, this.availabilityHelp);
+        this.availability.append(field("models-temporal-month", "Browse observations", this.month), this.coverage, actions, this.availabilityHelp);
         this.sourceRoot.append(this.periodHelp, this.status, this.availability);
         this.reductionRoot = element("div", "", "models-vector");
         this.statistic = element("select");
@@ -98,19 +99,24 @@ export class TemporalModelInputsView {
             (intervalObservations ? "Include each complete observation whose time interval overlaps this period. Dates are not rounded; values are not prorated or integrated over time." :
                 temporal.periodMode === "times" ? "Include observations at or after the start and before the end." : "Include available observations throughout the selected whole UTC days.") +
             " Changing the observation displayed on the map does not change these dates.";
-        this.availabilityHelp.textContent = "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. " +
+        const period = temporal.item?.properties["eolab:time_labels"];
+        this.useMonth.textContent = period ? "Use this period" : "Use this month";
+        this.availabilityHelp.textContent = period ? "Use this period sets the analysis dates to cover the observations listed here." :
+            "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. " +
             (precipitation ? "These are observation labels, not the boundaries of the intervals they represent. Missing intervals are omitted from the total." : "Missing observations are omitted from the calculation.");
         const selectionError = temporalSelectionError(temporal, reduction.reducer);
         this.status.textContent = selectionError; this.status.hidden = !selectionError;
         this.sourceRoot.setAttribute("aria-busy", String(temporal.loading));
         const choices = temporal.choices;
-        this.options(this.month, (choices?.months ?? []).map(value => ({value, label: value})), choices?.month ?? "");
+        this.options(this.month, (choices?.months ?? []).map(value => ({value, label: observationMonthLabel(value, period)})), choices?.month ?? "");
         this.month.disabled = temporal.loading || !choices?.months.length;
         this.useMonth.disabled = temporal.loading || !choices?.times.length;
         this.refresh.disabled = temporal.loading || !temporal.datasetKey;
         this.availability.hidden = !temporal.datasetKey;
+        const label = time => observationLabel(time, period, choices.interval_starts) ?? formatUtcTime(time);
         this.coverage.textContent = temporal.loading ? "Loading available observations…" : temporal.datesError ? temporal.datesError : !choices ? "Choose a variable to see available observations." :
-            choices.times.length ? `${choices.times.length.toLocaleString()} observations in ${choices.month}. First: ${observationLabel(choices.times[0])}. Last: ${observationLabel(choices.times.at(-1))}.` :
+            choices.times.length === 1 && period ? `1 observation · ${label(choices.times[0])}` :
+            choices.times.length ? `${choices.times.length.toLocaleString()} observations in ${observationMonthLabel(choices.month, period)}. First: ${label(choices.times[0])}. Last: ${label(choices.times.at(-1))}.` :
                 "No observations are available in this month. Choose another month or enter a different period.";
         this.options(this.statistic, getTemporalStatistics(variable, temporal), reduction.reducer);
         this.percentileField.hidden = reduction.reducer !== "percentile";

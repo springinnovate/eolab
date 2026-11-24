@@ -384,6 +384,18 @@ test("a named retained dataset offers a range without a displayed or published s
     } finally { h.close(); }
 });
 
+test("Raster Statistics starts with the annual period displayed on the map", async t => {
+    const h = fixture();
+    t.after(h.close);
+    const snapshot = {key: "annual", label: "2024", source: {...DATASET, variable: "temperature",
+        time: "2025-01-01T00:00:00.000Z"}, observationPeriod: {periodMode: "year",
+        startTime: "2024-01-01T00:00", endTime: "2025-01-01T00:00"}, visible: true};
+    h.controller.updateAvailableRasters([snapshot], [DATASET]);
+    await h.controller.chooseTimeRange(snapshot.key);
+    const {periodMode, startTime, endTime} = h.view.state.temporal;
+    assert.deepEqual({periodMode, startTime, endTime}, snapshot.observationPeriod);
+});
+
 test("a second named view can replace a range choice while its Catalog metadata is loading", async () => {
     const h = fixture(), reads = [];
     const views = ["temperature", "pressure"].map(variable => ({key: variable, label: variable, visible: true,

@@ -105,6 +105,10 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
     root = tmp_path / "annual"
     root.mkdir()
     manifest = annual_manifest(root)
+    stack = yaml.safe_load(manifest.read_text())
+    write_frame(root / "rain_2025.tif", 25)
+    stack["observations"].append({"file": "rain_2025.tif", "time": "2025"})
+    manifest.write_text(yaml.safe_dump(stack))
     assert run_cli("build", manifest, "--check").returncode == 0
     assert not (root / "catalog.sqlite").exists()
     built = run_cli("build", manifest)
@@ -115,8 +119,10 @@ def test_build_and_select_annual_archive(tmp_path: Path) -> None:
     ((key, item),) = writer.write_session.items.items()
     assert item["properties"]["eolab:time_labels"] == "calendar_year"
     ref = dict(collectionId=key[0], itemId=key[1], variable="rain")
-    dates = get_temporal_time_choices(item, TemporalTimeQuery(**ref), tmp_path)
-    assert dates.months == ("2023-01", "2025-01")
+    dates = get_temporal_time_choices(
+        item, TemporalTimeQuery(**ref, month="2024-12"), tmp_path
+    )
+    assert dates.months == ("2022-12", "2024-12", "2025-12")
     assert dates.times == ("2025-01-01T00:00:00.000Z",)
     for selection in (
         TemporalRasterSelection(**ref, time=dates.times[0]),
@@ -335,3 +341,58 @@ def test_explicit_periods_may_touch(
     assert result.returncode == (0 if valid else 1), result.stderr
     if not valid:
         assert first["file"] in result.stderr and second["file"] in result.stderr
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_browse_covered_months(tmp_path: Path, explicit: bool) -> None:
+    """Browse a leap-day boundary and read the exact frame covered by each choice.
+
+    Args:
+        tmp_path: Archive mount.
+        explicit: Use unequal intervals with second-precision boundaries.
+    """
+    from eolab_app.raster.source_models import (
+        TemporalIntervalSelection,
+        TemporalTimeQuery,
+    )
+    from eolab_app.raster.temporal_source import (
+        get_temporal_observations,
+        get_temporal_time_choices,
+    )
+    from tests.test_catalog_temporal import create_scanner, scan
+
+    root = tmp_path / "stack"
+    root.mkdir()
+    manifest = annual_manifest(root)
+    stack = yaml.safe_load(manifest.read_text())
+    stack["variable"]["period"] = "explicit" if explicit else "calendar_day"
+    first, second = stack["observations"]
+    first["time"] = (
+        {"start": "2024-01-21T06:12:43Z", "end": "2024-03-01"}
+        if explicit
+        else "2024-02-29"
+    )
+    second["time"] = (
+        {"start": "2024-03-01", "end": "2024-03-02"} if explicit else "2024-03-01"
+    )
+    manifest.write_text(yaml.safe_dump(stack))
+    result = run_cli("build", manifest)
+    assert result.returncode == 0, result.stderr
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["errors"] == []
+    ((key, item),) = writer.write_session.items.items()
+    ref = dict(collectionId=key[0], itemId=key[1], variable="rain")
+    dates = get_temporal_time_choices(
+        item, TemporalTimeQuery(**ref, month="2024-02"), tmp_path
+    )
+    assert dates.months == ("2024-02", "2024-03")
+    (end,) = dates.times
+    assert end == "2024-03-01T00:00:00.000Z"
+    start = "2024-02-29T00:00:00Z"
+    if explicit:
+        start = dates.interval_starts[end]
+        assert start == "2024-01-21T06:12:43.000Z"
+    (frame,) = get_temporal_observations(
+        item, TemporalIntervalSelection(**ref, startTime=start, endTime=end), tmp_path
+    )
+    assert frame.path.name == first["file"]

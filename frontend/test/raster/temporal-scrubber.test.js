@@ -12,13 +12,13 @@ test("annual totals show their covered years and navigate using exact interval-e
     try {
         const time = "2025-01-01T00:00:00.000Z";
         widget.setLayers([{...layer, timeline: {...layer.timeline, period: "calendar_year",
-            months: ["2025-01", "2027-01"], month: "2025-01", times: [time], time}}]);
+            months: ["2024-12", "2026-12"], month: "2024-12", times: [time], time}}]);
         widget.setMapStatus({phase: "complete"}, ["first"]);
         assert.equal(controls.display.textContent, "On map · 2024");
         assert.equal(controls.time.getAttribute("aria-valuetext"), "2024");
         assert.deepEqual(Array.from(controls.month.options, option => option.textContent), ["2024", "2026"]);
         controls.forward.dispatchEvent(new Event("click"));
-        assert.deepEqual(calls.at(-1), ["rain", "2027-01", "first"]);
+        assert.deepEqual(calls.at(-1), ["rain", "2026-12", "first"]);
     } finally { widget.destroy(); }
 });
 

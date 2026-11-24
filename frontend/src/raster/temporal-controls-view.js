@@ -1,5 +1,5 @@
 /** Compact variable and observation choices retained inside one map-layer row. */
-import { observationLabel, observationMonthLabel } from "./observation-label.js";
+import { observationLabel, observationMonthLabel } from "../observation-period.js";
 import { formatObservationTime } from "./observation-time.js";
 
 /**
@@ -7,11 +7,12 @@ import { formatObservationTime } from "./observation-time.js";
  * @param {HTMLSelectElement} select Existing choice control.
  * @param {{value:string,label:string}[]} choices Available choices.
  * @param {string|null} value Selected value, including an unavailable saved value.
+ * @param {string} [savedLabel=value] Display label for a missing selection.
  * @return {void}
  */
-function setChoices(select, choices, value) {
+function setChoices(select, choices, value, savedLabel = value) {
     const options = value && !choices.some(choice => choice.value === value)
-        ? [{value, label: `${value} (unavailable)`}, ...choices] : choices;
+        ? [{value, label: `${savedLabel} (unavailable)`}, ...choices] : choices;
     const signature = JSON.stringify(options);
     if (select.dataset.choices !== signature) {
         select.replaceChildren(...options.map(choice => {
@@ -74,22 +75,24 @@ export class TemporalControlsView {
 
     /**
      * Present actual coordinate choices and the current loading or failure state.
-     * @param {{variables:{id:string,label:string,units:string}[],variable:string,months:string[],month:string,times:string[],time:string|null,loading:boolean,error:string|null,period?:string}} state Raster-owned choices and status.
+     * @param {{variables:{id:string,label:string,units:string}[],variable:string,months:string[],month:string,times:string[],time:string|null,loading:boolean,error:string|null,period?:string,intervalStarts?:Object<string,string>}} state Raster-owned choices and status.
      * @return {void}
      */
-    render({variables, variable, months, month, times, time, loading, error, period}) {
+    render({variables, variable, months, month, times, time, loading, error, period, intervalStarts}) {
         this.monthCaption.textContent = ["year", "calendar_year"].includes(period) ? "Year" : "Month";
         this.timeCaption.textContent = period ? "Observation" : "Date and time (UTC)";
         setChoices(this.variable, variables.map(value => ({value: value.id,
             label: `${value.label}${value.units ? ` (${value.units})` : ""}`})), variable);
         if (this.period !== period || this.months !== months || this.unavailableMonth || !months.includes(month)) {
             this.unavailableMonth = Boolean(month && !months.includes(month));
-            setChoices(this.month, months.map(value => ({value, label: observationMonthLabel(value, period)})), month);
+            setChoices(this.month, months.map(value => ({value, label: observationMonthLabel(value, period)})), month,
+                month && observationMonthLabel(month, period));
             this.months = months;
         } else this.month.value = month;
         if (this.period !== period || this.times !== times || this.unavailableTime || !times.includes(time)) {
             this.unavailableTime = Boolean(time && !times.includes(time));
-            setChoices(this.time, times.map(value => ({value, label: observationLabel(value, period) ?? formatObservationTime(value)})), time);
+            setChoices(this.time, times.map(value => ({value, label: observationLabel(value, period, intervalStarts) ?? formatObservationTime(value)})), time,
+                time && (observationLabel(time, period, intervalStarts) ?? time));
             this.times = times;
         } else this.time.value = time;
         this.month.disabled = months.length === 0;

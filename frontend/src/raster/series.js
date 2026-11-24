@@ -409,7 +409,8 @@ export class RasterSeriesController {
             variable: reference?.variable ?? (sameDataset ? this.temporal.variable : ""),
             loading: false, error: ""});
         this.updateAreaInputs();
-        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal, getTemporalMonthBoundaries(reference.time.slice(0, 7)));
+        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal,
+            snapshot.observationPeriod ?? getTemporalMonthBoundaries(reference.time.slice(0, 7)));
         if (!sameDataset || !this.temporal.item) await this.loadTemporalItem();
         else this.updateAreaInputs();
     }

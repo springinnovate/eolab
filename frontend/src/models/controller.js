@@ -5,7 +5,8 @@ import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
-import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
+import { snapTemporalHour } from "../temporal-period.js";
+import { observationPeriod } from "../observation-period.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";
@@ -323,14 +324,14 @@ export class ModelsController {
         } finally { if (isCurrent()) { temporal.loading = false; this.render(); } }
     }
 
-    /** Replace the period only after the user explicitly chooses the displayed month.
-     * Missing dates within that calendar month remain valid; the calculation uses available observations.
+    /** Apply the covered period of the displayed availability group to the model inputs.
      * @return {void}
      */
     useTemporalMonth() {
         const temporal = this.state.draft?.temporal;
-        if (!temporal?.choices || this.state.submitting) return;
-        Object.assign(temporal, {periodMode: "month", ...getTemporalMonthBoundaries(temporal.choices.month)});
+        if (!temporal?.choices?.times.length || this.state.submitting) return;
+        const {times, interval_starts} = temporal.choices;
+        Object.assign(temporal, observationPeriod(times[0], times.at(-1), temporal.item.properties["eolab:time_labels"], interval_starts));
         this.editDraft({});
     }
 

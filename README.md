@@ -235,7 +235,7 @@ The first command shows dates found in filenames and acquisition or observation 
 
 Check the edited manifest, then build it. All observations must share a north-up grid and compatible stored values, units and NoData. Gaps are allowed. The build publishes `catalog.sqlite` and `dataset.yaml` beside the original files and requires a filesystem supporting hard links. Both commands protect existing outputs. To add observations, prepare a complete replacement archive between calculations, retain its dataset ID and rescan. Place the complete folder under the data mount and run a Catalog scan. Choose the layer in Map contents to select dates or press **Play**.
 
-A snapshot labeled `"2024"` uses the start of 2024 UTC for date-range selection. An annual total labeled `"2024"` covers the full calendar year. Both display as **2024** on the map.
+A snapshot labeled `"2024"` uses the start of 2024 UTC for date-range selection. An annual total labeled `"2024"` covers the full calendar year. Both display as **2024** on the map. In Models, **Use this period** sets the analysis dates from the observations shown. In Raster Statistics, choosing a map layer’s time range starts with its displayed observation.
 
 <details>
 <summary>Add dataset descriptions, citations, and supporting files</summary>

@@ -6197,6 +6197,30 @@ test("temporal Catalog removal names the topmost matching view after renaming an
 });
 
 
+test("restoring a leap-day raster uses its covered month, label and analysis bounds", async t => {
+    const item = temporalItem(), time = "2024-03-01T00:00:00.000Z", months = [];
+    item.properties["eolab:time_labels"] = "calendar_day";
+    let times = [time];
+    const h = temporalFixture({getTemporalItem: async () => item,
+        loadTimes: async (_item, _variable, month) => {
+            months.push(month);
+            return {months: ["2024-02"], month, times};
+        },
+        temporalControlsFactory: handlers => new TemporalControlsView(handlers, new FakeRasterControlDocument())});
+    t.after(() => h.destroy());
+    const row = await h.viewer.showTemporal(item, {variable: "rain", time});
+    assert.deepEqual(months, ["2024-02"]);
+    assert.equal(row.entry.label, "Weather · Rain · 2024-02-29");
+    assert.deepEqual(h.mapLayers.snapshots()[0].observationPeriod, {periodMode: "days",
+        startTime: "2024-02-29T00:00", endTime: "2024-03-01T00:00"});
+    times = [];
+    await h.viewer.refreshTemporalLayers();
+    const saved = row.state.temporal.controls.time.children[0];
+    assert.equal(saved.textContent, "2024-02-29 (unavailable)");
+    assert.equal(saved.value, time);
+    assert.deepEqual(months, ["2024-02", "2024-02"]);
+});
+
 test("same-minute map choices identify the selected observation in layer titles and pixel results", async () => {
     const observations = [
         {time: "2024-02-29T00:00:00.000Z", timeOfDay: "00:00", value: 19},
