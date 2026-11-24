@@ -30,7 +30,7 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.polygon_areas import SummaryPolygon
 
-from eolab_app.vector_native import (
+from eolab_app.native_vector import (
     get_native_feature,
     iter_native_features,
     native_feature_properties,

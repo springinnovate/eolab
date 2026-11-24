@@ -25,7 +25,7 @@ from eolab_app.bounded_geometry import (
     _iter_geometry_coordinates,
 )
 from eolab_app.bounded_vector import VectorReadLimits, _source_collection
-from eolab_app.vector_native import (
+from eolab_app.native_vector import (
     iter_native_features,
     native_spatial_geometry,
     open_native_vector_layer,

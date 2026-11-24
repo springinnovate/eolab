@@ -43,7 +43,7 @@ from eolab_app.raster.bounded_window import (
 from eolab_app.raster.read_cancellation import require_active_raster_read
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 from eolab_app.raster.models import RasterAreaMask
-from eolab_app.vector_native import (
+from eolab_app.native_vector import (
     get_native_feature,
     iter_native_features,
     native_feature_properties,
