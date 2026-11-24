@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import closing
 import json
+import math
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -261,6 +262,69 @@ def test_geographic_grid_footprint_and_original_pixel(
     (observation,) = get_temporal_observations(item, query, tmp_path)
     assert observation.path == root / "rain_2024.tif"
     assert read_raster_pixel(observation, *point).value == value
+
+
+@pytest.mark.parametrize(
+    ("west", "cell_width", "centers"),
+    [
+        (179.0, 1.0, (179.5, -179.5)),
+        (-181.0, 1.0, (179.5, -179.5)),
+        (230.0, 5.0, (-127.5, -122.5)),
+        (0.0, 180.0, (90.0, -90.0)),
+    ],
+    ids=["east-crossing", "west-crossing", "shifted-region", "shifted-world"],
+)
+def test_shifted_web_mercator_reads_original_cells(
+    tmp_path: Path, west: float, cell_width: float, centers: tuple[float, float]
+) -> None:
+    """Read the same original column by a WGS84 point and by a small area around it.
+
+    Args:
+        tmp_path: Catalog mount containing a prepared two-column archive.
+        west: Longitude of the grid's native western edge, before wrapping.
+        cell_width: Longitude span in degrees of each Web Mercator cell.
+        centers: Expected WGS84 longitudes of the two native cell centers.
+    """
+    from eolab_app.raster.bounded_window import NoRasterBoundsOverlapError
+    from eolab_app.raster.pixel import read_raster_pixel
+    from eolab_app.raster.source_models import TemporalRasterSelection
+    from eolab_app.raster.statistics import read_raster_statistics
+    from eolab_app.raster.temporal_source import get_temporal_observations
+    from eolab_app.sampling_area import SelectedBoundsSamplingArea
+    from tests.test_catalog_temporal import create_scanner, scan
+
+    root = tmp_path / "temperature"
+    root.mkdir()
+    manifest = annual_manifest(root)
+    metres_per_degree = math.tau * 6378137 / 360
+    for path in root.glob("*.tif"):
+        with rasterio.open(path, "r+") as src:
+            src.crs = "EPSG:3857"
+            src.transform = from_origin(
+                west * metres_per_degree, 1000, cell_width * metres_per_degree, 2000
+            )
+            src.write(numpy.array([[24, 37]], dtype="int16"), 1)
+    built = run_cli("build", manifest)
+    assert built.returncode == 0, built.stderr
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["errors"] == []
+    ((key, item),) = writer.write_session.items.items()
+    query = TemporalRasterSelection(
+        collectionId=key[0], itemId=key[1], variable="rain", time="2025-01-01T00:00:00Z"
+    )
+    (observation,) = get_temporal_observations(item, query, tmp_path)
+    for column, (lon, value) in enumerate(zip(centers, (24, 37), strict=True)):
+        pixel = read_raster_pixel(observation, lon, 0)
+        assert (pixel.row, pixel.column, pixel.value) == (0, column, value)
+        area = SelectedBoundsSamplingArea((lon - 0.1, -0.001, lon + 0.1, 0.001))
+        stats = read_raster_statistics(observation, area)
+        assert (stats.valid_sample_count, stats.sample_minimum) == (1, value)
+    if cell_width < 180:
+        assert not read_raster_pixel(observation, 0, 0).in_bounds
+        with pytest.raises(NoRasterBoundsOverlapError):
+            read_raster_statistics(
+                observation, SelectedBoundsSamplingArea((-0.1, -0.001, 0.1, 0.001))
+            )
 
 
 @pytest.mark.parametrize("answer", ["y", "n"])

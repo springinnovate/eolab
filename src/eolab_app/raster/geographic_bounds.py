@@ -7,19 +7,25 @@ from pyproj.exceptions import ProjError
 from rasterio.crs import CRS
 from rasterio.warp import transform_bounds
 
+WEB_MERCATOR_CRS = CRS.from_epsg(3857)
+# EPSG:3857 uses the WGS84 semi-major axis as its spherical radius, in metres.
+WEB_MERCATOR_WORLD_WIDTH = math.tau * 6378137.0
+
 
 def covers_full_longitude_turn(crs: CRS, grid_width: float) -> bool:
-    """Return whether a geographic grid covers one complete longitude cycle.
+    """Return whether a geographic or Web Mercator grid spans one longitude cycle.
 
     Args:
-        crs: Native raster CRS defining its angular units.
+        crs: Native raster coordinate reference system.
         grid_width: Distance between the western and eastern pixel edges in that CRS.
 
     Returns:
-        True for a complete turn, such as 360 degrees or 400 grads.
+        True for a complete turn in native units, including metres in Web Mercator.
     """
-    return crs.is_geographic and math.isclose(
-        grid_width * crs.units_factor[1], math.tau
+    if crs.is_geographic:
+        return math.isclose(grid_width * crs.units_factor[1], math.tau)
+    return crs == WEB_MERCATOR_CRS and math.isclose(
+        grid_width, WEB_MERCATOR_WORLD_WIDTH
     )
 
 
