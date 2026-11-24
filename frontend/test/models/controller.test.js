@@ -603,7 +603,7 @@ test("recipe units add a precipitation total without restricting ordinary statis
     await h.controller.chooseTemporalVariable("rain");
     assert.equal(controls.variable.children.find(option => option.value === "rain").disabled, false);
     assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, false);
-    assert.equal(controls.statistic.children.at(-1).textContent, "Precipitation total (cm)");
+    assert.equal(controls.statistic.children.at(-1).textContent, "Total precipitation (cm)");
     controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
     assert.match(controls.reductionHelp.textContent, /rate in mm\/hour.*converted to cm/);
     editExactTime(controls, "start", "2000-01-01T00:10", "change");

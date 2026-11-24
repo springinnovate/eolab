@@ -225,7 +225,7 @@ export class ModelsView {
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
         const mapHelp = this.element("p", "", "models-help");
         group.append(vectorGroup, areaDescription, mapHelp);
-        if (input.type === "mask_source") group.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
+        if (input.type === "mask_source") group.append(this.element("p", "All selected polygons or positive raster cells form one combined flow starting area and one overall result. Changing map visibility does not change these choices.", "models-help"));
         return {group, source, choiceHint, sourceOrigin, maskGroup, rasterReason, maskHint, vectorGroup, selectionCard, selectedCount, editFilter,
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
@@ -282,7 +282,7 @@ export class ModelsView {
             parameters[name] = input;
             fields.append(this.field(`models-parameter-${name}`, `${parameter.label}${parameter.unit ? ` (${parameter.unit})` : ""}${parameter.type === "optional_number" ? " — optional" : ""}`, input));
             if (modelHasInput(draft.model, "mask_source") && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
-            if (parameter.type === "summary_expression") fields.append(this.element("p", "a is the selected raster. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10).", "models-help"));
+            if (parameter.type === "summary_expression") fields.append(this.element("p", "a represents the raster values being summarized. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10). stdev uses population standard deviation; areaha returns hectares.", "models-help"));
         }
         const runLabel = "Run tool";
         const run = this.button(runLabel, () => {}, "models-primary"); run.type = "submit";
@@ -303,11 +303,11 @@ export class ModelsView {
      * @return {{root:HTMLDetailsElement,preview:HTMLButtonElement,model:HTMLAnchorElement,run:HTMLAnchorElement,message:HTMLParagraphElement}} Stable disclosure and YAML action controls.
      */
     recipeDetails() {
-        const root = this.element("details", "", "models-details"); root.append(this.element("summary", "Click to inspect the EOlab model recipe"));
+        const root = this.element("details", "", "models-details"); root.append(this.element("summary", "Tool definition (YAML)"));
         const actions = this.element("div", "", "models-actions");
-        const preview = this.button("View Model YAML", this.handlers.onYaml, "models-action");
-        const model = this.element("a", "Download Model YAML"); model.download = "";
-        const run = this.element("a", "Download Run YAML"); run.download = "";
+        const preview = this.button("View tool definition (YAML)", this.handlers.onYaml, "models-action");
+        const model = this.element("a", "Download tool definition (YAML)"); model.download = "";
+        const run = this.element("a", "Download run record (YAML)"); run.download = "";
         const message = this.element("p", "", "models-help");
         actions.append(preview, model, run); root.append(actions, message);
         return {root, preview, model, run, message};
@@ -639,7 +639,7 @@ export class ModelsView {
                 }
                 if (input.type === "habitat_stack") {
                     if (value.kind === "earthEngine") {
-                        list.append(this.element("dt", input.label), this.element("dd", `Original model inputs from Earth Engine · Assessment year ${value.year}`));
+                        list.append(this.element("dt", input.label), this.element("dd", `Prepared Earth Engine rasters · Assessment year ${value.year}`));
                         for (const [field, label] of [["predictorDatasets", "Predictor datasets"], ["responseDatasets", "Observed response datasets"]])
                             list.append(this.element("dt", label), this.element("dd", value[field] == null ? "All configured datasets"
                                 : value[field].map(id => state.habitatDatasetLabels?.get(id) ?? id).join(", ")));

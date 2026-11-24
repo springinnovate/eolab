@@ -1,12 +1,11 @@
 schema: eolab.model/v1
 id: vector-summary
 version: "2.0.0"
-title: Vector summary
+title: Group polygons and calculate field statistics
 description: >-
-  Calculate one or more field statistics for each distinct group and merge its polygons into an overview layer.
-  Boundary detail changes outlines only; use 0 to retain detailed merged boundaries.
-  Missing values are excluded. Standard deviation describes the whole group (population);
-  one valid value has zero deviation, and a group with no valid values has a missing result.
+  Group polygons by a field, merge each group's boundaries, and calculate statistics for selected numeric fields.
+  Produces one GeoPackage feature per group. Each feature's valid field value has equal weight; missing values are excluded.
+  Boundary simplification changes outlines only; use 0 to keep detailed merged boundaries.
 inputs:
   vector:
     type: vector
@@ -14,14 +13,14 @@ inputs:
     geometry: polygon
     fields:
       group:
-        label: Group by
+        label: Group by field
         kind: scalar
     rows:
-      label: Summaries
-      itemLabel: Summary
+      label: Field statistics
+      itemLabel: Field statistic
       fields:
         value:
-          label: Field
+          label: Numeric field
           kind: numeric
       parameters:
         statistic:
@@ -32,13 +31,13 @@ inputs:
             - {value: mean, label: Mean}
             - {value: max, label: Maximum}
             - {value: min, label: Minimum}
-            - {value: stdev, label: Standard deviation}
+            - {value: stdev, label: Population standard deviation}
           default: sum
 parameters:
   boundary_tolerance_m:
     type: number
-    label: Boundary detail
-    unit: approximate metres
+    label: Boundary simplification
+    unit: approx. m
     minimum: 0
     default: 1000
 steps:
@@ -50,6 +49,7 @@ steps:
       boundary_tolerance_m: {parameter: boundary_tolerance_m}
 outputs:
   summary:
+    label: Grouped polygons with field statistics
     source: calculate.summary
     role: result
     presentation: map
