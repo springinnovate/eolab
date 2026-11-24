@@ -186,9 +186,11 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     manifest = annual_manifest(tmp_path)
     stack = yaml.safe_load(manifest.read_text())
     write_frame(tmp_path / "shifted.tif", 1, origin=0.5)
+    write_frame(tmp_path / "wrapped.tif", 1, origin=240)
     stack["observations"].extend(
         [
             {"file": "shifted.tif", "time": "2023"},
+            {"file": "wrapped.tif", "time": "2020"},
             {"file": "short.tif", "time": {"start": "2024-05-01", "end": "2024-10-01"}},
             {"file": "bad.tif", "time": "2025-02-29"},
             {
@@ -202,6 +204,7 @@ def test_invalid_dates_ranges_and_grid_are_reported(tmp_path: Path) -> None:
     assert failed.returncode == 1
     for message in (
         "shifted.tif: Different transform",
+        "wrapped.tif: Reproject or shift the regional longitude grid",
         "short.tif: Expected one complete calendar year",
         "bad.tif: day is out of range",
         "duplicate time or overlap",

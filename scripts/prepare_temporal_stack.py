@@ -372,6 +372,14 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                     or not all(map(math.isfinite, grid))
                 ):
                     raise ValueError("Expected a georeferenced north-up grid.")
+                if (
+                    src.crs.is_geographic
+                    and not math.isclose(src.width * grid.a, 360)
+                    and (src.bounds.left < -180 or src.bounds.right > 180)
+                ):
+                    raise ValueError(
+                        "Reproject or shift the regional longitude grid into -180 to 180 degrees."
+                    )
                 if src.units[0] and src.units[0] != var.units:
                     raise ValueError(
                         f"Band units {src.units[0]!r} differ from {var.units!r}."
