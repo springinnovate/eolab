@@ -35,6 +35,12 @@ from raster_source_support import SOURCE
 EQUAL_EARTH_HALF_WIDTH = Transformer.from_crs(
     4326, 8859, always_xy=True, force_over=True
 ).transform(330, 0)[0]
+BOUND_PACIFIC = (
+    "+proj=eqc +lon_0=180 +ellps=clrk66 +towgs84=-8,160,176 +units=m +type=crs"
+)
+BOUND_PIXEL_EDGE = Transformer.from_crs(4326, BOUND_PACIFIC, always_xy=True).transform(
+    1.8, 1.5
+)
 
 
 def _trace_both_directions(
@@ -147,6 +153,60 @@ def test_subpixel_polygon_stops_before_reading_elevations(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("polygon", "vector_crs", "dem_crs", "grid", "shape"),
     [
+        pytest.param(
+            box(150100, 449920, 150110, 449930),
+            "EPSG:7415",
+            "EPSG:7415",
+            from_origin(150000, 450000, 30, 30),
+            (5, 7),
+            id="compound-horizontal-and-height",
+        ),
+        pytest.param(
+            box(-175, 0, -165, 5),
+            "EPSG:9518",
+            "+proj=robin +lon_0=30 +datum=WGS84 +type=crs",
+            from_origin(14510000, 450000, 30000, 30000),
+            (10, 40),
+            id="geographic-source-with-height",
+        ),
+        pytest.param(
+            Polygon(
+                box(-1e6, -1e6, 1e6, 1e6).exterior.coords,
+                [box(-2e5, -2e5, 2e5, 2e5).exterior.coords],
+            ),
+            "+proj=laea +lat_0=90 +lon_0=0 +ellps=clrk66 +towgs84=-8,160,176 +units=m +type=crs",
+            "EPSG:4326",
+            from_origin(-180, 90, 1, 1),
+            (20, 360),
+            id="datum-bound-polar-hole",
+        ),
+        pytest.param(
+            box(
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(-1.8, 1.2),
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(1.8, 1.8),
+            ),
+            "EPSG:3857",
+            BOUND_PACIFIC,
+            from_origin(
+                -20037726.3693194,
+                111320.70205177445 * 2,
+                111320.70205177445,
+                111320.70205177445,
+            ),
+            (1, 360),
+            id="datum-bound-map-seam",
+        ),
+        pytest.param(
+            box(
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(-1.8, 1.2),
+                *Transformer.from_crs(4326, 3857, always_xy=True).transform(1.8, 1.8),
+            ),
+            "EPSG:3857",
+            BOUND_PACIFIC,
+            from_origin(BOUND_PIXEL_EDGE[0] - 100, BOUND_PIXEL_EDGE[1] + 20, 5, 5),
+            (8, 70),
+            id="datum-bound-fine-edge",
+        ),
         pytest.param(
             box(
                 *Transformer.from_crs(4326, 3857, always_xy=True).transform(-32, -0.3),

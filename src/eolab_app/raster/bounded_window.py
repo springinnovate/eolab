@@ -9,11 +9,13 @@ from affine import Affine
 import numpy as np
 from pyproj import CRS as ProjCRS
 from pyproj import Transformer
-from pyproj.crs import ProjectedCRS
-from pyproj.crs.coordinate_operation import EquidistantCylindricalConversion
+from pyproj.crs import BoundCRS
 from rasterio.crs import CRS
 from rasterio.warp import transform, transform_geom
 from rasterio.windows import Window
+from shapely import get_parts, union_all
+from shapely.affinity import translate
+from shapely.geometry import box, mapping, shape
 
 from eolab_app.sampling_box import (
     Wgs84SamplingBox,
@@ -504,6 +506,21 @@ def _edge_transformer(source_crs: CRS | str, target_crs: CRS | str) -> Transform
 
 
 @lru_cache(maxsize=64)
+def _horizontal_crs(crs: CRS | str) -> ProjCRS:
+    """Find the horizontal CRS that defines the map projection parameters.
+
+    Args:
+        crs: Full CRS from a source, including its optional height or datum binding.
+
+    Returns:
+        Two-dimensional source CRS of the projection. Transformations still use
+        the full CRS so that its declared datum operation is applied.
+    """
+    horizontal = ProjCRS(crs).to_2d()
+    return horizontal.source_crs if horizontal.is_bound else horizontal
+
+
+@lru_cache(maxsize=64)
 def _polar_stereographic_frame(source_crs: CRS | str) -> CRS | None:
     """Choose the stereographic frame GDAL uses to cut pole-centred polygons.
 
@@ -514,7 +531,7 @@ def _polar_stereographic_frame(source_crs: CRS | str) -> CRS | None:
         A north or south polar stereographic CRS for projections centred on
         a pole, or None when the source can go directly to geographic coordinates.
     """
-    operation = ProjCRS(source_crs).coordinate_operation
+    operation = _horizontal_crs(source_crs).coordinate_operation
     if operation is not None:
         for parameter in operation.params:
             # EPSG latitude of natural origin or latitude of projection centre.
@@ -526,50 +543,76 @@ def _polar_stereographic_frame(source_crs: CRS | str) -> CRS | None:
 
 
 @lru_cache(maxsize=64)
-def _projection_cut_frame(target_crs: CRS | str) -> CRS:
-    """Return the longitude frame in which GDAL can cut at the map's outer meridian.
+def _map_longitude_domain(target_crs: CRS | str) -> tuple[CRS, float, float]:
+    """Locate the map's cut in its own horizontal datum and native angular units.
 
     Args:
-        target_crs: Destination map projection or geographic grid.
+        target_crs: Destination map projection, optionally with a datum binding.
 
     Returns:
-        Geographic degrees relative to the projection's central meridian.
-        Geographic grids use Greenwich and place periodic copies on their grid.
+        Native geographic CRS, retaining the datum transformation, and the
+        two longitude limits one half-turn on either side of the map centre.
     """
-    target = ProjCRS(target_crs)
-    if target.is_projected:
-        for parameter in target.coordinate_operation.params:
-            # EPSG longitude of natural origin, projection centre, false origin or origin.
-            if str(parameter.code) in {"8802", "8812", "8822", "8833"}:
-                prime = target.prime_meridian
-                longitude = math.degrees(
-                    parameter.value * parameter.unit_conversion_factor
-                    + prime.longitude * prime.unit_conversion_factor
-                )
-                if longitude:
-                    return CRS.from_string(
-                        f"+proj=longlat +datum=WGS84 +pm={longitude:.15g} +type=crs"
-                    )
-                break
-    return CRS.from_epsg(4326)
+    horizontal = _horizontal_crs(target_crs)
+    geographic = horizontal.geodetic_crs
+    target = ProjCRS(target_crs).to_2d()
+    if target.is_bound:
+        geographic = BoundCRS(
+            geographic, target.target_crs, target.coordinate_operation
+        )
+    frame = CRS.from_wkt(geographic.to_wkt())
+    unit, _ = _longitude_frame(frame)
+    center = 0.0
+    for parameter in horizontal.coordinate_operation.params:
+        # EPSG longitude of natural origin, projection centre, false origin or origin.
+        if str(parameter.code) in {"8802", "8812", "8822", "8833"}:
+            center = parameter.value * parameter.unit_conversion_factor / unit
+            break
+    half_turn = math.pi / abs(unit)
+    return frame, center - half_turn, center + half_turn
 
 
-@lru_cache(maxsize=64)
-def _linear_longitude_crs(source_crs: CRS | str) -> CRS:
-    """Give GDAL a projected plane that keeps geographic source edges straight.
+def _cut_at_map_meridian(
+    geometry: dict[str, object],
+    west: float,
+    east: float,
+    maximum_coordinates: int | None,
+) -> dict[str, object]:
+    """Place each polygon part on the correct side of the destination map's cut.
 
     Args:
-        source_crs: Geographic vector CRS, including its datum and prime meridian.
+        geometry: Polygon or multipolygon with continuous native geographic rings.
+        west: Lower longitude edge of the map.
+        east: Upper longitude edge one full turn east of west.
+        maximum_coordinates: Caller-owned capacity including split parts.
 
     Returns:
-        An equidistant cylindrical CRS with axes linear in native longitude and latitude.
+        Polygonal area inside the map's longitude interval, preserving holes.
+
+    Raises:
+        ValueError: If the number of intersected map copies exceeds the caller's capacity.
     """
-    return CRS.from_wkt(
-        ProjectedCRS(
-            conversion=EquidistantCylindricalConversion(),
-            geodetic_crs=ProjCRS(source_crs),
-        ).to_wkt()
-    )
+    if all(west <= x <= east for ring in _polygon_rings(geometry) for x, _ in ring):
+        return geometry
+    period = east - west
+    parts = []
+    for polygon in get_parts(shape(geometry)):
+        left, low, right, high = polygon.bounds
+        first = math.floor((left - west) / period)
+        last = math.ceil((right - west) / period) - 1
+        if maximum_coordinates is not None and last - first + 1 > maximum_coordinates:
+            raise ValueError("Selection exceeds the transformed-geometry limit")
+        for turn in range(first, last + 1):
+            offset = turn * period
+            piece = (
+                polygon
+                if first == last
+                else polygon.intersection(box(west + offset, low, east + offset, high))
+            )
+            for part in get_parts(piece):
+                if part.area:
+                    parts.append(translate(part, xoff=-offset) if turn else part)
+    return mapping(union_all(parts))
 
 
 def _refine_raster_rings(
@@ -838,6 +881,7 @@ def _project_polygon_rings(
 def _sample_cut_meridians(
     rings: tuple[tuple[tuple[float, float], ...], ...],
     frame: CRS,
+    meridians: tuple[float, float],
     target_crs: CRS | str,
     grid_transform: Affine | None,
     maximum_coordinates: int | None,
@@ -845,11 +889,12 @@ def _sample_cut_meridians(
     maximum_error: float,
     maximum_segment: float,
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Sample the new map-edge segments GDAL inserted when it split a polygon.
+    """Sample new map-edge segments after splitting a polygon at the map meridian.
 
     Args:
-        rings: Already sampled rings in geographic degrees relative to the map centre.
-        frame: Geographic CRS in which the outer meridians are at ±180 degrees.
+        rings: Already sampled rings in the projection's geographic CRS.
+        frame: Geographic CRS defining the native longitude units and datum.
+        meridians: West and east longitude limits of the destination map.
         target_crs: Destination map projection.
         grid_transform: Grid on which curved meridians must meet the chord tolerance.
         maximum_coordinates: Capacity shared by all rings, or None for unlimited work.
@@ -866,12 +911,12 @@ def _sample_cut_meridians(
     count = sum(map(len, rings))
     sampled = []
     for ring in rings:
-        if not any(abs(x) == 180 for x, _ in ring):
+        if not any(x in meridians for x, _ in ring):
             sampled.append(ring)
             continue
         result = [ring[0]]
         for start, end in zip(ring, ring[1:]):
-            if start[0] == end[0] and abs(start[0]) == 180 and start != end:
+            if start[0] == end[0] and start[0] in meridians and start != end:
                 capacity = (
                     None
                     if maximum_coordinates is None
@@ -956,69 +1001,58 @@ def project_polygons_to_crs(
             longitude_period,
         )
     vertex_crs = source_crs
-    source_frame = _longitude_frame(source_crs)
-    cut_frame = _projection_cut_frame(target_crs)
-    target_projected = CRS.from_user_input(target_crs).is_projected
-    cut_source = None
     if not same_crs and CRS.from_user_input(source_crs).is_projected:
-        cut_source = source_crs
-    elif (
-        not same_crs
-        and target_projected
-        and source_frame is not None
-        and not ProjCRS(source_crs).is_derived
-    ):
-        unit, prime = source_frame
-        cut_prime = _longitude_frame(cut_frame)[1]
-        if any(
-            abs(x * unit + prime - cut_prime) > math.pi + 1e-14
-            for ring in densified_rings
-            for x, _ in ring
-        ):
-            # GDAL cuts projected polygons. This linear plane preserves the
-            # geographic vector's straight edges and its native longitude branch.
-            cut_source = _linear_longitude_crs(source_crs)
-            densified_rings = _project_polygon_rings(
-                densified_rings,
-                source_crs,
-                cut_source,
-                coordinate_transform,
-                continuous=True,
-            )
-    if cut_source is not None:
+        # GDAL reconstructs geographic rings enclosing a pole, including holes.
         sampled = _with_polygon_rings(geometries, densified_rings)
-        polar_frame = _polar_stereographic_frame(cut_source)
-        if polar_frame is not None and polar_frame != cut_source:
-            sampled = tuple(transform_geom(cut_source, polar_frame, sampled))
+        polar_frame = _polar_stereographic_frame(source_crs)
+        if polar_frame is not None and polar_frame != source_crs:
+            sampled = tuple(transform_geom(source_crs, polar_frame, sampled))
+        vertex_crs = CRS.from_epsg(4326)
         geometries = tuple(
-            transform_geom(polar_frame or cut_source, cut_frame, sampled)
+            transform_geom(polar_frame or source_crs, vertex_crs, sampled)
         )
-        vertex_crs = cut_frame
         densified_rings = tuple(
             ring for geometry in geometries for ring in _polygon_rings(geometry)
         )
-        if (
-            maximum_coordinates is not None
-            and sum(map(len, densified_rings)) > maximum_coordinates
-        ):
-            raise ValueError("Selection exceeds the transformed-geometry limit")
-        if target_projected:
-            densified_rings = _sample_cut_meridians(
-                densified_rings,
-                cut_frame,
-                target_crs,
-                grid_transform,
-                maximum_coordinates,
-                initial_edge_points,
-                maximum_error,
-                maximum_segment,
+    project_map = not same_crs and CRS.from_user_input(target_crs).is_projected
+    if project_map:
+        frame, west, east = _map_longitude_domain(target_crs)
+        if vertex_crs != frame:
+            densified_rings = _project_polygon_rings(
+                densified_rings, vertex_crs, frame, coordinate_transform
             )
+        vertex_crs = frame
+        if any(x < west or x > east for ring in densified_rings for x, _ in ring):
+            geometries = tuple(
+                _cut_at_map_meridian(geometry, west, east, maximum_coordinates)
+                for geometry in _with_polygon_rings(geometries, densified_rings)
+            )
+            densified_rings = tuple(
+                ring for geometry in geometries for ring in _polygon_rings(geometry)
+            )
+    if (
+        maximum_coordinates is not None
+        and sum(map(len, densified_rings)) > maximum_coordinates
+    ):
+        raise ValueError("Selection exceeds the transformed-geometry limit")
+    if project_map:
+        densified_rings = _sample_cut_meridians(
+            densified_rings,
+            frame,
+            (west, east),
+            target_crs,
+            grid_transform,
+            maximum_coordinates,
+            initial_edge_points,
+            maximum_error,
+            maximum_segment,
+        )
     projected_rings = _project_polygon_rings(
         densified_rings,
         vertex_crs,
         target_crs,
         coordinate_transform,
-        continuous=cut_source is not None and target_projected,
+        continuous=project_map,
     )
     return _with_polygon_rings(geometries, projected_rings)
 
