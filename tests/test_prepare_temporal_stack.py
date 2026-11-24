@@ -468,7 +468,7 @@ def test_build_checks_temporal_cell_methods(tmp_path: Path, tag_band: int) -> No
         assert not (tmp_path / "dataset.yaml").exists()
     with rasterio.open(second, "r+") as src:
         src.update_tags(
-            tag_band, CELL_METHODS="time: area: mean (comment: time: maximum)"
+            tag_band, CELL_METHODS="time: area: MEAN (comment: time: maximum)"
         )
     built = run_cli("build", manifest)
     assert built.returncode == 0, built.stderr

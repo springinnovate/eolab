@@ -402,7 +402,7 @@ def index_rows(stack: Stack, root: Path) -> list[tuple[str | int | float | None,
                             for method in re.findall(
                                 r"\btime\s*:\s*(?:\w+\s*:\s*)*(\w+)", clauses
                             ):
-                                if method != expected_time_method:
+                                if method.lower() != expected_time_method:
                                     raise ValueError(
                                         f"cell_methods declares time: {method}, but "
                                         f"time_support {var.time_support!r} requires "
