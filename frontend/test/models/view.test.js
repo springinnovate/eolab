@@ -123,14 +123,25 @@ test("raster choices separate map layers from completed runs and explain unavail
     assert.match(h.view.setup.inputs.raster.reason.textContent, /do not need to be shown on the map/);
 });
 
-test("removed history entries leave the DOM while unrelated run cards retain their controls", () => {
+test("run history keeps its order and focused button when other runs appear or disappear", () => {
     const h = fixture(), first = job(), second = job({jobId: "2".repeat(32), label: "Another run"});
+    const older = job({jobId: "0".repeat(32), name: "Earlier survey"});
+    const newer = job({jobId: "3".repeat(32), name: "Latest survey"});
     Object.assign(h.state, {page: "runs", runs: [first, second]}); h.view.render(h.state);
     const retained = h.view.runCards.get(second.jobId).button;
-    h.state.runs = [second]; h.view.render(h.state);
+    retained.focus();
+    for (const runs of [[first, second, older], [newer, first, second, older], [newer, second, older], [second]]) {
+        h.state.runs = runs;
+        h.view.render(h.state);
+        const buttons = h.view.elements["runs-list"].querySelectorAll("button");
+        assert.deepEqual(buttons.map(button => button.textContent), runs.map(run => run.label));
+        assert.equal(h.doc.activeElement?.textContent, second.label);
+    }
     assert.equal(h.view.runCards.has(first.jobId), false);
     assert.equal(h.view.elements["runs-list"].children.length, 1);
     assert.equal(h.view.runCards.get(second.jobId).button, retained);
+    h.doc.activeElement.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["Run", second.jobId]);
     h.state.runs = []; h.view.render(h.state);
     assert.equal(h.view.elements["runs-list"].children.length, 0);
     assert.match(h.view.elements["runs-status"].textContent, /No data tool runs/);
