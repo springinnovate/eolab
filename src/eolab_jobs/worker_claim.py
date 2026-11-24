@@ -17,11 +17,11 @@ WHERE status IN ('running', 'cancelling')
 
 CLAIM_NEXT_JOB_SQL: Final = """
 WITH waiting AS (
-    SELECT DISTINCT ON (s.owner) j.id, s.owner, j.created_at
+    SELECT DISTINCT ON (s.owner) j.id, s.owner, s.created_at AS submitted_at, s.id AS subscriber_id
     FROM processing.jobs AS j
     JOIN processing.job_subscribers AS s ON s.job_id = j.id
     WHERE j.status = 'queued' AND s.status IS NULL
-    ORDER BY s.owner, j.created_at, j.id
+    ORDER BY s.owner, s.created_at, s.id
 ), next_job AS (
     SELECT waiting.id, waiting.owner, clock_timestamp() AS started_at
     FROM waiting
@@ -32,7 +32,7 @@ WITH waiting AS (
         ORDER BY turn.started_at DESC
         LIMIT 1
     ) AS last_served ON true
-    ORDER BY last_served.started_at NULLS FIRST, waiting.created_at, waiting.id, waiting.owner
+    ORDER BY last_served.started_at NULLS FIRST, waiting.submitted_at, waiting.subscriber_id
     LIMIT 1
 )
 UPDATE processing.jobs AS job

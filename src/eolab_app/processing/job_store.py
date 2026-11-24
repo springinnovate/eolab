@@ -1125,8 +1125,9 @@ class PostgresJobStore:
     def claim_next_job(self) -> dict[str, Any] | None:
         """Claim the next session's queued job when a worker slot is available.
 
-        Sessions are served by their most recent start, with newcomers first and FIFO
-        order within each session. Shared work serves its subscribed sessions together.
+        Sessions are served by their most recent start, with newcomers first. Each
+        session's oldest pending subscription goes first, including requests to join
+        shared work. A shared start serves all sessions subscribed at that time.
         Running and cancelling jobs retain their slots until native exit is confirmed.
         A lost heartbeat never releases capacity. Container replacement interrupts
         unfinished jobs only after the previous worker and its native children stop.

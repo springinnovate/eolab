@@ -101,7 +101,7 @@ def test_twelve_sessions_and_full_stack_wait_then_take_turns(
     expected = {
         owner: sorted(
             (job for job in jobs if job["owner"] == owner),
-            key=lambda job: (job["created_at"], job["id"]),
+            key=lambda job: (job["subscribed_at"], job["id"]),
         )
         for owner in owners
     }

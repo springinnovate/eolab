@@ -65,6 +65,34 @@ def test_only_subscribers_present_at_start_take_a_fair_turn(
     assert store.claim_next_job()["owner"] == next_owner
 
 
+@pytest.mark.parametrize("private_owner", ["joining", "another"])
+def test_joining_shared_work_keeps_submission_order(
+    store: PostgresJobStore, private_owner: str
+) -> None:
+    """Schedule requests by when each session subscribed to the queued work.
+
+    Args:
+        store: Disposable PostgreSQL job store.
+        private_owner: Exercise FIFO within a session or between two newcomers.
+    """
+    shared = PreparedJobPlan({}, {}, operation="test.v1", work_key="shared")
+    original = store.submit("original", "shared", shared, "shared")
+    private = store.submit(
+        private_owner,
+        "private",
+        PreparedJobPlan({}, {}, operation="test.v1"),
+        "private",
+    )
+    joined = store.submit("joining", "shared", shared, "shared")
+    assert joined["job_id"] == original["job_id"]
+    store.cancel(original["id"], "original")
+
+    for expected in (private, joined):
+        claim = store.claim_next_job()
+        assert (claim["id"], claim["owner"]) == (expected["job_id"], expected["owner"])
+        assert store.finish(claim["id"], claim["attempt_id"], None)
+
+
 def test_concurrent_subscribers_share_one_claim_and_published_result(
     store: PostgresJobStore,
 ) -> None:
