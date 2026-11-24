@@ -1558,7 +1558,7 @@ def test_numeric_meridian_locates_reference_and_warped_samples(
 
 @pytest.mark.parametrize(
     "survey_reference",
-    [(9102, 1, None, False), (9105, 1 / 0.9, None, True)],
+    [(9102, 1, None, False), (9105, 1 / 0.9, 5720, False), (9105, 1 / 0.9, None, True)],
     indirect=True,
 )
 def test_published_survey_grid_preserves_numeric_meridian_and_height(
@@ -1599,7 +1599,7 @@ def test_published_survey_grid_preserves_numeric_meridian_and_height(
         rasterio.open(destination) as result_grid,
     ):
         assert result_grid.crs == CRS.from_wkt(spec.grid.crs)
-        assert result_grid.units == (None,)
+        assert result_grid.units == ("unknown" if vertical else None,)
         np.testing.assert_array_equal(result_grid.read(1), np.arange(52).reshape(4, 13))
     assert read_raster_pixel(destination, -4.185 + meridian, 48.335).value == 51
     assert result.valid_pixels == 52

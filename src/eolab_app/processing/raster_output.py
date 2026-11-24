@@ -127,7 +127,9 @@ def write_float64_cog(
         destination: COG path in the same attempt.
         grid: Expected dimensions, CRS WKT, and affine transform.
         valid_pixels: Expected number of valid pixels at the base resolution.
-        unit: Expected band unit, or None for an unlabelled band.
+        unit: Expected band unit, or None when the value's unit is unspecified.
+            Compound grids explicitly label this as unknown so the vertical
+            coordinate unit cannot be mistaken for the unit of the formula.
         reference: Authorized GeoTIFF when matching an existing raster grid.
         output_name: Recipe output name associated with the destination.
         description: File description for output-integrity errors, such as
@@ -140,6 +142,12 @@ def write_float64_cog(
     """
     block_size = 512
     definition = ProjCRS.from_user_input(grid.crs)
+    band_unit = unit
+    if definition.is_compound and unit is None:
+        # GDAL otherwise labels the formula values with the vertical axis unit.
+        band_unit = "unknown"
+        with rasterio.open(stage, "r+") as staged:
+            staged.set_band_unit(1, band_unit)
     copy_keys = (
         reference is not None
         and definition.is_geographic
@@ -170,7 +178,7 @@ def write_float64_cog(
             or tuple(result.transform)[:6] != grid.transform
             or result.nodata is None
             or not math.isnan(result.nodata)
-            or result.units != (unit,)
+            or result.units != (band_unit,)
             or (max(result.shape) > block_size and not result.overviews(1))
         ):
             raise ProcessingError(
