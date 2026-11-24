@@ -150,7 +150,7 @@ function canRetryRasterStatistics(error) {
  * @property {string} variableLabel Human-readable name of the selected variable.
  * @property {string} variable Catalog variable identifier.
  * @property {string} time Selected UTC observation, including an unavailable saved selection.
- * @property {string} month Browsed UTC month.
+ * @property {string} month Requested or returned UTC month, or an empty string while looking up the latest month.
  * @property {string[]} months Ordered populated months from the Catalog.
  * @property {string[]} times Actual UTC observations in the browsed month.
  * @property {boolean} loading Whether the date list or publication is pending.
@@ -4710,7 +4710,7 @@ export function initializeRasterViewer(
         temporal.controls.render({
             variables: Object.entries(temporal.item.properties["cube:variables"]).map(([id, value]) => ({id, label: value.description ?? id, units: value.unit})),
             variable: pending?.variable ?? temporal.selection.variable,
-            month: pending ? pending.month ?? "" : temporal.month,
+            month: temporal.month,
             time: pending ? null : temporal.selection.time,
             months: temporal.months,
             times: temporal.times, loading: temporal.loading, error: temporal.error,
@@ -4822,7 +4822,7 @@ export function initializeRasterViewer(
         temporal.error = null;
         temporal.times = [];
         if (monthChoice && month === undefined) temporal.months = [];
-        temporal.month = month ?? temporal.month;
+        temporal.month = month ?? "";
         selectTemporalObservation(record, selection.time ? selection : {variable}, false);
         try {
             const choices = await loadTimes(temporal.item, variable, month, request.signal);

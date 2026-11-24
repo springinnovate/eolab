@@ -254,8 +254,9 @@ export class TemporalScrubber {
         c.play.textContent = this.playing ? "Pause" : "Play";
         c.display.textContent = painted ? "On map · " + utcLabel(t.time) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
+        const dateStatus = t.month ? "Loading dates for " + t.month : "Loading available dates…";
         const message = t.error || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
-            t.loading && !t.times.length ? "Loading dates for " + t.month :
+            t.loading && !t.times.length ? dateStatus :
                 (!painted || pending !== t.time) ? "Loading raster…" : "");
         if (c.status.textContent !== message) c.status.textContent = message;
         if (next?.time) {

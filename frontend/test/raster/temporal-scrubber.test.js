@@ -77,6 +77,11 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
         controls.time.dispatchEvent(Object.assign(new Event("keydown"), {key: "ArrowRight"}));
         assert.deepEqual(calls.at(-1), ["wind", stamps[2]]);
         assert.match(controls.gap.textContent, /3 days later/);
+        const lookup = {...other.timeline, loading: true, layerName: null, times: [], months: [], month: ""};
+        widget.setLayers([{...other, timeline: lookup}]);
+        assert.equal(controls.status.textContent, "Loading available dates…");
+        widget.setLayers([{...other, timeline: {...lookup, months, month: months[1]}}]);
+        assert.equal(controls.status.textContent, "Loading dates for 2000-05");
         widget.setLayers([{...other, visible: false}]);
         assert.equal(root.hidden, true);
     } finally { widget.destroy(); }

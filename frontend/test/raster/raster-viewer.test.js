@@ -6168,6 +6168,7 @@ for (const [action, choice, expectedVariable, expectedTime] of [
             assert.deepEqual(fixture.viewer.exportTemporal(record).temporalSource, originalSource);
             assert.equal(view.state.variable, expectedVariable);
             assert.equal(view.state.time, null);
+            assert.equal(fixture.mapLayers.snapshots()[0].timeline.month, action === "onMonthChange" ? choice : "");
             failLookup = false;
             await view.handlers.onRetry();
             assert.deepEqual(lookups[2], lookups[1]);
