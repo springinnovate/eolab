@@ -808,18 +808,24 @@ export class RasterSeriesController {
     renderTemporalResults() {
         const area = this.areaStatistics, showingPrevious = !!(area.busy && !area.temporalResult && area.previousTemporalResult);
         const result = area.temporalResult ?? (showingPrevious ? area.previousTemporalResult : null);
-        const observations = result?.observations ?? [];
-        const statistics = this.formulas.map(formula => ({...formula, ...this.statisticDisplay.get(formula.id), previousRows: null,
-            rows: observations.map(({time, start, period, rows}) => {
-                const capturedLabel = getCapturedStatisticLabel(result, formula);
+        const observations = (result?.observations ?? []).map(({time, start, period, rows}) => {
+            const end = new Date(time), position = start ? new Date(start) : end;
+            const utc = end.toISOString();
+            const label = observationLabel(utc, period, period === "explicit" && start ? position.toISOString() : undefined) ??
+                utc.replace("T", " ").replace(/(\.000)?Z$/, " UTC");
+            return {key: time, xValue: position.getTime(), label, rows};
+        });
+        const statistics = this.formulas.map(formula => {
+            const capturedLabel = getCapturedStatisticLabel(result, formula);
+            const matches = capturedLabel !== undefined;
+            const seriesRows = observations.map(({key, xValue, label, rows}) => {
                 const row = rows.find(value => value.label === capturedLabel);
-                const matches = capturedLabel !== undefined;
-                const end = new Date(time).toISOString();
-                const label = observationLabel(end, period, start && new Date(start).toISOString()) ?? end.replace("T", " ").replace(/(\.000)?Z$/, " UTC");
-                return {key: time, xValue: Date.parse(start ?? time), label,
+                return {key, xValue, label,
                     statisticId: formula.id, statisticLabel: formula.label || formula.expression, state: !matches ? "waiting" : row?.state === "ok" ? "value" : row?.state ?? "waiting",
                     value: !matches || row?.value == null ? null : Number(row.value), rawValue: matches ? row?.value : null, unit: row?.unit ?? ""};
-            })}));
+            });
+            return {...formula, ...this.statisticDisplay.get(formula.id), previousRows: null, rows: seriesRows};
+        });
         if (showingPrevious) for (const statistic of statistics) {statistic.previousRows = statistic.rows; statistic.rows = [];}
         this.view.render({active: this.active, temporal: {...this.temporal,
             variableBound: this.sources.some(source => source.key === this.temporal.viewKey), selectionError: this.temporalSelectionError()},
