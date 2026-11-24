@@ -92,8 +92,8 @@ export class HabitatStackView {
 
     /** Create one stable checkbox for a dataset's use as predictor or response.
      * @param {"predictor"|"response"} role Scientific role controlled by this checkbox.
-     * @param {{id:string,label:string,url:string,roles:string[],requiredRoles:string[]}} dataset Configured source and role requirements.
-     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,required:HTMLElement,link:HTMLAnchorElement}} Dataset row controls.
+     * @param {import("../processing/api.js").HabitatDatasetSource} dataset Configured source and role requirements.
+     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,required:HTMLElement,link:HTMLAnchorElement,bands:HTMLElement,years:HTMLElement}} Dataset row and its source description.
      */
     buildDatasetChoice(role, dataset) {
         const root = this.element("li"), label = this.element("label", "", "models-habitat-dataset-choice");
@@ -103,17 +103,22 @@ export class HabitatStackView {
         caption.append(name, required); label.append(checkbox, caption);
         const link = this.element("a", "Source");
         link.target = "_blank"; link.rel = "noopener noreferrer";
-        root.append(label, link);
+        const details = this.element("div", "", "models-habitat-dataset-details");
+        details.id = `models-${this.inputName}-${role}-${dataset.id}-details`;
+        checkbox.setAttribute("aria-describedby", details.id);
+        const bands = this.element("div"), years = this.element("div");
+        details.append(bands, years);
+        root.append(label, link, details);
         checkbox.addEventListener("change", () => {
             const {fieldName} = this.datasetGroups[role];
             const selected = this.value[fieldName];
             this.handlers.onInput(this.inputName, {[fieldName]: checkbox.checked ? [...selected, dataset.id] : selected.filter(id => id !== dataset.id)});
         });
-        return {root, checkbox, label: name, required, link};
+        return {root, checkbox, label: name, required, link, bands, years};
     }
 
     /** Refresh dataset choices in place so selection, focus and disclosures survive updates.
-     * @param {{datasets:Array<{id:string,label:string,url:string,roles:string[],requiredRoles:string[]}>}} configuration Model-owned dataset choices.
+     * @param {{datasets:import("../processing/api.js").HabitatDatasetSource[]}} configuration Model-owned dataset choices.
      * @return {void}
      */
     renderDatasetChoices(configuration) {
@@ -130,6 +135,10 @@ export class HabitatStackView {
                     group.controls.set(dataset.id, controls); group.list.append(controls.root);
                 }
                 controls.label.textContent = dataset.label;
+                const bands = dataset.bandsByRole[role];
+                controls.bands.textContent = `${bands.length === 1 ? "Source band" : "Source bands"} · ${bands.join(", ")}`;
+                const usage = dataset.yearsUsed[this.value.year] ?? "Choose a supported assessment year.";
+                controls.years.textContent = `Source years · ${dataset.sourceYears}. ${usage}`;
                 controls.checkbox.checked = selected.includes(dataset.id);
                 controls.checkbox.disabled = dataset.requiredRoles.includes(role);
                 controls.required.hidden = !controls.checkbox.disabled;

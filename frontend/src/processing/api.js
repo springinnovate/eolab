@@ -6,6 +6,18 @@ import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./cal
 import { csvParse } from "d3";
 import { rasterSourceReference } from "../raster-source.js";
 
+/** A prepared Earth Engine dataset offered in Ecosystem Condition setup.
+ * @typedef {Object} HabitatDatasetSource
+ * @property {string} id Dataset identifier submitted with the model.
+ * @property {string} label Human-readable dataset name.
+ * @property {string} url Catalog entry for the configured source.
+ * @property {Array<"predictor"|"response">} roles Roles served by the dataset.
+ * @property {Array<"predictor"|"response">} requiredRoles Roles requiring this dataset.
+ * @property {Record<string,string[]>} bandsByRole Source band names read in each role.
+ * @property {string} sourceYears Time coverage of the catalog source.
+ * @property {Record<string,string>} yearsUsed Observations used for each assessment year.
+ */
+
 /** Serialize one raster identity without carrying display state or file paths.
  * @param {Object} source Catalog item, exact temporal observation, uploaded raster or owned run-file source.
  * @return {Object} Path-free source accepted by Processing operations.
@@ -432,9 +444,9 @@ export class ProcessingApiClient {
         return response.models.map(validateAvailableModel);
     }
 
-    /** Read Habitat's years, acquisition grid and selectable input datasets.
+    /** Read Habitat's assessment years, grid and source details for each dataset.
      * @param {AbortSignal} [signal] Cancel choices for an abandoned model draft.
-     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:Array<{id:string,label:string,url:string,roles:Array<"predictor"|"response">,requiredRoles:Array<"predictor"|"response">}>}>} Stable dataset aliases, source links and required roles without connection credentials.
+     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:HabitatDatasetSource[]}>} Configured input choices, bands and observation years.
      * @throws {Error} If the configuration request fails.
      */
     async getHabitatEarthEngineOptions(signal) {

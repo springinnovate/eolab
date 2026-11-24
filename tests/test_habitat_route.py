@@ -70,12 +70,40 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
         "url": "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2",
         "roles": ["predictor", "response"],
         "requiredRoles": [],
+        "sourceYears": "2001–2024 (as of Nov 2026)",
+        "bandsByRole": {
+            "predictor": ["Greenup_1", "Senescence_1"],
+            "response": [
+                "Greenup_1",
+                "Senescence_1",
+                "Greenup_2",
+                "Senescence_2",
+                "NumCycles",
+            ],
+        },
+        "yearsUsed": {
+            str(year): f"Uses {year} observations." for year in range(2015, 2020)
+        },
     }
     assert {
         source["id"]: source["requiredRoles"]
         for source in datasets
         if source["requiredRoles"]
     } == {"srtm_landforms": ["predictor"]}
+    assert all(
+        source["sourceYears"]
+        and set(source["yearsUsed"]) == {str(year) for year in range(2015, 2020)}
+        and all(source["bandsByRole"][role] for role in source["roles"])
+        for source in datasets
+    )
+    assert sources_by_label["ERA5 daily aggregates"]["yearsUsed"]["2018"] == (
+        "Uses 2018 observations and 2009–2018 rainfall totals for rainfall variability."
+    )
+    soil = sources_by_label["SoilGrids organic carbon"]
+    assert soil["bandsByRole"] == {"predictor": ["soc_5-15cm_mean"]}
+    assert set(soil["yearsUsed"].values()) == {
+        "Uses the same map for every assessment year."
+    }
     assert len({source["id"] for source in datasets}) == 18
     assert sources_by_label["Landsat NDVI composites"]["roles"] == ["response"]
     assert sources_by_label["ERA5 daily aggregates"]["roles"] == ["predictor"]
@@ -122,3 +150,12 @@ def test_habitat_options_follow_configured_band_sources_and_roles(
         "ERA5 daily aggregates": ["predictor"],
         "SRTM landforms": ["predictor"],
     }
+    sources = {dataset["id"]: dataset for dataset in response.json()["datasets"]}
+    assert sources["modis_phenology"]["bandsByRole"] == {
+        "predictor": ["Greenup_1", "Senescence_1"],
+        "response": ["Greenup_1", "Senescence_1"],
+    }
+    assert sources["era5_daily"]["bandsByRole"] == {
+        "predictor": ["mean_2m_air_temperature"]
+    }
+    assert sources["era5_daily"]["yearsUsed"]["2018"] == "Uses 2018 observations."

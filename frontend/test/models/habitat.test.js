@@ -31,12 +31,19 @@ const habitat = {...model, id: "habitat-condition", title: "Ecosystem Condition"
  */
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+const annualUse = Object.fromEntries([2015, 2016, 2017, 2018, 2019].map(year => [year, `Uses ${year} observations.`]));
+
 const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2019,
     grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}, datasets: [
-        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"], requiredRoles: []},
-        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"], requiredRoles: []},
-        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"], requiredRoles: []},
-        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"], requiredRoles: ["predictor"]},
+        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"], requiredRoles: [],
+            sourceYears: "1979–July 2020", bandsByRole: {predictor: ["total_precipitation"]}, yearsUsed: annualUse},
+        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"], requiredRoles: [],
+            sourceYears: "2001–2024", bandsByRole: {predictor: ["Greenup_1", "Senescence_1"], response: ["NumCycles"]}, yearsUsed: annualUse},
+        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"], requiredRoles: [],
+            sourceYears: "1984–2026", bandsByRole: {response: ["NDVI"]}, yearsUsed: annualUse},
+        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"], requiredRoles: ["predictor"],
+            sourceYears: "2006–2011", bandsByRole: {predictor: ["constant"]},
+            yearsUsed: Object.fromEntries(Object.keys(annualUse).map(year => [year, "Uses the same map for every assessment year."]))},
     ]};
 
 /** Existing Catalog selections used for preparation, independent of Map layers.
@@ -192,6 +199,15 @@ test("Habitat starts with all datasets selected in collapsed role groups", async
         }
     }
     assert.equal(stack.datasetGroups.predictor.controls.get("srtm_landforms").required.hidden, false);
+    const phenology = stack.datasetGroups.predictor.controls.get("modis_phenology");
+    const response = stack.datasetGroups.response.controls.get("modis_phenology");
+    assert.equal(phenology.bands.textContent, "Source bands · Greenup_1, Senescence_1");
+    assert.equal(response.bands.textContent, "Source band · NumCycles");
+    assert.equal(phenology.checkbox.getAttribute("aria-describedby"), phenology.bands.parentElement.id);
+    assert.equal(phenology.years.textContent, "Source years · 2001–2024. Uses 2018 observations.");
+    edit(stack.year, "2015");
+    assert.equal(phenology.years.textContent, "Source years · 2001–2024. Uses 2015 observations.");
+    assert.match(stack.datasetGroups.predictor.controls.get("srtm_landforms").years.textContent, /same map for every assessment year/);
     assert.deepEqual(h.controller.state.draft.inputs.area.area.selectedBounds, h.context.area.selectedBounds);
     assert.equal(h.requests.length, 0, "Opening the default configuration does not submit a calculation");
     h.controller.destroy();
