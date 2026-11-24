@@ -181,6 +181,41 @@ test("Raster calculator keeps formula aliases and captures the chosen output gri
     assert.deepEqual(h.submitted[0].inputs.calculation.layers.map(row => row.alias), ["a", "c"]);
 });
 
+for (const type of ["raster", "raster_formula"]) test(`${type} observes deletion of a selected completed-run input`, async t => {
+    const recipe = {...model, parameters: {}, inputs: {
+        source: {type, label: "Input raster"}, area: {type: "explicit_area", label: "Analysis area"},
+    }};
+    const completed = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", artifacts: fileManifest()});
+    const selected = {kind: "runArtifact", jobId: completed.jobId, artifactId: completed.artifacts.files[0].artifactId};
+    const deleted = {...completed, status: "deleted", updatedAt: "2098-01-01T00:00:00Z"};
+    const reads = [], view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({
+        listModelRuns: async () => ({jobs: [completed], nextCursor: null}),
+        readJobStatuses: async ids => { reads.push(ids); return {jobs: [deleted], unavailableJobIds: []}; },
+    }, view);
+    t.after(() => { h.controller.destroy(); h.jobs.destroy(); });
+    h.controller.setActive(true);
+    await h.controller.loadRuns();
+    h.controller.chooseModel(recipe);
+    const editor = view.setup.inputs.source;
+    const control = type === "raster_formula" ? editor.rows.get("a").source : editor.source;
+    const choose = source => { control.value = modelSourceKey(source); control.dispatchEvent(new Event("change")); };
+    choose(selected);
+    assert.equal(view.setup.run.disabled, false);
+    choose(raster);
+    assert.equal(h.jobs.tracked.has(completed.jobId), false, "available but unselected files need no observation");
+    choose(selected);
+    await h.jobs.refresh();
+    assert.deepEqual(reads, [[completed.jobId]], "the observer must request this run's authoritative status");
+    assert.equal(h.controller.runSnapshots.get(completed.jobId).status, "deleted");
+    assert.equal(view.setup.run.disabled, true);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "deleted-input"), /unavailable|no longer available/);
+    if (type === "raster_formula") {
+        assert.match(editor.status.textContent, /Raster a is unavailable/);
+        assert.equal(editor.formula.value, "a", "status refresh preserves the formula");
+    }
+});
+
 const periodModel = {...model, id: "regional-period-statistic", parameters: {}, inputs: {
     weather: {type: "temporal_interval", label: "Dataset and period"},
     region: {type: "summary_area", label: "Analysis area"},

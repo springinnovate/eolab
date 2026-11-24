@@ -74,6 +74,20 @@ export function getModelRasterFields(draft) {
     return fields;
 }
 
+/** List selected raster sources so the existing observer can follow their runs.
+ * Input handlers resolve their own bindings without exposing mutable field layouts.
+ * @param {Object} draft Model setup with named input state.
+ * @return {Object[]} Selected source metadata, excluding empty choices.
+ */
+export function getModelRasterSources(draft) {
+    const sources = getModelRasterFields(draft).map(({state, field}) => state[field]).filter(Boolean);
+    for (const [name, definition] of Object.entries(draft.model.inputs)) {
+        const handler = getModelInputHandler(definition.type);
+        if (handler?.getRasterSources) sources.push(...handler.getRasterSources(draft.inputs[name]));
+    }
+    return sources;
+}
+
 /** Explain the saved polygon selection without exposing server paths.
  * @param {Object} filter Typed catalog filter.
  * @return {string} Readable predicate, including its all/any rule.

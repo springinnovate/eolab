@@ -44,6 +44,15 @@ function refreshDraft(state, definition, context) {
     state.sources = structuredClone(context.rasters ?? []);
 }
 
+/** Return sources bound to formula rows for completed-run status observation.
+ * @param {RasterFormulaDraft} state Current calculator settings.
+ * @return {Object[]} Selected source metadata from the current choices.
+ */
+function getRasterSources(state) {
+    const selected = new Set(state.layers.map(layer => layer.key));
+    return state.sources.filter(source => selected.has(modelSourceKey(source)));
+}
+
 /** Capture path-free inputs and validate the fields needed to submit the formula.
  * @param {RasterFormulaDraft} state Current calculator settings.
  * @return {Object} Raster formula input for the existing model-run endpoint.
@@ -312,5 +321,5 @@ function buildView(ui, callbacks, name, definition) {
  */
 export const rasterFormulaInputHandler = Object.freeze({
     createDraft, refresh: refreshDraft, capture: captureDraft, restore: restoreDraft,
-    describe: describeFormula, buildView,
+    describe: describeFormula, buildView, getRasterSources,
 });

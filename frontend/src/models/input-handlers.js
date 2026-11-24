@@ -7,6 +7,7 @@ import { rasterFormulaInputHandler } from "./raster-formula-input.js";
  * @typedef {Object} ModelInputHandler
  * @property {(definition:Object,context:Object)=>Object} createDraft Create independent editable state from recipe settings and current sources.
  * @property {(state:Object,definition:Object,context:Object)=>void} refresh Update live choices while preserving captured run inputs.
+ * @property {(state:Object)=>Object[]} [getRasterSources] Return selected raster metadata for observing completed-run inputs.
  * @property {(state:Object,definition:Object)=>Object} capture Return detached invocation data, throwing Error for incomplete user choices.
  * @property {(state:Object,value:Object,definition:Object)=>void} restore Copy a saved invocation into the newly created draft.
  * @property {(ui:Object,callbacks:Object,name:string,definition:Object)=>{root:HTMLElement,render:(state:Object)=>boolean,dispose?:()=>void}} buildView Build stable controls that report readiness and optionally cancel their reads on disposal.

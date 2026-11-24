@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
@@ -650,7 +650,7 @@ export class ModelsController {
             if (this.state.page === "run") { this.state.page = "runs"; this.view.focusPage("runs"); }
         }
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" &&
-            this.state.draft && getModelRasterFields(this.state.draft).some(({state, field}) => state[field]?.jobId === job.jobId))) {
+            this.state.draft && getModelRasterSources(this.state.draft).some(source => source.jobId === job.jobId))) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
         this.state.runs = [...this.runSnapshots.values()].filter(value => value.status !== "deleted")
