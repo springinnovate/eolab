@@ -19,7 +19,7 @@ from eolab_app.processing.aggregate_models import (
     NamedCalculation,
     PixelPoint,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 import eolab_app.processing.raster_aggregate as kernel

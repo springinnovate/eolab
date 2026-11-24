@@ -88,9 +88,10 @@ def plan_temporal_grid(
         Native grid, including the longitude view reused by every observation.
 
     Raises:
-        ProcessingError: If the area cannot be projected or does not overlap.
+        JobError: If the area cannot be projected or does not overlap.
         OSError: If source metadata cannot be read.
     """
+
     with TemporalRasterDataset(observation) as dataset:
         window, polygons = get_raster_window_and_mask_source(dataset, area, limits)
         try:
@@ -124,7 +125,7 @@ def plan_temporal_calculation_grid(
         Common native grid and the hectare strategy, or None when not used.
 
     Raises:
-        ProcessingError: If the area cannot be projected or does not overlap.
+        JobError: If the area cannot be projected or does not overlap.
         OSError: If source metadata cannot be read.
         rasterio.errors.RasterioError: If native metadata cannot be opened.
     """

@@ -22,8 +22,8 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
-from eolab_app.processing.artifact_manifest import FileDeclaration
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifact_manifest import FileDeclaration
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
 )
@@ -32,12 +32,12 @@ from eolab_app.processing.habitat_preparation_models import (
     HabitatInputPreparationArtifact,
     HabitatInputPreparationRequest,
 )
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.habitat_preparation_selections import (
     HabitatSubmissionDependencies,
     PostgresHabitatPreparationSelections,
 )
-from eolab_app.processing.models import PreparedJobPlan
+from eolab_jobs.models import PreparedJobPlan
 from eolab_app.processing.service import HABITAT_PREPARATION_OWNER, ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.routes.habitat_preparation import create_habitat_preparation_router

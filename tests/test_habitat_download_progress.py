@@ -9,7 +9,7 @@ import pytest
 from shapely.geometry import box, mapping
 
 from eolab_app.processing import habitat_earth_engine, habitat_preparation
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.habitat_earth_engine import (
     HabitatEarthEngineRuntime,
     HabitatEarthEngineSettings,

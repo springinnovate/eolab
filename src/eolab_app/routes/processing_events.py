@@ -7,8 +7,8 @@ from typing import Any
 from starlette.responses import StreamingResponse
 from starlette.requests import Request
 
-from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.ports import JobSubscription
+from eolab_jobs.models import JobError
+from eolab_jobs.ports import JobSubscription
 from eolab_app.routes.http_disconnect import wait_for_http_disconnect
 
 
@@ -68,7 +68,7 @@ class JobEventResponse(StreamingResponse):
                     yield "event: changed\ndata: {}\n\n"
                 else:
                     yield ": keepalive\n\n"
-        except ProcessingError:
+        except JobError:
             return
 
     async def _send(self, send: Any) -> None:

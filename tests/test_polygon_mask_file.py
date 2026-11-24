@@ -17,7 +17,7 @@ from shapely.ops import transform as transform_geometry
 
 import eolab_app.processing.raster_mask as masks
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 from raster_fixture_support import write_source

@@ -14,7 +14,7 @@ from rasterio.windows import Window
 
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.clip_models import ClipArea
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 from eolab_app.processing.raster_clip import create_clip
 from eolab_app.processing.raster_input import count_native_raster_blocks

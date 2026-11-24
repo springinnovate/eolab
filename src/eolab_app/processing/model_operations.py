@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from pydantic import BaseModel, TypeAdapter
 
 from eolab_app.catalog_selection import VectorSelection
-from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
+from eolab_jobs.models import Artifact, PreparedJobPlan, JobError
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.aggregate_models import (
     AggregateJobRequest,
@@ -159,7 +159,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         before_queue: Optional operation-owned submission check or recording step.
             Admission invokes it after accepted-request recovery and before job
             persistence, with the validated request and only this operation's
-            composition-supplied dependencies (or None). It may raise ProcessingError
+            composition-supplied dependencies (or None). It may raise JobError
             or be cancelled; native work must finish cleanup before cancellation
             releases an operation-owned concurrency gate. Shared admission continues
             to own ordinary session/source authorization and queued-job persistence.
@@ -794,11 +794,11 @@ def get_model_operation(identifier: str) -> ModelOperation[Any, Any, Any]:
         Registered contracts and application adapters.
 
     Raises:
-        ProcessingError: If no installed implementation supports this operation.
+        JobError: If no installed implementation supports this operation.
     """
     try:
         return OPERATIONS[identifier]
     except KeyError as error:
-        raise ProcessingError(
+        raise JobError(
             "unsupported_model_operation", "This operation is not installed.", 422
         ) from error

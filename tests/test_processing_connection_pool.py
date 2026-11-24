@@ -6,8 +6,8 @@ from threading import Barrier
 import psycopg
 import pytest
 
-from eolab_app.processing.job_store import PostgresJobStore, PROCESSING_ADVISORY_LOCK_ID
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.job_store import PostgresJobStore, PROCESSING_ADVISORY_LOCK_ID
+from eolab_jobs.models import JobError
 from test_processing_jobs import store
 
 
@@ -115,13 +115,13 @@ def test_pool_exhaustion_and_shutdown_use_storage_error(
         connections = [
             borrowed.enter_context(store._pool.connection()) for _ in range(8)
         ]
-        with pytest.raises(ProcessingError) as error:
+        with pytest.raises(JobError) as error:
             store.find_request("owner", "request")
         assert error.value.code == "processing_unavailable"
         assert not any(connection.closed for connection in connections)
     store.close()
     assert all(connection.closed for connection in connections)
     store.close()
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         store.find_request("owner", "request")
     assert error.value.code == "processing_unavailable"

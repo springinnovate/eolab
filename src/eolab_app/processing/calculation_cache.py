@@ -42,8 +42,9 @@ def calculation_result_cache_keys(
 
     Raises:
         ValueError: If a request lacks its required catalog or published-file identity.
-        ProcessingError: If a stored expression is invalid.
+        JobError: If a stored expression is invalid.
     """
+
     alias, source = next(iter(calculation.sources.items()))
     if isinstance(calculation, AggregateSpec):
         source_signature = calculation.sourceSignature

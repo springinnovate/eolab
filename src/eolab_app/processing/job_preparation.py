@@ -2,8 +2,7 @@
 
 from eolab_app.processing.aggregate_models import AggregateSpec
 from eolab_app.processing.clip_models import ClipSpec
-from eolab_app.processing.models import PreparedJobPlan
-
+from eolab_jobs.models import PreparedJobPlan
 
 def prepare_aggregate_job(spec: AggregateSpec) -> PreparedJobPlan:
     """Serialize a prepared raster calculation for the job store.

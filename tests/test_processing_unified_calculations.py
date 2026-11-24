@@ -22,7 +22,7 @@ from eolab_app.processing.aggregate_models import (
     AggregateJobRequest,
     AggregatePlanRequest,
 )
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.service import ProcessingService
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import request_body, ENDPOINT

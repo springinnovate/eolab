@@ -4,7 +4,7 @@ from typing import Any
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.processing.aggregate_models import AggregateArea
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_summary_models import (
     OPERATION,
@@ -107,11 +107,11 @@ async def prepare_vector_summary_execution(
         Ephemeral authorized original source and the unchanged native specification.
 
     Raises:
-        ProcessingError: If vector source reading is unavailable.
+        JobError: If vector source reading is unavailable.
         SelectionUnavailableError: If the original source or its predicate is unavailable.
     """
     if context.areas is None:
-        raise ProcessingError(
+        raise JobError(
             "selection_unavailable", "Vector source reading is unavailable.", 409
         )
     source = await context.areas.resolve_for_sampling(spec.inputs.vector.selection)

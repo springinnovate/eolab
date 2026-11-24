@@ -30,9 +30,10 @@ def identify_shared_calculation(
         A stable hash for matching queued/running work in this deployment.
 
     Raises:
-        ProcessingError: If an expression cannot be compiled.
+        JobError: If an expression cannot be compiled.
         ValueError: If inputs cannot be serialized as finite JSON.
     """
+
     request = inputs.request.model_dump(mode="json", by_alias=True)
     request.pop("requestId", None)
     if isinstance(inputs, UnpreparedCalculation):

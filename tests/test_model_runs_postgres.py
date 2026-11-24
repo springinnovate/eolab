@@ -22,7 +22,7 @@ from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistr
 from eolab_app.processing.habitat_models import QueuedHabitat
 from eolab_app.processing.model_run_contracts import ModelRunSpec, RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.service import ProcessingService
 from eolab_app.routes.processing import COOKIE, create_processing_router
 from test_processing_jobs import (
@@ -39,8 +39,7 @@ from test_polygon_summary_areas import rectangle
 from catalog_selection_support import register_selection, write_geopackage_layer
 import eolab_app.processing.worker as worker_module
 from eolab_app.raster.models import AuthorizedRaster
-from eolab_app.processing.job_store import PostgresJobStore
-
+from eolab_jobs.job_store import PostgresJobStore
 
 @pytest.mark.parametrize("state", ["cancelled", "failed", "interrupted"])
 def test_undo_restores_terminal_run_history(
@@ -151,7 +150,7 @@ def test_undo_dismiss_and_cleanup_share_one_lifecycle_transition(
             return store.resolve_deletion(
                 identifier, owner, deleted["deletion_id"], action == "undo"
             )["status"]
-        except ProcessingError as error:
+        except JobError as error:
             return error.code
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -301,7 +300,7 @@ def test_model_renewal_serializes_with_delete_and_cleanup(
             else:
                 store.cleanup_candidates()
             return action
-        except ProcessingError as error:
+        except JobError as error:
             return error.code
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -309,7 +308,7 @@ def test_model_renewal_serializes_with_delete_and_cleanup(
     assert outcomes[0] in {"renew", "result_unavailable"}
     assert outcomes[1:] == ["delete", "cleanup"]
     assert store.get(identifier, owner)["status"] == "deleted"
-    with pytest.raises(ProcessingError, match="completed run"):
+    with pytest.raises(JobError, match="completed run"):
         store.extend_result_lifetime(identifier, owner, 7 * 86400)
     client.portal.call(worker.cleanup)
 
@@ -421,7 +420,7 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
     from app_support import mounted_geotiff_item
     from catalog_selection_support import FixtureCatalog
     from test_downstream_model import downstream_fixture
-    from eolab_app.processing.artifacts import LocalJobArtifacts
+    from eolab_jobs.artifacts import LocalJobArtifacts
     from eolab_app.processing.native_processes import create_native_process
     from eolab_app.raster.catalog import StacRasterCatalog
     from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
@@ -1324,7 +1323,7 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
         ).status_code
         == 413
     )
-    with pytest.raises(ProcessingError, match="retained metadata"):
+    with pytest.raises(JobError, match="retained metadata"):
         store.submit(
             "fixture-owner",
             uuid4().hex,

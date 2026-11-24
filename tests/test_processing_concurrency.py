@@ -13,13 +13,13 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.job_notifications import PostgresJobWakeup
-from eolab_app.processing.models import (
+from eolab_jobs.job_store import PostgresJobStore
+from eolab_jobs.job_notifications import PostgresJobWakeup
+from eolab_jobs.models import (
     Artifact,
     PreparedJobPlan,
-    ProcessingLimits,
-    ProcessingError,
+    JobLimits,
+    JobError,
 )
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.worker import ProcessingWorker
@@ -29,7 +29,7 @@ from test_processing_calculations import ENDPOINT, request_body
 
 
 def claim_from_process(
-    arguments: tuple[str, ProcessingLimits],
+    arguments: tuple[str, JobLimits],
 ) -> dict[str, Any] | None:
     """Claim through an independent Python process and database connection.
 
@@ -373,15 +373,13 @@ def test_worker_retries_stopped_attempt_after_storage_recovers(
             Whether the real database still permits execution.
 
         Raises:
-            ProcessingError: While the injected storage outage is active.
+            JobError: While the injected storage outage is active.
             TimeoutError: If the test does not release the controlled heartbeat.
         """
         if unavailable.is_set():
             if not allow_heartbeat_failure.wait(30):
                 raise TimeoutError("Test did not release the heartbeat failure")
-            raise ProcessingError(
-                "processing_unavailable", "Temporary storage failure", 503
-            )
+            raise JobError("processing_unavailable", "Temporary storage failure", 503)
         return heartbeat(identifier, attempt, progress)
 
     def fail_finish(
@@ -404,15 +402,13 @@ def test_worker_retries_stopped_attempt_after_storage_recovers(
             The real database's fenced transition result after recovery.
 
         Raises:
-            ProcessingError: While the injected storage outage is active.
+            JobError: While the injected storage outage is active.
         """
         finish_calls.append((identifier, attempt))
         if unavailable.is_set():
             if pending_state == "committed" and len(finish_calls) == 1:
                 assert finish(identifier, attempt, artifact, error, reusable_results)
-            raise ProcessingError(
-                "processing_unavailable", "Temporary storage failure", 503
-            )
+            raise JobError("processing_unavailable", "Temporary storage failure", 503)
         return finish(identifier, attempt, artifact, error, reusable_results)
 
     monkeypatch.setattr(store, "heartbeat", fail_heartbeat)
@@ -446,7 +442,7 @@ def test_worker_retries_stopped_attempt_after_storage_recovers(
             assert native_pid in {child.pid for child in active_children()}
             assert store.claim_next_job() is None
             allow_heartbeat_failure.set()
-            with pytest.raises(ProcessingError, match="Temporary storage failure"):
+            with pytest.raises(JobError, match="Temporary storage failure"):
                 await asyncio.wait_for(task, 30)
             assert native_pid not in {child.pid for child in active_children()}
             assert len(finish_calls) == 2
@@ -466,7 +462,7 @@ def test_worker_retries_stopped_attempt_after_storage_recovers(
                         (replacement_attempt, identifier),
                     )
             # More than the two immediate writes can fail without losing the retry.
-            with pytest.raises(ProcessingError, match="Temporary storage failure"):
+            with pytest.raises(JobError, match="Temporary storage failure"):
                 await worker.run_once()
             assert len(finish_calls) == 3
             if pending_state in {"running", "cancelled"}:

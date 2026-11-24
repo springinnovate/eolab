@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import psycopg
 import pytest
 
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.aggregate_models import UnpreparedCalculation
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import (
@@ -84,9 +84,9 @@ def test_other_session_reuses_values_but_not_downloads(
                 source: Requested catalog raster.
 
             Raises:
-                ProcessingError: The source is no longer accessible.
+                JobError: The source is no longer accessible.
             """
-            raise ProcessingError("source_unavailable", "Source unavailable", 409)
+            raise JobError("source_unavailable", "Source unavailable", 409)
 
         monkeypatch.setattr(worker.authorizer, "authorize", deny_source)
         assert asyncio.run(worker.run_once())

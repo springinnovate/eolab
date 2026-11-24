@@ -15,8 +15,8 @@ import eolab_app.processing.model_operations as operations
 from eolab_app.processing.clip_models import ClipJobRequest
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
-from eolab_app.processing.ports import JobStore
+from eolab_jobs.models import PreparedJobPlan, JobError
+from eolab_jobs.ports import JobStore
 from eolab_app.processing.service import ProcessingService
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
@@ -204,7 +204,7 @@ def test_registered_check_precedes_queue_and_accepted_retry_skips_it(
     boundary.hook.assert_awaited_once()
     assert boundary.hook.await_args.args[1] is boundary.dependency
 
-    boundary.hook.side_effect = ProcessingError("not_available", "Unavailable", 409)
+    boundary.hook.side_effect = JobError("not_available", "Unavailable", 409)
     boundary.events.clear()
     retried = asyncio.run(boundary.service.submit_model_run("owner", boundary.request))
     assert retried["jobId"] == result["jobId"]
@@ -222,9 +222,9 @@ def test_registered_check_receives_missing_binding_and_owns_rejection(
     """
     boundary = submission_boundary
     boundary.service.operation_submission_dependencies.pop("raster.clip.v1")
-    rejection = ProcessingError("configuration_missing", "Configure this model.", 503)
+    rejection = JobError("configuration_missing", "Configure this model.", 503)
     boundary.hook.side_effect = rejection
-    with pytest.raises(ProcessingError) as caught:
+    with pytest.raises(JobError) as caught:
         asyncio.run(boundary.service.submit_model_run("owner", boundary.request))
     assert caught.value is rejection
     assert boundary.hook.await_args.args[1] is None

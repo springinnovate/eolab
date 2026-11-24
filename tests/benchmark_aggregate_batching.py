@@ -21,7 +21,7 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 from raster_aggregate_support import make_spec, LIMITS
 from catalog_selection_support import write_aggregate_area
@@ -116,7 +116,7 @@ def measure(path: Path, output: Path, case: str, target: int | None) -> dict:
     start = time.perf_counter()
     try:
         spec = make_spec(path, expressions, area, target_chunk_pixels=target)
-    except ProcessingError as error:
+    except JobError as error:
         return {
             "refused": error.code,
             "message": error.detail,

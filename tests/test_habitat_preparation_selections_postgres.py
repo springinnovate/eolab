@@ -23,8 +23,8 @@ from eolab_app.processing.habitat_preparation_models import (
     HabitatInputPreparationInputs,
     HabitatInputPreparationSpec,
 )
-from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.job_store import PostgresJobStore
+from eolab_jobs.models import PreparedJobPlan, JobError
 from test_habitat_preparation_selections import make_selection
 from test_processing_jobs import store
 
@@ -280,7 +280,7 @@ def test_invalid_persisted_selection_is_not_published(
             (Jsonb(invalid),),
         )
     assert not preparation_selections.contains(selection)
-    with pytest.raises(ProcessingError) as caught:
+    with pytest.raises(JobError) as caught:
         preparation_selections.list()
     assert caught.value.code == "habitat_preparation_selections_unavailable"
     assert caught.value.status == 503

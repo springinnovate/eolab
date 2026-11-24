@@ -18,16 +18,16 @@ import psycopg
 import pytest
 import rasterio
 
-from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.job_store import (
+from eolab_jobs.artifacts import LocalJobArtifacts
+from eolab_jobs.job_store import (
     PostgresJobStore,
     UnsupportedProcessingSchemaError,
 )
-from eolab_app.processing.job_notifications import PostgresJobWakeup
-from eolab_app.processing.models import (
+from eolab_jobs.job_notifications import PostgresJobWakeup
+from eolab_jobs.models import (
     Artifact,
     PreparedJobPlan,
-    ProcessingError,
+    JobError,
 )
 from eolab_app.processing.clip_models import ClipArea, RasterClipLimits
 from eolab_app.processing.service import ProcessingService

@@ -19,7 +19,7 @@ from eolab_app.processing.aggregate_models import (
     AggregateSpec,
     UnpreparedCalculation,
 )
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import serialize_processing_job
 from eolab_app.processing.worker import ProcessingWorker

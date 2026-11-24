@@ -17,11 +17,11 @@ from eolab_app.catalog_selection import VectorSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing import model_definitions, model_operations
 from eolab_app.processing.clip_models import ClipArtifact, ClipGrid
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
-from eolab_app.processing.models import PreparedJobPlan
+from eolab_jobs.models import PreparedJobPlan
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.raster.source_models import RasterSourceReference
 from test_model_runs_postgres import model_request, submit

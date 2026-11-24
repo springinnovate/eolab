@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from eolab_app.bounded_vector import summary_process
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.raster_operations import bind_area_arguments
@@ -155,11 +155,11 @@ async def prepare_temporal_series(
         Path-free plan with output units and actual observation coverage.
 
     Raises:
-        ProcessingError: If no observations overlap or the selected area fails
+        JobError: If no observations overlap or the selected area fails
             to resolve or cannot be read on the native grid.
     """
     if not source.observations:
-        raise ProcessingError(
+        raise JobError(
             "no_observations", "No observations are available in the selected period."
         )
     request = queued.request
@@ -171,7 +171,7 @@ async def prepare_temporal_series(
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*grid)
+        raise JobError(*grid)
     spec = TemporalSeriesSpec(
         source=request.source,
         statistic=request.statistic,
@@ -211,7 +211,7 @@ async def prepare_series_area(
         The selected area with its original vector reader when needed.
 
     Raises:
-        ProcessingError: If the vector selection cannot be read.
+        JobError: If the vector selection cannot be read.
     """
     if polygons is not None:
         area = polygons
@@ -229,7 +229,7 @@ async def prepare_series_area(
         )
     else:
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Vector selection reader is unavailable.", 409
             )
         resolved = await context.areas.resolve_for_sampling(request.catalogSelection)
@@ -237,7 +237,7 @@ async def prepare_series_area(
             summary_process, (resolved, None), None, context.native
         )
         if not success:
-            raise ProcessingError("selection_unavailable", summary, 409)
+            raise JobError("selection_unavailable", summary, 409)
         area = AggregateArea(
             kind="catalogSelection",
             bounds=summary["bbox"],
@@ -263,11 +263,11 @@ async def prepare_series_execution(
         Native observation metadata and the plan with its ephemeral vector reader.
 
     Raises:
-        ProcessingError: If the selected vector source cannot be read.
+        JobError: If the selected vector source cannot be read.
     """
     if spec.area.kind == "catalogSelection":
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Vector selection reader is unavailable.", 409
             )
         resolved = await context.areas.resolve_for_sampling(spec.area.catalogSelection)

@@ -25,7 +25,7 @@ from eolab_app.processing.habitat_preparation_selections import (
     HabitatSubmissionDependencies,
     validate_habitat_preparation_selection,
 )
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.raster_operations import bind_area_arguments
@@ -44,7 +44,7 @@ async def validate_habitat_submission(
             not require preparation dependencies.
 
     Raises:
-        ProcessingError: If Earth Engine inputs lack an authorized prepared Catalog
+        JobError: If Earth Engine inputs lack an authorized prepared Catalog
             selection, have no cached coverage, or cannot be inspected.
         asyncio.CancelledError: After the native coverage reader has stopped.
     """
@@ -188,12 +188,12 @@ async def resolve_habitat_sources(
         Ephemeral native sources; no paths or resolved vectors enter stored inputs.
 
     Raises:
-        ProcessingError: If vector reading is unavailable.
+        JobError: If vector reading is unavailable.
         SelectionUnavailableError: If a selected vector cannot be read.
     """
     selections = get_habitat_vector_selections(request)
     if selections and context.areas is None:
-        raise ProcessingError(
+        raise JobError(
             "selection_unavailable", "Vector selection reader is unavailable.", 409
         )
     vectors = {
@@ -220,7 +220,7 @@ async def prepare_habitat(
         Saved calculation inputs with the area descriptor and calculated output grid.
 
     Raises:
-        ProcessingError: If selected features cannot be read or the grid cannot
+        JobError: If selected features cannot be read or the grid cannot
             be calculated.
         SelectionUnavailableError: If a selected vector is unavailable.
     """
@@ -246,7 +246,7 @@ async def prepare_habitat(
             summary_process, (resolved, None), None, context.native
         )
         if not success:
-            raise ProcessingError("selection_unavailable", summary, 409)
+            raise JobError("selection_unavailable", summary, 409)
         area = AggregateArea(
             kind="catalogSelection",
             bounds=summary["bbox"],
@@ -259,7 +259,7 @@ async def prepare_habitat(
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*prepared)
+        raise JobError(*prepared)
     return PreparedJobPlan(
         operation=prepared.operation,
         specification=prepared.model_dump(mode="json", by_alias=True),
@@ -281,14 +281,14 @@ async def prepare_habitat_execution(
         Authorized file paths and vector readers, plus the saved calculation inputs.
 
     Raises:
-        ProcessingError: If vector reading or the prepared-input cache is unavailable.
+        JobError: If vector reading or the prepared-input cache is unavailable.
         SelectionUnavailableError: If a selected vector cannot be read.
     """
     sources = await resolve_habitat_sources(context, spec.inputs)
     if isinstance(spec.inputs.stack, HabitatEarthEngineStack):
         cache_directory = cast(Path | None, context.operation_settings.get(OPERATION))
         if cache_directory is None:
-            raise ProcessingError(
+            raise JobError(
                 "habitat_cache_unavailable",
                 "The Ecosystem Condition input cache is unavailable. "
                 "Ask your administrator to check the server configuration.",

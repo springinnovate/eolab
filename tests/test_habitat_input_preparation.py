@@ -20,7 +20,7 @@ from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing import habitat_operation, habitat_preparation
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_earth_engine import (
     HabitatEarthEngineRuntime,
@@ -45,7 +45,7 @@ from eolab_app.processing.model_runs import (
     build_model_calculation_request,
     build_model_job_submission,
 )
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.worker import ProcessingWorker
 from test_habitat_earth_engine import _use_offline_earth_engine
 from test_habitat_earth_engine_model import (
@@ -416,7 +416,7 @@ def test_changed_scientific_identity_is_rejected_before_reading_sources(
     monkeypatch.setattr(
         habitat_preparation, "get_habitat_tiles", Mock(side_effect=AssertionError)
     )
-    with pytest.raises(ProcessingError) as failure:
+    with pytest.raises(JobError) as failure:
         prepare_habitat_input_cache(
             HabitatPreparationSources(
                 area,
@@ -470,6 +470,6 @@ def test_input_preparation_is_not_a_selectable_model_operation() -> None:
             "executionProfile": get_model_operation(OPERATION).execution_profile,
         }
     )
-    with pytest.raises(ProcessingError) as failure:
+    with pytest.raises(JobError) as failure:
         ModelRegistry((definition,))
     assert failure.value.code == "unsupported_model_operation"

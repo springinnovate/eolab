@@ -22,7 +22,7 @@ from eolab_app.processing.aggregate_windows import (
     plan_raster_read_windows,
     iter_raster_read_windows,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 import eolab_app.processing.raster_aggregate as kernel
 from eolab_app.processing.job_preparation import prepare_aggregate_job
 from eolab_app.raster.source_contract import source_block_indexes_for_window

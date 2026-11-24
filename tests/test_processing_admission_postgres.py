@@ -9,12 +9,12 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-import eolab_app.processing.job_store as job_store_module
-from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.models import (
+import eolab_jobs.job_store as job_store_module
+from eolab_jobs.job_store import PostgresJobStore
+from eolab_jobs.models import (
     Artifact,
     PreparedJobPlan,
-    ProcessingError,
+    JobError,
     JobSubmission,
 )
 from test_processing_jobs import boundary, store, clip_inputs, HEADERS
@@ -52,7 +52,7 @@ def admit(
         Newly accepted job.
 
     Raises:
-        ProcessingError: If an admission budget is exhausted.
+        JobError: If an admission budget is exhausted.
     """
     return store.submit(owner, uuid4().hex, plan[1], "fixture-input-hash")
 
@@ -186,7 +186,7 @@ def test_concurrent_owners_can_queue_all_requested_jobs(
         """
         try:
             return admit(store, owner, plans[owner])["id"]
-        except ProcessingError as error:
+        except JobError as error:
             assert error.code == "queue_full" and error.status == 429
             return error.code
 
@@ -216,7 +216,7 @@ def test_duplicate_concurrent_submission_and_owner_cancel_are_isolated(
     assert len({job["id"] for job in jobs}) == 1
     first = jobs[0]
     other = admit(store, "two", make_plan(store, "two"))
-    with pytest.raises(ProcessingError) as denied:
+    with pytest.raises(JobError) as denied:
         store.cancel(first["id"], "two")
     assert denied.value.code == "job_not_found"
     assert store.cancel(first["id"], "one")["status"] == "cancelled"
@@ -250,7 +250,7 @@ def test_failed_subscriber_insert_rolls_back_the_entire_submission(
     """
     plan = PreparedJobPlan({}, {}, operation="test.v1", work_key="atomic")
     oversized = replace(plan, presentation={"label": "x" * 32769})
-    with pytest.raises(ProcessingError) as failed:
+    with pytest.raises(JobError) as failed:
         if batch:
             store.submit_batch(
                 "owner",
@@ -317,10 +317,10 @@ def test_retry_precedes_stopping_work_and_capacity_decisions(
         (plan, "different-inputs"),
         (replace(plan, operation="different-operation"), "hash"),
     ):
-        with pytest.raises(ProcessingError) as conflict:
+        with pytest.raises(JobError) as conflict:
             store.submit("owner", "retry", changed_plan, changed_hash)
         assert conflict.value.code == "request_conflict"
-    with pytest.raises(ProcessingError) as stopping:
+    with pytest.raises(JobError) as stopping:
         store.submit("other-owner", "fresh", plan, "hash")
     assert stopping.value.code == "previous_attempt_stopping"
 
@@ -458,7 +458,7 @@ def test_concurrent_maintenance_and_submission_preserve_record_limit(
         for request in requests:
             try:
                 accepted.append(request.result())
-            except ProcessingError as error:
+            except JobError as error:
                 assert error.code == "job_record_capacity"
     if not accepted:
         accepted.append(admit(store, "owner", plan))
@@ -581,7 +581,7 @@ def test_identical_work_with_a_lost_lease_can_retry_after_attempt_stops(
             "UPDATE processing.jobs SET lease_until=now()-interval '1 second' WHERE id=%s",
             (claimed["id"],),
         )
-    with pytest.raises(ProcessingError) as denied:
+    with pytest.raises(JobError) as denied:
         store.submit("second", "two", plan, "hash")
     assert denied.value.code == "previous_attempt_stopping"
     assert denied.value.status == 429

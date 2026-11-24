@@ -9,17 +9,17 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
-from eolab_app.processing.artifact_manifest import read_artifact_manifest
+from eolab_jobs.artifact_manifest import read_artifact_manifest
 
 from eolab_app.processing.shared_calculations import (
     present_calculation_rows,
 )
 from eolab_app.processing.statistics_csv import statistics_csv
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     ArtifactDownload,
     JobInputFile,
     JobSubmission,
-    ProcessingError,
+    JobError,
     PreparedJobPlan,
 )
 from eolab_app.raster.source_models import (
@@ -41,7 +41,7 @@ from eolab_app.polygon_areas import (
     SummaryPolygon,
     read_polygon_area_input,
 )
-from eolab_app.processing.ports import (
+from eolab_jobs.ports import (
     JobArtifactStore,
     JobStore,
     JobChanges,
@@ -132,11 +132,11 @@ def get_stored_job_operation(row: dict[str, Any]) -> str:
         The versioned operation used to select status fields and result links.
 
     Raises:
-        ProcessingError: If the stored operation is missing or unsupported.
+        JobError: If the stored operation is missing or unsupported.
     """
     operation = row.get("operation")
     if operation not in PUBLIC_JOB_OPERATIONS:
-        raise ProcessingError(
+        raise JobError(
             "unsupported_job_operation",
             "This job has a missing or unsupported processing operation.",
             409,
@@ -216,11 +216,11 @@ def require_operation(row: dict[str, Any], operation: str | tuple[str, ...]) -> 
         operation: One supported operation or the endpoint's allowed operations.
 
     Raises:
-        ProcessingError: If the stored operation is unsupported or does not match.
+        JobError: If the stored operation is unsupported or does not match.
     """
     actual = get_stored_job_operation(row)
     if actual not in ((operation,) if isinstance(operation, str) else operation):
-        raise ProcessingError(
+        raise JobError(
             "operation_mismatch",
             "This job belongs to a different processing operation.",
             409,
@@ -237,7 +237,7 @@ def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
         Public lifecycle, grid, source, and result links without storage metadata.
 
     Raises:
-        ProcessingError: If the stored operation is missing or unsupported.
+        JobError: If the stored operation is missing or unsupported.
     """
     operation = get_stored_job_operation(row)
     if operation == MODEL_OPERATION:
@@ -391,7 +391,7 @@ class ProcessingService:
             Previously accepted preparation, or None when this command is new.
 
         Raises:
-            ProcessingError: If the identifier belongs to different inputs or an
+            JobError: If the identifier belongs to different inputs or an
                 operation outside Habitat preparation, or storage is unavailable.
         """
         existing = await asyncio.to_thread(
@@ -401,7 +401,7 @@ class ProcessingService:
             return None
         require_operation(existing, HABITAT_PREPARATION_OPERATION)
         if existing["request_hash"] != request_hash:
-            raise ProcessingError(
+            raise JobError(
                 "request_conflict",
                 "That request ID already belongs to different preparation inputs.",
                 409,
@@ -426,25 +426,25 @@ class ProcessingService:
             Newly accepted preparation or an atomic, unchanged concurrent retry.
 
         Raises:
-            ProcessingError: If scientific configuration, preparation references
+            JobError: If scientific configuration, preparation references
                 or job storage are unavailable, the year is unsupported, or
                 inputs conflict.
             SelectionUnavailableError: If Catalog authorization rejects the area.
         """
         if self.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Catalog vector access is unavailable.", 503
             )
         try:
             prepared = build_habitat_input_preparation_submission(request)
         except ValueError as error:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_habitat_year",
                 "Choose an assessment year supported by the installed Ecosystem Condition inputs.",
                 422,
             ) from error
         except OSError as error:
-            raise ProcessingError(
+            raise JobError(
                 "habitat_inputs_unavailable",
                 "Ecosystem Condition input preparation is temporarily unavailable. Try again later.",
                 503,
@@ -453,7 +453,7 @@ class ProcessingService:
             expected_configuration_sha256 is not None
             and prepared.summary["configurationSha256"] != expected_configuration_sha256
         ):
-            raise ProcessingError(
+            raise JobError(
                 "habitat_configuration_changed",
                 "The Ecosystem Condition input configuration changed. Start a new preparation request.",
                 409,
@@ -487,7 +487,7 @@ class ProcessingService:
             and administrator passwords; downloads remain admin-only.
 
         Raises:
-            ProcessingError: If inputs conflict, configuration is unavailable or
+            JobError: If inputs conflict, configuration is unavailable or
                 admission fails.
             SelectionUnavailableError: If Catalog authorization rejects the AOI.
         """
@@ -520,7 +520,7 @@ class ProcessingService:
             recovered command keeps its original scope even if history changed.
 
         Raises:
-            ProcessingError: If this identifier belongs to another command, or
+            JobError: If this identifier belongs to another command, or
                 history or durable admission is unavailable.
             ValueError: If retained preparation metadata violates its contract.
         """
@@ -533,7 +533,7 @@ class ProcessingService:
         if existing is not None:
             require_operation(existing, HABITAT_BULK_PREPARATION_OPERATION)
             if existing["request_hash"] != request_hash:
-                raise ProcessingError(
+                raise JobError(
                     "request_conflict",
                     "That request ID already belongs to a different bulk preparation.",
                     409,
@@ -605,16 +605,16 @@ class ProcessingService:
             owner's jobs or other administrator operations can appear here.
 
         Raises:
-            ProcessingError: If pagination is invalid or storage is unavailable.
+            JobError: If pagination is invalid or storage is unavailable.
         """
         if not 1 <= limit <= 100:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_limit", "Choose between one and 100 input preparations."
             )
         try:
             before = decode_model_run_cursor(cursor)
-        except ProcessingError as error:
-            raise ProcessingError(
+        except JobError as error:
+            raise JobError(
                 "invalid_cursor", "This preparation-list cursor is invalid.", 422
             ) from error
         rows = await asyncio.to_thread(
@@ -641,7 +641,7 @@ class ProcessingService:
             Current lifecycle, measured tile progress and retained report links.
 
         Raises:
-            ProcessingError: If unavailable, of another operation or storage fails.
+            JobError: If unavailable, of another operation or storage fails.
         """
         row = await asyncio.to_thread(
             self.jobs.get, identifier, HABITAT_PREPARATION_OWNER
@@ -661,7 +661,7 @@ class ProcessingService:
             Stopping a bulk job does not cancel individual jobs it already queued.
 
         Raises:
-            ProcessingError: If the job is unavailable, of another operation or
+            JobError: If the job is unavailable, of another operation or
                 the cancellation cannot be recorded.
         """
         row = await asyncio.to_thread(
@@ -689,7 +689,7 @@ class ProcessingService:
             Completed cached tiles are reused by ordinary Habitat acquisition.
 
         Raises:
-            ProcessingError: If the original job is active, completed with every
+            JobError: If the original job is active, completed with every
                 tile, unavailable, outside this operation or its saved inputs expired.
             SelectionUnavailableError: If Catalog authorization now rejects the AOI.
         """
@@ -713,14 +713,14 @@ class ProcessingService:
             "interrupted",
             "expired",
         } and not (report and report["failedTileCount"]):
-            raise ProcessingError(
+            raise JobError(
                 "preparation_not_retryable",
                 "Retry an input preparation with missing tiles or an expired report.",
                 409,
             )
         inputs = get_retained_habitat_preparation_inputs(row)
         if inputs is None:
-            raise ProcessingError(
+            raise JobError(
                 "preparation_inputs_expired",
                 "This preparation's saved inputs have expired. Choose the area and year again.",
                 409,
@@ -750,7 +750,7 @@ class ProcessingService:
             and transfer cleanup never remove persistent Habitat cache entries.
 
         Raises:
-            ProcessingError: If the handle is unavailable, belongs to another
+            JobError: If the handle is unavailable, belongs to another
                 operation or its report has expired.
         """
         row = await asyncio.to_thread(
@@ -787,7 +787,7 @@ class ProcessingService:
             The newly queued run, or the original run for an unchanged retry.
 
         Raises:
-            ProcessingError: If the retry conflicts, model inputs are invalid,
+            JobError: If the retry conflicts, model inputs are invalid,
                 an additional source is unavailable, or submission cannot be admitted.
             RasterFeatureError: If the catalog cannot authorize the selected raster.
         """
@@ -799,7 +799,7 @@ class ProcessingService:
         if existing is not None:
             require_operation(existing, MODEL_OPERATION)
             if existing["request_hash"] != request_hash:
-                raise ProcessingError(
+                raise JobError(
                     "request_conflict",
                     "That request ID has different model inputs.",
                     409,
@@ -832,7 +832,7 @@ class ProcessingService:
         ) = None
         if isinstance(source, TemporalIntervalSelection):
             if self.model_authorizer is None:
-                raise ProcessingError(
+                raise JobError(
                     "models_unavailable",
                     "Model source authorization is unavailable.",
                     503,
@@ -857,7 +857,7 @@ class ProcessingService:
                         )
                     )
                 except RasterFeatureError as error:
-                    raise ProcessingError(
+                    raise JobError(
                         "source_unavailable",
                         f"The model's {name} input is unavailable. {error.detail}",
                         422,
@@ -908,13 +908,13 @@ class ProcessingService:
             catalog metadata or published file identity for Run YAML.
 
         Raises:
-            ProcessingError: If model authorization is unavailable or the
+            JobError: If model authorization is unavailable or the
                 published file cannot be used by this session.
             RasterFeatureError: If the Catalog raster cannot be authorized.
         """
         if isinstance(source, UploadedRasterReference):
             if self.upload_storage is None or upload_owner is None:
-                raise ProcessingError(
+                raise JobError(
                     "source_unavailable",
                     "This raster upload is unavailable to this browser.",
                     404,
@@ -927,7 +927,7 @@ class ProcessingService:
                     "raster",
                 )
             except UploadError as error:
-                raise ProcessingError(
+                raise JobError(
                     "source_unavailable", str(error), error.status
                 ) from error
             return prepared, metadata
@@ -941,7 +941,7 @@ class ProcessingService:
             )
             return prepared, file
         if self.model_authorizer is None:
-            raise ProcessingError(
+            raise JobError(
                 "models_unavailable",
                 "Model source authorization is unavailable.",
                 503,
@@ -976,7 +976,7 @@ class ProcessingService:
             The accepted job or its previously accepted retry.
 
         Raises:
-            ProcessingError: If source access or job admission fails.
+            JobError: If source access or job admission fails.
         """
         if not any(
             isinstance(source, UploadedRasterReference) for source in raster_sources
@@ -999,7 +999,7 @@ class ProcessingService:
             [raster_sources],
         )
         result = results[0]
-        if isinstance(result, ProcessingError):
+        if isinstance(result, JobError):
             raise result
         return result
 
@@ -1021,7 +1021,7 @@ class ProcessingService:
             with job admission, independent of parent deletion or expiry afterward.
 
         Raises:
-            ProcessingError: If a referenced result is unavailable or not a vector file.
+            JobError: If a referenced result is unavailable or not a vector file.
         """
         files = list(prepared.input_files)
         captured = {(file.run_id, file.artifact_id) for file in files}
@@ -1033,7 +1033,11 @@ class ProcessingService:
                 key = drawing.model_dump_json()
                 if key not in drawings:
                     if self.read_filter_drawing is None:
-                        raise ProcessingError("drawing_unavailable", "The selected drawing is unavailable.", 409)
+                        raise JobError(
+                            "drawing_unavailable",
+                            "The selected drawing is unavailable.",
+                            409,
+                        )
                     polygons = await self.read_filter_drawing(owner, drawing)
                     drawings[key] = [polygon.model_dump(mode="json") for polygon in polygons]
             if not isinstance(selection, ArtifactVectorSelection):
@@ -1049,7 +1053,7 @@ class ProcessingService:
                 or file.role not in {"result", "intermediate"}
                 or file.size <= 0
             ):
-                raise ProcessingError(
+                raise JobError(
                     "invalid_vector_input",
                     "Choose a published vector GeoPackage result.",
                     422,
@@ -1073,7 +1077,7 @@ class ProcessingService:
         raster_sources: list[
             tuple[RasterAnalysisSourceReference | TemporalIntervalSelection, ...]
         ],
-    ) -> list[dict[str, Any] | ProcessingError]:
+    ) -> list[dict[str, Any] | JobError]:
         """Submit jobs and keep their uploaded original files available until they stop.
 
         A hard link to each authorized original lets an accepted job read the
@@ -1098,18 +1102,18 @@ class ProcessingService:
             Accepted jobs or per-item errors, including unchanged retry results.
 
         Raises:
-            ProcessingError: If the shared database admission fails.
+            JobError: If the shared database admission fails.
             asyncio.CancelledError: After file linking and job submission have stopped.
         """
 
-        async def retain_and_submit() -> list[dict[str, Any] | ProcessingError]:
+        async def retain_and_submit() -> list[dict[str, Any] | JobError]:
             """Create hard links to uploaded originals, then submit the batch.
 
             Returns:
                 The store's accepted jobs and per-item failures.
 
             Raises:
-                ProcessingError: If the admission transaction fails.
+                JobError: If the admission transaction fails.
             """
             captured = []
             for submission, inputs, rasters in zip(
@@ -1121,7 +1125,7 @@ class ProcessingService:
                         prepared = await self._capture_vector_result_inputs(
                             owner, prepared, inputs
                         )
-                    except ProcessingError as error:
+                    except JobError as error:
                         prepared = error
                 uploaded = [
                     source
@@ -1176,13 +1180,11 @@ class ProcessingService:
                             work_key=None,
                         )
                     except (VectorUploadError, UploadError) as error:
-                        prepared = ProcessingError(
+                        prepared = JobError(
                             "source_unavailable", str(error), error.status
                         )
                     except SelectionUnavailableError as error:
-                        prepared = ProcessingError(
-                            "source_unavailable", error.detail, 409
-                        )
+                        prepared = JobError("source_unavailable", error.detail, 409)
                 captured.append(replace(submission, prepared=prepared))
             return await asyncio.to_thread(self.jobs.submit_batch, owner, captured)
 
@@ -1201,7 +1203,7 @@ class ProcessingService:
         and the database commit. Database unavailability leaves all files intact.
 
         Raises:
-            ProcessingError: If active job inputs cannot be read.
+            JobError: If active job inputs cannot be read.
             UploadError: If shared retained files cannot be removed.
             VectorUploadError: If a vector-only store cannot remove retained files.
         """
@@ -1213,7 +1215,7 @@ class ProcessingService:
             """Remove retained links absent from the active job snapshot.
 
             Raises:
-                ProcessingError: If the job snapshot is unavailable.
+                JobError: If the job snapshot is unavailable.
                 UploadError: If the shared upload directory cannot be cleaned.
                 VectorUploadError: If a vector-only upload directory cannot be cleaned.
             """
@@ -1246,7 +1248,7 @@ class ProcessingService:
             submission; catalog sharing stays unchanged.
 
         Raises:
-            ProcessingError: If the file is unavailable or is not published raster data.
+            JobError: If the file is unavailable or is not published raster data.
         """
         if not isinstance(source, RunArtifactReference):
             return prepared
@@ -1263,7 +1265,7 @@ class ProcessingService:
             or file.role not in {"result", "intermediate"}
             or file.size <= 0
         ):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_raster_input",
                 "Choose a published raster result or scientific raster intermediate.",
                 422,
@@ -1291,7 +1293,7 @@ class ProcessingService:
             UTF-8 YAML bytes describing the recipe.
 
         Raises:
-            ProcessingError: If the model version is unavailable or cannot be exported.
+            JobError: If the model version is unavailable or cannot be exported.
         """
         return export_yaml(self.model_registry.get(identifier, version).to_document())
 
@@ -1311,7 +1313,7 @@ class ProcessingService:
             timestamp. The saved recipe is independent of the current library.
 
         Raises:
-            ProcessingError: If the job is unavailable to this session or its metadata expired.
+            JobError: If the job is unavailable to this session or its metadata expired.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         document_kind = "run-yaml" if run else "model-yaml"
@@ -1333,7 +1335,7 @@ class ProcessingService:
             Updated run status and download names using its original creation time.
 
         Raises:
-            ProcessingError: If the run is unowned, deleted or not a model run.
+            JobError: If the run is unowned, deleted or not a model run.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         require_operation(row, MODEL_OPERATION)
@@ -1356,7 +1358,7 @@ class ProcessingService:
             The saved recipe, inputs and effective parameter values as JSON data.
 
         Raises:
-            ProcessingError: If the session cannot access the run or its metadata
+            JobError: If the session cannot access the run or its metadata
                 is no longer available.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
@@ -1376,12 +1378,10 @@ class ProcessingService:
             Model run statuses and a nextCursor when older matching runs exist.
 
         Raises:
-            ProcessingError: If pagination values are invalid or job storage is unavailable.
+            JobError: If pagination values are invalid or job storage is unavailable.
         """
         if not 1 <= limit <= 100:
-            raise ProcessingError(
-                "invalid_limit", "Choose between one and 100 model runs."
-            )
+            raise JobError("invalid_limit", "Choose between one and 100 model runs.")
         rows = await asyncio.to_thread(
             self.jobs.list_session_jobs_page,
             owner,
@@ -1406,10 +1406,10 @@ class ProcessingService:
             A subscription which the transport must close on every exit path.
 
         Raises:
-            ProcessingError: If live updates are disabled or at capacity.
+            JobError: If live updates are disabled or at capacity.
         """
         if self.changes is None:
-            raise ProcessingError(
+            raise JobError(
                 "events_unavailable",
                 "Live updates are unavailable; use job status polling.",
                 503,
@@ -1429,7 +1429,7 @@ class ProcessingService:
             Small area reference, geographic envelope and polygon count.
 
         Raises:
-            ProcessingError: If temporary input storage is full or unavailable.
+            JobError: If temporary input storage is full or unavailable.
         """
         checksum = polygons.geometry_hash()
         identifier = await asyncio.to_thread(
@@ -1454,7 +1454,7 @@ class ProcessingService:
             Validated geometry copied into this calculation job.
 
         Raises:
-            ProcessingError: If the input expired or is not owned by the caller.
+            JobError: If the input expired or is not owned by the caller.
             ValueError: If persisted geometry violates its input contract.
         """
         polygons = await read_polygon_area_input(self.jobs.get_input, owner, reference)
@@ -1473,7 +1473,7 @@ class ProcessingService:
             identifier: Uploaded polygon-area ID.
 
         Raises:
-            ProcessingError: If the storage operation fails.
+            JobError: If the storage operation fails.
         """
         await asyncio.to_thread(self.jobs.discard_input, owner, identifier)
 
@@ -1493,7 +1493,7 @@ class ProcessingService:
             The caller's handle for shared/new work, or the same handle on retry.
 
         Raises:
-            ProcessingError: If the retry changes inputs or admission is full.
+            JobError: If the retry changes inputs or admission is full.
         """
         request_hash = hashlib.sha256(
             json.dumps(
@@ -1516,7 +1516,7 @@ class ProcessingService:
                 upload_owner,
                 (operation.source(request),),
             )
-        except ProcessingError:
+        except JobError:
             existing = await asyncio.to_thread(
                 self.jobs.find_request, owner, request.requestId
             )
@@ -1524,7 +1524,7 @@ class ProcessingService:
                 raise
             require_operation(existing, operation.id)
             if existing["request_hash"] != request_hash:
-                raise ProcessingError(
+                raise JobError(
                     "request_conflict",
                     "That request ID has different clip inputs.",
                     409,
@@ -1550,7 +1550,7 @@ class ProcessingService:
             Completion observation uses the same budget as a calculation batch.
 
         Raises:
-            ProcessingError: For conflicting retries, unavailable polygon inputs,
+            JobError: For conflicting retries, unavailable polygon inputs,
                 or exhausted queue and job-record capacity.
         """
         inputs = request
@@ -1566,7 +1566,7 @@ class ProcessingService:
         if existing:
             require_operation(existing, "raster.aggregate.v1")
             if existing.get("request_hash") != request_hash:
-                raise ProcessingError(
+                raise JobError(
                     "request_conflict",
                     "That request ID has different calculation inputs.",
                     409,
@@ -1575,7 +1575,7 @@ class ProcessingService:
             submission = await self.build_calculation_submission(
                 owner, request, {}, request_hash
             )
-            if isinstance(submission.prepared, ProcessingError):
+            if isinstance(submission.prepared, JobError):
                 raise submission.prepared
         if existing:
             row = existing
@@ -1599,7 +1599,7 @@ class ProcessingService:
         self,
         owner: str,
         request: AggregateJobRequest,
-        polygon_inputs: dict[PolygonAreaReference, AggregateArea | ProcessingError],
+        polygon_inputs: dict[PolygonAreaReference, AggregateArea | JobError],
         request_hash: str | None = None,
     ) -> JobSubmission:
         """Capture validated inputs and resolve each owned polygon reference once.
@@ -1636,10 +1636,10 @@ class ProcessingService:
                     polygon_inputs[reference] = await self.read_polygon_area(
                         owner, reference
                     )
-                except ProcessingError as error:
+                except JobError as error:
                     polygon_inputs[reference] = error
             polygons = polygon_inputs[reference]
-            if isinstance(polygons, ProcessingError):
+            if isinstance(polygons, JobError):
                 return JobSubmission(
                     request.requestId, request_hash, "raster.aggregate.v1", polygons
                 )
@@ -1649,7 +1649,7 @@ class ProcessingService:
             prepared = await self.capture_input_file(
                 owner, operation.source(request), prepared
             )
-        except ProcessingError as error:
+        except JobError as error:
             return JobSubmission(request.requestId, request_hash, operation.id, error)
         return JobSubmission(request.requestId, request_hash, operation.id, prepared)
 
@@ -1658,7 +1658,7 @@ class ProcessingService:
         owner: str,
         requests: list[AggregateJobRequest],
         upload_owner: str | None = None,
-    ) -> list[dict[str, Any] | ProcessingError]:
+    ) -> list[dict[str, Any] | JobError]:
         """Submit independent calculations through one store admission transaction.
 
         Args:
@@ -1673,9 +1673,9 @@ class ProcessingService:
             the same snapshots used by ordinary status reads.
 
         Raises:
-            ProcessingError: If the shared admission transaction is unavailable.
+            JobError: If the shared admission transaction is unavailable.
         """
-        polygon_inputs: dict[PolygonAreaReference, AggregateArea | ProcessingError] = {}
+        polygon_inputs: dict[PolygonAreaReference, AggregateArea | JobError] = {}
         submissions = [
             await self.build_calculation_submission(owner, request, polygon_inputs)
             for request in requests
@@ -1705,7 +1705,7 @@ class ProcessingService:
             [
                 (
                     result
-                    if isinstance(result, ProcessingError)
+                    if isinstance(result, JobError)
                     else serialize_processing_job(result)
                 )
                 for result in results
@@ -1713,8 +1713,8 @@ class ProcessingService:
         )
 
     async def _observe_submitted_calculations(
-        self, owner: str, outcomes: list[dict[str, Any] | ProcessingError]
-    ) -> list[dict[str, Any] | ProcessingError]:
+        self, owner: str, outcomes: list[dict[str, Any] | JobError]
+    ) -> list[dict[str, Any] | JobError]:
         """Observe committed jobs within one deadline, preserving admission outcomes.
 
         Subscribe before reading owned state so a completion between admission
@@ -1746,7 +1746,7 @@ class ProcessingService:
             return outcomes
         try:
             subscription = await self.subscribe_jobs(owner)
-        except ProcessingError:
+        except JobError:
             return outcomes
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.submission_wait_seconds
@@ -1760,7 +1760,7 @@ class ProcessingService:
                 if remaining <= 0:
                     break
                 await subscription.wait(remaining)
-        except ProcessingError:
+        except JobError:
             pass
         finally:
             subscription.close()
@@ -1836,7 +1836,7 @@ class ProcessingService:
             Updated run state, with later existing expiry dates preserved.
 
         Raises:
-            ProcessingError: If the run is unavailable, expired, or not a model run.
+            JobError: If the run is unavailable, expired, or not a model run.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         require_operation(row, MODEL_OPERATION)
@@ -1864,7 +1864,7 @@ class ProcessingService:
             Updated public state; running cancellation completes after child exit.
 
         Raises:
-            ProcessingError: If ownership, job kind or lifecycle rejects the action.
+            JobError: If ownership, job kind or lifecycle rejects the action.
         """
         if undo:
             require_operation(
@@ -1896,7 +1896,7 @@ class ProcessingService:
             Updated public model run, without extending its original expiry.
 
         Raises:
-            ProcessingError: If the run, deletion or Undo window is unavailable.
+            JobError: If the run, deletion or Undo window is unavailable.
         """
         require_operation(
             await asyncio.to_thread(self.jobs.get, identifier, owner), MODEL_OPERATION
@@ -1926,7 +1926,7 @@ class ProcessingService:
             also carries small replacement bytes using this caller's formula labels.
 
         Raises:
-            ProcessingError: If the job is unavailable, unsupported or expired, or transfer capacity is full.
+            JobError: If the job is unavailable, unsupported or expired, or transfer capacity is full.
         """
         row, lease = await asyncio.to_thread(
             self.jobs.acquire_transfer, identifier, owner
@@ -1997,7 +1997,7 @@ class ProcessingService:
             File metadata and availability, without private filesystem information.
 
         Raises:
-            ProcessingError: If the model run is unavailable to this session.
+            JobError: If the model run is unavailable to this session.
             ValidationError: If persisted file metadata is malformed.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
@@ -2018,7 +2018,7 @@ class ProcessingService:
             Confined file and renewable transfer lease for the existing response.
 
         Raises:
-            ProcessingError: If ownership, expiry, file identity or availability checks fail.
+            JobError: If ownership, expiry, file identity or availability checks fail.
             ValidationError: If the persisted manifest is malformed.
         """
         row, lease = await asyncio.to_thread(
@@ -2034,7 +2034,7 @@ class ProcessingService:
                 else None
             )
             if file is None:
-                raise ProcessingError(
+                raise JobError(
                     "artifact_not_found", "This result file is unavailable.", 404
                 )
             path = await asyncio.to_thread(
@@ -2067,7 +2067,7 @@ class ProcessingService:
             Whether the ready run still offers this original file.
 
         Raises:
-            ProcessingError: If storage is unavailable; cleanup must retry.
+            JobError: If storage is unavailable; cleanup must retry.
             ValidationError: If persisted file metadata is malformed.
         """
         row = await asyncio.to_thread(self.jobs.available_result, identifier)
@@ -2100,13 +2100,13 @@ class ProcessingService:
             Confined original file and its publication metadata.
 
         Raises:
-            ProcessingError: If ownership, expiry, format or availability fails.
+            JobError: If ownership, expiry, format or availability fails.
             ValidationError: If persisted file metadata is invalid.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         require_operation(row, MODEL_OPERATION)
         if serialize_model_artifacts(row)["availability"] != "available":
-            raise ProcessingError(
+            raise JobError(
                 "result_unavailable", "This result is no longer available.", 409
             )
         return await self._resolve_model_artifact_file(row, artifact_id)
@@ -2130,7 +2130,7 @@ class ProcessingService:
             Confined mount-relative location and published media type.
 
         Raises:
-            ProcessingError: If the capability, run, file or lifetime is unavailable.
+            JobError: If the capability, run, file or lifetime is unavailable.
             ValidationError: If persisted publication metadata is malformed.
         """
         row = await asyncio.to_thread(
@@ -2156,13 +2156,13 @@ class ProcessingService:
             Confined immutable file and its recorded publication metadata.
 
         Raises:
-            ProcessingError: If the file identity or confined file is unavailable.
+            JobError: If the file identity or confined file is unavailable.
             ValidationError: If the persisted manifest is malformed.
         """
         manifest = read_artifact_manifest(row["artifact"]["manifest"])
         file = next((file for file in manifest.files if file.id == artifact_id), None)
         if file is None:
-            raise ProcessingError(
+            raise JobError(
                 "artifact_not_found", "This result file is unavailable.", 404
             )
         path = await asyncio.to_thread(
@@ -2184,12 +2184,12 @@ class ProcessingService:
             artifact_id: Opaque published file identity.
 
         Raises:
-            ProcessingError: If the session, run or file is no longer available.
+            JobError: If the session, run or file is no longer available.
             ValidationError: If persisted file metadata is malformed.
         """
         manifest = await self.list_model_artifacts(owner, identifier)
         if manifest["availability"] != "available":
-            raise ProcessingError(
+            raise JobError(
                 "result_unavailable", "This result is no longer available.", 409
             )
         file = next(
@@ -2197,7 +2197,7 @@ class ProcessingService:
             None,
         )
         if file is None:
-            raise ProcessingError(
+            raise JobError(
                 "artifact_not_found", "This result file is unavailable.", 404
             )
 

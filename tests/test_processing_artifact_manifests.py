@@ -13,12 +13,12 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
-from eolab_app.processing.artifact_manifest import (
+from eolab_jobs.artifact_manifest import (
     FileDeclaration,
     read_artifact_manifest,
 )
-from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.models import Artifact, ProcessingError
+from eolab_jobs.artifacts import LocalJobArtifacts
+from eolab_jobs.models import Artifact, JobError
 from eolab_app.processing.worker import ProcessingWorker
 
 ATTEMPT = "a" * 32
@@ -147,7 +147,7 @@ def test_invalid_publication_exposes_no_manifest(tmp_path: Path, invalid: str) -
             pytest.skip("OS does not allow creating this link")
     elif invalid == "cancelled":
         cancelled.set()
-    with pytest.raises((ProcessingError, ValidationError)):
+    with pytest.raises((JobError, ValidationError)):
         storage.publish(ATTEMPT, declarations, cancelled)
     assert not (tmp_path / "results" / ATTEMPT).exists()
     if invalid in {"hardlink", "symlink"}:
@@ -213,13 +213,13 @@ def test_worker_waits_for_publication_after_repeated_cancellation() -> None:
             cancelled: Signal proving the worker requests cooperative stop.
 
         Raises:
-            ProcessingError: After cancellation and explicit test release.
+            JobError: After cancellation and explicit test release.
         """
         started.set()
         assert release.wait(5)
         assert cancelled.is_set()
         exited.set()
-        raise ProcessingError("job_cancelled", "Cancelled", 409)
+        raise JobError("job_cancelled", "Cancelled", 409)
 
     async def exercise() -> None:
         """Cancel twice while the publication thread is still inside its file operation."""

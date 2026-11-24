@@ -17,7 +17,7 @@ from eolab_app.processing.habitat_preparation_selections import (
     HabitatPreparationSelections,
     get_habitat_preparation_coverage,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.habitat_models import (
     get_habitat_dataset_roles,
     get_required_habitat_predictor_datasets,
@@ -226,7 +226,7 @@ def create_habitat_router(
             )
         try:
             recorded = await asyncio.to_thread(preparation_selections.list)
-        except ProcessingError as error:
+        except JobError as error:
             raise HTTPException(
                 error.status,
                 error.detail,
@@ -263,7 +263,7 @@ def create_habitat_router(
                 Current tile counts for the requested selection and year.
 
             Raises:
-                ProcessingError: If configuration, recorded preparation or cache fails.
+                JobError: If configuration, recorded preparation or cache fails.
                 SelectionUnavailableError: If its original Catalog source is unavailable.
             """
             async with coverage_lock:
@@ -293,7 +293,7 @@ def create_habitat_router(
             raise HTTPException(
                 409, error.detail, headers={"Cache-Control": "private, no-store"}
             ) from error
-        except ProcessingError as error:
+        except JobError as error:
             raise HTTPException(
                 error.status,
                 error.detail,

@@ -14,10 +14,10 @@ import rasterio
 from fastapi.testclient import TestClient
 
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifact_manifest import read_artifact_manifest
-from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.artifact_manifest import ProducedFile
+from eolab_jobs.artifact_manifest import read_artifact_manifest
+from eolab_jobs.models import Artifact, PreparedJobPlan, JobError
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.raster_clip import create_clip, clip_process_target

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from eolab_app.processing.artifact_manifest import FileName
+from eolab_jobs.artifact_manifest import FileName
 from eolab_app.processing.model_run_contracts import (
     ModelRunNameRequest,
     ModelRunRequest,

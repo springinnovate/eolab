@@ -19,7 +19,7 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArea
-from eolab_app.processing.artifacts import write_progress
+from eolab_jobs.artifacts import write_progress
 from eolab_app.processing.habitat_calculation import (
     describe_habitat_file,
     read_habitat_polygons,
@@ -39,7 +39,7 @@ from eolab_app.processing.habitat_preparation_models import (
     HabitatInputPreparationSpec,
     QueuedHabitatInputPreparation,
 )
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.habitat_preparation_selections import (
     HabitatSubmissionDependencies,
 )
@@ -62,11 +62,11 @@ async def record_habitat_preparation_selection(
             or None when preparation storage is not configured.
 
     Raises:
-        ProcessingError: If preparation references are not configured or unavailable.
+        JobError: If preparation references are not configured or unavailable.
     """
     resources = cast(HabitatSubmissionDependencies | None, dependencies)
     if resources is None:
-        raise ProcessingError(
+        raise JobError(
             "habitat_preparation_selections_unavailable",
             "Prepared Catalog selections are temporarily unavailable. Try again later.",
             503,
@@ -215,18 +215,18 @@ async def prepare_habitat_input_preparation_execution(
         Authorized native area source and Habitat runtime, plus the unchanged inputs.
 
     Raises:
-        ProcessingError: If source reading or Earth Engine configuration is unavailable.
+        JobError: If source reading or Earth Engine configuration is unavailable.
         SelectionUnavailableError: If the original Catalog identity cannot be resolved.
     """
     if context.areas is None:
-        raise ProcessingError(
+        raise JobError(
             "selection_unavailable", "Catalog selection reader is unavailable.", 409
         )
     runtime = cast(
         HabitatEarthEngineRuntime | None, context.operation_settings.get(OPERATION)
     )
     if runtime is None:
-        raise ProcessingError(
+        raise JobError(
             "habitat_earth_engine_unavailable",
             "Earth Engine inputs are not configured. Ask the administrator to "
             "configure Ecosystem Condition's Earth Engine project and credentials.",
@@ -253,7 +253,7 @@ def prepare_habitat_input_cache(
         coverage or no completed tiles after remote request failures.
 
     Raises:
-        ProcessingError: If scientific identity changed or Earth Engine cannot initialize.
+        JobError: If scientific identity changed or Earth Engine cannot initialize.
         SelectionUnavailableError: If original selected polygons cannot be read.
         ValueError: If selected geometry or a downloaded tile is invalid.
         RasterioError: If downloaded raster data cannot be admitted.
@@ -262,7 +262,7 @@ def prepare_habitat_input_cache(
     inputs = spec.inputs
     configuration = load_habitat_stack(inputs.year)
     if configuration.raster_configuration_sha256 != inputs.configurationSha256:
-        raise ProcessingError(
+        raise JobError(
             "habitat_configuration_changed",
             "The Ecosystem Condition input configuration changed. Submit a new preparation request.",
             409,
@@ -299,7 +299,7 @@ def prepare_habitat_input_cache(
             check_cancelled=lambda: None,
         )
     except HabitatEarthEngineConnectionError as error:
-        raise ProcessingError("habitat_earth_engine_failed", str(error), 502) from error
+        raise JobError("habitat_earth_engine_failed", str(error), 502) from error
     report = HabitatInputPreparationReport(
         **inputs.model_dump(),
         tileCount=len(tiles.tiles),
@@ -351,7 +351,7 @@ def habitat_input_preparation_process_target(
     sources, spec, directory, _ = arguments
     try:
         writer.put(("ok", prepare_habitat_input_cache(sources, spec, directory)))
-    except ProcessingError as error:
+    except JobError as error:
         writer.put(("error", (error.code, error.detail, error.status)))
     except SelectionUnavailableError as error:
         writer.put(("error", ("selection_unavailable", error.detail, 409)))

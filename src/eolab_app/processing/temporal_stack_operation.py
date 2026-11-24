@@ -11,7 +11,7 @@ from eolab_app.processing.aggregate_models import (
     GroundAreaPlan,
     RasterAggregateLimits,
 )
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.raster_operations import bind_area_arguments
 from eolab_app.processing.temporal_series_operation import prepare_series_area
@@ -115,10 +115,10 @@ async def prepare_temporal_stack(
         Path-free native grid, requested formulas and actual observation coverage.
 
     Raises:
-        ProcessingError: If no observations overlap or point/area planning fails.
+        JobError: If no observations overlap or point/area planning fails.
     """
     if not source.observations:
-        raise ProcessingError(
+        raise JobError(
             "no_observations", "No observations are available in the selected period."
         )
     request = queued.request
@@ -139,7 +139,7 @@ async def prepare_temporal_stack(
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*planned)
+        raise JobError(*planned)
     grid, ground_area = planned
     spec = TemporalStackSpec(
         source=request.source,

@@ -21,9 +21,9 @@ from rasterio.windows import Window, transform as window_transform
 from eolab_app.bounded_vector import PolygonRasterizer
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
-from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifacts import write_progress
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.artifact_manifest import ProducedFile
+from eolab_jobs.artifacts import write_progress
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_aggregate import prepare_raster_area_tools
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.temporal_grid import (
@@ -317,7 +317,7 @@ def _reduce_windows(
         Native windows with their statistic values and valid-observation counts.
 
     Raises:
-        ProcessingError: If the statistic overflows float64 arithmetic.
+        JobError: If the statistic overflows float64 arithmetic.
         OSError: If source or scratch-file I/O fails.
         ValueError: If native decoding fails.
         rasterio.errors.RasterioError: If a native TIFF cannot be opened or read.
@@ -355,7 +355,7 @@ def _reduce_windows(
                 yield from reduced
                 del reduced
     except FloatingPointError as error:
-        raise ProcessingError(
+        raise JobError(
             "numerical_error",
             "The temporal statistic exceeds float64 arithmetic.",
         ) from error
@@ -381,7 +381,7 @@ def _create_cog(
         Completed file metadata and SHA-256 checksum for artifact publication.
 
     Raises:
-        ProcessingError: If the generated file fails output-integrity checks.
+        JobError: If the generated file fails output-integrity checks.
         OSError: If conversion, verification or checksumming fails.
     """
     copy_raster(
@@ -408,7 +408,7 @@ def _create_cog(
             or result.units != (unit,)
             or (max(result.shape) > 512 and not result.overviews(1))
         ):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_output", "The temporal result failed grid/COG validation.", 500
             )
         actual_valid = sum(
@@ -416,7 +416,7 @@ def _create_cog(
             for _, window in result.block_windows(1)
         )
         if actual_valid != valid_pixels:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_output",
                 "The temporal result failed validity-mask validation.",
                 500,
@@ -453,7 +453,7 @@ def create_temporal_map(
         All-missing areas still produce a valid result with zero count cells.
 
     Raises:
-        ProcessingError: If numerical computation or output validation fails.
+        JobError: If numerical computation or output validation fails.
         OSError: If a native input or output cannot be read or written.
         ValueError: If native source decoding fails.
         rasterio.errors.RasterioError: If native raster I/O fails.
@@ -651,7 +651,7 @@ def temporal_process_target(
             else create_temporal_map(*arguments)
         )
         queue.put(("ok", value))
-    except ProcessingError as error:
+    except JobError as error:
         queue.put(("error", (error.code, error.detail, error.status)))
     except (OSError, ValueError, rasterio.errors.RasterioError):
         queue.put(

@@ -9,8 +9,8 @@ from uuid import UUID, uuid4
 import fiona
 import pytest
 
-from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.models import Artifact, PreparedJobPlan
+from eolab_jobs.job_store import PostgresJobStore
+from eolab_jobs.models import Artifact, PreparedJobPlan
 from eolab_app.routes.browser_identity import COOKIE
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from test_processing_jobs import store

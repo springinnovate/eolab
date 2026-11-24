@@ -11,7 +11,7 @@ import pytest
 
 from eolab_app.catalog_selection import SelectionUnavailableError
 from eolab_app.main import create_app
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.service import HABITAT_PREPARATION_OWNER, ProcessingService
 from eolab_app.routes.habitat_preparation import create_habitat_preparation_router
 
@@ -170,9 +170,7 @@ def test_preparation_commands_keep_the_existing_metadata_body_limit(
     "failure,expected",
     [
         (
-            ProcessingError(
-                "unavailable", "Job storage is temporarily unavailable.", 503
-            ),
+            JobError("unavailable", "Job storage is temporarily unavailable.", 503),
             503,
         ),
         (SelectionUnavailableError("The selected Catalog area is unavailable."), 409),

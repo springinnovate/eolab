@@ -28,8 +28,8 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.artifacts import write_progress
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.artifacts import write_progress
+from eolab_jobs.models import JobError
 from eolab_app.processing.vector_summary_models import (
     OPERATION,
     VectorSummaryArtifact,
@@ -88,7 +88,7 @@ def _read_summary_schema(
         Fiona's grouping type and each distinct numeric field's integer flag.
 
     Raises:
-        ProcessingError: If a selected field is absent or has an unsupported type.
+        JobError: If a selected field is absent or has an unsupported type.
         FionaError: If the native dataset cannot be opened.
     """
     with fiona.open(
@@ -100,7 +100,7 @@ def _read_summary_schema(
         }
         value_fields = dict.fromkeys(summary.field for summary in summaries)
         if {inputs.groupField, *value_fields} - set(fields):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_vector_summary_fields",
                 "A selected field is missing. Choose the layer and fields again.",
             )
@@ -113,7 +113,7 @@ def _read_summary_schema(
             "float",
             "bool",
         }:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_vector_summary_fields",
                 "Group by a text, number or boolean field.",
             )
@@ -121,7 +121,7 @@ def _read_summary_schema(
         for name in value_fields:
             value_type = fields[name].split(":", 1)[0]
             if value_type not in {"int", "int32", "int64", "float"}:
-                raise ProcessingError(
+                raise JobError(
                     "invalid_vector_summary_fields",
                     "Choose numeric fields to summarize.",
                 )
@@ -155,7 +155,7 @@ def _merge_group_polygons(
         Valid nonempty dissolved polygons, using original detail if necessary.
 
     Raises:
-        ProcessingError: If the original polygons cannot form a valid union.
+        JobError: If the original polygons cannot form a valid union.
     """
     try:
         merged = disjoint_subset_union_all(get_parts(polygons))
@@ -163,7 +163,7 @@ def _merge_group_polygons(
         LOGGER.warning(
             "Vector summary group %r could not be merged: %s", group_value, error
         )
-        raise ProcessingError(
+        raise JobError(
             "invalid_vector_summary_geometry",
             "The selected polygons could not be merged into a valid overview.",
         ) from error
@@ -177,7 +177,7 @@ def _merge_group_polygons(
             group_value,
             is_valid_reason(merged),
         )
-        raise ProcessingError(
+        raise JobError(
             "invalid_vector_summary_geometry",
             "The selected polygons could not be merged into a valid overview.",
         )
@@ -233,7 +233,7 @@ def _summarize_group_values(
         None when every source value was missing. One value has zero deviation.
 
     Raises:
-        ProcessingError: If the result cannot be represented by its GeoPackage column.
+        JobError: If the result cannot be represented by its GeoPackage column.
     """
     if not values:
         return None
@@ -255,12 +255,12 @@ def _summarize_group_values(
         else:
             result = statistics.pstdev(values)
     except OverflowError as error:
-        raise ProcessingError(
+        raise JobError(
             "vector_summary_overflow",
             "A group result is too large for a numeric vector field.",
         ) from error
     if (integer_output and not -(2**63) <= result < 2**63) or not math.isfinite(result):
-        raise ProcessingError(
+        raise JobError(
             "vector_summary_overflow",
             "A group result is too large for a numeric vector field.",
         )
@@ -289,7 +289,7 @@ def calculate_vector_summary(
         Completed GeoPackage metadata ready for ordinary atomic publication.
 
     Raises:
-        ProcessingError: If fields, selection or numeric output are invalid.
+        JobError: If fields, selection or numeric output are invalid.
         SelectionUnavailableError: If the original polygon source cannot be read.
         GeometryValidationError: If original polygons are invalid.
         FionaError: If the result cannot be written by the native driver.
@@ -346,7 +346,7 @@ def calculate_vector_summary(
                     directory, "reading_vector_features", included, 0, unit="features"
                 )
     if not groups:
-        raise ProcessingError(
+        raise JobError(
             "empty_vector_selection",
             "No polygon features match this selection. Change the filter and try again.",
         )
@@ -430,7 +430,7 @@ def vector_summary_process_target(
     source, spec, directory, _ = arguments
     try:
         writer.put(("ok", calculate_vector_summary(source, spec, directory)))
-    except ProcessingError as error:
+    except JobError as error:
         writer.put(("error", (error.code, error.detail, error.status)))
     except SelectionUnavailableError as error:
         writer.put(("error", ("selection_unavailable", error.detail, 409)))

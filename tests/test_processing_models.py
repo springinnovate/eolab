@@ -2,8 +2,7 @@
 
 from typing import Literal
 
-from eolab_app.processing.models import JobListResponse, JobResponse, JobResultResponse
-
+from eolab_jobs.models import JobListResponse, JobResponse, JobResultResponse
 
 class SummaryResult(JobResultResponse):
     """Test-only result with record counts instead of raster validity metadata."""

@@ -15,13 +15,13 @@ from pydantic import (
     model_validator,
 )
 
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     Artifact,
     JobProgressResponse,
     JobResponse,
     JobResultResponse,
-    ProcessingLimits,
-    ProcessingError,
+    JobLimits,
+    JobError,
 )
 from eolab_app.processing.raster_expression import FUNCTIONS, compile_expression, walk
 from eolab_app.sampling_box import Wgs84SamplingBox, sampling_box_bounds
@@ -81,7 +81,7 @@ class AggregateValidationRequest(BaseModel):
             trees = [
                 compile_expression(item.expression, alias) for item in self.calculations
             ]
-        except ProcessingError as error:
+        except JobError as error:
             raise ValueError(error.detail) from error
         if sum(sum(1 for _ in walk(tree)) for tree in trees) > 256:
             raise ValueError(
@@ -571,7 +571,7 @@ class AggregateBatchResponse(BaseModel):
 
 
 @dataclass(frozen=True)
-class RasterAggregateLimits(ProcessingLimits):
+class RasterAggregateLimits(JobLimits):
     """Configure statistics job lifetimes and ground-area measurement accuracy.
 
     The edge tolerance and maximum segment length control geometric accuracy;
@@ -584,7 +584,7 @@ class RasterAggregateLimits(ProcessingLimits):
     area_max_segment_metres: float = 10_000.0
 
     @classmethod
-    def with_lifecycle(cls, limits: ProcessingLimits) -> "RasterAggregateLimits":
+    def with_lifecycle(cls, limits: JobLimits) -> "RasterAggregateLimits":
         """Copy the shared job lifecycle settings for statistics calculations.
 
         Args:
@@ -594,10 +594,7 @@ class RasterAggregateLimits(ProcessingLimits):
             Settings with the same concurrency, leases, retention and cache policy.
         """
         return cls(
-            **{
-                item.name: getattr(limits, item.name)
-                for item in fields(ProcessingLimits)
-            }
+            **{item.name: getattr(limits, item.name) for item in fields(JobLimits)}
         )
 
 

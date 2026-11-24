@@ -10,12 +10,12 @@ from fastapi.testclient import TestClient
 import psycopg
 import pytest
 
-from eolab_app.processing.job_events import PostgresJobEvents
-from eolab_app.processing.job_notifications import (
+from eolab_jobs.job_events import PostgresJobEvents
+from eolab_jobs.job_notifications import (
     PostgresNotifications,
     JOB_CHANGE_CHANNEL,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.service import ProcessingService
 from eolab_app.routes.processing import COOKIE, create_processing_router
 from eolab_app.routes.processing_events import JobEventResponse
@@ -44,9 +44,9 @@ def test_notifications_are_owner_isolated_coalesced_and_bounded(monkeypatch):
             hub.subscribe("b" * 64),
         )
         try:
-            with pytest.raises(ProcessingError):
+            with pytest.raises(JobError):
                 hub.subscribe("a" * 64)
-            with pytest.raises(ProcessingError):
+            with pytest.raises(JobError):
                 hub.subscribe("c" * 64)
             for _ in range(100):
                 connection.messages.put_nowait(SimpleNamespace(payload="a" * 64))
@@ -66,7 +66,7 @@ def test_notifications_are_owner_isolated_coalesced_and_bounded(monkeypatch):
             await hub.close()
         assert hub.count == 0
         connection.close.assert_awaited()
-        with pytest.raises(ProcessingError):
+        with pytest.raises(JobError):
             hub.subscribe("a" * 64)
 
     asyncio.run(scenario())
@@ -82,7 +82,7 @@ def test_close_before_listener_starts_releases_capacity():
         hub.start()
         await hub.close()
         assert hub.count == 0
-        with pytest.raises(ProcessingError):
+        with pytest.raises(JobError):
             await subscription.wait(0.1)
 
     asyncio.run(scenario())

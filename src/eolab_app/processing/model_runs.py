@@ -40,15 +40,15 @@ from eolab_app.processing.model_yaml import (
     compute_document_checksum,
     export_yaml,
 )
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     JobInputFile,
     OpaqueId,
     PreparedJobPlan,
-    ProcessingError,
-    ProcessingLimits,
+    JobError,
+    JobLimits,
     Artifact,
 )
-from eolab_app.processing.artifact_manifest import (
+from eolab_jobs.artifact_manifest import (
     FileDeclaration,
     ProducedFile,
     PublishedFile,
@@ -124,10 +124,10 @@ def build_model_download_filename(
 def compute_implementation_checksum() -> str:
     """Compute a checksum of the installed backend code and numerical libraries.
 
-    The checksum includes EOlab's Python source files and the installed versions
-    of its numerical libraries. It is cached for the process lifetime. The API
-    saves it when accepting a run; the worker compares it before execution to
-    avoid silently running that request with different software.
+    The checksum includes Python source files in ``eolab_app`` and ``eolab_jobs``
+    and the installed versions of numerical libraries. It is cached for the
+    process lifetime. The API saves it when accepting a run; the worker compares
+    it before execution to avoid running that request with different software.
 
     Returns:
         A SHA-256 hexadecimal checksum, not a Git commit or model version.
@@ -137,9 +137,9 @@ def compute_implementation_checksum() -> str:
         PackageNotFoundError: If required package version metadata is unavailable.
     """
     digest = hashlib.sha256()
-    # Identify the installed package as a build artifact; do not import or
+    # Identify the installed packages as build artifacts; do not import or
     # inspect sibling services to determine whether a model may execute.
-    pending = [("", files("eolab_app"))]
+    pending = [(name, files(name)) for name in ("eolab_app", "eolab_jobs")]
     while pending:
         prefix, directory = pending.pop()
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
@@ -216,12 +216,12 @@ def build_model_calculation_request(
         The operation request to execute and the recipe/input record to save with it.
 
     Raises:
-        ProcessingError: If the model is unavailable, its definition has changed,
+        JobError: If the model is unavailable, its definition has changed,
             or the selected input, area or formula is invalid.
     """
     definition = registry.get(request.model.id, request.model.version)
     if definition.digest != request.model.definitionSha256:
-        raise ProcessingError(
+        raise JobError(
             "model_changed",
             "The model definition changed. Refresh model setup before running.",
             409,
@@ -229,7 +229,7 @@ def build_model_calculation_request(
     if set(request.inputs) != set(definition.inputs) or set(request.parameters) - set(
         definition.parameters
     ):
-        raise ProcessingError(
+        raise JobError(
             "invalid_model_inputs",
             "Supply exactly the model's inputs and declared parameters.",
         )
@@ -268,7 +268,7 @@ def build_model_calculation_request(
             request.label,
         )
     except (ValidationError, ValueError) as error:
-        raise ProcessingError(
+        raise JobError(
             "invalid_model_inputs",
             "The model's inputs or parameters are invalid.",
         ) from error
@@ -339,7 +339,7 @@ def build_model_job_submission(
         It does not join another run's calculation.
 
     Raises:
-        ProcessingError: If the saved recipe and inputs exceed the YAML size limits.
+        JobError: If the saved recipe and inputs exceed the YAML size limits.
     """
     definition = invocation.model.definition
     operation = get_model_operation(definition.steps[0].operation)
@@ -435,7 +435,7 @@ def declare_model_files(
         with the member label; single-file outputs use the recipe alias.
 
     Raises:
-        ProcessingError: If files are missing, duplicated, unknown, or have a format
+        JobError: If files are missing, duplicated, unknown, or have a format
             different from the registered operation contract.
         ValidationError: If native file metadata is invalid.
     """
@@ -453,7 +453,7 @@ def declare_model_files(
     )
     produced = (primary, *artifact.additional_outputs)
     if len({item.name for item in produced}) != len(produced):
-        raise ProcessingError(
+        raise JobError(
             "invalid_model_result",
             "The operation returned unexpected result files.",
             500,
@@ -468,7 +468,7 @@ def declare_model_files(
             or contract.multiple_files != (item.output_name is not None)
             or contract.multiple_files != (item.member_label is not None)
         ):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_model_result",
                 "The operation returned unexpected result files.",
                 500,
@@ -484,7 +484,7 @@ def declare_model_files(
             or output["mediaType"] != contracts[name].media_type
             or output["role"] != contracts[name].role
         ):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_model_result",
                 "A declared model output is missing or invalid.",
                 500,
@@ -515,7 +515,7 @@ def record_model_preparation(
     row: dict[str, Any],
     wrapper: ModelRunSpec,
     prepared: PreparedJobPlan,
-    limits: ProcessingLimits,
+    limits: JobLimits,
 ) -> PreparedJobPlan:
     """Record a model's calculation settings and its raster grid when applicable.
 
@@ -532,7 +532,7 @@ def record_model_preparation(
         The original recipe and selected inputs remain unchanged.
 
     Raises:
-        ProcessingError: If the updated Run YAML exceeds its document limits.
+        JobError: If the updated Run YAML exceeds its document limits.
         ValidationError: If the stored model or prepared calculation is invalid.
         ValueError: If the prepared operation differs from the saved recipe.
     """
@@ -588,7 +588,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         have no download links.
 
     Raises:
-        ProcessingError: If a completed result's operation or format is unsupported.
+        JobError: If a completed result's operation or format is unsupported.
     """
     summary = row["summary"]
     status = row["status"]
@@ -613,7 +613,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     if status == "running" and isinstance(measured["phase"], str):
         try:
             operation = get_model_operation(summary["operationId"])
-        except ProcessingError as error:
+        except JobError as error:
             if error.code != "unsupported_model_operation":
                 raise
         else:
@@ -625,7 +625,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     if artifact is not None:
         operation = get_model_operation(summary["operationId"])
         if artifact["media_type"] != operation.output.media_type:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_model_result",
                 "The result format does not match this model output.",
                 500,
@@ -756,19 +756,19 @@ def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
         The saved recipe, input selections and effective parameter values.
 
     Raises:
-        ProcessingError: If the job is not a model run, was deleted, or its
+        JobError: If the job is not a model run, was deleted, or its
             saved metadata expired.
         ValidationError: If the saved invocation is invalid.
     """
     expiry = row.get("metadata_expires_at")
     if row["operation"] != MODEL_OPERATION:
-        raise ProcessingError("job_not_found", "This model run is unavailable.", 404)
+        raise JobError("job_not_found", "This model run is unavailable.", 404)
     if (
         row["status"] == "deleted"
         or not row.get("retained_metadata")
         or (expiry is not None and expiry <= datetime.now(timezone.utc))
     ):
-        raise ProcessingError(
+        raise JobError(
             "model_metadata_expired",
             "This run's captured metadata is no longer available.",
             410,
@@ -796,7 +796,7 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
         calculation settings and any finished summary values or failure.
 
     Raises:
-        ProcessingError: If the job is not a model run, was deleted, or its saved
+        JobError: If the job is not a model run, was deleted, or its saved
             metadata expired; also if the YAML exceeds export limits.
         ValidationError: If the saved recipe or execution details are invalid.
     """
@@ -859,7 +859,7 @@ def decode_model_run_cursor(value: str | None) -> tuple[datetime, str] | None:
         The creation time and job ID to list older entries than, or None.
 
     Raises:
-        ProcessingError: If the cursor is invalid or exceeds its size limit.
+        JobError: If the cursor is invalid or exceeds its size limit.
     """
     if value is None:
         return None
@@ -872,7 +872,7 @@ def decode_model_run_cursor(value: str | None) -> tuple[datetime, str] | None:
         cursor = ModelRunPageCursor.model_validate_json(data)
         return cursor.createdAt, cursor.jobId
     except (ValueError, ValidationError) as error:
-        raise ProcessingError(
+        raise JobError(
             "invalid_cursor", "This model-list cursor is invalid.", 422
         ) from error
 

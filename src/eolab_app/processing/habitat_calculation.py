@@ -30,8 +30,8 @@ from eolab_app.bounded_vector import polygon_features
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
-from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifacts import write_progress
+from eolab_jobs.artifact_manifest import ProducedFile
+from eolab_jobs.artifacts import write_progress
 from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.habitat_models import (
     HabitatCalculationInputs,
@@ -45,7 +45,7 @@ from eolab_app.processing.habitat_earth_engine import (
     load_habitat_stack,
     prepare_habitat_band_views,
 )
-from eolab_app.processing.models import Artifact, ProcessingError
+from eolab_jobs.models import Artifact, JobError
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_preparation import (
     RasterGrid,
@@ -304,7 +304,7 @@ def calculate_habitat(
 
     Raises:
         ValueError: If the upstream reader or numerical calculation rejects inputs.
-        ProcessingError: If no inputs are prepared for the selected area and year.
+        JobError: If no inputs are prepared for the selected area and year.
         RasterioError: If a raster cannot be read or written.
         OSError: If result creation or cleanup fails.
     """
@@ -331,7 +331,7 @@ def calculate_habitat(
                 aoi, acquisition, cast(Path, sources.cache_directory)
             )
             if not tiles.tiles:
-                raise ProcessingError(
+                raise JobError(
                     "habitat_inputs_not_prepared",
                     "No Ecosystem Condition inputs are prepared for this area and year. "
                     "Ask an administrator to prepare the saved area and year, "
@@ -545,7 +545,7 @@ def habitat_process_target(
             else calculate_habitat(*arguments)
         )
         queue.put(("ok", value))
-    except ProcessingError as error:
+    except JobError as error:
         queue.put(("error", (error.code, error.detail, error.status)))
     except ValueError as error:
         detail = str(error)

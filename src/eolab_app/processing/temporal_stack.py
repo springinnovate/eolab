@@ -12,7 +12,7 @@ import rasterio
 
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.statistics_csv import escape_spreadsheet_text
 from eolab_app.processing.temporal_grid import plan_temporal_calculation_grid
 from eolab_app.processing.temporal_series import calculate_temporal_observations
@@ -46,7 +46,7 @@ def create_temporal_stack(
         CSV file identity and the number of calculation rows written.
 
     Raises:
-        ProcessingError: If an area cannot be read or projected.
+        JobError: If an area cannot be read or projected.
         OSError: If a source or result file cannot be read or written.
         ValueError: If native decoding or JSON serialization fails.
         rasterio.errors.RasterioError: If native raster or mask reads fail.
@@ -151,7 +151,7 @@ def temporal_stack_process_target(
             else create_temporal_stack
         )
         queue.put(("ok", function(*arguments)))
-    except ProcessingError as error:
+    except JobError as error:
         queue.put(("error", (error.code, error.detail, error.status)))
     except (OSError, ValueError, rasterio.errors.RasterioError):
         queue.put(

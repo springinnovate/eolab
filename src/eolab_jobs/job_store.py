@@ -12,20 +12,20 @@ from importlib.resources import files
 import json
 from typing import Any, Iterator
 from uuid import uuid4
-from eolab_app.processing.artifact_manifest import read_artifact_manifest, PublishedFile
+from eolab_jobs.artifact_manifest import read_artifact_manifest, PublishedFile
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
-from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
+from eolab_jobs.job_notifications import JOB_QUEUE_CHANNEL
 
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     Artifact,
     PreparedJobPlan,
     JobSubmission,
-    ProcessingError,
-    ProcessingLimits,
+    JobError,
+    JobLimits,
     JobInputFile,
 )
 
@@ -50,7 +50,7 @@ def serialize_retained_metadata(value: dict[str, object] | None) -> Jsonb | None
         the final result or error within the database's combined 256 KiB limit.
 
     Raises:
-        ProcessingError: If the details exceed the size limit or contain non-JSON values.
+        JobError: If the details exceed the size limit or contain non-JSON values.
     """
     if value is None:
         return None
@@ -58,7 +58,7 @@ def serialize_retained_metadata(value: dict[str, object] | None) -> Jsonb | None
         if len(json.dumps(value, allow_nan=False).encode("utf-8")) > 192 * 1024:
             raise ValueError("Metadata too large")
     except (ValueError, TypeError) as error:
-        raise ProcessingError(
+        raise JobError(
             "metadata_size", "This run exceeds its retained metadata limit.", 413
         ) from error
     return Jsonb(value)
@@ -75,7 +75,7 @@ class PostgresJobStore:
     are borrowed exclusively per transaction, never retained by jobs or callers.
     """
 
-    def __init__(self, limits: ProcessingLimits, conninfo: str = "") -> None:
+    def __init__(self, limits: JobLimits, conninfo: str = "") -> None:
         """Configure the adapter without opening a startup-time connection.
 
         Args:
@@ -136,7 +136,7 @@ class PostgresJobStore:
             Dictionary-row cursor; all operations are committed or rolled back.
 
         Raises:
-            ProcessingError: If the pool is closed, saturated or unavailable,
+            JobError: If the pool is closed, saturated or unavailable,
                 or a database operation fails or times out.
         """
         try:
@@ -149,7 +149,7 @@ class PostgresJobStore:
                         )
                     yield cursor
         except psycopg.Error as error:
-            raise ProcessingError(
+            raise JobError(
                 "processing_unavailable",
                 "Job processing is temporarily unavailable. Try again shortly.",
                 503,
@@ -164,9 +164,9 @@ class PostgresJobStore:
 
         Raises:
             UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
-            ProcessingError: If the database is temporarily unavailable.
+            JobError: If the database is temporarily unavailable.
         """
-        resources = files("eolab_app.processing")
+        resources = files("eolab_jobs")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute("SELECT to_regnamespace('processing') AS namespace")
             if cursor.fetchone()["namespace"] is None:
@@ -211,7 +211,7 @@ class PostgresJobStore:
             Number of unfinished jobs interrupted by this restart.
 
         Raises:
-            ProcessingError: If PostgreSQL cannot update the jobs.
+            JobError: If PostgreSQL cannot update the jobs.
         """
 
         with self._transaction(acquire_lock=True) as cursor:
@@ -242,11 +242,11 @@ class PostgresJobStore:
             Opaque identifier usable only by the same owner.
 
         Raises:
-            ProcessingError: If the input or shared storage capacity is exceeded.
+            JobError: If the input or shared storage capacity is exceeded.
         """
         size = len(json.dumps(payload, allow_nan=False).encode("utf-8"))
         if size > 8 * 1024**2:
-            raise ProcessingError(
+            raise JobError(
                 "input_size",
                 "This processing input exceeds the 8 MiB storage limit.",
                 413,
@@ -263,7 +263,7 @@ class PostgresJobStore:
                 or count["owned"] >= 32
                 or count["bytes"] + size > 64 * 1024**2
             ):
-                raise ProcessingError(
+                raise JobError(
                     "input_capacity",
                     "Temporary processing input storage is full. Release an unused input or try again later.",
                     429,
@@ -288,7 +288,7 @@ class PostgresJobStore:
             Stored JSON to validate at the operation boundary, or an empty object after an access-only check.
 
         Raises:
-            ProcessingError: If the reference is expired, changed or belongs to someone else.
+            JobError: If the reference is expired, changed or belongs to someone else.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -298,7 +298,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
         if row is None:
-            raise ProcessingError(
+            raise JobError(
                 "input_unavailable",
                 "This calculation area expired or is unavailable. Select the layer again.",
                 409,
@@ -313,7 +313,7 @@ class PostgresJobStore:
             identifier: Input to delete, including an already deleted input.
 
         Raises:
-            ProcessingError: If storage is unavailable.
+            JobError: If storage is unavailable.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
@@ -353,7 +353,7 @@ class PostgresJobStore:
             Parent row and immutable published identity.
 
         Raises:
-            ProcessingError: If ownership, expiry or publication denies access.
+            JobError: If ownership, expiry or publication denies access.
             ValueError: If persisted manifest data is malformed.
         """
         cursor.execute(
@@ -362,11 +362,9 @@ class PostgresJobStore:
         )
         row = cursor.fetchone()
         if row is None:
-            raise ProcessingError(
-                "job_not_found", "This input run is unavailable.", 404
-            )
+            raise JobError("job_not_found", "This input run is unavailable.", 404)
         if row["status"] != "ready" or not row["available"]:
-            raise ProcessingError(
+            raise JobError(
                 "input_unavailable",
                 "This raster result expired or was deleted. Choose another input.",
                 409,
@@ -385,9 +383,7 @@ class PostgresJobStore:
             else None
         )
         if file is None:
-            raise ProcessingError(
-                "artifact_not_found", "This input file is unavailable.", 404
-            )
+            raise JobError("artifact_not_found", "This input file is unavailable.", 404)
         return row, JobInputFile(
             run_id, file.id, file.sha256, file.size, file.media_type, file.role
         )
@@ -406,7 +402,7 @@ class PostgresJobStore:
             Published identity; this inspection alone retains no file.
 
         Raises:
-            ProcessingError: If the owned file is not currently available.
+            JobError: If the owned file is not currently available.
         """
         with self._transaction() as cursor:
             return self._inspect_input_file(cursor, owner, run_id, artifact_id)[1]
@@ -419,7 +415,7 @@ class PostgresJobStore:
             serializes admission with upload cleanup before using this snapshot.
 
         Raises:
-            ProcessingError: If the database cannot read the active jobs.
+            JobError: If the database cannot read the active jobs.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -444,7 +440,7 @@ class PostgresJobStore:
             Parent storage attempt and immutable published file metadata.
 
         Raises:
-            ProcessingError: If the job stopped, grant is absent or identity changed.
+            JobError: If the job stopped, grant is absent or identity changed.
             ValueError: If the stored manifest is invalid.
         """
         with self._transaction() as cursor:
@@ -457,7 +453,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
             if row is None:
-                raise ProcessingError(
+                raise JobError(
                     "input_unavailable",
                     "This job no longer has access to its input file.",
                     409,
@@ -471,7 +467,7 @@ class PostgresJobStore:
                 or file.sha256 != row["sha256"]
                 or file.size != row["bytes"]
             ):
-                raise ProcessingError(
+                raise JobError(
                     "source_changed",
                     "The retained input file changed. Run the parent model again.",
                     409,
@@ -493,20 +489,20 @@ class PostgresJobStore:
             Owned subscriber row, including an existing idempotent retry.
 
         Raises:
-            ProcessingError: If admission or storage fails.
+            JobError: If admission or storage fails.
             ValueError: If the internal request hash is missing.
         """
         result = self.submit_batch(
             owner,
             [JobSubmission(request_key, request_hash, expected.operation, expected)],
         )[0]
-        if isinstance(result, ProcessingError):
+        if isinstance(result, JobError):
             raise result
         return result
 
     def submit_batch(
         self, owner: str, submissions: list[JobSubmission]
-    ) -> list[dict[str, Any] | ProcessingError]:
+    ) -> list[dict[str, Any] | JobError]:
         """Admit up to fifty requests with one capacity snapshot and transaction.
 
         The shared lock protects retry and work lookups, capacity decisions and
@@ -523,7 +519,7 @@ class PostgresJobStore:
 
         Raises:
             ValueError: If batch length or an internal request hash is invalid.
-            ProcessingError: If the database transaction fails. No partial commit
+            JobError: If the database transaction fails. No partial commit
                 is attempted; callers retry with the same per-item keys.
         """
         if not 1 <= len(submissions) <= 50:
@@ -537,7 +533,7 @@ class PostgresJobStore:
                 if isinstance(item.prepared, PreparedJobPlan) and item.prepared.work_key
             }
         )
-        outcomes: list[str | ProcessingError] = []
+        outcomes: list[str | JobError] = []
         new_jobs: list[tuple[Any, ...]] = []
         new_subscribers: list[tuple[Any, ...]] = []
         new_inputs: list[tuple[Any, ...]] = []
@@ -565,7 +561,7 @@ class PostgresJobStore:
                         or existing["operation"] != item.operation
                     ):
                         outcomes.append(
-                            ProcessingError(
+                            JobError(
                                 "request_conflict",
                                 "That request ID already belongs to different job inputs.",
                                 409,
@@ -575,7 +571,7 @@ class PostgresJobStore:
                         outcomes.append(existing["id"])
                     continue
                 expected = item.prepared
-                if isinstance(expected, ProcessingError):
+                if isinstance(expected, JobError):
                     outcomes.append(expected)
                     continue
                 # Existing retries above retain their original grant even after expiry.
@@ -586,19 +582,19 @@ class PostgresJobStore:
                             cursor, owner, captured.run_id, captured.artifact_id
                         )
                         if current != captured:
-                            raise ProcessingError(
+                            raise JobError(
                                 "source_changed",
                                 "The input file changed before this job was accepted.",
                                 409,
                             )
                         inputs.append((parent["job_id"], current))
-                except ProcessingError as error:
+                except JobError as error:
                     outcomes.append(error)
                     continue
                 shared = work.get(expected.work_key)
                 if shared and not shared["can_join"]:
                     outcomes.append(
-                        ProcessingError(
+                        JobError(
                             "previous_attempt_stopping",
                             "Waiting for the previous attempt to stop. Retrying shortly.",
                             429,
@@ -715,7 +711,7 @@ class PostgresJobStore:
             Updated running job without reserving disk or returning it to the queue.
 
         Raises:
-            ProcessingError: If ownership was lost, cancellation won or storage failed.
+            JobError: If ownership was lost, cancellation won or storage failed.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
@@ -724,9 +720,7 @@ class PostgresJobStore:
                 (identifier, attempt),
             )
             if cursor.fetchone() is None:
-                raise ProcessingError(
-                    "job_cancelled", "Job stopped during preparation.", 409
-                )
+                raise JobError("job_cancelled", "Job stopped during preparation.", 409)
             cursor.execute(
                 "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),"
                 "progress=%s,updated_at=clock_timestamp() "
@@ -752,7 +746,7 @@ class PostgresJobStore:
             Owned job record.
 
         Raises:
-            ProcessingError: If no owned record exists.
+            JobError: If no owned record exists.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -761,9 +755,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
         if not row:
-            raise ProcessingError(
-                "job_not_found", "This processing job is unavailable.", 404
-            )
+            raise JobError("job_not_found", "This processing job is unavailable.", 404)
         return row
 
     def update_presentation(
@@ -780,7 +772,7 @@ class PostgresJobStore:
             The updated owned job, with its execution, files and creation time unchanged.
 
         Raises:
-            ProcessingError: If the job is unowned, deleted or storage is unavailable.
+            JobError: If the job is unowned, deleted or storage is unavailable.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
@@ -789,11 +781,11 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
             if row is None:
-                raise ProcessingError(
+                raise JobError(
                     "job_not_found", "This processing job is unavailable.", 404
                 )
             if row["status"] == "deleted":
-                raise ProcessingError("job_deleted", "This run has been deleted.", 409)
+                raise JobError("job_deleted", "This run has been deleted.", 409)
             cursor.execute(
                 "UPDATE processing.job_subscribers SET "
                 "presentation=COALESCE(presentation,'{}'::jsonb)||%s,"
@@ -878,7 +870,7 @@ class PostgresJobStore:
 
         Raises:
             ValueError: If the page size or operation count is invalid.
-            ProcessingError: If job storage is unavailable.
+            JobError: If job storage is unavailable.
         """
         if not 1 <= limit <= 101 or not 1 <= len(operations) <= 16:
             raise ValueError("Invalid operation page limits")
@@ -917,10 +909,10 @@ class PostgresJobStore:
             Updated subscriber state, including cancelling while its last worker exits.
 
         Raises:
-            ProcessingError: If the handle is unowned or deletion targets active work.
+            JobError: If the handle is unowned or deletion targets active work.
         """
         if not 0 <= undo_seconds <= 60 or undo_seconds and not delete:
-            raise ProcessingError("invalid_deletion", "Invalid deletion Undo window.")
+            raise JobError("invalid_deletion", "Invalid deletion Undo window.")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
@@ -928,11 +920,11 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
             if not row:
-                raise ProcessingError(
+                raise JobError(
                     "job_not_found", "This processing job is unavailable.", 404
                 )
             if delete and row["status"] in UNFINISHED:
-                raise ProcessingError(
+                raise JobError(
                     "job_active",
                     "Cancel this job and wait for it to stop before deleting it.",
                     409,
@@ -987,7 +979,7 @@ class PostgresJobStore:
             Current owned job state, including an idempotent repeated restoration.
 
         Raises:
-            ProcessingError: If ownership, deletion identity or the Undo window fails.
+            JobError: If ownership, deletion identity or the Undo window fails.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
@@ -997,18 +989,18 @@ class PostgresJobStore:
             )
             subscriber = cursor.fetchone()
             if subscriber is None:
-                raise ProcessingError(
+                raise JobError(
                     "job_not_found", "This processing job is unavailable.", 404
                 )
             if subscriber["deletion_id"] != deletion_id:
-                raise ProcessingError(
+                raise JobError(
                     "deletion_changed",
                     "This deletion has changed. Refresh the run list.",
                     409,
                 )
             if restore and subscriber["status"] == "deleted":
                 if not subscriber["can_undo"]:
-                    raise ProcessingError(
+                    raise JobError(
                         "undo_expired", "The time to undo this deletion has ended.", 409
                     )
                 cursor.execute(
@@ -1018,7 +1010,7 @@ class PostgresJobStore:
                     (identifier,),
                 )
                 if cursor.fetchone() is None:
-                    raise ProcessingError(
+                    raise JobError(
                         "undo_expired", "The time to undo this deletion has ended.", 409
                     )
             elif not restore and subscriber["status"] == "deleted":
@@ -1071,10 +1063,10 @@ class PostgresJobStore:
             The owned job with the same deadline for results and saved details.
 
         Raises:
-            ProcessingError: If ownership, availability or the duration is invalid.
+            JobError: If ownership, availability or the duration is invalid.
         """
         if not 1 <= seconds <= 31_536_000:
-            raise ProcessingError("invalid_retention", "Invalid result lifetime.")
+            raise JobError("invalid_retention", "Invalid result lifetime.")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "SELECT *, expires_at>clock_timestamp() AS available "
@@ -1083,7 +1075,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
             if row is None:
-                raise ProcessingError(
+                raise JobError(
                     "job_not_found", "This processing job is unavailable.", 404
                 )
             if (
@@ -1092,7 +1084,7 @@ class PostgresJobStore:
                 or row["artifact"] is None
                 or row["retained_metadata"] is None
             ):
-                raise ProcessingError(
+                raise JobError(
                     "result_unavailable",
                     "Only a completed run with available files and details can be extended.",
                     409,
@@ -1106,7 +1098,7 @@ class PostgresJobStore:
                 (seconds, seconds, row["job_id"]),
             )
             if cursor.fetchone() is None:
-                raise ProcessingError(
+                raise JobError(
                     "result_unavailable",
                     "This run expired before it could be extended.",
                     409,
@@ -1131,7 +1123,7 @@ class PostgresJobStore:
             Claimed job with a new attempt token, or None when no worker slot/job is free.
 
         Raises:
-            ProcessingError: If the database cannot complete the claim.
+            JobError: If the database cannot complete the claim.
         """
 
         with self._transaction(acquire_lock=True) as cursor:
@@ -1221,7 +1213,7 @@ class PostgresJobStore:
             True only if the still-current attempt reached the requested state.
 
         Raises:
-            ProcessingError: If durable storage is unavailable.
+            JobError: If durable storage is unavailable.
             ValidationError: If the supplied manifest violates its storage contract.
         """
         with self._transaction(acquire_lock=True) as cursor:
@@ -1310,7 +1302,7 @@ class PostgresJobStore:
             Matching payloads by hash; missing or expired entries are omitted.
 
         Raises:
-            ProcessingError: If PostgreSQL is unavailable.
+            JobError: If PostgreSQL is unavailable.
             ValueError: If more than five keys are requested.
         """
         if len(keys) > 5:
@@ -1338,7 +1330,7 @@ class PostgresJobStore:
             Job metadata and renewable opaque transfer ID.
 
         Raises:
-            ProcessingError: If the result is unavailable or transfer capacity is full.
+            JobError: If the result is unavailable or transfer capacity is full.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
@@ -1348,7 +1340,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
             if not row:
-                raise ProcessingError(
+                raise JobError(
                     "job_not_found", "This processing job is unavailable.", 404
                 )
             cursor.execute(
@@ -1356,7 +1348,7 @@ class PostgresJobStore:
                 (row["job_id"],),
             )
             if not cursor.fetchone() or row["status"] != "ready":
-                raise ProcessingError(
+                raise JobError(
                     "result_unavailable",
                     "This job result is not ready or its download has expired.",
                     409,
@@ -1367,7 +1359,7 @@ class PostgresJobStore:
             )
             transfers = cursor.fetchone()
             if transfers["count"] >= 4 or transfers["total"] >= 64:
-                raise ProcessingError(
+                raise JobError(
                     "download_busy",
                     "Too many downloads of this job result are already open.",
                     429,
@@ -1394,7 +1386,7 @@ class PostgresJobStore:
             Ready run metadata while both the subscription and transfer are live.
 
         Raises:
-            ProcessingError: If the capability, run or result lifetime is unavailable.
+            JobError: If the capability, run or result lifetime is unavailable.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -1406,7 +1398,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
             if row is None:
-                raise ProcessingError(
+                raise JobError(
                     "result_unavailable", "This result is no longer available.", 404
                 )
             return row
@@ -1446,7 +1438,7 @@ class PostgresJobStore:
             An unexpired ready result, or None after expiry, deletion or cleanup.
 
         Raises:
-            ProcessingError: If the database is unavailable; callers must retry.
+            JobError: If the database is unavailable; callers must retry.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -1468,7 +1460,7 @@ class PostgresJobStore:
             Their byte counts are cleared after the worker removes the files.
 
         Raises:
-            ProcessingError: If the database cannot update expiration or read jobs.
+            JobError: If the database cannot update expiration or read jobs.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")

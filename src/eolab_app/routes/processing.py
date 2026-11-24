@@ -19,12 +19,12 @@ from fastapi.routing import APIRoute
 from pydantic import Field, ValidationError
 from starlette.responses import FileResponse, StreamingResponse
 
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     ArtifactDownload,
     JobListResponse,
     JobStatusRequest,
     JobStatusResponse,
-    ProcessingError,
+    JobError,
 )
 from eolab_app.processing.clip_models import ClipJobRequest, ClipJobResponse
 from eolab_app.processing.aggregate_models import (
@@ -208,7 +208,7 @@ async def _await_service_result(awaitable: Any) -> Any:
     """
     try:
         return await awaitable
-    except ProcessingError as error:
+    except JobError as error:
         raise HTTPException(
             error.status,
             {"code": error.code, "message": error.detail},
@@ -342,7 +342,7 @@ class JobDownloadResponse(FileResponse):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            with suppress(ProcessingError):
+            with suppress(JobError):
                 await self.service.transfer_heartbeat(self.lease, release=True)
 
 
@@ -845,7 +845,7 @@ def create_processing_router(
                 )
             )
             for index, outcome in zip(indices, outcomes, strict=True):
-                if isinstance(outcome, ProcessingError):
+                if isinstance(outcome, JobError):
                     results[index]["error"] = {
                         "status": outcome.status,
                         "code": outcome.code,

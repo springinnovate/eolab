@@ -8,8 +8,8 @@ from unittest.mock import Mock
 import pytest
 
 from eolab_app.processing.aggregate_models import AggregateJobRequest
-from eolab_app.processing.job_events import PostgresJobEvents
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.job_events import PostgresJobEvents
+from eolab_jobs.models import JobError
 from eolab_app.processing.service import ProcessingService
 from raster_source_support import SOURCE
 
@@ -53,7 +53,7 @@ def test_submission_observes_committed_state_and_releases_capacity(mode: str) ->
         owner = "a" * 64
         hub = PostgresJobEvents(max_streams=1)
         rows = [queued_row("1" * 32), queued_row("2" * 32)]
-        rejection = ProcessingError("queue_full", "Busy", 429)
+        rejection = JobError("queue_full", "Busy", 429)
         store = Mock()
         store.submit_batch.return_value = [dict(row) for row in rows] + [rejection]
         first_read = asyncio.Event()

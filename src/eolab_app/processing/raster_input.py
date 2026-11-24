@@ -9,7 +9,7 @@ from eolab_app.catalog_selection import ResolvedCatalogSelection
 import math
 from typing import Any
 
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.raster.source_models import (
     RasterAnalysisSourceReference,
     RunArtifactReference,
@@ -57,7 +57,7 @@ def validate_supported_raster(dataset: Any, raster_data: RasterData) -> None:
         raster_data: Confined source path or admitted temporal observation.
 
     Raises:
-        ProcessingError: For unsupported input structure or unsigned dependencies.
+        JobError: For unsupported input structure or unsigned dependencies.
     """
     try:
         require_signed_raster_dependencies(dataset, raster_data)
@@ -66,7 +66,7 @@ def validate_supported_raster(dataset: Any, raster_data: RasterData) -> None:
         if dataset.driver != "GTiff":
             raise ValueError("GeoTIFF required")
     except ValueError as error:
-        raise ProcessingError("unsupported_source", str(error)) from error
+        raise JobError("unsupported_source", str(error)) from error
 
 
 def select_area(
@@ -100,7 +100,7 @@ def select_area(
         Native window and projected geometry for operation-owned inclusion rules.
 
     Raises:
-        ProcessingError: If the area is unavailable, invalid, or exceeds bounded work.
+        JobError: If the area is unavailable, invalid, or exceeds bounded work.
     """
 
     try:
@@ -130,7 +130,7 @@ def select_area(
             dataset, geometries, max_coordinates, selected_bounds=bounds
         )
     except ProjectedGeometryMemoryError as error:
-        raise ProcessingError(
+        raise JobError(
             "polygon_memory_limit",
             f"Selected polygons cannot fit within the "
             f"{max_retained_polygon_bytes / 1024**2:.1f} MiB geometry allowance. "
@@ -138,11 +138,11 @@ def select_area(
             413,
         ) from error
     except NoRasterBoundsOverlapError as error:
-        raise ProcessingError(
+        raise JobError(
             "no_overlap", "The selected area does not overlap this raster."
         ) from error
     except (ValueError, TypeError, OverflowError) as error:
-        raise ProcessingError(
+        raise JobError(
             "invalid_area",
             "The selected area could not be projected onto this raster. Check its geometry and coordinate system.",
         ) from error

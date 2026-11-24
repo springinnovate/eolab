@@ -29,7 +29,7 @@ from eolab_app.processing.downstream_models import (
     DownstreamRequest,
     DownstreamPlan,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_input import (
     count_native_raster_blocks,
     validate_supported_raster,
@@ -62,7 +62,7 @@ def read_starting_area_geometry(sources: DownstreamSources) -> BaseGeometry:
         Process-local geometry used to find intersecting watershed partitions.
 
     Raises:
-        ProcessingError: If the mask is empty or its source structure is unsupported.
+        JobError: If the mask is empty or its source structure is unsupported.
     """
     if sources.starting is None:
         with rasterio.open(sources.rasters["starting_mask"]) as dataset:
@@ -71,7 +71,7 @@ def read_starting_area_geometry(sources: DownstreamSources) -> BaseGeometry:
             values = read_native_raster_window(dataset, window)
             positive = (~np.ma.getmaskarray(values)) & (values.data > 0)
             if not positive.any():
-                raise ProcessingError(
+                raise JobError(
                     "empty_starting_mask",
                     "The starting raster has no positive valid cells.",
                     422,
@@ -101,7 +101,7 @@ def read_starting_area_geometry(sources: DownstreamSources) -> BaseGeometry:
 
             polygons.append(polygon)
     if not polygons:
-        raise ProcessingError(
+        raise JobError(
             "empty_starting_mask",
             "The starting filter matches no polygon features.",
             422,
@@ -148,7 +148,7 @@ def plan_downstream(
         Source grid, current watershed identity and effective pit-filling setting.
 
     Raises:
-        ProcessingError: If a raster is missing, unreadable or violates the source
+        JobError: If a raster is missing, unreadable or violates the source
             reader's supported file contract.
     """
     grid = None
@@ -160,7 +160,7 @@ def plan_downstream(
                     grid = describe_values_grid(dataset)
         except (OSError, rasterio.errors.RasterioIOError) as error:
             label = "configured DEM" if name == "dem" else "values raster"
-            raise ProcessingError(
+            raise JobError(
                 "source_unavailable",
                 f"The model's {label} is missing or unreadable. Check the source and try again.",
                 422,
@@ -194,7 +194,7 @@ def calculate_downstream(
         The upstream model's rasters and total, plus requested formula metadata.
 
     Raises:
-        ProcessingError: If the original calculation fails on its supplied inputs.
+        JobError: If the original calculation fails on its supplied inputs.
     """
     from eolab_app.processing.downstream_runner import run_original_downstream
 
@@ -228,7 +228,7 @@ def downstream_process_target(
             else:
                 raise ValueError("Unknown downstream operation")
         writer.put(("ok", result))
-    except ProcessingError as error:
+    except JobError as error:
         writer.put(("error", (error.code, error.detail, error.status)))
     except SelectionUnavailableError:
         writer.put(

@@ -15,12 +15,12 @@ import pytest
 from eolab_app.execution.bounded_process import ProcessResultWriter
 import eolab_app.processing.model_definitions as definitions
 import eolab_app.processing.model_operations as operations
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_operations import OperationOutput
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
-from eolab_app.processing.models import Artifact
+from eolab_jobs.models import Artifact
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.routes.processing import COOKIE
 from test_model_runs_postgres import model_boundary, model_request, submit

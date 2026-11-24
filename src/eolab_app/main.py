@@ -66,18 +66,18 @@ from eolab_app.catalog_selection import (
     SavedDrawingReference,
     CatalogSelection,
 )
-from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.artifacts import LocalJobArtifacts
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.habitat_preparation_selections import (
     HabitatSubmissionDependencies,
     PostgresHabitatPreparationSelections,
     import_retained_habitat_preparation_selections,
 )
 from eolab_app.processing.habitat_models import OPERATION as HABITAT_CONDITION_OPERATION
-from eolab_app.processing.job_notifications import PostgresJobWakeup
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.job_notifications import PostgresJobWakeup
+from eolab_jobs.models import JobError
 from eolab_app.processing.native_processes import create_native_process
-from eolab_app.processing.job_events import PostgresJobEvents
+from eolab_jobs.job_events import PostgresJobEvents
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
@@ -289,21 +289,25 @@ def create_app(
             Original polygons in the selected feature order, including an empty selection.
 
         Raises:
-            ProcessingError: The drawing changed, is unavailable or belongs to another browser.
+            JobError: The drawing changed, is unavailable or belongs to another browser.
         """
         if isinstance(reference, PolygonAreaReference):
             return (await read_polygon_area_input(processing_store.get_input, owner, reference)).polygons
         try:
             drawing = await asyncio.to_thread(drawing_store.read_layer, reference.drawingLayerId)
         except DrawingError as error:
-            raise ProcessingError("drawing_unavailable", str(error), error.status) from error
+            raise JobError("drawing_unavailable", str(error), error.status) from error
         if drawing.revision != reference.revision:
-            raise ProcessingError("drawing_changed", "The drawing changed. Reapply its filter.", 409)
+            raise JobError(
+                "drawing_changed", "The drawing changed. Reapply its filter.", 409
+            )
         features = {feature.id: feature for feature in drawing.collection.features}
         try:
             return tuple(SummaryPolygon(coordinates=features[fid].geometry.coordinates) for fid in reference.featureIds)
         except KeyError as error:
-            raise ProcessingError("drawing_changed", "A selected drawing polygon is unavailable.", 409) from error
+            raise JobError(
+                "drawing_changed", "A selected drawing polygon is unavailable.", 409
+            ) from error
 
     vector_selection_reader = VectorSamplingService(
         vector_catalog,
@@ -379,7 +383,7 @@ def create_app(
             return await read_polygon_area_input(
                 processing_store.get_input, owner, reference
             )
-        except ProcessingError as error:
+        except JobError as error:
             if error.code == "input_unavailable":
                 raise RasterConflictError(
                     "This drawn polygon area expired or is unavailable. Choose the polygon layer again."
@@ -495,7 +499,7 @@ def create_app(
                     or private
                 )
             return private
-        except (DrawingError, ProcessingError) as error:
+        except (DrawingError, JobError) as error:
             raise HTTPException(error.status, str(error), headers={"Cache-Control": "private, no-store"}) from error
         except (SourceFileError, VectorUploadError, UploadError) as error:
             raise HTTPException(
@@ -592,7 +596,7 @@ def create_app(
                 )
             try:
                 await processing_service.reconcile_upload_inputs()
-            except (ProcessingError, VectorUploadError, UploadError):
+            except (JobError, VectorUploadError, UploadError):
                 logging.getLogger(__name__).warning(
                     "Retained upload cleanup will retry."
                 )
@@ -1112,7 +1116,7 @@ async def run_processing_worker() -> None:
                 )
                 await asyncio.to_thread(jobs.interrupt_unfinished_jobs_on_restart)
                 break
-            except ProcessingError:
+            except JobError:
                 logging.getLogger(__name__).warning(
                     "Processing startup is unavailable; retrying in five seconds"
                 )

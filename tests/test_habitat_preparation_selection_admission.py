@@ -39,8 +39,8 @@ from eolab_app.processing.model_runs import (
     build_model_job_submission,
     read_model_invocation,
 )
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
-from eolab_app.processing.ports import JobStore
+from eolab_jobs.models import PreparedJobPlan, JobError
+from eolab_jobs.ports import JobStore
 from eolab_app.processing.service import ProcessingService
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
@@ -294,7 +294,7 @@ def test_current_coverage_controls_admission_without_changing_captured_inputs(
     )
     request = _request(boundary.service.model_registry)
     if cached_tiles == 0:
-        with pytest.raises(ProcessingError) as error:
+        with pytest.raises(JobError) as error:
             asyncio.run(boundary.service.submit_model_run(OWNER, request))
         assert error.value.code == "habitat_inputs_not_prepared"
         assert error.value.status == 409
@@ -344,7 +344,7 @@ def test_arbitrary_earth_engine_areas_are_rejected_before_private_input_reads(
     """
     boundary = admission_boundary
     request = _request(boundary.service.model_registry, area=area)
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         asyncio.run(boundary.service.submit_model_run(OWNER, request))
     assert error.value.code == "habitat_preparation_selection_required"
     assert error.value.status == 422
@@ -386,7 +386,7 @@ def test_forged_selection_is_not_admitted_by_another_areas_cached_tiles(
         boundary.service.model_registry,
         area={"kind": "catalogSelection", "selection": selection},
     )
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         asyncio.run(boundary.service.submit_model_run(OWNER, request))
     assert error.value.code == "habitat_preparation_selection_unavailable"
     assert error.value.status == 409
@@ -418,7 +418,7 @@ def test_accepted_retry_recovers_before_membership_coverage_or_model_revalidatio
     assert boundary.preparation_selections.contains.call_count == 1
     changed = request.model_dump(mode="json")
     changed["label"] = "Conflicting request"
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         asyncio.run(
             boundary.service.submit_model_run(
                 OWNER, ModelRunRequest.model_validate(changed)
@@ -440,7 +440,7 @@ def test_source_authorization_failure_blocks_admission_before_persistence(
     failure = SelectionUnavailableError("The selected Catalog layer is unavailable.")
     boundary.coverage.side_effect = failure
     request = _request(boundary.service.model_registry)
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         asyncio.run(boundary.service.submit_model_run(OWNER, request))
     assert error.value.code == "selection_unavailable"
     assert error.value.detail == failure.detail
@@ -491,7 +491,7 @@ def test_earth_engine_submission_fails_closed_without_operation_dependencies(
     boundary = admission_boundary
     boundary.service.operation_submission_dependencies.clear()
     request = _request(boundary.service.model_registry)
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         asyncio.run(boundary.service.submit_model_run(OWNER, request))
     assert error.value.code == "habitat_preparation_selections_unavailable"
     assert error.value.status == 503
@@ -715,7 +715,7 @@ def test_old_arbitrary_area_run_remains_readable_but_new_duplicate_is_rejected(
     duplicate = deepcopy(request.model_dump(mode="json"))
     duplicate["requestId"] = uuid4().hex
     duplicate["inputs"] = saved.inputs
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         asyncio.run(
             boundary.service.submit_model_run(
                 OWNER, ModelRunRequest.model_validate(duplicate)

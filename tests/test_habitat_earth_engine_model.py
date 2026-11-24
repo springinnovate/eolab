@@ -29,7 +29,7 @@ from eolab_app.bounded_vector import summary_process
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing import habitat_calculation, habitat_operation
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_earth_engine import (
     HabitatEarthEngineSettings,

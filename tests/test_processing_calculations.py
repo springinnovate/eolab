@@ -16,7 +16,7 @@ import pytest
 
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 import eolab_app.processing.worker as worker_module
-from eolab_app.processing.models import Artifact, PreparedJobPlan
+from eolab_jobs.models import Artifact, PreparedJobPlan
 from test_processing_jobs import (
     boundary,
     store,
@@ -44,7 +44,7 @@ def test_submission_returns_committed_warm_worker_result(
         batch: Exercise the single endpoint or two jobs in the browser batch endpoint.
     """
     from fastapi import FastAPI
-    from eolab_app.processing.job_events import PostgresJobEvents
+    from eolab_jobs.job_events import PostgresJobEvents
     from eolab_app.processing.native_processes import create_native_process
     from eolab_app.processing.service import ProcessingService
     from eolab_app.routes.processing import create_processing_router

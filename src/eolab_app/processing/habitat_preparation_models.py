@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.processing.habitat_earth_engine import HabitatTileFailure
-from eolab_app.processing.models import Artifact
+from eolab_jobs.models import Artifact
 
 OPERATION = "habitat.prepare-inputs.v1"
 BULK_OPERATION = "habitat.retry-missing-inputs.v1"

@@ -8,7 +8,7 @@ from eolab_app.catalog_selection import CatalogSelectionReader
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.ports import JobStore
+from eolab_jobs.ports import JobStore
 from eolab_app.raster.models import AuthorizedRaster
 
 

@@ -21,7 +21,7 @@ from rasterio.windows import Window
 from shapely.geometry import box, mapping
 
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.temporal_models import (
     PrecipitationConversion,
@@ -152,7 +152,7 @@ def _calculate(
 
     Raises:
         OSError: If source or output files cannot be read or written.
-        ProcessingError: If planning, numerical calculation or output validation fails.
+        JobError: If planning, numerical calculation or output validation fails.
         ValueError: If native source decoding fails.
     """
     directory.mkdir()
@@ -1313,7 +1313,7 @@ def test_valid_streaming_overflow_fails_without_publishing_partial_outputs(
         else None
     )
     directory = tmp_path / "overflow-output"
-    with pytest.raises(ProcessingError) as failure:
+    with pytest.raises(JobError) as failure:
         _calculate(
             interval,
             TemporalReduction(reducer=reducer),

@@ -24,7 +24,7 @@ from eolab_app.processing.aggregate_models import (
     GroundAreaPlan,
     RasterAggregateLimits,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.area_coverage import FractionalAreaCoverage
 from eolab_app.bounded_vector import polygon_features, native_bbox_for_grid
 
@@ -48,18 +48,18 @@ def project_points(points: np.ndarray, transformer: Transformer) -> np.ndarray:
         Finite N by 2 transformed coordinates.
 
     Raises:
-        ProcessingError: For unsupported/discontinuous projection input.
+        JobError: For unsupported/discontinuous projection input.
     """
     try:
         x, y = transformer.transform(points[:, 0], points[:, 1], errcheck=True)
     except ProjError as error:
-        raise ProcessingError(
+        raise JobError(
             "unsupported_area_crs",
             "Ground-area boundaries cannot be transformed continuously. Choose a smaller area or a WGS84 raster.",
         ) from error
     result = np.column_stack((x, y))
     if not np.isfinite(result).all():
-        raise ProcessingError(
+        raise JobError(
             "unsupported_area_crs",
             "Ground-area boundaries contain undefined projected coordinates.",
         )
@@ -87,7 +87,7 @@ def densified_ring(
         Closed, densified ring in destination coordinates.
 
     Raises:
-        ProcessingError: If the required refinement exceeds bounded work/depth.
+        JobError: If the required refinement exceeds bounded work/depth.
     """
     points = np.asarray(coordinates, dtype=np.float64)[:, :2]
     for _ in range(MAX_SUBDIVISIONS):
@@ -120,7 +120,7 @@ def densified_ring(
         refined[offsets[:-1][split] + 1] = (start[split] + end[split]) / 2
         refined[-1] = points[-1]
         points = refined
-    raise ProcessingError(
+    raise JobError(
         "area_geometry_limit",
         "Ground-area edge refinement could not meet its tolerance. Choose a smaller area.",
         413,
@@ -145,7 +145,7 @@ def transformed_polygon(
         Valid projected polygonal geometry.
 
     Raises:
-        ProcessingError: For invalid topology after transformation.
+        JobError: For invalid topology after transformation.
     """
     if geometry.geom_type == "MultiPolygon":
         result = shapely.multipolygons(
@@ -165,7 +165,7 @@ def transformed_polygon(
             ],
         )
     if not result.is_valid:
-        raise ProcessingError(
+        raise JobError(
             "unsupported_area_crs",
             "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
         )
@@ -196,7 +196,7 @@ class PixelAreaCalculator:
             planning: Whether this instance describes a grid before execution.
 
         Raises:
-            ProcessingError: For unsupported CRS/topology or excessive work.
+            JobError: For unsupported CRS/topology or excessive work.
         """
         if area.kind == "samplingBox":
             prepare_raster_for_wgs84_bounds(
@@ -210,7 +210,7 @@ class PixelAreaCalculator:
         if not (
             crs.is_geographic or crs.is_projected
         ) or not crs.geodetic_crs.to_2d().equals(WGS84, ignore_axis_order=True):
-            raise ProcessingError(
+            raise JobError(
                 "unsupported_area_crs",
                 "Ground-area calculations currently require a geographic or projected WGS84 raster. Other datums need an explicit area transformation policy.",
             )
@@ -240,7 +240,7 @@ class PixelAreaCalculator:
                 force_over=True,
             )
         except ProjError as error:
-            raise ProcessingError(
+            raise JobError(
                 "unsupported_area_crs",
                 "A precise WGS84 ground-area transformation is unavailable for this raster.",
             ) from error
@@ -293,7 +293,7 @@ class PixelAreaCalculator:
                 dataset.height, math.ceil(bottom + pad)
             )
             if x0 >= x1 or y0 >= y1:
-                raise ProcessingError(
+                raise JobError(
                     "no_overlap", "The selected area does not overlap this raster."
                 )
             self.window = Window(x0, y0, x1 - x0, y1 - y0)
@@ -344,7 +344,7 @@ class PixelAreaCalculator:
                 or not g.is_valid
                 for g in originals
             ):
-                raise ProcessingError(
+                raise JobError(
                     "invalid_area",
                     "Ground-area selection must contain valid polygons with positive area.",
                 )
@@ -377,7 +377,7 @@ class PixelAreaCalculator:
                 ]
                 pixel_bounds = shapely.total_bounds(native_polygons)
             if not self.geometry.is_valid:
-                raise ProcessingError(
+                raise JobError(
                     "area_geometry_limit",
                     "The selected polygons do not form a valid area. Repair the source polygons.",
                     413,
@@ -389,7 +389,7 @@ class PixelAreaCalculator:
                 dataset.height, math.ceil(bottom + pad)
             )
             if x0 >= x1 or y0 >= y1:
-                raise ProcessingError(
+                raise JobError(
                     "no_overlap", "The selected area does not overlap this raster."
                 )
             self.window = Window(x0, y0, x1 - x0, y1 - y0)
@@ -478,11 +478,11 @@ class PixelAreaCalculator:
             WGS84 ellipsoidal equal-area positions in metres.
 
         Raises:
-            ProcessingError: For footprints wrapping outside the supported world.
+            JobError: For footprints wrapping outside the supported world.
         """
         result = project_points(points, self.to_area)
         if np.any(np.abs(result[:, 0]) > MAXIMUM_X + 1e-6):
-            raise ProcessingError(
+            raise JobError(
                 "unsupported_area_crs",
                 "Ground-area measurement requires a continuous grid within longitudes -180 to 180. Select an area away from the wrapped edge or reproject the raster.",
             )
@@ -498,7 +498,7 @@ class PixelAreaCalculator:
             Float64 hectares per cell, independent of values and source NoData.
 
         Raises:
-            ProcessingError: For excessive or unsupported transformed geometry.
+            JobError: For excessive or unsupported transformed geometry.
         """
         height, width = int(tile.height), int(tile.width)
         if self.catalog_source is not None:
@@ -535,7 +535,7 @@ class PixelAreaCalculator:
                 return np.zeros((height, width), dtype=np.float64)
             self.geometry = shapely.union_all(retained)
             if not self.geometry.is_valid:
-                raise ProcessingError(
+                raise JobError(
                     "area_geometry_limit",
                     "Selected polygons do not form a valid area in this tile. Repair the source polygons.",
                     413,
@@ -591,7 +591,7 @@ class PixelAreaCalculator:
                 )
                 polygon = Polygon(ring)
                 if not polygon.is_valid:
-                    raise ProcessingError(
+                    raise JobError(
                         "unsupported_area_crs",
                         "A native pixel has a discontinuous ground-area footprint. Choose a smaller area.",
                     )

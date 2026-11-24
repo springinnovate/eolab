@@ -25,12 +25,12 @@ from eolab_app.catalog_selection import (
     CatalogSelectionReader,
     SelectionUnavailableError,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 
 if TYPE_CHECKING:
     from eolab_app.processing.habitat_earth_engine import HabitatCacheCoverage
     from eolab_app.processing.habitat_models import HabitatRequest
-    from eolab_app.processing.ports import JobStore
+    from eolab_jobs.ports import JobStore
 
 
 class HabitatPreparationSelections(Protocol):
@@ -43,7 +43,7 @@ class HabitatPreparationSelections(Protocol):
             selection: Authorized Catalog source, layer and exact feature filter.
 
         Raises:
-            ProcessingError: If persistence is unavailable.
+            JobError: If persistence is unavailable.
         """
         ...
 
@@ -57,7 +57,7 @@ class HabitatPreparationSelections(Protocol):
             True when the selection has a preparation reference, regardless of coverage.
 
         Raises:
-            ProcessingError: If persistence is unavailable.
+            JobError: If persistence is unavailable.
         """
         ...
 
@@ -68,7 +68,7 @@ class HabitatPreparationSelections(Protocol):
             Distinct validated selections in stable JSONB order, without new identities.
 
         Raises:
-            ProcessingError: If persistence is unavailable or stored data is invalid.
+            JobError: If persistence is unavailable or stored data is invalid.
         """
         ...
 
@@ -144,14 +144,14 @@ class PostgresHabitatPreparationSelections:
             Exclusive cursor committed or rolled back before its connection is returned.
 
         Raises:
-            ProcessingError: If storage is unavailable or returned metadata is invalid.
+            JobError: If storage is unavailable or returned metadata is invalid.
         """
         try:
             with self._pool.connection() as connection:
                 with connection.cursor() as cursor:
                     yield cursor
         except (psycopg.Error, ValidationError) as error:
-            raise ProcessingError(
+            raise JobError(
                 "habitat_preparation_selections_unavailable",
                 "Catalog selections for prepared Ecosystem Condition inputs could not be read or saved. Try again later.",
                 503,
@@ -168,7 +168,7 @@ class PostgresHabitatPreparationSelections:
             selection: Authorized Catalog source, layer and feature predicate.
 
         Raises:
-            ProcessingError: If persistence is unavailable.
+            JobError: If persistence is unavailable.
         """
         document = Jsonb(selection.model_dump(mode="json", by_alias=True))
         with self._transaction() as cursor:
@@ -192,7 +192,7 @@ class PostgresHabitatPreparationSelections:
             Whether preparation has been requested for this selection.
 
         Raises:
-            ProcessingError: If persistence is unavailable.
+            JobError: If persistence is unavailable.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -209,7 +209,7 @@ class PostgresHabitatPreparationSelections:
             Validated selections in stable JSONB order, independent of job expiry.
 
         Raises:
-            ProcessingError: If persistence is unavailable or a stored selection is invalid.
+            JobError: If persistence is unavailable or a stored selection is invalid.
         """
         with self._transaction() as cursor:
             cursor.execute(
@@ -234,7 +234,7 @@ async def import_retained_habitat_preparation_selections(
         store: Durable preparation references to original Catalog selections.
 
     Raises:
-        ProcessingError: If history or preparation references cannot be read or saved.
+        JobError: If history or preparation references cannot be read or saved.
         ValueError: If retained preparation metadata violates its persisted schema.
     """
     from eolab_app.processing.habitat_preparation import (
@@ -283,19 +283,19 @@ async def get_habitat_preparation_coverage(
         Current required, cached and missing acquisition-tile counts, including zero.
 
     Raises:
-        ProcessingError: If services are unconfigured, preparation never referenced
+        JobError: If services are unconfigured, preparation never referenced
             this selection, or coverage inspection fails.
         SelectionUnavailableError: If the original source is unavailable or unauthorized.
         asyncio.CancelledError: After the existing reader stops its native child.
     """
     if store is None or selections is None or cache_directory is None:
-        raise ProcessingError(
+        raise JobError(
             "habitat_preparation_selections_unavailable",
             "Catalog selections for prepared Ecosystem Condition inputs are not available on this server. Ask an administrator to check the service configuration.",
             503,
         )
     if not await asyncio.to_thread(store.contains, selection):
-        raise ProcessingError(
+        raise JobError(
             "habitat_preparation_selection_unavailable",
             "Choose one of the Catalog selections listed for prepared inputs. Ask an administrator to request preparation for another selection.",
             409,
@@ -324,7 +324,7 @@ async def validate_habitat_preparation_selection(
             read gate; None when composition has not configured the operation.
 
     Raises:
-        ProcessingError: If Earth Engine inputs lack an eligible Catalog selection,
+        JobError: If Earth Engine inputs lack an eligible Catalog selection,
             have zero cached coverage, or cannot be authorized or inspected.
         asyncio.CancelledError: After the existing reader stops its native child.
     """
@@ -333,13 +333,13 @@ async def validate_habitat_preparation_selection(
     if not isinstance(request.stack, HabitatEarthEngineStack):
         return
     if not isinstance(request.catalogSelection, CatalogSelection):
-        raise ProcessingError(
+        raise JobError(
             "habitat_preparation_selection_required",
             "Choose a Catalog selection listed for prepared inputs when using Original model inputs.",
             422,
         )
     if dependencies is None:
-        raise ProcessingError(
+        raise JobError(
             "habitat_preparation_selections_unavailable",
             "Prepared Catalog selections are temporarily unavailable. Try again later.",
             503,
@@ -354,9 +354,9 @@ async def validate_habitat_preparation_selection(
                 dependencies.cache_directory,
             )
         except SelectionUnavailableError as error:
-            raise ProcessingError("selection_unavailable", error.detail, 409) from error
+            raise JobError("selection_unavailable", error.detail, 409) from error
     if coverage.cached_tiles == 0:
-        raise ProcessingError(
+        raise JobError(
             "habitat_inputs_not_prepared",
             "No Ecosystem Condition inputs are prepared for this selection and year. Ask an administrator to prepare them before running the model.",
             409,

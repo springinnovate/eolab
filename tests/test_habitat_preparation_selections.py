@@ -12,8 +12,7 @@ from eolab_app.processing.habitat_preparation_selections import (
     PostgresHabitatPreparationSelections,
     get_habitat_preparation_coverage,
 )
-from eolab_app.processing.models import ProcessingError
-
+from eolab_jobs.models import JobError
 
 def make_selection(
     value: str | int | float | bool | None = "North",
@@ -43,7 +42,7 @@ def test_closed_store_reports_a_safe_service_failure() -> None:
     """Translate actual pool lifecycle failure without publishing connection details."""
     store = PostgresHabitatPreparationSelections()
     store.close()
-    with pytest.raises(ProcessingError) as caught:
+    with pytest.raises(JobError) as caught:
         store.contains(make_selection())
     assert caught.value.code == "habitat_preparation_selections_unavailable"
     assert caught.value.status == 503
@@ -52,7 +51,7 @@ def test_closed_store_reports_a_safe_service_failure() -> None:
 
 def test_coverage_with_missing_services_fails_before_scientific_runtime_load() -> None:
     """Explain missing configuration before attempting source or native inspection."""
-    with pytest.raises(ProcessingError) as caught:
+    with pytest.raises(JobError) as caught:
         asyncio.run(
             get_habitat_preparation_coverage(make_selection(), 2018, None, None, None)
         )
@@ -66,7 +65,7 @@ def test_unknown_selection_cannot_start_source_or_coverage_inspection() -> None:
     store.contains.return_value = False
     reader = create_autospec(CatalogSelectionReader, instance=True)
     selection = make_selection()
-    with pytest.raises(ProcessingError) as caught:
+    with pytest.raises(JobError) as caught:
         asyncio.run(
             get_habitat_preparation_coverage(
                 selection, 2018, store, reader, Path("private-cache")

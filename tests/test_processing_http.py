@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from eolab_app.processing.models import ArtifactDownload
+from eolab_jobs.models import ArtifactDownload
 from eolab_app.routes.processing import create_processing_router
 
 

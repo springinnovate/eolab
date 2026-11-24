@@ -31,7 +31,7 @@ from eolab_app.processing.model_definitions import (
     Name,
     Version,
 )
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     JobFailureResponse,
     JobProgressResponse,
     JobResponse,
@@ -45,7 +45,7 @@ from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_result_contracts import ModelResult, RasterResultGrid
 from eolab_app.processing.vector_input_models import VectorFieldSelection
-from eolab_app.processing.artifact_manifest import (
+from eolab_jobs.artifact_manifest import (
     FileId,
     OutputName,
     FileRole,
@@ -226,7 +226,7 @@ class ModelInvocation(ModelSchema):
         Raises:
             ValueError: If a saved input or parameter is missing,
                 unknown or invalid.
-            ProcessingError: If the recorded operation is unavailable.
+            JobError: If the recorded operation is unavailable.
         """
         definition = self.model.definition
         if set(self.inputs) != set(definition.inputs) or set(self.parameters) != set(
@@ -303,7 +303,7 @@ class ModelRunSpec(ModelSchema):
 
         Raises:
             ValueError: If the operation data is malformed.
-            ProcessingError: If its implementation is not installed.
+            JobError: If its implementation is not installed.
         """
         if not isinstance(value, (BaseModel, dict)):
             raise ValueError("Stored calculation must be an operation object")
@@ -634,7 +634,7 @@ class ModelExecution(ModelSchema):
         Raises:
             ValueError: If details have no recorded operation or registered schema.
             ValidationError: If details violate the registered operation schema.
-            ProcessingError: If the recorded operation is unavailable.
+            JobError: If the recorded operation is unavailable.
         """
         if isinstance(value, ModelOutcome):
             details = value.details
@@ -668,7 +668,7 @@ class ModelExecution(ModelSchema):
 
         Raises:
             ValueError: If the policy does not match the recorded operation.
-            ProcessingError: If the recorded operation is not installed.
+            JobError: If the recorded operation is not installed.
         """
         if not isinstance(value, dict):
             raise ValueError("Execution details must be an object")

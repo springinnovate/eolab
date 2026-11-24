@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.catalog_selection import VectorSelection
-from eolab_app.processing.models import Artifact
+from eolab_jobs.models import Artifact
 
 OPERATION = "vector.summary.v1"
 FIELD_NAME = Annotated[str, Field(strict=True, min_length=1, max_length=256)]

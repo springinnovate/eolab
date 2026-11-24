@@ -187,7 +187,7 @@ def test_app_closes_every_http_pool_when_lifespan_exits_with_an_error(
         version_file_path: Runtime version fixture.
         monkeypatch: Observe database-pool lifecycle without requiring PostgreSQL.
     """
-    from eolab_app.processing.job_store import PostgresJobStore
+    from eolab_jobs.job_store import PostgresJobStore
 
     database_lifecycle = []
     monkeypatch.setattr(

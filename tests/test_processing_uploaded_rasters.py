@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.artifacts import LocalJobArtifacts
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
@@ -146,7 +146,7 @@ def test_uploaded_raster_batch_authorizes_each_browser(
     """
     client, worker, service, uploads, reference = raster_upload_boundary
     from eolab_app.processing.aggregate_models import AggregateJobRequest
-    from eolab_app.processing.models import ProcessingError
+    from eolab_jobs.models import JobError
 
     requests = [
         AggregateJobRequest(
@@ -161,7 +161,7 @@ def test_uploaded_raster_batch_authorizes_each_browser(
     async def exercise() -> None:
         """Submit through the service's existing batch ownership boundary."""
         denied = await service.submit_calculation_batch("run-owner", requests, "b" * 64)
-        assert all(isinstance(result, ProcessingError) for result in denied)
+        assert all(isinstance(result, JobError) for result in denied)
         accepted = await service.submit_calculation_batch("run-owner", requests, OWNER)
         assert len(accepted) == 2 and all(
             isinstance(result, dict) for result in accepted

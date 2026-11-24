@@ -28,10 +28,10 @@ from eolab_app.processing.model_runs import (
     record_model_preparation,
 )
 from eolab_app.processing.model_yaml import export_yaml, parse_yaml
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     PreparedJobPlan,
-    ProcessingError,
-    ProcessingLimits,
+    JobError,
+    JobLimits,
 )
 from eolab_app.processing.vector_input_models import VectorFieldSelection
 
@@ -340,7 +340,7 @@ def test_admission_rejects_invalid_vector_rows(
         vector_rows_definition: Recipe declaring exact row field and parameter roles.
         rows: Malformed row bindings supplied by a public client.
     """
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         build_model_calculation_request(
             vector_rows_request(vector_rows_definition, rows),
             ModelRegistry((vector_rows_definition,)),
@@ -364,7 +364,7 @@ def test_configured_rows_are_required_and_unconfigured_rows_are_forbidden(
         ordinary, ModelRegistry((vector_definition,))
     )
     assert "rows" not in calculation.model_dump(mode="json")
-    with pytest.raises(ProcessingError, match="invalid"):
+    with pytest.raises(JobError, match="invalid"):
         build_model_calculation_request(
             vector_request(
                 vector_rows_definition, {"identifier": "code", "weight": "population"}
@@ -372,7 +372,7 @@ def test_configured_rows_are_required_and_unconfigured_rows_are_forbidden(
             ModelRegistry((vector_rows_definition,)),
         )
     for rows in (None, [{"fields": {}, "parameters": {}}]):
-        with pytest.raises(ProcessingError, match="invalid"):
+        with pytest.raises(JobError, match="invalid"):
             build_model_calculation_request(
                 vector_rows_request(vector_definition, rows),
                 ModelRegistry((vector_definition,)),
@@ -504,7 +504,7 @@ def test_admission_rejects_missing_extra_or_invalid_field_choices(
         vector_definition: Recipe declaring exactly identifier and weight roles.
         fields: Invalid role keys or source attribute values.
     """
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         build_model_calculation_request(
             vector_request(vector_definition, fields),
             ModelRegistry((vector_definition,)),
@@ -580,7 +580,7 @@ def test_preparation_records_vector_policy_without_reading_a_raster_grid(
             specification=spec.model_dump(mode="json"),
             summary={},
         ),
-        ProcessingLimits(),
+        JobLimits(),
     )
     recorded = prepared.retained_metadata["execution"]
     assert "grid" not in recorded and "grid" not in prepared.summary

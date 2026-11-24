@@ -15,7 +15,7 @@ from shapely.geometry import MultiPolygon, Polygon, box, mapping
 import eolab_app.bounded_vector as vector
 import eolab_app.processing.raster_aggregate as kernel
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 from catalog_selection_support import write_selection
 from raster_aggregate_support import make_spec

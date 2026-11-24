@@ -20,11 +20,11 @@ from eolab_app.processing.habitat_preparation_models import (
     HabitatInputPreparationRequest,
     PreparationRequestId,
 )
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     JobProgressResponse,
     JobResponse,
     JobResultResponse,
-    ProcessingError,
+    JobError,
 )
 from eolab_app.processing.service import ProcessingService
 from eolab_app.routes.admin_auth import create_administrator_dependency
@@ -216,7 +216,7 @@ class HabitatPreparationRoute(RequestSizeLimitedRoute):
                 )
             except RequestValidationError as error:
                 response = await request_validation_exception_handler(request, error)
-            except ProcessingError as error:
+            except JobError as error:
                 response = JSONResponse({"detail": error.detail}, error.status)
             except SelectionUnavailableError as error:
                 response = JSONResponse({"detail": error.detail}, 409)
@@ -265,7 +265,7 @@ def create_habitat_preparation_router(
             Accepted job, including an unchanged retry of an earlier submission.
 
         Raises:
-            ProcessingError: If input validation, conflict detection or admission fails.
+            JobError: If input validation, conflict detection or admission fails.
             SelectionUnavailableError: If Catalog source authorization rejects the AOI.
         """
         return await service.submit_habitat_input_preparation(body)
@@ -286,7 +286,7 @@ def create_habitat_preparation_router(
             browser leaves; individual outcomes appear in preparation history.
 
         Raises:
-            ProcessingError: If recovery conflicts or durable admission fails.
+            JobError: If recovery conflicts or durable admission fails.
             ValueError: If saved preparation metadata cannot be read.
         """
         return await service.submit_habitat_bulk_preparation(body)
@@ -305,7 +305,7 @@ def create_habitat_preparation_router(
             Matching job statuses and a cursor for older retained entries.
 
         Raises:
-            ProcessingError: If the cursor is invalid or job storage is unavailable.
+            JobError: If the cursor is invalid or job storage is unavailable.
         """
         return await service.list_habitat_input_preparations(limit, cursor)
 
@@ -320,7 +320,7 @@ def create_habitat_preparation_router(
             Current admin-owned preparation without worker paths or credentials.
 
         Raises:
-            ProcessingError: If this preparation is unavailable to administration.
+            JobError: If this preparation is unavailable to administration.
         """
         return await service.get_habitat_input_preparation(job_id)
 
@@ -338,7 +338,7 @@ def create_habitat_preparation_router(
             bulk checks leaves any individual preparations already queued intact.
 
         Raises:
-            ProcessingError: If this preparation is unavailable or cancellation fails.
+            JobError: If this preparation is unavailable or cancellation fails.
         """
         return await service.cancel_habitat_input_preparation(job_id)
 
@@ -358,7 +358,7 @@ def create_habitat_preparation_router(
             Newly accepted preparation or the earlier acceptance of this command.
 
         Raises:
-            ProcessingError: If saved inputs expired, configuration changed or admission fails.
+            JobError: If saved inputs expired, configuration changed or admission fails.
             SelectionUnavailableError: If the original Catalog AOI is unavailable.
         """
         return await service.retry_habitat_input_preparation(job_id, body.requestId)
@@ -376,7 +376,7 @@ def create_habitat_preparation_router(
 
         Raises:
             HTTPException: If the requested byte range is unsupported.
-            ProcessingError: If the report is unavailable or expired.
+            JobError: If the report is unavailable or expired.
         """
         byte_range = request.headers.get("range", "")
         if len(byte_range) > 128 or "," in byte_range:
@@ -395,7 +395,7 @@ def create_habitat_preparation_router(
             Private provenance response with the existing renewable transfer lease.
 
         Raises:
-            ProcessingError: If the preparation or retained provenance is unavailable.
+            JobError: If the preparation or retained provenance is unavailable.
         """
         artifact = await service.download_habitat_input_preparation(job_id, True)
         return JobDownloadResponse(artifact, service)

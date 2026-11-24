@@ -24,7 +24,7 @@ from eolab_app.processing.model_yaml import (
     export_yaml,
     parse_yaml,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from model_recipe_support import multiple_output_recipe
 from eolab_app.processing.model_operations import OperationOutput
 import eolab_app.processing.model_operations as operation_registry
@@ -79,7 +79,7 @@ def test_registry_requires_matching_primary_source_declarations(
             original.id: replace(original, **{missing_field: None}),
         },
     )
-    with pytest.raises(ProcessingError, match="operation contract"):
+    with pytest.raises(JobError, match="operation contract"):
         ModelRegistry((definition,))
 
 
@@ -122,7 +122,7 @@ def test_registry_rejects_an_unsupported_primary_result(
             ModelDefinition.model_validate(document)
         return
     model = ModelDefinition.model_validate(document)
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         ModelRegistry((model,))
     assert error.value.code == "unsupported_model_operation"
 
@@ -132,7 +132,7 @@ def test_bulk_preparation_cannot_bind_from_a_public_model_recipe() -> None:
     operation = operation_registry.get_model_operation(
         "habitat.retry-missing-inputs.v1"
     )
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         operation.bind({}, {}, "public-model-request", "Attempted bulk preparation")
     assert error.value.code == "administration_required"
     assert error.value.status == 403
@@ -200,13 +200,13 @@ def test_recipe_selects_registered_outputs_and_roles(
     ):
         document = recipe.to_document()
         document["outputs"][name].update(change)
-        with pytest.raises(ProcessingError):
+        with pytest.raises(JobError):
             ModelRegistry((ModelDefinition.model_validate(document),))
     document = recipe.to_document()
     document["outputs"].pop("inspected_coverage")
     assert ModelRegistry((ModelDefinition.model_validate(document),))
     document["outputs"].pop("habitat_result")
-    with pytest.raises(ProcessingError):
+    with pytest.raises(JobError):
         ModelRegistry((ModelDefinition.model_validate(document),))
 
 
@@ -398,7 +398,7 @@ def test_yaml_rejects_unsupported_or_unbounded_documents(document: bytes) -> Non
     Args:
         document: Invalid or excessive YAML fixture.
     """
-    with pytest.raises(ProcessingError, match="YAML document"):
+    with pytest.raises(JobError, match="YAML document"):
         parse_yaml(document)
 
 
@@ -444,7 +444,7 @@ def test_registry_rejects_definitions_that_cannot_execute(kind: str) -> None:
         value["parameters"]["summary"]["default"] = "pixelValue(a)"
     elif kind == "parameter":
         value["steps"][0]["parameters"]["expression"] = {"parameter": "missing"}
-    with pytest.raises((ProcessingError, ValidationError)):
+    with pytest.raises((JobError, ValidationError)):
         replacement = ModelDefinition.model_validate(value)
         ModelRegistry(
             (replacement, replacement) if kind == "duplicate" else (replacement,)
@@ -488,7 +488,7 @@ def test_model_submission_rejects_invalid_bindings(kind: str) -> None:
         del value["inputs"]["raster"]
     else:
         value["parameters"]["summary"] = float("nan")
-    with pytest.raises((ProcessingError, ValidationError)):
+    with pytest.raises((JobError, ValidationError)):
         build_model_calculation_request(
             ModelRunRequest.model_validate(value), ModelRegistry.load_installed()
         )
@@ -532,10 +532,10 @@ def test_saved_model_input_endpoint_preserves_ownership_and_expiry() -> None:
                 The test's saved job record.
 
             Raises:
-                ProcessingError: If the requested job is not owned by this session.
+                JobError: If the requested job is not owned by this session.
             """
             if identifier != "1" * 32 or requesting_owner != owner:
-                raise ProcessingError("job_not_found", "Job unavailable", 404)
+                raise JobError("job_not_found", "Job unavailable", 404)
             return row
 
     app = FastAPI()
@@ -646,7 +646,7 @@ def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None
         "definitionSha256": definition.digest,
     }
     body["inputs"]["area"] = area
-    with pytest.raises(ProcessingError, match="inputs"):
+    with pytest.raises(JobError, match="inputs"):
         build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
 
 
@@ -661,11 +661,11 @@ def test_clip_recipe_rejects_extra_parameters_and_mismatched_output_contract() -
         "definitionSha256": definition.digest,
     }
     body["parameters"] = {"summary": "sum(a)"}
-    with pytest.raises(ProcessingError, match="declared parameters"):
+    with pytest.raises(JobError, match="declared parameters"):
         build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
     document = definition.to_document()
     document["outputs"]["raster"]["presentation"] = "table"
-    with pytest.raises(ProcessingError, match="operation contract"):
+    with pytest.raises(JobError, match="operation contract"):
         ModelRegistry((ModelDefinition.model_validate(document),))
 
 
@@ -683,7 +683,7 @@ def test_recipe_cannot_mislabel_its_operation_output(
     """
     document = ModelRegistry.load_installed().get(model_id, "1.1.0").to_document()
     next(iter(document["outputs"].values()))["type"] = wrong_type
-    with pytest.raises(ProcessingError, match="operation contract"):
+    with pytest.raises(JobError, match="operation contract"):
         ModelRegistry((ModelDefinition.model_validate(document),))
 
 
@@ -771,7 +771,7 @@ def test_downstream_recipe_binds_fixed_sources_and_settings() -> None:
         changed = submitted.model_copy(
             update={"inputs": {**submitted.inputs, unknown: configured}}
         )
-        with pytest.raises(ProcessingError, match="exactly the model's inputs"):
+        with pytest.raises(JobError, match="exactly the model's inputs"):
             build_model_calculation_request(changed, registry)
 
 
@@ -816,7 +816,7 @@ def test_fixed_downstream_inputs_reject_invalid_recipe_contracts(problem: str) -
     else:
         document["steps"][0]["inputs"]["values"] = binding
         document["inputs"].pop("values")
-    with pytest.raises((ValidationError, ProcessingError)):
+    with pytest.raises((ValidationError, JobError)):
         ModelRegistry((ModelDefinition.model_validate(document),))
 
 
@@ -942,7 +942,7 @@ def test_operation_owns_fixed_and_user_input_schemas(
     assert restored.inputs == invocation.inputs
     if binding_kind == "user":
         body["inputs"]["adjustment"]["multiplier"] = "3"
-        with pytest.raises(ProcessingError, match="invalid"):
+        with pytest.raises(JobError, match="invalid"):
             build_model_calculation_request(
                 ModelRunRequest.model_validate(body), registry
             )
@@ -971,7 +971,7 @@ def test_operation_rejects_fixed_configuration_outside_its_schema(
         value["multiplier"] = "3"
     else:
         bindings["unregistered"] = bindings.pop("calibration")
-    with pytest.raises((ProcessingError, ValidationError)):
+    with pytest.raises((JobError, ValidationError)):
         ModelRegistry((ModelDefinition.model_validate(document),))
 
 
@@ -1064,5 +1064,5 @@ def test_temporal_stack_recipe_binds_formulas_and_only_the_area_they_use() -> No
     assert point_request.wholeRaster is True
     assert point_request.selectedBounds is None
     body["inputs"]["metrics"].pop("pixelPoint")
-    with pytest.raises(ProcessingError, match="invalid"):
+    with pytest.raises(JobError, match="invalid"):
         build_model_calculation_request(ModelRunRequest.model_validate(body), registry)

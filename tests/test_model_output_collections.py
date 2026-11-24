@@ -13,15 +13,14 @@ import rasterio
 from rasterio.transform import from_origin
 
 from eolab_app.processing.aggregate_models import AggregateArtifact
-from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifact_manifest import ProducedFile
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.model_runs import (
     declare_model_files,
     serialize_model_artifacts,
 )
 from eolab_app.processing.model_run_contracts import ModelArtifactManifest, ModelOutcome
-from eolab_app.processing.models import ProcessingError
-
+from eolab_jobs.models import JobError
 
 @pytest.fixture
 def routing_dem_files(
@@ -129,7 +128,7 @@ def test_collection_members_use_normal_publication_and_cleanup(
             assert raster.nodata == -9999
             assert raster.read_masks(1)[0, 2] == 0
     storage.remove_orphans(set(), -1)
-    with pytest.raises(ProcessingError, match="no longer available"):
+    with pytest.raises(JobError, match="no longer available"):
         storage.artifact_path("a" * 32, manifest.files[1].storage_name)
 
 
@@ -145,7 +144,7 @@ def test_omitted_collection_is_discarded_with_scratch(
     del row["summary"]["outputs"]["routing_dem"]
     manifest = storage.publish("a" * 32, declare_model_files(row, artifact), Event())
     assert [file.name for file in manifest.files] == ["total"]
-    with pytest.raises(ProcessingError, match="no longer available"):
+    with pytest.raises(JobError, match="no longer available"):
         storage.artifact_path("a" * 32, artifact.additional_outputs[0].storage_name)
 
 
@@ -254,6 +253,6 @@ def test_collection_contract_rejects_invalid_native_results(
         artifact = replace(
             artifact, additional_outputs=(replace(first, **changes), second)
         )
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         declare_model_files(row, artifact)
     assert error.value.code == "invalid_model_result"

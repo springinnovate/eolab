@@ -19,7 +19,7 @@ from rasterio.windows import Window
 
 from eolab_app.bounded_vector import PolygonRasterizer
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
-from eolab_app.processing.artifacts import write_progress
+from eolab_jobs.artifacts import write_progress
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 
 

@@ -23,7 +23,7 @@ from eolab_app.catalog_selection import (
 from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.service import ProcessingService
 from eolab_app.raster.errors import RasterNotFoundError
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
@@ -258,7 +258,7 @@ def test_missing_configured_dem_names_the_unavailable_model_input(
             "label": "Missing DEM",
         }
     )
-    with pytest.raises(ProcessingError, match="dem input is unavailable") as failure:
+    with pytest.raises(JobError, match="dem input is unavailable") as failure:
         asyncio.run(service.submit_model_run("owner", request))
     assert failure.value.code == "source_unavailable"
     assert "catalog raster could not be found" in failure.value.detail

@@ -26,10 +26,10 @@ from eolab_app.processing.aggregate_models import (
     AggregateSpec,
     UnpreparedCalculation,
 )
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_yaml import compute_document_checksum, parse_yaml
-from eolab_app.processing.models import ProcessingError, PreparedJobPlan
+from eolab_jobs.models import JobError, PreparedJobPlan
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.routes.processing import COOKIE
@@ -217,7 +217,7 @@ def additional_raster_model(
             Existing native summary plan plus the comparison source descriptors.
 
         Raises:
-            ProcessingError: If ordinary summary preparation fails.
+            JobError: If ordinary summary preparation fails.
         """
         read_comparison_pixels(context, "preparation")
         prepared = await original.prepare(context, queued, authorized)
@@ -245,7 +245,7 @@ def additional_raster_model(
             Native primary source path and the existing summary execution plan.
 
         Raises:
-            ProcessingError: If ordinary summary execution preparation fails.
+            JobError: If ordinary summary execution preparation fails.
         """
         read_comparison_pixels(context, "execution")
         return await original.execution_inputs(context, spec, authorized)
@@ -774,7 +774,7 @@ def test_admission_rechecks_identity_and_excludes_unpublished_files(
             headers=HEADERS,
         )
         assert response.status_code in {404, 422}, response.text
-    with pytest.raises(ProcessingError, match="changed"):
+    with pytest.raises(JobError, match="changed"):
         store.submit(
             owner,
             uuid4().hex,
@@ -786,7 +786,7 @@ def test_admission_rechecks_identity_and_excludes_unpublished_files(
             "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
             (parent["jobId"],),
         )
-    with pytest.raises(ProcessingError, match="expired"):
+    with pytest.raises(JobError, match="expired"):
         store.submit(
             owner,
             uuid4().hex,
@@ -1100,7 +1100,7 @@ def test_concurrent_retries_retain_one_input_and_failed_admission_retains_none(
         rows = [call.result() for call in calls]
     assert rows[0]["id"] == rows[1]["id"]
     assert input_counts(store) == (1, 0)
-    with pytest.raises(ProcessingError) as denied:
+    with pytest.raises(JobError) as denied:
         store.submit(owner, request.requestId, prepared, "b" * 64)
     assert denied.value.code == "request_conflict"
     assert input_counts(store) == (1, 0)

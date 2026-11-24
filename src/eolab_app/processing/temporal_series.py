@@ -28,8 +28,8 @@ from eolab_app.processing.aggregate_models import (
     PixelPoint,
     RasterAggregateLimits,
 )
-from eolab_app.processing.artifacts import write_progress
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.artifacts import write_progress
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_aggregate import (
     AREA_TILE_SIDE,
     TILE_SIDE,
@@ -101,7 +101,7 @@ def calculate_temporal_observations(
         remain absent; present NoData observations retain their result states.
 
     Raises:
-        ProcessingError: If the area or hectare calculation fails.
+        JobError: If the area or hectare calculation fails.
         OSError: If source, mask, area-weight or progress I/O fails.
         ValueError: If native decoding fails.
         rasterio.errors.RasterioError: If a source or mask cannot be read.
@@ -183,7 +183,7 @@ def calculate_temporal_observations(
                 Exact float64 weights, or None when no formula needs hectares.
 
             Raises:
-                ProcessingError: If selected geometry cannot be measured.
+                JobError: If selected geometry cannot be measured.
                 OSError: If area-weight scratch or original source I/O fails.
                 ValueError: If native area-weight decoding fails.
                 rasterio.errors.RasterioError: If selected source data cannot be read.
@@ -226,7 +226,7 @@ def calculate_temporal_observations(
                 Ordered named scalar results including raw values and coverage.
 
             Raises:
-                ProcessingError: If the hectare calculation fails.
+                JobError: If the hectare calculation fails.
                 OSError: If source, mask, area-weight or progress I/O fails.
                 ValueError: If native decoding fails.
                 rasterio.errors.RasterioError: If a source or mask cannot be read.
@@ -335,7 +335,7 @@ def create_temporal_series(
         observation labels and intervals without source file locations.
 
     Raises:
-        ProcessingError: If the selected area cannot be read or projected.
+        JobError: If the selected area cannot be read or projected.
         OSError: If source, mask, CSV or provenance I/O fails.
         ValueError: If native decoding or result serialization fails.
         rasterio.errors.RasterioError: If a native source or mask cannot be read.
@@ -436,7 +436,7 @@ def temporal_series_process_target(
             else create_temporal_series(*arguments)
         )
         queue.put(("ok", value))
-    except ProcessingError as error:
+    except JobError as error:
         queue.put(("error", (error.code, error.detail, error.status)))
     except (OSError, ValueError, rasterio.errors.RasterioError):
         queue.put(

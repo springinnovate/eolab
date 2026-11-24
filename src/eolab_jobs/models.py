@@ -1,4 +1,4 @@
-"""Operation-neutral job lifecycle, storage values, and Processing policy."""
+"""Operation-neutral job lifecycle values and storage policy."""
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
-from eolab_app.processing.artifact_manifest import ArtifactManifest, ProducedFile
+from eolab_jobs.artifact_manifest import ArtifactManifest, ProducedFile
 
 OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 
@@ -79,7 +79,7 @@ class JobSubmission:
     request_key: str
     request_hash: str
     operation: str
-    prepared: "PreparedJobPlan | ProcessingError"
+    prepared: "PreparedJobPlan | JobError"
 
 
 class JobResultResponse(BaseModel):
@@ -159,8 +159,8 @@ class JobStatusResponse(JobListResponse[JobResponseType], Generic[JobResponseTyp
 
 
 @dataclass(frozen=True)
-class ProcessingLimits:
-    """Configure Processing concurrency, ownership leases, retention and result caching.
+class JobLimits:
+    """Configure job concurrency, ownership leases, retention and result caching.
 
     Calculations have no size, memory, disk or total-runtime ceiling. Worker slots
     remain occupied until native work exits. Leases detect lost ownership; they
@@ -179,11 +179,11 @@ class ProcessingLimits:
     calculation_cache_ttl_seconds: int = 86_400
 
 
-class ProcessingError(Exception):
-    """Sanitized, stable error at the processing API boundary."""
+class JobError(Exception):
+    """A sanitized job failure with a stable code and HTTP response status."""
 
     def __init__(self, code: str, detail: str, status: int = 422) -> None:
-        """Create a safe processing failure.
+        """Create a job failure safe to return to the caller.
 
         Args:
             code: Machine-readable reason, also retained on failed jobs.

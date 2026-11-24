@@ -16,8 +16,8 @@ import pytest
 from eolab_app.processing import clip_models
 from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest, UnpreparedClip
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.processing.models import JobInputFile
-from eolab_app.processing.ports import JobArtifactStore, JobStore
+from eolab_jobs.models import JobInputFile
+from eolab_jobs.ports import JobArtifactStore, JobStore
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.shared_calculations import identify_shared_calculation
 from eolab_app.raster.models import CatalogRasterRequest

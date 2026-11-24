@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 
 MAX_MODEL_YAML_BYTES = 64 * 1024
 MAX_RUN_YAML_BYTES = 256 * 1024
@@ -110,7 +110,7 @@ def parse_yaml(data: bytes, *, run: bool = False) -> dict[str, Any]:
         A dictionary containing the document's JSON-compatible values.
 
     Raises:
-        ProcessingError: If the document is malformed, oversized or uses unsupported YAML.
+        JobError: If the document is malformed, oversized or uses unsupported YAML.
     """
     limit, depth_limit, node_limit = (
         (MAX_RUN_YAML_BYTES, 32, 8192) if run else (MAX_MODEL_YAML_BYTES, 16, 2048)
@@ -163,7 +163,7 @@ def parse_yaml(data: bytes, *, run: bool = False) -> dict[str, Any]:
         yaml.YAMLError,
         RecursionError,
     ) as error:
-        raise ProcessingError(
+        raise JobError(
             "invalid_model_yaml",
             "The YAML document is invalid or exceeds model limits.",
         ) from error
@@ -180,7 +180,7 @@ def export_yaml(value: dict[str, Any], *, run: bool = False) -> bytes:
         UTF-8 YAML bytes preserving the supplied values and types.
 
     Raises:
-        ProcessingError: If the output exceeds document limits or changes on re-reading.
+        JobError: If the output exceeds document limits or changes on re-reading.
         ValueError: If a number is NaN or infinite.
         TypeError: If a supplied value cannot be represented in JSON.
     """
@@ -191,7 +191,7 @@ def export_yaml(value: dict[str, Any], *, run: bool = False) -> bytes:
         "utf-8"
     )
     if encode_canonical_json(parse_yaml(data, run=run)) != encode_canonical_json(value):
-        raise ProcessingError(
+        raise JobError(
             "invalid_model_yaml", "The model document cannot be exported faithfully."
         )
     return data

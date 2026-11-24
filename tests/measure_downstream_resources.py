@@ -46,8 +46,9 @@ async def measure(
     Raises:
         ValueError: If requested dimensions exceed the benchmark's bounded fixture.
         FileExistsError: If the output directory already exists.
-        ProcessingError: If preparation or native calculation rejects the case.
+        JobError: If preparation or native calculation rejects the case.
     """
+
     if width < 6 or height < 4 or width * height > 4_000_000:
         raise ValueError(
             "Choose 6 or more columns, 4 or more rows and at most four million cells"

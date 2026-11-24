@@ -81,8 +81,9 @@ class DownstreamRequest(HydrologySchema):
 
         Raises:
             ValueError: If a point-only function is requested.
-            ProcessingError: If formula syntax or types are invalid.
+            JobError: If formula syntax or types are invalid.
         """
+
         if any(
             node.op == "pixelValue"
             for node in walk(compile_expression(self.summary, "a"))

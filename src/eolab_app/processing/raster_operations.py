@@ -34,7 +34,7 @@ from eolab_app.processing.clip_models import (
     UnpreparedClip,
     RasterClipLimits,
 )
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError, Artifact
+from eolab_jobs.models import PreparedJobPlan, JobError, Artifact
 from eolab_app.processing.shared_calculations import identify_shared_calculation
 from eolab_app.processing.raster_aggregate import (
     aggregate_process_target,
@@ -91,7 +91,7 @@ async def prepare_raster_execution(
         Native raster data and plan with any authorized vector selections.
 
     Raises:
-        ProcessingError: If the catalog selection is unavailable.
+        JobError: If the catalog selection is unavailable.
     """
     if isinstance(spec, ClipSpec) and spec.area.polygonGroup is not None:
         resolved_group = await resolve_clip_polygon_group(
@@ -104,7 +104,7 @@ async def prepare_raster_execution(
         )
     elif spec.area.kind == "catalogSelection":
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Catalog selection reader is unavailable.", 409
             )
         resolved = await context.areas.resolve_for_sampling(spec.area.catalogSelection)
@@ -132,10 +132,10 @@ async def resolve_clip_polygon_group(
         Authorized sources in group order for this worker attempt.
 
     Raises:
-        ProcessingError: If the selection reader or a member is unavailable.
+        JobError: If the selection reader or a member is unavailable.
     """
     if context.areas is None:
-        raise ProcessingError(
+        raise JobError(
             "selection_unavailable", "Vector selection reader is unavailable.", 409
         )
     sources = []
@@ -143,7 +143,7 @@ async def resolve_clip_polygon_group(
         try:
             sources.append(await context.areas.resolve_for_sampling(member.selection))
         except SelectionUnavailableError as error:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable",
                 f"Could not use {member.label}. {error.detail}",
                 409,
@@ -205,7 +205,7 @@ async def prepare_summary(
         Prepared summary inputs and display metadata.
 
     Raises:
-        ProcessingError: If the selection, native planning or resource limits fail.
+        JobError: If the selection, native planning or resource limits fail.
     """
 
     request = queued.request
@@ -219,7 +219,7 @@ async def prepare_summary(
     resolved = None
     if request.catalogSelection:
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable",
                 "Vector selection reader is unavailable.",
                 409,
@@ -263,7 +263,7 @@ async def prepare_summary(
                 summary_process, (resolved, None), None, context.native
             )
             if not success:
-                raise ProcessingError("selection_unavailable", summary, 409)
+                raise JobError("selection_unavailable", summary, 409)
             area = AggregateArea(
                 kind="catalogSelection",
                 bounds=summary["bbox"],
@@ -292,7 +292,7 @@ async def prepare_summary(
             context.native,
         )
         if status != "ok":
-            raise ProcessingError(*grid)
+            raise JobError(*grid)
         spec = AggregateSpec(
             sources=request.sources,
             sourceSignature=signature,
@@ -322,7 +322,7 @@ async def prepare_clip(
         Prepared clip inputs and display metadata.
 
     Raises:
-        ProcessingError: If the selection, native planning or resource limits fail.
+        JobError: If the selection, native planning or resource limits fail.
     """
     request = queued.request
     source = get_clip_source(queued)
@@ -356,7 +356,7 @@ async def prepare_clip(
                 summary_process, (resolved, None), None, context.native
             )
             if not success:
-                raise ProcessingError(
+                raise JobError(
                     "selection_unavailable",
                     f"Could not use {member.label}. {summary}",
                     409,
@@ -375,7 +375,7 @@ async def prepare_clip(
         )
     else:
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable",
                 "Vector selection reader is unavailable.",
                 409,
@@ -385,7 +385,7 @@ async def prepare_clip(
             summary_process, (resolved, None), None, context.native
         )
         if not success:
-            raise ProcessingError("selection_unavailable", summary, 409)
+            raise JobError("selection_unavailable", summary, 409)
         area = ClipArea(
             kind="catalogSelection",
             bounds=summary["bbox"],
@@ -399,7 +399,7 @@ async def prepare_clip(
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*grid)
+        raise JobError(*grid)
     spec = ClipSpec(
         source=source,
         sourceSignature=signature,

@@ -9,7 +9,7 @@ import psycopg
 import pytest
 
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.vector_field_values import (
     VECTOR_FIELD_VALUES_KEY,
     CatalogVectorFieldValueQuery,

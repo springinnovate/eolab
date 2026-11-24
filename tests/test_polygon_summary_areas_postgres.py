@@ -12,8 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from eolab_app.main import create_app
-from eolab_app.processing.job_events import PostgresJobEvents
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_events import PostgresJobEvents
+from eolab_jobs.job_store import PostgresJobStore
 from app_support import mounted_geotiff_item
 from raster_fixture_support import write_source
 from raster_source_support import SOURCE

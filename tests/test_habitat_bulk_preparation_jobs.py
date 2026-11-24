@@ -10,7 +10,7 @@ import psycopg
 import pytest
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.habitat_earth_engine import (
     HabitatCacheCoverage,
     HabitatEarthEngineRuntime,
@@ -24,7 +24,7 @@ from eolab_app.processing.habitat_preparation_models import (
     HABITAT_PREPARATION_OWNER,
     HabitatInputPreparationRequest,
 )
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.routes.processing import COOKIE

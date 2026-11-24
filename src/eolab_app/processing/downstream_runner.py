@@ -22,8 +22,8 @@ from eolab_app.processing.aggregate_models import (
     AggregateArtifact,
     RasterAggregateLimits,
 )
-from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifacts import write_progress
+from eolab_jobs.artifact_manifest import ProducedFile
+from eolab_jobs.artifacts import write_progress
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.downstream_models import (
     BENEFICIARIES_REVISION,
@@ -32,7 +32,7 @@ from eolab_app.processing.downstream_models import (
     DownstreamPlan,
 )
 from eolab_app.processing.ground_area import PixelAreaCalculator
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_expression import Calculation, compile_expression, walk
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ def load_beneficiaries() -> ModuleType:
         The original module, with its functions and numerical constants unchanged.
 
     Raises:
-        ProcessingError: If the installed source differs from the reviewed package.
+        JobError: If the installed source differs from the reviewed package.
         ImportError: If the application build omitted a required model dependency.
     """
     package = files("wwf_es_beneficiaries")
@@ -56,7 +56,7 @@ def load_beneficiaries() -> ModuleType:
         or hashlib.sha256((package / "workflow_runner.py").read_bytes()).hexdigest()
         != provenance["runnerSha256"]
     ):
-        raise ProcessingError(
+        raise JobError(
             "model_implementation_changed",
             "The installed downstream model does not match its recorded version.",
             500,
@@ -81,12 +81,12 @@ def write_watershed_view(
         Run-local VRT path readable by the original model.
 
     Raises:
-        ProcessingError: If the configuration cannot represent HydroBASINS links.
+        JobError: If the configuration cannot represent HydroBASINS links.
         OSError: If the private view cannot be written.
     """
     topology = spec.inputs.hydrology.topology
     if topology.idType != "integer" or topology.terminalIdField is None:
-        raise ProcessingError(
+        raise JobError(
             "unsupported_hydrology",
             "This model needs integer watershed IDs and a next-sink ID field in its hydrology configuration.",
             422,
@@ -130,7 +130,7 @@ def prepare_starting_inputs(
         AOI GeoJSON path and original or rasterized starting-mask path.
 
     Raises:
-        ProcessingError: If rasterization cannot create a nonempty grid.
+        JobError: If rasterization cannot create a nonempty grid.
         OSError: If the prepared AOI cannot be written.
     """
     from osgeo import gdal
@@ -167,7 +167,7 @@ def prepare_starting_inputs(
         or starting_mask_dataset.RasterXSize < 1
         or starting_mask_dataset.RasterYSize < 1
     ):
-        raise ProcessingError(
+        raise JobError(
             "empty_starting_mask",
             "The starting area is smaller than the selected calculation pixel size.",
             422,
@@ -198,7 +198,7 @@ def summarize_downstream_covered_values(
         Ordinary Processing statistics fields, including coverage counts.
 
     Raises:
-        ProcessingError: If the upstream result is nonfinite or a formula fails.
+        JobError: If the upstream result is nonfinite or a formula fails.
         RasterioError: If the completed raster cannot be read.
     """
     root = compile_expression(expression, "a")
@@ -232,7 +232,7 @@ def summarize_downstream_covered_values(
     result = calculation.result()
     if root.op == "sum" and len(root.args) == 1 and root.args[0].op == "source":
         if not math.isfinite(original_model_sum):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_output",
                 "The downstream model returned a nonfinite total.",
                 422,
@@ -294,7 +294,7 @@ def run_original_downstream(
         and one pit-filled routing DEM per terminal drainage group.
 
     Raises:
-        ProcessingError: If input adaptation or completed output validation fails.
+        JobError: If input adaptation or completed output validation fails.
         Exception: If an upstream calculation fails; the existing native boundary
             sanitizes the failure before exposing it to the browser.
     """
@@ -321,7 +321,7 @@ def run_original_downstream(
             )
         )
     except Exception as error:
-        raise ProcessingError(
+        raise JobError(
             "watershed_read_failed",
             "The model could not read or process its configured watershed layer. Check the source and field mappings in Model YAML.",
             422,
@@ -352,7 +352,7 @@ def run_original_downstream(
                 partition_vector_path,
             )
         except Exception as error:
-            raise ProcessingError(
+            raise JobError(
                 "dem_read_failed",
                 "The model could not read or process its configured DEM. Check the source in Model YAML.",
                 422,
@@ -481,7 +481,7 @@ def run_original_downstream(
         model_working_directory.resolve().parent != directory.resolve()
         or model_working_directory.is_symlink()
     ):
-        raise ProcessingError(
+        raise JobError(
             "invalid_output", "The downstream workspace changed unexpectedly.", 500
         )
     shutil.rmtree(model_working_directory)

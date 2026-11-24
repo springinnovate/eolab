@@ -4,11 +4,11 @@ import asyncio
 from collections.abc import Callable
 import re
 
-from eolab_app.processing.job_notifications import (
+from eolab_jobs.job_notifications import (
     JOB_CHANGE_CHANNEL,
     PostgresNotifications,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 
 
 class Subscription:
@@ -38,13 +38,13 @@ class Subscription:
             True when a change notification is pending, False after the timeout.
 
         Raises:
-            ProcessingError: If the subscription closes before a notification is read.
+            JobError: If the subscription closes before a notification is read.
         """
         try:
             async with asyncio.timeout(timeout):
                 await self.pending.wait()
             if self.closed:
-                raise ProcessingError("events_closed", "Live job updates closed.", 503)
+                raise JobError("events_closed", "Live job updates closed.", 503)
             self.pending.clear()
             return True
         except TimeoutError:
@@ -124,7 +124,7 @@ class PostgresJobEvents:
             Subscription registered before the initial snapshot notification.
 
         Raises:
-            ProcessingError: If closed or stream capacity is exhausted.
+            JobError: If closed or stream capacity is exhausted.
             ValueError: If an invalid internal owner identifier is supplied.
         """
         if not re.fullmatch(r"[a-f0-9]{64}", owner):
@@ -134,7 +134,7 @@ class PostgresJobEvents:
             or self.count >= self.max_streams
             or len(self.owners.get(owner, ())) >= self.max_owner_streams
         ):
-            raise ProcessingError(
+            raise JobError(
                 "events_unavailable",
                 "Live job updates are unavailable; status polling remains active.",
                 503,

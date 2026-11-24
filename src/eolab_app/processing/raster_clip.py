@@ -17,8 +17,8 @@ from eolab_app.execution.bounded_process import ProcessResultWriter
 from rasterio.shutil import copy as copy_raster
 from rasterio.windows import Window, intersect, transform as window_transform, union
 
-from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.artifacts import write_progress as _progress
+from eolab_jobs.models import JobError
+from eolab_jobs.artifacts import write_progress as _progress
 from eolab_app.processing.raster_input import (
     validate_supported_raster as _validate_supported_raster,
     select_area,
@@ -55,7 +55,7 @@ def _select_clip_area(
         An entire raster uses its full window and an empty tuple of mask sources.
 
     Raises:
-        ProcessingError: If no member overlaps the grid or a mask cannot be prepared.
+        JobError: If no member overlaps the grid or a mask cannot be prepared.
     """
     if area.kind == "wholeRaster":
         return Window(0, 0, dataset.width, dataset.height), ()
@@ -75,15 +75,15 @@ def _select_clip_area(
                         resolved=source,
                     )
                 )
-            except ProcessingError as error:
+            except JobError as error:
                 if error.code != "no_overlap":
-                    raise ProcessingError(
+                    raise JobError(
                         error.code,
                         f"Could not use {member.label}. {error.detail}",
                         error.status,
                     ) from error
         if not areas:
-            raise ProcessingError(
+            raise JobError(
                 "no_overlap", "The polygon group does not overlap this raster."
             )
         return union(*(selection.source_window for selection in areas)), tuple(areas)
@@ -148,7 +148,7 @@ def _plan_clip_grid(dataset: RasterDataset, window: Window) -> ClipGrid:
         Native grid, source block count and estimated uncompressed output size.
 
     Raises:
-        ProcessingError: If the source grid or selected area is invalid.
+        JobError: If the source grid or selected area is invalid.
     """
     width, height = int(window.width), int(window.height)
     raw_bytes = width * height * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
@@ -180,7 +180,7 @@ def plan_clip(
         Planned native grid; this function does not read raster values.
 
     Raises:
-        ProcessingError: If the source or area is unsupported.
+        JobError: If the source or area is unsupported.
         rasterio.errors.RasterioError: If the source cannot be opened.
     """
     with rasterio.Env(GDAL_CACHEMAX=64 * 1024**2, GDAL_NUM_THREADS="2"):
@@ -207,7 +207,7 @@ def create_clip(
         Validated artifact metadata. Publication remains the job owner's duty.
 
     Raises:
-        ProcessingError: For unsupported input, invalid area, or no valid pixels.
+        JobError: For unsupported input, invalid area, or no valid pixels.
         OSError: If writing or validating the private artifact fails.
     """
     stage = directory / "window.tif"
@@ -322,7 +322,7 @@ def create_clip(
                         _progress(directory, "clipping", index + 1, len(blocks))
                         last_progress = time.monotonic()
             if not valid_count:
-                raise ProcessingError(
+                raise JobError(
                     "no_valid_data",
                     "There are no valid raster pixels in the selected area.",
                 )
@@ -352,7 +352,7 @@ def create_clip(
                 != spec.grid.nodata
                 or (max(check.shape) > 512 and not check.overviews(1))
             ):
-                raise ProcessingError(
+                raise JobError(
                     "invalid_output",
                     "The generated clip failed grid/COG validation.",
                     500,
@@ -362,7 +362,7 @@ def create_clip(
                 for _, block in check.block_windows(1)
             )
             if counted != valid_count:
-                raise ProcessingError(
+                raise JobError(
                     "invalid_output",
                     "The generated clip failed validity-mask validation.",
                     500,
@@ -419,7 +419,7 @@ def clip_process_target(
         else:
             raise ValueError("Unknown clip operation")
         queue.put(("ok", value))
-    except ProcessingError as error:
+    except JobError as error:
         queue.put(("error", (error.code, error.detail, error.status)))
     except Exception:
         queue.put(

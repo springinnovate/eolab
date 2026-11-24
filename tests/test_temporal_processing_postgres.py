@@ -19,8 +19,8 @@ from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
 from eolab_app.catalog.scanner import ScanManager
-from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.artifacts import LocalJobArtifacts
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml

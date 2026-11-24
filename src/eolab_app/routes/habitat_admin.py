@@ -21,7 +21,7 @@ from eolab_app.processing.habitat_earth_engine import (
     HabitatCacheCoverage,
     HabitatCacheInventoryEntry,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.routes.admin_auth import create_administrator_dependency
 from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
@@ -155,7 +155,7 @@ def create_habitat_admin_router(
 
         Raises:
             SelectionUnavailableError: If the Catalog selection is unavailable.
-            ProcessingError: If native polygon or cache inspection fails.
+            JobError: If native polygon or cache inspection fails.
         """
         async with inspection_lock:
             return await get_habitat_cache_coverage(
@@ -186,7 +186,7 @@ def create_habitat_admin_router(
             raise HTTPException(499, "Cache check cancelled.") from error
         except SelectionUnavailableError as error:
             raise HTTPException(409, error.detail) from error
-        except ProcessingError as error:
+        except JobError as error:
             raise HTTPException(error.status, error.detail) from error
         return HabitatCacheCoverageResponse(
             configurationSha256=coverage.configuration_sha256,
@@ -223,7 +223,7 @@ def create_habitat_admin_router(
             entries = await run_until_http_disconnect(request, read_inventory())
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Cache inventory cancelled.") from error
-        except ProcessingError as error:
+        except JobError as error:
             raise HTTPException(error.status, error.detail) from error
         return HabitatCacheInventoryResponse(
             configurations=[

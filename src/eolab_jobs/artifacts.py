@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from uuid import uuid4
 from pydantic import TypeAdapter, ValidationError
 
-from eolab_app.processing.artifact_manifest import (
+from eolab_jobs.artifact_manifest import (
     ArtifactManifest,
     FileDeclaration,
     PublishedFile,
@@ -22,7 +22,7 @@ from eolab_app.processing.artifact_manifest import (
     FileName,
 )
 
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 
 
 def write_progress(
@@ -166,27 +166,25 @@ class LocalJobArtifacts:
             Immutable file inventory and exact retained bytes, including manifest.json.
 
         Raises:
-            ProcessingError: If files are missing, unsafe, changed,
+            JobError: If files are missing, unsafe, changed,
                 undeclared metadata is invalid, or publication was cancelled.
             OSError: If atomic publication fails.
         """
         path = self._directory(attempt, False)
         if not declarations:
-            raise ProcessingError("invalid_artifact", "Invalid result file count.", 500)
+            raise JobError("invalid_artifact", "Invalid result file count.", 500)
         names = [item.storage_name.casefold() for item in declarations]
         if len(set(names)) != len(names) or any(
             name in {"manifest.json", "progress.json", "progress.tmp"} for name in names
         ):
-            raise ProcessingError(
-                "invalid_artifact", "Result file names conflict.", 500
-            )
+            raise JobError("invalid_artifact", "Result file names conflict.", 500)
         children = {}
         for child in path.iterdir():
             info = self._regular_file(child)
             if child.name.casefold() == "manifest.json" or child.name.casefold() in {
                 name.casefold() for name in children
             }:
-                raise ProcessingError(
+                raise JobError(
                     "invalid_artifact", "Workspace file names conflict.", 500
                 )
             children[child.name] = info
@@ -194,7 +192,7 @@ class LocalJobArtifacts:
         for declaration in declarations:
             self._check_cancelled(cancelled)
             if declaration.storage_name not in children:
-                raise ProcessingError(
+                raise JobError(
                     "invalid_artifact", "A declared result file is missing.", 500
                 )
             source = path / declaration.storage_name
@@ -214,7 +212,7 @@ class LocalJobArtifacts:
                     and digest.hexdigest() != declaration.sha256
                 )
             ):
-                raise ProcessingError(
+                raise JobError(
                     "invalid_artifact", "A completed result file changed.", 500
                 )
             files.append(
@@ -251,12 +249,10 @@ class LocalJobArtifacts:
             cancelled: Cooperative signal owned by the worker.
 
         Raises:
-            ProcessingError: If cancellation has been requested.
+            JobError: If cancellation has been requested.
         """
         if cancelled.is_set():
-            raise ProcessingError(
-                "job_cancelled", "Result publication was cancelled.", 409
-            )
+            raise JobError("job_cancelled", "Result publication was cancelled.", 409)
 
     @staticmethod
     def _regular_file(path: Path) -> os.stat_result:
@@ -269,7 +265,7 @@ class LocalJobArtifacts:
             File stat values used to check size and detect replacement.
 
         Raises:
-            ProcessingError: If the candidate is not a single-link regular file.
+            JobError: If the candidate is not a single-link regular file.
             OSError: If the file cannot be inspected.
         """
         info = path.lstat()
@@ -278,7 +274,7 @@ class LocalJobArtifacts:
             or info.st_nlink != 1
             or getattr(info, "st_file_attributes", 0) & 0x400
         ):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_artifact",
                 "Result folders must contain only regular files.",
                 500,
@@ -299,20 +295,20 @@ class LocalJobArtifacts:
             Existing confined regular file.
 
         Raises:
-            ProcessingError: If the name is unsafe or the file is unavailable.
+            JobError: If the name is unsafe or the file is unavailable.
         """
 
         try:
             TypeAdapter(FileName).validate_python(storage_name)
         except ValidationError as error:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_artifact", "Invalid result file name.", 500
             ) from error
         path = self._directory(attempt, True) / storage_name
         try:
             self._regular_file(path)
         except OSError as error:
-            raise ProcessingError(
+            raise JobError(
                 "result_missing",
                 "This result file is no longer available. Run the model again.",
                 410,
@@ -333,10 +329,10 @@ class LocalJobArtifacts:
             Confined, existing artifact path.
 
         Raises:
-            ProcessingError: If the immutable artifact is absent or not a file.
+            JobError: If the immutable artifact is absent or not a file.
         """
         if not re.fullmatch(r"result\.[a-z0-9]{1,8}", result_name):
-            raise ProcessingError(
+            raise JobError(
                 "invalid_artifact", "Invalid processing result descriptor.", 500
             )
         return self.artifact_path(

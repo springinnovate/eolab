@@ -29,8 +29,9 @@ def make_spec(
     Raises:
         OSError: If the fixture's filesystem identity cannot be read.
         rasterio.errors.RasterioIOError: If the native raster cannot be opened.
-        ProcessingError: If the raster or selected clip area is unsupported.
+        JobError: If the raster or selected clip area is unsupported.
     """
+
     signature = tuple(RasterSourceIdentity.read(path).to_catalog())
     return ClipSpec(
         source=CatalogRasterRequest(**SOURCE),

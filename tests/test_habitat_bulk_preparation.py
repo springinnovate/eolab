@@ -18,7 +18,7 @@ from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing import habitat_bulk_preparation as bulk
 from eolab_app.processing import habitat_preparation
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_earth_engine import (
     HabitatCacheCoverage,
@@ -37,7 +37,7 @@ from eolab_app.processing.habitat_preparation_models import (
 )
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_yaml import encode_canonical_json
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.worker import ProcessingWorker
 from test_processing_worker_results import configure_prepared_job_store
@@ -249,7 +249,7 @@ def test_bulk_recovers_child_before_rechecking_changed_sources(
 @pytest.mark.parametrize(
     "failure",
     [
-        ProcessingError("denied", "Source access denied.", 403),
+        JobError("denied", "Source access denied.", 403),
         ValueError("private/config/path"),
         OSError("private/cache/path"),
     ],

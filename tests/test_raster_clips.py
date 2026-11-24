@@ -19,7 +19,7 @@ from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
     run_bounded_process,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.processing.clip_models import (
     ClipArea,
@@ -269,14 +269,14 @@ def test_clips_reject_outside_empty_stale_and_excessive_work(tmp_path: Path) -> 
     path = write_source(
         tmp_path / "empty.tif", numpy.full((100, 100), -9999, dtype="int16"), -9999
     )
-    with pytest.raises(ProcessingError) as outside:
+    with pytest.raises(JobError) as outside:
         make_spec(path, ClipArea(kind="bounds", bounds=(20, 20, 21, 21)))
     assert outside.value.code == "no_overlap"
     area = ClipArea(kind="bounds", bounds=(0.1, 9.1, 0.9, 9.9))
     spec = make_spec(path, area)
     attempt = tmp_path / "attempt"
     attempt.mkdir()
-    with pytest.raises(ProcessingError) as empty:
+    with pytest.raises(JobError) as empty:
         create_clip(path, spec, attempt, LIMITS)
     assert empty.value.code == "no_valid_data"
     assert not (attempt / "result.tif").exists()

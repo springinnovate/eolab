@@ -13,7 +13,7 @@ import pytest
 
 from eolab_app.rendering.artifact_preview import ArtifactPreviewService
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.artifact_manifest import ProducedFile
+from eolab_jobs.artifact_manifest import ProducedFile
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_operations import OperationOutput
 from eolab_app.processing.raster_clip import create_clip, clip_process_target

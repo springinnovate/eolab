@@ -46,10 +46,11 @@ def make_spec(
     Raises:
         OSError: If the fixture's filesystem identity cannot be read.
         rasterio.errors.RasterioIOError: If the native raster cannot be opened.
-        ProcessingError: If a formula, raster or selected area cannot be planned.
+        JobError: If a formula, raster or selected area cannot be planned.
         pydantic.ValidationError: If formulas or the specification violate the
             aggregate contract.
     """
+
     signature = tuple(RasterSourceIdentity.read(path).to_catalog())
     area = area or AggregateArea(kind="wholeRaster")
     calculations = tuple(

@@ -26,8 +26,7 @@ from eolab_app.processing.habitat_earth_engine import (
     inspect_habitat_cache,
     load_habitat_stack,
 )
-from eolab_app.processing.models import ProcessingError
-
+from eolab_jobs.models import JobError
 
 def habitat_cache_coverage_process(
     writer: ProcessResultWriter,
@@ -107,7 +106,7 @@ async def get_habitat_cache_coverage(
 
     Raises:
         SelectionUnavailableError: If Catalog identity or source access fails.
-        ProcessingError: If polygons, the year, native execution or cache reads fail.
+        JobError: If polygons, the year, native execution or cache reads fail.
         asyncio.CancelledError: After the native child stops on cancellation.
     """
     resolved = await selections.resolve_for_sampling(selection)
@@ -116,13 +115,13 @@ async def get_habitat_cache_coverage(
             habitat_cache_coverage_process, (resolved, year, cache_directory), None
         )
     except ProcessDeadlineError as error:
-        raise ProcessingError(
+        raise JobError(
             "habitat_cache_inspection_failed",
             "Cached Ecosystem Condition inputs could not be checked. Try again later.",
             500,
         ) from error
     if status != "ok":
-        raise ProcessingError(*result)
+        raise JobError(*result)
     return cast(HabitatCacheCoverage, result)
 
 
@@ -176,7 +175,7 @@ async def get_habitat_cache_inventory(
         Separate configuration rows with completed tiles and stored tile bytes.
 
     Raises:
-        ProcessingError: If metadata, filesystem reads or native execution fail.
+        JobError: If metadata, filesystem reads or native execution fail.
         asyncio.CancelledError: After the native child stops on cancellation.
     """
     try:
@@ -184,11 +183,11 @@ async def get_habitat_cache_inventory(
             habitat_cache_inventory_process, (cache_directory,), None
         )
     except ProcessDeadlineError as error:
-        raise ProcessingError(
+        raise JobError(
             "habitat_cache_inventory_failed",
             "The Ecosystem Condition cache inventory could not be read. Try again later.",
             500,
         ) from error
     if status != "ok":
-        raise ProcessingError(*result)
+        raise JobError(*result)
     return cast(tuple[HabitatCacheInventoryEntry, ...], result)

@@ -36,8 +36,8 @@ from eolab_app.processing.aggregate_windows import (
     plan_raster_read_windows,
     iter_raster_read_windows,
 )
-from eolab_app.processing.artifacts import write_progress
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.artifacts import write_progress
+from eolab_jobs.models import JobError
 from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.processing.raster_expression import (
     FUNCTIONS,
@@ -139,7 +139,7 @@ def get_raster_window_and_mask_source(
         indicates that no additional polygon mask is needed.
 
     Raises:
-        ProcessingError: If the area does not overlap the raster, cannot be
+        JobError: If the area does not overlap the raster, cannot be
             projected.
     """
     if area.kind == "wholeRaster":
@@ -202,7 +202,7 @@ def prepare_raster_area_tools(
         returned PolygonRasterizer when the calculation ends.
 
     Raises:
-        ProcessingError: If the area cannot be read or projected, does not
+        JobError: If the area cannot be read or projected, does not
             overlap the raster.
     """
     polygon_budget = None if area.kind == "catalogSelection" else 0
@@ -282,7 +282,7 @@ def plan_statistics_grid(
         Source grid metadata and read-window sizes.
 
     Raises:
-        ProcessingError: If grid metadata cannot describe valid execution windows.
+        JobError: If grid metadata cannot describe valid execution windows.
     """
     blocks = (
         count_native_raster_blocks(dataset, window)
@@ -375,7 +375,7 @@ def plan_aggregate(
         or estimating memory consumption. The saved calculation keeps the exact area descriptor.
 
     Raises:
-        ProcessingError: If the area misses the raster or cannot be projected.
+        JobError: If the area misses the raster or cannot be projected.
         rasterio.errors.RasterioIOError: If the raster cannot be opened.
     """
     roots = [compile_expression(item.expression, alias) for item in calculations]
@@ -466,7 +466,7 @@ def calculate_raster_statistics_for_area(
         filename, size, and checksum.
 
     Raises:
-        ProcessingError: If the raster or area is unsupported, or the
+        JobError: If the raster or area is unsupported, or the
             calculation inputs are invalid.
     """
     completed_blocks = 0
@@ -731,7 +731,7 @@ def aggregate_process_target(
         else:
             raise ValueError("Unsupported calculation operation")
         queue.put(("ok", value))
-    except ProcessingError as error:
+    except JobError as error:
         queue.put(("error", (error.code, error.detail, error.status)))
     except Exception:
         queue.put(

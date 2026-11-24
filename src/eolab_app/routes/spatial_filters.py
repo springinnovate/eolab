@@ -15,7 +15,7 @@ from eolab_app.catalog_selection import (
     VectorFilter,
     VectorSourceOwners,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.rendering.errors import PublishedLayerChangedError, PublishedLayerNotAuthorizedError
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.http_disconnect import HttpClientDisconnectedError, run_until_http_disconnect
@@ -89,7 +89,7 @@ def create_spatial_filter_router(
             raise HTTPException(499, "Map filter cancelled.") from error
         except (GeometryValidationError, SelectionUnavailableError, PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
             raise HTTPException(409, str(error)) from error
-        except ProcessingError as error:
+        except JobError as error:
             raise HTTPException(error.status, str(error)) from error
 
     @router.post("/drawings")
@@ -117,7 +117,7 @@ def create_spatial_filter_router(
             raise HTTPException(499, "Drawing filter cancelled.") from error
         except (GeometryValidationError, SelectionUnavailableError, AttributeFilterError) as error:
             raise HTTPException(409, str(error)) from error
-        except ProcessingError as error:
+        except JobError as error:
             raise HTTPException(error.status, str(error)) from error
 
     return router

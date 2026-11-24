@@ -153,10 +153,10 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
     paths = [
         Path("src/eolab_app/execution/bounded_process.py"),
         Path("src/eolab_app/raster/bounded_window.py"),
-        Path("src/eolab_app/processing/job_store.py"),
-        Path("src/eolab_app/processing/job_notifications.py"),
-        Path("src/eolab_app/processing/job_events.py"),
-        Path("src/eolab_app/processing/artifacts.py"),
+        Path("src/eolab_jobs/job_store.py"),
+        Path("src/eolab_jobs/job_notifications.py"),
+        Path("src/eolab_jobs/job_events.py"),
+        Path("src/eolab_jobs/artifacts.py"),
         Path("src/eolab_app/processing/raster_clip.py"),
         Path("src/eolab_app/processing/raster_aggregate.py"),
         Path("src/eolab_app/processing/raster_expression.py"),
@@ -290,7 +290,7 @@ def test_jobs_deployment_keeps_its_own_resource_and_filesystem_limits() -> None:
 
 def test_processing_schema_is_independent_of_catalog_storage() -> None:
     """Keep Processing tables in their own schema without pgSTAC dependencies."""
-    sql = Path("src/eolab_app/processing/schema.sql").read_text()
+    sql = Path("src/eolab_jobs/schema.sql").read_text()
     assert "pgstac." not in sql.lower()
     assert "CREATE SCHEMA processing" in sql
 
@@ -312,8 +312,8 @@ def test_spawned_worker_entry_does_not_import_application_composition() -> None:
     )
 
 
-def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
-    """Keep reusable lifecycle contracts independent of any operation's schema."""
+def test_shared_job_models_and_storage_do_not_depend_on_application_owners() -> None:
+    """Keep durable lifecycle contracts below application and execution owners."""
     for name in (
         "models.py",
         "ports.py",
@@ -323,23 +323,46 @@ def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
         "artifacts.py",
         "artifact_manifest.py",
     ):
-        dependencies = imports(Path("src/eolab_app/processing") / name)
-        assert "eolab_app.processing.clip_models" not in dependencies
-        assert "eolab_app.processing.aggregate_models" not in dependencies
-        assert not {
-            module for module in dependencies if module.startswith("eolab_app.raster")
-        }
+        dependencies = imports(Path("src/eolab_jobs") / name)
         assert not {
             module
             for module in dependencies
             if module.startswith(
                 (
-                    "eolab_app.processing.model_",
-                    "eolab_app.catalog",
-                    "eolab_app.rendering",
+                    "eolab_app",
+                    "job_service",
+                    "eolab_jobs.client",
                 )
             )
-        }
+        }, name
+
+
+def test_durable_job_foundation_imports_and_resources_without_application() -> None:
+    """Load the installed foundation and SQL without feature or HTTP client imports."""
+    script = """
+import sys
+from importlib import import_module
+from importlib.resources import files
+
+sys.modules.update({name: None for name in (
+    "eolab_app", "job_service", "eolab_jobs.client", "rasterio", "fiona", "osgeo"
+)})
+for name in (
+    "models", "ports", "job_store", "job_notifications", "job_events",
+    "artifacts", "artifact_manifest"
+):
+    import_module(f"eolab_jobs.{name}")
+resources = files("eolab_jobs")
+assert "CREATE SCHEMA processing" in resources.joinpath("schema.sql").read_text()
+assert resources.joinpath("schema_check.sql").read_text()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_fractional_mask_is_numerical_and_has_no_geometry_or_service_dependency() -> (
@@ -401,12 +424,12 @@ def test_retired_upload_runtime_is_absent() -> None:
 def test_storage_and_native_mechanisms_do_not_know_model_definitions() -> None:
     """Model dispatch remains above opaque persistence and native execution ports."""
     for path in (
-        "src/eolab_app/processing/job_store.py",
-        "src/eolab_app/processing/artifacts.py",
+        "src/eolab_jobs/job_store.py",
+        "src/eolab_jobs/artifacts.py",
         "src/eolab_app/processing/raster_clip.py",
         "src/eolab_app/processing/raster_aggregate.py",
-        "src/eolab_app/processing/models.py",
-        "src/eolab_app/processing/ports.py",
+        "src/eolab_jobs/models.py",
+        "src/eolab_jobs/ports.py",
         "src/eolab_app/execution/reusable_process.py",
         "src/eolab_app/execution/bounded_process.py",
         "src/eolab_app/raster/source_contract.py",

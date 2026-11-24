@@ -27,13 +27,13 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.processing.aggregate_models import AggregateArea
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest, UnpreparedClip
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing import model_definitions, model_operations
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.native_processes import create_native_process
-from eolab_app.processing.models import JobSubmission, PreparedJobPlan, ProcessingError
+from eolab_jobs.models import JobSubmission, PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
@@ -305,7 +305,7 @@ def reference_clip(
 
         Raises:
             SelectionUnavailableError: If a saved vector selection cannot be read.
-            ProcessingError: If ordinary clip preparation fails.
+            JobError: If ordinary clip preparation fails.
         """
         assert context.areas is not None
         for name, selection in operation.vector_selections(queued.request).items():
@@ -559,7 +559,7 @@ def test_accepted_upload_survives_deletion_and_worker_restart(
             assert owner_hash and requested.drawingLayerId == reference.drawingLayerId
             assert requested.featureIds == reference.featureIds
             if requested.revision != revision:
-                raise ProcessingError("drawing_changed", "The drawing changed.", 409)
+                raise JobError("drawing_changed", "The drawing changed.", 409)
             return (SummaryPolygon(coordinates=(((0, -1), (1, -1), (1, 1), (0, 1), (0, -1)),)),)
 
         service.read_filter_drawing = read_drawing
@@ -647,7 +647,7 @@ def test_clip_retry_recovers_the_accepted_job_after_a_drawing_changes(upload_bou
     endpoint, request = processing_request(owner, target, "clip")
     accepted = owner.post(endpoint, json=request, headers=HEADERS)
     assert accepted.status_code == 202, accepted.text
-    read.side_effect = ProcessingError("drawing_changed", "The drawing changed.", 409)
+    read.side_effect = JobError("drawing_changed", "The drawing changed.", 409)
     retry = owner.post(endpoint, json=request, headers=HEADERS)
     assert retry.json().get("jobId") == accepted.json()["jobId"], retry.text
     fresh = owner.post(endpoint, json={**request, "requestId": uuid4().hex}, headers=HEADERS)
@@ -738,7 +738,7 @@ def test_cancelled_admission_blocks_cleanup_until_database_commit(
 
     def pause_admission(
         owner_hash: str, submissions: list[JobSubmission]
-    ) -> list[dict[str, Any] | ProcessingError]:
+    ) -> list[dict[str, Any] | JobError]:
         """Pause at the database boundary, then execute the actual admission transaction.
 
         Args:

@@ -14,13 +14,13 @@ from pydantic import (
     SerializerFunctionWrapHandler,
 )
 
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     Artifact,
     JobListResponse,
     JobProgressResponse,
     JobResponse,
     JobResultResponse,
-    ProcessingLimits,
+    JobLimits,
 )
 from eolab_app.sampling_box import Wgs84SamplingBox, sampling_box_bounds
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
@@ -380,7 +380,7 @@ ClipJobsResponse = JobListResponse[ClipJobResponse]
 
 
 @dataclass(frozen=True)
-class RasterClipLimits(ProcessingLimits):
+class RasterClipLimits(JobLimits):
     """Configure clip job scheduling and result retention.
 
     Clipping streams native blocks without a total-work or storage ceiling.

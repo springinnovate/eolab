@@ -18,8 +18,8 @@ from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
 )
 from eolab_app.execution.reusable_process import ReusableProcess, run_process
-from eolab_app.processing.models import Artifact, ProcessingError
-from eolab_app.processing.artifact_manifest import FileDeclaration
+from eolab_jobs.models import Artifact, JobError
+from eolab_jobs.artifact_manifest import FileDeclaration
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
@@ -34,7 +34,7 @@ from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservat
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
-from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
+from eolab_jobs.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.vector_uploads import VectorUploadStore
@@ -118,7 +118,7 @@ class ProcessingWorker:
             Operation context without browser, recipe or rendering state.
 
         Raises:
-            ProcessingError: If retained upload reading is not configured.
+            JobError: If retained upload reading is not configured.
         """
         areas = self.areas
         if (
@@ -126,7 +126,7 @@ class ProcessingWorker:
             and self.upload_storage is None
             and (areas is None or self.uploads is None)
         ):
-            raise ProcessingError(
+            raise JobError(
                 "uploads_unavailable",
                 "Uploaded source access is unavailable.",
                 503,
@@ -143,7 +143,7 @@ class ProcessingWorker:
                 Confined immutable file protected until this job stops.
 
             Raises:
-                ProcessingError: If the grant, active attempt or file is unavailable.
+                JobError: If the grant, active attempt or file is unavailable.
             """
             parent_attempt, file = await asyncio.to_thread(
                 self.jobs.read_retained_input,
@@ -169,14 +169,14 @@ class ProcessingWorker:
                     Use before native execution starts reporting its own progress.
 
             Raises:
-                ProcessingError: If storage fails, the job is cancelled, or this
+                JobError: If storage fails, the job is cancelled, or this
                     attempt no longer holds its execution lease.
                 asyncio.CancelledError: If the operation is stopped while reporting.
             """
             if not await asyncio.to_thread(
                 self.jobs.heartbeat, row["id"], row["attempt_id"], progress
             ):
-                raise ProcessingError(
+                raise JobError(
                     "interrupted",
                     "The job was cancelled or its worker lease ended.",
                     409,
@@ -214,12 +214,12 @@ class ProcessingWorker:
             a private published file. A retained file survives parent expiry/deletion.
 
         Raises:
-            ProcessingError: If an accepted source's retained file is unavailable.
+            JobError: If an accepted source's retained file is unavailable.
             RasterFeatureError: If catalog authorization fails.
         """
         if isinstance(source, UploadedRasterReference):
             if self.upload_storage is None:
-                raise ProcessingError(
+                raise JobError(
                     "uploads_unavailable",
                     "Uploaded raster source access is unavailable.",
                     503,
@@ -230,7 +230,7 @@ class ProcessingWorker:
                     self.upload_storage.get_retained_source, token
                 )
             except (UploadError, KeyError) as error:
-                raise ProcessingError(
+                raise JobError(
                     "source_unavailable",
                     "This calculation's uploaded raster is unavailable. Submit a new run.",
                     409,
@@ -275,7 +275,7 @@ class ProcessingWorker:
             Authorized native sources for this preparation or execution phase.
 
         Raises:
-            ProcessingError: If a named source is unavailable.
+            JobError: If a named source is unavailable.
         """
         result = {}
         for name, reference in (
@@ -284,7 +284,7 @@ class ProcessingWorker:
             try:
                 source, _ = await self._resolve_source(row, reference)
             except RasterFeatureError as error:
-                raise ProcessingError(
+                raise JobError(
                     "source_unavailable",
                     f"The model's {name} input is unavailable. {error.detail}",
                     422,
@@ -313,7 +313,7 @@ class ProcessingWorker:
             attempt, or (None, None) for an operation with no primary source.
 
         Raises:
-            ProcessingError: If authorization or planning fails, or the attempt is cancelled.
+            JobError: If authorization or planning fails, or the attempt is cancelled.
         """
         operation = get_model_operation(calculation.operation)
         if not await asyncio.to_thread(
@@ -322,7 +322,7 @@ class ProcessingWorker:
             row["attempt_id"],
             {"phase": "preparing"},
         ):
-            raise ProcessingError(
+            raise JobError(
                 "job_cancelled", "Calculation stopped before preparation.", 409
             )
         authorized, checksum = (
@@ -358,7 +358,7 @@ class ProcessingWorker:
             Metadata for the completed and published result files.
 
         Raises:
-            ProcessingError: If the source, resources, or native operation fail.
+            JobError: If the source, resources, or native operation fail.
         """
         operation = row["spec"]["operation"]
         model = (
@@ -370,7 +370,7 @@ class ProcessingWorker:
             model.implementationRevision != compute_implementation_checksum()
             or model.applicationBuild != get_application_build_id()
         ):
-            raise ProcessingError(
+            raise JobError(
                 "model_implementation_changed",
                 "The model implementation changed before execution. Submit a new run.",
                 409,
@@ -417,7 +417,7 @@ class ProcessingWorker:
             self.native,
         )
         if status != "ok":
-            raise ProcessingError(*value)
+            raise JobError(*value)
         return await self._publish_result(row, value)
 
     async def _publish_result(
@@ -433,7 +433,7 @@ class ProcessingWorker:
             The original scientific result with its verified immutable inventory.
 
         Raises:
-            ProcessingError: If file validation or publication fails.
+            JobError: If file validation or publication fails.
             asyncio.CancelledError: After the publication thread has stopped writing.
         """
         if row["spec"]["operation"] == MODEL_OPERATION:
@@ -497,7 +497,7 @@ class ProcessingWorker:
         The ordinary queue loop supplies retry pacing after storage failures.
 
         Raises:
-            ProcessingError: If storage still cannot acknowledge native exit.
+            JobError: If storage still cannot acknowledge native exit.
         """
         if self._stopped_attempt is None:
             return
@@ -525,7 +525,7 @@ class ProcessingWorker:
             True after handling a claimed job; False when nothing can be claimed.
 
         Raises:
-            ProcessingError: If durable storage is unavailable.
+            JobError: If durable storage is unavailable.
             asyncio.CancelledError: After stopping native work on worker shutdown.
         """
         await self._finish_stopped_attempt()
@@ -591,7 +591,7 @@ class ProcessingWorker:
         except Exception as error:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            if isinstance(error, ProcessingError):
+            if isinstance(error, JobError):
                 detail = {"code": error.code, "detail": error.detail}
             elif isinstance(error, (TimeoutError, ProcessDeadlineError)):
                 detail = {
@@ -618,7 +618,7 @@ class ProcessingWorker:
             await asyncio.gather(task, return_exceptions=True)
             if not finished:
                 self._stopped_attempt = identifier, attempt
-                with suppress(ProcessingError):
+                with suppress(JobError):
                     await self._finish_stopped_attempt()
         return True
 
@@ -626,7 +626,7 @@ class ProcessingWorker:
         """Remove terminal files/snapshots only after native and transfer leases end.
 
         Raises:
-            ProcessingError: If storage state cannot be read safely.
+            JobError: If storage state cannot be read safely.
             OSError: If removing the files fails. Their recorded sizes are retained.
         """
 
@@ -669,7 +669,7 @@ async def serve(
                         await asyncio.sleep(2)
                     else:
                         await wakeup.wait(2)
-            except (ProcessingError, OSError):
+            except (JobError, OSError):
                 LOGGER.warning(
                     "Processing worker storage is unavailable; retrying in five seconds"
                 )

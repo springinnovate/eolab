@@ -12,14 +12,14 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.models import Artifact, PreparedJobPlan, JobError
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.shared_calculations import identify_shared_calculation
 from eolab_app.processing.aggregate_models import (
     AggregatePlanRequest,
     UnpreparedCalculation,
 )
-from eolab_app.processing.job_notifications import (
+from eolab_jobs.job_notifications import (
     JOB_CHANGE_CHANNEL,
     PostgresNotifications,
 )
@@ -84,7 +84,7 @@ def test_only_last_cancellation_stops_shared_work(
     )
     if running:
         assert store.heartbeat(claimed["id"], claimed["attempt_id"], {})
-    with pytest.raises(ProcessingError) as denied:
+    with pytest.raises(JobError) as denied:
         store.cancel(second["id"], "first")
     assert denied.value.status == 404
     assert store.cancel(second["id"], "second")["status"] == (

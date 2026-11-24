@@ -16,7 +16,7 @@ from eolab_app.processing.habitat_earth_engine import HabitatCacheCoverage
 from eolab_app.processing.habitat_preparation_selections import (
     HabitatPreparationSelections,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.routes.habitat import create_habitat_router
 
 BASE = "/api/processing/models/habitat-condition/preparation-selections"
@@ -179,7 +179,7 @@ def test_unavailable_preparation_storage_has_an_actionable_error(
         else None
     )
     if store is not None:
-        store.list.side_effect = ProcessingError(
+        store.list.side_effect = JobError(
             "habitat_preparation_selections_unavailable",
             "Prepared Catalog selections are temporarily unavailable.",
             503,

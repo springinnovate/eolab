@@ -16,7 +16,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import Polygon, box, mapping
 
 from eolab_app.processing.aggregate_models import AggregateArea
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 import eolab_app.processing.raster_aggregate as kernel
 from raster_aggregate_support import LIMITS, make_spec
@@ -396,14 +396,14 @@ def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:
         crs="EPSG:4267",
         transform=from_origin(-100, 45, 1, 1),
     )
-    with pytest.raises(ProcessingError, match="WGS84"):
+    with pytest.raises(JobError, match="WGS84"):
         make_spec(nad, ["areaha(a>0)"])
     wrapped = write_source(
         tmp_path / "wrap.tif",
         np.ones((1, 2), dtype="uint8"),
         transform=from_origin(179, 10, 1, 1),
     )
-    with pytest.raises(ProcessingError, match="-180 to 180"):
+    with pytest.raises(JobError, match="-180 to 180"):
         make_spec(wrapped, ["areaha(a>0)"])
 
 

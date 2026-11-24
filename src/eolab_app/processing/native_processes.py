@@ -2,7 +2,7 @@
 
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.bounded_vector import summary_process
-from eolab_app.processing.models import ProcessingLimits
+from eolab_jobs.models import JobLimits
 from eolab_app.processing.raster_aggregate import aggregate_process_target
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.downstream_calculation import downstream_process_target
@@ -19,7 +19,7 @@ from eolab_app.processing.habitat_bulk_preparation import (
 )
 
 
-def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
+def create_native_process(limits: JobLimits) -> ReusableProcess:
     """Configure a reusable native process for Processing calculations.
 
     Args:

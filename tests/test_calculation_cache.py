@@ -436,8 +436,8 @@ def test_worker_reuses_results_after_authorization(
     from datetime import datetime, timezone
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
-    from eolab_app.processing.artifacts import LocalJobArtifacts
-    from eolab_app.processing.models import ProcessingError
+    from eolab_jobs.artifacts import LocalJobArtifacts
+    from eolab_jobs.models import JobError
     from eolab_app.processing.job_preparation import prepare_aggregate_job
     from eolab_app.processing.worker import ProcessingWorker
     from eolab_app.raster.models import AuthorizedRaster
@@ -509,7 +509,7 @@ def test_worker_reuses_results_after_authorization(
     assert artifacts.result_path("b" * 32, result_name="result.csv").exists()
     assert artifacts.result_path("d" * 32, result_name="result.csv").exists()
 
-    authorizer.authorize.side_effect = ProcessingError(
+    authorizer.authorize.side_effect = JobError(
         "source_unavailable", "Source unavailable", 409
     )
     store.claim_next_job.return_value = {**row, "id": "e" * 32, "attempt_id": "f" * 32}
@@ -539,7 +539,7 @@ def test_cache_hit_skips_planning_and_pins_values(
     from eolab_app.processing.aggregate_models import (
         AggregatePlanRequest,
     )
-    from eolab_app.processing.models import ProcessingError
+    from eolab_jobs.models import JobError
 
     if area_kind == "catalogSelection":
         area = AggregateArea(
@@ -634,13 +634,11 @@ def test_cache_hit_skips_planning_and_pins_values(
         if area_kind == "catalogSelection"
         else authorizer.authorize
     )
-    denied.side_effect = ProcessingError(
-        "source_unavailable", "Source unavailable", 409
-    )
+    denied.side_effect = JobError("source_unavailable", "Source unavailable", 409)
     row["spec"] = UnpreparedCalculation(request=request).model_dump(
         mode="json", by_alias=True
     )
-    with pytest.raises(ProcessingError):
+    with pytest.raises(JobError):
         asyncio.run(
             worker._prepare_operation(
                 row, UnpreparedCalculation.model_validate(row["spec"]), None

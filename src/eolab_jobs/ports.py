@@ -4,16 +4,16 @@ from typing import Protocol, Any
 from pathlib import Path
 from datetime import datetime
 from threading import Event
-from eolab_app.processing.artifact_manifest import (
+from eolab_jobs.artifact_manifest import (
     ArtifactManifest,
     FileDeclaration,
     PublishedFile,
 )
-from eolab_app.processing.models import (
+from eolab_jobs.models import (
     Artifact,
     PreparedJobPlan,
     JobSubmission,
-    ProcessingError,
+    JobError,
     JobInputFile,
 )
 
@@ -31,7 +31,7 @@ class JobSubscription(Protocol):
             True for a pending hint, False after the timeout.
 
         Raises:
-            ProcessingError: If the subscription closes before a notification is read.
+            JobError: If the subscription closes before a notification is read.
         """
         ...
 
@@ -89,7 +89,7 @@ class JobStore(Protocol):
             serializes admission with upload cleanup before using this snapshot.
 
         Raises:
-            ProcessingError: If the database cannot read the active jobs.
+            JobError: If the database cannot read the active jobs.
         """
         ...
 
@@ -107,7 +107,7 @@ class JobStore(Protocol):
             Immutable identity to recheck atomically when accepting work.
 
         Raises:
-            ProcessingError: If the file is foreign, expired, deleted or unpublished.
+            JobError: If the file is foreign, expired, deleted or unpublished.
         """
         ...
 
@@ -126,7 +126,7 @@ class JobStore(Protocol):
             Parent storage attempt and validated immutable file metadata.
 
         Raises:
-            ProcessingError: If the grant, attempt or published identity is invalid.
+            JobError: If the grant, attempt or published identity is invalid.
         """
         ...
 
@@ -142,7 +142,7 @@ class JobStore(Protocol):
             Owned input identifier.
 
         Raises:
-            ProcessingError: If storage capacity or input size is exceeded.
+            JobError: If storage capacity or input size is exceeded.
         """
         ...
 
@@ -159,7 +159,7 @@ class JobStore(Protocol):
             JSON input for operation validation, or an empty object after an access-only check.
 
         Raises:
-            ProcessingError: If the input is unavailable to this owner.
+            JobError: If the input is unavailable to this owner.
         """
         ...
 
@@ -171,7 +171,7 @@ class JobStore(Protocol):
             identifier: Input to release.
 
         Raises:
-            ProcessingError: If storage is unavailable.
+            JobError: If storage is unavailable.
         """
         ...
 
@@ -204,7 +204,7 @@ class JobStore(Protocol):
             Updated running job.
 
         Raises:
-            ProcessingError: If cancellation or a lost lease prevents the attempt from continuing.
+            JobError: If cancellation or a lost lease prevents the attempt from continuing.
         """
         ...
 
@@ -231,14 +231,14 @@ class JobStore(Protocol):
             Owned handle with current computation state and its small public summary.
 
         Raises:
-            ProcessingError: If the request identity conflicts or job storage is unavailable.
+            JobError: If the request identity conflicts or job storage is unavailable.
         """
 
         ...
 
     def submit_batch(
         self, owner: str, submissions: list[JobSubmission]
-    ) -> list[dict[str, Any] | ProcessingError]:
+    ) -> list[dict[str, Any] | JobError]:
         """Admit independent requests under one connection, lock and transaction.
 
         Args:
@@ -251,7 +251,7 @@ class JobStore(Protocol):
             back the transaction. Retries retain each request's original identity.
 
         Raises:
-            ProcessingError: If the transaction fails without a known outcome.
+            JobError: If the transaction fails without a known outcome.
             ValueError: If the batch size or internal request identity is invalid.
         """
         ...
@@ -267,7 +267,7 @@ class JobStore(Protocol):
             Owned job record.
 
         Raises:
-            ProcessingError: If no owned record exists.
+            JobError: If no owned record exists.
         """
         ...
 
@@ -285,7 +285,7 @@ class JobStore(Protocol):
             Updated owned job with its creation time, inputs and files unchanged.
 
         Raises:
-            ProcessingError: If ownership, deletion or storage prevents the update.
+            JobError: If ownership, deletion or storage prevents the update.
         """
         ...
 
@@ -349,7 +349,7 @@ class JobStore(Protocol):
 
         Raises:
             ValueError: If the page size or operation count is invalid.
-            ProcessingError: If job storage is unavailable.
+            JobError: If job storage is unavailable.
         """
         ...
 
@@ -367,7 +367,7 @@ class JobStore(Protocol):
             Updated owned job.
 
         Raises:
-            ProcessingError: If deleting active work or an unowned job.
+            JobError: If deleting active work or an unowned job.
         """
         ...
 
@@ -437,7 +437,7 @@ class JobStore(Protocol):
             Matching payloads by hash; missing or expired entries are omitted.
 
         Raises:
-            ProcessingError: If PostgreSQL is unavailable.
+            JobError: If PostgreSQL is unavailable.
             ValueError: If more than five keys are requested.
         """
         ...
@@ -455,7 +455,7 @@ class JobStore(Protocol):
             Job metadata and renewable opaque transfer ID.
 
         Raises:
-            ProcessingError: If the result is unavailable or transfer capacity is full.
+            JobError: If the result is unavailable or transfer capacity is full.
         """
         ...
 
@@ -481,7 +481,7 @@ class JobStore(Protocol):
             Available result metadata, or None. This grants no user/file access.
 
         Raises:
-            ProcessingError: If lookup fails and reconciliation must retry.
+            JobError: If lookup fails and reconciliation must retry.
         """
         ...
 
@@ -496,7 +496,7 @@ class JobStore(Protocol):
             until the worker confirms filesystem cleanup.
 
         Raises:
-            ProcessingError: If the database cannot update expiration or read jobs.
+            JobError: If the database cannot update expiration or read jobs.
         """
         ...
 
@@ -556,7 +556,7 @@ class JobArtifactStore(Protocol):
             Verified files and exact retained bytes, including the manifest file.
 
         Raises:
-            ProcessingError: If a declared file is missing, changed or unsafe, or work is cancelled.
+            JobError: If a declared file is missing, changed or unsafe, or work is cancelled.
             OSError: If atomic publication fails.
         """
         ...
@@ -572,7 +572,7 @@ class JobArtifactStore(Protocol):
             Existing confined regular file.
 
         Raises:
-            ProcessingError: If the name is unsafe or the file is unavailable.
+            JobError: If the name is unsafe or the file is unavailable.
         """
         ...
 
@@ -590,7 +590,7 @@ class JobArtifactStore(Protocol):
             Confined, existing artifact path.
 
         Raises:
-            ProcessingError: If the immutable artifact is absent or not a file.
+            JobError: If the immutable artifact is absent or not a file.
         """
         ...
 

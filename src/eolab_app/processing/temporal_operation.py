@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from eolab_app.bounded_vector import summary_process
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.raster_operations import bind_area_arguments
@@ -145,7 +145,7 @@ async def prepare_temporal_map(
         Path-free execution plan with actual observation coverage and output units.
 
     Raises:
-        ProcessingError: If the statistic does not support this variable's units
+        JobError: If the statistic does not support this variable's units
             or time support, no observations overlap, or area preparation fails.
     """
     output_unit = source.unit
@@ -153,7 +153,7 @@ async def prepare_temporal_map(
     precipitation = queued.request.precipitation
     if queued.request.reduction.reducer == "precipitation_total":
         if source.time_support != "mean_rate" or source.unit != precipitation.inputUnit:
-            raise ProcessingError(
+            raise JobError(
                 "unsupported_precipitation_source",
                 f"Precipitation total requires mean rates in {precipitation.inputUnit}. "
                 "Choose a precipitation-rate variable with those units.",
@@ -161,7 +161,7 @@ async def prepare_temporal_map(
         output_unit = precipitation.outputUnit
         conversion_factor = precipitation.factor
     if not source.observations:
-        raise ProcessingError(
+        raise JobError(
             "no_observations", "No observations are available in the selected period."
         )
     request = queued.request
@@ -181,7 +181,7 @@ async def prepare_temporal_map(
         )
     else:
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Vector selection reader is unavailable.", 409
             )
         resolved = await context.areas.resolve_for_sampling(request.catalogSelection)
@@ -189,7 +189,7 @@ async def prepare_temporal_map(
             summary_process, (resolved, None), None, context.native
         )
         if not success:
-            raise ProcessingError("selection_unavailable", summary, 409)
+            raise JobError("selection_unavailable", summary, 409)
         area = AggregateArea(
             kind="catalogSelection",
             bounds=summary["bbox"],
@@ -203,7 +203,7 @@ async def prepare_temporal_map(
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*grid)
+        raise JobError(*grid)
     spec = TemporalMapSpec(
         source=request.source,
         reduction=request.reduction,
@@ -244,11 +244,11 @@ async def prepare_temporal_execution(
         Native observation metadata and the plan with its ephemeral vector reader.
 
     Raises:
-        ProcessingError: If the selected vector source cannot be read.
+        JobError: If the selected vector source cannot be read.
     """
     if spec.area.kind == "catalogSelection":
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Vector selection reader is unavailable.", 409
             )
         resolved = await context.areas.resolve_for_sampling(spec.area.catalogSelection)

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 
 FUNCTIONS = frozenset(
     {"count", "sum", "mean", "stdev", "min", "max", "areaha", "pixelValue"}
@@ -65,9 +65,7 @@ class Parser:
             alias: Validated catalog source alias.
         """
         if len(text.encode("utf-8")) > 4096:
-            raise ProcessingError(
-                "invalid_expression", "Expressions must fit within 4 KiB."
-            )
+            raise JobError("invalid_expression", "Expressions must fit within 4 KiB.")
         self.tokens: list[tuple[str, int]] = []
         self.index = self.nodes = self.nesting = 0
         self.alias = alias
@@ -77,7 +75,7 @@ class Parser:
                 break
             match = TOKEN.match(text, position)
             if match is None:
-                raise ProcessingError(
+                raise JobError(
                     "invalid_expression",
                     f"Unexpected character at column {position + 1}.",
                 )
@@ -90,7 +88,7 @@ class Parser:
             position = match.end()
         self.tokens.append(("", len(text) + 1))
 
-    def error(self, message: str) -> ProcessingError:
+    def error(self, message: str) -> JobError:
         """Return a location-bearing grammar error.
 
         Args:
@@ -99,7 +97,7 @@ class Parser:
         Returns:
             Sanitized validation error for the current token.
         """
-        return ProcessingError(
+        return JobError(
             "invalid_expression", f"{message} At column {self.tokens[self.index][1]}."
         )
 

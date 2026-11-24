@@ -33,7 +33,7 @@ from eolab_app.processing.habitat_preparation_models import (
     QueuedHabitatBulkPreparation,
 )
 from eolab_app.processing.model_yaml import encode_canonical_json
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 
 
@@ -49,9 +49,9 @@ def bind_habitat_bulk_preparation(
         name: Unused recipe label.
 
     Raises:
-        ProcessingError: Always; bulk preparation is an administrator command.
+        JobError: Always; bulk preparation is an administrator command.
     """
-    raise ProcessingError(
+    raise JobError(
         "administration_required",
         "Start bulk input preparation from Habitat administration.",
         403,
@@ -89,7 +89,7 @@ async def _active_preparation_areas(context: OperationContext) -> set[bytes]:
         Canonical selection/year keys for queued, running or cancelling work.
 
     Raises:
-        ProcessingError: If retained history cannot be read.
+        JobError: If retained history cannot be read.
         ValueError: If persisted preparation metadata is invalid.
     """
     active = set()
@@ -135,7 +135,7 @@ async def _check_and_queue_area(
         Accepted child identifier, cached outcome, or active-work skip.
 
     Raises:
-        ProcessingError: If recovery conflicts, coverage fails or admission fails.
+        JobError: If recovery conflicts, coverage fails or admission fails.
         SelectionUnavailableError: If Catalog source authorization rejects the area.
         ValueError: If the installed scientific configuration rejects the year.
         OSError: If the installed scientific configuration cannot be read.
@@ -151,7 +151,7 @@ async def _check_and_queue_area(
             previous["operation"] != OPERATION
             or previous["request_hash"] != request_hash
         ):
-            raise ProcessingError(
+            raise JobError(
                 "request_conflict",
                 "This saved preparation request has conflicting inputs.",
                 409,
@@ -227,7 +227,7 @@ async def prepare_habitat_bulk_preparation(
         Prepared report plan for normal artifact publication and retention.
 
     Raises:
-        ProcessingError: If source/runtime configuration or job history is unavailable.
+        JobError: If source/runtime configuration or job history is unavailable.
         ValueError: If persisted active preparation metadata is invalid.
         asyncio.CancelledError: After an in-progress native coverage read has stopped.
     """
@@ -243,7 +243,7 @@ async def prepare_habitat_bulk_preparation(
     )
     if queued.request.areas:
         if context.areas is None:
-            raise ProcessingError(
+            raise JobError(
                 "selection_unavailable", "Catalog selection reader is unavailable.", 409
             )
         runtime = cast(
@@ -251,7 +251,7 @@ async def prepare_habitat_bulk_preparation(
             context.operation_settings.get(BULK_OPERATION),
         )
         if runtime is None:
-            raise ProcessingError(
+            raise JobError(
                 "habitat_earth_engine_unavailable",
                 "Ecosystem Condition input preparation is not configured. Ask the administrator to check its settings.",
                 503,
@@ -260,7 +260,7 @@ async def prepare_habitat_bulk_preparation(
         for request in queued.request.areas:
             try:
                 outcome = await _check_and_queue_area(context, runtime, request, active)
-            except (ProcessingError, SelectionUnavailableError) as error:
+            except (JobError, SelectionUnavailableError) as error:
                 outcome = HabitatBulkPreparationOutcome(
                     name=request.name,
                     year=request.year,

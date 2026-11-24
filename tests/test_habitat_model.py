@@ -27,7 +27,7 @@ from nhi_terrestrial_integrity_modeling.prepared_runner import run_habitat_condi
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_calculation import HabitatSources, read_habitat_area
 from eolab_app.processing.habitat_models import HabitatEarthEngineStack
@@ -44,7 +44,7 @@ from eolab_app.processing.model_runs import (
     export_model_job_yaml,
 )
 from eolab_app.processing.model_yaml import parse_yaml
-from eolab_app.processing.models import JobInputFile, ProcessingError
+from eolab_jobs.models import JobInputFile, JobError
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.service import serialize_processing_job
@@ -715,7 +715,7 @@ def test_habitat_rejects_ambiguous_stack_or_preparation(
             "resampling": request.inputs["preparation"]["resampling"]
         }
         build_model_calculation_request(baseline, ModelRegistry((habitat_definition,)))
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         build_model_calculation_request(request, ModelRegistry((habitat_definition,)))
     assert error.value.code == "invalid_model_inputs"
 

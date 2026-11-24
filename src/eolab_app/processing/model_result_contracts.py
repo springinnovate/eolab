@@ -10,8 +10,7 @@ from pydantic import (
     model_validator,
 )
 from eolab_app.processing.aggregate_models import AggregateValue, NamedCalculation
-from eolab_app.processing.models import JobResultResponse
-
+from eolab_jobs.models import JobResultResponse
 
 class RasterResultGrid(BaseModel):
     """The dimensions, coordinate system and datatype of a downloadable raster.

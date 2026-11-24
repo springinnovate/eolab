@@ -1,1 +1,1 @@
-"""Operation-independent Python client for the EOLab Job service."""
+"""Shared job contracts, durable storage, notifications, and HTTP client."""

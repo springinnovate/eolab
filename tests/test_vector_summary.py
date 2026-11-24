@@ -21,7 +21,7 @@ from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelecti
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest
 from eolab_app.processing.model_runs import build_model_calculation_request
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.vector_summary import calculate_vector_summary
 from eolab_app.processing.vector_summary_models import (
     VectorSummaryInput,
@@ -76,7 +76,7 @@ def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
         }
     )
     if capture_kind != "configured":
-        with pytest.raises(ProcessingError) as error:
+        with pytest.raises(JobError) as error:
             build_model_calculation_request(request, registry)
         assert error.value.code == "invalid_model_inputs"
         return
@@ -474,7 +474,7 @@ def test_float_sum_rejects_an_unrepresentable_final_result(tmp_path: Path) -> No
         tmp_path: Real original and output GeoPackages.
     """
     source, spec = summary_source(tmp_path, [("A", 1e308), ("A", 1e308)])
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         calculate_vector_summary(source, spec, tmp_path)
     assert error.value.code == "vector_summary_overflow"
 
@@ -775,7 +775,7 @@ def test_failed_native_union_reports_group_geometry_error(
     monkeypatch.setattr(
         "eolab_app.processing.vector_summary.disjoint_subset_union_all", failed_union
     )
-    with pytest.raises(ProcessingError) as error:
+    with pytest.raises(JobError) as error:
         calculate_vector_summary(source, spec, tmp_path)
     assert error.value.code == "invalid_vector_summary_geometry"
     assert "Vector summary group 'A'" in caplog.text
@@ -826,7 +826,7 @@ def test_invalid_summary_inputs_fail_locally(tmp_path: Path, case: str) -> None:
                 }
             ),
         )
-    with pytest.raises(ProcessingError) as failure:
+    with pytest.raises(JobError) as failure:
         calculate_vector_summary(source, spec, tmp_path)
     assert (
         failure.value.code

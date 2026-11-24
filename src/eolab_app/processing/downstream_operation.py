@@ -17,7 +17,7 @@ from eolab_app.processing.downstream_calculation import (
     downstream_process_target,
 )
 from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
-from eolab_app.processing.models import PreparedJobPlan, ProcessingError
+from eolab_jobs.models import PreparedJobPlan, JobError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
@@ -140,11 +140,11 @@ async def resolve_downstream_sources(
         Ephemeral native paths and exact selection readers.
 
     Raises:
-        ProcessingError: If the configured watershed is missing or unreadable.
+        JobError: If the configured watershed is missing or unreadable.
         SelectionUnavailableError: If the user-selected starting vector is unavailable.
     """
     if context.areas is None:
-        raise ProcessingError(
+        raise JobError(
             "selection_unavailable", "Catalog vector reading is unavailable.", 409
         )
     try:
@@ -154,7 +154,7 @@ async def resolve_downstream_sources(
             else await context.areas.resolve_for_sampling(watershed_selection)
         )
     except SelectionUnavailableError as error:
-        raise ProcessingError(
+        raise JobError(
             "watershed_unavailable",
             "The model's configured watershed layer is missing or unreadable. Check the configured source and try again.",
             409,
@@ -188,7 +188,7 @@ async def prepare_downstream(
         Values grid metadata and the watershed identity captured for this run.
 
     Raises:
-        ProcessingError: If preparation or source access fails.
+        JobError: If preparation or source access fails.
         ProcessDeadlineError: If the supervised process exits without a result.
     """
     sources = await resolve_downstream_sources(context, queued.request, authorized)
@@ -199,7 +199,7 @@ async def prepare_downstream(
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*result)
+        raise JobError(*result)
     return PreparedJobPlan(
         operation=result.operation,
         specification=result.model_dump(mode="json", by_alias=True),
@@ -226,7 +226,7 @@ async def resolve_downstream_execution_inputs(
         Ephemeral native sources and the unchanged numerical plan.
 
     Raises:
-        ProcessingError: If source access fails.
+        JobError: If source access fails.
     """
     return (
         await resolve_downstream_sources(

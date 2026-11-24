@@ -21,7 +21,7 @@ from eolab_app.processing.model_yaml import (
     export_yaml,
     parse_yaml,
 )
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.model_operations import OPERATIONS
 from eolab_app.processing.raster_expression import compile_expression, walk
 
@@ -298,7 +298,7 @@ class SummaryExpressionParameter(ModelSchema):
         """
         try:
             tree = compile_expression(self.default, self.alias)
-        except ProcessingError as error:
+        except JobError as error:
             raise ValueError(error.detail) from error
         if any(node.op == "pixelValue" for node in walk(tree)):
             raise ValueError("This model has no point binding for pixelValue")
@@ -541,7 +541,7 @@ def validate_operation(definition: ModelDefinition) -> None:
         definition: A recipe whose internal references have already been validated.
 
     Raises:
-        ProcessingError: If the operation is unavailable or its arguments, outputs
+        JobError: If the operation is unavailable or its arguments, outputs
             or execution profile do not match the installed implementation, or
             its primary output has no supported model-result response type, or
             its primary-source callback and input declaration disagree.
@@ -612,7 +612,7 @@ def validate_operation(definition: ModelDefinition) -> None:
             )
         )
     if not valid:
-        raise ProcessingError(
+        raise JobError(
             "unsupported_model_operation",
             "The definition does not match an installed operation contract.",
         )
@@ -628,7 +628,7 @@ class ModelRegistry:
             definitions: Installed recipes, with no count limit.
 
         Raises:
-            ProcessingError: If recipes repeat an ID/version, require an unsupported
+            JobError: If recipes repeat an ID/version, require an unsupported
                 operation, or cannot be exported as valid Model YAML.
         """
         entries = {}
@@ -636,9 +636,7 @@ class ModelRegistry:
             validate_operation(definition)
             key = (definition.id, definition.version)
             if key in entries:
-                raise ProcessingError(
-                    "invalid_model_library", "Duplicate model identity."
-                )
+                raise JobError("invalid_model_library", "Duplicate model identity.")
             export_yaml(definition.to_document())
             entries[key] = definition
         self._entries = MappingProxyType(entries)
@@ -651,7 +649,7 @@ class ModelRegistry:
             A registry containing every installed recipe, checked before use.
 
         Raises:
-            ProcessingError: If recipes are missing, invalid, duplicated or unsupported.
+            JobError: If recipes are missing, invalid, duplicated or unsupported.
         """
         try:
             paths = sorted(
@@ -667,7 +665,7 @@ class ModelRegistry:
                 raise ValueError("No installed models")
             return cls(definitions)
         except (OSError, ValidationError, ValueError) as error:
-            raise ProcessingError(
+            raise JobError(
                 "invalid_model_library",
                 "Installed model definitions are missing or invalid.",
                 503,
@@ -684,12 +682,12 @@ class ModelRegistry:
             The matching model definition.
 
         Raises:
-            ProcessingError: If that model version is not installed.
+            JobError: If that model version is not installed.
         """
         try:
             return self._entries[(identifier, version)]
         except KeyError as error:
-            raise ProcessingError(
+            raise JobError(
                 "model_unavailable", "This model version is not installed.", 404
             ) from error
 

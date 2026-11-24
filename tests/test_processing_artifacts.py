@@ -5,8 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from eolab_app.processing.artifacts import LocalJobArtifacts
-
+from eolab_jobs.artifacts import LocalJobArtifacts
 
 def test_prepare_does_not_scan_retained_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -37,7 +36,7 @@ def test_prepare_does_not_scan_retained_outputs(
 
     monkeypatch.setattr("os.scandir", reject_scan)
     monkeypatch.setattr(
-        "eolab_app.processing.artifacts.shutil.disk_usage",
+        "eolab_jobs.artifacts.shutil.disk_usage",
         lambda path: SimpleNamespace(free=100),
     )
     assert artifacts.prepare("b" * 32).is_dir()
@@ -55,7 +54,7 @@ def test_prepare_does_not_reserve_physical_free_space(
     artifacts = LocalJobArtifacts(tmp_path)
     artifacts.initialize()
     monkeypatch.setattr(
-        "eolab_app.processing.artifacts.shutil.disk_usage",
+        "eolab_jobs.artifacts.shutil.disk_usage",
         lambda path: SimpleNamespace(free=20),
     )
     assert artifacts.prepare("a" * 32).is_dir()
@@ -84,5 +83,5 @@ def test_prepare_does_not_query_free_space(
         """
         raise OSError("free space unavailable")
 
-    monkeypatch.setattr("eolab_app.processing.artifacts.shutil.disk_usage", unavailable)
+    monkeypatch.setattr("eolab_jobs.artifacts.shutil.disk_usage", unavailable)
     assert artifacts.prepare("a" * 32).is_dir()

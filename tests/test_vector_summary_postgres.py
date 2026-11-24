@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import psycopg
 import pytest
 
-from eolab_app.processing.job_store import PostgresJobStore
+from eolab_jobs.job_store import PostgresJobStore
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.vector_summary_models import VectorSummaryDetails

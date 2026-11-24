@@ -21,7 +21,7 @@ from eolab_app.processing.downstream_calculation import (
 )
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamSettings
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
@@ -288,7 +288,7 @@ def test_downstream_progress_counts_drainage_groups(
         monkeypatch: Capture each progress snapshot after its atomic write.
     """
     from shapely.geometry import box, mapping
-    from eolab_app.processing.artifacts import LocalJobArtifacts, write_progress
+    from eolab_jobs.artifacts import LocalJobArtifacts, write_progress
 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(
@@ -389,7 +389,7 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
     plan = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
-    with pytest.raises(ProcessingError, match="no positive valid cells"):
+    with pytest.raises(JobError, match="no positive valid cells"):
         calculate_downstream(sources, plan, directory, limits)
 
 
@@ -631,7 +631,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     Args:
         tmp_path: Isolated catalog and owned artifact fixtures.
     """
-    from eolab_app.processing.artifacts import LocalJobArtifacts
+    from eolab_jobs.artifacts import LocalJobArtifacts
     from eolab_app.processing.worker import ProcessingWorker
     from eolab_app.processing.native_processes import create_native_process
     from eolab_app.processing.model_definitions import ModelRegistry
@@ -819,7 +819,7 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
         tmp_path: Original sources and Processing-owned attempt storage.
     """
     from multiprocessing import active_children
-    from eolab_app.processing.artifacts import LocalJobArtifacts
+    from eolab_jobs.artifacts import LocalJobArtifacts
     from eolab_app.processing.native_processes import create_native_process
     from eolab_app.processing.downstream_calculation import downstream_process_target
 
@@ -1131,7 +1131,7 @@ def test_missing_configured_raster_names_the_runtime_input(
     absent = tmp_path / "absent.tif"
     sources = replace(sources, rasters={**sources.rasters, missing: absent})
     label = "configured DEM" if missing == "dem" else "values raster"
-    with pytest.raises(ProcessingError, match=label) as failure:
+    with pytest.raises(JobError, match=label) as failure:
         plan_downstream(sources, request)
     assert failure.value.code == "source_unavailable"
     assert str(absent) not in failure.value.detail
@@ -1181,7 +1181,7 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     assert execution_sources.network == sources.network
     reader.resolve_for_sampling.assert_awaited_once_with(sources.network.selection)
     reader.resolve_for_sampling.side_effect = SelectionUnavailableError("unavailable")
-    with pytest.raises(ProcessingError, match="watershed layer"):
+    with pytest.raises(JobError, match="watershed layer"):
         asyncio.run(resolve_downstream_execution_inputs(context, restored, values))
     assert reader.resolve_source.await_count == 1
 
@@ -1207,7 +1207,7 @@ def test_missing_configured_watershed_names_the_runtime_input(tmp_path: Path) ->
     values = AuthorizedRaster(
         sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
     )
-    with pytest.raises(ProcessingError, match="configured watershed layer") as failure:
+    with pytest.raises(JobError, match="configured watershed layer") as failure:
         asyncio.run(resolve_downstream_sources(context, request, values))
     assert failure.value.code == "watershed_unavailable"
     assert "private path" not in failure.value.detail
@@ -1259,7 +1259,7 @@ def test_native_source_failure_identifies_configured_input(
     expected_code = (
         "watershed_read_failed" if input_name == "watersheds" else "dem_read_failed"
     )
-    with pytest.raises(ProcessingError) as failure:
+    with pytest.raises(JobError) as failure:
         downstream_runner.run_original_downstream(
             sources, spec, directory, limits, box(0, 0, 1, 4)
         )

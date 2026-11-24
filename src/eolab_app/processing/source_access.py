@@ -1,6 +1,6 @@
 """Adapt Processing artifact ownership to scoped immutable source-file access."""
 
-from eolab_app.processing.models import ArtifactDownload, ProcessingError
+from eolab_jobs.models import ArtifactDownload, JobError
 from eolab_app.processing.service import ProcessingService
 from eolab_app.source_files import (
     LeasedSourceFiles,
@@ -35,7 +35,7 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
         """
         try:
             return await service.download_model_artifact(owner, run_id, file_id)
-        except ProcessingError as error:
+        except JobError as error:
             raise SourceFileError(
                 error.detail, error.status, code=error.code
             ) from error
@@ -53,7 +53,7 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
         """
         try:
             await service.check_model_artifact(owner, run_id, file_id)
-        except ProcessingError as error:
+        except JobError as error:
             raise SourceFileError(
                 error.detail, error.status, code=error.code
             ) from error
@@ -85,7 +85,7 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
         """
         try:
             return await service.resolve_model_artifact(owner, run_id, file_id)
-        except ProcessingError as error:
+        except JobError as error:
             raise SourceFileError(
                 error.detail, error.status, code=error.code
             ) from error

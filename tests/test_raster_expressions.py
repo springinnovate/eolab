@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from eolab_app.processing.aggregate_models import AggregatePlanRequest
-from eolab_app.processing.models import ProcessingError
+from eolab_jobs.models import JobError
 from eolab_app.processing.raster_expression import Calculation, compile_expression
 from raster_source_support import SOURCE
 
@@ -107,7 +107,7 @@ def test_rejects_unsupported_unsafe_or_unbounded_language(expression: str) -> No
     Args:
         expression: Forbidden or invalid input.
     """
-    with pytest.raises(ProcessingError, match="."):
+    with pytest.raises(JobError, match="."):
         compile_expression(expression, "a")
 
 

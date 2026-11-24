@@ -16,7 +16,7 @@ from eolab_app.processing.aggregate_models import (
     UnpreparedCalculation,
     AggregateJobResponse,
 )
-from eolab_app.processing.artifacts import LocalJobArtifacts
+from eolab_jobs.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import ClipArea, ClipSpec, RasterClipLimits
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.native_processes import create_native_process
