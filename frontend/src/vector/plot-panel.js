@@ -6,6 +6,9 @@ const FIELD_ORDER = new Intl.Collator("en", {numeric: true, sensitivity: "base"}
 /** Number of features in one interactive comparison or native picker page. */
 export const FEATURES_PER_PAGE = 1000;
 
+/** Explain an unavailable numeric range while directing users to the unchanged readings. */
+export const VECTOR_PLOT_RANGE_MESSAGE = "Some values are too large for this plot. Open Values to see every exact value.";
+
 /** List the exact feature ranges available in a plot, values table, or picker.
  * @param {HTMLSelectElement} select Range control.
  * @param {number} total Number of features in the complete selection.
@@ -320,14 +323,25 @@ function fieldCoordinate(value, origin) {
     return Number(BigInt(Math.trunc(value)) - origin) + value % 1;
 }
 
+/** Shorten a long numeric label while keeping its leading and trailing digits.
+ * Signed 64-bit integers fit unchanged. Callers retain the full reading in
+ * accessible descriptions and tooltips; this changes display text only.
+ * @param {string} text Formatted numeric reading.
+ * @return {string} Original text or a compact label with an explicit ellipsis.
+ */
+function abbreviateNumericLabel(text) {
+    return text.length <= 28 ? text : text.slice(0, 12) + "…" + text.slice(-12);
+}
+
 /**
  * Draw a feature plot with exact readings for labels, selection and values.
  * Nearby wide integers are spaced by their exact difference. Bars retain a
- * zero baseline. Numeric X ticks always show the original field values.
+ * zero baseline. Numeric X ticks show original field values. Long numeric
+ * captions are abbreviated; tooltips and accessible descriptions retain them in full.
  * @template {{xValue:number|bigint|string|boolean|null,xLabel:string,yValue:number|bigint|null}} Point
  * @param {Omit<Parameters<typeof renderOrdinalSeriesChart>[0],"series"|"points"|"pointAccessibleLabel"|"pointTooltip"|"onPointSelect"> &
  * {points:Point[],pointAccessibleLabel:(point:Point)=>string,pointTooltip:(point:Point)=>string,onPointSelect:(point:Point)=>void}} options Single-feature or comparison chart.
- * @return {{pointElements:{circle:SVGElement,point:Point}[]}} Rendered marks tied to the original observations.
+ * @return {{pointElements:{circle:SVGElement,point:Point}[]}|null} Marks tied to original observations, or null when coordinates or their domain exceed finite numbers.
  * @throws {TypeError} If the underlying chart receives invalid positions or no plottable reading.
  */
 export function renderVectorFieldChart(options) {
@@ -338,28 +352,42 @@ export function renderVectorFieldChart(options) {
 
     const xOrigin = firstWideX?.xValue;
     const yOrigin = chartType === "bar" ? undefined : firstWideY?.yValue;
-    const {pointElements} = renderOrdinalSeriesChart({
+    const coordinates = points.map(point => ({
+        original: point,
+        xLabel: point.xLabel,
+        xValue: xScale === "numeric" ? fieldCoordinate(point.xValue, xOrigin) : point.xValue,
+        yValue: point.yValue === null ? null : fieldCoordinate(point.yValue, yOrigin),
+    }));
+    if (coordinates.some(point =>
+        (point.yValue !== null && !Number.isFinite(point.yValue)) ||
+        (xScale === "numeric" && !Number.isFinite(point.xValue)))) return null;
+
+    const originText = yOrigin === undefined ? "" : String(yOrigin);
+    const originLabel = abbreviateNumericLabel(originText);
+    const rendered = renderOrdinalSeriesChart({
         ...options,
         // A signed 64-bit coordinate needs up to 20 characters, including its sign.
         ...(firstWideX ? {xTickLabelLimit:20, axisFontSize:11} : {}),
-        points: points.map(point => ({
-            original: point,
-            xLabel: point.xLabel,
-            xValue: xScale === "numeric" ? fieldCoordinate(point.xValue, xOrigin) : point.xValue,
-            yValue: point.yValue === null ? null : fieldCoordinate(point.yValue, yOrigin),
-        })),
-        yAxisLabel: yOrigin === undefined ? options.yAxisLabel : options.yAxisLabel + " relative to\n" + yOrigin,
+        points: coordinates,
+        yAxisLabel: yOrigin === undefined ? options.yAxisLabel : options.yAxisLabel + " relative to\n" + originLabel,
         yAxisLabelPosition: yOrigin === undefined ? options.yAxisLabelPosition : "top",
+        ...(originLabel !== originText ? {
+            yAxisLabelTooltip: originText,
+            ariaLabel: options.ariaLabel + "; " + options.yAxisLabel + " relative to " + originText,
+        } : {}),
         pointAccessibleLabel: point => options.pointAccessibleLabel(point.original),
         pointTooltip: point => options.pointTooltip(point.original),
         onPointSelect: point => options.onPointSelect(point.original),
     });
-    return {pointElements: pointElements.map(({circle, point}) => ({circle, point:point.original}))};
+    return rendered === null ? null : {
+        pointElements: rendered.pointElements.map(({circle, point}) => ({circle, point:point.original})),
+    };
 }
 
 /**
  * Label the peak of a profile or the readings in a small bar comparison.
  * Labels use the actual painted bar centers, including distinct features at the same X.
+ * Long readings use a visible ellipsis without replacing the marks' full readings.
  * @param {SVGElement} chart Rendered comparison or profile SVG.
  * @param {{circle:SVGElement,point:{yValue:number|bigint}}[]} marks Selectable plotted observations.
  * @param {"line"|"scatter"|"bar"} shape Chart style.
@@ -373,7 +401,8 @@ export function labelVectorPlotValues(chart, marks, shape) {
     const placed = [];
     const width = Number(chart.getAttribute("viewBox").split(" ")[2]);
     for (const {circle, point} of candidates) {
-        const text = formatSeriesNumber(point.yValue);
+        const formatted = formatSeriesNumber(point.yValue);
+        const text = abbreviateNumericLabel(formatted);
         const half = text.length * 3.6;
         const center = shape === "bar" ? Number(circle.getAttribute("x")) + Number(circle.getAttribute("width")) / 2
             : Number(circle.getAttribute("cx"));

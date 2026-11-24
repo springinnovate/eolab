@@ -6,7 +6,7 @@ import {
     renderStackedSeriesChart,
 } from "../charts/series-chart.js";
 
-import { labelVectorPlotValues, renderVectorFieldChart, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { labelVectorPlotValues, renderVectorFieldChart, VECTOR_PLOT_RANGE_MESSAGE, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
 import { isNumericFeatureValue } from "./inspection-observation.js";
 import { VectorPlotStatistics } from "./plot-statistics.js";
 
@@ -510,7 +510,7 @@ export class VectorFeatureProfileController {
         this.compare.disabled = observations.length < 2;
     }
 
-    /** Update feature navigation and render the requested chart or exact values in the open dock. @return {void} */
+    /** Update navigation and show the requested chart, exact values, or an unavailable-range message. @return {void} */
     render() {
         this.chart.replaceChildren();
         this.legend.hidden = true;
@@ -578,10 +578,8 @@ export class VectorFeatureProfileController {
         this.chartTitle.textContent = profile.points.length === 1 ? first :
             profile.xScale === "numeric" ? first + " – " + profile.points.at(-1).fieldName : "";
         this.chartTitle.hidden = stacked || this.chartTitle.textContent === "";
-        if (stacked) {
-            this.#drawStackedProfile(profile.points, presentation.heading);
-        } else {
-            const {pointElements} = renderVectorFieldChart({
+        const rendered = stacked ? this.#drawStackedProfile(profile.points, presentation.heading)
+            : renderVectorFieldChart({
                 documentContext: this.document,
                 chart: this.chart,
                 points: profile.points,
@@ -600,9 +598,13 @@ export class VectorFeatureProfileController {
                 pointTooltip: point => point.fieldName + " · " + point.yValue,
                 onPointSelect: point => this.#selectField(point.fieldName),
             });
-            this.pointElements = pointElements;
-            labelVectorPlotValues(this.chart, pointElements, settings.chartType);
+        if (rendered === null) {
+            this.figure.hidden = true;
+            this.status.textContent = VECTOR_PLOT_RANGE_MESSAGE;
+            return;
         }
+        this.pointElements = rendered.pointElements;
+        if (!stacked) labelVectorPlotValues(this.chart, this.pointElements, settings.chartType);
         if (this.selectedField !== null) this.#selectField(this.selectedField);
     }
 
@@ -610,10 +612,10 @@ export class VectorFeatureProfileController {
      * Draw the current feature as a single stack in the profile's field order.
      * @param {{fieldName:string,yValue:number|bigint|null}[]} points Parsed field readings.
      * @param {string} featureLabel Name shown beside the stack.
-     * @return {void}
+     * @return {ReturnType<typeof renderStackedSeriesChart>} Marks with their original readings, or null for an unavailable numeric range.
      */
     #drawStackedProfile(points, featureLabel) {
-        this.pointElements = renderStackedSeriesChart({
+        return renderStackedSeriesChart({
             documentContext: this.document,
             chart: this.chart,
             legend: this.legend,
@@ -624,7 +626,7 @@ export class VectorFeatureProfileController {
             ariaLabel: `Stacked bars for ${featureLabel}`,
             describePoint: point => `${point.fieldName}: ${point.yValue}`,
             onPointSelect: point => this.#selectField(point.fieldName),
-        }).pointElements;
+        });
     }
 
     /** @return {Object|null} Mutable settings for the current source. */

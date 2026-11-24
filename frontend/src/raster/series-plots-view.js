@@ -281,6 +281,7 @@ export class RasterSeriesPlotsView {
 
     /** Update one existing plot card's chart, legend, value details and empty-state message.
      * Values its scale cannot represent stay in the result table and CSV.
+     * Ranges beyond the chart's numeric capacity show an explanation instead of a blank SVG.
      * @param {Object} elements Retained card elements.
      * @param {import("./series-view.js").SeriesPlot} plot Plot settings.
      * @param {Object[]} statistics Visible statistics assigned to this plot.
@@ -341,6 +342,12 @@ export class RasterSeriesPlotsView {
                 this.highlightStatistic(inspection ? Number(inspection.series.id) : null);
             },
         });
+        if (!chart.hidden && elements.domains === null) {
+            chart.hidden = true;
+            chart.setAttribute("hidden", "");
+            empty.hidden = false;
+            empty.textContent = "The value range is too large to plot. See the table or CSV for all results.";
+        }
         if (hadChartFocus && focusSeries) {
             // Replaced SVG nodes lose focus. Restore the same observation only in this plot.
             const selector = focusPoint !== null ? `[data-series-id="${focusSeries}"] [data-point-index="${focusPoint}"]` : `[data-series-line="${focusSeries}"]`;

@@ -19,6 +19,15 @@ let clipSerial = 0;
  */
 
 /**
+ * Check a constructed chart domain before the scale converts it to SVG positions.
+ * @param {number[]} domain Two endpoints after bounds and chart padding are applied.
+ * @return {boolean} Whether both endpoints and their separation are finite.
+ */
+function isFiniteChartDomain(domain) {
+    return domain.every(Number.isFinite) && Number.isFinite(domain[1] - domain[0]);
+}
+
+/**
  * Return compact finite-number text for axes and accessible details.
  *
  * @param {number|bigint} value Finite number or exact integer.
@@ -105,13 +114,14 @@ function bindSeriesPointSelection(mark, select) {
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
  * @param {string} configuration.yAxisLabel Vertical-axis title. A top title can use newlines for full-width caption lines.
  * @param {"left"|"top"} [configuration.yAxisLabelPosition="left"] Place the Y title beside or above the plot.
+ * @param {string|null} [configuration.yAxisLabelTooltip=null] Full reference text when the visible Y title is abbreviated.
  * @param {string} configuration.ariaLabel Chart-level accessible description.
  * @param {(point:Object,series:ChartSeries,index:number)=>string} configuration.pointAccessibleLabel Accessible point label.
  * @param {((point:Object)=>string)|null} [configuration.pointTooltip=null] Native tooltip text, required unless onInspect is supplied.
  * @param {((point:Object)=>void)|null} [configuration.onPointSelect=null]
  * Optional selection intent callback.
  * @param {((inspection:{series:ChartSeries,point:Object|null,index:number|null}|null)=>void)|null} [configuration.onInspect=null] Pointer/focus details; when supplied, replaces native tooltips.
- * @return {{pointElements:{circle:SVGElement,point:Object}[],xDomain:number[],yDomain:number[]}} Rendered handles and displayed domains, for axis editors.
+ * @return {{pointElements:{circle:SVGElement,point:Object}[],xDomain:number[],yDomain:number[]}|null} Rendered handles and axis-editor domains, or null when the constructed domains exceed finite numbers.
  * @throws {TypeError} If the chart contract or aligned positions are invalid, or no plottable value exists.
  */
 export function renderOrdinalSeriesChart({
@@ -136,6 +146,7 @@ export function renderOrdinalSeriesChart({
     xAxisLabel,
     yAxisLabel,
     yAxisLabelPosition = "left",
+    yAxisLabelTooltip = null,
     ariaLabel,
     pointAccessibleLabel,
     pointTooltip = null,
@@ -233,6 +244,7 @@ export function renderOrdinalSeriesChart({
     const horizontal = scaleLinear()
         .domain(xBounds ?? (chartType === "bar" ? [xDomain[0] - spacing / 2, xDomain[1] + spacing / 2] : xDomain))
         .range(xReverse ? [margin.left + plotWidth, margin.left] : [margin.left, margin.left + plotWidth]);
+    if (!isFiniteChartDomain(horizontal.domain())) return null;
     const x = index => horizontal(xScale === "numeric" ? numericX[index] : index);
     const groupWidth = Math.min(60, Math.abs(horizontal(xDomain[0] + spacing) - horizontal(xDomain[0])) * 0.8);
     const occurrenceCounts = new Map();
@@ -247,6 +259,7 @@ export function renderOrdinalSeriesChart({
             ? [Math.max(Number.MIN_VALUE, 10 ** minimum), Math.min(Number.MAX_VALUE, 10 ** maximum)]
             : [minimum, maximum]))
         .range([margin.top + plotHeight, margin.top]);
+    if (!isFiniteChartDomain(y.domain())) return null;
     [minimum, maximum] = y.domain().map(value => yScale === "log" ? Math.log10(value) : value);
     const baselineValue = Math.max(y.domain()[0], Math.min(0, y.domain()[1]));
     const barBaseline = y(baselineValue);
@@ -260,8 +273,9 @@ export function renderOrdinalSeriesChart({
         .map(value => Math.min(Number.MAX_VALUE, Math.max(Number.MIN_VALUE, 10 ** value))) : y.ticks(yTickCount);
     const yTitles = topYTitle ? yTitleLines.map((text, line) => ({
         text, x: yTitleLines.length > 1 ? 4 : margin.left, y: (line + 1) * lineHeight, anchor: "start",
+        tooltip: yAxisLabelTooltip,
     })) : [{text: yAxisLabel, x: Math.max(16, (axisFontSize ?? 0) + 4),
-        y: margin.top + plotHeight / 2, rotation: -90}];
+        y: margin.top + plotHeight / 2, rotation: -90, tooltip: yAxisLabelTooltip}];
     drawChartAxes(documentContext, chart, {left: margin.left, top: margin.top, width: plotWidth, height: plotHeight},
         {scale: horizontal, values: [...new Set(ticks)], rotation: -35,
             format: value => tickLabel(xScale === "numeric" ? numericX.indexOf(value) : value)},
@@ -369,7 +383,7 @@ export function renderOrdinalSeriesChart({
  * @param {(point:Point,field:string)=>string} configuration.describePoint Exact segment label and tooltip.
  * @param {(point:Point,field:string)=>void} configuration.onPointSelect Segment activation callback.
  * @param {number} [configuration.width=680] Measured chart width in screen pixels.
- * @return {{pointElements:{circle:SVGElement,point:Point}[]}} Selectable marks and their original readings.
+ * @return {{pointElements:{circle:SVGElement,point:Point}[]}|null} Marks with their original readings, or null when a reading cannot be represented by a finite number.
  */
 export function renderStackedSeriesChart({
     documentContext, chart, legend, series, rowLabels, valueAxisLabel, ariaLabel,
@@ -377,6 +391,7 @@ export function renderStackedSeriesChart({
 }) {
     const rowIndexes = rowLabels.map((_, index) => index);
     const largest = max(series, item => max(item.points, point => Math.abs(Number(point.yValue))));
+    if (!Number.isFinite(largest)) return null;
     const exponent = Math.floor(Math.log10(largest || 1));
     const axisExponent = exponent >= 6 || exponent <= -4 ? Math.max(-308, exponent) : 0;
     const divisor = 10 ** axisExponent;

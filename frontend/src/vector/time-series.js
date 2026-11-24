@@ -1,7 +1,7 @@
 /** Ordered numeric analysis for bounded vector feature-inspection results. */
 
 import { renderStackedSeriesChart } from "../charts/series-chart.js";
-import { FEATURES_PER_PAGE, fillFeatureRanges, labelVectorPlotValues, renderVectorFieldChart, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
+import { FEATURES_PER_PAGE, fillFeatureRanges, labelVectorPlotValues, renderVectorFieldChart, VECTOR_PLOT_RANGE_MESSAGE, VectorPlotFields, VectorPlotPanel, vectorFeatureLabel } from "./plot-panel.js";
 import { isNumericFeatureValue } from "./inspection-observation.js";
 import { VectorPlotStatistics } from "./plot-statistics.js";
 /** @typedef {import("./inspection-observation.js").VectorInspectionObservation} VectorInspectionObservation */
@@ -471,7 +471,7 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Draw one field with its own numeric scale and the shared ordered X positions.
+     * Draw one field at the shared X positions, or explain why its numeric range is unavailable.
      * @param {ComparisonPlot} plot Field and readings.
      * @param {number} index Plot position.
      * @param {string} xLabel Horizontal field name.
@@ -493,6 +493,7 @@ export class VectorTimeSeriesController {
         }
         figure.hidden = false;
         title.textContent = plot.field;
+        let rangeUnavailable = false;
         if (plot.finiteCount) {
             chart.removeAttribute("hidden");
             const handles = renderVectorFieldChart({
@@ -505,21 +506,26 @@ export class VectorTimeSeriesController {
                 pointTooltip:p => this.#identity(p.observation,p.sourceIndex,plot.field,p.xLabel),
                 onPointSelect: point => this.#selectAndZoomToFeature(point.sourceIndex, plot.field),
             });
-            labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
-            for (const mark of handles.pointElements) this.pointElements.push(mark);
+            rangeUnavailable = handles === null;
+            if (rangeUnavailable) chart.setAttribute("hidden", "");
+            else {
+                labelVectorPlotValues(chart, handles.pointElements, this.settings.chartType);
+                for (const mark of handles.pointElements) this.pointElements.push(mark);
+            }
         } else chart.setAttribute("hidden","");
         const missing = total - plot.finiteCount;
-        if (missing) {
+        if (rangeUnavailable || missing) {
             const note = this.document.createElement("p");
             note.classList.add("vector-plot-missing");
-            note.textContent = !plot.finiteCount ? "No numeric readings with the selected X field." :
+            note.textContent = rangeUnavailable ? VECTOR_PLOT_RANGE_MESSAGE :
+                !plot.finiteCount ? "No numeric readings with the selected X field." :
                 missing + (missing === 1 ? " feature lacks" : " features lack") + " an X value or a numeric " + plot.field + " value.";
             figure.append(note);
         }
     }
 
     /**
-     * Draw one stack per inspected feature, including separate rows for tied labels.
+     * Draw one stack per feature or explain an unavailable range, keeping tied labels on separate rows.
      * @param {ComparisonPlot[]} plots Selected measurements aligned to the same ordered features.
      * @return {void}
      */
@@ -537,7 +543,7 @@ export class VectorTimeSeriesController {
             return labelCounts.get(row.xLabel) > 1 ? `${row.sourceIndex + 1} · ${row.xLabel}` : row.xLabel;
         });
         this.firstPlot.hidden = false;
-        this.pointElements = renderStackedSeriesChart({
+        const rendered = renderStackedSeriesChart({
             documentContext: this.document,
             chart: this.chart,
             legend: this.legend,
@@ -548,7 +554,13 @@ export class VectorTimeSeriesController {
             ariaLabel: "Numeric fields stacked by feature",
             describePoint: (point, field) => this.#identity(point.observation, point.sourceIndex, field, point.xLabel),
             onPointSelect: (point, field) => this.#selectAndZoomToFeature(point.sourceIndex, field),
-        }).pointElements;
+        });
+        if (rendered === null) {
+            this.firstPlot.hidden = true;
+            this.status.textContent = VECTOR_PLOT_RANGE_MESSAGE;
+            return;
+        }
+        this.pointElements = rendered.pointElements;
         const missing = rows.length * plots.length - readingCount;
         if (missing) this.status.textContent = missing === 1 ? "One field value is missing. See Values." :
             `${missing} field values are missing. See Values.`;

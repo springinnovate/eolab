@@ -350,6 +350,123 @@ for (const plotName of ["Compare features", "One feature"]) {
   });
 }
 
+test("oversized JSON integers keep exact Values and explain unavailable absolute plots", async t => {
+  const base = 10n ** 400n;
+  const rows = [0n, 2n].map((offset, index) => ({id:String(index + 1), properties:{
+    huge:{integer:String(base + offset)}, x:index + 1, ordinary:index ? -0.75 : 0.25,
+    opposite:{integer:String(index ? -base : base)}, mixed:index ? 0.5 : {integer:String(base)},
+    zFar:index ? {integer:String(15n * 10n ** 307n)} : 0,
+  }}));
+  const {inspector, profile, series, documentContext:doc} = composition(async (url, options) =>
+    Response.json(url.endsWith("/lasso") ? {matched:2, featureIds:["1","2"], geometry:null} :
+      {selection:JSON.parse(options.body).selection, features:rows}));
+  t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
+  await inspector.inspectLasso(inspector.getSelectionTargets()[0],
+    {type:"Polygon", coordinates:[[[0,0],[3,0],[3,1],[0,0]]]}, new AbortController().signal);
+  const profileChart = doc.querySelector("#vector-feature-profile-chart");
+  const comparisonChart = doc.querySelector("#vector-time-series-chart");
+  const unavailable = /too large.*plot.*Values/i;
+  /** Check that a visible numeric abbreviation retains both ends of its reading.
+   * @param {SVGElement} label Painted label.
+   * @param {string} exact Original numeric text.
+   * @return {void}
+   */
+  function assertAbbreviatedValue(label, exact) {
+    assert.ok(label.textContent.length <= 28, "A long reading must fit a compact chart");
+    assert.match(label.textContent, /…/, "An omitted middle must be explicit");
+    assert.ok(label.textContent.startsWith(exact.slice(0, 10)));
+    assert.ok(label.textContent.endsWith(exact.slice(-10)));
+  }
+  inspector.onFeatureProfileRequested();
+  const settings = profile.settingsBySource.get(profile.currentObservation.sourceId);
+  settings.selectedFields = ["huge", "ordinary"];
+  for (const chartType of ["bar", "stacked", "scatter", "line"]) {
+    settings.chartType = chartType;
+    profile.render();
+    assert.equal(profileChart.querySelectorAll(".series-chart-point").length, 0,
+      "An unsupported field must not silently disappear from a mixed profile");
+    assert.match(doc.querySelector("#vector-feature-profile-status").textContent, unavailable);
+  }
+  doc.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
+  const profileValue = doc.querySelector("#vector-feature-profile-table-body").children.find(row =>
+    row.children[0].children[0].textContent === "huge").children.at(-1).textContent;
+  assert.equal(profileValue, rows[0].properties.huge.integer);
+  settings.selectedFields = ["huge"];
+  settings.chartType = "scatter";
+  doc.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
+  profile.render();
+  assertAbbreviatedValue(profileChart.querySelector(".vector-plot-value"), rows[0].properties.huge.integer);
+  assert.ok(profileChart.querySelector(".series-chart-point").getAttribute("aria-label").includes(rows[0].properties.huge.integer));
+  assert.ok(profileChart.querySelector(".series-chart-point").querySelector("title").textContent.includes(rows[0].properties.huge.integer));
+
+  assert.doesNotThrow(() => inspector.onTimeSeriesRequested(), "The default comparison must explain its unavailable plot");
+  assert.equal(comparisonChart.querySelectorAll(".series-chart-point").length, 0);
+  assert.match(series.firstPlot.querySelector("p").textContent, unavailable);
+  series.settings = {xField:"x", yFields:["huge", "ordinary"], direction:"ascending", chartType:"bar"};
+  series.render();
+  assert.equal(comparisonChart.querySelectorAll(".series-chart-point").length, 0);
+  assert.equal(series.extraPlots.querySelectorAll(".series-chart-point").length, 2,
+    "A separately plotted ordinary field remains usable");
+  series.settings.chartType = "stacked";
+  series.render();
+  assert.equal(comparisonChart.querySelectorAll(".series-chart-point").length, 0);
+  assert.match(doc.querySelector("#vector-time-series-status").textContent, unavailable);
+  doc.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
+  const values = doc.querySelector("#vector-time-series-table-body").children;
+  assert.deepEqual(values.map(row => row.children[1].children[0].textContent), rows.map(row => row.properties.huge.integer));
+  values[1].children[1].children[0].dispatchEvent(new Event("click"));
+  doc.querySelector("#vector-time-series-one").dispatchEvent(new Event("click"));
+  assert.equal(profile.currentObservation.featureId, "2", "Exact Values still select their original feature");
+
+  inspector.onTimeSeriesRequested();
+  series.settings.yFields = ["huge"];
+  series.settings.chartType = "scatter";
+  doc.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
+  series.plotPanel.width = 242;
+  for (const chartType of ["scatter", "line"]) {
+    series.settings.chartType = chartType;
+    series.render();
+    const origin = comparisonChart.querySelectorAll(".series-chart-axis-title").find(label => label.textContent.startsWith("100000"));
+    assertAbbreviatedValue(origin, String(base));
+    assert.equal(origin.querySelector("title").textContent, String(base));
+    assert.ok(comparisonChart.getAttribute("aria-label").includes(String(base)), "The complete relative reference stays accessible");
+    assertAbbreviatedValue(comparisonChart.querySelector(".vector-plot-value"), String(base + 2n));
+    const marks = comparisonChart.querySelectorAll(".series-chart-point");
+    assert.equal(marks.length, 2, "Finite relative distances remain plottable");
+    marks.forEach((mark, index) => {
+      assert.ok(mark.getAttribute("aria-label").includes(rows[index].properties.huge.integer));
+      assert.ok(mark.querySelector("title").textContent.includes(rows[index].properties.huge.integer));
+    });
+    assert.ok(Number(marks[0].getAttribute("cy")) > Number(marks[1].getAttribute("cy")));
+    assert.ok(marks.every(mark => ["cx", "cy"].every(axis => Number.isFinite(Number(mark.getAttribute(axis))))));
+    assert.equal(doc.querySelector("#vector-time-series-status").textContent, "");
+  }
+  series.settings = {xField:"zFar", yFields:["ordinary"], direction:"ascending", chartType:"bar"};
+  series.render();
+  assert.equal(comparisonChart.querySelectorAll(".series-chart-point").length, 0,
+    "Bar spacing must not turn finite exact X coordinates into an infinite domain");
+  assert.match(series.firstPlot.querySelector("p").textContent, unavailable);
+  series.settings = {xField:"x", yFields:["zFar"], direction:"ascending", chartType:"bar"};
+  series.render();
+  const largeBars = comparisonChart.querySelectorAll(".series-chart-point");
+  assert.equal(largeBars.length, 2, "A finite absolute Y range remains supported");
+  assertAbbreviatedValue(comparisonChart.querySelector(".vector-plot-value"), rows[1].properties.zFar.integer);
+  assert.ok(largeBars[1].getAttribute("aria-label").includes(rows[1].properties.zFar.integer));
+  assert.ok(largeBars[1].querySelector("title").textContent.includes(rows[1].properties.zFar.integer));
+  assert.ok(largeBars.every(mark => ["x", "y", "width", "height"].every(attribute =>
+    Number.isFinite(Number(mark.getAttribute(attribute))))));
+  for (const field of ["opposite", "mixed"]) {
+    for (const axis of ["x", "y"]) {
+      series.settings = {xField:axis === "x" ? field : "x", yFields:[axis === "y" ? field : "ordinary"],
+        direction:"ascending", chartType:"scatter"};
+      series.render();
+      assert.equal(comparisonChart.querySelectorAll(".series-chart-point").length, 0,
+        "An overflowing relative coordinate must not produce an invalid SVG mark");
+      assert.match(series.firstPlot.querySelector("p").textContent, unavailable);
+    }
+  }
+});
+
 test("wide parcel attributes keep their exact values and numeric spacing in both plots", async t => {
   const base = 9007199254740992n;
   const minimumInt64 = -(2n ** 63n);
