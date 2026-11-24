@@ -526,7 +526,7 @@ export function initializeRasterViewer(
      * Hand the same raster's sampling state and results to another owner.
      *
      * The analysis object follows the active owner; controllers and Leaflet
-     * resources stay with their existing session.
+     * resources stay with their existing session. A restored target keeps its saved appearance.
      *
      * @param {Object} target New renderer or detached raster session.
      * @param {Object} source Existing session for the same raster.
@@ -535,7 +535,7 @@ export function initializeRasterViewer(
     function adoptRasterInteractionState(target, source) {
         target.analysis = source.analysis;
         target.histogramPercentiles = { ...source.histogramPercentiles, rescale: false };
-        if (target.hasSavedAppearance && !styleEditingEnabled) return;
+        if (target.hasSavedAppearance) return;
         target.rasterStyle = { ...source.rasterStyle };
         target.paletteName = source.paletteName;
         target.rasterStyleWasEdited = source.rasterStyleWasEdited;
@@ -3337,14 +3337,13 @@ export function initializeRasterViewer(
 
     /**
      * Set a continuous raster's initial color thresholds from its whole-raster statistics.
-     * Retain manual edits, ranges shared across dates, and saved appearances on locked maps.
+     * Retain saved appearances, manual edits and ranges shared across dates.
      * @param {Object} session Active, background or detached raster session.
      * @param {Object} statistics Validated whole-raster distribution.
      * @return {boolean} Whether new thresholds were applied.
      */
     function initializeRasterRange(session, statistics) {
-        if (session.appearanceMode === "categorical" || session.temporal?.preserveRange ||
-            (session.hasSavedAppearance && !styleEditingEnabled)) return false;
+        if (session.hasSavedAppearance || session.appearanceMode === "categorical" || session.temporal?.preserveRange) return false;
         const style = deriveInitialRasterStyleFromStatistics(session.rasterStyle, statistics, session.rasterStyleWasEdited);
         if (style === null) return false;
         applySessionStyle(session, style, session.paletteName, false);

@@ -1258,7 +1258,8 @@ test("style category changes preserve map scope and never display unmatched cach
 });
 
 test("raster adapter exports and reapplies only validated portable appearance", async () => {
-    const h = visibleLayerFixture();
+    const statistics = createDeferred();
+    const h = visibleLayerFixture(() => statistics.promise);
     await h.viewer.show(createRasterItem("portable"));
     const record = h.mapLayers.retainedRecords[0];
 
@@ -1312,6 +1313,14 @@ test("raster adapter exports and reapplies only validated portable appearance", 
         }),
         /unsupported fields/,
     );
+    const savedAutomaticRange = {
+        ...restoredAppearance,
+        continuous: { ...restoredAppearance.continuous, styleWasEdited: false },
+    };
+    record.adapter.applySavedState(record, savedAutomaticRange);
+    statistics.resolve(RASTER_STATISTICS);
+    await flushPromises();
+    assert.deepEqual(record.adapter.exportSavedState(record), savedAutomaticRange);
     h.destroy();
 });
 
