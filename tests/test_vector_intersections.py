@@ -97,6 +97,53 @@ def test_filtered_source_uses_exact_geometry_and_includes_boundary_contact(tmp_p
 
 
 @pytest.mark.parametrize("as_target", [True, False])
+def test_curved_geopackage_polygons_keep_their_intersection_membership(
+    tmp_path: Path, as_target: bool
+) -> None:
+    """Read a native curved polygon as either an original target or a boundary.
+
+    Args:
+        tmp_path: Temporary directory for the two native GeoPackages.
+        as_target: Compare the curved original against a linear boundary if true.
+    """
+    from osgeo import gdal, ogr, osr
+
+    path = tmp_path / "curves.gpkg"
+    with (
+        gdal.ExceptionMgr(),
+        ogr.ExceptionMgr(),
+        osr.ExceptionMgr(),
+        ogr.GetDriverByName("GPKG").CreateDataSource(str(path)) as dataset,
+    ):
+        crs = osr.SpatialReference()
+        assert crs.ImportFromEPSG(4326) == 0
+        layer = dataset.CreateLayer("features", crs, ogr.wkbCurvePolygon)
+        feature = ogr.Feature(layer.GetLayerDefn())
+        geometry = ogr.CreateGeometryFromWkt(
+            "CURVEPOLYGON (CIRCULARSTRING (1 0, 0 1, -1 0, 0 -1, 1 0))"
+        )
+        assert feature.SetGeometry(geometry) == 0
+        assert layer.CreateFeature(feature) == 0
+    curved = resolve_vector_file_selection(
+        path,
+        UploadedSelection(
+            uploadId=UUID(int=2), layerName="features", filter=VectorFilter()
+        ),
+    )
+    linear = _write_layer(
+        tmp_path / "linear.gpkg",
+        [
+            (box(0.7, 0.6, 0.8, 0.7), "intersects the arc"),
+            (box(2, 2, 3, 3), "outside"),
+        ],
+        geometry_type="Polygon",
+    )
+    target, boundary = (curved, linear) if as_target else (linear, curved)
+    matches = match_features(target, {str(UUID(int=1)): boundary}, _spatial_rule())
+    assert matches.ids == {1}
+
+
+@pytest.mark.parametrize("as_target", [True, False])
 def test_drawings_and_projected_source_share_one_comparison(tmp_path: Path, as_target: bool) -> None:
     """A saved WGS84 drawing around one degree east meets only the first metric polygon."""
     projected = _write_layer(tmp_path / "metric.gpkg", [

@@ -426,6 +426,9 @@ def iter_original_features(
                 ):
                     continue
                 native_geometry = feature.GetGeometryRef() if read_geometry else None
+                if native_geometry is not None and native_geometry.HasCurveGeometry():
+                    # Fiona linearized curved features before passing them to Shapely.
+                    native_geometry = native_geometry.GetLinearGeometry()
                 geometry = (
                     from_wkb(bytes(native_geometry.ExportToIsoWkb()))
                     if native_geometry is not None
