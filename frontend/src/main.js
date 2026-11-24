@@ -1957,7 +1957,6 @@ async function initializeCatalog(
             rasterVisualization.setStyleEditingEnabled(styleEditing);
             vectorFeatureInspector.setStyleEditingEnabled(styleEditing);
             annotations.setStyleEditingEnabled(styleEditing);
-            mapLayerController.render();
             onWorkspaceOptionsChange({
                 allowCatalog: visitorAvailability.catalog,
                 allowMapContents: visitorAvailability.mapContents,
