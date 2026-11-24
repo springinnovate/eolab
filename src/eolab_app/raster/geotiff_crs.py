@@ -134,15 +134,21 @@ class GeoTiffReader(DatasetReader):
         """
         with rasterio.Env(OSR_WKT_FORMAT="WKT2_2019"):
             crs = super().read_crs()
-        if self.driver != "GTiff" or not crs or not crs.is_geographic:
+        if (
+            self.driver != "GTiff"
+            or not crs
+            or not (crs.is_geographic or crs.is_projected)
+        ):
             return crs
-        radians_per_unit = crs.units_factor[1]
+        if crs.is_geographic and math.isclose(crs.units_factor[1], math.radians(1)):
+            return crs
+        definition = ProjCRS.from_wkt(crs.to_wkt(version="WKT2_2019"))
+        radians_per_unit = definition.geodetic_crs.axis_info[0].unit_conversion_factor
         if math.isclose(radians_per_unit, math.radians(1)):
             return crs
         radians = _geokey_meridian_radians(self.name, radians_per_unit)
         if radians is None:
             return crs
-        definition = ProjCRS.from_wkt(crs.to_wkt(version="WKT2_2019"))
         meridian = definition.prime_meridian
         if math.isclose(
             meridian.longitude * meridian.unit_conversion_factor, radians, rel_tol=1e-13
