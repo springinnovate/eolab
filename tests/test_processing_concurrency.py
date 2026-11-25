@@ -3,6 +3,7 @@
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
+import hashlib
 from multiprocessing import active_children, get_context
 import os
 from threading import Event
@@ -24,9 +25,18 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.worker import ProcessingWorker
+from eolab_app.routes.processing import COOKIE
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_jobs.worker_claim import claim_next_job
-from test_processing_jobs import boundary, store, HEADERS, _paused_clip, clip_inputs
+from raster_source_support import SOURCE
+from test_processing_jobs import (
+    boundary,
+    store,
+    HEADERS,
+    _paused_clip,
+    clip_inputs,
+    submitted,
+)
 from test_processing_calculations import ENDPOINT, request_body
 
 
@@ -50,11 +60,12 @@ def claim_from_process(
                     cursor,
                     worker_count=limits.worker_count,
                     lease_seconds=limits.lease_seconds,
+                    supported_operations=["test.v1"],
                 )
     jobs = PostgresJobStore(limits, dsn)
     try:
         jobs.open()
-        return jobs.claim_next_job()
+        return jobs.claim_next_job(supported_operations=["test.v1"])
     finally:
         jobs.close()
 
@@ -126,7 +137,12 @@ def test_rolled_back_shared_claim_is_available_to_processing(
         store.conninfo, autocommit=True, row_factory=dict_row
     ) as connection:
         with connection.transaction(force_rollback=True), connection.cursor() as cursor:
-            claim = claim_next_job(cursor, worker_count=1, lease_seconds=20)
+            claim = claim_next_job(
+                cursor,
+                worker_count=1,
+                lease_seconds=20,
+                supported_operations=["test.v1"],
+            )
             assert claim["id"] == queued["job_id"]
             # Earlier worker releases use this same database-wide lock key.
             with psycopg.connect(store.conninfo) as observer:
@@ -137,6 +153,55 @@ def test_rolled_back_shared_claim_is_available_to_processing(
         assert turns == []
     retried = store.claim_next_job()
     assert retried["id"] == claim["id"] and retried["attempt_id"] != claim["attempt_id"]
+
+
+def test_workers_claim_compatible_requests_under_one_slot_limit(
+    boundary: Any, store: PostgresJobStore
+) -> None:
+    """Run one session's eligible clip while a Jobs request waits for its executor.
+
+    Args:
+        boundary: Processing HTTP client and real native clip worker.
+        store: Disposable PostgreSQL queue with one global slot.
+    """
+    client, worker, _, _, _ = boundary
+    client.get("/api/processing/jobs").raise_for_status()
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    operation = "diagnostic.v1"
+    plan = PreparedJobPlan(
+        {"operation": operation, "inputs": {}}, {}, operation=operation
+    )
+    diagnostic = store.submit(owner, "diagnostic", plan, "hash")
+    clip = submitted(client, clip_inputs(client))
+    assert asyncio.run(worker.run_once())
+    result = client.get(f"/api/processing/jobs/{clip['jobId']}").json()
+    assert result["status"] == "ready", result
+    assert result["result"]["validPixels"] == 6_400
+    assert store.get(diagnostic["id"], owner)["status"] == "queued"
+    assert not asyncio.run(worker.run_once())
+    assert store.claim_next_job(supported_operations=[]) is None
+
+    with psycopg.connect(
+        store.conninfo, autocommit=True, row_factory=dict_row
+    ) as connection:
+        with connection.cursor() as cursor:
+            active = claim_next_job(
+                cursor,
+                worker_count=1,
+                lease_seconds=20,
+                supported_operations=[operation],
+            )
+    assert active["id"] == diagnostic["job_id"]
+    next_clip = submitted(client, {**SOURCE, "wholeRaster": True})
+    assert not asyncio.run(worker.run_once())
+    assert store.cancel(diagnostic["id"], owner)["status"] == "cancelling"
+    assert not asyncio.run(worker.run_once())
+    assert store.finish(active["id"], active["attempt_id"], None)
+    assert store.claim_next_job(supported_operations=[operation]) is None
+    assert asyncio.run(worker.run_once())
+    result = client.get(f"/api/processing/jobs/{next_clip['jobId']}").json()
+    assert result["status"] == "ready", result
+    assert result["result"]["validPixels"] == 10_000
 
 
 def test_prepared_job_keeps_its_attempt_without_disk_admission(
