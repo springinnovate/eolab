@@ -1,8 +1,9 @@
 """Concurrent workers share durable admission without sharing native processes."""
 
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import replace
+from datetime import timedelta
 import hashlib
 from multiprocessing import active_children, get_context
 import os
@@ -27,7 +28,7 @@ from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.routes.processing import COOKIE
 from eolab_app.execution.reusable_process import ReusableProcess
-from eolab_jobs.worker_claim import claim_next_job
+from eolab_jobs.worker_claim import claim_next_job, renew_job_lease
 from raster_source_support import SOURCE
 from test_processing_jobs import (
     boundary,
@@ -144,6 +145,13 @@ def test_rolled_back_shared_claim_is_available_to_processing(
                 supported_operations=["test.v1"],
             )
             assert claim["id"] == queued["job_id"]
+            assert renew_job_lease(
+                cursor,
+                job_id=claim["id"],
+                attempt_id=claim["attempt_id"],
+                lease_seconds=20,
+                progress={"phase": "reading"},
+            )
             # Earlier worker releases use this same database-wide lock key.
             with psycopg.connect(store.conninfo) as observer:
                 assert observer.execute(
@@ -153,12 +161,13 @@ def test_rolled_back_shared_claim_is_available_to_processing(
         assert turns == []
     retried = store.claim_next_job()
     assert retried["id"] == claim["id"] and retried["attempt_id"] != claim["attempt_id"]
+    assert retried["progress"] == {}
 
 
 def test_workers_claim_compatible_requests_under_one_slot_limit(
     boundary: Any, store: PostgresJobStore
 ) -> None:
-    """Run one session's eligible clip while a Jobs request waits for its executor.
+    """Share one slot between a native clip worker and an independent Jobs claimant.
 
     Args:
         boundary: Processing HTTP client and real native clip worker.
@@ -181,6 +190,7 @@ def test_workers_claim_compatible_requests_under_one_slot_limit(
     assert not asyncio.run(worker.run_once())
     assert store.claim_next_job(supported_operations=[]) is None
 
+    progress = {"phase": "checking"}
     with psycopg.connect(
         store.conninfo, autocommit=True, row_factory=dict_row
     ) as connection:
@@ -191,10 +201,20 @@ def test_workers_claim_compatible_requests_under_one_slot_limit(
                 lease_seconds=20,
                 supported_operations=[operation],
             )
-    assert active["id"] == diagnostic["job_id"]
+            assert active["id"] == diagnostic["job_id"]
+            assert renew_job_lease(
+                cursor,
+                job_id=active["id"],
+                attempt_id=active["attempt_id"],
+                lease_seconds=20,
+                progress=progress,
+            )
+    assert store.heartbeat(active["id"], active["attempt_id"], {})
+    assert store.get(diagnostic["id"], owner)["progress"] == progress
     next_clip = submitted(client, {**SOURCE, "wholeRaster": True})
     assert not asyncio.run(worker.run_once())
     assert store.cancel(diagnostic["id"], owner)["status"] == "cancelling"
+    assert not store.heartbeat(active["id"], active["attempt_id"], {})
     assert not asyncio.run(worker.run_once())
     assert store.finish(active["id"], active["attempt_id"], None)
     assert store.claim_next_job(supported_operations=[operation]) is None
@@ -202,6 +222,60 @@ def test_workers_claim_compatible_requests_under_one_slot_limit(
     result = client.get(f"/api/processing/jobs/{next_clip['jobId']}").json()
     assert result["status"] == "ready", result
     assert result["result"]["validPixels"] == 10_000
+
+
+@pytest.mark.parametrize("expires", [False, True], ids=["live", "expired"])
+def test_heartbeat_checks_the_lease_after_waiting_for_its_job(
+    store: PostgresJobStore, expires: bool
+) -> None:
+    """Check the full renewal or rejection after a competing writer releases the row.
+
+    Args:
+        store: Disposable PostgreSQL queue in which to claim an attempt.
+        expires: End the lease while the heartbeat is blocked on the job.
+    """
+    store.submit(
+        "owner", "request", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
+    )
+    job = store.claim_next_job()
+    progress = {"phase": "reading"}
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        with psycopg.connect(store.conninfo) as blocker:
+            blocker.execute(
+                "SELECT id FROM processing.jobs WHERE id=%s FOR UPDATE", (job["id"],)
+            )
+            renewal = worker.submit(
+                store.heartbeat, job["id"], job["attempt_id"], progress
+            )
+            deadline = time.monotonic() + 5
+            while not blocker.execute(
+                "SELECT EXISTS (SELECT FROM pg_locks WHERE NOT granted "
+                "AND pg_backend_pid()=ANY(pg_blocking_pids(pid)))"
+            ).fetchone()[0]:
+                assert time.monotonic() < deadline, "Heartbeat never waited on the job"
+                time.sleep(0.01)
+            before_release = blocker.execute("SELECT clock_timestamp()").fetchone()[0]
+            if expires:
+                blocker.execute(
+                    "UPDATE processing.jobs SET lease_until=%s WHERE id=%s",
+                    (before_release, job["id"]),
+                )
+        assert renewal.result(timeout=5) is (not expires)
+    with psycopg.connect(store.conninfo) as reader:
+        updated, lease_until, saved = reader.execute(
+            "SELECT updated_at,lease_until,progress FROM processing.jobs WHERE id=%s",
+            (job["id"],),
+        ).fetchone()
+    if expires:
+        assert (updated, lease_until, saved) == (
+            job["updated_at"],
+            before_release,
+            job["progress"],
+        )
+    else:
+        assert updated >= before_release
+        assert lease_until == updated + timedelta(seconds=store.limits.lease_seconds)
+        assert saved == progress
 
 
 def test_prepared_job_keeps_its_attempt_without_disk_admission(
