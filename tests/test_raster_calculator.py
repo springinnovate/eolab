@@ -80,6 +80,10 @@ def test_pixel_formula_keeps_power_precedence_and_undefined_intermediates() -> N
         "area_max(a + 1)",
         "area_max(b)",
         "area_max(a, a)",
+        "area_min()",
+        "area_min(a + 1)",
+        "area_min(b)",
+        "area_min(a, a)",
         "42",
     ],
 )
@@ -192,13 +196,30 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     assert not list(tmp_path.rglob("polygon-mask.tif"))
 
 
-def test_area_max_normalizes_each_raster_across_the_selected_area(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("sign", "formula", "typical", "corner"),
+    [
+        (1, "a/area_max(a) - b/area_max(b)", -8 / -2 - 2 / 6, -4 / -2 - 2 / 6),
+        (
+            -1,
+            "(a-area_min(a))/(area_max(a)-area_min(a))"
+            " - (b-area_min(b))/(area_max(b)-area_min(b))",
+            1.0 - 1.0,
+            (4 - 2) / (8 - 2) - 1.0,
+        ),
+    ],
+)
+def test_area_extrema_normalize_each_raster_across_the_selected_area(
+    tmp_path: Path, sign: int, formula: str, typical: float, corner: float
 ) -> None:
-    """Compare published cells with independent maxima across two output tiles.
+    """Compare published cells with independent extrema across two output tiles.
 
     Args:
         tmp_path: Directory for the input rasters, polygon and output.
+        sign: Reverse valid values to put the selected minima at the isolated peaks.
+        formula: Normalization using maxima alone or both ends of each input range.
+        typical: Expected difference for the uniform shared cells.
+        corner: Expected difference for the distinct top-left cell.
     """
     transform = from_origin(0, 3, 0.125, 1)
     a = np.full((3, 516), -8, dtype="int16")
@@ -211,6 +232,8 @@ def test_area_max_normalizes_each_raster_across_the_selected_area(
     a[0, 0] = -4
     a[1, 4:6] = 300
     b[2:4, 8:12] = 500
+    a[a != -9999] *= sign
+    b[b != -9999] *= sign
     polygon = Polygon(
         box(0, 0, 64.5, 3).exterior.coords, [box(0.5, 1, 0.75, 2).exterior.coords]
     )
@@ -230,7 +253,7 @@ def test_area_max_normalizes_each_raster_across_the_selected_area(
                 RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
                 RasterFormulaLayer(alias="b", source=SOURCE, resampling="mean"),
             ),
-            expression="a/area_max(a) - b/area_max(b)",
+            expression=formula,
             grid=MatchRasterGrid(kind="match", alias="a"),
         ),
         catalogSelection=area.selection,
@@ -239,8 +262,8 @@ def test_area_max_normalizes_each_raster_across_the_selected_area(
         sources, QueuedRasterCalculator(request=request, polygonArea=None)
     )
     result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
-    expected = np.full(a.shape, -8 / -2 - 2 / 6)
-    expected[0, 0] = -4 / -2 - 2 / 6
+    expected = np.full(a.shape, typical)
+    expected[0, 0] = corner
     expected[1, 4:6] = np.nan
     expected[2, 0] = np.nan
     expected[0, 514] = np.nan
@@ -2109,7 +2132,13 @@ def test_bilinear_uses_source_neighbours_at_the_area_edge(tmp_path: Path) -> Non
         (-9999, "a", "no_shared_raster_coverage"),
         (1, "a / 0", "no_valid_calculator_values"),
         (-9999, "area_max(a)", "no_shared_raster_coverage"),
+        (-9999, "area_min(a)", "no_shared_raster_coverage"),
         (0, "a / area_max(a)", "no_valid_calculator_values"),
+        (
+            7,
+            "(a - area_min(a)) / (area_max(a) - area_min(a))",
+            "no_valid_calculator_values",
+        ),
     ],
 )
 def test_calculator_distinguishes_missing_coverage_from_invalid_arithmetic(

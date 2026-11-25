@@ -7,7 +7,8 @@ const RESAMPLING = [
     {value: "mode", label: "Mode"}, {value: "min", label: "Minimum"},
     {value: "max", label: "Maximum"}, {value: "mean", label: "Mean"},
 ];
-const FUNCTIONS = ["min", "max", "area_max"];
+const AREA_FUNCTIONS = ["area_min", "area_max"];
+const FUNCTIONS = ["min", "max", ...AREA_FUNCTIONS];
 const OPERATORS = ["+", "-", "*", "/", "^"];
 const EPSG = /^EPSG:[1-9][0-9]{0,8}$/;
 const CUSTOM_GRID = "custom-grid";
@@ -140,7 +141,7 @@ class RasterFormulaView {
         const operators = ui.element("div", "", "models-formula-insert");
         operators.append(...OPERATORS.map(token => this.button(token, () => this.insert(" " + token + " "))));
         for (const name of FUNCTIONS) {
-            const suffix = name === "area_max" ? ")" : ", )";
+            const suffix = AREA_FUNCTIONS.includes(name) ? ")" : ", )";
             operators.append(this.button(name + "(…)", () => this.insert(name + "(", suffix)));
         }
         this.grid = ui.element("select");
@@ -159,7 +160,7 @@ class RasterFormulaView {
         this.gridInfo = ui.element("p", "", "models-help");
         this.status = ui.element("p", "", "models-help"); this.status.setAttribute("aria-live", "polite");
         this.root.append(this.layers, this.add, ui.field("models-" + name + "-expression", "Formula", this.formula),
-            this.variables, operators, ui.element("p", "Uses the values stored in each raster. area_max(a) finds the highest valid value of a in the selected area on the output grid.", "models-help"),
+            this.variables, operators, ui.element("p", "Uses the values stored in each raster. On the output grid, area_min(a) finds the lowest valid value of a in the selected area and area_max(a) finds the highest.", "models-help"),
             ui.field("models-" + name + "-grid", "Output grid", this.grid), this.custom, this.gridInfo, this.status);
     }
 

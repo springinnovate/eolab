@@ -293,6 +293,9 @@ test("Raster calculator keeps formula aliases and captures the chosen output gri
     const normalizedDifference = "a/area_max(a) - b/area_max(b)";
     change(editor.formula, normalizedDifference, "input");
     assert.equal(capture().expression, normalizedDifference);
+    const differenceOfRanges = "(area_max(a) - area_min(a)) - (area_max(b) - area_min(b))";
+    change(editor.formula, differenceOfRanges, "input");
+    assert.equal(capture().expression, differenceOfRanges);
     change(editor.grid, "custom-grid");
     change(editor.crs, "EPSG:6933", "input");
     change(editor.cellWidth, "30", "input");

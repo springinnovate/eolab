@@ -40,7 +40,11 @@ from eolab_app.processing.raster_calculator_models import (
     RasterCalculatorSpec,
     RasterFormulaInput,
 )
-from eolab_app.processing.raster_expression import evaluate_pixel_expression, walk
+from eolab_app.processing.raster_expression import (
+    AREA_EXTREMA,
+    evaluate_pixel_expression,
+    walk,
+)
 from eolab_app.processing.raster_input import validate_supported_raster
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_operations import bind_area_arguments
@@ -249,7 +253,7 @@ def referenced_rasters(calculation: RasterFormulaInput) -> set[str]:
     return {
         cast(str, node.value)
         for node in walk(calculation.formula)
-        if node.op in {"source", "area_max"}
+        if node.op == "source" or node.op in AREA_EXTREMA
     }
 
 
@@ -439,11 +443,12 @@ def write_calculator_tiles(
         (grid.height + tile_side - 1) // tile_side
     )
     formula = spec.inputs.calculation.formula
-    maximum_aliases = {
-        cast(str, node.value) for node in walk(formula) if node.op == "area_max"
+    area_extrema = {
+        node: float("nan") for node in walk(formula) if node.op in AREA_EXTREMA
     }
-    maximum_rasters = {alias: rasters[alias] for alias in maximum_aliases}
-    total = tile_count * (2 if maximum_rasters else 1)
+    extrema_aliases = {cast(str, node.value) for node in area_extrema}
+    extrema_rasters = {alias: rasters[alias] for alias in extrema_aliases}
+    total = tile_count * (2 if area_extrema else 1)
     write_progress(directory, "calculating_raster", 0, total, unit="tiles")
     last_progress = time.monotonic()
     with rasterio.open(
@@ -463,15 +468,18 @@ def write_calculator_tiles(
         compress="DEFLATE",
         BIGTIFF="IF_SAFER",
     ) as destination:
-        area_maxima = dict.fromkeys(maximum_rasters, float("nan"))
-        if maximum_rasters:
+        if area_extrema:
             for index, (_, samples) in enumerate(
-                iter_calculator_tiles(destination, maximum_rasters, polygon_mask), 1
+                iter_calculator_tiles(destination, extrema_rasters, polygon_mask), 1
             ):
-                for alias, values in samples.items():
-                    area_maxima[alias] = float(
-                        np.fmax.reduce(values, axis=None, initial=area_maxima[alias])
-                    )
+                if samples:
+                    for call, previous in area_extrema.items():
+                        values = samples[cast(str, call.value)]
+                        area_extrema[call] = float(
+                            AREA_EXTREMA[call.op].reduce(
+                                values, axis=None, initial=previous
+                            )
+                        )
                 if time.monotonic() - last_progress > 0.5:
                     write_progress(
                         directory, "calculating_raster", index, total, unit="tiles"
@@ -490,7 +498,7 @@ def write_calculator_tiles(
                     for values in samples.values():
                         shared &= np.isfinite(values)
                     has_shared_cells = bool(shared.any())
-                result = evaluate_pixel_expression(formula, samples, area_maxima)
+                result = evaluate_pixel_expression(formula, samples, area_extrema)
                 valid_pixels += int(np.count_nonzero(np.isfinite(result)))
             destination.write(result, 1, window=window)
             if time.monotonic() - last_progress > 0.5:
