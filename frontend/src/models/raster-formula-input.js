@@ -7,7 +7,7 @@ const RESAMPLING = [
     {value: "mode", label: "Mode"}, {value: "min", label: "Minimum"},
     {value: "max", label: "Maximum"}, {value: "mean", label: "Mean"},
 ];
-const AREA_FUNCTIONS = ["area_min", "area_max"];
+const AREA_FUNCTIONS = ["area_min", "area_max", "area_mean", "area_stdev", "area_sum", "area_count"];
 const FUNCTIONS = ["min", "max", ...AREA_FUNCTIONS];
 const OPERATORS = ["+", "-", "*", "/", "^"];
 const EPSG = /^EPSG:[1-9][0-9]{0,8}$/;
@@ -160,7 +160,7 @@ class RasterFormulaView {
         this.gridInfo = ui.element("p", "", "models-help");
         this.status = ui.element("p", "", "models-help"); this.status.setAttribute("aria-live", "polite");
         this.root.append(this.layers, this.add, ui.field("models-" + name + "-expression", "Formula", this.formula),
-            this.variables, operators, ui.element("p", "Uses the values stored in each raster. On the output grid, area_min(a) finds the lowest valid value of a in the selected area and area_max(a) finds the highest.", "models-help"),
+            this.variables, operators, ui.element("p", "Area functions use the raster’s stored values after resampling to the output grid. area_count(a) counts valid cells inside the selected area, including zeros. area_stdev(a) gives their population standard deviation.", "models-help"),
             ui.field("models-" + name + "-grid", "Output grid", this.grid), this.custom, this.gridInfo, this.status);
     }
 
