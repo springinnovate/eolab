@@ -290,6 +290,9 @@ test("Raster calculator keeps formula aliases and captures the chosen output gri
     const capture = () => captureModelSubmission(h.controller.state.draft, "calculator-request").inputs.calculation;
     assert.deepEqual(capture().grid, {kind: "match", alias: "a"});
     assert.deepEqual(capture().layers.map(({alias, resampling}) => [alias, resampling]), [["a", "nearest"], ["b", "mean"]]);
+    const normalizedDifference = "a/area_max(a) - b/area_max(b)";
+    change(editor.formula, normalizedDifference, "input");
+    assert.equal(capture().expression, normalizedDifference);
     change(editor.grid, "custom-grid");
     change(editor.crs, "EPSG:6933", "input");
     change(editor.cellWidth, "30", "input");

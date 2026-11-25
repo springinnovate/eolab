@@ -43,8 +43,8 @@ class Node:
     Attributes:
         op: Source, literal, operator or statistic name.
         args: Child expressions supplying this node's operands or arguments.
-        value: Numeric literal for "number", or the binding name for "source"
-            in a pixel formula.
+        value: Numeric literal for "number", or the raster variable for "source"
+            and "area_max" in a pixel formula.
         boolean: Whether the expression produces a true/false condition.
         scalar: Whether the expression produces one value rather than pixel values.
         depth: Number of levels from this node to its deepest child.
@@ -263,7 +263,7 @@ class Parser:
 
 
 class PixelExpressionParser(Parser):
-    """Parse numerical formulas over named rasters without scalar reductions."""
+    """Parse cell arithmetic and selected-area maxima over named rasters."""
 
     precedence: Mapping[str, int] = {"+": 5, "-": 5, "*": 6, "/": 6, "^": 7}
 
@@ -278,15 +278,24 @@ class PixelExpressionParser(Parser):
         self.aliases = aliases
 
     def read_operand(self, token: str) -> Node:
-        """Return a named raster, two-argument function or number.
+        """Return a raster variable, calculator function call or number.
 
         Args:
             token: First token of the operand.
         Returns:
             Parsed numerical operand.
         Raises:
-            ProcessingError: If a name is unknown or a call lacks two arguments.
+            ProcessingError: If a variable, function or argument list is invalid.
         """
+        if token == "area_max" and self.tokens[self.index][0] == "(":
+            self.take("(")
+            alias = self.take()
+            if alias not in self.aliases:
+                raise self.error(
+                    "area_max requires one raster variable, for example area_max(a)"
+                )
+            self.take(")")
+            return self.node("area_max", value=alias)
         if token in self.aliases:
             return self.node("source", value=token)
         if token in PIXEL_FUNCTIONS:
@@ -425,13 +434,16 @@ def apply_operator(node: Node, values: list[Any]) -> Any:
 
 
 def evaluate_pixel_expression(
-    root: Node, samples: Mapping[str, NDArray[np.float64]]
+    root: Node,
+    samples: Mapping[str, NDArray[np.float64]],
+    area_maxima: Mapping[str, float],
 ) -> NDArray[np.float64]:
     """Calculate a tile, preserving missing samples and undefined arithmetic.
 
     Args:
         root: Parsed pixel formula referencing one or more rasters.
         samples: Equally shaped tiles keyed by raster name, with NaN for NoData.
+        area_maxima: Selected-area maximum for each alias used in area_max calls.
     Returns:
         Float64 tile with NaN wherever an input or intermediate value is invalid.
     """
@@ -440,6 +452,9 @@ def evaluate_pixel_expression(
         """Evaluate one formula node against the supplied tile samples."""
         if node.op == "source":
             return samples[cast(str, node.value)]
+        if node.op == "area_max":
+            alias = cast(str, node.value)
+            return np.where(np.isfinite(samples[alias]), area_maxima[alias], np.nan)
         if node.op == "number":
             return np.float64(cast(float, node.value))
         operands = [evaluate(child) for child in node.args]

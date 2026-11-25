@@ -1,6 +1,6 @@
 """Calculate a raster formula inside a selected area on one output grid."""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 import json
@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 
 from affine import Affine
 import numpy as np
+from numpy.typing import NDArray
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
@@ -248,7 +249,7 @@ def referenced_rasters(calculation: RasterFormulaInput) -> set[str]:
     return {
         cast(str, node.value)
         for node in walk(calculation.formula)
-        if node.op == "source"
+        if node.op in {"source", "area_max"}
     }
 
 
@@ -382,6 +383,33 @@ def plan_calculator_grid(
     )
 
 
+def iter_calculator_tiles(
+    destination: rasterio.io.DatasetWriter,
+    rasters: Mapping[str, rasterio.io.DatasetReader],
+    polygon_mask: rasterio.io.DatasetReader | None,
+) -> Iterator[tuple[Window, dict[str, NDArray[np.float64]]]]:
+    """Read the selected rasters on each output tile inside the analysis area.
+
+    Args:
+        destination: Staging raster whose blocks partition the output grid.
+        rasters: Aligned readers needed for this pass, keyed by formula variable.
+        polygon_mask: Inclusion mask on the same grid, or None for the entire grid.
+    Yields:
+        Output window and masked samples, or an empty mapping for an excluded tile.
+    """
+    for _, window in destination.block_windows(1):
+        inside = (
+            None if polygon_mask is None else polygon_mask.read(1, window=window) != 0
+        )
+        samples = {}
+        if inside is None or inside.any():
+            samples = {
+                alias: read_warped_tile(raster, window, inside)
+                for alias, raster in rasters.items()
+            }
+        yield window, samples
+
+
 def write_calculator_tiles(
     rasters: Mapping[str, rasterio.io.DatasetReader],
     polygon_mask: rasterio.io.DatasetReader | None,
@@ -407,9 +435,15 @@ def write_calculator_tiles(
     valid_pixels = 0
     has_shared_cells = False
     tile_side = 512
-    total = ((grid.width + tile_side - 1) // tile_side) * (
+    tile_count = ((grid.width + tile_side - 1) // tile_side) * (
         (grid.height + tile_side - 1) // tile_side
     )
+    formula = spec.inputs.calculation.formula
+    maximum_aliases = {
+        cast(str, node.value) for node in walk(formula) if node.op == "area_max"
+    }
+    maximum_rasters = {alias: rasters[alias] for alias in maximum_aliases}
+    total = tile_count * (2 if maximum_rasters else 1)
     write_progress(directory, "calculating_raster", 0, total, unit="tiles")
     last_progress = time.monotonic()
     with rasterio.open(
@@ -429,28 +463,34 @@ def write_calculator_tiles(
         compress="DEFLATE",
         BIGTIFF="IF_SAFER",
     ) as destination:
-        for index, (_, window) in enumerate(destination.block_windows(1), 1):
-            inside = (
-                None
-                if polygon_mask is None
-                else polygon_mask.read(1, window=window) != 0
-            )
+        area_maxima = dict.fromkeys(maximum_rasters, float("nan"))
+        if maximum_rasters:
+            for index, (_, samples) in enumerate(
+                iter_calculator_tiles(destination, maximum_rasters, polygon_mask), 1
+            ):
+                for alias, values in samples.items():
+                    area_maxima[alias] = float(
+                        np.fmax.reduce(values, axis=None, initial=area_maxima[alias])
+                    )
+                if time.monotonic() - last_progress > 0.5:
+                    write_progress(
+                        directory, "calculating_raster", index, total, unit="tiles"
+                    )
+                    last_progress = time.monotonic()
+        for index, (window, samples) in enumerate(
+            iter_calculator_tiles(destination, rasters, polygon_mask),
+            total - tile_count + 1,
+        ):
             shape = (int(window.height), int(window.width))
-            if inside is not None and not inside.any():
+            if not samples:
                 result = np.full(shape, np.nan)
             else:
-                samples = {
-                    alias: read_warped_tile(raster, window, inside)
-                    for alias, raster in rasters.items()
-                }
                 if not has_shared_cells:
                     shared = np.ones(shape, dtype=bool)
                     for values in samples.values():
                         shared &= np.isfinite(values)
                     has_shared_cells = bool(shared.any())
-                result = evaluate_pixel_expression(
-                    spec.inputs.calculation.formula, samples
-                )
+                result = evaluate_pixel_expression(formula, samples, area_maxima)
                 valid_pixels += int(np.count_nonzero(np.isfinite(result)))
             destination.write(result, 1, window=window)
             if time.monotonic() - last_progress > 0.5:

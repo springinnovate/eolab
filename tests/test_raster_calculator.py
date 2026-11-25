@@ -57,18 +57,31 @@ def test_pixel_formula_keeps_power_precedence_and_undefined_intermediates() -> N
     }
     root = compile_pixel_expression("max(-a^2 + 2^3^2, min(b^2, 10)) / 2", aliases)
     np.testing.assert_array_equal(
-        evaluate_pixel_expression(root, samples), [254, 254, 256, np.nan]
+        evaluate_pixel_expression(root, samples, {}), [254, 254, 256, np.nan]
     )
     invalid = compile_pixel_expression("(a / (b - b)) ^ 0", aliases)
-    assert np.isnan(evaluate_pixel_expression(invalid, samples)).all()
+    assert np.isnan(evaluate_pixel_expression(invalid, samples, {})).all()
     fractional = compile_pixel_expression("min(10, a^0.5)", aliases)
     np.testing.assert_allclose(
-        evaluate_pixel_expression(fractional, samples), [2**0.5, np.nan, 0, np.nan]
+        evaluate_pixel_expression(fractional, samples, {}), [2**0.5, np.nan, 0, np.nan]
     )
 
 
 @pytest.mark.parametrize(
-    "expression", ["a + missing", "mean(a)", "a >= 2", "min(a)", "max(a, 1, 2)", "42"]
+    "expression",
+    [
+        "a + missing",
+        "mean(a)",
+        "a >= 2",
+        "min(a)",
+        "max(a, 1, 2)",
+        "area_max()",
+        "area_max(1)",
+        "area_max(a + 1)",
+        "area_max(b)",
+        "area_max(a, a)",
+        "42",
+    ],
 )
 def test_calculator_rejects_names_and_operators_outside_its_grammar(
     expression: str,
@@ -177,6 +190,63 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     assert sorted(raster_writes) == ["calculated.tif", "polygon-mask.tif"]
     assert not list(tmp_path.rglob("*.vrt"))
     assert not list(tmp_path.rglob("polygon-mask.tif"))
+
+
+def test_area_max_normalizes_each_raster_across_the_selected_area(
+    tmp_path: Path,
+) -> None:
+    """Compare published cells with independent maxima across two output tiles.
+
+    Args:
+        tmp_path: Directory for the input rasters, polygon and output.
+    """
+    transform = from_origin(0, 3, 0.125, 1)
+    a = np.full((3, 516), -8, dtype="int16")
+    b = np.full((6, 1032), 2, dtype="int16")
+    # The largest A and B samples occur in different tiles where the other is missing.
+    a[0, 514] = -2
+    b[:2, 1028:1030] = -9999
+    a[2, 0] = -9999
+    b[4:, :2] = [[2, 6], [6, 10]]  # The maximum after mean resampling is 6.
+    a[0, 0] = -4
+    a[1, 4:6] = 300
+    b[2:4, 8:12] = 500
+    polygon = Polygon(
+        box(0, 0, 64.5, 3).exterior.coords, [box(0.5, 1, 0.75, 2).exterior.coords]
+    )
+    area = write_selection(tmp_path / "area.gpkg", [mapping(polygon)])
+    sources = RasterCalculatorSources(
+        {
+            "a": write_source(tmp_path / "a.tif", a, -9999, transform),
+            "b": write_source(
+                tmp_path / "b.tif", b, -9999, from_origin(0, 3, 0.0625, 0.5)
+            ),
+        },
+        area,
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+                RasterFormulaLayer(alias="b", source=SOURCE, resampling="mean"),
+            ),
+            expression="a/area_max(a) - b/area_max(b)",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    expected = np.full(a.shape, -8 / -2 - 2 / 6)
+    expected[0, 0] = -4 / -2 - 2 / 6
+    expected[1, 4:6] = np.nan
+    expected[2, 0] = np.nan
+    expected[0, 514] = np.nan
+    with rasterio.open(tmp_path / "result.tif") as output:
+        np.testing.assert_allclose(output.read(1), expected)
+    assert result.valid_pixels == np.isfinite(expected).sum()
 
 
 def test_match_grid_preserves_native_polygon_edges(tmp_path: Path) -> None:
@@ -2038,6 +2108,8 @@ def test_bilinear_uses_source_neighbours_at_the_area_edge(tmp_path: Path) -> Non
     [
         (-9999, "a", "no_shared_raster_coverage"),
         (1, "a / 0", "no_valid_calculator_values"),
+        (-9999, "area_max(a)", "no_shared_raster_coverage"),
+        (0, "a / area_max(a)", "no_valid_calculator_values"),
     ],
 )
 def test_calculator_distinguishes_missing_coverage_from_invalid_arithmetic(
