@@ -12,20 +12,20 @@ from uuid import uuid4
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
-from shapely.geometry import box, mapping
 from starlette.requests import Request
 from starlette.responses import Response
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.main import create_app
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
-from eolab_app.vector import selection_operation
+from eolab_app.settings import load_settings
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
+from eolab_app.vector.lasso import LASSO_EXECUTION_SECONDS
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.sampling import VectorSamplingService
-from eolab_app.vector.selection_jobs import SelectionJobs
+from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
 from eolab_app.vector.selection_operation import (
     SelectionMeasurementInput,
     SelectionMeasurementResult,
@@ -352,31 +352,23 @@ def test_route_disconnect_cancels_only_its_job(
     ("ceiling", "expected_timeout"), [(30, 30), (300, 50), (39.5, 39), (0.9, 0.9)]
 )
 def test_lasso_respects_jobs_timeout_ceiling(
-    outline_case: tuple[CatalogSelection, dict[str, Any], str],
-    tmp_path: Path,
     configured_environment: None,
     version_file_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     ceiling: float,
     expected_timeout: float,
 ) -> None:
-    """Return a selected row through Jobs under the configured deployment ceiling.
+    """Admit a Lasso comparison and give its worker the allowed execution budget.
 
     Args:
-        outline_case: Filtered Catalog polygons and their HTTP metadata.
-        tmp_path: Mount containing the original dataset.
         configured_environment: Application deployment settings.
-        version_file_path: Version supplied to the application factory.
-        monkeypatch: Connect the in-process worker to the fixture services.
+        version_file_path: Version supplied to the application settings loader.
+        monkeypatch: Configure the ceiling and observe the admitted worker.
         ceiling: Operator's maximum Jobs timeout in seconds.
         expected_timeout: Execution time granted to this Lasso worker.
     """
-    selection, _, catalog_url = outline_case
-    monkeypatch.setenv("CATALOG_INTERNAL_URL", catalog_url)
-    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("JOBS_MAX_TIMEOUT_SECONDS", str(ceiling))
-    monkeypatch.setattr(selection_operation, "CATALOG_URL", catalog_url)
-    monkeypatch.setattr(selection_operation, "SCAN_MOUNT", tmp_path)
+    settings = load_settings(version_file_path)
     jobs = create_jobs_app(
         Settings(
             callers={"eolab": hashlib.sha256(TOKEN.encode()).hexdigest()},
@@ -385,14 +377,12 @@ def test_lasso_respects_jobs_timeout_ceiling(
             max_timeout_seconds=ceiling,
         )
     )
-    app = create_app(version_file_path, jobs_transport=httpx2.ASGITransport(app=jobs))
-
-    execution_timeouts = []
+    execution_timeouts: list[float] = []
 
     async def execute(
         payload: bytes, cancel: asyncio.Event, timeout: float
     ) -> ExecutionResult:
-        """Run the admitted intersection against the application's private callback.
+        """Record the execution budget granted to the native worker.
 
         Args:
             payload: Jobs operation and input descriptor.
@@ -400,39 +390,25 @@ def test_lasso_respects_jobs_timeout_ceiling(
             timeout: Execution budget granted by Jobs admission.
 
         Returns:
-            Successful native completion after delivering the selection.
+            The registered operation's completion acknowledgment.
         """
         execution_timeouts.append(timeout)
-        inputs = selection_operation.ComparisonInput.model_validate(
-            json.loads(payload)["inputs"]
-        )
-        async with httpx2.AsyncClient(
-            mounts={"http://app:8000": httpx2.ASGITransport(app=app)}, trust_env=False
-        ) as client:
-            await selection_operation.deliver_intersection_result(client, inputs)
         return ExecutionResult("succeeded", {"error": None})
 
     monkeypatch.setattr("job_service.manager.run_job", execute)
 
     async def select() -> None:
-        """Exercise the public Lasso route through the running Jobs manager."""
+        """Submit and reap the comparison through the real Jobs manager."""
         async with (
             jobs.router.lifespan_context(jobs),
-            httpx2.AsyncClient(
-                transport=httpx2.ASGITransport(app=app), base_url="http://app"
-            ) as client,
+            httpx2.AsyncClient(transport=httpx2.ASGITransport(app=jobs)) as client,
         ):
-            response = await client.post(
-                "/api/vector-sampling/lasso",
-                json={
-                    "selection": selection.model_dump(mode="json", by_alias=True),
-                    "polygon": mapping(box(-1, -1, 5, 5)),
-                },
+            await compare_selection_job(
+                JobsClient(client, settings.jobs_token),
+                "a" * 64,
+                LASSO_EXECUTION_SECONDS,
+                max_timeout_seconds=settings.jobs_max_timeout_seconds,
             )
-            assert response.status_code == 200, response.text
-            assert response.json()["features"] == [
-                {"id": "1", "properties": {"selected": 1}}
-            ]
 
     asyncio.run(select())
     assert execution_timeouts == [expected_timeout]
