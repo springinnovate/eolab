@@ -11,30 +11,34 @@ from eolab_app.vector.selection_operation import ComparisonResult, SelectionMeas
 
 
 async def compare_selection_job(
-    jobs: JobsClient, token: str, execution_seconds: int
+    jobs: JobsClient, token: str, execution_seconds: int, *, max_timeout_seconds: float
 ) -> None:
     """Queue an exact polygon comparison and hold both original inputs until native exit.
 
     Args:
         jobs: Authenticated application connection to the existing Jobs queue.
         token: One-request capability for obtaining the source pair and returning its IDs.
-        execution_seconds: Outer native deadline covering the requested comparison or Lasso stages.
+        execution_seconds: Requested native budget for the comparison or Lasso stages.
+        max_timeout_seconds: Operator's ceiling for queue and execution time.
 
     Raises:
         VectorConflictError: If the queue or native reader cannot complete the comparison.
         asyncio.CancelledError: After the job has stopped using both original sources.
     """
-    queue_seconds = 30
+    # Jobs accepts whole-second overrides. Below one second its configured defaults apply.
+    whole_seconds = int(max_timeout_seconds)
+    execution_limit = min(execution_seconds, whole_seconds)
+    queue_limit = min(30, whole_seconds)
     try:
         result = await jobs.run(
             {
                 "operation": "vector.intersection.v1",
                 "inputs": {"spatialRead": token},
                 "priority": 0,
-                "executionTimeoutSeconds": execution_seconds,
-                "queueTimeoutSeconds": queue_seconds,
+                "executionTimeoutSeconds": execution_limit or None,
+                "queueTimeoutSeconds": queue_limit or None,
             },
-            timeout_seconds=queue_seconds + execution_seconds + 10,
+            timeout_seconds=queue_limit + execution_limit + 10,
             delete_on_completion=True,
             require_terminal_cleanup=True,
         )

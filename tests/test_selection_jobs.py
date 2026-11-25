@@ -12,12 +12,14 @@ from uuid import uuid4
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from shapely.geometry import box, mapping
 from starlette.requests import Request
 from starlette.responses import Response
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.main import create_app
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
+from eolab_app.vector import selection_operation
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
@@ -344,6 +346,96 @@ def test_route_disconnect_cancels_only_its_job(
         ]
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("ceiling", "expected_timeout"), [(30, 30), (300, 50), (39.5, 39), (0.9, 0.9)]
+)
+def test_lasso_respects_jobs_timeout_ceiling(
+    outline_case: tuple[CatalogSelection, dict[str, Any], str],
+    tmp_path: Path,
+    configured_environment: None,
+    version_file_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ceiling: float,
+    expected_timeout: float,
+) -> None:
+    """Return a selected row through Jobs under the configured deployment ceiling.
+
+    Args:
+        outline_case: Filtered Catalog polygons and their HTTP metadata.
+        tmp_path: Mount containing the original dataset.
+        configured_environment: Application deployment settings.
+        version_file_path: Version supplied to the application factory.
+        monkeypatch: Connect the in-process worker to the fixture services.
+        ceiling: Operator's maximum Jobs timeout in seconds.
+        expected_timeout: Execution time granted to this Lasso worker.
+    """
+    selection, _, catalog_url = outline_case
+    monkeypatch.setenv("CATALOG_INTERNAL_URL", catalog_url)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("JOBS_MAX_TIMEOUT_SECONDS", str(ceiling))
+    monkeypatch.setattr(selection_operation, "CATALOG_URL", catalog_url)
+    monkeypatch.setattr(selection_operation, "SCAN_MOUNT", tmp_path)
+    jobs = create_jobs_app(
+        Settings(
+            callers={"eolab": hashlib.sha256(TOKEN.encode()).hexdigest()},
+            execution_seconds=min(20, ceiling),
+            queue_seconds=min(30, ceiling),
+            max_timeout_seconds=ceiling,
+        )
+    )
+    app = create_app(version_file_path, jobs_transport=httpx2.ASGITransport(app=jobs))
+
+    execution_timeouts = []
+
+    async def execute(
+        payload: bytes, cancel: asyncio.Event, timeout: float
+    ) -> ExecutionResult:
+        """Run the admitted intersection against the application's private callback.
+
+        Args:
+            payload: Jobs operation and input descriptor.
+            cancel: Worker cancellation signal.
+            timeout: Execution budget granted by Jobs admission.
+
+        Returns:
+            Successful native completion after delivering the selection.
+        """
+        execution_timeouts.append(timeout)
+        inputs = selection_operation.ComparisonInput.model_validate(
+            json.loads(payload)["inputs"]
+        )
+        async with httpx2.AsyncClient(
+            mounts={"http://app:8000": httpx2.ASGITransport(app=app)}, trust_env=False
+        ) as client:
+            await selection_operation.deliver_intersection_result(client, inputs)
+        return ExecutionResult("succeeded", {"error": None})
+
+    monkeypatch.setattr("job_service.manager.run_job", execute)
+
+    async def select() -> None:
+        """Exercise the public Lasso route through the running Jobs manager."""
+        async with (
+            jobs.router.lifespan_context(jobs),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://app"
+            ) as client,
+        ):
+            response = await client.post(
+                "/api/vector-sampling/lasso",
+                json={
+                    "selection": selection.model_dump(mode="json", by_alias=True),
+                    "polygon": mapping(box(-1, -1, 5, 5)),
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["features"] == [
+                {"id": "1", "properties": {"selected": 1}}
+            ]
+
+    asyncio.run(select())
+    assert execution_timeouts == [expected_timeout]
 
 
 def test_users_queue_selections_ahead_of_waiting_outlines(
