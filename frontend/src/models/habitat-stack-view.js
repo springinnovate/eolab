@@ -1,5 +1,27 @@
 /** Choose Earth Engine inputs or a named raster stack for Habitat condition. */
 
+/** List the source bands included by this role's choices, grouped by analysis period.
+ * @param {import("../processing/api.js").HabitatDatasetSource} dataset Prepared source shown in this row.
+ * @param {string} role Predictor or response group containing the row.
+ * @param {string[]} selected Dataset IDs selected for this role.
+ * @param {number} year Requested assessment year.
+ * @return {string} Lines pairing each period with its bands, or an explanation when none apply.
+ */
+function describeSelectedBands(dataset, role, selected, year) {
+    if (!selected.includes(dataset.id)) return "Excluded from this analysis.";
+    const bandsByPeriod = new Map();
+    for (const input of dataset.inputsByRole[role]) {
+        if (!input.requiredDatasets.every(id => selected.includes(id))) continue;
+        const period = input.periods[year];
+        if (!period) return "Choose a supported assessment year.";
+        if (!bandsByPeriod.has(period)) bandsByPeriod.set(period, new Set());
+        for (const band of input.bands) bandsByPeriod.get(period).add(band);
+    }
+    if (!bandsByPeriod.size) return "No bands used with these dataset choices.";
+    return ["Bands used", ...Array.from(bandsByPeriod, ([period, bands]) =>
+        `${period} · ${[...bands].join(", ")}`)].join("\n");
+}
+
 /** Choose Habitat datasets or manual rasters while retaining focused controls. */
 export class HabitatStackView {
     /** Group the configuration selector with its existing year and raster controls.
@@ -92,8 +114,8 @@ export class HabitatStackView {
 
     /** Create one stable checkbox for a dataset's use as predictor or response.
      * @param {"predictor"|"response"} role Scientific role controlled by this checkbox.
-     * @param {{id:string,label:string,url:string,roles:string[],requiredRoles:string[]}} dataset Configured source and role requirements.
-     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,required:HTMLElement,link:HTMLAnchorElement}} Dataset row controls.
+     * @param {import("../processing/api.js").HabitatDatasetSource} dataset Configured source and role requirements.
+     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,required:HTMLElement,link:HTMLAnchorElement,details:HTMLElement}} Dataset row and its analysis inputs.
      */
     buildDatasetChoice(role, dataset) {
         const root = this.element("li"), label = this.element("label", "", "models-habitat-dataset-choice");
@@ -103,17 +125,20 @@ export class HabitatStackView {
         caption.append(name, required); label.append(checkbox, caption);
         const link = this.element("a", "Source");
         link.target = "_blank"; link.rel = "noopener noreferrer";
-        root.append(label, link);
+        const details = this.element("div", "", "models-habitat-dataset-details");
+        details.id = `models-${this.inputName}-${role}-${dataset.id}-details`;
+        checkbox.setAttribute("aria-describedby", details.id);
+        root.append(label, link, details);
         checkbox.addEventListener("change", () => {
             const {fieldName} = this.datasetGroups[role];
             const selected = this.value[fieldName];
             this.handlers.onInput(this.inputName, {[fieldName]: checkbox.checked ? [...selected, dataset.id] : selected.filter(id => id !== dataset.id)});
         });
-        return {root, checkbox, label: name, required, link};
+        return {root, checkbox, label: name, required, link, details};
     }
 
     /** Refresh dataset choices in place so selection, focus and disclosures survive updates.
-     * @param {{datasets:Array<{id:string,label:string,url:string,roles:string[],requiredRoles:string[]}>}} configuration Model-owned dataset choices.
+     * @param {{datasets:import("../processing/api.js").HabitatDatasetSource[]}} configuration Model-owned dataset choices.
      * @return {void}
      */
     renderDatasetChoices(configuration) {
@@ -130,6 +155,7 @@ export class HabitatStackView {
                     group.controls.set(dataset.id, controls); group.list.append(controls.root);
                 }
                 controls.label.textContent = dataset.label;
+                controls.details.textContent = describeSelectedBands(dataset, role, selected, this.value.year);
                 controls.checkbox.checked = selected.includes(dataset.id);
                 controls.checkbox.disabled = dataset.requiredRoles.includes(role);
                 controls.required.hidden = !controls.checkbox.disabled;

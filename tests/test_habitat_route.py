@@ -64,7 +64,9 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
         role: sum(role in source["roles"] for source in datasets)
         for role in ("predictor", "response")
     } == {"predictor": 13, "response": 6}
-    assert sources_by_label["MODIS land-cover dynamics / phenology"] == {
+    phenology = sources_by_label["MODIS land-cover dynamics / phenology"].copy()
+    phenology_inputs = phenology.pop("inputsByRole")
+    assert phenology == {
         "id": "modis_phenology",
         "label": "MODIS land-cover dynamics / phenology",
         "url": "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2",
@@ -72,10 +74,61 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
         "requiredRoles": [],
     }
     assert {
+        role: {name for entry in entries for name in entry["bands"]}
+        for role, entries in phenology_inputs.items()
+    } == {
+        "predictor": {"Greenup_1", "Senescence_1"},
+        "response": {
+            "Greenup_1",
+            "Senescence_1",
+            "Greenup_2",
+            "Senescence_2",
+            "NumCycles",
+        },
+    }
+    assert {
         source["id"]: source["requiredRoles"]
         for source in datasets
         if source["requiredRoles"]
     } == {"srtm_landforms": ["predictor"]}
+    assert all(
+        source["inputsByRole"][role]
+        and all(
+            set(entry["periods"]) == {str(year) for year in range(2015, 2020)}
+            and entry["bands"]
+            and source["id"] in entry["requiredDatasets"]
+            for entry in source["inputsByRole"][role]
+        )
+        for source in datasets
+        for role in source["roles"]
+    )
+    daily = sources_by_label["ERA5 daily aggregates"]["inputsByRole"]["predictor"]
+    assert {
+        (
+            entry["periods"]["2018"],
+            tuple(entry["bands"]),
+            tuple(entry["requiredDatasets"]),
+        )
+        for entry in daily
+    } == {
+        ("2018", ("maximum_2m_air_temperature",), ("era5_daily",)),
+        ("2018", ("minimum_2m_air_temperature",), ("era5_daily",)),
+        ("2018", ("total_precipitation",), ("era5_daily",)),
+        (
+            "2018 growing season",
+            ("mean_2m_air_temperature",),
+            ("era5_daily", "modis_phenology"),
+        ),
+        (
+            "2018 growing season",
+            ("total_precipitation",),
+            ("era5_daily", "modis_phenology"),
+        ),
+        ("2009–2018 rainfall variability", ("total_precipitation",), ("era5_daily",)),
+    }
+    (soil,) = sources_by_label["SoilGrids organic carbon"]["inputsByRole"]["predictor"]
+    assert soil["bands"] == ["soc_5-15cm_mean"]
+    assert set(soil["periods"].values()) == {"Fixed map for every assessment year"}
     assert len({source["id"] for source in datasets}) == 18
     assert sources_by_label["Landsat NDVI composites"]["roles"] == ["response"]
     assert sources_by_label["ERA5 daily aggregates"]["roles"] == ["predictor"]
@@ -122,3 +175,12 @@ def test_habitat_options_follow_configured_band_sources_and_roles(
         "ERA5 daily aggregates": ["predictor"],
         "SRTM landforms": ["predictor"],
     }
+    sources = {dataset["id"]: dataset for dataset in response.json()["datasets"]}
+    phenology = sources["modis_phenology"]["inputsByRole"]
+    for role in ("predictor", "response"):
+        (entry,) = phenology[role]
+        assert entry["bands"] == ["Greenup_1", "Senescence_1"]
+        assert entry["periods"]["2018"] == "2018"
+    (daily,) = sources["era5_daily"]["inputsByRole"]["predictor"]
+    assert daily["bands"] == ["mean_2m_air_temperature"]
+    assert daily["periods"]["2018"] == "2018 growing season"
