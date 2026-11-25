@@ -3,20 +3,19 @@ import { vectorSelectionsEqual } from "../selected-area.js";
 
 /** Keep Catalog preparation choices separate from manual area and reference controls. */
 export class HabitatPreparationSelectionView {
-    /** Create stable selection, coverage and retry controls with existing form helpers.
-     * @param {Object} helpers Existing Models element/field/options/button helpers.
+    /** Create the area chooser, map outline toggle and coverage status.
+     * @param {Object} helpers Existing Models form and selection helpers.
      * @param {(draft:Object)=>Object} helpers.captureSelection Capture the chosen prepared Catalog features.
      * @param {(filter:Object)=>string} helpers.describeFilter Describe the exact feature predicate.
      * @param {(source:Object)=>string} helpers.sourceKey Identify the Catalog Item for display titles.
      * @param {(tag:string,text?:string,className?:string)=>HTMLElement} helpers.element Create text-only elements.
      * @param {(id:string,caption:string,input:HTMLElement)=>HTMLLabelElement} helpers.field Label a control.
      * @param {(select:HTMLSelectElement,choices:Object[],selected:string)=>void} helpers.options Update select choices.
-     * @param {(label:string,action:()=>void,className?:string)=>HTMLButtonElement} helpers.button Create an action.
-     * @param {{onHabitatPreparationSelection:(selection:Object|null)=>void,onRefreshHabitatPreparationSelections:()=>void,onRefreshHabitatCoverage:()=>void}} handlers Controller-owned selection and retries.
+     * @param {{onHabitatPreparationSelection:(selection:Object|null)=>void,onShowOutline:(visible:boolean)=>void}} handlers Choose an area or change its map visibility.
      * @param {string} name Recipe input name for unique accessible IDs.
      * @param {string} label Analysis-area label supplied by the recipe.
      */
-    constructor({element, field, options, button, captureSelection, describeFilter, sourceKey}, handlers, name, label) {
+    constructor({element, field, options, captureSelection, describeFilter, sourceKey}, handlers, name, label) {
         Object.assign(this, {options, captureSelection, describeFilter, sourceKey}); this.selections = [];
         this.root = element("div", "", "models-spatial-input");
         this.source = element("select"); this.source.required = true;
@@ -29,13 +28,16 @@ export class HabitatPreparationSelectionView {
         this.status = element("p", "", "models-help"); this.status.setAttribute("role", "status");
         this.status.id = "models-" + name + "-prepared-coverage";
         this.source.setAttribute("aria-describedby", this.status.id);
-        this.refresh = button("Refresh areas", handlers.onRefreshHabitatPreparationSelections, "models-action");
-        this.retry = button("Check coverage again", handlers.onRefreshHabitatCoverage, "models-action");
+        this.outline = element("input"); this.outline.type = "checkbox";
+        this.outline.addEventListener("change", () => handlers.onShowOutline(this.outline.checked));
+        const outlineField = field("models-" + name + "-outline", "Show analysis area on map", this.outline);
+        outlineField.classList.add("models-boolean");
+        this.outlineStatus = element("p", "", "models-help"); this.outlineStatus.setAttribute("role", "status");
         this.root.append(field("models-" + name + "-preparation-selection", label, this.source),
-            this.help, this.sourceDetails, this.status, this.refresh, this.retry);
+            outlineField, this.outlineStatus, this.help, this.sourceDetails, this.status);
     }
 
-    /** Show exact Catalog layers and filters, readiness and missing-input warnings.
+    /** Show the selected Catalog polygons, their outline status and prepared-input coverage.
      * Preserve full titles without repeating an already named trailing layer.
      * Option indexes belong only to this DOM list; the controller receives the descriptor.
      * @param {Object} draft Habitat draft with selections, optional Catalog titles and coverage.
@@ -62,10 +64,11 @@ export class HabitatPreparationSelectionView {
         this.selectionDetails.textContent = selectedIndex < 0 ? "" : `${labels[selectedIndex]} · Source: ${identities[selectedIndex]}`;
         this.sourceDetails.hidden = selectedIndex < 0;
         this.source.disabled = value.loading || !value.loaded || Boolean(value.error) || !value.selections.length;
-        this.refresh.disabled = value.loading;
-        this.refresh.textContent = value.loading ? "Loading areas…" : "Refresh areas";
-        this.retry.hidden = selectedIndex < 0 || value.loading || Boolean(value.error);
-        this.retry.disabled = value.coverageLoading;
+        this.outline.disabled = this.source.disabled || selectedIndex < 0;
+        this.outline.checked = value.outlineStatus === "loading" || value.outlineStatus === "visible";
+        this.outlineStatus.textContent = value.outlineStatus === "loading" ? "Loading area outline…"
+            : value.outlineStatus === "unavailable" ? "Could not show the area outline. Select the checkbox to try again." : "";
+        this.outlineStatus.hidden = !this.outlineStatus.textContent;
         const choosingArea = value.loaded && !value.loading && !value.error && value.selections.length > 0 &&
             selectedIndex < 0 && !value.unavailable;
         this.status.hidden = choosingArea;

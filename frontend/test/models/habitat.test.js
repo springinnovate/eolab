@@ -80,20 +80,21 @@ function edit(control, value, event = "change") {
     control.value = value; control.dispatchEvent(new Event(event));
 }
 
-/** Toggle a dataset through the actual checkbox handler.
- * @param {HTMLInputElement} checkbox Dataset choice.
- * @param {boolean} checked Whether to use this dataset for its displayed role.
+/** Change a setup checkbox through its actual event handler.
+ * @param {HTMLInputElement} checkbox Rendered checkbox.
+ * @param {boolean} checked Requested checked state.
  * @return {void}
  */
-function toggleDataset(checkbox, checked) {
+function setCheckbox(checkbox, checked) {
     checkbox.checked = checked; checkbox.dispatchEvent(new Event("change"));
 }
 
 /** Open Habitat setup with real Models components and explicit API boundaries.
  * @param {Object} [contextOverrides={}] Map choices to replace in the starting context.
+ * @param {import("../../src/models/model-setup.js").ModelSetupDependencies["showAreaOutline"]} [showAreaOutline] Display the selected Catalog polygons for the lifetime of a signal.
  * @return {Promise<Object>} Controller, view, source choices and captured API requests.
  */
-async function fixture(contextOverrides = {}) {
+async function fixture(contextOverrides = {}, showAreaOutline = async () => true) {
     const requests = [], filters = [], values = new Map();
     const uploads = [], released = [];
     const context = {
@@ -121,7 +122,7 @@ async function fixture(contextOverrides = {}) {
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
     const jobs = {subscribe: () => () => {}, tracked: new Set(), schedule() {}, accept() {}};
     let id = 0;
-    const controller = new ModelsController({api, jobs, view, getContext: () => context,
+    const controller = new ModelsController({api, jobs, view, getContext: () => context, showAreaOutline,
         getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
         prepareVector: async source => ({selection: source.uploadId
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}
@@ -243,8 +244,16 @@ test("Habitat keeps reference choices and the independent optional output mask i
     assert.equal(mask.root.contains(mask.source), true);
     assert.equal(mask.root.contains(references.source), false);
     assert.equal(mask.root.contains(area.preparationSelection.source), false);
-    assert.equal(mask.source.parentElement.textContent, "Output mask (optional)");
-    assert.equal(mask.hint.textContent, "Limits results to cells with a mask value of 1 on the output grid.");
+    assert.equal(mask.source.parentElement.textContent, "Output mask (optional) — calculate scores only where the mask is 1");
+    assert.equal(mask.source.getAttribute("aria-describedby"), mask.reason.id);
+    assert.equal(mask.reason.hidden, true);
+    assert.equal(references.areaDescription.hidden, true);
+    assert.deepEqual(h.view.setup.fields.querySelectorAll("p").filter(node => [
+        "Date and time are added automatically.", "Choose reference sites above.",
+        "Leave None selected to run without this optional input.", "Limits results to cells with a mask value of 1 on the output grid.",
+    ].includes(node.textContent)), []);
+    assert.deepEqual(area.preparationSelection.root.querySelectorAll("button").filter(node =>
+        ["Refresh areas", "Check coverage again"].includes(node.textContent)), []);
     assert.equal(references.choiceHint.textContent, "Choose either polygon features or a raster for the reference sites.");
     assert.equal(references.choiceHint.hidden, false);
     assert.ok(references.source.getAttribute("aria-describedby").split(" ").includes(references.choiceHint.id));
@@ -491,8 +500,8 @@ test("Habitat duplicates a large mixed stack and preserves unavailable private s
     assert.equal(h.view.setup.run.disabled, true, "The unavailable optional mask must not become an omitted mask");
     edit(h.view.setup.inputs.habitat_mask.source, "");
     assert.equal(h.view.setup.run.disabled, false);
-    assert.equal(h.view.setup.inputs.habitat_mask.reason.hidden, false);
-    assert.match(h.view.setup.inputs.habitat_mask.reason.textContent, /None selected/);
+    assert.equal(h.view.setup.inputs.habitat_mask.reason.hidden, true);
+    assert.equal(h.view.setup.inputs.habitat_mask.reason.textContent, "");
     assert.equal(captureModelSubmission(draft, "mask-omitted").inputs.habitat_mask, null);
     h.controller.destroy();
 });
@@ -507,7 +516,7 @@ test("Habitat keeps raster reference and assessment choices separate through dup
     assert.equal(mask.root.parentElement, h.view.setup.fields);
     assert.equal(mask.root.hidden, false);
     assert.equal(mask.source.value, modelSourceKey(h.context.rasters[4]));
-    assert.equal(mask.source.parentElement.textContent, "Output mask (optional)");
+    assert.equal(mask.source.parentElement.textContent, "Output mask (optional) — calculate scores only where the mask is 1");
     assert.equal(h.controller.state.draft.model.inputs.habitat_mask.label, "Habitat assessment mask");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-masks").inputs, h.requests[0].inputs);
     h.context.rasters.pop(); h.controller.refreshMapLayers();
@@ -632,8 +641,8 @@ test("Earth Engine runs capture and duplicate dataset choices, year, area and re
     assert.equal(h.view.setup.inputs.area.preparationSelection.root.hidden, false);
     await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[1], "South");
-    toggleDataset(stack.datasetGroups.predictor.controls.get("era5_daily").checkbox, false);
-    toggleDataset(stack.datasetGroups.response.controls.get("modis_phenology").checkbox, false);
+    setCheckbox(stack.datasetGroups.predictor.controls.get("era5_daily").checkbox, false);
+    setCheckbox(stack.datasetGroups.response.controls.get("modis_phenology").checkbox, false);
     edit(stack.year, "2017");
     assert.equal(h.view.setup.run.disabled, true);
     await settle();
@@ -669,7 +678,7 @@ test("dataset roles remain independent and keep focus and disclosure state throu
     const stack = h.view.setup.inputs.stack, predictors = stack.datasetGroups.predictor, responses = stack.datasetGroups.response;
     const checkbox = predictors.controls.get("modis_phenology").checkbox;
     predictors.root.open = true; checkbox.focus();
-    toggleDataset(checkbox, false);
+    setCheckbox(checkbox, false);
     assert.equal(h.doc.activeElement, checkbox);
     assert.equal(predictors.root.open, true); assert.equal(responses.root.open, false);
     assert.equal(responses.controls.get("modis_phenology").checkbox.checked, true);
@@ -680,7 +689,7 @@ test("dataset roles remain independent and keep focus and disclosure state throu
     assert.equal(predictors.controls.get("modis_phenology").checkbox, checkbox);
     assert.equal(h.doc.activeElement, checkbox); assert.equal(checkbox.checked, false);
     assert.equal(predictors.root.open, true); assert.equal(responses.root.open, false);
-    toggleDataset(checkbox, true);
+    setCheckbox(checkbox, true);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "all-datasets").inputs.stack,
     {kind: "earthEngine", year: 2019, predictorDatasets: ["era5_daily", "modis_phenology", "srtm_landforms"],
         responseDatasets: ["modis_phenology", "landsat_ndvi"]});
@@ -762,14 +771,14 @@ test("an empty response selection stays empty on refresh and prevents submission
     await choosePreparationSelection(h);
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const stack = h.view.setup.inputs.stack;
-    for (const controls of stack.datasetGroups.response.controls.values()) toggleDataset(controls.checkbox, false);
+    for (const controls of stack.datasetGroups.response.controls.values()) setCheckbox(controls.checkbox, false);
     h.view.setup.inputs.stack.retry.dispatchEvent(new Event("click")); await settle();
     assert.deepEqual(h.controller.state.draft.inputs.stack.responseDatasets, []);
     assert.equal(h.view.setup.run.disabled, true);
     assert.equal(stack.status.textContent, "Select at least one observed response dataset.");
     assert.equal(stack.datasetGroups.response.summary.textContent, "Select observed response datasets · 0 of 2 selected");
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "empty-responses"), /at least one observed response dataset/);
-    toggleDataset(stack.datasetGroups.response.controls.get("landsat_ndvi").checkbox, true);
+    setCheckbox(stack.datasetGroups.response.controls.get("landsat_ndvi").checkbox, true);
     assert.equal(h.view.setup.run.disabled, false);
 });
 
@@ -1158,7 +1167,7 @@ for (const cachedTiles of [0, 2, 4]) test("preparation selection with " + cached
     }
 });
 
-test("coverage requests cancel stale years and areas, and retry failures without changing the choice", async t => {
+test("coverage is checked automatically for the chosen year and area, including after reselection", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
     await chooseVector(h, "references", h.context.vectors[0], "North");
     const pending = [];
@@ -1173,9 +1182,10 @@ test("coverage requests cancel stale years and areas, and retry failures without
     assert.equal(h.view.setup.run.disabled, true);
     await choosePreparationSelection(h, 1);
     pending[2].reject(new Error("Connection interrupted")); await settle();
-    assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /Try again.*Connection interrupted/);
+    assert.match(h.view.setup.inputs.area.preparationSelection.status.textContent, /reselect the analysis area.*Connection interrupted/);
     assert.equal(h.view.setup.run.disabled, true);
-    h.view.setup.inputs.area.preparationSelection.retry.dispatchEvent(new Event("click"));
+    await choosePreparationSelection(h, null);
+    await choosePreparationSelection(h, 1);
     assert.deepEqual(pending[3].selection, preparationSelections[1]);
     pending[3].resolve({year: 2017, requiredTiles: 4, cachedTiles: 2, missingTiles: 2}); await settle();
     assert.equal(h.view.setup.run.disabled, false);
@@ -1186,7 +1196,7 @@ test("coverage requests cancel stale years and areas, and retry failures without
     assert.equal(h.controller.state.draft.setupState.coverage, null);
 });
 
-test("preparation-selection loading failures and empty lists can be retried without blocking manual setup", async t => {
+test("area loading errors and empty lists allow manual setup and reopening the model loads its areas", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());
     h.api.getHabitatPreparationSelections = async () => { throw new Error("Offline"); };
     h.controller.chooseModel(habitat); await settle();
@@ -1195,14 +1205,15 @@ test("preparation-selection loading failures and empty lists can be retried with
     assert.equal(controls.source.disabled, true);
     chooseStack(h); await chooseVector(h, "references", h.context.vectors[0], "North");
     assert.equal(h.view.setup.run.disabled, false);
-    edit(h.view.setup.inputs.stack.source, "earthEngine"); await settle();
     h.api.getHabitatPreparationSelections = async () => ({selections: []});
-    controls.refresh.dispatchEvent(new Event("click")); await settle();
+    edit(h.view.setup.inputs.stack.source, "earthEngine"); await settle();
     assert.match(controls.status.textContent, /No preparation selections.*administrator/);
     assert.equal(h.view.setup.run.disabled, true);
     h.api.getHabitatPreparationSelections = async () => ({selections: structuredClone(preparationSelections)});
-    controls.refresh.dispatchEvent(new Event("click")); await settle();
+    h.controller.chooseModel(habitat); await settle();
+    controls = h.view.setup.inputs.area.preparationSelection;
     assert.equal(controls.source.disabled, false); assert.equal(controls.source.value, "");
+    await chooseVector(h, "references", h.context.vectors[0], "North");
     await choosePreparationSelection(h); assert.equal(h.view.setup.run.disabled, false);
 });
 
@@ -1338,7 +1349,7 @@ test("failed or stale Catalog title reads never block or rename a later preparat
     assert.match(h.view.setup.inputs.area.preparationSelection.selectionDetails.textContent, /^basins.*watersheds/);
     let finish, signal;
     h.api.getCatalogItem = (_source, requestSignal) => new Promise(resolve => { finish = resolve; signal = requestSignal; });
-    h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
+    h.controller.chooseModel(habitat); await settle();
     h.controller.chooseModel(model);
     assert.equal(signal.aborted, true);
     finish({id: selection.itemId, properties: {title: "Stale title"}}); await settle();
@@ -1362,9 +1373,10 @@ test("matching area labels identify their sources and assets without repeating t
     await choosePreparationSelection(h, 2);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "distinct-source").inputs.area.selection, choices[2]);
     assert.ok(controls.selectionDetails.textContent.endsWith("Source: eolab-mounted-vectors / area-a / other-polygons"));
+    await h.controller.submit();
     h.api.getHabitatPreparationSelections = async () => ({selections: [...choices].reverse()});
-    controls.refresh.dispatchEvent(new Event("click")); await settle();
-    assert.equal(controls.source.value, "0");
+    await h.controller.duplicateRun();
+    assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "0");
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "reordered-source").inputs.area.selection, choices[2]);
 });
 
@@ -1388,17 +1400,59 @@ test("area titles preserve their text without appending an already named layer",
     }
 });
 
-test("preparation refresh matches descriptors across option reorder without selecting another filter", async t => {
-    const h = await fixture(); t.after(() => h.controller.destroy());
+test("the map outline follows the chosen off-map polygon while coverage and reference sites stay independent", async t => {
+    const displays = [];
+    const h = await fixture({vectors: []}, (area, signal) => new Promise(resolve => displays.push({area, signal, resolve})));
+    t.after(() => h.controller.destroy());
+    const controls = h.view.setup.inputs.area.preparationSelection;
+    assert.equal(controls.outline.disabled, true);
+    await choosePreparationSelection(h);
+    assert.equal(controls.outline.disabled, false);
+    assert.equal(displays.length, 0);
+    setCheckbox(controls.outline, true);
+    assert.deepEqual(displays[0].area, preparationSelections[0]);
+    assert.match(controls.outlineStatus.textContent, /Loading/);
+    edit(h.view.setup.inputs.references.source, "raster:" + modelSourceKey(h.context.rasters[3]));
+    edit(h.view.setup.inputs.stack.year, "2017"); await settle();
+    assert.equal(h.view.setup.run.disabled, false);
+    assert.equal(displays.length, 1);
     await choosePreparationSelection(h, 1);
-    await chooseVector(h, "references", h.context.vectors[0], "North");
-    h.api.getHabitatPreparationSelections = async () => ({selections: structuredClone(preparationSelections).reverse()});
-    h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
-    assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "0");
-    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "reordered").inputs.area.selection, preparationSelections[1]);
-    h.api.getHabitatPreparationSelections = async () => ({selections: [structuredClone(preparationSelections[0])]});
-    h.view.setup.inputs.area.preparationSelection.refresh.dispatchEvent(new Event("click")); await settle();
-    assert.equal(h.view.setup.inputs.area.preparationSelection.source.value, "");
-    assert.equal(h.controller.state.draft.setupState.selectedSelection, null);
-    assert.equal(h.view.setup.run.disabled, true);
+    assert.equal(displays[0].signal.aborted, true);
+    assert.deepEqual(displays[1].area, preparationSelections[1]);
+    displays[0].resolve(false); await settle();
+    assert.equal(controls.outline.checked, true);
+    displays[1].resolve(true); await settle();
+    h.controller.setActive(false); h.controller.setActive(true);
+    assert.equal(displays[1].signal.aborted, false);
+    setCheckbox(controls.outline, false);
+    assert.equal(displays[1].signal.aborted, true);
+    setCheckbox(controls.outline, true);
+    displays[2].resolve(false); await settle();
+    assert.equal(controls.outline.checked, false);
+    assert.match(controls.outlineStatus.textContent, /Could not show the area outline/);
+    assert.equal(h.view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: preparationSelections[1]});
+    assert.equal(h.requests[0].inputs.references.kind, "raster");
+});
+
+test("clearing the area, switching to manual inputs or replacing the draft removes its outline", async t => {
+    const displays = [];
+    const h = await fixture({}, async (_selection, signal) => { displays.push(signal); return true; });
+    t.after(() => h.controller.destroy());
+    const controls = h.view.setup.inputs.area.preparationSelection;
+    await choosePreparationSelection(h);
+    setCheckbox(controls.outline, true);
+    await choosePreparationSelection(h, null);
+    assert.equal(displays[0].aborted, true);
+    assert.equal(controls.outline.checked, false);
+    await choosePreparationSelection(h);
+    setCheckbox(controls.outline, true);
+    edit(h.view.setup.inputs.stack.source, "manual");
+    assert.equal(displays[1].aborted, true);
+    edit(h.view.setup.inputs.stack.source, "earthEngine"); await settle();
+    assert.equal(controls.outline.checked, false);
+    setCheckbox(controls.outline, true);
+    h.controller.chooseModel(model);
+    assert.equal(displays[2].aborted, true);
 });

@@ -83,7 +83,7 @@ test("an unrelated model owns setup actions, readiness, capture, restoration and
     view.render = state => { renders += 1; originalRender(state); };
     sessions[1].dependencies.render();
     assert.equal(renders, 0, "late notifications from replaced setup cannot render its successor");
-    assert.deepEqual(capabilities[0], ["api", "closeInputEditor", "getCatalogItem", "render"]);
+    assert.deepEqual(capabilities[0], ["api", "closeInputEditor", "getCatalogItem", "render", "showAreaOutline"]);
 });
 
 test("Habitat preparation policy stays behind the registered model integration", () => {
