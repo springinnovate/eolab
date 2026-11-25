@@ -188,6 +188,7 @@ def _fixture_native_target(
         "no_references",
         "selected",
         "categorical_only",
+        "continuous_only",
     ],
 )
 def test_earth_engine_run_uses_prepared_geographic_coverage(
@@ -202,6 +203,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         "no_references",
         "selected",
         "categorical_only",
+        "continuous_only",
     ],
 ) -> None:
     """Use prepared tiles without downloads and retain model screening and NoData.
@@ -249,13 +251,13 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         },
         parameters={},
     )
-    if coverage in {"selected", "categorical_only"}:
+    if coverage in {"selected", "categorical_only", "continuous_only"}:
         request.inputs["stack"].update(
-            predictorDatasets=(
-                ["srtm_landforms", "era5_daily"]
-                if coverage == "selected"
-                else ["srtm_landforms"]
-            ),
+            predictorDatasets={
+                "selected": ["srtm_landforms", "era5_daily"],
+                "continuous_only": ["era5_daily"],
+                "categorical_only": ["srtm_landforms"],
+            }[coverage],
             responseDatasets=["modis_phenology"],
         )
     calculation, invocation = build_model_calculation_request(
@@ -464,7 +466,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
     }
     assert provenance["variables"]["predictors"] == list(selected_names["predictor"])
     assert provenance["variables"]["responses"] == list(selected_names["response"])
-    if coverage in {"selected", "categorical_only"}:
+    if coverage in {"selected", "categorical_only", "continuous_only"}:
         assert [
             band.identifier
             for name, band in named
@@ -474,7 +476,13 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             band.identifier
             for name, band in named
             if name in selected_names["predictor"]
-        ] == (["d20", "d35"] if coverage == "selected" else ["d35"])
+        ] == {
+            "selected": ["d20", "d35"],
+            "categorical_only": ["d35"],
+            "continuous_only": ["d20"],
+        }[
+            coverage
+        ]
     predictor_coverage = {
         item["predictor"]: item for item in provenance["fit"]["predictorCoverage"]
     }
@@ -538,7 +546,13 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             }
         ),
         categorical_predictor_name=next(
-            name for name, band in named if band.data_type == "categorical"
+            (
+                name
+                for name, band in named
+                if name in selected_names["predictor"]
+                and band.data_type == "categorical"
+            ),
+            None,
         ),
         samples_per_class_per_block=settings.samples_per_class_per_block,
         random_seed=settings.random_seed,

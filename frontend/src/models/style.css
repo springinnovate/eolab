@@ -43,7 +43,6 @@
 .models-habitat-datasets li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 2px 8px; }
 .models-habitat-dataset-choice { display: flex; align-items: start; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 #models-panel .models-habitat-dataset-choice input { width: auto; padding: 0; margin: 2px 0 0; flex: none; }
-.models-habitat-dataset-required { display: block; color: var(--text-2); font-size: var(--font-size-support); }
 .models-habitat-datasets a { overflow-wrap: anywhere; }
 .models-habitat-dataset-details { grid-column: 1 / -1; color: var(--text-2); font-size: var(--font-size-support); overflow-wrap: anywhere; white-space: pre-line; }
 .models-tool {

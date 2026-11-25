@@ -99,30 +99,29 @@ export class HabitatStackView {
             this.manual.append(group);
         }
         this.addPredictor = this.groups.predictors.add; this.addResponse = this.groups.responses.add;
-        this.categorical = element("select"); this.categorical.required = true;
+        this.categorical = element("select");
         this.categorical.addEventListener("change", () => {
             this.categoricalRow = this.categorical.value ? this.predictors.find(row => this.value.predictors[row.index].name === this.categorical.value) : null;
             handlers.onInput(name, {categoricalPredictor: this.categorical.value});
         });
-        const categoryHelp = element("p", "Choose the predictor whose values identify categories, such as land-cover classes. All other predictors are treated as continuous measurements. Nearest neighbor and mode preserve category values; interpolation can create intermediate values.", "models-help");
+        const categoryHelp = element("p", "If a raster contains categories such as landform classes, choose it here. All other predictors are treated as continuous measurements. Nearest neighbor and mode preserve category values; interpolation can create intermediate values.", "models-help");
         categoryHelp.id = `models-${name}-categorical-help`;
         this.categorical.setAttribute("aria-describedby", categoryHelp.id);
         this.status = element("p", "", "models-error"); this.status.setAttribute("role", "status");
-        this.manual.append(field(`models-${name}-categorical`, "Categorical predictor", this.categorical), categoryHelp);
+        this.manual.append(field(`models-${name}-categorical`, "Categorical predictor (optional)", this.categorical), categoryHelp);
         this.configurationGroup.append(this.status);
     }
 
     /** Create one stable checkbox for a dataset's use as predictor or response.
      * @param {"predictor"|"response"} role Scientific role controlled by this checkbox.
      * @param {import("../processing/api.js").HabitatDatasetSource} dataset Configured source and role requirements.
-     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,required:HTMLElement,link:HTMLAnchorElement,details:HTMLElement}} Dataset row and its analysis inputs.
+     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,link:HTMLAnchorElement,details:HTMLElement}} Dataset row and its analysis inputs.
      */
     buildDatasetChoice(role, dataset) {
         const root = this.element("li"), label = this.element("label", "", "models-habitat-dataset-choice");
         const checkbox = this.element("input"); checkbox.type = "checkbox";
-        const caption = this.element("span"), name = this.element("span", dataset.label);
-        const required = this.element("span", "Required by the model", "models-habitat-dataset-required");
-        caption.append(name, required); label.append(checkbox, caption);
+        const name = this.element("span", dataset.label);
+        label.append(checkbox, name);
         const link = this.element("a", "Source");
         link.target = "_blank"; link.rel = "noopener noreferrer";
         const details = this.element("div", "", "models-habitat-dataset-details");
@@ -134,7 +133,7 @@ export class HabitatStackView {
             const selected = this.value[fieldName];
             this.handlers.onInput(this.inputName, {[fieldName]: checkbox.checked ? [...selected, dataset.id] : selected.filter(id => id !== dataset.id)});
         });
-        return {root, checkbox, label: name, required, link, details};
+        return {root, checkbox, label: name, link, details};
     }
 
     /** Refresh dataset choices in place so selection, focus and disclosures survive updates.
@@ -157,8 +156,6 @@ export class HabitatStackView {
                 controls.label.textContent = dataset.label;
                 controls.details.textContent = describeSelectedBands(dataset, role, selected, this.value.year);
                 controls.checkbox.checked = selected.includes(dataset.id);
-                controls.checkbox.disabled = dataset.requiredRoles.includes(role);
-                controls.required.hidden = !controls.checkbox.disabled;
                 controls.link.href = dataset.url;
                 controls.link.setAttribute("aria-label", `Source information for ${dataset.label}`);
             }
@@ -267,7 +264,7 @@ export class HabitatStackView {
         } else if (!this.value.categoricalPredictor && this.categoricalRow && this.value.predictors[this.categoricalRow.index]?.name !== "") {
             this.categoricalRow = null;
         }
-        this.options(this.categorical, [{value: "", label: "Choose the categorical predictor…"},
+        this.options(this.categorical, [{value: "", label: "None (all predictors are continuous)"},
             ...this.value.predictors.filter(row => row.name.trim()).map(row => ({value: row.name, label: row.name}))], this.value.categoricalPredictor);
         let error = "";
         try { this.captureStack(this.value, draft.sources); } catch (problem) { error = problem.message; }

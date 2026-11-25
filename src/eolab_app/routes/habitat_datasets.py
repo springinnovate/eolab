@@ -6,10 +6,7 @@ from typing import Literal
 from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfiguration
 from pydantic import BaseModel
 
-from eolab_app.processing.habitat_models import (
-    get_habitat_dataset_roles,
-    get_required_habitat_predictor_datasets,
-)
+from eolab_app.processing.habitat_models import get_habitat_dataset_roles
 
 
 @dataclass(frozen=True)
@@ -209,14 +206,12 @@ class HabitatDatasetSource(BaseModel):
         url: Catalog page describing the configured Earth Engine source.
         roles: Predictor and/or response roles derived from the configured bands.
         inputsByRole: Source bands, periods and selection requirements for each calculation.
-        requiredRoles: Roles in which this source must remain selected.
     """
 
     id: str
     label: str
     url: str
     roles: list[Literal["predictor", "response"]]
-    requiredRoles: list[Literal["predictor", "response"]]
     inputsByRole: dict[Literal["predictor", "response"], list[HabitatBandUse]]
 
 
@@ -271,7 +266,6 @@ def describe_habitat_datasets(
     Raises:
         KeyError: A configured asset or computation lacks source metadata.
     """
-    required = get_required_habitat_predictor_datasets(configuration)
     datasets = []
     for key, roles in get_habitat_dataset_roles(configuration).items():
         source = _DATASETS[configuration.datasets[key]]
@@ -300,7 +294,6 @@ def describe_habitat_datasets(
                 label=source.label,
                 url=source.url,
                 roles=list(roles),
-                requiredRoles=["predictor"] if key in required else [],
                 inputsByRole=inputs_by_role,
             )
         )
