@@ -1,4 +1,4 @@
-"""HTTP routes for original-source vector selections and layer measurements."""
+"""HTTP routes for original-source vector selections, attributes and measurements."""
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from typing import Any
@@ -28,6 +28,10 @@ from eolab_app.vector.field_statistics import (
     VectorLayerStatisticsRequest,
 )
 from eolab_app.vector.lasso import LassoSelectionRequest, LassoSelectionResult
+from eolab_app.vector.feature_attributes import (
+    FeatureAttributesRequest,
+    FeatureAttributesResult,
+)
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.parcel_models import (
@@ -46,7 +50,7 @@ def create_vector_sampling_router(
     """Create selection routes that cancel source reads when the client disconnects.
 
     Args:
-        service: Authorizes vector sources and counts their matching features.
+        service: Authorizes vector sources and reads their original features.
         read_artifact_owner: Composition-supplied Processing session authority.
 
     Returns:
@@ -142,10 +146,18 @@ def create_vector_sampling_router(
             raise HTTPException(409, error.detail) from error
 
     @router.api_route("/spatial-read", methods=["GET", "PUT"], include_in_schema=False)
-    async def spatial_read(request: Request) -> Response:
-        """Exchange original sources or matching feature IDs with the authorized Jobs worker.
+    async def spatial_read(request: Request, stage: str | None = None) -> Response:
+        """Exchange original sources, IDs or staged Lasso output with the authorized job.
 
-        The submitting request owns the bearer token and holds every source until the worker stops.
+        Args:
+            request: Bearer-authenticated worker GET for inputs or PUT for results.
+            stage: Lasso delivery step. Ordinary comparisons return their matches directly.
+
+        Returns:
+            Held inputs, or acknowledgment of an accepted delivery.
+
+        Raises:
+            HTTPException: The credential expired or the Lasso delivery is invalid.
         """
         from fastapi.responses import JSONResponse
 
@@ -153,6 +165,17 @@ def create_vector_sampling_router(
         read = service.spatial_reads.get(token) if scheme.lower() == "bearer" else None
         if read is None:
             raise HTTPException(404, "This polygon filter is unavailable.")
+        if read.lasso is not None:
+            try:
+                if request.method == "GET":
+                    read.lasso.receive("intersection")
+                else:
+                    read.lasso.receive(stage, await request.body())
+                    return Response(status_code=204)
+            except ValueError as error:
+                raise HTTPException(
+                    409, "This Lasso result could not be accepted."
+                ) from error
         if request.method == "GET":
             return JSONResponse(read.inputs)
         read.result = FeatureMatches.model_validate_json(await request.body())
@@ -245,7 +268,7 @@ def create_vector_sampling_router(
             response: Renews the selected private source's browser cookie.
 
         Returns:
-            Exact matching IDs and count, plus optional whole-feature highlights.
+            Exact matching IDs, count and scalar rows, plus optional whole-feature highlights.
 
         Raises:
             HTTPException: For invalid ownership, unavailable sources or failed reads.
@@ -263,6 +286,34 @@ def create_vector_sampling_router(
             raise HTTPException(409, error.detail) from error
         except SourceFileError as error:
             raise HTTPException(error.status, str(error)) from error
+
+    @router.post("/features", response_model=FeatureAttributesResult)
+    async def feature_attributes(
+        payload: FeatureAttributesRequest, request: Request, response: Response
+    ) -> FeatureAttributesResult:
+        """Read identified feature attributes independently of map display geometry.
+
+        Args:
+            payload: Path-free filtered source and unique native feature IDs.
+            request: Browser ownership and HTTP disconnect observer.
+            response: Renews credentials for private sources used by the selection.
+
+        Returns:
+            Complete ordered scalar rows with the original source descriptor.
+
+        Raises:
+            HTTPException: If access is invalid, the source or bounded read is
+                unavailable, or the browser disconnects before completion.
+        """
+        source_owner = read_source_owner(payload.selection, request, response)
+        try:
+            return await run_until_http_disconnect(
+                request, service.read_feature_attributes(payload, source_owner)
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Feature attribute reading cancelled") from error
+        except SelectionUnavailableError as error:
+            raise HTTPException(409, error.detail) from error
 
     @router.post("/outline")
     async def outline(

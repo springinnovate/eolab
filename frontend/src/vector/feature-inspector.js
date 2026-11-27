@@ -1,6 +1,8 @@
-/** Feature inspection and selection history for visible published vector layers. */
+/** Own selected vector attributes and history acquired by map clicks or Lasso. */
 
 import { getFeatureInfoViewport } from "./feature-info-viewport.js";
+import { isNumericFeatureValue } from "./inspection-observation.js";
+import { selectLassoFeatures } from "./lasso.js";
 import { DEFAULT_FIELD_FORMATS } from "../feature-field-formats.js";
 import { VectorFeatureFieldDisplay } from "./feature-field-display.js";
 
@@ -17,10 +19,11 @@ const HIGHLIGHT_STYLE = Object.freeze({
     fillOpacity: 0.35,
 });
 const TIME_SERIES_AVAILABLE_HELP =
-    "Compare numeric fields across the features at this location.";
+    "Compare numeric fields across the selected features.";
 const TIME_SERIES_UNAVAILABLE_HELP =
-    "Click a location with at least two features to compare their fields.";
+    "Select at least two features with Picker or Lasso to compare their fields.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
+const WMS_GEOMETRY_FIELDS = new Set(["geometry", "the_geom", "boundedBy", "bbox"]);
 const MAX_SELECTION_HISTORY_ENTRIES = 20;
 
 /**
@@ -28,15 +31,47 @@ const MAX_SELECTION_HISTORY_ENTRIES = 20;
  */
 
 /**
- * @typedef {{feature:Object,target:import("./feature-info.js").VectorFeatureInspectionTarget,
- * inspectionPosition:InspectionPosition}} InspectedVectorFeature A bounded feature-info result.
+ * @typedef {{key:string,label:string,selection:Object}} VectorSelectionTarget
+ * Retained view identity and path-free original source with its applied predicate.
+ * @typedef {{polygon:Object,geometry:Object|null,count:number,label:string}} FeatureSelectionDisplay
+ * Optional Lasso display, independent of attributes and plotting eligibility.
+ * @typedef {{kind:"click",signature:string}|{kind:"lasso",key:string,signature:string}} FeatureSelectionContext
+ * Source context used to reject stale reads and history after a source or predicate changes.
+ * @typedef {{feature:Object,target:{sourceId:string,label:string,primaryGeometry?:string|null,
+ * publication?:Object,geometryKind?:string},inspectionPosition:InspectionPosition|null}} InspectedVectorFeature
+ * Selected attributes with optional published display metadata and click context.
  */
 
 /**
- * @typedef {{identity:string|null,results:InspectedVectorFeature[],position:InspectionPosition,
+ * @typedef {{clickIdentity:string|null,results:InspectedVectorFeature[],position:InspectionPosition|null,
+ * context:FeatureSelectionContext,display:FeatureSelectionDisplay|null,
  * resultIndex:number,state:"ready"|"empty",message:string,failedLayers:number}} FeatureSelection
  * A completed inspection with its last highlighted feature.
  */
+
+/**
+ * Decide whether the latest inspection can replace the current history entry.
+ * Lasso returns native IDs in numeric order within one retained view and predicate.
+ * @param {FeatureSelection|undefined} previous Currently displayed history entry, if any.
+ * @param {FeatureSelection} next Newly completed inspection.
+ * @return {boolean} Whether both represent the same selected features.
+ */
+function sameFeatureSelection(previous, next) {
+    if (next.context.kind === "click") return next.clickIdentity !== null && next.clickIdentity === previous?.clickIdentity;
+    return previous?.context.kind === "lasso" && previous.context.key === next.context.key &&
+        previous.context.signature === next.context.signature && previous.results.length === next.results.length &&
+        next.results.every(({feature}, index) => feature.id === previous.results[index].feature.id);
+}
+
+/**
+ * Describe completed Lasso results using the layer's current display name.
+ * @param {FeatureSelectionDisplay} display Selected count, layer name and optional highlight geometry.
+ * @return {string} Selection status for Features and retained history.
+ */
+function formatLassoSelectionStatus({count, label, geometry}) {
+    return `${count} feature${count === 1 ? "" : "s"} selected in ${label}.` +
+        (count && geometry === null ? " Map highlights are unavailable; attributes and plots are ready." : "");
+}
 
 /**
  * Format elapsed inspection time without implying unavailable precision.
@@ -56,13 +91,15 @@ function formatInspectionDuration(elapsedMilliseconds) {
  * @param {Object} configuration Focus inputs.
  * @param {Object} configuration.feature Bounded GeoJSON feature result with
  * geographic bounds validated at the response boundary.
- * @param {{lng:number,lat:number}} configuration.inspectionPosition Accepted
- * WGS 84 map-click position.
- * @return {Readonly<Object>} Feature center and optional geographic bounds.
+ * @param {{lng:number,lat:number}|null} configuration.inspectionPosition Accepted
+ * WGS 84 map-click position, or null for attributes acquired without a point.
+ * @return {Readonly<Object>|null} Feature center and optional geographic bounds,
+ * or null when the read supplies neither bounds nor a click.
  * Without bounds the click is retained only as context, never a zoom destination.
  * @throws {TypeError} If the inspection position is outside WGS 84.
  */
 function vectorFeatureFocus({ feature, inspectionPosition }) {
+    if (inspectionPosition === null) return null;
     const longitude = inspectionPosition?.lng;
     const latitude = inspectionPosition?.lat;
     if (
@@ -89,8 +126,7 @@ function vectorFeatureFocus({ feature, inspectionPosition }) {
  * boundary contains only chart fields and the small geometry-neutral map focus
  * needed to navigate back to an inspected row.
  *
- * @param {{feature:Object,target:import("./feature-info.js").VectorFeatureInspectionTarget,
- * inspectionPosition:{lng:number,lat:number}}} result Result.
+ * @param {InspectedVectorFeature} result Selected feature and optional click context.
  * @return {Readonly<Object>} Closed inspection-observation contract.
  */
 export function vectorInspectionObservation({ feature, target, inspectionPosition }) {
@@ -100,7 +136,7 @@ export function vectorInspectionObservation({ feature, target, inspectionPositio
             value === null ||
             typeof value === "string" ||
             typeof value === "boolean" ||
-            typeof value === "number"
+            typeof value === "number" || typeof value === "bigint"
         ) {
             properties[name] = value;
         }
@@ -150,7 +186,7 @@ export function formatVectorFeatureAttribute(value, format) {
     if (typeof value === "boolean") {
         return value ? "True" : "False";
     }
-    if (format?.format && Number.isFinite(value)) {
+    if (format?.format && isNumericFeatureValue(value)) {
         /** @type {Intl.NumberFormatOptions} */
         const options = {};
         if (format.format === "currency") {
@@ -180,20 +216,20 @@ export function formatVectorFeatureAttribute(value, format) {
 }
 
 /**
- * Return inspector labels and formatted values without changing source properties or including geometry metadata.
+ * Format the fields shown in Features. Lasso supplies original scalar attributes.
+ * Map clicks can also supply WMS geometry fields, which are omitted from the list.
  *
- * @param {Object} feature Validated GeoJSON Feature.
- * @param {string|null} primaryGeometry Catalog-declared geometry field.
+ * @param {{id?:string|number|null,properties:Record<string,unknown>}} feature Original or WMS feature properties and ID.
+ * @param {string|null} [primaryGeometry=null] Catalog-declared WMS geometry field.
  * @param {import("../feature-field-formats.js").FeatureFieldFormats} [formats] Labels and numeric display settings for this view.
+ * @param {FeatureSelectionContext["kind"]} [selectionKind="click"] How the inspector acquired these properties.
  * @return {{name:string,value:string}[]} Bounded display attributes.
  */
-export function vectorFeatureAttributes(feature, primaryGeometry = null, formats = DEFAULT_FIELD_FORMATS) {
-    const geometryNames = new Set(
-        [primaryGeometry, "geometry", "the_geom", "boundedBy", "bbox"]
-            .filter((name) => typeof name === "string")
-    );
+export function vectorFeatureAttributes(
+    feature, primaryGeometry = null, formats = DEFAULT_FIELD_FORMATS, selectionKind = "click"
+) {
     const attributes = Object.entries(feature.properties)
-        .filter(([name]) => !geometryNames.has(name))
+        .filter(([name]) => selectionKind === "lasso" || (name !== primaryGeometry && !WMS_GEOMETRY_FIELDS.has(name)))
         .map(([name, value]) => {
             const format = Object.hasOwn(formats, name) ? formats[name] : undefined;
             return {name: format?.displayName ?? name, value: formatVectorFeatureAttribute(value, format)};
@@ -211,23 +247,32 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null, formats
 export class VectorFeatureInspectorController {
     /** @type {FeatureSelection[]} */
     #selectionHistory = [];
+    /** @type {number} Saved selection index, or the entry before an unfinished or invalidated view. */
     #selectionHistoryIndex = -1;
     /** @type {InspectionPosition|null} */
     #inspectionPosition = null;
+    /** @type {FeatureSelectionContext|null} Context of the active read or displayed selection. */
+    #selectionContext = null;
+    /** @type {FeatureSelectionDisplay|null} Optional display retained with the active selection. */
+    #selectionDisplay = null;
 
     /**
-     * Connect map clicks to feature results, navigation and map highlights.
+     * Connect click and Lasso acquisition to one feature selection and its history.
      *
      * @param {Object} configuration Collaborators.
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Initialized Leaflet map.
      * @param {() => import("./feature-info.js").VectorFeatureInspectionTarget[]}
      * configuration.getVisibleTargets Current visible vectors from composition.
+     * @param {()=>VectorSelectionTarget[]} [configuration.getSelectionTargets] Retained original sources, including hidden views.
+     * @param {(display:FeatureSelectionDisplay|null,options?:{cancelGesture:boolean})=>void} [configuration.onSelectionDisplayChange]
+     * Publishes the current Lasso outline and optional highlights through composition.
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
      * Requests presentation changes without knowing the presentation owner.
-     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>,change:import("./inspection-observation.js").VectorInspectionChange)=>void} configuration.onSampleChange
-     * Publishes observations through composition. Label edits refresh plots without announcing another map result.
+     * @param {(sample:Readonly<import("./inspection-observation.js").VectorInspectionSample>,
+     * update?:import("./inspection-observation.js").VectorInspectionUpdate)=>void} configuration.onSampleChange
+     * Publishes observations and identifies layer renames and history restores for the plots.
      * @param {(navigation:Readonly<{canPrevious:boolean,canNext:boolean}>)=>void}
      * configuration.onSelectionNavigationChange Publishes available directions
      * between completed map selections.
@@ -242,7 +287,7 @@ export class VectorFeatureInspectorController {
      * styling intent with the selected feature's opaque source identity.
      * @param {(sourceId:string)=>void} [configuration.onFilterRequested] Publishes
      * filtering intent with the selected feature's opaque source identity.
-     * @param {(focus:Readonly<Object>)=>boolean}
+     * @param {(focus:Readonly<Object>|null)=>boolean}
      * configuration.onFeatureZoomRequested Publishes current-feature map
      * navigation intent without owning viewport movement.
      * @param {(sourceId:string)=>import("./feature-field-display.js").FeatureFieldDisplay|null}
@@ -258,6 +303,8 @@ export class VectorFeatureInspectorController {
         leaflet,
         leafletMap,
         getVisibleTargets,
+        getSelectionTargets = () => [],
+        onSelectionDisplayChange = () => {},
         wmsUrl,
         onInspectionChange,
         onSampleChange,
@@ -309,6 +356,8 @@ export class VectorFeatureInspectorController {
         this.leaflet = leaflet;
         this.map = leafletMap;
         this.getVisibleTargets = getVisibleTargets;
+        this.getSelectionTargets = getSelectionTargets;
+        this.onSelectionDisplayChange = onSelectionDisplayChange;
         this.getFieldDisplay = getFieldDisplay;
         this.wmsUrl = wmsUrl;
         this.onInspectionChange = onInspectionChange;
@@ -328,6 +377,7 @@ export class VectorFeatureInspectorController {
         this.panel = documentContext.querySelector("#vector-feature-inspector");
         this.heading = documentContext.querySelector("#vector-feature-inspector-heading");
         this.closeButton = documentContext.querySelector("#close-vector-inspector");
+        this.clearButton = documentContext.querySelector("#clear-vector-selection");
         this.timeSeriesButton = documentContext.querySelector(
             "#open-vector-time-series"
         );
@@ -352,27 +402,20 @@ export class VectorFeatureInspectorController {
             () => this.#showAttributes(this.results[this.resultIndex]));
         this.previous = documentContext.querySelector("#previous-vector-feature");
         this.next = documentContext.querySelector("#next-vector-feature");
+        this.previousSelection = documentContext.querySelector("#previous-vector-selection");
+        this.nextSelection = documentContext.querySelector("#next-vector-selection");
         this.results = [];
         this.resultIndex = 0;
         this.highlightLayer = null;
         this.abortController = null;
         this.requestGeneration = 0;
-        this.sampleTargetSignature = null;
         this.mapContainer = this.map.getContainer();
-        /** Dismiss the Features tab and stop outstanding reads. Keep the observations
-         * and navigation already available to open plots. @return {void}
-         */
         this.onClose = () => {
-            if (this.abortController !== null) {
-                this.#cancelInspection();
-                this.#publishSample("interrupted", this.results,
-                    "Inspection stopped before all layers were inspected. Click the map to try again.",
-                    this.lastSample.failedLayers);
-            }
-            this.clearHighlight();
-            this.onInspectionChange(false);
+            this.close();
             this.mapContainer.focus();
         };
+        /** Clear the selected attributes and all derived presentation. @return {void} */
+        this.onClear = () => this.clearSelection();
         this.onOpenFeatureProfile = () => {
             if (!this.featureProfileButton.disabled) {
                 this.onFeatureProfileRequested();
@@ -403,6 +446,8 @@ export class VectorFeatureInspectorController {
         };
         this.onPrevious = () => this.navigateResult("previous");
         this.onNext = () => this.navigateResult("next");
+        this.onPreviousSelection = () => this.navigateSelection("previous");
+        this.onNextSelection = () => this.navigateSelection("next");
         /** Dismiss Features where Escape was pressed, keeping keyboard panning on the map.
          * @param {KeyboardEvent} event Original key event, including its originating control.
          * @return {void}
@@ -417,6 +462,7 @@ export class VectorFeatureInspectorController {
             else this.closeButton.click();
         };
         this.closeButton.addEventListener("click", this.onClose);
+        this.clearButton.addEventListener("click", this.onClear);
         this.featureProfileButton.addEventListener(
             "click",
             this.onOpenFeatureProfile
@@ -426,11 +472,15 @@ export class VectorFeatureInspectorController {
         this.zoomFeatureButton.addEventListener("click", this.onZoomFeature);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
+        this.previousSelection.addEventListener("click", this.onPreviousSelection);
+        this.nextSelection.addEventListener("click", this.onNextSelection);
         this.document.addEventListener("keydown", this.onKeydown);
         if (this.filterButton) this.filterButton.hidden = true;
         this.styleButton.hidden = true;
         this.styleButton.disabled = true;
         this.zoomFeatureButton.disabled = true;
+        this.clearButton.disabled = true;
+        this.status.textContent = "Use Picker or Lasso to select features, then inspect their attributes or plot their fields.";
         this.#updateTimeSeriesAction(0);
         this.syncVisibleLayers();
     }
@@ -479,44 +529,54 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Clear results and history if the visible vector sources change.
-     * Close the inspector after the last visible vector leaves.
+     * Invalidate removed or changed sources without coupling Lasso to map visibility.
+     * Click history retains its published-view context; Lasso retains its original
+     * source and predicate. Valid history remains available after an invalidation.
      * Refresh display names without repeating feature queries or discarding results.
      *
      * @return {void}
      */
     syncVisibleLayers() {
-        const targets = this.visibleTargets();
-        if (this.#refreshResultNames(targets) && this.results.length) {
-            this.showResult(this.resultIndex, "labels");
-            if (this.lastSample) this.#publishSample(this.lastSample.state, this.results,
-                this.lastSample.message, this.lastSample.failedLayers, "labels");
+        const retainedTargets = this.getSelectionTargets();
+        const visibleTargets = this.visibleTargets();
+        const targets = [...retainedTargets.map(target => ({sourceId: target.key, label: target.label})), ...visibleTargets];
+        if (this.#refreshResultNames(targets)) {
+            if (this.results.length) this.showResult(this.resultIndex, "labels");
+            if (this.lastSample) {
+                let message = this.lastSample.message;
+                if (this.#selectionDisplay !== null) {
+                    this.onSelectionDisplayChange(this.#selectionDisplay);
+                    message = formatLassoSelectionStatus(this.#selectionDisplay);
+                    this.status.textContent = message;
+                }
+                this.#publishSample(this.lastSample.state, this.results, message, this.lastSample.failedLayers, "labels");
+            }
         }
-        const available = targets.length > 0;
-        const signature = this.#targetSignature(targets);
-        if (
-            this.sampleTargetSignature !== null &&
-            signature !== this.sampleTargetSignature
-        ) {
+        const visibleSignature = this.#targetSignature(visibleTargets);
+        const retainedSignatures = new Map(retainedTargets.map(target => [target.key, JSON.stringify(target.selection)]));
+        /** Check saved acquisition context against the sources from this layer refresh.
+         * @param {FeatureSelectionContext} context Saved selection context. @return {boolean} Whether its sources still match.
+         */
+        const isCurrent = context => context.signature === (context.kind === "click"
+            ? visibleSignature : retainedSignatures.get(context.key));
+        let retainedIndex = -1;
+        this.#selectionHistory = this.#selectionHistory.filter((selection, index) => {
+            const retained = isCurrent(selection.context);
+            if (retained && index <= this.#selectionHistoryIndex) retainedIndex++;
+            return retained;
+        });
+        this.#selectionHistoryIndex = retainedIndex;
+        if (this.#selectionContext !== null && !isCurrent(this.#selectionContext)) {
             this.#cancelInspection();
-            this.#clearSelectionHistory();
             this.clearResults();
-            this.sampleTargetSignature = null;
-            this.status.textContent = available
-                ? "Visible vector layers changed. Click the map to sample again."
-                : "Show a vector layer, then click the map to inspect features.";
-            this.#publishSample(
-                "invalidated",
-                [],
-                "Visible vector layers changed. Click the map to sample again."
-            );
+            this.#selectionContext = null;
+            this.#inspectionPosition = null;
+            this.#selectionDisplay = null;
+            this.onSelectionDisplayChange(null);
+            this.status.textContent = "The selected layer or filter changed. Use Picker or Lasso to select features again.";
+            this.#publishSample("invalidated", [], this.status.textContent);
         }
-        if (!available && (
-            !this.panel.hidden || this.abortController !== null ||
-            this.results.length > 0
-        )) {
-            this.close();
-        }
+        this.#publishSelectionNavigation();
     }
 
     /**
@@ -559,42 +619,145 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Hide the inspector and discard its reads, results and selection history when its sources are removed or it is destroyed.
+     * Dismiss Features and its click highlight while retaining selection history and plot values.
+     * Keep partial map-click results. Restore the last completed selection if a Lasso is interrupted.
      *
      * @return {void}
      */
     close() {
+        if (this.abortController !== null) {
+            this.#cancelInspection();
+            if (this.#selectionContext.kind === "click" && (this.results.length || this.#selectionHistoryIndex < 0)) {
+                const message = "Inspection stopped before all layers were inspected. Click the map to try again.";
+                this.status.textContent = message;
+                this.#publishSample("interrupted", this.results, message, this.lastSample.failedLayers);
+            } else {
+                this.#restoreCompletedSelection();
+            }
+        }
+        this.clearHighlight();
+        this.onInspectionChange(false);
+    }
+
+    /** Clear selected features, plots and history, and cancel any unfinished replacement.
+     * @return {void}
+     */
+    clearSelection() {
         this.#cancelInspection();
         this.#clearSelectionHistory();
         this.clearResults();
-        this.#publishSelectionNavigation();
-        this.status.textContent = "Click the map to inspect visible vector features.";
-        this.onInspectionChange(false);
+        this.#selectionContext = null;
+        this.#selectionDisplay = null;
+        this.onSelectionDisplayChange(null, {cancelGesture:true});
+        this.status.textContent = "Selection cleared. Use Picker or Lasso to select features.";
+        this.#publishSample("empty", [], this.status.textContent);
     }
 
     /** Whether the map may start another feature inspection. */
     #pickingEnabled = true;
 
     /**
-     * Enable map-click acquisition or cancel unfinished work and restore the last completed selection.
+     * Enable map-click acquisition or cancel an unfinished click and restore completed selection.
+     * Lasso acquisition has its own cancellation signal and is unaffected.
      * Existing results remain available to the inspector and its plots.
      * @param {boolean} enabled Whether map clicks may acquire features.
      * @return {void}
      */
     setPickingEnabled(enabled) {
         this.#pickingEnabled = enabled;
-        if (enabled || this.abortController === null) return;
+        if (enabled || this.abortController === null || this.#selectionContext?.kind !== "click") return;
         this.#cancelInspection();
+        this.#restoreCompletedSelection();
+        if (this.#selectionHistoryIndex < 0) this.onInspectionChange(false);
+    }
+
+    /** Restore the preceding completed selection after cancelling a replacement.
+     * Keep forward history available when no earlier completed selection remains.
+     * @return {void}
+     */
+    #restoreCompletedSelection() {
         if (this.#selectionHistoryIndex >= 0) {
             this.#restoreSelection(this.#selectionHistoryIndex);
             return;
         }
+        this.#selectionContext = null;
         this.#inspectionPosition = null;
+        this.#selectionDisplay = null;
+        this.onSelectionDisplayChange(null);
         this.clearResults();
         const message = "Feature inspection cancelled.";
         this.status.textContent = message;
         this.#publishSample("empty", [], message);
-        this.onInspectionChange(false);
+    }
+
+    /**
+     * Replace selected features with exact Lasso membership and original scalar attributes.
+     * This acquisition is independent of map-click picking and WMS publication.
+     * Cancelling restores the previous completed selection; a failed read publishes
+     * an error with no partial attributes and leaves completed history available.
+     * @param {VectorSelectionTarget} target Captured retained source and predicate.
+     * @param {Object} polygon Closed WGS 84 Lasso polygon.
+     * @param {AbortSignal} signal Gesture owner's cancellation signal.
+     * @return {Promise<void>} Completes after attributes and display are published.
+     * @throws {Error} If selection or attribute reading fails.
+     * @throws {DOMException} If cancelled, cleared or superseded.
+     */
+    async inspectLasso(target, polygon, signal) {
+        signal.throwIfAborted();
+        const generation = this.#cancelInspection();
+        const abort = new AbortController();
+        this.abortController = abort;
+        this.#selectionContext = {kind: "lasso", key: target.key, signature: JSON.stringify(target.selection)};
+        this.#inspectionPosition = null;
+        this.#selectionDisplay = null;
+        this.clearResults();
+        this.status.textContent = `Selecting features in ${target.label}…`;
+        this.onInspectionChange(true);
+        this.#publishSample("loading", [], this.status.textContent);
+        /** Restore completed selection when the gesture owner cancels this acquisition. @return {void} */
+        const cancel = () => {
+            if (generation !== this.requestGeneration) return;
+            this.#cancelInspection();
+            this.#restoreCompletedSelection();
+        };
+        signal.addEventListener("abort", cancel, {once: true});
+        let selected, currentTarget;
+        try {
+            selected = await selectLassoFeatures(target.selection, polygon, abort.signal, this.fetchImplementation);
+            abort.signal.throwIfAborted();
+            currentTarget = this.getSelectionTargets().find(value => value.key === target.key);
+            if (!currentTarget || JSON.stringify(currentTarget.selection) !== this.#selectionContext.signature) {
+                this.syncVisibleLayers();
+                throw new DOMException("The selected source changed.", "AbortError");
+            }
+        } catch (error) {
+            if (generation === this.requestGeneration && error.name !== "AbortError") {
+                this.clearResults();
+                this.#selectionDisplay = null;
+                this.onSelectionDisplayChange(null);
+                this.status.textContent = error.message;
+                this.#finishSelection("empty", error.message, 1);
+            }
+            throw error;
+        } finally {
+            signal.removeEventListener("abort", cancel);
+            if (generation === this.requestGeneration) this.abortController = null;
+        }
+        const rows = selected.features;
+        this.results = rows.map(row => ({
+            feature: {...row, geometry: null},
+            target: {sourceId: target.key, label: currentTarget.label},
+            inspectionPosition: null,
+        }));
+        this.#selectionDisplay = {polygon, geometry: selected.geometry, count: selected.matched, label: currentTarget.label};
+        this.#updateTimeSeriesAction(rows.length);
+        this.status.textContent = formatLassoSelectionStatus(this.#selectionDisplay);
+        try {
+            this.#finishSelection(rows.length ? "ready" : "empty", this.status.textContent);
+        } finally {
+            // Present the feature even if the comparison plot cannot draw the completed sample.
+            if (rows.length) this.showResult(0);
+        }
     }
 
     /** Update the selected feature's Style shortcut while keeping its values and plots accessible.
@@ -623,7 +786,9 @@ export class VectorFeatureInspectorController {
         const generation = this.#cancelInspection();
         const position = Object.freeze({ lng: event.latlng.lng, lat: event.latlng.lat });
         this.#inspectionPosition = position;
-        this.sampleTargetSignature = this.#targetSignature(visibleTargets);
+        this.#selectionContext = {kind: "click", signature: this.#targetSignature(visibleTargets)};
+        this.#selectionDisplay = null;
+        this.onSelectionDisplayChange(null);
         this.clearResults();
         const targets = visibleTargets.filter((target) =>
             vectorBoundsContainPosition(target.bbox, position)
@@ -787,16 +952,16 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Identify the returned feature set independently of layer and feature order.
-     * @param {InspectedVectorFeature[]} results Features from one completed inspection.
-     * @return {string|null} Source and feature IDs, or null if a feature has no ID.
+     * Identify features returned by a map click independent of WMS response order.
+     * @param {InspectedVectorFeature[]} results Features from one completed map click.
+     * @return {string|null} Source, publication and feature IDs, or null if a feature has no ID.
      */
-    #identifyFeatureSelection(results) {
+    #identifyClickFeatures(results) {
         const ids = [];
         for (const { feature, target } of results) {
             const id = feature.id;
             if (typeof id !== "number" && !(typeof id === "string" && id.length)) return null;
-            ids.push(JSON.stringify([target.sourceId, id]));
+            ids.push(JSON.stringify([target.sourceId, target.publication?.layerName ?? null, String(id)]));
         }
         return JSON.stringify(ids.sort());
     }
@@ -813,13 +978,13 @@ export class VectorFeatureInspectorController {
      */
     #finishSelection(state, message, failedLayers = 0) {
         if (state === "ready" || failedLayers === 0) {
-            const identity = this.#identifyFeatureSelection(this.results);
             const selection = {
-                identity, results: this.results, resultIndex: this.resultIndex,
+                clickIdentity: this.#selectionContext.kind === "click" ? this.#identifyClickFeatures(this.results) : null,
+                results: this.results, resultIndex: this.resultIndex,
                 position: this.#inspectionPosition, state, message, failedLayers,
+                context: this.#selectionContext, display: this.#selectionDisplay,
             };
-            const current = this.#selectionHistory[this.#selectionHistoryIndex];
-            if (identity !== null && identity === current?.identity) {
+            if (sameFeatureSelection(this.#selectionHistory[this.#selectionHistoryIndex], selection)) {
                 this.#selectionHistory[this.#selectionHistoryIndex] = selection;
             } else {
                 this.#selectionHistory.splice(this.#selectionHistoryIndex + 1, this.#selectionHistory.length, selection);
@@ -827,12 +992,14 @@ export class VectorFeatureInspectorController {
                 this.#selectionHistoryIndex = this.#selectionHistory.length - 1;
             }
         }
+        this.onSelectionDisplayChange(this.#selectionDisplay);
         this.#publishSample(state, this.results, message, failedLayers);
     }
 
     /**
-     * Locate an adjacent saved selection. If a click is unfinished or failed,
-     * going back restores the last displayed completed selection.
+     * Locate a saved selection before or after the current history position.
+     * An unfinished, failed or invalidated view lies after its preceding retained
+     * entry, so Previous restores that entry and Next preserves forward navigation.
      *
      * @param {"previous"|"next"} direction History direction.
      * @return {number} Index of the destination, or -1 if unavailable.
@@ -841,18 +1008,21 @@ export class VectorFeatureInspectorController {
         const index = this.#selectionHistoryIndex;
         const displayingSavedSelection = this.#selectionHistory[index]?.results === this.results;
         if (direction === "previous") return displayingSavedSelection ? index - 1 : index;
-        return displayingSavedSelection && index + 1 < this.#selectionHistory.length ? index + 1 : -1;
+        return index + 1 < this.#selectionHistory.length ? index + 1 : -1;
     }
 
     /**
-     * Tell composition which directions currently lead to a saved selection.
+     * Enable the available history directions in Features and publish them to the plot.
      * @return {void}
      */
     #publishSelectionNavigation() {
-        this.onSelectionNavigationChange(Object.freeze({
+        const navigation = Object.freeze({
             canPrevious: this.#adjacentSelectionIndex("previous") >= 0,
             canNext: this.#adjacentSelectionIndex("next") >= 0,
-        }));
+        });
+        this.previousSelection.disabled = !navigation.canPrevious;
+        this.nextSelection.disabled = !navigation.canNext;
+        this.onSelectionNavigationChange(navigation);
     }
 
     /**
@@ -870,35 +1040,45 @@ export class VectorFeatureInspectorController {
         const index = this.#adjacentSelectionIndex(direction);
         if (index < 0) return;
 
+        const button = direction === "previous" ? this.previousSelection : this.nextSelection;
+        const opposite = direction === "previous" ? this.nextSelection : this.previousSelection;
+        const wasFocused = this.document.activeElement === button;
         this.#cancelInspection();
-        this.#restoreSelection(index);
+        this.#restoreSelection(index, {cancelGesture:true});
+        if (wasFocused && button.disabled && !opposite.disabled) opposite.focus();
     }
 
-    /** Present a completed selection from the inspector's existing history.
+    /** Present a completed selection and keep the history controls available across empty results.
      * @param {number} index Position of the completed selection in history.
+     * @param {{cancelGesture:boolean}} [options] Cancel the map gesture when the user navigates history.
      * @return {void}
      */
-    #restoreSelection(index) {
+    #restoreSelection(index, options) {
         const selection = this.#selectionHistory[index];
         this.#selectionHistoryIndex = index;
         this.#inspectionPosition = selection.position;
+        this.#selectionContext = selection.context;
+        this.#selectionDisplay = selection.display;
+        this.results = selection.results;
+        this.#refreshResultNames([...this.getSelectionTargets().map(target => ({sourceId: target.key, label: target.label})), ...this.visibleTargets()]);
         if (selection.state === "ready") {
-            this.results = selection.results;
-            this.#refreshResultNames(this.visibleTargets());
             this.showResult(selection.resultIndex);
             this.#updateTimeSeriesAction(this.results.length);
+            this.onInspectionChange(true);
         } else {
             this.clearResults();
             this.results = selection.results;
         }
-        this.status.textContent = selection.message;
-        this.onInspectionChange(selection.state === "ready");
-        this.#publishSample(selection.state, selection.results, selection.message, selection.failedLayers);
+        const message = selection.display === null ? selection.message : formatLassoSelectionStatus(selection.display);
+        this.status.textContent = message;
+        this.onSelectionDisplayChange(this.#selectionDisplay, options);
+        this.#publishSample(selection.state, selection.results, message, selection.failedLayers,
+            selection.state === "ready" ? {kind:"restore", featureIndex:selection.resultIndex} : undefined);
     }
 
     /**
-     * Update retained result labels from current visible targets without changing their identities.
-     * @param {import("./feature-info.js").VectorFeatureInspectionTarget[]} targets Current map-layer presentation.
+     * Update selected attributes and optional Lasso display labels without changing identities.
+     * @param {Array<{sourceId:string,label:string}>} targets Current source display names.
      * @return {boolean} Whether any result name changed.
      */
     #refreshResultNames(targets) {
@@ -908,6 +1088,13 @@ export class VectorFeatureInspectorController {
             const label = names.get(result.target.sourceId);
             if (label !== undefined && label !== result.target.label) {
                 result.target = { ...result.target, label };
+                changed = true;
+            }
+        }
+        if (this.#selectionDisplay !== null && this.#selectionContext?.kind === "lasso") {
+            const label = names.get(this.#selectionContext.key);
+            if (label !== undefined && this.#selectionDisplay.label !== label) {
+                this.#selectionDisplay.label = label;
                 changed = true;
             }
         }
@@ -933,16 +1120,17 @@ export class VectorFeatureInspectorController {
      * @param {InspectedVectorFeature[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
      * @param {number} [failedLayers=0] Completed layers whose inspection failed.
-     * @param {import("./inspection-observation.js").VectorInspectionChange} [change="inspection"] Whether the inspection changed or its layer names were edited.
+     * @param {import("./inspection-observation.js").VectorInspectionUpdate} [update="inspection"] How the existing selection changed.
      * @return {void}
      */
-    #publishSample(state, results, message, failedLayers = 0, change = "inspection") {
+    #publishSample(state, results, message, failedLayers = 0, update = "inspection") {
+        this.clearButton.disabled = state !== "loading" && results.length === 0 && this.#selectionHistory.length === 0;
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
         );
         this.lastSample = Object.freeze({ state, observations, message, failedLayers, position: this.#inspectionPosition });
-        this.onSampleChange(this.lastSample, change);
         this.#publishSelectionNavigation();
+        this.onSampleChange(this.lastSample, update);
     }
 
     /**
@@ -1016,16 +1204,16 @@ export class VectorFeatureInspectorController {
         this.heading.title = this.heading.textContent;
         if (this.filterButton) this.filterButton.hidden = false;
         this.setStyleEditingEnabled(this.styleEditingEnabled);
-        this.zoomFeatureButton.disabled = false;
+        this.zoomFeatureButton.disabled = observation.focus === null;
+        this.zoomFeatureButton.title = observation.focus === null ? "Feature location is unavailable for this selection." : "";
         if (this.lastSample) this.status.textContent = this.lastSample.message;
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;
         this.next.disabled = !navigation.canNext;
-        this.featureProfileButton.disabled = !Object.values(observation.properties).some(Number.isFinite);
-        this.onCurrentObservationChange(observation, navigation, change);
+        this.featureProfileButton.disabled = !Object.values(observation.properties).some(isNumericFeatureValue);
         this.#showAttributes(this.results[this.resultIndex]);
         this.clearHighlight();
-        if (typeof feature.id === "string" && feature.id.length > 0) {
+        if (target.publication && typeof feature.id === "string" && feature.id.length > 0) {
             const highlightLayer = this.leaflet.tileLayer.wms(this.wmsUrl, {
                 layers: target.publication.layerName,
                 styles: `vector-highlight-${target.geometryKind}`,
@@ -1043,18 +1231,21 @@ export class VectorFeatureInspectorController {
                     this.leaflet.circleMarker(latlng, HIGHLIGHT_STYLE),
             }).addTo(this.map);
         }
+        this.onCurrentObservationChange(observation, navigation, change);
     }
 
     /**
      * Present the selected feature's attributes using the current view's display settings.
-     * @param {{feature:Object,target:import("./feature-info.js").VectorFeatureInspectionTarget}} selected Inspected feature and layer.
+     * @param {InspectedVectorFeature} selected Inspected feature and its original source or published layer.
      * @return {void}
      */
     #showAttributes({feature, target}) {
         const display = this.getFieldDisplay(target.sourceId);
         this.fieldDisplay.show(display && {...display, sourceId: target.sourceId, properties: feature.properties});
         this.attributes.replaceChildren();
-        const entries = vectorFeatureAttributes(feature, target.primaryGeometry, display?.formats);
+        const entries = vectorFeatureAttributes(
+            feature, target.primaryGeometry, display?.formats, this.#selectionContext.kind
+        );
         if (entries.length === 0) {
             const term = this.document.createElement("dt");
             term.textContent = "Attributes";
@@ -1116,9 +1307,11 @@ export class VectorFeatureInspectorController {
      * @return {void}
      */
     destroy() {
+        this.clearSelection();
         this.close();
         this.fieldDisplay.destroy();
         this.closeButton.removeEventListener("click", this.onClose);
+        this.clearButton.removeEventListener("click", this.onClear);
         this.featureProfileButton.removeEventListener(
             "click",
             this.onOpenFeatureProfile
@@ -1129,6 +1322,8 @@ export class VectorFeatureInspectorController {
         this.zoomFeatureButton.removeEventListener("click", this.onZoomFeature);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);
+        this.previousSelection.removeEventListener("click", this.onPreviousSelection);
+        this.nextSelection.removeEventListener("click", this.onNextSelection);
         this.document.removeEventListener("keydown", this.onKeydown);
     }
 }

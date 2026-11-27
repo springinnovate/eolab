@@ -202,7 +202,7 @@ export class LeafletLayerSet {
     /**
      * Synchronize complete top-first descriptors with the current strategy.
      *
-     * @param {Array<{key:string,visible:boolean,opacity:number,descriptor:Object|null,observation?:{variable:string,time:string}|null}>}
+     * @param {Array<{key:string,visible:boolean,opacity:number,descriptor:Object|null,observation?:{variable:string,time:string,intervalStart?:string}|null}>}
      * rendering Complete retained-layer rendering state.
      * @param {{keepPreviousFrame?:boolean}} [options] Whether this render follows a same-variable date replacement.
      * @return {void}

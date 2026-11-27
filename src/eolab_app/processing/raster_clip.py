@@ -346,7 +346,7 @@ def create_clip(
                 or check.height != spec.grid.height
                 or check.count != 1
                 or check.dtypes[0] != spec.grid.dtype
-                or check.crs.to_wkt() != spec.grid.crs
+                or check.crs != rasterio.crs.CRS.from_wkt(spec.grid.crs)
                 or tuple(check.transform)[:6] != spec.grid.transform
                 or (None if check.nodata is None else str(check.nodata))
                 != spec.grid.nodata

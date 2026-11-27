@@ -70,10 +70,18 @@ export function temporalSelectionError(temporal, reducer) {
     if (!variable) return "Choose a variable.";
     const periodError = temporalPeriodError(temporal);
     if (periodError) return periodError;
-    const start = Date.parse(`${temporal.startTime}Z`), end = Date.parse(`${temporal.endTime}Z`);
-    if (reducer === "precipitation_total" && (start % 3600000 !== 0 || end % 3600000 !== 0))
+    if (reducer === "precipitation_total" && !hasWholeHourBoundaries(`${temporal.startTime}Z`, `${temporal.endTime}Z`))
         return "Finish editing the dates to round them to whole UTC hours before running the precipitation total.";
     return "";
+}
+
+/** Check whether an observation range can be used exactly for a precipitation total.
+ * @param {string} start Inclusive UTC boundary with timezone.
+ * @param {string} end Exclusive UTC boundary with timezone.
+ * @return {boolean} Whether both boundaries fall on whole hours.
+ */
+export function hasWholeHourBoundaries(start, end) {
+    return Date.parse(start) % 3600000 === 0 && Date.parse(end) % 3600000 === 0;
 }
 
 /** Capture a path-free dataset selection and its requested UTC period.

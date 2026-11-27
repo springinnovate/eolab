@@ -17,10 +17,14 @@ from affine import Affine
 from pydantic import BaseModel, ConfigDict, Field
 from rasterio.crs import CRS
 from rasterio.transform import array_bounds
-from rasterio.warp import transform_bounds
 
 from eolab_app.catalog.collections import TEMPORAL_COLLECTION_ID
 from eolab_app.catalog.models import DatasetCandidate
+from eolab_app.raster.geographic_bounds import (
+    covers_full_longitude_turn,
+    normalize_wgs84_bounds,
+    transform_bounds_to_wgs84,
+)
 
 
 class ArchiveSource(BaseModel):
@@ -33,13 +37,31 @@ class ArchiveSource(BaseModel):
 
 
 class ArchiveDescription(BaseModel):
-    """Supply the stable catalog identity and display title for an archive."""
+    """Supply the archive identity, title, and optional precision for displaying dates.
+
+    Snapshot labels use year, month, day or timestamp. Calendar aggregates use
+    the covered period preceding their exclusive end. Explicit intervals are
+    identified by their ending timestamp.
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str = Field(pattern=r"\S")
     title: str = Field(pattern=r"\S")
     source: ArchiveSource
+    time_labels: (
+        Literal[
+            "year",
+            "month",
+            "day",
+            "timestamp",
+            "calendar_year",
+            "calendar_month",
+            "calendar_day",
+            "explicit",
+        ]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -488,13 +510,11 @@ def build_temporal_items(
     if grid is None:
         raise ValueError("The archive has no published observations")
     crs, transform, height, width = grid
-    west, south, east, north = array_bounds(height, width, transform)
-    if crs.is_geographic:
-        bbox = [max(-180, west), max(-90, south), min(180, east), min(90, north)]
-        if math.isclose(width * transform.a, 360):
-            bbox[0], bbox[2] = -180, 180
-    else:
-        bbox = list(transform_bounds(crs, "EPSG:4326", west, south, east, north))
+    bounds = transform_bounds_to_wgs84(crs, array_bounds(height, width, transform))
+    if covers_full_longitude_turn(crs, width * transform.a):
+        # A datum transformation can map both native longitude edges to the same meridian.
+        bounds = (-180.0, bounds[1], 180.0, bounds[3])
+    bbox = list(normalize_wgs84_bounds(bounds))
     west, south, east, north = bbox
     reference_system = crs.to_epsg() or crs.to_wkt()
     return (
@@ -525,6 +545,11 @@ def build_temporal_items(
                 "start_datetime": utc_timestamp(cast(int, support_start)),
                 "end_datetime": utc_timestamp(cast(int, support_end)),
                 "eolab:calendar": "proleptic_gregorian",
+                **(
+                    {"eolab:time_labels": archive.description.time_labels}
+                    if archive.description.time_labels
+                    else {}
+                ),
                 "cube:dimensions": {
                     "time": {
                         "type": "temporal",

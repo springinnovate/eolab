@@ -125,9 +125,9 @@ def compute_implementation_checksum() -> str:
     """Compute a checksum of the installed backend code and numerical libraries.
 
     The checksum includes Python source files in ``eolab_app`` and ``eolab_jobs``
-    and the installed versions of numerical libraries. It is cached for the
-    process lifetime. The API saves it when accepting a run; the worker compares
-    it before execution to avoid running that request with different software.
+    and the installed versions of numerical libraries, including the routing
+    engine and compiler runtime. Each process caches the checksum. The API saves
+    it when accepting a run and the worker compares it before execution.
 
     Returns:
         A SHA-256 hexadecimal checksum, not a Git commit or model version.
@@ -152,6 +152,9 @@ def compute_implementation_checksum() -> str:
         digest.update(f"{dependency}={version(dependency)}\n".encode())
     for dependency in (
         "ecoshard",
+        "pyflwdir",
+        "numba",
+        "llvmlite",
         "scipy",
         "wwf-es-beneficiaries",
         "shortest-distances",

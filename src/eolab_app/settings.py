@@ -193,6 +193,8 @@ class Settings:
             application as a Jobs caller. Jobs uses that identity to restrict
             status, result, cancellation and deletion to the owning caller.
             Required at application startup; never sent to the browser.
+        jobs_max_timeout_seconds: Deployment ceiling for queue and execution
+            timeouts requested by the polygon comparison adapter.
     """
 
     app_title: str
@@ -249,6 +251,7 @@ class Settings:
     shared_layer_capacity: int = 10000
     shared_layer_creation_limit: int = 100
     shared_layer_creation_window_seconds: int = 60
+    jobs_max_timeout_seconds: float = 300
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -285,6 +288,10 @@ class Settings:
             r"[A-Za-z0-9._~-]{32,256}", self.jobs_token
         ) is None:
             raise ValueError("JOBS_TOKEN must be a configured 32–256 character URL-safe Jobs credential")
+        if not 0 < self.jobs_max_timeout_seconds <= 86400:
+            raise ValueError(
+                "JOBS_MAX_TIMEOUT_SECONDS must be positive and at most one day"
+            )
         for environment_variable_name, setting_value in required_text_settings.items():
             if not setting_value:
                 raise ValueError(f"{environment_variable_name} must not be blank")
@@ -569,6 +576,9 @@ def load_settings(
             os.environ.get("SHARED_LAYER_CREATION_WINDOW_SECONDS", "60")
         ),
         jobs_token=os.environ.get("JOBS_TOKEN", ""),
+        jobs_max_timeout_seconds=float(
+            os.environ.get("JOBS_MAX_TIMEOUT_SECONDS", "300")
+        ),
         admin_password=os.environ.get("ADMIN_PASSWORD", ""),
         app_title=os.environ["APP_TITLE"].strip(),
         app_subtitle=os.environ["APP_SUBTITLE"].strip(),

@@ -3,7 +3,7 @@
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.raster_input import raster_source_filename_prefix
 
-from eolab_app.bounded_vector import PolygonRasterizer
+from eolab_app.bounded_vector import PolygonRasterizer, selection_edges_are_wgs84
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -186,9 +186,8 @@ def prepare_raster_area_tools(
 ) -> RasterAreaTools:
     """Prepare the final window, selected polygons and optional hectare calculator.
 
-    For formulas requiring area measurement, use the hectare calculator's window,
-    matching its cached pixel coordinates. Other formulas use the ordinary
-    selection window. Both retain their existing projection and boundary rules.
+    Catalog formulas share the window prepared from the native polygon edges.
+    Hectare formulas intersect the polygon with each cell inside that window.
 
     Args:
         dataset: Open, validated raster; it must remain open while tools are used.
@@ -215,7 +214,16 @@ def prepare_raster_area_tools(
     try:
         pixel_area_calculator = None
         if measure_hectares:
-            pixel_area_calculator = PixelAreaCalculator(dataset, area, limits)
+            pixel_area_calculator = PixelAreaCalculator(
+                dataset,
+                area,
+                limits,
+                catalog_pixel_bounds=(
+                    selected_polygons.pixel_bounds
+                    if isinstance(selected_polygons, PolygonRasterizer)
+                    else None
+                ),
+            )
             raster_window = pixel_area_calculator.window
         else:
             raster_window = selection_window
@@ -398,21 +406,30 @@ def plan_aggregate(
                 area.kind == "catalogSelection"
                 and dataset.crs.to_epsg() in {4326, 3857, 6933}
                 and dataset.transform.b == dataset.transform.d == 0
+                and selection_edges_are_wgs84(area.resolved)
             ):
                 planning_area = AggregateArea(kind="bounds", bounds=area.bounds)
             pixel_only = functions == {"pixelValue"}
             raster_window = pixel_window
+            catalog_pixel_bounds = None
             if not pixel_only:
-                raster_window, _ = get_raster_window_and_mask_source(
+                raster_window, polygons = get_raster_window_and_mask_source(
                     dataset, planning_area, limits
                 )
+                if isinstance(polygons, PolygonRasterizer):
+                    catalog_pixel_bounds = polygons.pixel_bounds
+                    polygons.close()
             needs_ground_area = any(
                 node.op == "areaha" for root in roots for node in walk(root)
             )
             pixel_area_calculator = None
             if needs_ground_area:
                 pixel_area_calculator = PixelAreaCalculator(
-                    dataset, planning_area, limits, planning=True
+                    dataset,
+                    planning_area,
+                    limits,
+                    planning=True,
+                    catalog_pixel_bounds=catalog_pixel_bounds,
                 )
             if pixel_area_calculator is not None:
                 raster_window = pixel_area_calculator.window

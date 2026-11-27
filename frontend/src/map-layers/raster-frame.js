@@ -1,5 +1,5 @@
 /** A retained row as it was drawn. The descriptor and date belong to this specific Leaflet layer.
- * @typedef {{layer:Object,descriptor:Object,observation:{variable:string,time:string}|null}} MapFrame
+ * @typedef {{layer:Object,descriptor:Object,observation:{variable:string,time:string,intervalStart?:string}|null}} MapFrame
  */
 
 /** A frame reported to the timeline. An outside-viewport frame has finished without drawing tiles here.

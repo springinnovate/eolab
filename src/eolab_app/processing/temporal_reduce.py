@@ -4,7 +4,6 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
-import hashlib
 import json
 import math
 import mmap
@@ -15,7 +14,6 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 import rasterio
-from rasterio.shutil import copy as copy_raster
 from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.bounded_vector import PolygonRasterizer
@@ -23,9 +21,11 @@ from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
+from eolab_app.processing.model_result_contracts import RasterResultGrid
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import prepare_raster_area_tools
 from eolab_app.processing.raster_mask import temporary_polygon_mask
+from eolab_app.processing.raster_output import write_float64_cog
 from eolab_app.processing.temporal_grid import (
     TemporalReadGrid,
     plan_temporal_grid,
@@ -34,10 +34,14 @@ from eolab_app.processing.temporal_grid import (
 from eolab_app.processing.temporal_models import (
     TemporalMapArtifact,
     TemporalMapSpec,
-    TemporalReduction,
 )
 from eolab_app.raster.source_contract import read_native_raster_window
-from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalRasterDataset
+from eolab_app.raster.source_models import TemporalIntervalSelection
+from eolab_app.raster.temporal import (
+    ResolvedTemporalInterval,
+    TemporalObservation,
+    TemporalRasterDataset,
+)
 
 # Target retained accumulator cells; one native window is always processed.
 STREAMING_BATCH_PIXELS = 1024 * 1024
@@ -165,12 +169,27 @@ def _reduce_ordered_values(
     return result.reshape(shape), counts.reshape(shape)
 
 
+def _overlap_seconds(
+    observation: TemporalObservation, period: TemporalIntervalSelection
+) -> float:
+    """Return the observation's duration inside the requested precipitation period.
+
+    Args:
+        observation: Admitted mean rate whose interval overlaps the request.
+        period: Selected UTC start and exclusive end.
+
+    Returns:
+        Seconds for which this mean rate contributes to the estimated total.
+    """
+    start = max(observation.interval_start, period.start_time)
+    end = min(observation.interval_end, period.end_time)
+    return (end - start).total_seconds()
+
+
 def _reduce_streaming_batch(
     interval: ResolvedTemporalInterval,
-    reduction: TemporalReduction,
-    conversion_factor: float,
+    spec: TemporalMapSpec,
     windows: tuple[Window, ...],
-    column_rotation: int,
     record_read: Callable[[], None],
 ) -> tuple[tuple[Window, NDArray[np.float64], NDArray[np.uint64]], ...]:
     """Reduce a spatial batch while opening each observation only once.
@@ -183,12 +202,8 @@ def _reduce_streaming_batch(
 
     Args:
         interval: Authorized observations in increasing label order.
-        reduction: Streaming statistic or integrated precipitation total;
-            median and percentile are handled separately.
-        conversion_factor: Model-configured multiplier after rate times seconds;
-            unused by ordinary statistics.
+        spec: Selected dates, native grid, streaming statistic and unit conversion.
         windows: Native windows grouped by their selected-cell working target.
-        column_rotation: Source-column shift shared by every observation.
         record_read: Count a native read after its accumulator update completes.
 
     Returns:
@@ -201,6 +216,7 @@ def _reduce_streaming_batch(
         FloatingPointError: If the statistic overflows float64 arithmetic.
         rasterio.errors.RasterioError: If a native TIFF cannot be opened or read.
     """
+    reduction = spec.reduction
     shapes = [(int(window.height), int(window.width)) for window in windows]
     results = [np.zeros(shape, dtype="float64") for shape in shapes]
     counts = [np.zeros(shape, dtype="uint64") for shape in shapes]
@@ -221,8 +237,13 @@ def _reduce_streaming_batch(
         for shape in shapes
     ]
     for observation in interval.observations:
+        seconds = (
+            _overlap_seconds(observation, spec.source)
+            if reduction.reducer == "precipitation_total"
+            else None
+        )
         with TemporalRasterDataset(observation) as dataset:
-            dataset.prepare_column_view(column_rotation)
+            dataset.prepare_column_view(spec.grid.columnRotation)
             for window, result, count, variance_sum, origin, converted_values in zip(
                 windows,
                 results,
@@ -237,10 +258,7 @@ def _reduce_streaming_batch(
                 if reduction.reducer in {"min", "max"}:
                     previous_counts = count[valid]
                 np.add(count, valid, out=count)
-                if reduction.reducer == "precipitation_total":
-                    seconds = (
-                        observation.interval_end - observation.interval_start
-                    ).total_seconds()
+                if seconds is not None:
                     np.multiply(
                         values.data,
                         seconds,
@@ -250,7 +268,7 @@ def _reduce_streaming_batch(
                     )
                     np.multiply(
                         converted_values,
-                        conversion_factor,
+                        spec.conversionFactor,
                         out=converted_values,
                         where=valid,
                     )
@@ -345,12 +363,7 @@ def _reduce_windows(
             for windows in _batch_windows(spec.grid):
                 with np.errstate(over="raise", invalid="raise"):
                     reduced = _reduce_streaming_batch(
-                        interval,
-                        spec.reduction,
-                        spec.conversionFactor,
-                        windows,
-                        spec.grid.columnRotation,
-                        record_read,
+                        interval, spec, windows, record_read
                     )
                 yield from reduced
                 del reduced
@@ -384,53 +397,20 @@ def _create_cog(
         ProcessingError: If the generated file fails output-integrity checks.
         OSError: If conversion, verification or checksumming fails.
     """
-    copy_raster(
+    return write_float64_cog(
         stage,
         destination,
-        driver="COG",
-        COMPRESS="DEFLATE",
-        BLOCKSIZE=512,
-        PREDICTOR="YES",
-        OVERVIEW_RESAMPLING="NEAREST",
-        NUM_THREADS="2",
-        BIGTIFF="IF_SAFER",
-    )
-    with rasterio.open(destination) as result:
-        if (
-            result.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") != "COG"
-            or result.width != grid.width
-            or result.height != grid.height
-            or result.count != 1
-            or result.dtypes != ("float64",)
-            or result.crs.to_wkt() != grid.crs
-            or tuple(result.transform)[:6] != grid.transform
-            or not math.isnan(result.nodata)
-            or result.units != (unit,)
-            or (max(result.shape) > 512 and not result.overviews(1))
-        ):
-            raise ProcessingError(
-                "invalid_output", "The temporal result failed grid/COG validation.", 500
-            )
-        actual_valid = sum(
-            int(np.count_nonzero(result.read_masks(1, window=window)))
-            for _, window in result.block_windows(1)
-        )
-        if actual_valid != valid_pixels:
-            raise ProcessingError(
-                "invalid_output",
-                "The temporal result failed validity-mask validation.",
-                500,
-            )
-    with destination.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    stage.unlink()
-    return ProducedFile(
-        name="raster" if destination.stem == "result" else "count",
-        storage_name=destination.name,
-        filename=destination.name,
-        media_type="image/tiff",
-        size=destination.stat().st_size,
-        sha256=digest,
+        RasterResultGrid(
+            crs=grid.crs,
+            transform=grid.transform,
+            width=grid.width,
+            height=grid.height,
+            dtype=grid.dtype,
+        ),
+        valid_pixels,
+        unit,
+        output_name="raster" if destination.stem == "result" else "count",
+        description="The temporal result",
     )
 
 
@@ -612,11 +592,15 @@ def create_temporal_map(
         ],
         "inputUnit": interval.unit,
         "availableDurationSeconds": sum(
-            (item.interval_end - item.interval_start).total_seconds()
+            (
+                _overlap_seconds(item, spec.source)
+                if spec.reduction.reducer == "precipitation_total"
+                else (item.interval_end - item.interval_start).total_seconds()
+            )
             for item in interval.observations
         ),
         "weighting": (
-            "interval duration"
+            "mean rate assumed constant over the overlap with the requested period"
             if spec.reduction.reducer == "precipitation_total"
             else "equal observations"
         ),

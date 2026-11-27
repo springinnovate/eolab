@@ -332,6 +332,7 @@ def read_raster_paired_statistics(
         x_area = selected_raster_area_for_wgs84_bounds(
             x_dataset,
             overlap_bounds,
+            maximum_output_coordinates=RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
         )
         scope: Literal[
             "wholeOverlap",

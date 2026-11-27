@@ -1276,7 +1276,8 @@ export class MapLayerController {
                     visible: entry.visible && record.adapter.renderingAvailable?.(record) !== false,
                     opacity: entry.opacity,
                     descriptor: record.publication === null ? null : record.adapter.renderDescriptor(record),
-                    observation: entry.timeline ? {variable: entry.timeline.variable, time: entry.timeline.time} : null,
+                    observation: entry.timeline ? {variable: entry.timeline.variable, time: entry.timeline.time,
+                        intervalStart: entry.timeline.intervalStart} : null,
                 };
             }), {keepPreviousFrame}
         );

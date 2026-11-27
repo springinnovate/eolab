@@ -46,11 +46,11 @@ Use a color range for continuous measurements such as rainfall, named colors for
 
 ### Inspect a place and compare measurements
 
-Use the map tool strip to choose **Pan**, **Pixel picker**, **Histogram box**, or **Lasso**. Pixel picker reads raster values and inspects vector features at a click. Use **Previous** and **Next** in **Feature inspector** when features overlap. Results stay in the right panel. **All tabs** lists views that don’t fit across the top.
+Use the map tool strip to choose **Pan**, **Picker**, **Histogram box**, or **Lasso**. Picker reads raster values and inspects vector features at a click; it is called **Pixel picker** when only raster picking is enabled. Open **Tools → Features** to inspect selected features. Use **Previous** and **Next** in **Features** when several features are selected. Results stay in the right panel. **All tabs** lists views that don’t fit across the top.
 
 To give fields friendly names or display units and currency in the inspector, open **Field display** on a selected feature and choose **Download template**. Keep `field` unchanged and enter labels in `display_name`, including for text fields. For numeric fields, enter `number` with `1` decimal place and unit `ha`, or `currency` with code `USD`. Save as CSV UTF-8, then use **Import field formats** to preview names and values before applying. Blank names use the source field names, and blank number settings use the default value display. Each import replaces that layer view's display settings, so download its current template before editing. Names and formats are saved with the layer in your remembered or published map view and leave the source data unchanged.
 
-For **Lasso**, choose a vector layer, drag around an area and release. EOLab selects whole original features that intersect the polygon, including boundary touches. Existing layer filters still apply. The strip shows the exact count and highlights the selected features when they fit the display budget. Draw again to replace the selection, use **Clear selection** to remove it, or press **Esc** to cancel unfinished work. Choose **Pan** to move the map, or press **P** to return to Pixel picker.
+For **Lasso**, choose a vector layer, drag around an area and release. EOLab selects whole original features that intersect the polygon, including boundary touches. Existing layer filters still apply. **Features** shows their attributes and enables plotting, even when the layer is hidden or map highlights are unavailable. Draw again to replace the selection, use **Clear selection** to remove it, or press **Esc** to cancel unfinished work. Closing Features preserves the completed selection. Choose **Pan** to move the map, or press **P** to return to Picker when it is available.
 
 Choose **Histogram box** to place the sampling box at a click, or open **Histograms** for saved polygons. Enter the box width in kilometers or hold **Alt** and scroll to resize it. **1D** plots the distribution for each visible raster. A log scale makes small bars easier to see. **2D** compares the top two visible continuous rasters. Reorder the layers to change the pair or swap X and Y. Larger squares show more common pairs of values. Matching colors locate them on the map.
 
@@ -75,11 +75,13 @@ Use **Data tools → Calculate a raster statistic within an area** to calculate 
 
 ### Plot attributes and summarize polygons
 
-In the **Feature inspector**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across the features under your map click. Line, scatter, and bar comparisons give each field its own scale and share the same X axis. In either plot, choose **Stacked bars** under **Plot options** to put the checked fields into one horizontal bar per feature. Stack fields that use the same units. Switch between **Plot** and **Values** to read exact measurements, including missing values. **Plot options** contains the chart style, order, and axis or title field.
+In **Features**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across features selected by Picker or Lasso. To plot X against Y after a Lasso selection, open **Compare features**, use **Choose fields** to select Y, then choose **Scatter** and the X field under **Plot options**. Line, scatter, and bar comparisons give each field its own scale and share the same X axis. In either plot, choose **Stacked bars** under **Plot options** to put the checked fields into one horizontal bar per feature. Stack fields that use the same units. Switch between **Plot** and **Values** to read exact measurements, including missing values.
 
-Select a mark in a comparison plot to highlight its feature and zoom to it while keeping the plot open. You can also select a measurement in **Values** and choose **Zoom to feature**. Click another place on the map to update the open plot.
+For selections larger than 1,000 features, use **Features shown** to move through the comparison in the selected sort order. Choose **Plot all** to draw the entire selection. The **Values** table shows up to 1,000 features at a time. Use **Feature numbers** in either plot’s feature picker to jump to a range in the original selection order.
 
-In **Compare features**, use **Previous selection** and **Next selection** to revisit earlier map clicks, including after a click that cleared the plot. If you go back and select a different set of features, the forward history clears.
+Select a mark in a comparison plot to inspect its feature while keeping the plot open. When a feature location is available, selecting a mark also highlights and zooms to it; **Zoom to feature** is available from **Values** too. Attribute-only Lasso results do not supply individual feature locations. Make another selection to update the open plot.
+
+In **Features** or **Compare features**, use **Previous selection** and **Next selection** to revisit Picker or Lasso selections, including after a selection that found no features. Within a selection, **Previous** and **Next** step through its individual features. If you go back and select a different set of features, the forward history clears. **Clear selection** removes the results and their history.
 
 Use **Layer stats** to show the mean, minimum, or maximum of each plotted field beside the selected values. Each statistic uses all numeric values in its original layer, including features outside the current view or filter.
 
@@ -101,7 +103,7 @@ Use the timeline at the bottom of the map to drag through a month or press **Pla
 
 *Rainfall at 06:00 UTC on July 1, 2026. A band of rain crosses the tropical Atlantic toward West Africa. Choose another available hour to see how the pattern changes.*
 
-- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each available rate by its recorded interval duration to calculate accumulated depth. Start and end use whole UTC hours.
+- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. Ordinary statistics include the complete value of each overlapping observation. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each mean rate by the seconds its interval overlaps the selected period. A partial interval gives an estimate assuming a constant rate. Start and end use whole UTC hours.
 - **Export area statistics over time (CSV)** calculates a statistic across an area's valid pixels for each available observation, such as mean temperature within a watershed over time. The CSV contains one row per observation, including valid pixel counts.
 - **Raster statistics** plots statistics or formulas across the dates you select. Compare an area average with a value at a clicked point, or download the plotted values as CSV. You choose the calculation dates independently of the hour displayed on the map.
 
@@ -124,7 +126,29 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 </details>
 
+### Calculate a raster from several layers
+
+Open **Tools → Data tools → Raster calculator**. Add rasters from Map contents or completed runs and use the assigned variables in a formula such as `max(0, b - a)`. Choose a resampling method for each input, an analysis area, and an output grid. Matching a raster uses its projection, cell size, and grid alignment. Custom cell sizes use the chosen projection’s units.
+
+Area functions use the valid cells of each raster inside the selected area after resampling to the output grid. Use `a / area_max(a) - b / area_max(b)` to divide each raster by its own maximum and subtract the results, or `(a - area_min(a)) / (area_max(a) - area_min(a))` to scale one raster from 0 to 1.
+
+Use `(a - area_mean(a)) / area_stdev(a)` to express each cell's difference from the area average in population standard deviations. `area_sum(a)` adds the valid cell values, and `area_count(a)` counts those cells, including zeros. Cells missing a referenced raster value or dividing by zero produce NoData.
+
+The calculator includes cells whose centers fall inside the analysis area. Cells with missing formula inputs or undefined arithmetic are blank. In **Runs**, select **Show on map** or **Download** to use the GeoTIFF.
+
 ### Run environmental models
+
+**Upstream and downstream area** traces flow around selected polygons. Choose
+a polygon layer and an elevation raster with square cells. Turn on **Upstream**
+to find cells that drain into the polygons, **Downstream** to follow paths
+leaving them, or both to combine the areas. The calculation fills depressions
+and traces flow within the DEM. Valid DEM cells with centres inside the
+selected polygons start the trace and are excluded from the result.
+
+Choose **Run tool**. In the completed run, **Show on map** displays the mask
+and **Download** saves it as a GeoTIFF. The mask keeps the DEM grid. A value
+of 1 marks traced cells and 0 marks other valid cells. Missing elevation
+remains NoData.
 
 **Map downstream areas and summarize raster values** uses the WWF model to trace and buffer downstream flow from a starting area, then calculates a statistic from positive raster values within the resulting area. For example, sum a population raster to estimate how many people are within the downstream area of a proposed restoration site.
 
@@ -137,7 +161,9 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 <details>
 <summary>Choose reference sites and prepare Ecosystem Condition inputs</summary>
 
-Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. With the prepared inputs you can select datasets separately for each role. SRTM landforms and at least one observed response are required. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
+Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. After choosing a prepared area, select **Show analysis area on map** to zoom to its polygon and see the boundary while choosing reference sites. With the prepared inputs you can select datasets separately for each role. SRTM landforms and at least one observed response are required. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
+
+To inspect a published input, choose an **Assessment year** and expand the predictor or response group. Under the dataset, choose the variable if it has several, then select **Add to map**. You can inspect a layer even when its dataset is unchecked for the model.
 
 For reference sites, select saved polygons or a raster mask. With a Catalog raster mask, valid finite nonzero values inside the area designate reference sites. For an uploaded mask, use a single-band Byte GeoTIFF with its own coordinate system, `1` for reference sites and `0` elsewhere. NoData is excluded. The output uses the equal-area EPSG:6933 grid.
 
@@ -220,6 +246,42 @@ Back up the Docker volumes and keep their names and the database password. Let a
 </details>
 
 ### Prepare data for the Catalog
+
+#### Publish prepared Ecosystem Condition inputs
+
+From an environment with GDAL's Python bindings and the scientific package in
+[`deployment/application-habitat-requirements.txt`](deployment/application-habitat-requirements.txt),
+run the [cache publisher](scripts/publish_habitat_cache.py) on the extracted
+`habitat-cache` folder. Give it a separate output folder on the instance's
+catalog data mount. Keep the raw tiles outside the configured scan directories.
+
+```sh
+python scripts/publish_habitat_cache.py habitat-cache catalog/condition-inputs
+```
+
+The command discovers the assessment years and writes one named Cloud Optimized
+GeoTIFF per available variable per year. The assessment year identifies the
+model inputs; some variables use observations from other periods. Each map
+covers the cached tiles, with uncached areas marked as missing. Rerun the same
+command on the same extracted snapshot to resume. Use a new output folder if
+the snapshot's tile coverage changes. In **Status**, choose **Scan directories**.
+Search **Catalog** for the variable or assessment year and choose **Add to map**.
+
+#### Make a temporal layer from GeoTIFFs
+
+Put one variable's single-band GeoTIFFs in a dedicated folder. Use Python with Rasterio, NumPy, PyYAML and Pydantic 2 to run the [stack preparation script](scripts/prepare_temporal_stack.py).
+
+```sh
+python scripts/prepare_temporal_stack.py draft rainfall/
+python scripts/prepare_temporal_stack.py build rainfall/stack.yaml --check
+python scripts/prepare_temporal_stack.py build rainfall/stack.yaml
+```
+
+The first command shows dates found in filenames and acquisition or observation tags. Confirm the suggestions, choose what each raster measures, then edit `stack.yaml`. Fill in the variable ID, title and units. The draft keeps conflicting clues beside the affected file. For snapshots choose `year`, `month`, `day` or `timestamp`. For means and totals choose `calendar_year`, `calendar_month`, `calendar_day` or `explicit`. Quote dates such as `"2024"` or `"2024-06"`. Exact timestamps need a timezone. For explicit intervals use e.g. `time: {start: "2024-05-01", end: "2024-10-01"}`; the end is exclusive.
+
+Check the edited manifest, then build it. All observations must share a north-up grid and compatible stored values, units and NoData. If a GeoTIFF declares a time operation in its CF `cell_methods` tag, it must match the manifest (`point` for snapshots, `mean` for means, or `sum` for totals). Gaps are allowed. The build publishes `catalog.sqlite` and `dataset.yaml` beside the original files and requires a filesystem supporting hard links. Both commands protect existing outputs. To add observations, prepare a complete replacement archive between calculations, retain its dataset ID and rescan. Place the complete folder under the data mount and run a Catalog scan. Choose the layer in Map contents to select dates or press **Play**.
+
+A snapshot labeled `"2024"` uses the start of 2024 UTC for date-range selection. An annual total labeled `"2024"` covers the full calendar year. Both display as **2024** on the map. In Models, **Use this period** sets the analysis dates from the observations shown. In Raster Statistics, choosing a map layer’s time range starts with its displayed observation.
 
 <details>
 <summary>Add dataset descriptions, citations, and supporting files</summary>

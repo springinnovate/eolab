@@ -11,17 +11,24 @@ from affine import Affine
 import numpy as np
 from pyproj import Geod, Transformer
 import pytest
+import rasterio
+from rasterio.windows import Window
 from rasterio.shutil import copy as copy_raster
-from rasterio.transform import from_origin
+from rasterio.transform import array_bounds, from_origin
+from shapely import contains_xy, segmentize
 from shapely.geometry import Polygon, box, mapping
+from shapely.ops import transform as transform_geometry
 
+from eolab_app.bounded_vector import selection_summary
 from eolab_app.processing.aggregate_models import AggregateArea
+from eolab_app.processing.area_coverage import FractionalAreaCoverage
+from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 import eolab_app.processing.raster_aggregate as kernel
 from raster_aggregate_support import LIMITS, make_spec
 from raster_fixture_support import write_source
-from catalog_selection_support import write_aggregate_area
+from catalog_selection_support import write_aggregate_area, write_selection
 
 
 def reference_area(polygon: Polygon, crs: str = "EPSG:4326") -> float:
@@ -140,6 +147,129 @@ def test_partial_cell_sliver_is_area_even_when_center_is_outside(
     assert provenance["grid"]["groundArea"]["edgeToleranceMetres"] == 0.1
     rows = list(csv.DictReader((tmp_path / "result.csv").open(newline="")))
     assert rows[0]["unit"] == "ha" and rows[2]["unit"] == ""
+
+
+@pytest.mark.parametrize(
+    ("grid", "dimensions"),
+    [
+        (from_origin(0, 60, 0.05, 0.05), (100, 200)),
+        (from_origin(3, 59.1, 0.02, 0.02), (20, 50)),
+    ],
+    ids=["partial-coverage", "beyond-projected-corners"],
+)
+def test_native_selection_count_and_hectares_use_the_same_boundary(
+    tmp_path: Path,
+    grid: Affine,
+    dimensions: tuple[int, int],
+) -> None:
+    """Check mixed formulas against native membership and an equal-area intersection.
+
+    Args:
+        tmp_path: Directory for the vector, value raster and published tables.
+        grid: Geographic grid intersecting the projected northern polygon edge.
+        dimensions: Raster height and width.
+    """
+    polygon = box(3e6, 2e6, 5e6, 4e6)
+    vector = write_selection(
+        tmp_path / "area.gpkg", [mapping(polygon)], crs="EPSG:3035"
+    )
+    area = AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(vector)["bbox"],
+        catalogSelection=vector.selection,
+        resolved=vector,
+    )
+    path = write_source(
+        tmp_path / "values.tif", np.ones(dimensions, dtype="uint8"), transform=grid
+    )
+    inverse = Transformer.from_crs(4326, 3035, always_xy=True)
+    rows, columns = np.indices(dimensions) + 0.5
+    x, y = grid * (columns, rows)
+    expected_count = int(contains_xy(polygon, *inverse.transform(x, y)).sum())
+    footprint = transform_geometry(
+        inverse.transform, segmentize(box(*array_bounds(*dimensions, grid)), 0.001)
+    )
+    intersection = polygon.intersection(footprint)
+
+    numeric = calculate_raster_statistics_for_area(
+        path, make_spec(path, ["count(a)"], area), tmp_path, LIMITS
+    )
+    mixed = calculate_raster_statistics_for_area(
+        path,
+        make_spec(path, ["count(a) + 0 * areaha(a > 0)", "areaha(a > 0)"], area),
+        tmp_path,
+        LIMITS,
+    )
+    assert (int(numeric.rows[0]["value"]), float(mixed.rows[0]["value"])) == (
+        expected_count,
+        expected_count,
+    )
+    assert float(mixed.rows[1]["value"]) == pytest.approx(
+        intersection.area / 10_000,
+        abs=intersection.length * LIMITS.area_edge_tolerance_metres / 10_000,
+    )
+
+
+def test_catalog_hectares_cross_the_vector_prime_meridian_cut(tmp_path: Path) -> None:
+    """Measure the part of a Pacific-prime-meridian polygon on a WGS84 grid.
+
+    Args:
+        tmp_path: Directory for the native vector, raster and result table.
+    """
+    vector = write_selection(
+        tmp_path / "pacific.gpkg",
+        [mapping(box(-2, 1.2, 2, 1.8))],
+        crs="+proj=longlat +datum=WGS84 +pm=180 +type=crs",
+    )
+    area = AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(vector)["bbox"],
+        catalogSelection=vector.selection,
+        resolved=vector,
+    )
+    path = write_source(
+        tmp_path / "raster.tif",
+        np.ones((1, 5), dtype="uint8"),
+        transform=from_origin(175, 2, 1, 1),
+    )
+    spec = make_spec(path, ["count(a) + 0 * areaha(a > 0)", "areaha(a > 0)"], area)
+    result = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
+    assert float(result.rows[0]["value"]) == 2
+    assert float(result.rows[1]["value"]) == pytest.approx(
+        reference_area(box(178, 1.2, 180, 1.8)), rel=1e-8
+    )
+
+
+@pytest.mark.parametrize(("crs", "north"), [("EPSG:6931", 90), ("EPSG:6932", -70)])
+def test_polar_catalog_hectares_include_the_pole(
+    tmp_path: Path, crs: str, north: int
+) -> None:
+    """Measure a polar cap against its original ellipsoidal equal-area rectangle.
+
+    Args:
+        tmp_path: Directory for the vector, raster and published table.
+        crs: North or south polar equal-area CRS.
+        north: Top latitude of the geographic grid covering the cap.
+    """
+    polygon = box(-1e6, -1e6, 1e6, 1e6)
+    vector = write_selection(tmp_path / "cap.gpkg", [mapping(polygon)], crs=crs)
+    area = AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(vector)["bbox"],
+        catalogSelection=vector.selection,
+        resolved=vector,
+    )
+    path = write_source(
+        tmp_path / "polar.tif",
+        np.ones((20, 72), dtype="uint8"),
+        transform=from_origin(-180, north, 5, 1),
+    )
+    result = calculate_raster_statistics_for_area(
+        path, make_spec(path, ["areaha(a > 0)"], area), tmp_path, LIMITS
+    )
+    assert float(result.rows[0]["value"]) == pytest.approx(
+        polygon.area / 10_000, rel=2e-6
+    )
 
 
 def test_polygon_union_holes_and_fractional_edges(tmp_path: Path) -> None:
@@ -407,6 +537,36 @@ def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:
         make_spec(wrapped, ["areaha(a>0)"])
 
 
+@pytest.mark.parametrize(
+    ("grid_west", "west", "east"),
+    [(176, 179.2, 179.8), (176, 179.2, 180), (-182, -180, -179.2)],
+)
+def test_catalog_hectares_at_longitude_limit(
+    tmp_path: Path, grid_west: float, west: float, east: float
+) -> None:
+    """Measure selected cells up to the longitude limit on a grid crossing it.
+
+    Args:
+        tmp_path: Directory for the value raster, polygon and results.
+        grid_west: Raster's left edge in degrees east.
+        west: Selected polygon's left edge.
+        east: Selected polygon's right edge.
+    """
+    polygon = box(west, 1.2, east, 1.8)
+    area = write_aggregate_area(tmp_path / "selection.gpkg", [mapping(polygon)])
+    path = write_source(
+        tmp_path / "grid.tif",
+        np.ones((3, 6), dtype="uint8"),
+        transform=from_origin(grid_west, 3, 1, 1),
+    )
+    spec = make_spec(path, ["count(a) + 0 * areaha(a>0)", "areaha(a>0)"], area)
+    result = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
+    assert float(result.rows[0]["value"]) == 1
+    assert float(result.rows[1]["value"]) == pytest.approx(
+        reference_area(polygon), rel=1e-8
+    )
+
+
 def test_area_results_do_not_depend_on_source_blocks_or_processing_tiles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -463,6 +623,59 @@ def test_area_results_do_not_depend_on_source_blocks_or_processing_tiles(
             assert measured == pytest.approx(baseline, rel=1e-11)
             assert counts == baseline_counts
         assert spec.grid.groundArea.estimatedGeometryCells == 0
+
+
+def test_hectare_tiles_only_process_nearby_field_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Count overlapping field and corridor areas once with local work per tile.
+
+    Args:
+        tmp_path: Directory for the native raster and catalog polygons.
+        monkeypatch: Observe how many projected edges enter each coverage calculation.
+    """
+    fields = [box(i * 0.01 + 0.002, 1.002, i * 0.01 + 0.008, 1.008) for i in range(24)]
+    corridor = box(0, 1.004, 0.24, 1.006)
+    region = write_aggregate_area(
+        tmp_path / "fields.gpkg", list(map(mapping, [*fields, corridor]))
+    )
+    path = write_source(
+        tmp_path / "grid.tif",
+        np.ones((4, 96), dtype="uint8"),
+        transform=from_origin(0, 1.01, 0.0025, 0.0025),
+    )
+    edge_counts = []
+    calculate = FractionalAreaCoverage.calculate_cell_coverage
+
+    def measure(
+        coverage: FractionalAreaCoverage, xs: np.ndarray, ys: np.ndarray
+    ) -> np.ndarray:
+        """Count boundary edges and return the production tile's coverage fractions.
+
+        Args:
+            coverage: Prepared area boundary.
+            xs: Equal-area column edges.
+            ys: Equal-area row edges.
+
+        Returns:
+            Fraction covered in each tile cell.
+        """
+        edge_counts.append(len(coverage.edges))
+        return calculate(coverage, xs, ys)
+
+    monkeypatch.setattr(FractionalAreaCoverage, "calculate_cell_coverage", measure)
+    with rasterio.open(path) as dataset:
+        calculator = PixelAreaCalculator(dataset, region, LIMITS)
+        measured = sum(
+            calculator.calculate_hectares(Window(x, 0, 4, 4)).sum()
+            for x in range(0, 96, 4)
+        )
+    expected = sum(
+        reference_area(field) - reference_area(field.intersection(corridor))
+        for field in fields
+    )
+    assert measured == pytest.approx(expected + reference_area(corridor), rel=1e-8)
+    assert edge_counts and max(edge_counts) < 32
 
 
 @pytest.mark.parametrize("crs", ["EPSG:3857", "EPSG:6933"])

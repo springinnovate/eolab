@@ -28,10 +28,12 @@ REPRODUCIBILITY_FILES = {
     "frontend/package.json",
     "frontend/package-lock.json",
     "deployment/application-build-report.py",
+    "deployment/build-pyflwdir.py",
     "deployment/build-beneficiaries.py",
     "deployment/beneficiaries-source.json",
 }
 PROCESSING_FILES = {
+    "deployment/build-pyflwdir.py",
     "pyproject.toml",
     "deployment/build-beneficiaries.py",
     "deployment/beneficiaries-source.json",

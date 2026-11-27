@@ -1,4 +1,5 @@
 /** Browse and play the published observations of one visible map layer. */
+import { hasExclusiveEnd, observationDate, observationLabel, observationMonthLabel } from "../observation-period.js";
 
 /** @typedef {{key:string,visible:boolean,opacity:number,timeline?:import("./raster-viewer.js").TemporalMapTimeline|null}} TimelineLayer */
 /** @typedef {{time?:string,month?:string,edge?:"first"|"last"|"firstOfLastDay"}} Destination */
@@ -107,7 +108,7 @@ export class TemporalScrubber {
 
     /** Report the actual loaded map, independently of date availability and raster publication.
      * @param {{phase:string}} status Current drawing status.
-     * @param {Map<string,{time:string,variable:string,outsideViewport?:boolean}>} displayed Observations drawn or confirmed outside the viewport, by view.
+     * @param {Map<string,{time:string,variable:string,intervalStart?:string,outsideViewport?:boolean}>} displayed Observations drawn or confirmed outside the viewport, by view.
      * @return {void}
      */
     setMapStatus(status, displayed) {
@@ -160,16 +161,26 @@ export class TemporalScrubber {
         setOptions(this.controls.layer, this.layers.map((item, i) => [item.key,
             (this.layers.length > 1 ? (i + 1) + ". " : "") + item.timeline.name + " · " + item.timeline.variableLabel]));
         this.controls.layer.value = layer.key;
+        this.controls.monthCaption.textContent = ["year", "calendar_year"].includes(next.period) ? "Year" : "Month";
         const availableMonthsChanged = next.months !== before?.months;
-        if (availableMonthsChanged) setOptions(this.controls.month, next.months.map(month => [month, month]));
+        if (availableMonthsChanged || next.period !== before?.period) {
+            setOptions(this.controls.month, next.months.map(month => [month, observationMonthLabel(month, next.period)]));
+        }
         if (availableMonthsChanged || next.month !== before?.month) {
             this.previousMonth = next.months.findLast(month => month < next.month);
             this.nextMonth = next.months.find(month => month > next.month);
         }
         this.controls.month.value = next.month;
-        if (next.times !== before?.times) {
-            this.days = next.times.filter((time, index, times) => !index || time.slice(0, 10) !== times[index - 1].slice(0, 10));
+        if (next.times !== before?.times || next.period !== before?.period) {
             this.epochs = next.times.map(Date.parse);
+            const offset = hasExclusiveEnd(next.period) ? 1 : 0;
+            let previousDay;
+            this.days = next.times.filter((_, index) => {
+                const day = Math.floor((this.epochs[index] - offset) / 86400000);
+                const first = day !== previousDay;
+                previousDay = day;
+                return first;
+            });
             this.controls.time.min = this.epochs[0] ?? 0;
             this.controls.time.max = this.epochs.at(-1) ?? 0;
             this.ticks.replaceChildren(...(next.times.length <= 31 ? next.times : this.days).map(time => {
@@ -198,11 +209,13 @@ export class TemporalScrubber {
      * @return {Destination|null} Time, populated month and edge, or end of coverage.
      */
     #neighbor(direction, from = this.layer.timeline.time) {
+        const {times, period} = this.layer.timeline;
         const daily = this.controls.stride.value === "day";
-        const candidates = daily ? this.days : this.layer.timeline.times;
-        const coordinate = daily ? from.slice(0, 10) : from;
-        const time = direction > 0 ? candidates.find(t => (daily ? t.slice(0, 10) : t) > coordinate)
-            : candidates.findLast(t => (daily ? t.slice(0, 10) : t) < coordinate);
+        const candidates = daily ? this.days : times;
+        const coordinate = t => daily ? observationDate(t, period) : t;
+        const origin = coordinate(from);
+        const time = direction > 0 ? candidates.find(t => coordinate(t) > origin)
+            : candidates.findLast(t => coordinate(t) < origin);
         if (time) return {time};
         const adjacent = direction > 0 ? this.nextMonth : this.previousMonth;
         return adjacent ? {month: adjacent, edge: direction > 0 ? "first" : daily ? "firstOfLastDay" : "last"} : null;
@@ -263,7 +276,7 @@ export class TemporalScrubber {
         if (failed && this.playing) this.pause();
         const target = this.dragTime ?? t.time;
         if (t.times.length) c.time.value = Date.parse(target);
-        c.time.setAttribute("aria-valuetext", utcLabel(target));
+        c.time.setAttribute("aria-valuetext", observationLabel(target, t.period, t.intervalStarts?.[target]) ?? utcLabel(target));
         c.month.disabled = !t.months.length;
         const next = this.#neighbor(1), previous = this.#neighbor(-1);
         c.time.disabled = t.times.length < 2 && !next && !previous;
@@ -271,10 +284,10 @@ export class TemporalScrubber {
         c.forward.disabled = !next;
         c.play.disabled = !this.playing && (!next || !ready || Boolean(failed));
         c.play.textContent = this.playing ? "Pause" : "Play";
-        c.display.textContent = onMapTime ? "On map · " + utcLabel(onMapTime) : "";
+        c.display.textContent = onMapTime ? "On map · " + (observationLabel(onMapTime, t.period, drawn.intervalStart) ?? utcLabel(onMapTime)) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
         const message = t.error || this.playbackError || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
-            t.loading && !t.times.length ? "Loading dates for " + t.month :
+            t.loading && !t.times.length ? "Loading dates for " + observationMonthLabel(t.month, t.period) :
                 (!ready || pending !== t.time || (this.action?.month && this.action.month !== t.month)) ? "Loading raster…" : "");
         if (c.status.textContent !== message) c.status.textContent = message;
         if (next?.time) {
@@ -283,7 +296,8 @@ export class TemporalScrubber {
                 seconds % 60 === 0 ? ["minute", 60] : ["second", 1];
             const count = seconds / unit[1];
             c.gap.textContent = "Next · " + count + " " + unit[0] + (count === 1 ? "" : "s") + " later";
-        } else c.gap.textContent = next ? "Next month · " + next.month : "End of available dates";
+        } else c.gap.textContent = next ? (t.period ? "Next · " : "Next month · ") +
+            observationMonthLabel(next.month, t.period) : "End of available dates";
         if (!this.playing || this.action || !ready) return;
         if (!next) { this.pause(); c.play.textContent = "Play"; c.play.disabled = true; return; }
         for (let target = next; target && this.frames.size < PLAYBACK_LOOKAHEAD; target = this.#neighbor(1, target.time)) {

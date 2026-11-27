@@ -54,6 +54,7 @@ function acrossFeatures(rows) {
     onNavigateSelection() {},
   });
   controller.setSample({ state: "ready", observations, message: "" });
+  controller.open();
   for (const [id, value] of [["x", "visit"], ["chart-type", "bar"]]) {
     const control = documentContext.querySelector(`#vector-time-series-${id}`);
     control.value = value;
@@ -90,6 +91,7 @@ for (const values of [[2, 8], [-2, -9], [-4, 6], [0, 8]]) {
         assert.deepEqual(f.zooms.at(-1), f.observations[index].focus);
       }
       const table = f.documentContext.querySelector("#vector-time-series-table-body");
+      f.documentContext.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
       assert.deepEqual(table.children.map(row => row.children.at(-1).children[0].textContent), rows.map(row => String(row.y)));
       f.controller.destroy();
     }

@@ -2,10 +2,11 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, updateClipPolygonGroup } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
-import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
+import { snapTemporalHour } from "../temporal-period.js";
+import { observationPeriod } from "../observation-period.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";
@@ -27,8 +28,10 @@ export class ModelsController {
      * @param {Object} dependencies.api Processing API client.
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
+     * @param {import("./model-setup.js").ModelCatalogRasters} [dependencies.catalogRasters] Lookup and display of published input layers.
      * @param {(options?:{includeDrawnPolygons?:boolean})=>Object & {drawnPolygonLayers?:import("./inputs.js").DrawnPolygonLayer[]}} dependencies.getContext Catalog and map choices, with optional detached drawn polygons.
      * @param {(identity:{collectionId:string,itemId:string},signal?:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read an exact Catalog Item for input metadata and display titles.
+     * @param {import("./model-setup.js").ModelSetupDependencies["showAreaOutline"]} dependencies.showAreaOutline Show a model's chosen polygon through map composition.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
@@ -51,13 +54,13 @@ export class ModelsController {
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      * @param {(model:Object)=>import("./model-setup.js").ModelSetupIntegration|null} [dependencies.getSetupIntegration] Resolve the installed setup adapter.
      */
-    constructor({api, jobs, view, getContext, getCatalogItem, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getCatalogItem, catalogRasters, showAreaOutline, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {}, onViewLabel = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         allowedModelIds = null, recoveryScope = "",
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", ""), getSetupIntegration = getModelSetupIntegration}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
-        Object.assign(this, {getCatalogItem, loadTemporalTimes});
+        Object.assign(this, {getCatalogItem, catalogRasters, showAreaOutline, loadTemporalTimes});
         this.getSetupIntegration = getSetupIntegration;
         this.allowedModelIds = allowedModelIds === null ? null : new Set(allowedModelIds);
         this.recoveryScope = recoveryScope;
@@ -319,7 +322,8 @@ export class ModelsController {
     bindModelSetup(draft) {
         const current = () => !this.destroyed && this.state.draft === draft;
         this.setupSession = draft.integration?.createSession(draft, {
-            api: this.api, getCatalogItem: this.getCatalogItem,
+            api: this.api, getCatalogItem: this.getCatalogItem, showAreaOutline: this.showAreaOutline,
+            ...(this.catalogRasters && {findCatalogRasterTitles: this.catalogRasters.findByTitles}),
             render: () => { if (current()) this.render(); },
             closeInputEditor: () => { if (current()) this.closeVectorFilter(); },
         }) ?? null;
@@ -449,14 +453,14 @@ export class ModelsController {
         } finally { if (isCurrent()) { temporal.loading = false; this.render(); } }
     }
 
-    /** Replace the period only after the user explicitly chooses the displayed month.
-     * Missing dates within that calendar month remain valid; the calculation uses available observations.
+    /** Apply the covered period of the displayed availability group to the model inputs.
      * @return {void}
      */
     useTemporalMonth() {
         const temporal = this.state.draft?.temporal;
-        if (!temporal?.choices || this.state.submitting) return;
-        Object.assign(temporal, {periodMode: "month", ...getTemporalMonthBoundaries(temporal.choices.month)});
+        if (!temporal?.choices?.times.length || this.state.submitting) return;
+        const {times, interval_starts} = temporal.choices;
+        Object.assign(temporal, observationPeriod(times[0], times.at(-1), temporal.item.properties["eolab:time_labels"], interval_starts));
         this.editDraft({});
     }
 
@@ -634,13 +638,13 @@ export class ModelsController {
     }
 
     /** Combine map inputs with this session's published raster results.
-     * Request committed drawn layers only for Ecosystem Condition setup.
+     * Request committed drawn layers for recipes that support them.
      * @param {Object} model Recipe whose input contract controls eligible choices.
      * @return {Object} Existing map context with available completed-run inputs.
      */
     inputContext(model) {
-        const context = this.getContext({includeDrawnPolygons: model.id === "habitat-condition"});
-        const acceptsResults = Object.values(model.inputs).some(input => ["raster", "optional_raster", "habitat_references", "habitat_stack"].includes(input.type));
+        const context = this.getContext({includeDrawnPolygons: modelSupportsDrawnAreas(model)});
+        const acceptsResults = Object.values(model.inputs).some(input => ["raster", "optional_raster", "habitat_references", "habitat_stack", "raster_formula"].includes(input.type));
         const choices = [...(context.rasters ?? []).filter(source => acceptsResults || source.kind !== "runArtifact"),
             ...(acceptsResults ? modelResultSources([...this.runSnapshots.values()]) : [])];
         return {...context, rasters: [...new Map(choices.map(source => [modelSourceKey(source), source])).values()]};
@@ -657,7 +661,7 @@ export class ModelsController {
         const draft = this.state.draft;
         if (!draft || this.destroyed || this.state.submitting || this.state.pending) return;
         const context = this.inputContext(draft.model);
-        draft.drawnPolygonLayers = draft.model.id === "habitat-condition" ? context.drawnPolygonLayers ?? [] : [];
+        draft.drawnPolygonLayers = modelSupportsDrawnAreas(draft.model) ? context.drawnPolygonLayers ?? [] : [];
         if (draft.temporal) {
             draft.temporal.datasets = structuredClone(context.temporalDatasets ?? []);
             if (draft.temporal.datasetKey && !draft.temporal.datasets.some(source => modelSourceKey(source) === draft.temporal.datasetKey)) {
@@ -680,7 +684,7 @@ export class ModelsController {
             const definition = draft.model.inputs[name], type = definition.type;
             const handler = getModelInputHandler(type);
             if (handler) { handler.refresh(input, definition, context); continue; }
-            if (!["summary_area", "clip_area", "mask_source", "habitat_references"].includes(type)) continue;
+            if (!isModelSpatialInput(type)) continue;
             const previous = input.vectors.find(source => source.key === input.vectorKey);
             input.vectors = structuredClone(context.vectors ?? []);
             if (type === "clip_area") {
@@ -797,8 +801,7 @@ export class ModelsController {
         const visibleRunIds = new Set();
         if (active && page === "run" && selectedRun) visibleRunIds.add(selectedRun);
         if (active && page === "setup" && draft) {
-            for (const {state, field} of getModelRasterFields(draft)) {
-                const id = state[field]?.jobId;
+            for (const {jobId: id} of getModelRasterSources(draft)) {
                 if (this.runSnapshots.has(id)) visibleRunIds.add(id);
             }
         }
@@ -1105,7 +1108,7 @@ export class ModelsController {
                 definition.type === "habitat_references" && saved.inputs[name].kind === "raster") {
                 input.area = null; input.areaMode = "raster";
                 input.maskRaster = structuredClone(saved.inputs[name].source);
-            } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(definition.type)) {
+            } else if (isModelSpatialInput(definition.type)) {
                 const value = saved.inputs[name];
                 input.area = definition.type === "habitat_references" && value.kind === "vector"
                     ? {kind: "catalogSelection", selection: structuredClone(value.selection)} : structuredClone(value);
@@ -1144,7 +1147,7 @@ export class ModelsController {
             library: "Choose a tool", setup: this.state.draft?.model.title ?? "Setup",
             runs: "Runs", run: job?.label ?? "Data tool run",
         }[this.state.page]);
-        this.view.render({...this.state, noModelsSelected: this.allowedModelIds?.size === 0,
+        this.view.render({...this.state, catalogRasters: this.catalogRasters, noModelsSelected: this.allowedModelIds?.size === 0,
             duplicateRestricted: !this.#allowsModel(this.state.invocation?.model.id ?? job?.model.id),
             deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
