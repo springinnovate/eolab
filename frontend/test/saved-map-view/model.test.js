@@ -418,8 +418,11 @@ test("temporal views preserve explicit observations and independent appearance w
     style: candidate.layers[0].style,
   };
   candidate.layers = [layer, { ...structuredClone(layer), customName: "Comparison", opacity: 0.3 }];
+  const awaitingDates = structuredClone(layer);
+  delete awaitingDates.temporalSource.time;
+  candidate.layers.push(awaitingDates);
   const parsed = parseSavedMapView(serializeSavedMapView(createSavedMapView(candidate)));
-  for (const expected of candidate.layers) expected.temporalSource.time = "2020-01-15T12:00:00.000Z";
+  for (const expected of candidate.layers.slice(0, 2)) expected.temporalSource.time = "2020-01-15T12:00:00.000Z";
   assert.deepEqual(parsed.layers, candidate.layers);
   for (const time of [null, "bad date", "2020-01-15T12:00:00"]) {
     const invalid = structuredClone(candidate);

@@ -6209,6 +6209,7 @@ test("timeline selections reuse the row, consume only admitted prepared times an
     const jan = ["2020-01-02T00:00:00Z", "2020-01-24T00:00:00Z", "2020-01-24T02:00:00Z"];
     const may = ["2020-05-06T03:00:00Z"], publications = [];
     const firstRange = createDeferred();
+    let failLookup = false;
     const f = temporalFixture({
         loadStatistics: async (item, area) => {
             await firstRange.promise;
@@ -6216,9 +6217,10 @@ test("timeline selections reuse the row, consume only admitted prepared times an
                 {minimum: 230, midpoint: 277, maximum: 310};
             return {...createLayerStatistics(item, area), suggestedRange};
         },
-        loadTimes: async (_item, _variable, month = "2020-01") => ({
-            month, months: ["2020-01", "2020-05"], times: [...(month === "2020-01" ? jan : may)],
-        }),
+        loadTimes: async (_item, _variable, month = "2020-01") => {
+            if (failLookup) throw new Error("Dates temporarily unavailable");
+            return {month, months: ["2020-01", "2020-05"], times: [...(month === "2020-01" ? jan : may)]};
+        },
         publishRaster: async raster => {
             publications.push(raster.source.time);
             return {layerName: raster.source.time, bbox: raster.bbox};
@@ -6250,8 +6252,142 @@ test("timeline selections reuse the row, consume only admitted prepared times an
         assert.equal(f.temporalViews[0].state.time, jan[1]);
         await f.viewer.selectTemporalTime(key, jan[0]);
         assert.equal(f.temporalViews[0].state.time, jan[0]);
+        await f.viewer.selectTemporalMonth(key, "2020-05", "first");
+        failLookup = true;
+        await f.viewer.selectTemporalMonth(key, "2020-01", "firstOfLastDay");
+        assert.match(f.temporalViews[0].state.error, /Dates temporarily unavailable/);
+        failLookup = false;
+        await f.temporalViews[0].handlers.onRetry();
+        assert.equal(f.temporalViews[0].state.time, jan[1]);
+        assert.equal(publications.at(-1), jan[1]);
         assert.equal(f.mapLayers.retainedRecords[0], row);
     } finally { f.destroy(); }
+});
+
+for (const [action, choice, expectedVariable, expectedTime] of [
+    ["onMonthChange", "2020-02", "temperature", "2020-02-27T03:00:00Z"],
+    ["onVariableChange", "rain", "rain", "2020-01-15T00:00:00Z"],
+]) {
+    test(`Refresh dates retries the failed choice of ${choice} on a fixed dataset`, async context => {
+        const marchTime = "2020-03-02T16:25:00Z";
+        const observations = {
+            temperature: {"2020-02": ["2020-02-27T03:00:00Z"], "2020-03": [marchTime]},
+            rain: {"2020-01": ["2020-01-15T00:00:00Z"]},
+        };
+        const lookups = [];
+        let failLookup = false;
+        const fixture = temporalFixture({
+            loadTimes: async (_item, variable, month) => {
+                lookups.push({variable, month});
+                if (failLookup) throw new Error("Dates temporarily unavailable");
+                const months = Object.keys(observations[variable]);
+                const selectedMonth = month ?? months.at(-1);
+                return {months, month: selectedMonth, times: observations[variable][selectedMonth] ?? []};
+            },
+        });
+        try {
+            const record = await fixture.viewer.showTemporal(temporalItem(), {variable: "temperature", time: marchTime});
+            const view = fixture.temporalViews[0];
+            const originalSource = fixture.viewer.exportTemporal(record).temporalSource;
+            failLookup = true;
+            await view.handlers[action](choice);
+            assert.match(view.state.error, /Dates temporarily unavailable/);
+            assert.equal(record.publication, null);
+            assert.deepEqual(fixture.viewer.exportTemporal(record).temporalSource, originalSource);
+            assert.equal(view.state.variable, expectedVariable);
+            assert.equal(view.state.time, null);
+            assert.equal(fixture.mapLayers.snapshots()[0].timeline.month, action === "onMonthChange" ? choice : "");
+            failLookup = false;
+            const renders = context.mock.method(view, "render");
+            await view.handlers.onRetry();
+            assert.deepEqual(lookups[2], lookups[1]);
+            assert.equal(view.state.error, null);
+            assert.equal(view.state.time, expectedTime);
+            assert.equal(record.publication.layerName, `eolab:${expectedVariable}-${expectedTime}`);
+            const completed = renders.mock.calls.filter(call => !call.arguments[0].loading);
+            assert.equal(completed.length, 1, "the row finishes the date lookup and publication together");
+            await view.handlers.onRetry();
+            assert.deepEqual(lookups.at(-1), {variable: expectedVariable, month: expectedTime.slice(0, 7)});
+        } finally { fixture.destroy(); }
+    });
+}
+
+test("saving a new layer before its first date lookup succeeds reopens the requested variable's latest month", async () => {
+    const january = "2020-01-05T06:00:00.000Z", april = "2020-04-03T19:10:00.000Z";
+    const firstLookup = createDeferred();
+    const lookups = [];
+    const fixture = temporalFixture({loadTimes: async (_item, variable, month) => {
+        lookups.push({variable, month});
+        if (lookups.length === 1) return firstLookup.promise;
+        const selectedMonth = month ?? "2020-04";
+        return {months: ["2020-01", "2020-04"], month: selectedMonth, times: [selectedMonth === "2020-01" ? january : april]};
+    }});
+    try {
+        const item = temporalItem();
+        item.properties["cube:dimensions"].time.extent = [january, april];
+        const adding = fixture.viewer.showTemporal(item);
+        const [row] = fixture.mapLayers.retainedRecords;
+        const saved = parseSavedMapView(serializeSavedMapView(createSavedMapView({
+            viewer: {version: "1", origin: "https://example.test"}, createdAt: april,
+            viewport: {center: {latitude: 0, longitude: 0}, zoom: 3}, layers: [fixture.viewer.exportTemporal(row)],
+        }))).layers[0];
+        firstLookup.reject(new Error("Dates temporarily unavailable"));
+        await adding;
+        assert.deepEqual(saved.temporalSource, {collectionId: item.collection, itemId: item.id, variable: "temperature"});
+        assert.deepEqual(fixture.viewer.exportTemporal(row).temporalSource, saved.temporalSource);
+        assert.equal(row.publication, null);
+        assert.equal(row.state.item.capabilities.pixels, false);
+        const restoredKey = await fixture.viewer.restoreTemporal(saved, item, () => true);
+        const restored = fixture.mapLayers.getRecord(restoredKey);
+        assert.deepEqual(lookups[1], {variable: "temperature", month: undefined});
+        assert.equal(restored.publication.layerName, `eolab:temperature-${april}`);
+        assert.deepEqual(fixture.viewer.exportTemporal(restored).temporalSource, {...saved.temporalSource, time: april});
+    } finally { fixture.destroy(); }
+});
+
+test("saving, copying and undoing removal during a failed variable switch restore the previous observation", async () => {
+    const march = "2020-03-22T12:00:00.000Z", april = "2020-04-03T19:10:00.000Z";
+    const rainLookup = createDeferred();
+    let datesOffline = true;
+    const fixture = temporalFixture({
+        loadTimes: async (_item, variable, month) => {
+            const months = variable === "rain" ? ["2020-03", "2020-04"] : ["2020-03"];
+            if (variable === "rain" && datesOffline) await rainLookup.promise;
+            const selectedMonth = month ?? months.at(-1);
+            return {months, month: selectedMonth, times: [selectedMonth === "2020-03" ? march : april]};
+        },
+    });
+    try {
+        const item = temporalItem();
+        item.properties["cube:dimensions"].time.extent = [march, april];
+        const row = await fixture.viewer.showTemporal(item, {variable: "temperature", time: march});
+        const original = fixture.viewer.exportTemporal(row);
+        const view = fixture.temporalViews[0];
+        const switching = view.handlers.onVariableChange("rain");
+        const duringLookup = fixture.viewer.exportTemporal(row);
+        rainLookup.reject(new Error("Dates temporarily unavailable"));
+        await switching;
+        assert.match(view.state.error, /Dates temporarily unavailable/);
+        assert.deepEqual(duringLookup.temporalSource, original.temporalSource);
+        const saved = fixture.viewer.exportTemporal(row);
+        assert.deepEqual(saved.temporalSource, original.temporalSource);
+        const restored = await fixture.viewer.restoreTemporal(saved, item, () => true);
+        const copy = await fixture.mapLayers.addAnotherView(row.entry.key);
+        for (const key of [restored, copy]) {
+            assert.equal(fixture.mapLayers.getRecord(key).publication.layerName, `eolab:temperature-${march}`);
+        }
+        assert.equal(fixture.mapLayers.removeWithUndo(row.entry.key), true);
+        await fixture.mapLayers.undoLayerRemoval();
+        assert.equal(fixture.mapLayers.getRecord(row.entry.key).publication.layerName, `eolab:temperature-${march}`);
+        const restoredView = fixture.temporalViews[1];
+        await restoredView.handlers.onVariableChange("rain");
+        assert.match(restoredView.state.error, /Dates temporarily unavailable/);
+        datesOffline = false;
+        await fixture.viewer.refreshTemporalLayers();
+        assert.equal(fixture.mapLayers.getRecord(restored).publication.layerName, `eolab:rain-${april}`);
+        assert.equal(restoredView.state.error, null);
+        assert.equal(fixture.mapLayers.getRecord(copy).publication.layerName, `eolab:temperature-${march}`);
+    } finally { fixture.destroy(); }
 });
 
 test("playback changes the selected month and analysis source only when its prepared frame is shown", async () => {
@@ -6305,30 +6441,38 @@ test("playback changes the selected month and analysis source only when its prep
 });
 
 test("refresh keeps a removed observation explicit and retry recovers publication without losing the row", async () => {
-    let times = ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"];
+    let times = ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z", "2020-01-01T04:00:00Z"];
     let failPublication = false;
     const fixture = temporalFixture({
         loadTimes: async () => ({months: ["2020-01"], month: "2020-01", times}),
         publishRaster: async raster => {
             if (failPublication) throw new Error("GeoServer unavailable");
-            return {layerName: "eolab:frame", bbox: raster.bbox};
+            return {layerName: raster.source.time, bbox: raster.bbox};
         },
     });
     try {
         const record = await fixture.viewer.showTemporal(temporalItem(), {variable: "temperature", time: times[1]});
-        times = times.slice(0, 1);
+        const saved = fixture.viewer.exportTemporal(record);
+        times = [times[0], times[2]];
         await fixture.viewer.refreshTemporalLayers();
         assert.equal(record.state.item.source.time, "2020-01-01T02:00:00Z");
         assert.equal(record.publication, null);
         assert.equal(record.state.item.capabilities.statistics, false);
         assert.match(fixture.temporalViews[0].state.error, /no longer available/);
+        const restoredKey = await fixture.viewer.restoreTemporal(saved, temporalItem(), () => true);
+        await fixture.temporalViews[1].handlers.onRetry();
+        const restored = fixture.mapLayers.getRecord(restoredKey);
+        assert.equal(restored.state.item.source.time, saved.temporalSource.time);
+        assert.match(fixture.temporalViews[1].state.error, /no longer available/);
+        assert.equal(restored.publication, null);
         failPublication = true;
-        await fixture.temporalViews[0].handlers.onTimeChange(times[0]);
+        await fixture.temporalViews[0].handlers.onTimeChange(times[1]);
         assert.equal(record.state.item.capabilities.statistics, true);
         assert.match(fixture.temporalViews[0].state.error, /GeoServer unavailable/);
+        assert.equal(fixture.viewer.exportTemporal(record).temporalSource.time, times[1]);
         failPublication = false;
         await fixture.temporalViews[0].handlers.onRetry();
-        assert.equal(record.publication.layerName, "eolab:frame");
+        assert.equal(record.publication.layerName, times[1]);
         assert.equal(fixture.temporalViews[0].state.error, null);
     } finally {fixture.destroy();}
 });

@@ -97,6 +97,8 @@ Use **Data tools → Group polygons and calculate field statistics** to group po
 
 Find a dataset with `type:temporal`. In **Map contents**, choose a variable, month, and observation time in UTC. Duplicate the layer to compare two dates or variables with different styles.
 
+If you save a new layer before its dates load, the map reopens the chosen variable at the first observation in its latest available month. Once a date has loaded, saving the map keeps that exact observation.
+
 Use the timeline at the bottom of the map to drag through a month or press **Play**. During playback, the map loads up to five upcoming dates in the background. Choose **First observation each day** to see changes over a longer period. The arrow buttons step across available months and skip missing observations. When several time layers are visible, use **Layer** to choose which one moves. The current raster and its **On map** time stay visible until the next observation is ready.
 
 ![Hourly rainfall over the Atlantic and Africa, with July 1, 2026 at 06:00 UTC selected.](docs/images/eolab-temporal-map.jpg)

@@ -241,10 +241,13 @@ def test_temporal_views_preserve_explicit_selections_and_independent_appearance(
     }
     candidate["view"]["layers"] = [layer, deepcopy(layer)]
     candidate["view"]["layers"][1].update(customName="Comparison", opacity=0.3)
+    awaiting_dates = deepcopy(layer)
+    del awaiting_dates["temporalSource"]["time"]
+    candidate["view"]["layers"].append(awaiting_dates)
     document = CreateSavedMap.model_validate(candidate).model_dump(
         mode="json", exclude_unset=True
     )
-    for expected in candidate["view"]["layers"]:
+    for expected in candidate["view"]["layers"][:2]:
         expected["temporalSource"]["time"] = "2020-01-15T12:00:00.000Z"
     assert document == candidate
     assert (

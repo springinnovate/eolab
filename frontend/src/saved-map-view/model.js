@@ -308,6 +308,7 @@ function validateAnnotationReference(candidate) {
  * isCustom preserves the card's presentation without changing its source identity.
  * When absent, restoration uses the source owner's ordinary presentation.
  * isDuplicate records a private vector copy that can open the geometry editor.
+ * A temporal source saved before its first observation omits the time and reopens its variable's latest month.
  *
  * @param {unknown} candidate Untrusted layer value.
  * @return {Readonly<Object>} Frozen normalized layer entry.
@@ -339,16 +340,17 @@ function validateLayer(candidate) {
     if (isTemporal) {
         const source = candidate.temporalSource;
         requirePlainObject(source, "Temporal source");
-        requireExactKeys(source, ["collectionId", "itemId", "variable", "time"], "Temporal source");
-        if (typeof source.time !== "string" || !/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(source.time) ||
-            !Number.isFinite(Date.parse(source.time))) {
+        const hasTime = Object.hasOwn(source, "time");
+        requireExactKeys(source, ["collectionId", "itemId", "variable", ...(hasTime ? ["time"] : [])], "Temporal source");
+        if (hasTime && (typeof source.time !== "string" || !/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(source.time) ||
+            !Number.isFinite(Date.parse(source.time)))) {
             throw new SavedMapViewValidationError("Observation time must be a valid timestamp with a timezone.");
         }
         identity = { temporalSource: Object.freeze({
             collectionId: requireBoundedString(source.collectionId, MAX_IDENTITY_LENGTH, "Catalog Collection id"),
             itemId: requireBoundedString(source.itemId, MAX_IDENTITY_LENGTH, "Catalog Item id"),
             variable: requireBoundedString(source.variable, MAX_IDENTITY_LENGTH, "Variable"),
-            time: new Date(source.time).toISOString(),
+            ...(hasTime ? {time: new Date(source.time).toISOString()} : {}),
         }) };
     } else if (isArtifact) {
         const source = candidate.runArtifact;

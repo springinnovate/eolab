@@ -286,8 +286,9 @@ export class TemporalScrubber {
         c.play.textContent = this.playing ? "Pause" : "Play";
         c.display.textContent = onMapTime ? "On map · " + (observationLabel(onMapTime, t.period, drawn.intervalStart) ?? utcLabel(onMapTime)) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
+        const dateStatus = t.month ? "Loading dates for " + observationMonthLabel(t.month, t.period) : "Loading available dates…";
         const message = t.error || this.playbackError || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
-            t.loading && !t.times.length ? "Loading dates for " + observationMonthLabel(t.month, t.period) :
+            t.loading && !t.times.length ? dateStatus :
                 (!ready || pending !== t.time || (this.action?.month && this.action.month !== t.month)) ? "Loading raster…" : "");
         if (c.status.textContent !== message) c.status.textContent = message;
         if (next?.time) {
