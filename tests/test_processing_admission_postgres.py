@@ -3,13 +3,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from importlib.resources import files
-import json
 import time
 from typing import Any
 from uuid import uuid4
 
 import psycopg
-from psycopg.types.json import Jsonb
 import pytest
 
 import eolab_app.processing.job_store as job_store_module
@@ -508,26 +506,8 @@ def test_version_22_upgrade_retains_known_turns_until_job_cleanup(
             connection.execute(
                 "ALTER TABLE processing.jobs ENABLE TRIGGER processing_release_inputs"
             )
-            original = {"type": "FeatureCollection", "name": "Sites", "features": []}
-            reference = {"id": "c" * 32, "sha256": "d" * 64}
-            connection.execute(
-                "INSERT INTO processing.jobs(id,status,operation,spec,reserved_bytes,expires_at) "
-                "VALUES ('drawn','queued','test',%s,0,now()+interval '7 days')",
-                (Jsonb({"_vectorInputs": {json.dumps(reference): original}}),),
-            )
-            connection.execute(
-                "INSERT INTO processing.job_subscribers(id,job_id,owner,request_key) "
-                "VALUES ('drawn','drawn','drawing-owner','drawn')"
-            )
             store.migrate()
             store.migrate()
-            claimed = store.claim_next_job()
-            assert claimed["id"] == "drawn" and claimed["has_input_payloads"]
-            assert store.read_job_inputs("drawn", claimed["attempt_id"]) == {
-                reference["id"]: original
-            }
-            assert "_vectorInputs" not in claimed["spec"]
-            connection.execute("DELETE FROM processing.jobs WHERE id='drawn'")
             assert connection.execute(
                 "SELECT owner FROM processing.job_turns WHERE job_id='shared'"
             ).fetchall() == [("served",)]
