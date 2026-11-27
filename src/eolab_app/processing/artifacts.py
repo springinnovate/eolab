@@ -38,6 +38,8 @@ def write_progress(
 
     Callers must keep the complete serialized snapshot within the progress
     reader's 1024-byte limit, including any operation-owned details.
+    If Windows denies replacement while the supervisor reads the previous
+    snapshot, retry for up to 150 ms of total sleep before raising the error.
 
     Args:
         directory: Confined private attempt directory.
@@ -59,7 +61,17 @@ def write_progress(
         snapshot["details"] = dict(details)
     temporary = directory / "progress.tmp"
     temporary.write_text(json.dumps(snapshot))
-    temporary.replace(directory / "progress.json")
+    destination = directory / "progress.json"
+    for delay in (0.01, 0.02, 0.04, 0.08):
+        try:
+            temporary.replace(destination)
+            return
+        except PermissionError as error:
+            # Windows reports access denied (5) or sharing violation (32).
+            if getattr(error, "winerror", None) not in (5, 32):
+                raise
+            time.sleep(delay)
+    temporary.replace(destination)
 
 
 class LocalJobArtifacts:
