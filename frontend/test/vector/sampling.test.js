@@ -187,6 +187,7 @@ test("run-result polygon pickers and Models retain the native layer, formulas an
     const target = getPolygonTargets()[0], signal = new AbortController().signal;
     const pickerArea = await createPolygonSamplingArea(target.item, target.filter, signal, target);
     const modelSource = modelOptions.getContext().vectors[0];
+    assert.deepEqual(modelSource.originLabels, {group: "Completed runs", label: "Completed run"});
     const modelArea = await modelOptions.prepareVector(modelSource, signal);
     assert.deepEqual(pickerArea.selection, selection);
     assert.deepEqual(modelArea.selection, selection);

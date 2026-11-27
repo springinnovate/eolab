@@ -3,19 +3,29 @@ import { ANNOTATION_FIELDS, filterAnnotationPolygons } from "./annotations/summa
 import { exportAnnotationGeoJSON } from "./annotations/geojson.js";
 import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 
+/** User-facing labels for map layers backed by an original file.
+ * @type {Record<string, {group:string,label:string}>}
+ */
+const fileOriginLabels = {
+    catalog: {group: "Catalog layers", label: "Catalog"},
+    upload: {group: "Your uploads", label: "Uploaded by you"},
+    runArtifact: {group: "Completed runs", label: "Completed run"},
+};
+
 /** Describe original-file and editor layers with the same geometry, fields and selection choices.
  * @param {Object[]} files Map vector descriptors supplied by their source owners.
  * @param {Object[]} drawings Committed editor targets, including their current filter.
  * @return {import("./models/vector-input.js").VectorInputSource[]} Source choices in map order within each list.
  */
 export function modelVectorSources(files, drawings) {
-    const sources = files.filter(target => target.selection).map(({item, ...target}) => ({...item, ...target,
+    const sources = files.filter(target => target.selection).map(({item, sourceOrigin, ...target}) => ({...item, ...target,
+        originLabels: fileOriginLabels[sourceOrigin],
         selection: {...target.selection, filter: target.filter},
         allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}}));
     for (const target of drawings) {
         const {matchingIds, ...filter} = target.filter;
         const selection = {kind: "localVector", key: target.key, filter};
-        sources.push({key: target.key, label: target.label, sourceOrigin: "drawing", geometryKind: "polygon",
+        sources.push({key: target.key, label: target.label, originLabels: {group: "Drawn polygons", label: "Drawing"}, geometryKind: "polygon",
             fields: ANNOTATION_FIELDS, scalarFields: ANNOTATION_FIELDS, numericFields: [], filter,
             selection, allSelection: {...selection, filter: EMPTY_VECTOR_FILTER}, editFilterInMap: true,
             featureCounts: {matched: filterAnnotationPolygons(target.polygons, target.filter).length, total: target.polygons.length}});

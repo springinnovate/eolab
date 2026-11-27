@@ -381,7 +381,7 @@ export class ModelsView {
             areaChoices.push({value: "captured", label: value.areaOrigin === "run" ? originalLabel : "Selected features"});
         }
         areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: `${source.label} · Polygons`,
-            group: ({"drawing": "Drawn polygons", "upload": "Your uploads", "runArtifact": "Completed runs"})[source.sourceOrigin] ?? "Catalog layers"})));
+            group: source.originLabels?.group})));
         if (input.type === "clip_area") {
             areaChoices.push(...value.polygonGroups.map(group => ({value: `polygonGroup:${group.id}`,
                 label: group.name, group: "Polygon groups"})));
@@ -401,8 +401,7 @@ export class ModelsView {
         const rasterActive = usesRasterOrVector && value.areaMode === "raster";
         controls.maskGroup.hidden = !rasterActive;
         const selectedVector = value.areaMode === "vector" ? value.vectors.find(source => source.key === value.vectorKey) : null;
-        controls.sourceOrigin.textContent = selectedVector ? ({"drawing": "Drawn polygons", "upload": "Uploaded by you · Polygons",
-            "runArtifact": "Completed run · Polygons"})[selectedVector.sourceOrigin] ?? "Catalog · Polygons"
+        controls.sourceOrigin.textContent = selectedVector ? [selectedVector.originLabels?.label, "Polygons"].filter(Boolean).join(" · ")
             : rasterActive && value.maskRaster ? value.maskRaster.kind === "uploadedRaster" ? "Uploaded by you · Raster mask"
                 : value.maskRaster.kind === "runArtifact" ? "Completed run · Raster" : "Catalog · Raster"
             : "";

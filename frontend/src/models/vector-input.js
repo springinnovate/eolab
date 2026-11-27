@@ -33,6 +33,7 @@
  * @typedef {Object} VectorInputSource
  * @property {string} key Map-layer identity, independent of its visibility.
  * @property {string} label User-facing layer name.
+ * @property {{group:string,label:string}} [originLabels] Source owner’s display text for grouped pickers.
  * @property {"point"|"line"|"polygon"} geometryKind Native geometry family.
  * @property {Object} filter Accepted field predicate.
  * @property {Array<{name:string,type:string}>} scalarFields Attributes supporting scalar comparisons.

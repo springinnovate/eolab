@@ -103,8 +103,8 @@ async function fixture(contextOverrides = {}, showAreaOutline = async () => true
     const context = {
         rasters: ["Environment", "Habitat class", "Productivity", "Reference mask", "Assessment mask"].map((label, index) =>
             ({collectionId: "eolab-mounted-geotiffs", itemId: `geotiff-${index.toString(16).padStart(24, "0")}`, label, visible: false})),
-        vectors: [{...selection, key: "view:basins", label: "Catalog basins", sourceOrigin: "catalog", fields: [{name: "BASIN", type: "str"}]},
-            {key: "view:sites", sourceOrigin: "upload", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "reference_sites", label: "Uploaded sites",
+        vectors: [{...selection, key: "view:basins", label: "Catalog basins", originLabels: {group: "Catalog layers", label: "Catalog"}, fields: [{name: "BASIN", type: "str"}]},
+            {key: "view:sites", originLabels: {group: "Your uploads", label: "Uploaded by you"}, uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "reference_sites", label: "Uploaded sites",
                 filter: structuredClone(selection.filter), fields: [{name: "BASIN", type: "str"}]}],
         area: {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}},
         ...contextOverrides,
