@@ -126,6 +126,7 @@ import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
 import { modelVectorSources, bindModelVectorInputs } from "./model-vector-sources.js";
+import { eligibleVectorSources } from "./models/vector-input.js";
 import { ModelsController } from "./models/controller.js";
 import { describeRasterSource } from "./raster-source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
@@ -1002,7 +1003,7 @@ async function initializeCatalog(
             vectorFieldCalculator?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
-            polygonGroups?.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
+            polygonGroups?.updateLayers(getPolygonGroupLayers());
             models?.refreshMapLayers();
             if (!layers.some((layer) =>
                 layer.capabilities?.statistics && layer.visible
@@ -1645,6 +1646,15 @@ async function initializeCatalog(
         });
     /** Return only polygons for area-based map analysis. @return {Object[]} Compatible map sources. */
     const getPolygonTargets = () => getVectorTargets().filter(source => source.geometryKind === "polygon");
+    /** List current vector inputs with their fields, filters and committed feature counts.
+     * @return {import("./models/vector-input.js").VectorInputSource[]} Available model choices.
+     */
+    const getModelVectorSources = () => modelVectorSources(getVectorTargets(), annotations?.describeVectorLayers() ?? []);
+    /** List the layers a model can use as members of a polygon boundary group.
+     * @return {import("./map-layers/polygon-groups.js").PolygonGroupLayer[]} Eligible keys and display names.
+     */
+    const getPolygonGroupLayers = () => eligibleVectorSources({geometry: "polygon"}, getModelVectorSources())
+        .map(({key, label}) => ({key, label}));
     /** List retained source layers and committed drawings for the polygon pickers.
      * @return {Object[]} Independent vector descriptors and drawing snapshots.
      */
@@ -1746,7 +1756,7 @@ async function initializeCatalog(
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: modelVectorSources(getVectorTargets(), annotations?.describeVectorLayers() ?? []),
+                vectors: getModelVectorSources(),
                 polygonGroups: polygonGroups?.snapshot() ?? [],
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
@@ -1801,7 +1811,7 @@ async function initializeCatalog(
             storage: new SavedMapViewLocalStorage(undefined, "eolab.polygon-groups.v1"),
             onChange: () => models.refreshMapLayers(),
         });
-        polygonGroups.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
+        polygonGroups.updateLayers(getPolygonGroupLayers());
     }
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
     models.start();

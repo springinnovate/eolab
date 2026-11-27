@@ -1598,15 +1598,20 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
 
 
 @pytest.mark.parametrize(
-    ("model_id", "group"),
-    [("raster-summary", False), ("raster-clip", False), ("raster-clip", True)],
+    ("model_id", "second_source"),
+    [
+        ("raster-summary", None),
+        ("raster-clip", None),
+        ("raster-clip", "catalog"),
+        ("raster-clip", "drawing"),
+    ],
 )
 def test_model_vector_filter_preserves_catalog_selection(
     model_boundary: Any,
     boundary: Any,
     tmp_path: Path,
     model_id: str,
-    group: bool,
+    second_source: str | None,
 ) -> None:
     """Clip or summarize selected original polygons and record the exact sources.
 
@@ -1615,12 +1620,16 @@ def test_model_vector_filter_preserves_catalog_selection(
         model_boundary: Model API and worker with the neutral selection reader.
         boundary: Existing vector-selection/catalog API fixture.
         tmp_path: Mounted fixture root.
-        group: Use separate mounted layers for the Raster clip's combined area.
+        second_source: Optional second group member from a catalog layer or a drawing.
     """
     client, worker, _ = model_boundary
     source_client = boundary[0]
     path = tmp_path / "selection.gpkg"
-    west = rectangle(0.1, 9.1, 0.55, 9.55) if group else rectangle(0.1, 9.1, 0.9, 9.9)
+    west = (
+        rectangle(0.1, 9.1, 0.55, 9.55)
+        if second_source
+        else rectangle(0.1, 9.1, 0.9, 9.9)
+    )
     write_geopackage_layer(
         path,
         "mask",
@@ -1636,19 +1645,20 @@ def test_model_vector_filter_preserves_catalog_selection(
         ],
     }
     area = {"kind": "catalogSelection", "selection": selection}
-    if group:
+    if second_source:
         east = rectangle(0.35, 9.35, 0.9, 9.9)
-        path = tmp_path / "east.gpkg"
-        write_geopackage_layer(path, "mask", crs="EPSG:4326", geometry=east)
+        if second_source == "drawing":
+            east_selection = capture_drawing(client, east)
+        else:
+            path = tmp_path / "east.gpkg"
+            write_geopackage_layer(path, "mask", crs="EPSG:4326", geometry=east)
+            east_selection = register_selection(source_client, path)
         area = {
             "kind": "polygonGroup",
             "name": "Selected basins",
             "members": [
                 {"label": "West basin", "selection": selection},
-                {
-                    "label": "East basin",
-                    "selection": register_selection(source_client, path),
-                },
+                {"label": "East basin", "selection": east_selection},
             ],
         }
     body = model_request(
@@ -1667,7 +1677,7 @@ def test_model_vector_filter_preserves_catalog_selection(
         client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
     )
     assert capture["invocation"]["inputs"]["area"] == area
-    if group:
+    if second_source:
         with rasterio.open(boundary[2]) as source:
             expected = geometry_mask(
                 [west, east],

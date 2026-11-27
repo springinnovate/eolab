@@ -24,7 +24,7 @@
  * @typedef {Object} VectorInputDefinition
  * @property {"vector"} type Input family.
  * @property {string} label User-facing layer selector label.
- * @property {"polygon"} [geometry] Optional polygon restriction; composed calculation inputs currently contain polygon sources only.
+ * @property {"polygon"} [geometry] Restrict the input to polygon layers when specified.
  * @property {Object<string,VectorFieldDefinition>} [fields] Named field selectors; absent or empty for a source-only input.
  * @property {VectorInputRowsDefinition} [rows] Optional repeated controls, with at least one row and no maximum count.
  */
@@ -91,7 +91,7 @@ function createClearedVectorFields(state, definition) {
 }
 
 /** List the layers with an eligible attribute for every fixed and repeatable field.
- * @param {VectorInputDefinition} definition Requirements declared by this input.
+ * @param {Pick<VectorInputDefinition,"geometry"|"fields"|"rows">} definition Geometry and attribute requirements declared by this input.
  * @param {VectorInputSource[]} sources Composed sources with their field metadata.
  * @return {VectorInputSource[]} Compatible layers in the original picker order.
  */
