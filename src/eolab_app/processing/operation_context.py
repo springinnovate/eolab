@@ -2,13 +2,51 @@
 
 from dataclasses import dataclass, field
 from collections.abc import Mapping
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol
 
+from eolab_app.catalog.vector_contract import CatalogVectorRequest
+from eolab_app.catalog_selection import ModelVectorSelection, ResolvedCatalogSelection
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.ports import JobStore, ModelVectorReader
+from eolab_app.processing.ports import JobStore
 from eolab_app.raster.models import AuthorizedRaster
+
+
+class ModelVectorReader(Protocol):
+    """Provide native vector sources to model operations under the current job's authorization."""
+
+    async def resolve_for_sampling(
+        self, selection: ModelVectorSelection
+    ) -> ResolvedCatalogSelection:
+        """Open the original features and bind their captured predicate for this attempt.
+
+        Args:
+            selection: Path-free model vector input accepted when the job was submitted.
+
+        Returns:
+            Authorized native file, layer and feature predicate.
+
+        Raises:
+            SelectionUnavailableError: If the source cannot be read or the predicate is invalid.
+        """
+        ...
+
+    async def resolve_source(
+        self, source: CatalogVectorRequest
+    ) -> ResolvedCatalogSelection:
+        """Read the complete catalog dataset configured by a recipe.
+
+        Args:
+            source: Collection and item declared in the installed configuration.
+
+        Returns:
+            Authorized original vector with all its features.
+
+        Raises:
+            SelectionUnavailableError: If the configured dataset is unavailable.
+        """
+        ...
 
 
 @dataclass(frozen=True)
