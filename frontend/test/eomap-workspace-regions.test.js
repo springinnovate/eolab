@@ -596,11 +596,12 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     const chooser = requireElementRange("map-tool-chooser").source;
     assert.match(chooser, /^<button\b[^>]*\btype="button"/);
     assert.match(chooser, /aria-controls="workspace-tool-actions"/);
-    for (const id of ["collapse-panel", "toggle-map-inspection-dock"]) {
-        assert.match(requireElementRange(id).source, /class="map-panel-toggle map-panel-collapse"/);
-        if (id === "collapse-panel") assert.match(requireElementRange(id).source, /<span aria-hidden="true">×<\/span>/);
-        else assert.doesNotMatch(requireElementRange(id).source, /×/);
-    }
+    const closeIcons = ["collapse-panel", "toggle-map-inspection-dock"].map(id => {
+        const icon = requireElementRange(id).source.match(/<svg\b[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/svg>/);
+        assert.ok(icon, `${id} has a decorative close icon`);
+        return icon[0].trim();
+    });
+    assert.equal(closeIcons[0], closeIcons[1], "Both panels display the same close icon");
     for (const [id, action] of [["toggle-map-inspection-dock", "Collapse"], ["open-map-tools", "Expand"]]) {
         const button = requireElementRange(id).source;
         assert.match(button, /^<button\b[^>]*\btype="button"/);

@@ -571,8 +571,15 @@
       check(document.activeElement === chooser, "When the last focused tool disappears, focus must return to the chooser");
       const leftButton = collapseLeft.getBoundingClientRect(), rightButton = collapseRight.getBoundingClientRect();
       check(leftButton.width === rightButton.width && leftButton.height === rightButton.height &&
-        leftButton.width === leftButton.height && getComputedStyle(collapseRight, "::before").content !== "none" &&
-        !collapseRight.textContent.includes("×"), "Map tools needs a distinct, reachable collapse control");
+        leftButton.width === leftButton.height, "Panel close buttons have different target sizes");
+      for (const button of [collapseLeft, collapseRight]) {
+        const target = button.getBoundingClientRect();
+        const tile = button.querySelector("svg").getBoundingClientRect();
+        check(tile.width === tile.height && tile.width > 0 && tile.width < target.width &&
+          Math.abs((target.left + target.right) - (tile.left + tile.right)) < 1 &&
+          Math.abs((target.top + target.bottom) - (tile.top + tile.bottom)) < 1,
+          "Each close icon should be centered inside a larger square target");
+      }
       collapseLeft.click();
       inspection.showStyle("Land cover");
       await settleLayout();
