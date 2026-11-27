@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {selectLassoFeatures} from "../../src/vector/lasso.js";
 
 import {
     assessCatalogVector,
@@ -9,7 +10,6 @@ import {
     getVectorFieldValues,
     getVectorFilterExtent,
     getVectorLayerStatistics,
-    getSelectedVectorFeatures,
     publishVector,
     styleVector,
     summarizeVectorCategories,
@@ -28,25 +28,28 @@ test("selected attributes preserve exact IDs, missing values and private ownersh
     const features = [{id: featureIds[0], properties: {x: -3, y: null, name: "CO2", parcel: {integer:"-9007199254740993"}, code:"001"}},
         {id: featureIds[1], properties: {x: 1.25, y: 4, name: "Café"}}];
     const signal = new AbortController().signal;
-    assert.deepEqual(await getSelectedVectorFeatures(selection, featureIds, signal, async (url, options) => {
-        assert.equal(url, "/api/vector-sampling/features");
-        assert.deepEqual(JSON.parse(options.body), {selection, featureIds});
+    const polygon = {type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 1], [0, 0]]]};
+    const membership = {matched: 2, featureIds, geometry: null};
+    const selected = await selectLassoFeatures(selection, polygon, signal, async (url, options) => {
+        assert.equal(url, "/api/vector-sampling/lasso");
+        assert.deepEqual(JSON.parse(options.body), {selection, polygon});
         assert.equal(options.signal, signal);
         assert.equal(options.credentials, "same-origin");
         assert.equal(options.cache, "no-store");
         assert.equal(options.headers["X-EOLab-Uploads"], "1");
         assert.equal(options.headers["X-EOLab-Processing"], "1");
-        return Response.json({selection, features});
-    }), [{...features[0], properties:{...features[0].properties, parcel:-9007199254740993n}}, features[1]]);
+        return Response.json({...membership, features});
+    });
+    assert.deepEqual(selected.features, [{...features[0], properties:{...features[0].properties, parcel:-9007199254740993n}}, features[1]]);
     for (const invalid of [[], features.slice(1), [...features].reverse(),
         [features[0], {...features[1], id: Number(featureIds[1])}],
         [features[0], {...features[1], properties: {x: []}}],
         [features[0], {...features[1], properties: {x: {integer:"001"}}}],
         [features[0], {...features[1], properties: {x: {integer:"5", extra:true}}}]]) {
-        await assert.rejects(getSelectedVectorFeatures(selection, featureIds, signal,
-            async () => Response.json({features: invalid})), /incomplete or invalid/);
+        await assert.rejects(selectLassoFeatures(selection, polygon, signal,
+            async () => Response.json({...membership, features: invalid})), /incomplete or invalid/);
     }
-    await assert.rejects(getSelectedVectorFeatures(selection, featureIds, signal,
+    await assert.rejects(selectLassoFeatures(selection, polygon, signal,
         async () => Response.json({detail: "This result has expired."}, {status: 410})), /expired/);
 });
 

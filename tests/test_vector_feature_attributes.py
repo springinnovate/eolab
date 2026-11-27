@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import fiona
+import httpx2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -19,20 +20,16 @@ from eolab_app.bounded_vector import VectorReadLimits
 from eolab_app.calculated_fields import CalculatedField
 from eolab_app.catalog_selection import (
     CatalogSelection,
-    FeatureMatches,
     ResolvedCatalogSelection,
 )
 from eolab_app.execution.bounded_process import ProcessDeadlineError
 from eolab_app.feature_intersection import iter_original_features, match_features
-from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.source_files import SourceFileError
-from eolab_app.vector import feature_attributes, lasso
+from eolab_app.vector import feature_attributes, lasso, selection_operation
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.feature_attributes import (
     FeatureAttributesRequest,
-    FeatureAttributes,
-    FeatureAttributesResult,
     read_feature_attributes,
 )
 from eolab_app.vector.models import ResolvedVectorSource
@@ -55,7 +52,7 @@ def source(
     """
     is_gpkg = request.param.startswith("GPKG")
     ids = (
-        (-7, 2**31, 2**53 + 1)
+        (-(2**53 + 1), 2**31, 2**53 + 1)
         if request.param == "GPKG-wide-ids"
         else (-7, 2, 3) if is_gpkg else (0, 1, 2)
     )
@@ -256,96 +253,75 @@ def test_http_round_trip_preserves_native_ids_outside_javascript_integer_range(
     source: tuple[VectorSamplingService, ResolvedCatalogSelection, tuple[int, ...]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Carry exact native IDs through Lasso JSON and the following attribute request.
+    """Check complete scalar rows and exact IDs across both public feature-reading routes.
 
     Args:
-        source: Real source authorization used by both HTTP requests.
-        monkeypatch: Supply native reader results at the source-reading boundaries.
+        source: Original projected features, including signed-64-bit GeoPackage IDs.
+        monkeypatch: Share the fixture Catalog with the worker and omit optional outlines.
     """
-    service, original, _ids = source
-    native_ids = (-(2**53) - 1, 2**53 + 1)
-    wire_ids = [str(feature_id) for feature_id in native_ids]
-
-    async def compare(
-        target: ResolvedCatalogSelection,
-        boundaries: dict[str, Any],
-        predicate: VectorFilter,
-        *,
-        required_area: SummaryPolygon,
-    ) -> FeatureMatches:
-        """Supply exact native membership before browser serialization.
-
-        Args:
-            target: Authorized original source.
-            boundaries: Other polygon sources, empty for this Lasso.
-            predicate: Additional field predicate, inactive for this Lasso.
-            required_area: Validated user-drawn polygon.
-
-        Returns:
-            Two distinct native IDs outside JavaScript's exact numeric range.
-        """
-        return FeatureMatches(ids=frozenset(native_ids), total=2)
-
-    async def no_highlights(
-        target: ResolvedCatalogSelection, ids: tuple[int, ...]
-    ) -> None:
-        """Leave display geometry unavailable while exact membership remains usable.
-
-        Args:
-            target: Authorized original source.
-            ids: Unrounded native IDs passed to the optional display reader.
-        """
-        assert ids == native_ids
-
-    async def attributes(
-        target: ResolvedCatalogSelection, ids: tuple[int, ...]
-    ) -> FeatureAttributesResult:
-        """Verify the JSON round trip restored the exact IDs supplied by native reading.
-
-        Args:
-            target: Reauthorized original source.
-            ids: Native integers decoded from the validated public ID strings.
-
-        Returns:
-            Identified scalar rows for the browser response.
-        """
-        assert ids == native_ids
-        return FeatureAttributesResult(
-            selection=target.selection,
-            features=tuple(
-                FeatureAttributes(id=str(feature_id), properties={"x": index + 0.5})
-                for index, feature_id in enumerate(ids)
-            ),
-        )
-
-    monkeypatch.setattr(service, "compare_layers", compare)
-    monkeypatch.setattr(lasso, "read_lasso_highlights", no_highlights)
-    monkeypatch.setattr(feature_attributes, "read_feature_attributes", attributes)
+    service, original, ids = source
     app = FastAPI()
-    app.include_router(create_vector_sampling_router(service))
+
+    async def open_original(
+        client: httpx2.AsyncClient,
+        inputs: selection_operation.SelectionMeasurementInput,
+    ) -> ResolvedCatalogSelection:
+        """Resolve the worker's path-free descriptor through the fixture Catalog.
+
+        Args:
+            client: Internal worker connection, supplied by the production reader.
+            inputs: The source description authorized for this job.
+
+        Returns:
+            Fixture original with its applied predicate and calculated fields.
+        """
+        return await service.resolve_for_sampling(inputs.selection)
+
+    async def run_job(token: str, execution_seconds: int) -> None:
+        """Deliver the real comparison and attributes through the private worker routes.
+
+        Args:
+            token: One-request credential held by the feature selection service.
+            execution_seconds: Outer native deadline supplied by the service.
+        """
+        async with httpx2.AsyncClient(
+            mounts={"http://app:8000": httpx2.ASGITransport(app=app)}, trust_env=False
+        ) as client:
+            await selection_operation.deliver_intersection_result(
+                client, selection_operation.ComparisonInput(spatialRead=token)
+            )
+
+    monkeypatch.setattr(selection_operation, "_open_job_selection", open_original)
+    monkeypatch.setattr(lasso, "MAX_DISPLAY_COORDINATES", 0)
+    reader = VectorSamplingService(
+        service.catalog, service.resolver, comparison_executor=run_job
+    )
+    app.include_router(create_vector_sampling_router(reader))
     selection = original.selection.model_dump(mode="json", by_alias=True)
     with TestClient(app) as client:
         picked = client.post(
             "/api/vector-sampling/lasso",
-            json={
-                "selection": selection,
-                "polygon": mapping(box(0, 0, 1, 1)),
-            },
+            json={"selection": selection, "polygon": mapping(box(-1, -1, 1, 1))},
         )
         assert picked.status_code == 200, picked.text
-        assert picked.json() == {"matched": 2, "featureIds": wire_ids, "geometry": None}
+        result = picked.json()
+        assert result["matched"] == 3
+        assert result["featureIds"] == [str(fid) for fid in ids]
+        assert result["geometry"] is None
         inspected = client.post(
             "/api/vector-sampling/features",
-            json={
-                "selection": selection,
-                "featureIds": picked.json()["featureIds"],
-            },
+            json={"selection": selection, "featureIds": result["featureIds"]},
         )
         assert inspected.status_code == 200, inspected.text
-        assert inspected.json()["features"] == [
-            {"id": wire_ids[0], "properties": {"x": 0.5}},
-            {"id": wire_ids[1], "properties": {"x": 1.5}},
+        assert result["features"] == inspected.json()["features"]
+        assert [row["properties"]["x"] for row in result["features"]] == [
+            1.25,
+            2.5,
+            -3.0,
         ]
+        assert result["features"][-1]["properties"]["parcel"] == {
+            "integer": "-9007199254740993"
+        }
 
 
 def test_attribute_reader_does_not_decode_geometry(

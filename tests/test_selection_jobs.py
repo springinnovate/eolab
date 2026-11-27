@@ -18,12 +18,14 @@ from starlette.responses import Response
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.main import create_app
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
+from eolab_app.settings import load_settings
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
+from eolab_app.vector.lasso import LASSO_EXECUTION_SECONDS
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.sampling import VectorSamplingService
-from eolab_app.vector.selection_jobs import SelectionJobs
+from eolab_app.vector.selection_jobs import SelectionJobs, compare_selection_job
 from eolab_app.vector.selection_operation import (
     SelectionMeasurementInput,
     SelectionMeasurementResult,
@@ -344,6 +346,72 @@ def test_route_disconnect_cancels_only_its_job(
         ]
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("ceiling", "expected_timeout"), [(30, 30), (300, 50), (39.5, 39), (0.9, 0.9)]
+)
+def test_lasso_respects_jobs_timeout_ceiling(
+    configured_environment: None,
+    version_file_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ceiling: float,
+    expected_timeout: float,
+) -> None:
+    """Admit a Lasso comparison and give its worker the allowed execution budget.
+
+    Args:
+        configured_environment: Application deployment settings.
+        version_file_path: Version supplied to the application settings loader.
+        monkeypatch: Configure the ceiling and observe the admitted worker.
+        ceiling: Operator's maximum Jobs timeout in seconds.
+        expected_timeout: Execution time granted to this Lasso worker.
+    """
+    monkeypatch.setenv("JOBS_MAX_TIMEOUT_SECONDS", str(ceiling))
+    settings = load_settings(version_file_path)
+    jobs = create_jobs_app(
+        Settings(
+            callers={"eolab": hashlib.sha256(TOKEN.encode()).hexdigest()},
+            execution_seconds=min(20, ceiling),
+            queue_seconds=min(30, ceiling),
+            max_timeout_seconds=ceiling,
+        )
+    )
+    execution_timeouts: list[float] = []
+
+    async def execute(
+        payload: bytes, cancel: asyncio.Event, timeout: float
+    ) -> ExecutionResult:
+        """Record the execution budget granted to the native worker.
+
+        Args:
+            payload: Jobs operation and input descriptor.
+            cancel: Worker cancellation signal.
+            timeout: Execution budget granted by Jobs admission.
+
+        Returns:
+            The registered operation's completion acknowledgment.
+        """
+        execution_timeouts.append(timeout)
+        return ExecutionResult("succeeded", {"error": None})
+
+    monkeypatch.setattr("job_service.manager.run_job", execute)
+
+    async def select() -> None:
+        """Submit and reap the comparison through the real Jobs manager."""
+        async with (
+            jobs.router.lifespan_context(jobs),
+            httpx2.AsyncClient(transport=httpx2.ASGITransport(app=jobs)) as client,
+        ):
+            await compare_selection_job(
+                JobsClient(client, settings.jobs_token),
+                "a" * 64,
+                LASSO_EXECUTION_SECONDS,
+                max_timeout_seconds=settings.jobs_max_timeout_seconds,
+            )
+
+    asyncio.run(select())
+    assert execution_timeouts == [expected_timeout]
 
 
 def test_users_queue_selections_ahead_of_waiting_outlines(
