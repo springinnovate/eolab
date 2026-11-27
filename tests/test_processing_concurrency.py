@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.job_notifications import PostgresJobWakeup
+from eolab_jobs.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,

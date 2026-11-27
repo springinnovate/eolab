@@ -18,7 +18,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
-from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
+from eolab_jobs.job_notifications import JOB_QUEUE_CHANNEL
 
 from eolab_app.processing.models import (
     Artifact,

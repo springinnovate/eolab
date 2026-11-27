@@ -25,7 +25,7 @@ from eolab_app.processing.job_store import (
     PostgresJobStore,
     UnsupportedProcessingSchemaError,
 )
-from eolab_app.processing.job_notifications import PostgresJobWakeup
+from eolab_jobs.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,

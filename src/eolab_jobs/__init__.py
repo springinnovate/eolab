@@ -1,1 +1,1 @@
-"""Operation-independent Python client for the EOLab Job service."""
+"""PostgreSQL job notifications and the EOLab Job service HTTP client."""
