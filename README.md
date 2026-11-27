@@ -245,6 +245,26 @@ Back up the Docker volumes and keep their names and the database password. Let a
 
 ### Prepare data for the Catalog
 
+#### Publish prepared Ecosystem Condition inputs
+
+From an environment with GDAL's Python bindings and the scientific package in
+[`deployment/application-habitat-requirements.txt`](deployment/application-habitat-requirements.txt),
+run the [cache publisher](scripts/publish_habitat_cache.py) on the extracted
+`habitat-cache` folder. Give it a separate output folder on the instance's
+catalog data mount. Keep the raw tiles outside the configured scan directories.
+
+```sh
+python scripts/publish_habitat_cache.py habitat-cache catalog/condition-inputs
+```
+
+The command discovers the assessment years and writes one named Cloud Optimized
+GeoTIFF per available variable per year. The assessment year identifies the
+model inputs; some variables use observations from other periods. Each map
+covers the cached tiles, with uncached areas marked as missing. Rerun the same
+command on the same extracted snapshot to resume. Use a new output folder if
+the snapshot's tile coverage changes. In **Status**, choose **Scan directories**.
+Search **Catalog** for the variable or assessment year and choose **Add to map**.
+
 #### Make a temporal layer from GeoTIFFs
 
 Put one variable's single-band GeoTIFFs in a dedicated folder. Use Python with Rasterio, NumPy, PyYAML and Pydantic 2 to run the [stack preparation script](scripts/prepare_temporal_stack.py).
