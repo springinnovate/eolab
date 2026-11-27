@@ -48,6 +48,12 @@ import { habitatSetup } from "./habitat-setup.js";
  * @property {()=>void} closeInputEditor Close an active input editor while this draft is current.
  */
 
+/** Status to display while the server decides whether to start a run.
+ * @typedef {Object} ModelSubmissionWait
+ * @property {string} buttonLabel Short action shown on the Run tool button.
+ * @property {string} message Accessible description of the action and its inputs.
+ */
+
 /** One model integration's draft, input presentation and asynchronous setup lifecycle.
  * Model-owned state is opaque to the host. No integration receives a controller,
  * viewer or map object; dependencies expose only transport and explicit UI callbacks.
@@ -60,6 +66,7 @@ import { habitatSetup } from "./habitat-setup.js";
  * @property {(draft:Object,inputs:Object)=>void} restoreState Restore cross-input setup state after ordinary input restoration.
  * @property {(ui:ModelSetupUi,handlers:ModelSetupActions,name:string,definition:Object,draft:Object)=>ModelSetupControls|null} buildInput Build owned controls or defer to ordinary controls.
  * @property {(invocation:Object,name:string)=>Array<{label:string,value:string}>|null} [describeInput] Describe an owned saved input using its captured model definition; null defers to ordinary descriptions and an empty array omits the input.
+ * @property {(draft:Object,helpers:{sourceKey:(source:Object)=>string,describeFilter:(filter:Object)=>string})=>ModelSubmissionWait|null} [describeSubmissionWait] Describe work before acceptance at the moment a new request is captured. Null uses the ordinary starting message.
  * @property {(draft:Object,dependencies:ModelSetupDependencies)=>ModelSetupSession} createSession Bind transport and explicit UI notifications to one draft.
  */
 

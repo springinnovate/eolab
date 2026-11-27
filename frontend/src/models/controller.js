@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, describeModelFilter, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, modelSupportsDrawnAreas, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { snapTemporalHour } from "../temporal-period.js";
@@ -73,7 +73,7 @@ export class ModelsController {
         this.state = {page: "library", active: false, library: [], missingModels: false, loading: false, libraryError: "", error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, historyError: "", selectedRun: null, invocation: null, invocationError: "", yaml: null,
             habitatDatasetLabels: null,
-            pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
+            pending: null, submitting: false, submissionWait: null, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
         this.vectorSelectionRequests = new Map();
         /** @type {Map<string,string[]>} Uploaded polygon IDs owned by each retry slot in this tab. */
@@ -727,9 +727,13 @@ export class ModelsController {
             const submission = retry ? this.state.pending : captureModelSubmission(draft, this.newId());
             if (!submission) return;
             if (!this.storage) throw new Error("Enable session storage to submit a recoverable run.");
+            const wait = retry ? {buttonLabel: "Confirming run…", message: `Confirming whether “${submission.label}” started…`}
+                : draft.integration?.describeSubmissionWait?.(draft, {sourceKey: modelSourceKey, describeFilter: describeModelFilter})
+                    ?? {buttonLabel: "Starting run…", message: `Starting run “${submission.label}”…`};
             if (!retry) {
                 const drawn = Object.entries(submission.inputs).filter(([, value]) => value?.kind === "drawnPolygons");
                 if (drawn.length) {
+                    this.state.submissionWait = {buttonLabel: "Saving drawn polygons…", message: `Saving drawn polygons for “${submission.label}”…`};
                     this.state.submitting = true; this.render();
                     const references = new Map();
                     for (const [name, layer] of drawn) {
@@ -750,8 +754,9 @@ export class ModelsController {
             if (new TextEncoder().encode(serialized).length > 16384) throw new Error("Tool inputs exceed the 16 KiB submission limit.");
             this.storage.setItem(recoveryKey, serialized);
             if (uploadedPolygonAreaIds.length) this.pendingPolygonAreas.set(recoveryKey, uploadedPolygonAreaIds.splice(0));
-            this.state.pending = submission; this.state.submitting = true; this.render();
+            this.state.pending = submission; this.state.submitting = true; this.state.submissionWait = wait; this.render();
             const job = await this.api.submitModelRun(submission);
+            this.state.submissionWait = null;
             this.pendingPolygonAreas.delete(recoveryKey);
             this.#finishRecovery(recoveryKey);
             this.rememberRun(job); this.jobs.accept(job);
@@ -768,7 +773,7 @@ export class ModelsController {
                 this.state.error = error.message;
         } finally {
             this.discardPolygonAreas(uploadedPolygonAreaIds);
-            this.state.submitting = false; this.render();
+            this.state.submissionWait = null; this.state.submitting = false; this.render();
         }
     }
 
