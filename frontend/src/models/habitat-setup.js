@@ -85,8 +85,9 @@ export function captureHabitatStack(state, sources, captureRaster) {
             const ids = state[field];
             if (!ids.length) throw new Error(`Select at least one ${label} dataset.`);
             if (ids.some(id => !choices.some(dataset => dataset.id === id))) throw new Error(`A selected ${label} dataset is no longer available. Review the dataset choices.`);
-            const missing = choices.find(dataset => dataset.requiredRoles.includes(role) && !ids.includes(dataset.id));
-            if (missing) throw new Error(`${missing.label} is required by the model.`);
+            if (!choices.some(dataset => ids.includes(dataset.id) && dataset.inputsByRole[role].some(
+                band => band.requiredDatasets.every(id => ids.includes(id))
+            ))) throw new Error(`Select datasets that supply at least one ${label} band.`);
             selected[field] = choices.filter(dataset => ids.includes(dataset.id)).map(dataset => dataset.id);
         }
         return {kind: "earthEngine", year: state.year, ...selected};
@@ -95,8 +96,8 @@ export function captureHabitatStack(state, sources, captureRaster) {
     const names = [...state.predictors, ...state.responses].map(row => row.name.trim());
     if (names.some(name => !name)) throw new Error("Name each predictor and observed response.");
     if (new Set(names).size !== names.length) throw new Error("Give each predictor and observed response a different name.");
-    const categoricalPredictor = state.categoricalPredictor.trim();
-    if (!state.predictors.some(row => row.name.trim() === categoricalPredictor)) throw new Error("Choose the categorical predictor.");
+    const categoricalPredictor = state.categoricalPredictor.trim() || null;
+    if (categoricalPredictor && !state.predictors.some(row => row.name.trim() === categoricalPredictor)) throw new Error("Choose the categorical predictor.");
     return {predictors: state.predictors.map(row => ({name: row.name.trim(), source: captureRaster(row.raster, sources)})),
         responses: state.responses.map(row => ({name: row.name.trim(), source: captureRaster(row.raster, sources)})), categoricalPredictor};
 }
@@ -445,7 +446,7 @@ function restoreInput(draft, name, value) {
     else Object.assign(input, {kind: "manual",
         predictors: value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)})),
         responses: value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)})),
-        categoricalPredictor: value.categoricalPredictor});
+        categoricalPredictor: value.categoricalPredictor ?? ""});
     return true;
 }
 

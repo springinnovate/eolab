@@ -12,7 +12,6 @@ import { rasterSourceReference } from "../raster-source.js";
  * @property {string} label Human-readable dataset name.
  * @property {string} url Catalog entry for the configured source.
  * @property {Array<"predictor"|"response">} roles Roles served by the dataset.
- * @property {Array<"predictor"|"response">} requiredRoles Roles requiring this dataset.
  * @property {Record<string,Array<{variable:string,bands:string[],requiredDatasets:string[],periods:Record<string,string>}>>} inputsByRole Prepared variable names, source bands, dependencies and time periods for the calculations in each role.
  */
 

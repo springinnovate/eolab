@@ -161,7 +161,7 @@ remains NoData.
 <details>
 <summary>Choose reference sites and prepare Ecosystem Condition inputs</summary>
 
-Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. After choosing a prepared area, select **Show analysis area on map** to zoom to its polygon and see the boundary while choosing reference sites. With the prepared inputs you can select datasets separately for each role. SRTM landforms and at least one observed response are required. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
+Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. After choosing a prepared area, select **Show analysis area on map** to zoom to its polygon and see the boundary while choosing reference sites. With the prepared inputs you can select datasets separately for each role. Select at least one predictor and one observed response. SRTM landforms are optional. For custom rasters, leave the categorical predictor set to **None** to treat all predictors as continuous. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
 
 To inspect a published input, choose an **Assessment year** and expand the predictor or response group. Under the dataset, choose the variable if it has several, then select **Add to map**. You can inspect a layer even when its dataset is unchecked for the model.
 

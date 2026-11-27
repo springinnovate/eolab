@@ -328,9 +328,12 @@ def calculate_habitat(
                 )
             )
             categorical_predictor = next(
-                name
-                for name in predictor_names
-                if tiles.bands[name].data_type == "categorical"
+                (
+                    name
+                    for name in predictor_names
+                    if tiles.bands[name].data_type == "categorical"
+                ),
+                None,
             )
             for role, names in (
                 ("predictor", predictor_names),

@@ -38,18 +38,18 @@ const rainfallWindow = Object.fromEntries(years.map(year => [year, `${year - 9}â
 
 const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2019,
     grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}, datasets: [
-        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"], requiredRoles: [],
+        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"],
             inputsByRole: {predictor: [
                 {variable: "Annual precipitation", bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: annual},
                 {variable: "Growing season climate", bands: ["mean_2m_air_temperature", "total_precipitation"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: growingSeason},
                 {variable: "Rainfall variability", bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: rainfallWindow},
             ]}},
-        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"], requiredRoles: [],
+        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"],
             inputsByRole: {predictor: [{variable: "Growing season climate", bands: ["Greenup_1", "Senescence_1"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: annual}],
                 response: [{variable: "Growing cycles", bands: ["NumCycles"], requiredDatasets: ["modis_phenology"], periods: annual}]}},
-        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"], requiredRoles: [],
+        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"],
             inputsByRole: {response: ["NDVI 95th percentile", "NDVI median"].map(variable => ({variable, bands: ["NDVI"], requiredDatasets: ["landsat_ndvi"], periods: annual}))}},
-        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"], requiredRoles: ["predictor"],
+        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"],
             inputsByRole: {predictor: [{variable: "Landform class", bands: ["constant"], requiredDatasets: ["srtm_landforms"],
                 periods: Object.fromEntries(years.map(year => [year, "Fixed map for every assessment year"]))}]}},
     ]};
@@ -257,14 +257,18 @@ test("Habitat starts with all datasets selected in collapsed role groups", async
         for (const dataset of datasets) {
             const controls = group.controls.get(dataset.id);
             assert.equal(controls.checkbox.checked, true);
-            assert.equal(controls.checkbox.disabled, dataset.requiredRoles.includes(role));
+            assert.ok(!controls.checkbox.disabled);
             assert.equal(controls.label.textContent, dataset.label);
             assert.equal(controls.link.href, dataset.url);
             assert.equal(controls.link.getAttribute("aria-label"), `Source information for ${dataset.label}`);
             assert.notEqual(controls.link.parentElement, controls.checkbox.parentElement, "Source links are outside the checkbox label");
         }
     }
-    assert.equal(stack.datasetGroups.predictor.controls.get("srtm_landforms").required.hidden, false);
+    const landform = stack.datasetGroups.predictor.controls.get("srtm_landforms");
+    setCheckbox(landform.checkbox, false);
+    assert.ok(!h.controller.state.draft.inputs.stack.predictorDatasets.includes("srtm_landforms"));
+    assert.equal(landform.details.textContent, "Excluded from this analysis.");
+    setCheckbox(landform.checkbox, true);
     const phenology = stack.datasetGroups.predictor.controls.get("modis_phenology");
     const response = stack.datasetGroups.response.controls.get("modis_phenology");
     assert.doesNotMatch(phenology.details.textContent, /2001â€“2024/, "Only dates used for this assessment belong in the row");
@@ -497,8 +501,10 @@ test("Habitat stack edits preserve other rows and require unambiguous roles befo
     assert.deepEqual(stack.responses, [{name: "productivity", source: {collectionId: h.context.rasters[2].collectionId, itemId: h.context.rasters[2].itemId}}]);
     assert.equal(stack.predictors[0].name, "environment"); assert.equal(stack.categoricalPredictor, "land_class");
     controls.predictors[1].remove.dispatchEvent(new Event("click"));
-    assert.equal(h.view.setup.run.disabled, true);
-    assert.throws(() => captureModelSubmission(h.controller.state.draft, "removed-category"), /categorical/i);
+    assert.equal(h.view.setup.run.disabled, false);
+    const continuous = captureModelSubmission(h.controller.state.draft, "removed-category").inputs.stack;
+    assert.deepEqual(continuous.predictors, stack.predictors.slice(0, 1));
+    assert.equal(continuous.categoricalPredictor, null);
     h.controller.destroy();
 });
 
