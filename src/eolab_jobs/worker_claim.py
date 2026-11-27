@@ -1,9 +1,10 @@
-"""Serialize durable queue writes and assign leased attempts to available workers."""
+"""Serialize queue decisions, claim worker slots and renew running attempts' leases."""
 
 from typing import Any, Final
 from uuid import uuid4
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 # Deployed PostgreSQL single-bigint advisory key, shared by claims and queue writes.
 JOB_QUEUE_LOCK_ID: Final = 7_610_329
@@ -98,3 +99,57 @@ def claim_next_job(
             },
         )
         return cursor.fetchone()
+
+
+def renew_job_lease(
+    cursor: psycopg.Cursor[Any],
+    *,
+    job_id: str,
+    attempt_id: str,
+    lease_seconds: int,
+    progress: dict[str, Any],
+) -> bool:
+    """Extend a running attempt's lease and optionally replace its progress.
+
+    The database checks expiry after locking the job row. A live attempt gets
+    the full duration from that check. The caller controls the transaction.
+
+    Args:
+        cursor: Open cursor on the queue database at read committed isolation.
+        job_id: Identifier of the claimed job.
+        attempt_id: Token returned when this worker claimed the job.
+        lease_seconds: Duration of the renewed lease, in seconds.
+        progress: Operation-defined progress fields. An empty mapping keeps the
+            most recently recorded progress.
+
+    Returns:
+        True if renewed. False if the attempt is missing, no longer running,
+        belongs to a different claim, or has expired.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot lock or update the job.
+    """
+    cursor.execute(
+        """
+        WITH locked_attempt AS (
+            SELECT id, lease_until FROM processing.jobs
+            WHERE id = %(job_id)s AND attempt_id = %(attempt_id)s AND status = 'running'
+            FOR NO KEY UPDATE
+        ), heartbeat AS MATERIALIZED (
+            SELECT id, lease_until, clock_timestamp() AS checked_at FROM locked_attempt
+        )
+        UPDATE processing.jobs AS job
+        SET lease_until = heartbeat.checked_at + %(lease_seconds)s * interval '1 second',
+            updated_at = heartbeat.checked_at,
+            progress = COALESCE(%(progress)s::jsonb, job.progress)
+        FROM heartbeat
+        WHERE job.id = heartbeat.id AND heartbeat.lease_until > heartbeat.checked_at
+        """,
+        {
+            "job_id": job_id,
+            "attempt_id": attempt_id,
+            "lease_seconds": lease_seconds,
+            "progress": Jsonb(progress) if progress else None,
+        },
+    )
+    return cursor.rowcount == 1

@@ -1,6 +1,7 @@
 """Check exact lasso membership, whole-feature highlights and private source access."""
 
 import asyncio
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,11 +20,14 @@ from eolab_app.feature_intersection import iter_original_features, match_feature
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from eolab_app.source_files import SourceFileError
 from eolab_app.vector import lasso, selection_operation
-from eolab_app.vector.lasso import LassoSelectionRequest, read_lasso_highlights
+from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.lasso import LassoSelectionRequest, encode_lasso_highlights
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector_uploads import VectorUploadStore
+from tests.test_raster_source_access import _vector_result_sampler
 from tests.test_vector_intersections import _write_layer
 from tests.test_vector_publication import StaticCatalog
 from tests.test_vector_uploads import BASE, HEADERS, write_layer
@@ -136,7 +140,7 @@ def test_lasso_uses_exact_geometry_and_keeps_whole_filtered_features(
     )
     assert combined.ids == frozenset(ids)
     assert combined.total == 6
-    highlights = asyncio.run(read_lasso_highlights(target, ids))
+    highlights = json.loads(encode_lasso_highlights(target, ids, VectorReadLimits()))
     assert highlights is not None
     assert [feature["id"] for feature in highlights["features"]] == [1, 2, 4]
     assert shape(highlights["features"][-1]["geometry"]).equals(box(-1, -1, 5, 5))
@@ -148,7 +152,7 @@ def test_lasso_uses_exact_geometry_and_keeps_whole_filtered_features(
         ).ids
     )
     assert empty == ()
-    assert asyncio.run(read_lasso_highlights(target, empty)) == {
+    assert json.loads(encode_lasso_highlights(target, empty, VectorReadLimits())) == {
         "type": "FeatureCollection",
         "features": [],
     }
@@ -185,42 +189,25 @@ def test_highlight_budget_does_not_change_membership(
     ids = tuple(
         match_features(target, {}, VectorFilter(), required_area=box(1, 1, 3, 3)).ids
     )
-    result = []
-
-    class Writer:
-        """Collect the native highlight worker's output without spawning a second interpreter."""
-
-        def put(self, value: object) -> None:
-            """Collect the optional display result.
-
-            Args:
-                value: Complete geometry or the display-unavailable sentinel.
-            """
-            result.append(value)
-
     monkeypatch.setattr(lasso, "MAX_DISPLAY_COORDINATES", 1)
-    lasso._read_highlights(Writer(), target, ids, lasso.VectorReadLimits())
     assert ids == (1,)
-    assert result == [None]
+    assert encode_lasso_highlights(target, ids, VectorReadLimits()) is None
 
 
-def test_lasso_highlight_reads_the_matching_feature_by_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_lasso_highlight_reads_the_matching_feature_by_id(tmp_path: Path) -> None:
     """Read a late feature's highlight and attributes under a one-feature budget.
 
     Args:
         tmp_path: Directory for the original GeoPackage.
-        monkeypatch: Limit the highlight reader to one original geometry.
     """
     original = box(10, 10, 12, 12)
     target = _write_layer(
         tmp_path / "targets.gpkg",
         [(box(0, 0, 1, 1), "earlier"), (original, "selected")],
     )
-    monkeypatch.setattr(lasso, "VectorReadLimits", lambda: VectorReadLimits(features=1))
-
-    highlights = asyncio.run(read_lasso_highlights(target, (2,)))
+    highlights = json.loads(
+        encode_lasso_highlights(target, (2,), VectorReadLimits(features=1))
+    )
 
     assert highlights is not None
     assert [feature["id"] for feature in highlights["features"]] == [2]
@@ -251,16 +238,18 @@ def test_private_lasso_uses_original_source_jobs_without_geoserver(
     app = FastAPI()
     monkeypatch.setattr(selection_operation, "UPLOAD_MOUNT", uploads.root)
 
-    async def run_job(token: str) -> None:
+    async def run_job(token: str, execution_seconds: int) -> None:
         """Execute the production comparison operation against the authorized source route.
 
         Args:
             token: One expiring comparison capability held by the request owner.
+            execution_seconds: Hard deadline covering comparison, attributes and outlines.
         """
+        assert execution_seconds == 50
         async with httpx2.AsyncClient(
             mounts={"http://app:8000": httpx2.ASGITransport(app=app)}, trust_env=False
         ) as client:
-            await selection_operation.return_intersecting_ids(
+            await selection_operation.deliver_intersection_result(
                 client, selection_operation.ComparisonInput(spatialRead=token)
             )
 
@@ -304,6 +293,7 @@ def test_private_lasso_uses_original_source_jobs_without_geoserver(
             headers=HEADERS,
         )
         assert attributes.status_code == 200, attributes.text
+        assert value["features"] == attributes.json()["features"]
         assert attributes.json()["features"] == [
             {
                 "id": value["featureIds"][0],
@@ -350,3 +340,126 @@ def test_private_lasso_uses_original_source_jobs_without_geoserver(
             ).status_code
             == 404
         )
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "required_timeout",
+        "optional_timeout",
+        "optional_failure",
+        "cancel",
+        "source_expired",
+    ],
+)
+def test_lasso_delivery_waits_for_native_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """Keep completed rows on outline failure and withhold results after cancellation or lease loss.
+
+    Args:
+        tmp_path: Immutable original result file.
+        monkeypatch: Shorten the stage deadlines for the controlled worker.
+        outcome: The worker, caller or source transition to exercise.
+    """
+    service, authority, selection = _vector_result_sampler(tmp_path)
+    polygon = SummaryPolygon.model_validate(mapping(box(0, 0, 1, 1)))
+    label = "x" * (520 * 1024) if outcome == "optional_timeout" else "Marsh"
+    rows = [{"id": "9007199254740993", "properties": {"label": label}}]
+    monkeypatch.setattr(lasso, "READ_SECONDS", 0.15)
+    app = FastAPI()
+    app.include_router(create_vector_sampling_router(service))
+
+    async def exercise() -> None:
+        """Keep both the lease and private exchange alive through controlled native cleanup."""
+        entered, stopping, exit_allowed = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
+        credentials = []
+
+        async def run_job(token: str, execution_seconds: int) -> None:
+            """Use the worker HTTP handoff and delay terminal cleanup until observed by the test.
+
+            Args:
+                token: Only credential authorized to deliver this selection.
+                execution_seconds: Outer Jobs execution deadline.
+
+            Raises:
+                VectorConflictError: The optional native read fails.
+                asyncio.CancelledError: A stage times out or the caller cancels.
+            """
+            credentials.append(token)
+            headers = {"Authorization": f"Bearer {token}"}
+            url = "/api/vector-sampling/spatial-read"
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://app"
+            ) as client:
+                assert (await client.get(url, headers=headers)).is_success
+                assert (
+                    await client.put(
+                        url, headers=headers, params={"stage": "highlights"}, json={}
+                    )
+                ).status_code == 409
+                assert (
+                    await client.put(
+                        url, headers=headers, params={"stage": "attributes"}
+                    )
+                ).is_success
+                if outcome != "required_timeout":
+                    assert (
+                        await client.put(
+                            url,
+                            headers=headers,
+                            params={"stage": "features"},
+                            json=rows,
+                        )
+                    ).is_success
+            entered.set()
+            try:
+                if outcome == "optional_failure":
+                    raise VectorConflictError("The native worker stopped.")
+                if outcome == "source_expired":
+                    authority.ready = False
+                    return
+                await asyncio.Event().wait()
+            finally:
+                stopping.set()
+                await exit_allowed.wait()
+
+        monkeypatch.setattr(service, "_comparison_executor", run_job)
+        async with asyncio.timeout(5):
+            pending = asyncio.create_task(service.lasso(selection, polygon, "owner"))
+            await entered.wait()
+            if outcome == "cancel":
+                pending.cancel()
+            await stopping.wait()
+            assert (
+                authority.leases
+                and service.spatial_reads.get(credentials[0]) is not None
+            )
+            assert not pending.done()
+            exit_allowed.set()
+            if outcome == "required_timeout":
+                with pytest.raises(VectorConflictError, match="too long"):
+                    await pending
+            elif outcome == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            elif outcome == "source_expired":
+                with pytest.raises(SourceFileError):
+                    await pending
+            else:
+                result = await pending
+                assert (
+                    result.featureIds == ("9007199254740993",)
+                    and result.geometry is None
+                )
+                assert result.model_dump(mode="json")["features"] == rows
+            assert (
+                not authority.leases
+                and service.spatial_reads.get(credentials[0]) is None
+            )
+
+    asyncio.run(exercise())

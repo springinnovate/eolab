@@ -1,7 +1,6 @@
 /** Own selected vector attributes and history acquired by map clicks or Lasso. */
 
 import { getFeatureInfoViewport } from "./feature-info-viewport.js";
-import { getSelectedVectorFeatures } from "./api.js";
 import { isNumericFeatureValue } from "./inspection-observation.js";
 import { selectLassoFeatures } from "./lasso.js";
 import { DEFAULT_FIELD_FORMATS } from "../feature-field-formats.js";
@@ -722,14 +721,9 @@ export class VectorFeatureInspectorController {
             this.#restoreCompletedSelection();
         };
         signal.addEventListener("abort", cancel, {once: true});
-        let selected, rows, currentTarget;
+        let selected, currentTarget;
         try {
             selected = await selectLassoFeatures(target.selection, polygon, abort.signal, this.fetchImplementation);
-            abort.signal.throwIfAborted();
-            this.status.textContent = `Reading attributes for ${selected.matched} selected features in ${target.label}…`;
-            this.#publishSample("loading", [], this.status.textContent);
-            rows = selected.matched === 0 ? [] : await getSelectedVectorFeatures(
-                target.selection, selected.featureIds, abort.signal, this.fetchImplementation);
             abort.signal.throwIfAborted();
             currentTarget = this.getSelectionTargets().find(value => value.key === target.key);
             if (!currentTarget || JSON.stringify(currentTarget.selection) !== this.#selectionContext.signature) {
@@ -749,6 +743,7 @@ export class VectorFeatureInspectorController {
             signal.removeEventListener("abort", cancel);
             if (generation === this.requestGeneration) this.abortController = null;
         }
+        const rows = selected.features;
         this.results = rows.map(row => ({
             feature: {...row, geometry: null},
             target: {sourceId: target.key, label: currentTarget.label},

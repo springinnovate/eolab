@@ -28,7 +28,7 @@ from eolab_app.processing.models import (
     ProcessingLimits,
     JobInputFile,
 )
-from eolab_jobs.worker_claim import claim_next_job, lock_job_queue
+from eolab_jobs.worker_claim import claim_next_job, lock_job_queue, renew_job_lease
 
 UNFINISHED = ("queued", "running", "cancelling")
 
@@ -1153,23 +1153,24 @@ class PostgresJobStore:
         Args:
             identifier: Running job.
             attempt: Current fencing token.
-            progress: Bounded, owner-defined progress fields.
+            progress: Bounded, owner-defined fields. An empty mapping keeps the
+                last recorded progress.
 
         Returns:
-            False after cancellation or loss of the attempt or its lease.
+            True if renewed, or False after cancellation or loss of the attempt
+            or its lease.
+
+        Raises:
+            ProcessingError: If the database cannot complete the heartbeat.
         """
         with self._transaction() as cursor:
-            cursor.execute(
-                "UPDATE processing.jobs SET lease_until=now()+%s*interval '1 second',progress=CASE WHEN %s::jsonb='{}'::jsonb THEN progress ELSE %s::jsonb END,updated_at=now() WHERE id=%s AND attempt_id=%s AND status='running' AND lease_until>now() RETURNING id",
-                (
-                    self.limits.lease_seconds,
-                    Jsonb(progress),
-                    Jsonb(progress),
-                    identifier,
-                    attempt,
-                ),
+            return renew_job_lease(
+                cursor,
+                job_id=identifier,
+                attempt_id=attempt,
+                lease_seconds=self.limits.lease_seconds,
+                progress=progress,
             )
-            return cursor.fetchone() is not None
 
     def finish(
         self,
