@@ -1,14 +1,60 @@
 """Test the synchronous raster pixel boundary."""
 
 from pathlib import Path
+import tracemalloc
 
 import pytest
 import numpy
+import rasterio
+from pyproj import Transformer
 from rasterio.enums import MaskFlags
-from rasterio.transform import Affine
+from rasterio.transform import Affine, from_origin
 from rasterio.windows import Window
 
 from eolab_app.raster.pixel import read_raster_pixel
+
+
+def test_single_pixel_does_not_allocate_the_whole_geotiff_tile_index(
+    tmp_path: Path,
+) -> None:
+    """Bound Python allocations for a real grad grid as its tile count grows.
+
+    Args:
+        tmp_path: Directory for small and large sparse TIFFs with one populated tile.
+    """
+    peaks = []
+    longitude, latitude = Transformer.from_crs(4807, 4326, always_xy=True).transform(
+        -2, 54
+    )
+    for size in (512, 8192):
+        path = tmp_path / f"測量-{size}.tif"
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            crs="EPSG:4807",
+            transform=from_origin(-2.0005, 54.0005, 0.001, 0.001),
+            width=size,
+            height=size,
+            count=1,
+            dtype="uint8",
+            tiled=True,
+            blockxsize=16,
+            blockysize=16,
+            compress="DEFLATE",
+            SPARSE_OK="YES",
+        ) as source:
+            source.write(
+                numpy.array([[77]], dtype="uint8"), 1, window=Window(0, 0, 1, 1)
+            )
+        assert read_raster_pixel(path, longitude, latitude).value == 77
+        tracemalloc.start()
+        try:
+            assert read_raster_pixel(path, longitude, latitude).value == 77
+            peaks.append(tracemalloc.get_traced_memory()[1])
+        finally:
+            tracemalloc.stop()
+    assert peaks[1] < peaks[0] + 1024**2
 
 
 class _Dataset:
@@ -63,7 +109,7 @@ def test_pixel_reader_reads_only_band_one_and_one_source_cell(
     """Keep each pixel probe bounded to one cell in band 1."""
     dataset = _Dataset()
     monkeypatch.setattr(
-        "eolab_app.raster.pixel.rasterio.open",
+        "eolab_app.raster.reader.GeoTiffReader",
         lambda _, **kwargs: dataset,
     )
     monkeypatch.setattr(

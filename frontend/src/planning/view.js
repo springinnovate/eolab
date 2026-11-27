@@ -31,9 +31,8 @@ export class PlanningView {
         this.interventionRows = new Map();
         const header = this.element("header", "", "planning-header");
         this.heading = this.element("h2", "Planning tools");
-        this.close = this.button("Close", () => this.callbacks.onClose());
-        this.close.setAttribute("aria-label", "Close Planning tools");
-        header.append(this.heading, this.close);
+        this.close = documentContext.querySelector("#close-planning");
+        header.append(this.heading);
         this.error = this.element("p", "", "planning-error"); this.error.setAttribute("role", "alert");
         this.message = this.element("p", "", "planning-help"); this.message.setAttribute("role", "status");
         this.library = this.element("div", "", "planning-library");
@@ -83,7 +82,11 @@ export class PlanningView {
     /** Connect author action callbacks after the view is constructed.
      * @param {PlanningActions} callbacks Planning-owned actions. @return {void}
      */
-    bind(callbacks) { this.callbacks = callbacks; this.openButton.addEventListener("click", this.openListener); }
+    bind(callbacks) {
+        this.callbacks = callbacks;
+        this.openButton.addEventListener("click", this.openListener);
+        this.close.addEventListener("click", callbacks.onClose);
+    }
 
     /** Create an owned text-only element.
      * @template {keyof HTMLElementTagNameMap} Tag
@@ -188,6 +191,9 @@ export class PlanningView {
     /** Focus the newly appended intervention's name. @return {void} */
     focusLastIntervention() { [...this.interventionRows.values()].at(-1)?.input.focus(); }
 
-    /** Detach the external entry-point listener owned by this view. @return {void} */
-    destroy() { this.openButton.removeEventListener("click", this.openListener); }
+    /** Detach the Planning entry point and its tab's close action. @return {void} */
+    destroy() {
+        this.openButton.removeEventListener("click", this.openListener);
+        this.close.removeEventListener("click", this.callbacks.onClose);
+    }
 }

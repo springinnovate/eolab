@@ -2,7 +2,6 @@
 
 import asyncio
 from pathlib import Path
-from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,9 +17,9 @@ from eolab_app.processing.habitat_preparation_selections import (
     get_habitat_preparation_coverage,
 )
 from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.habitat_models import (
-    get_habitat_dataset_roles,
-    get_required_habitat_predictor_datasets,
+from eolab_app.routes.habitat_datasets import (
+    HabitatDatasetSource,
+    describe_habitat_datasets,
 )
 from eolab_app.raster.source_models import ProjectedRasterGrid
 from eolab_app.routes.processing import RequestSizeLimitedRoute
@@ -28,99 +27,6 @@ from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
     run_until_http_disconnect,
 )
-
-HABITAT_DATASET_LINKS: dict[str, tuple[str, str]] = {
-    "LANDSAT/COMPOSITES/C02/T1_L2_8DAY_NDVI": (
-        "Landsat NDVI composites",
-        "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI",
-    ),
-    "MODIS/061/MCD12Q2": (
-        "MODIS land-cover dynamics / phenology",
-        "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2",
-    ),
-    "projects/global-pasture-watch/assets/gsvh-30m/v1/short-veg-height_m": (
-        "Global Pasture Watch short vegetation height",
-        "https://developers.google.com/earth-engine/datasets/catalog/projects_global-pasture-watch_assets_gsvh-30m_v1_short-veg-height_m",
-    ),
-    "MODIS/061/MOD44B": (
-        "MODIS vegetation cover",
-        "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD44B",
-    ),
-    "MODIS/061/MOD15A2H": (
-        "MODIS LAI / FPAR",
-        "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD15A2H",
-    ),
-    "MODIS/061/MOD17A3HGF": (
-        "MODIS annual productivity",
-        "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD17A3HGF",
-    ),
-    "ECMWF/ERA5/DAILY": (
-        "ERA5 daily aggregates",
-        "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY",
-    ),
-    "ECMWF/ERA5/MONTHLY": (
-        "ERA5 monthly aggregates",
-        "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_MONTHLY",
-    ),
-    "GRIDMET/DROUGHT": (
-        "GRIDMET drought",
-        "https://developers.google.com/earth-engine/datasets/catalog/GRIDMET_DROUGHT",
-    ),
-    "NASA/VIIRS/002/VNP64A1": (
-        "VIIRS burned area",
-        "https://developers.google.com/earth-engine/datasets/catalog/NASA_VIIRS_002_VNP64A1",
-    ),
-    "JRC/GSW1_4/MonthlyHistory": (
-        "JRC monthly water",
-        "https://developers.google.com/earth-engine/datasets/catalog/JRC_GSW1_4_MonthlyHistory",
-    ),
-    "MERIT/Hydro/v1_0_1": (
-        "MERIT Hydro",
-        "https://developers.google.com/earth-engine/datasets/catalog/MERIT_Hydro_v1_0_1",
-    ),
-    "projects/soilgrids-isric/soc_mean": (
-        "SoilGrids organic carbon",
-        "https://gee-community-catalog.org/projects/isric/",
-    ),
-    "NASA/GLDAS/V021/NOAH/G025/T3H": (
-        "GLDAS",
-        "https://developers.google.com/earth-engine/datasets/catalog/NASA_GLDAS_V021_NOAH_G025_T3H",
-    ),
-    "CSP/ERGo/1_0/Global/SRTM_landforms": (
-        "SRTM landforms",
-        "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms",
-    ),
-    "CSP/ERGo/1_0/Global/ALOS_topoDiversity": (
-        "ALOS topographic diversity",
-        "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_ALOS_topoDiversity",
-    ),
-    "MODIS/061/MOD16A2GF": (
-        "MODIS evapotranspiration",
-        "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD16A2GF",
-    ),
-    "NASA/SMAP/SPL4SMGP/008": (
-        "SMAP",
-        "https://developers.google.com/earth-engine/datasets/catalog/NASA_SMAP_SPL4SMGP_008",
-    ),
-}
-
-
-class HabitatDatasetSource(BaseModel):
-    """Describe a linked dataset used by the configured Habitat input bands.
-
-    Attributes:
-        id: Stable configured dataset alias used in submitted selections.
-        label: Human-readable dataset name shown in model setup.
-        url: Catalog page describing the configured Earth Engine source.
-        roles: Predictor and/or response roles derived from the configured bands.
-        requiredRoles: Roles in which this source must remain selected.
-    """
-
-    id: str
-    label: str
-    url: str
-    roles: list[Literal["predictor", "response"]]
-    requiredRoles: list[Literal["predictor", "response"]]
 
 
 class HabitatEarthEngineOptions(BaseModel):
@@ -314,20 +220,6 @@ def create_habitat_router(
         """
         configuration = load_habitat_stack()
         grid = configuration.grid
-        dataset_roles = get_habitat_dataset_roles(configuration)
-        required_predictors = get_required_habitat_predictor_datasets(configuration)
-        datasets: list[HabitatDatasetSource] = []
-        for key, roles in dataset_roles.items():
-            label, url = HABITAT_DATASET_LINKS[configuration.datasets[key]]
-            datasets.append(
-                HabitatDatasetSource(
-                    id=key,
-                    label=label,
-                    url=url,
-                    roles=list(roles),
-                    requiredRoles=["predictor"] if key in required_predictors else [],
-                )
-            )
         return HabitatEarthEngineOptions(
             defaultYear=configuration.year,
             minimumYear=configuration.minimum_year,
@@ -339,7 +231,7 @@ def create_habitat_router(
                 unit="metre",
                 approximate=False,
             ),
-            datasets=datasets,
+            datasets=describe_habitat_datasets(configuration),
         )
 
     return router

@@ -23,6 +23,7 @@ from eolab_app.feature_intersection import bind_intersections, match_features
 from eolab_app.polygon_areas import SummaryPolygon
 from eolab_app.vector.display_feature_ids import display_feature_ranges
 from eolab_app.vector.parcels import read_parcel_rows
+from eolab_app.vector.feature_attributes import read_feature_attributes
 
 
 def _write_layer(
@@ -95,6 +96,104 @@ def test_filtered_source_uses_exact_geometry_and_includes_boundary_contact(tmp_p
     assert match_features(target, {str(UUID(int=1)): ()}, _spatial_rule()).counts == {"matched": 0, "total": 6}
 
 
+def _write_native_geometry(path: Path, wkt: str) -> ResolvedCatalogSelection:
+    """Write an original feature whose native type is unavailable in Shapely.
+
+    Args:
+        path: Temporary GeoPackage for the selected layer.
+        wkt: Original geometry in GDAL's well-known text format.
+
+    Returns:
+        A resolved selection containing the feature at native ID 1.
+    """
+    from osgeo import gdal, ogr, osr
+
+    with (
+        gdal.ExceptionMgr(),
+        ogr.ExceptionMgr(),
+        osr.ExceptionMgr(),
+        ogr.GetDriverByName("GPKG").CreateDataSource(str(path)) as dataset,
+    ):
+        crs = osr.SpatialReference()
+        assert crs.ImportFromEPSG(4326) == 0
+        geometry = ogr.CreateGeometryFromWkt(wkt)
+        layer = dataset.CreateLayer("features", crs, geometry.GetGeometryType())
+        feature = ogr.Feature(layer.GetLayerDefn())
+        assert feature.SetGeometry(geometry) == 0
+        assert layer.CreateFeature(feature) == 0
+    return resolve_vector_file_selection(
+        path,
+        UploadedSelection(
+            uploadId=UUID(int=2), layerName="features", filter=VectorFilter()
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "CURVEPOLYGON (CIRCULARSTRING (1 0, 0 1, -1 0, 0 -1, 1 0))",
+        "TRIANGLE Z ((0 0 7, 2 0 7, 0 2 7, 0 0 7))",
+        "TIN (((-4 -4,-3 -4,-4 -3,-4 -4)),((0 0,2 0,0 2,0 0)))",
+        "POLYHEDRALSURFACE (((-4 -4,-3 -4,-4 -3,-4 -4)),((0 0,2 0,0 2,0 0)))",
+    ],
+    ids=["curved-polygon", "triangle-z", "tin", "polyhedral-surface"],
+)
+@pytest.mark.parametrize("as_target", [True, False])
+def test_native_geopackage_surfaces_keep_their_intersection_membership(
+    tmp_path: Path, as_target: bool, wkt: str
+) -> None:
+    """Read a native polygonal surface as either an original target or a boundary.
+
+    Args:
+        tmp_path: Temporary directory for the two native GeoPackages.
+        as_target: Compare the native surface against a linear boundary if true.
+        wkt: Native surface with a part intersecting the first linear polygon.
+    """
+    surface = _write_native_geometry(tmp_path / "surface.gpkg", wkt)
+    linear = _write_layer(
+        tmp_path / "linear.gpkg",
+        [
+            (box(0.7, 0.6, 0.8, 0.7), "intersects the surface"),
+            (box(2, 2, 3, 3), "outside"),
+        ],
+        geometry_type="Polygon",
+    )
+    target, boundary = (surface, linear) if as_target else (linear, surface)
+    matches = match_features(target, {str(UUID(int=1)): boundary}, _spatial_rule())
+    assert matches.ids == {1}
+
+
+def test_measured_native_surface_keeps_only_spatial_coordinates(tmp_path: Path) -> None:
+    """Keep the original elevation when converting measured vertices to GeoJSON."""
+    from eolab_app.feature_intersection import iter_original_features
+
+    surface = _write_native_geometry(
+        tmp_path / "measured.gpkg",
+        "TRIANGLE ZM ((0 0 7 10,2 0 8 20,0 2 9 30,0 0 7 10))",
+    )
+    [(_, _, polygon)] = list(iter_original_features(surface, None, None))
+    assert list(polygon.exterior.coords) == [(0, 0, 7), (2, 0, 8), (0, 2, 9), (0, 0, 7)]
+
+
+def test_mixed_collection_keeps_nested_surfaces_and_points(tmp_path: Path) -> None:
+    """Select an original collection by either part, and exclude the empty gap."""
+    collection = _write_native_geometry(
+        tmp_path / "collection.gpkg",
+        "GEOMETRYCOLLECTION (POINT (4 4), GEOMETRYCOLLECTION "
+        "(TRIANGLE ((0 0,2 0,0 2,0 0))))",
+    )
+    for area, expected in [
+        (box(0.7, 0.6, 0.8, 0.7), {1}),
+        (box(3.9, 3.9, 4.1, 4.1), {1}),
+        (box(2, 2, 3, 3), set()),
+    ]:
+        assert (
+            match_features(collection, {}, VectorFilter(), required_area=area).ids
+            == expected
+        )
+
+
 @pytest.mark.parametrize("as_target", [True, False])
 def test_drawings_and_projected_source_share_one_comparison(tmp_path: Path, as_target: bool) -> None:
     """A saved WGS84 drawing around one degree east meets only the first metric polygon."""
@@ -137,6 +236,8 @@ def test_mixed_filter_counts_and_pages_original_features(tmp_path: Path, match: 
     assert display_feature_ranges(bound, bound.matches.ids) == ("1" if match == "all" else "1:4")
     page = read_parcel_rows(bound, "group", ("group",), 0, 10)
     assert [row.properties["group"] for row in page.rows] == expected
+    attributes = asyncio.run(read_feature_attributes(bound, tuple(sorted(bound.matches.ids))))
+    assert [feature.properties["group"] for feature in attributes.features] == expected
 
 
 def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,12 +268,21 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
     monkeypatch.setattr(selection_operation, "UPLOAD_MOUNT", uploads.root)
     completed = []
 
-    async def run_job(token: str) -> None:
-        """Run the installed worker read against the real application and the fixture catalog."""
+    async def run_job(token: str, execution_seconds: int) -> None:
+        """Run the installed comparison with the deadline for the requested result.
+
+        Args:
+            token: Request-scoped credential for these source layers.
+            execution_seconds: Hard deadline passed to the Jobs executor.
+        """
+        read = reader.spatial_reads.get(token)
+        assert execution_seconds == (50 if read.lasso else 20)
         catalog = httpx2.MockTransport(lambda request: httpx2.Response(200, json=item))
         mounts = {"http://app:8000": httpx2.ASGITransport(app=app), "http://stac-api:8080": catalog}
         async with httpx2.AsyncClient(mounts=mounts, trust_env=False) as client:
-            await selection_operation.return_intersecting_ids(client, selection_operation.ComparisonInput(spatialRead=token))
+            await selection_operation.deliver_intersection_result(
+                client, selection_operation.ComparisonInput(spatialRead=token)
+            )
         completed.append(token)
 
     async def read_drawing(owner: str, reference: Any) -> tuple[SummaryPolygon, ...]:
@@ -196,14 +306,15 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         request = {"layerName": published.layer_name, "selection": target}
         url = "/api/vector-filters/map"
         scans = []
-        original_filter = fiona.Collection.filter
+        from osgeo import ogr
+        original_scan = ogr.Layer.__iter__
 
-        def track_scan(dataset: fiona.Collection, *args: Any, **kwargs: Any) -> Any:
+        def track_scan(dataset: ogr.Layer) -> Any:
             """Record each native feature scan performed while applying this map filter."""
-            scans.append(dataset.name)
-            return original_filter(dataset, *args, **kwargs)
+            scans.append(dataset.GetName())
+            return original_scan(dataset)
 
-        monkeypatch.setattr(fiona.Collection, "filter", track_scan)
+        monkeypatch.setattr(ogr.Layer, "__iter__", track_scan)
         result = owner.post(url, json=request, headers=HEADERS)
         assert result.status_code == 200, result.text
         assert result.json()["count"] == {"matched": 8, "total": 8, "complete": True}
@@ -238,5 +349,21 @@ def test_public_map_filter_requires_the_private_boundary(tmp_path: Path, monkeyp
         empty = owner.post(url, json=request, headers=HEADERS)
         assert empty.status_code == 200, empty.text
         assert empty.json()["count"] == {"matched": 0, "total": 8, "complete": True}
+        # A Lasso covering the layer must still use the empty private spatial filter.
+        before_lasso = len(completed)
+        lasso_url = "/api/vector-sampling/lasso"
+        lasso_body = {"selection": target, "polygon": mapping(box(-1, -1, 1, 1))}
+        lasso = owner.post(lasso_url, json=lasso_body, headers=HEADERS)
+        assert lasso.status_code == 200, lasso.text
+        assert lasso.json() == {
+            "matched": 0,
+            "featureIds": [],
+            "features": [],
+            "geometry": {"type": "FeatureCollection", "features": []},
+        }
+        assert len(completed) == before_lasso + 2  # One bound filter and one Lasso.
+        assert (
+            other.post(lasso_url, json=lasso_body, headers=HEADERS).status_code == 404
+        )
         assert owner.delete(f"{BASE}/{identifier}", headers=HEADERS).status_code == 204
         assert owner.post(url, json=request, headers=HEADERS).status_code == 404

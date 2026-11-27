@@ -208,7 +208,7 @@ function validateSavedMapView(candidate) {
 function validateVisitorControls(candidate) {
     requirePlainObject(candidate, "Visitor controls");
     requireExactKeys(candidate, ["version", "choices",
-        ...(Object.hasOwn(candidate, "initialPanels") ? ["initialPanels"] : [])], "Visitor controls");
+        ...["initialPanels", "modelIds"].filter(key => Object.hasOwn(candidate, key))], "Visitor controls");
     if (candidate.version !== VISITOR_CONTROLS_VERSION) {
         throw new SavedMapViewValidationError("This map uses a visitor controls version this viewer does not support.");
     }
@@ -226,7 +226,13 @@ function validateVisitorControls(candidate) {
             }
         }
     }
+    if (Object.hasOwn(candidate, "modelIds") && (!Array.isArray(candidate.modelIds) ||
+        candidate.modelIds.some(id => typeof id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(id)) ||
+        new Set(candidate.modelIds).size !== candidate.modelIds.length)) {
+        throw new SavedMapViewValidationError("Visitor model selections must use distinct recipe IDs.");
+    }
     return Object.freeze({ version: VISITOR_CONTROLS_VERSION, choices: Object.freeze({ ...candidate.choices }),
+        ...(candidate.modelIds === undefined ? {} : { modelIds: Object.freeze([...candidate.modelIds]) }),
         ...(candidate.initialPanels === undefined ? {} : { initialPanels: Object.freeze({ ...candidate.initialPanels }) }),
     });
 }

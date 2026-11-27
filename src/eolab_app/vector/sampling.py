@@ -52,8 +52,16 @@ from eolab_app.vector.parcel_models import (
 )
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
-from eolab_app.vector.lasso import LassoSelectionResult
-from eolab_app.vector.spatial_read import SpatialReads, worker_layer
+from eolab_app.vector.lasso import LASSO_EXECUTION_SECONDS, LassoRead, LassoSelectionResult
+from eolab_app.vector.feature_attributes import (
+    FeatureAttributesRequest,
+    FeatureAttributesResult,
+)
+from eolab_app.vector.spatial_read import (
+    INTERSECTION_SECONDS,
+    SpatialReads,
+    worker_layer,
+)
 from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.source_files import (
     LeasedSourceFiles,
@@ -175,7 +183,7 @@ class VectorSamplingService:
         uploads: VectorUploadStore | None = None,
         artifact_files: Callable[[], LeasedSourceFiles] | None = None,
         read_drawing: Callable[[str, DrawingReference], Awaitable[tuple[SummaryPolygon, ...]]] | None = None,
-        comparison_executor: Callable[[str], Awaitable[None]] | None = None,
+        comparison_executor: Callable[[str, int], Awaitable[None]] | None = None,
     ) -> None:
         """Connect vector source resolution with feature-count, extent and outline jobs.
 
@@ -197,7 +205,7 @@ class VectorSamplingService:
             artifact_files: Composition-supplied access to immutable result files;
                 resolved when used, after the owning source service is composed.
             read_drawing: Read a saved drawing revision or a device-only input owned by this browser.
-            comparison_executor: Submit an interactive intersection to the ordinary Jobs queue.
+            comparison_executor: Run the credentialed native job with its execution deadline in seconds.
         """
         self.catalog = catalog
         self.resolver = resolver
@@ -412,7 +420,6 @@ class VectorSamplingService:
     async def compare_layers(
         self, target: IntersectionLayer, boundaries: dict[str, IntersectionLayer], predicate: VectorFilter,
         drawing_properties: tuple[dict[str, str], ...] = (),
-        *, required_area: SummaryPolygon | None = None,
     ) -> FeatureMatches:
         """Queue one read of the original target and all filtered polygon sources.
 
@@ -421,8 +428,6 @@ class VectorSamplingService:
             boundaries: Authorized polygon views keyed by their map-layer ID.
             predicate: Field and spatial conditions on the target.
             drawing_properties: Name and note in target order for drawing filters.
-            required_area: Additional validated WGS84 polygon every match must
-                intersect, independently of the target's field-condition grouping.
 
         Returns:
             Matching original IDs and the total target feature count.
@@ -435,11 +440,16 @@ class VectorSamplingService:
         for layer in (target, *boundaries.values()):
             if isinstance(layer, ResolvedCatalogSelection) and layer.upload_owner:
                 await asyncio.to_thread(self._uploads.prepare_source_read, layer.path)
-        inputs = {"target": worker_layer(target), "boundaries": {key: worker_layer(layer) for key, layer in boundaries.items()},
-                  "filter": predicate.model_dump(mode="json", by_alias=True), "drawingProperties": drawing_properties,
-                  "requiredArea": required_area.model_dump(mode="json") if required_area is not None else None}
+        inputs = {
+            "target": worker_layer(target),
+            "boundaries": {
+                key: worker_layer(layer) for key, layer in boundaries.items()
+            },
+            "filter": predicate.model_dump(mode="json", by_alias=True),
+            "drawingProperties": drawing_properties,
+        }
         with self.spatial_reads.hold(inputs) as (token, read):
-            await self._comparison_executor(token)
+            await self._comparison_executor(token, INTERSECTION_SECONDS)
             if read.result is None:
                 raise VectorConflictError("The polygon intersection reader returned no result.")
             return read.result
@@ -458,23 +468,71 @@ class VectorSamplingService:
             source_owner: Browser credentials for every private referenced source.
 
         Returns:
-            Exact matching IDs and count, with optional complete display geometry.
-            Display limits never alter membership or make the count approximate.
+            Exact IDs, count and complete ordered attributes, with optional whole-feature outlines.
+            An outline timeout preserves the completed rows after the native job exits.
 
         Raises:
             SelectionUnavailableError: If the source identity or access is invalid.
-            VectorConflictError: If the bounded original-source comparison fails.
+            VectorConflictError: The comparison or complete attribute read failed.
             asyncio.CancelledError: After native work has stopped using its sources.
         """
-        from eolab_app.vector.lasso import read_lasso_highlights
-
+        if self._comparison_executor is None:
+            raise VectorConflictError("The polygon intersection reader is unavailable.")
         async with self.open_selection(selection, source_owner) as target:
-            matches = await self.compare_layers(target, {}, VectorFilter(), required_area=polygon)
-            feature_ids = tuple(sorted(matches.ids))
-            geometry = await read_lasso_highlights(target, feature_ids)
-            return LassoSelectionResult(
-                matched=len(feature_ids), featureIds=feature_ids, geometry=geometry
-            )
+            if target.upload_owner:
+                await asyncio.to_thread(self._uploads.prepare_source_read, target.path)
+            inputs = {
+                "target": worker_layer(target),
+                "lasso": polygon.model_dump(mode="json"),
+            }
+            deadline = asyncio.timeout(None)
+            read = LassoRead(deadline)
+            with self.spatial_reads.hold(inputs, lasso=read) as (token, _):
+                try:
+                    async with deadline:
+                        await self._comparison_executor(token, LASSO_EXECUTION_SECONDS)
+                except TimeoutError as error:
+                    if read.result is None:
+                        raise VectorConflictError(
+                            "Selecting these features took too long. Select a smaller area and try again."
+                        ) from error
+                except VectorConflictError:
+                    if read.result is None:
+                        raise
+            if read.result is None:
+                raise VectorConflictError(
+                    "The Lasso reader returned no feature attributes."
+                )
+            return read.result
+
+    async def read_feature_attributes(
+        self,
+        request: FeatureAttributesRequest,
+        source_owner: str | VectorSourceOwners | None = None,
+    ) -> FeatureAttributesResult:
+        """Authorize selected native IDs and read their original scalar attributes.
+
+        Args:
+            request: Path-free filtered source and unique ordered native-ID text.
+            source_owner: Browser credentials for every private referenced source.
+
+        Returns:
+            Complete identified attributes and the original source descriptor,
+            independently of map visibility or optional display geometry.
+
+        Raises:
+            SelectionUnavailableError: If source identity or access is invalid.
+            VectorUploadError: If the selected upload is unavailable to this browser.
+            SourceFileError: If a private result expires or loses its read lease.
+            VectorFeatureError: If Catalog access, the filter, or the complete
+                bounded attribute read fails.
+            asyncio.CancelledError: After native work stops using its sources.
+        """
+        from eolab_app.vector.feature_attributes import read_feature_attributes
+
+        async with self.open_selection(request.selection, source_owner) as target:
+            native_ids = tuple(int(feature_id) for feature_id in request.featureIds)
+            return await read_feature_attributes(target, native_ids)
 
     @asynccontextmanager
     async def _open_original(

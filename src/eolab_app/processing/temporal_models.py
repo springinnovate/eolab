@@ -15,6 +15,7 @@ from pydantic import (
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import Artifact
+from eolab_app.processing.temporal_coverage import OptionalObservationLabels
 from eolab_app.processing.temporal_grid import TemporalReadGrid
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.sampling_box import Wgs84SamplingBox
@@ -28,7 +29,7 @@ class PrecipitationConversion(BaseModel):
     Attributes:
         inputUnit: Exact unit required on the admitted mean-rate variable.
         outputUnit: Unit written on the resulting total raster.
-        factor: Positive multiplier applied after rate times interval seconds:
+        factor: Positive multiplier applied after rate times seconds of overlap:
             total = sum(rate * seconds * factor).
     """
 
@@ -44,8 +45,8 @@ class TemporalReduction(BaseModel):
     Statistics give valid observations equal weight. Standard deviation is the
     population statistic; percentiles use exact linear interpolation and require
     a percentile value. Sum retains the source units without integration.
-    Precipitation total integrates mean rates over their recorded intervals,
-    using the model's configured units and conversion factor.
+    Precipitation total multiplies each mean rate by the seconds its interval
+    overlaps the request. Partial intervals assume a constant rate.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -160,7 +161,7 @@ class TemporalMapSpec(BaseModel):
     Detailed observation labels and support intervals belong in provenance.json.
     unit describes the output values; original units remain in source metadata.
     timeSupport retains the admitted meaning of each observation.
-    conversionFactor multiplies each rate after integration over interval seconds;
+    conversionFactor multiplies each rate after integration over seconds of overlap;
     ordinary statistics use 1.
     """
 
@@ -176,6 +177,7 @@ class TemporalMapSpec(BaseModel):
     observationCount: int
     firstObservation: datetime
     lastObservation: datetime
+    observationLabels: OptionalObservationLabels = None
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ import { samplingBoxBounds } from "../sampling-box.js";
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
 import { publishRasterSource } from "./api.js";
 import { loadTemporalTimes } from "./temporal-api.js";
+import { observationDate, observationLabel, observationPeriod } from "../observation-period.js";
 import { formatObservationTime } from "./observation-time.js";
 import { TemporalControlsView } from "./temporal-controls-view.js";
 import {
@@ -149,6 +150,8 @@ function canRetryRasterStatistics(error) {
  * @property {string} name Dataset title or custom layer name.
  * @property {string} variableLabel Human-readable name of the selected variable.
  * @property {string} variable Catalog variable identifier.
+ * @property {string} [period] Operator-declared period for observation labels.
+ * @property {Object<string,string>} [intervalStarts] Inclusive starts of explicit ranges by selection key.
  * @property {string} time Selected UTC observation, including an unavailable saved selection.
  * @property {string} month Requested or returned UTC month, or an empty string while looking up the latest month.
  * @property {string[]} months Ordered populated months from the Catalog.
@@ -160,6 +163,7 @@ function canRetryRasterStatistics(error) {
 
 /**
  * @typedef {Object} RasterViewer
+ * @property {(enabled:boolean)=>void} setStyleEditingEnabled Set whether style actions may change the map or its charts.
  * @property {(enabled:boolean)=>void} setPixelPickingEnabled Enable or hide transient pixel values.
  * @property {(choices:{rasterValues:boolean,histogramBox:boolean})=>void} setMapInspectionAvailability
  * Apply this viewer's permission to pick values or create and resize map boxes.
@@ -219,6 +223,7 @@ function canRetryRasterStatistics(error) {
  * @property {() => {lat:number,lng:number}} [getMapCenter] Map focus for center-based sampling.
  * @property {Object} leaflet Leaflet namespace with WMS and polygon factories.
  * @property {boolean} [inspectionInitiallyEnabled=true] Whether map inspection can run before composition resolves the active tools.
+ * @property {boolean} [styleEditingEnabled=true] Whether user actions may change appearance when the viewer opens.
  * @property {(message: string, item: Object) => void} onTileError Reports a
  * layer-specific tile error.
  * @property {(item:Object)=>void} [onTemporalInfo] Open Catalog details for a retained temporal dataset.
@@ -295,6 +300,7 @@ export function initializeRasterViewer(
         leaflet,
         onTileError,
         inspectionInitiallyEnabled = true,
+        styleEditingEnabled = true,
         onTemporalInfo = /** @param {Object} _item Temporal Catalog Item. @return {void} */ (_item) => {},
         onCalculateRequested = /** @param {Object} _item Original raster. @param {Object|null} _area Histogram scope. @param {string} _label View name. @param {string} _key View identity. @return {void} */ (_item, _area, _label, _key) => {},
         onHistogramChange = () => {},
@@ -482,6 +488,7 @@ export function initializeRasterViewer(
             publishedRaster,
             appearanceMode: "continuous",
             categoricalStyle: null,
+            hasSavedAppearance: false,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
@@ -509,6 +516,7 @@ export function initializeRasterViewer(
             key: `analysis:${rasterSourceKey(item)}`,
             item,
             label: getRasterDisplayName(item),
+            hasSavedAppearance: false,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
@@ -522,7 +530,7 @@ export function initializeRasterViewer(
      * Hand the same raster's sampling state and results to another owner.
      *
      * The analysis object follows the active owner; controllers and Leaflet
-     * resources stay with their existing session.
+     * resources stay with their existing session. A restored target keeps its saved appearance.
      *
      * @param {Object} target New renderer or detached raster session.
      * @param {Object} source Existing session for the same raster.
@@ -530,10 +538,12 @@ export function initializeRasterViewer(
      */
     function adoptRasterInteractionState(target, source) {
         target.analysis = source.analysis;
+        target.histogramPercentiles = { ...source.histogramPercentiles, rescale: false };
+        if (target.hasSavedAppearance) return;
         target.rasterStyle = { ...source.rasterStyle };
         target.paletteName = source.paletteName;
         target.rasterStyleWasEdited = source.rasterStyleWasEdited;
-        target.histogramPercentiles = { ...source.histogramPercentiles, rescale: false };
+        target.hasSavedAppearance = source.hasSavedAppearance;
     }
 
     /**
@@ -979,7 +989,7 @@ export function initializeRasterViewer(
         }
         if (!message && !session.layer) message = "Add this raster to the map to rescale its colors.";
         if (!message) message = session.histogramPercentileError;
-        return { key: session.key, settings: session.histogramPercentiles, canRescale: !message, message };
+        return { key: session.key, settings: session.histogramPercentiles, canRescale: styleEditingEnabled && !message, message };
     }
 
     /**
@@ -1044,7 +1054,7 @@ export function initializeRasterViewer(
             ? analysisRasterSession : mapLayers.getRecord(key)?.state;
         if (!session) return;
         session.histogramPercentileError = "";
-        session.histogramPercentiles = { ...settings };
+        session.histogramPercentiles = { ...settings, rescale: styleEditingEnabled && settings.rescale };
         scheduleHistogramStyleUpdate(session);
         if (session.key === activeLayerKey && session.analysis.rasterStatistics) {
             refreshActiveSessionPresentation();
@@ -1246,16 +1256,13 @@ export function initializeRasterViewer(
         pointSamplesController.clear();
         bivariateStatistics = null;
         controlsView.clearPairedStatistics?.();
-        restoreOrdinaryRasterPresentation(previousKeys);
+        if (styleEditingEnabled) restoreOrdinaryRasterPresentation(previousKeys);
         bivariatePercentiles.clear();
         bivariateMode.enter(bivariateCandidates.map(
             /** @param {Object} candidate Newly derived analysis candidate. */
             (candidate) => candidate.key
         ));
-        onBivariateRenderingChange([
-            bivariateMode.xKey,
-            bivariateMode.yKey,
-        ]);
+        if (styleEditingEnabled) onBivariateRenderingChange([bivariateMode.xKey, bivariateMode.yKey]);
         if (axesWereSwapped) bivariateMode.swap();
         applyBivariatePresentation();
         requestBivariateStatistics();
@@ -1563,16 +1570,9 @@ export function initializeRasterViewer(
         session.analysis.rasterStatistics = statistics;
         session.analysis.rasterStatisticsIsApplicable = true;
         session.histogramPercentileError = "";
-        if (samplingArea.kind === "wholeRaster" && session.appearanceMode !== "categorical") {
-            const style = deriveInitialRasterStyleFromStatistics(
-                session.rasterStyle, statistics, session.rasterStyleWasEdited || session.temporal?.preserveRange === true
-            );
-            if (style !== null) {
-                applySessionStyle(session, style, session.paletteName, false);
-                if (editingLayerKey === session.key) {
-                    controlsView.setStyle(style, session.paletteName);
-                }
-            }
+        if (samplingArea.kind === "wholeRaster") {
+            const rangeChanged = initializeRasterRange(session, statistics);
+            if (rangeChanged && editingLayerKey === session.key) controlsView.setStyle(session.rasterStyle, session.paletteName);
         }
         scheduleHistogramStyleUpdate(session);
         renderLayerStack();
@@ -1985,12 +1985,13 @@ export function initializeRasterViewer(
         const eligible = bivariateCandidates;
         const hasCategorical = eligible.some(candidate => candidate.appearanceMode === "categorical");
         const canEnter = eligible.length === 2 && !hasCategorical;
-        const hasSuppressedLayers = mapLayers.visibleCount > 2;
+        const hasSuppressedLayers = styleEditingEnabled && mapLayers.visibleCount > 2;
         const extraGuidance = hasSuppressedLayers
             ? " Other visible layers are temporarily hidden in 2D mode."
             : "";
-        const guidance = message ?? (
-            bivariateMode.active
+        const guidance = message ?? (canEnter && !styleEditingEnabled
+            ? "2D compares the top two visible rasters. The map keeps its published colors."
+            : bivariateMode.active
                 ? "2D analyzes the X/Y-badged rasters with coordinated colors " +
                   "and blending at 100% opacity. Reorder Map contents to change " +
                   `the pair.${extraGuidance}`
@@ -2006,7 +2007,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Apply coordinated axis ramps, 100% opacity, and ESOS-C compositing.
+     * Present the paired histogram and apply coordinated colors to the map when styling is enabled.
      *
      * @return {void}
      */
@@ -2014,6 +2015,19 @@ export function initializeRasterViewer(
         const candidates = getBivariatePairCandidates();
         if (candidates === null) return;
         const presentation = getBivariatePresentation();
+        if (styleEditingEnabled) renderBivariateMapColors(candidates, presentation);
+        controlsView.renderBivariateMode?.({ active: true, ...presentation });
+        updateBivariatePercentileValues();
+        if (bivariateStatistics !== null) controlsView.renderPairedStatistics?.(bivariateStatistics, presentation);
+    }
+
+    /**
+     * Apply coordinated ramps, full opacity and additive blending to the two rendered rasters.
+     * @param {{xCandidate:Object,yCandidate:Object}} candidates Current ordered analysis sources.
+     * @param {{xStyle:Object,yStyle:Object}} presentation Coordinated styles for the two axes.
+     * @return {void}
+     */
+    function renderBivariateMapColors(candidates, presentation) {
         const renderedRecords = [];
         for (const [candidate, style] of [
             [candidates.xCandidate, presentation.xStyle],
@@ -2047,17 +2061,6 @@ export function initializeRasterViewer(
             setRasterLayerAdditiveBlend(
                 mapLayers.getLeafletLayer(topRecord.entry.key),
                 true
-            );
-        }
-        controlsView.renderBivariateMode?.({
-            active: true,
-            ...presentation,
-        });
-        updateBivariatePercentileValues();
-        if (bivariateStatistics !== null) {
-            controlsView.renderPairedStatistics?.(
-                bivariateStatistics,
-                presentation
             );
         }
     }
@@ -2140,10 +2143,7 @@ export function initializeRasterViewer(
              */
             (candidate) => candidate.key
         ));
-        onBivariateRenderingChange([
-            bivariateMode.xKey,
-            bivariateMode.yKey,
-        ]);
+        if (styleEditingEnabled) onBivariateRenderingChange([bivariateMode.xKey, bivariateMode.yKey]);
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
         renderRasterSamplingAreaControls();
@@ -2174,15 +2174,15 @@ export function initializeRasterViewer(
         pairedStatisticsController.clear();
         pointSamplesController.synchronize([]);
         bivariateStatistics = null;
-        restoreOrdinaryRasterPresentation(keys);
+        if (styleEditingEnabled) restoreOrdinaryRasterPresentation(keys);
         bivariateMode.leave();
-        onBivariateRenderingChange(null);
+        if (styleEditingEnabled) onBivariateRenderingChange(null);
         bivariateSelectedBounds = null;
         bivariateSelectedCenter = null;
         bivariateSelectedWindowSizeKm = null;
         controlsView.renderBivariateMode?.({ active: false });
         controlsView.clearPairedStatistics?.();
-        controlsView.setAppearanceEnabled?.(true);
+        controlsView.setAppearanceEnabled?.(styleEditingEnabled);
         controlsView.setUnivariateHistogramVisible?.(true);
         renderRasterSamplingAreaControls();
         rasterSampleWindowController.clearSelection();
@@ -2244,6 +2244,7 @@ export function initializeRasterViewer(
                 session.appearanceMode = appearance.mode; session.categoricalStyle = appearance.categorical;
                 session.rasterStyle = appearance.continuous.definition; session.paletteName = appearance.continuous.paletteName;
                 session.rasterStyleWasEdited = appearance.continuous.styleWasEdited;
+                session.hasSavedAppearance = true;
             }
             if (analysisSession !== null) {
                 adoptRasterInteractionState(session, analysisSession);
@@ -2311,9 +2312,12 @@ export function initializeRasterViewer(
                 sourceOrigin: source.kind === "uploadedRaster" ? "upload" : source.kind === "runArtifact" ? "runArtifact" : "catalog",
                 canInfo: record.entry.item !== null || Boolean(record.state.temporal) || Boolean(record.state.lifecycle?.info),
                 ...(record.state.temporal ? {controls: record.state.temporal.controls.element,
-                    timeline: source.time && (!bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
+                    observationPeriod: record.state.item.observationPeriod,
+                    timeline: source.time && (!styleEditingEnabled || !bivariateMode.active || bivariateMode.contains(record.entry.key)) ? {
                         name: record.entry.customName ?? record.state.temporal.item.properties.title ?? record.state.temporal.item.id,
                         variableLabel: record.state.temporal.item.properties["cube:variables"][source.variable]?.description ?? source.variable,
+                        period: record.state.temporal.item.properties["eolab:time_labels"],
+                        intervalStarts: record.state.temporal.intervalStarts,
                         variable: source.variable, time: source.time, months: record.state.temporal.months,
                         month: record.state.temporal.month, times: record.state.temporal.times,
                         loading: record.state.temporal.loading, error: record.state.temporal.error,
@@ -2330,7 +2334,8 @@ export function initializeRasterViewer(
                     legend: buildCategoricalRasterLegend(record.state.categoricalStyle),
                 };
             }
-            const opacityLocked = bivariateMode.contains(record.entry.key);
+            const paired = bivariateMode.contains(record.entry.key);
+            const opacityLocked = styleEditingEnabled && paired;
             if (opacityLocked) {
                 const presentation = getBivariatePresentation();
                 presentationStyle = record.entry.key === bivariateMode.xKey
@@ -2342,7 +2347,7 @@ export function initializeRasterViewer(
                 ...metadata, datasetKind: "raster",
                 opacityLocked,
                 effectiveOpacity: opacityLocked ? 1 : record.entry.opacity,
-                roleBadge: opacityLocked ? {
+                roleBadge: paired ? {
                     label: record.entry.key === bivariateMode.xKey ? "X" : "Y",
                     description: record.entry.key === bivariateMode.xKey
                         ? "X axis raster"
@@ -2413,6 +2418,7 @@ export function initializeRasterViewer(
             session.categoricalStyle = appearance.categorical;
             applySessionStyle(session, appearance.continuous.definition,
                 appearance.continuous.paletteName, appearance.continuous.styleWasEdited);
+            session.hasSavedAppearance = true;
             if (bivariateMode.contains(session.key) && appearance.mode === "categorical") {
                 leaveBivariateMode("2D comparison is not available for categorical layers.");
             }
@@ -2888,13 +2894,14 @@ export function initializeRasterViewer(
     /**
      * Find the session that owns style edits, independently of analysis.
      *
-     * An explicit editing key takes precedence. Without one, legacy callers
+     * Disabled editing has no user style target. An explicit editing key takes precedence. Without one, legacy callers
      * use the active detached or retained analysis session.
      *
      * @return {Object|null} Mutable raster session, or null when the target
      * is absent; does not fall back from a missing explicit editing key.
      */
     function editingSession() {
+        if (!styleEditingEnabled) return null;
         return editingLayerKey === null
             ? activeDetachedRasterSession() ??
                 mapLayers.getRecord(activeLayerKey)?.state ?? null
@@ -3076,6 +3083,7 @@ export function initializeRasterViewer(
      * false for missing or non-raster targets, leaving no explicit style target.
      */
     function openStyle(key) {
+        if (!styleEditingEnabled) return false;
         closeStyle();
         const record = mapLayers.getRecord(key);
         const session = record?.adapter === rasterMapLayerAdapter
@@ -3096,7 +3104,7 @@ export function initializeRasterViewer(
      * @return {boolean} Whether this key belongs to the active 2D pair.
      */
     function openPairedStyle(key) {
-        if (!bivariateMode.contains(key)) return false;
+        if (!styleEditingEnabled || !bivariateMode.contains(key)) return false;
         showHistogramWorkspace();
         controlsView.openBivariateStyle();
         return true;
@@ -3115,6 +3123,32 @@ export function initializeRasterViewer(
         editingLayerKey = null;
         editingAppearanceMode = "continuous";
         controlsView.clearStyleHistogram?.();
+    }
+
+    /**
+     * Close disabled raster style actions and keep existing histogram results available.
+     * An active pair keeps its analysis and resumes ordinary layer rendering when editing ends.
+     * @param {boolean} enabled Whether the visitor may change raster appearance.
+     * @return {void}
+     */
+    function setStyleEditingEnabled(enabled) {
+        if (styleEditingEnabled === enabled) return;
+        styleEditingEnabled = enabled;
+        controlsView.setStyleEditingEnabled?.(enabled);
+        controlsView.setAppearanceEnabled?.(enabled && !bivariateMode.active);
+        if (!enabled) {
+            closeStyle();
+            cancelBivariateStyleUpdate();
+            for (const key of histogramStyleTimers.keys()) cancelHistogramStyleUpdate(key);
+        }
+        if (bivariateMode.active) {
+            const keys = [bivariateMode.xKey, bivariateMode.yKey];
+            if (!enabled) restoreOrdinaryRasterPresentation(keys);
+            onBivariateRenderingChange(enabled ? keys : null);
+            applyBivariatePresentation();
+        }
+        renderBivariateAvailability();
+        renderLayerHistogramSummaries();
     }
 
     /**
@@ -3234,6 +3268,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function scheduleRasterStyleCommit() {
+        if (!styleEditingEnabled) return;
         const candidate = editingAppearanceMode === "categorical"
             ? null : validateRasterStyleControls();
         if (candidate !== null) {
@@ -3308,33 +3343,17 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Apply the initial whole-raster range unless a manual edit superseded it.
-     *
-     * @param {Object} statistics Validated whole-raster statistics.
-     * @return {boolean} Whether the bounded initial range was applied.
+     * Set a continuous raster's initial color thresholds from its whole-raster statistics.
+     * Retain saved appearances, manual edits and ranges shared across dates.
+     * @param {Object} session Active, background or detached raster session.
+     * @param {Object} statistics Validated whole-raster distribution.
+     * @return {boolean} Whether new thresholds were applied.
      */
-    function applyInitialWholeRasterStyle(statistics) {
-        if (activeAppearanceIsCategorical() || mapLayers.getRecord(activeLayerKey)?.state.temporal?.preserveRange) return false;
-        const initialStyle = deriveInitialRasterStyleFromStatistics(
-            rasterStyle,
-            statistics,
-            rasterStyleWasEdited
-        );
-        if (initialStyle === null) {
-            return false;
-        }
-        rasterStyle = initialStyle;
-        const session = activeDetachedRasterSession() ??
-            mapLayers.getRecord(activeLayerKey)?.state;
-        if (session) applySessionStyle(
-            session, rasterStyle, activePaletteName, rasterStyleWasEdited
-        );
-        // A retained raster changes the composite descriptor, while detached
-        // Catalog analysis has no map presentation to invalidate.
-        if (session && !isActiveAnalysisRaster()) {
-            renderLayerStack();
-        }
-        presentActiveStyle(rasterStyle, activePaletteName);
+    function initializeRasterRange(session, statistics) {
+        if (session.hasSavedAppearance || session.appearanceMode === "categorical" || session.temporal?.preserveRange) return false;
+        const style = deriveInitialRasterStyleFromStatistics(session.rasterStyle, statistics, session.rasterStyleWasEdited);
+        if (style === null) return false;
+        applySessionStyle(session, style, session.paletteName, false);
         return true;
     }
 
@@ -3462,10 +3481,13 @@ export function initializeRasterViewer(
      */
     function renderWholeRasterStatistics(statistics) {
         storeRasterStatisticsResult(rasterAnalysis, statistics, "wholeRaster");
-        const initialRangeApplied = hasSelectedRasterSamplingArea()
-            ? false
-            : applyInitialWholeRasterStyle(statistics);
         if (!hasSelectedRasterSamplingArea()) {
+            const session = activeDetachedRasterSession() ?? requireLayerSession(activeLayerKey);
+            const initialRangeApplied = initializeRasterRange(session, statistics);
+            if (initialRangeApplied) {
+                if (!isActiveAnalysisRaster()) renderLayerStack();
+                presentActiveStyle(rasterStyle, activePaletteName);
+            }
             renderRasterStatistics(statistics, initialRangeApplied);
         }
         refreshActiveSessionPresentation();
@@ -4319,7 +4341,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleBivariatePaletteChange(paletteName) {
-        if (!bivariateMode.active) return;
+        if (!styleEditingEnabled || !bivariateMode.active) return;
         bivariateMode.setPalette(paletteName);
         applyBivariatePresentation();
         renderLayerStack();
@@ -4331,7 +4353,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleBivariateSwapAxes() {
-        if (!bivariateMode.active) return;
+        if (!styleEditingEnabled || !bivariateMode.active) return;
         bivariateStatistics = null;
         bivariateMode.swap();
         applyBivariatePresentation();
@@ -4375,11 +4397,12 @@ export function initializeRasterViewer(
                 const [minimum, midpoint, maximum] = estimates;
                 values = Object.fromEntries(["lower", "middle", "upper"].map((name, index) =>
                     [name, formatRasterPixelValue(estimates[index])]));
-                invalid = !(minimum < midpoint && midpoint < maximum);
-                message = invalid
-                    ? "These percentiles give the same value. Choose a wider range or another sample."
-                    : `Estimated from ${bivariateStatistics.scope === "wholeOverlap" ? "whole overlap" : "the selected sample area"}; only pixels valid in both rasters.`;
-                if (!invalid) ranges[axis] = { minimum, midpoint, maximum };
+                if (minimum < midpoint && midpoint < maximum) {
+                    ranges[axis] = { minimum, midpoint, maximum };
+                    message = `Estimated from pixels valid in both rasters across ${bivariateStatistics.scope === "wholeOverlap" ? "the whole overlap" : "the selected sample area"}.`;
+                } else {
+                    message = "At least two percentiles have the same value in this sample.";
+                }
             }
             controlsView.renderBivariatePercentiles(axis, {
                 values, range: ranges[axis] ?? null, message, invalid, available,
@@ -4440,9 +4463,10 @@ export function initializeRasterViewer(
      */
     function handleBivariatePercentileInput(axis) {
         if (!bivariateMode.active) return;
-        bivariatePercentiles.set(bivariateMode[`${axis}Key`], controlsView.readBivariatePercentiles(axis));
+        const settings = controlsView.readBivariatePercentiles(axis);
+        bivariatePercentiles.set(bivariateMode[`${axis}Key`], {...settings, rescale: styleEditingEnabled && settings.rescale});
         const ranges = updateBivariatePercentileValues();
-        if (!["x", "y"].some(name => getBivariatePercentiles(name).rescale && ranges[name])) {
+        if (!styleEditingEnabled || !["x", "y"].some(name => getBivariatePercentiles(name).rescale && ranges[name])) {
             cancelBivariateStyleUpdate();
             return;
         }
@@ -4631,7 +4655,7 @@ export function initializeRasterViewer(
         controlsView.renderLayerHistograms([], null);
         cursorValuesView.clear();
         controlsView.renderBivariateMode?.({ active: false });
-        controlsView.setAppearanceEnabled?.(true);
+        controlsView.setAppearanceEnabled?.(styleEditingEnabled);
         controlsView.setUnivariateHistogramVisible?.(true);
         controlsView.setSamplingAreaMode("none", "No raster selected");
         renderBivariateAvailability();
@@ -4685,14 +4709,22 @@ export function initializeRasterViewer(
      * @param {Object} item Catalog temporal Item.
      * @param {{variable:string,time?:string}} selection Variable and optional exact observation time.
      * @param {boolean} available Whether this observation remains admitted.
+     * @param {Object<string,string>} [starts] Inclusive starts for explicit ranges.
      * @return {Object} Numerical source and presentation metadata; no rendering identity.
      */
-    function temporalRaster(item, selection, available) {
+    function temporalRaster(item, selection, available, starts) {
         const variable = item.properties["cube:variables"][selection.variable];
-        const label = `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable}`;
+        const period = item.properties["eolab:time_labels"];
+        let label = `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable}`;
+        if (selection.time) {
+            const timeLabel = observationLabel(selection.time, period, starts?.[selection.time]) ??
+                `${formatObservationTime(selection.time)} UTC`;
+            label += ` · ${timeLabel}`;
+        }
         return {
             source: {collectionId: item.collection, itemId: item.id, ...(selection.time ? selection : {})},
-            label: selection.time ? `${label} · ${formatObservationTime(selection.time)} UTC` : label,
+            observationPeriod: available ? observationPeriod(selection.time, selection.time, period, starts) : null,
+            label,
             bbox: item.bbox,
             assets: {data: {"raster:bands": [{unit: variable?.unit}]}},
             capabilities: {pixels: available, statistics: available, calculations: available, modelInput: false},
@@ -4713,13 +4745,15 @@ export function initializeRasterViewer(
             month: temporal.month,
             time: pending ? null : temporal.selection.time,
             months: temporal.months,
+            period: temporal.item.properties["eolab:time_labels"],
+            intervalStarts: temporal.intervalStarts,
             times: temporal.times, loading: temporal.loading, error: temporal.error,
         });
     }
 
     /** Replace source identity and discard results from the previous observation.
      * An admitted observation becomes the exact target for subsequent retries.
-     * Keeps the row, its area, appearance, visibility and drawing order.
+     * Keeps the row, area and drawing order. A change of units ends the pair and resets its appearance.
      * @param {Object} record Retained temporal raster.
      * @param {{variable:string,time?:string}} selection Variable alone before the first date is known, otherwise an exact observation.
      * @param {boolean} available Whether numerical readers may use the selection.
@@ -4730,19 +4764,23 @@ export function initializeRasterViewer(
         const session = record.state, temporal = session.temporal;
         cancelHistogramStyleUpdate(session.key);
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
+        const unit = temporal.item.properties["cube:variables"][selection.variable]?.unit;
+        const unitsChanged = unit !== temporal.unit;
+        if (unitsChanged && bivariateMode.contains(session.key)) {
+            leaveBivariateMode("The variable's units changed. Choose the two rasters again for a 2D comparison.", false);
+        }
         if (activeLayerKey === session.key) deactivateActiveLayer();
         cancelLayerHistogramRequest(session);
         pointSamplesController.clear();
         cursorSamplesController.clear();
         const oldAnalysis = session.analysis;
-        const unit = temporal.item.properties["cube:variables"][selection.variable]?.unit;
-        if (unit !== temporal.unit) {
-            if (bivariateMode.contains(session.key)) leaveBivariateMode("The variable's units changed. Choose the two rasters again for a 2D comparison.", false);
+        if (unitsChanged) {
             session.appearanceMode = "continuous";
             session.categoricalStyle = null;
             session.rasterStyle = {...DEFAULT_RASTER_STYLE};
             session.paletteName = DEFAULT_RASTER_PALETTE_NAME;
             session.rasterStyleWasEdited = false;
+            session.hasSavedAppearance = false;
             temporal.preserveRange = false;
         } else if (oldAnalysis.wholeRasterStatisticsState === "ready") {
             temporal.preserveRange = true;
@@ -4750,7 +4788,7 @@ export function initializeRasterViewer(
         temporal.unit = unit;
         temporal.selection = {...selection};
         if (available) temporal.pendingMonthChoice = undefined;
-        session.item = temporalRaster(temporal.item, selection, available);
+        session.item = temporalRaster(temporal.item, selection, available, temporal.intervalStarts);
         session.analysis = {...createRasterAnalysisState(oldAnalysis.selectedPolygonSampling),
             selectedRasterBounds: oldAnalysis.selectedRasterBounds,
             selectedRasterCenter: oldAnalysis.selectedRasterCenter,
@@ -4819,7 +4857,7 @@ export function initializeRasterViewer(
         const temporal = record.state.temporal;
         const selection = temporal.selection;
         const variable = monthChoice?.variable ?? selection.variable;
-        const month = monthChoice ? monthChoice.month : selection.time.slice(0, 7);
+        const month = monthChoice ? monthChoice.month : observationDate(selection.time, temporal.item.properties["eolab:time_labels"]).slice(0, 7);
         const edge = monthChoice?.edge;
         temporal.pendingMonthChoice = monthChoice;
         temporal.request?.abort();
@@ -4827,33 +4865,43 @@ export function initializeRasterViewer(
         temporal.loading = true;
         temporal.error = null;
         temporal.times = [];
+        temporal.intervalStarts = undefined;
         if (monthChoice && month === undefined) temporal.months = [];
         temporal.month = month ?? "";
-        selectTemporalObservation(record, selection.time ? selection : {variable}, false);
+        if (selection.time) {
+            renderTemporalControls(record);
+            mapLayers.render();
+        } else {
+            selectTemporalObservation(record, {variable}, false);
+        }
         try {
             const choices = await loadTimes(temporal.item, variable, month, request.signal);
             if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
             temporal.months = choices.months;
             temporal.month = choices.month;
             temporal.times = choices.times;
+            temporal.intervalStarts = choices.interval_starts;
             let time = selection.time;
             if (edge === "first") time = choices.times[0];
             if (edge === "last") time = choices.times.at(-1);
-            if (edge === "firstOfLastDay") {
-                const day = choices.times.at(-1)?.slice(0, 10);
-                time = choices.times.find(label => label.startsWith(day));
+            if (edge === "firstOfLastDay" && choices.times.length) {
+                const period = temporal.item.properties["eolab:time_labels"];
+                const day = observationDate(choices.times.at(-1), period);
+                time = choices.times.find(label => observationDate(label, period) === day);
             }
-            if (!time || !choices.times.includes(time)) {
-                temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
+            if (time && choices.times.includes(time)) {
+                selectTemporalObservation(record, {variable, time}, true);
+                await publishTemporalObservation(record, request);
+                finishTemporalRequest(record, request);
                 return;
             }
-            selectTemporalObservation(record, {variable, time}, true);
-            await publishTemporalObservation(record, request);
+            temporal.error = "The selected observation is no longer available. Choose another time or refresh the dataset.";
         } catch (error) {
-            if (!request.signal.aborted) temporal.error = `Could not load observation times: ${error.message}`;
-        } finally {
-            finishTemporalRequest(record, request);
+            if (request.signal.aborted || mapLayers.getRecord(record.entry.key) !== record) return;
+            temporal.error = `Could not load observation times: ${error.message}`;
         }
+        temporal.loading = false;
+        selectTemporalObservation(record, temporal.selection, false);
     }
 
     /** Select an actual timestamp from the row without reloading its month.
@@ -4913,7 +4961,7 @@ export function initializeRasterViewer(
         const times = temporal?.times;
         if (!times?.includes(time)) return null;
         const selection = {variable: temporal.selection.variable, time};
-        const publication = await publishRaster(temporalRaster(temporal.item, selection, true), undefined, signal);
+        const publication = await publishRaster(temporalRaster(temporal.item, selection, true, temporal.intervalStarts), undefined, signal);
         /** @return {boolean} Whether the original view and admitted month still own this frame. */
         const current = () => !signal.aborted && mapLayers.getRecord(key) === record && temporal.times === times;
         if (!current()) return null;
@@ -4938,7 +4986,7 @@ export function initializeRasterViewer(
         const initial = selection?.time ? {variable, time: selection.time} : {variable};
         const temporal = {item, selection: initial, unit: item.properties["cube:variables"][variable]?.unit,
             pendingMonthChoice: initial.time ? undefined : {variable, edge: "first"},
-            months: [], month: initial.time?.slice(0, 7) ?? "", times: [], request: null, loading: true, error: null,
+            months: [], month: initial.time ? observationDate(initial.time, item.properties["eolab:time_labels"]).slice(0, 7) : "", times: [], request: null, loading: true, error: null,
             preserveRange: Boolean(presentation.appearance)};
         let record;
         temporal.controls = temporalControlsFactory({
@@ -5232,7 +5280,7 @@ export function initializeRasterViewer(
             }
         },
         onSelectHistogram: handleSelectLayerHistogram,
-        onStyleHistogram: onStyleRequested,
+        onStyleHistogram: key => { if (styleEditingEnabled) onStyleRequested(key); },
         onCalculateHistogram: calculateHistogram,
         onCalculatePairedHistogram: calculatePairedHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
@@ -5254,6 +5302,8 @@ export function initializeRasterViewer(
     });
     cursorValuesView.setEnabled?.(pixelPickerEnabled, pixelPickingActive);
     controlsView.setSamplingBoxAvailable?.(histogramBoxAvailable);
+    controlsView.setStyleEditingEnabled?.(styleEditingEnabled);
+    if (!styleEditingEnabled) controlsView.setAppearanceEnabled?.(false);
     leafletMap.on("mousemove", handleMapMouseMove);
     leafletMap.on("dragstart", handleMapDragStart);
     leafletMap.on("dragend", handleMapDragEnd);
@@ -5293,6 +5343,7 @@ export function initializeRasterViewer(
         setFirstSampleHintEnabled,
         exploreAt,
         openStyle,
+        setStyleEditingEnabled,
         openPairedStyle,
         closeStyle,
         refreshStyle,

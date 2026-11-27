@@ -78,8 +78,9 @@ def build_image(application_image: str | None) -> str:
             "--require-hashes -r /build-inputs/application-ecoshard-requirements.txt "
             "&& python -m pip install --no-cache-dir --no-deps --no-build-isolation "
             "--require-hashes -r /build-inputs/application-habitat-requirements.txt\n"
-            "COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json /build-inputs/\n"
-            "RUN python /build-inputs/build-beneficiaries.py --manifest /build-inputs/beneficiaries-source.json --output /model-wheels "
+            "COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json deployment/build-pyflwdir.py /build-inputs/\n"
+            "RUN python /build-inputs/build-pyflwdir.py /model-wheels "
+            "&& python /build-inputs/build-beneficiaries.py --manifest /build-inputs/beneficiaries-source.json --output /model-wheels "
             "&& python -m pip install --no-deps --no-index /model-wheels/*.whl\n"
             "COPY pyproject.toml README.md LICENSE ./\nCOPY src/ ./src/\n"
             "RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation . "
@@ -120,6 +121,7 @@ def build_image(application_image: str | None) -> str:
                         ROOT / "deployment" / name
                         for name in (
                             "build-beneficiaries.py",
+                            "build-pyflwdir.py",
                             "beneficiaries-source.json",
                         )
                     ]
@@ -290,6 +292,8 @@ def run_suite(image: str, *, inject_failure: bool = False) -> int:
             "OPENBLAS_NUM_THREADS=1",
             "--env",
             "OMP_NUM_THREADS=2",
+            "--env",
+            "NUMBA_CACHE_DIR=/tmp/eolab-numba-cache",
             "--cap-drop",
             "ALL",
             "--security-opt",

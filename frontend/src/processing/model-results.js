@@ -43,16 +43,19 @@ function validateRasterResult(result) {
     }
 }
 
-/** Check the saved observation count, units and timestamps of a temporal result.
+/** Check the saved observation count, units, timestamps and optional date labels.
  * @param {Object} coverage Temporal coverage from the Processing API.
  * @return {void}
- * @throws {Error} If the observation count, units or timestamps are invalid.
+ * @throws {Error} If the coverage or its explicit interval starts are invalid.
  */
 function validateTemporalCoverage(coverage) {
+    const labels = coverage?.observationLabels;
+    const validTime = value => typeof value === "string" && Number.isFinite(Date.parse(value));
     if (!coverage || typeof coverage.unit !== "string" ||
         !Number.isSafeInteger(coverage.observationCount) || coverage.observationCount < 1 ||
-        !["firstObservation", "lastObservation"].every(key =>
-            typeof coverage[key] === "string" && Number.isFinite(Date.parse(coverage[key])))) {
+        ![coverage.firstObservation, coverage.lastObservation].every(validTime) ||
+        labels !== undefined && (typeof labels?.period !== "string" || labels.period === "explicit" &&
+            !(Array.isArray(labels.explicitStarts) && labels.explicitStarts.length === 2 && labels.explicitStarts.every(validTime)))) {
         throw new Error("Processing returned invalid temporal coverage.");
     }
 }

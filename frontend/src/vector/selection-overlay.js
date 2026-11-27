@@ -1,4 +1,7 @@
 /** Optional display outlines for catalog or uploaded polygons; never authorizes analysis. */
+import { vectorMapBounds } from "./leaflet.js";
+
+/** Draw one replaceable, noninteractive polygon outline on a Leaflet map. */
 export class VectorSelectionOverlay {
     /**
      * @param {Object} map Leaflet map.
@@ -7,11 +10,12 @@ export class VectorSelectionOverlay {
     constructor(map, leaflet) { this.map = map; this.leaflet = leaflet; this.sequence = 0; }
 
     /**
-     * Request a bounded outline without delaying numeric selection activation.
-     * @param {Object} area Validated selection response.
+     * Draw the selected polygons using their bounded display geometry.
+     * @param {{selection:Object}} area Original source descriptor and feature filter.
+     * @param {{fitBounds?:boolean}} [options] Zoom to the selected polygons' original bounds when requested.
      * @return {Promise<Object|undefined>} Displayed GeoJSON for other map previews, or undefined if unavailable or superseded.
      */
-    async load(area) {
+    async load(area, {fitBounds = false} = {}) {
         this.clear();
         const sequence = this.sequence;
         this.abort = new AbortController();
@@ -26,9 +30,11 @@ export class VectorSelectionOverlay {
             if (!response.ok) return;
             const value = await response.json();
             if (sequence !== this.sequence || value.geometry?.type !== "FeatureCollection") return;
+            if (fitBounds && !value.geometry.features.length) return;
             this.layer = this.leaflet.geoJSON(value.geometry, {
                 style: { color: "#f59e0b", weight: 2, fillOpacity: 0.05 }, interactive: false,
             }).addTo(this.map);
+            if (fitBounds) this.map.fitBounds(vectorMapBounds(value.bbox), {padding: [24, 24], maxZoom: 14});
             return value.geometry;
         } catch { /* Optional outline failure never changes the analysis selection. */ }
     }

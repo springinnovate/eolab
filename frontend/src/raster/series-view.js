@@ -56,6 +56,7 @@ function setCaption(element, text) {
 
 /**
  * @typedef {Object} SeriesPresentation
+ * @property {boolean} styleEditingEnabled Whether chart geometry, colors, sizes and tick counts may be edited.
  * @property {boolean} active Whether the panel is open.
  * @property {{key:string,label:string,selected:boolean,hasSnapshot?:boolean,temporalDatasetKey?:string,rangeSelected?:boolean}[]} sources Named snapshot choices and temporal-range actions.
  * @property {SeriesValueRow[]} rows Current ordered values for the table.
@@ -103,6 +104,7 @@ export class RasterSeriesView {
         this.plotProgressBar = documentContext.querySelector("#raster-series-plot-progress-bar");
         this.addPlot = documentContext.querySelector("#raster-series-add-plot");
         this.chartToolbar = documentContext.querySelector("#raster-series-chart-toolbar");
+        this.chartStyle = documentContext.querySelector("#raster-series-chart-style");
         this.chartSettings = documentContext.querySelector("#raster-series-data-settings");
         this.chartNote = documentContext.querySelector("#raster-series-chart-note");
         this.table = documentContext.querySelector("#raster-series-table-body");
@@ -392,6 +394,8 @@ export class RasterSeriesView {
         if (this.addPlot.hidden !== hideAddPlot) this.addPlot.hidden = hideAddPlot;
         const hideToolbar = hideAddPlot && !calculating;
         if (this.chartToolbar.hidden !== hideToolbar) this.chartToolbar.hidden = hideToolbar;
+        const hideChartStyle = state.styleEditingEnabled === false;
+        if (this.chartStyle.hidden !== hideChartStyle) this.chartStyle.hidden = hideChartStyle;
         const hideHeading = this.valuesSelected || (hidePlots && !calculating);
         if (this.plotHeading.hidden !== hideHeading) this.plotHeading.hidden = hideHeading;
         const contextualHeading = Boolean(state.temporal || showingPrevious);
@@ -627,6 +631,11 @@ export class RasterSeriesView {
             const removeLabel = `Remove ${name}`;
             if (remove.getAttribute("aria-label") !== removeLabel) remove.setAttribute("aria-label", removeLabel);
             for (const input of row.querySelectorAll("input")) {
+                if (input.dataset.field === "color") {
+                    const locked = state.styleEditingEnabled === false;
+                    if (input.disabled !== locked) input.disabled = locked;
+                    if (input.parentElement.hidden !== locked) input.parentElement.hidden = locked;
+                }
                 if (input.dataset.field === "visible") {
                     if (input.checked !== formula.visible) input.checked = formula.visible;
                     const label = `Show ${name} on plot`;

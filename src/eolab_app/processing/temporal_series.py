@@ -343,6 +343,8 @@ def create_temporal_series(
     result_path = directory / "result.csv"
     with result_path.open("w", encoding="utf-8", newline="") as result:
         writer = csv.writer(result)
+        label_columns = ("time_labels",) if interval.time_labels else ()
+        label_values = (interval.time_labels,) if interval.time_labels else ()
         writer.writerow(
             (
                 "time_utc",
@@ -354,6 +356,7 @@ def create_temporal_series(
                 "unit",
                 "valid_pixels",
                 "state",
+                *label_columns,
             )
         )
         variable = escape_spreadsheet_text(spec.source.variable)
@@ -376,6 +379,7 @@ def create_temporal_series(
                     unit,
                     row["aggregates"][0]["validPixels"],
                     row["state"],
+                    *label_values,
                 )
             )
     with result_path.open("rb") as result:

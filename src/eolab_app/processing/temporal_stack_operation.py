@@ -14,6 +14,11 @@ from eolab_app.processing.aggregate_models import (
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.raster_operations import bind_area_arguments
+from eolab_app.processing.temporal_coverage import (
+    ObservationLabels,
+    OptionalObservationLabels,
+    temporal_result_coverage,
+)
 from eolab_app.processing.temporal_series_operation import prepare_series_area
 from eolab_app.processing.temporal_stack import temporal_stack_process_target
 from eolab_app.processing.temporal_stack_models import (
@@ -45,6 +50,7 @@ class TemporalStackNumericalPolicy(BaseModel):
     observationCount: int
     firstObservation: datetime
     lastObservation: datetime
+    observationLabels: OptionalObservationLabels = None
 
 
 def bind_temporal_stack(
@@ -152,6 +158,7 @@ async def prepare_temporal_stack(
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
+        observationLabels=ObservationLabels.from_interval(source),
     )
     return PreparedJobPlan(
         specification=spec.model_dump(mode="json", by_alias=True),
@@ -198,6 +205,7 @@ def describe_stack_policy(spec: TemporalStackSpec) -> TemporalStackNumericalPoli
         observationCount=spec.observationCount,
         firstObservation=spec.firstObservation,
         lastObservation=spec.lastObservation,
+        observationLabels=spec.observationLabels,
     )
 
 
@@ -220,15 +228,5 @@ def describe_stack_result(
     policy = cast(dict[str, Any], numerical_policy)
     return {
         "calculations": policy["metrics"]["calculations"],
-        "temporalCoverage": {
-            "unit": "",
-            **{
-                name: policy[name]
-                for name in (
-                    "observationCount",
-                    "firstObservation",
-                    "lastObservation",
-                )
-            },
-        },
+        "temporalCoverage": temporal_result_coverage(policy, ""),
     }

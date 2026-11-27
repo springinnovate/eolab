@@ -40,6 +40,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {number} [effectiveOpacity] Display opacity when the owner locks opacity.
  * @property {LayerLegend|null} legend Owner-supplied legend appearance.
  * @property {boolean} [legendIncluded] Include in the map legend unless false.
+ * @property {boolean} [styleEditingEnabled] Whether to offer appearance and clipboard actions.
  * @property {{canCopy:boolean,canPaste:boolean,pasting:boolean,sourceLabel:string|null,pasteReason:string|null}} [styleClipboard] Owner-reported compatibility and pending paste state.
  * @property {string|null} error Visible layer failure, when present.
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
@@ -360,10 +361,10 @@ export class MapLayerStackView {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
             );
-            if (focusTarget?.disabled) {
+            if (!focusTarget || focusTarget.disabled) {
                 focusTarget = focusTargets.get(
                     `${retainedFocus.key}\u0000style`
-                );
+                ) ?? focusTargets.get(`${retainedFocus.key}\u0000visibility`);
             }
             if (focusTarget === undefined && layers.length === 0) {
                 focusTarget = this.documentContext.querySelector("#toggle-map-layers") ?? this.status;
@@ -576,18 +577,7 @@ export class MapLayerStackView {
         const identity = this.documentContext.createElement("div");
         identity.className = "map-layer-identity";
         primary.append(identity);
-        const style = this.#button(
-            "Style", `Style ${accessibleName}`, layer.key, "style",
-            () => this.handlers?.onStyle(layer.key), focusTargets
-        );
-        style.classList.add("map-layer-style-action");
         const stylePreview = this.#buildLegendKey(layer.legend, layer.effectiveOpacity ?? layer.opacity);
-        if (stylePreview) style.prepend(stylePreview);
-        if (layer.stylePanelId) style.setAttribute("aria-controls", layer.stylePanelId);
-        else if (!layer.controls) {
-            style.setAttribute("aria-haspopup", "dialog");
-            style.setAttribute("aria-controls", "layer-style-editor");
-        }
         const zoom = this.#iconButton(
             "zoom", `Zoom to ${accessibleName}`, layer.key, "zoom",
             () => this.handlers?.onZoom(layer.key), focusTargets
@@ -620,34 +610,6 @@ export class MapLayerStackView {
             informationLabel, `${informationLabel} for ${accessibleName}`, layer.key, "info",
             () => this.handlers?.onInfo(layer.key), focusTargets
         );
-        const clipboard = layer.styleClipboard ?? {
-            canCopy: false,
-            canPaste: false,
-            pasting: false,
-            sourceLabel: null,
-            pasteReason: "Pasting styles is unavailable for this layer.",
-        };
-        const copyStyle = this.#iconButton(
-            "copy",
-            `Copy style from ${accessibleName}`,
-            layer.key,
-            "copy-style",
-            () => { if (clipboard.canCopy) this.handlers?.onCopyStyle(layer.key); },
-            focusTargets
-        );
-        copyStyle.classList.add("map-layer-clipboard-action");
-        copyStyle.setAttribute("aria-disabled", String(!clipboard.canCopy));
-        const pasteStyle = this.#iconButton(
-            "paste",
-            `Paste style onto ${accessibleName}`,
-            layer.key,
-            "paste-style",
-            () => { if (clipboard.canPaste && !clipboard.pasting) this.handlers?.onPasteStyle(layer.key); },
-            focusTargets
-        );
-        pasteStyle.classList.add("map-layer-clipboard-action");
-        pasteStyle.setAttribute("aria-disabled", String(!clipboard.canPaste || clipboard.pasting));
-        pasteStyle.setAttribute("aria-busy", String(clipboard.pasting));
         const legend = this.#buildLegend(layer, focusTargets, stylePreview);
         if (this.allowRemoval) {
             const remove = this.#button(
@@ -664,18 +626,6 @@ export class MapLayerStackView {
         }
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
-        const styleActions = this.documentContext.createElement("div");
-        styleActions.className = "map-layer-style-actions";
-        styleActions.setAttribute("role", "group");
-        styleActions.setAttribute("aria-label", `Style controls for ${layer.label}`);
-        styleActions.append(
-            style, copyStyle, pasteStyle,
-            this.#buildActionTooltip(copyStyle, clipboard.canCopy
-                ? `Copy style and opacity from ${layer.label}.`
-                : "Copying styles is unavailable for this layer."),
-            this.#buildActionTooltip(pasteStyle, clipboard.pasteReason ??
-                (clipboard.canPaste ? `Paste style and opacity from ${clipboard.sourceLabel}.` : "Copy a style first.")),
-        );
         const layerActions = this.documentContext.createElement("div");
         layerActions.className = "map-layer-data-actions";
         const filter = layer.canFilter ? this.#button(
@@ -745,7 +695,12 @@ export class MapLayerStackView {
         const details = this.#buildDetails(layer, utilities, focusTargets);
         if (legend) details.panel.append(legend.panel);
         layerActions.append(details.trigger);
-        rowActions.prepend(styleActions, layerActions);
+        rowActions.prepend(layerActions);
+        if (layer.styleEditingEnabled !== false) {
+            rowActions.prepend(this.#buildStyleActions(layer, accessibleName, stylePreview, focusTargets));
+        } else if (stylePreview) {
+            identity.append(stylePreview);
+        }
         row.append(reorder);
         row.append(primary);
         if (layer.primaryControl) row.append(layer.primaryControl);
@@ -768,6 +723,69 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
+    }
+
+    /**
+     * Build the appearance editor and style clipboard buttons for an editable layer card.
+     * @param {MapLayerStackSnapshot} layer Layer and clipboard compatibility.
+     * @param {string} accessibleName Layer name and type used by action labels.
+     * @param {HTMLElement|null} stylePreview Decorative legend key for the Style button.
+     * @param {Map<string,HTMLElement>} focusTargets Keyboard destinations after the card refreshes.
+     * @return {HTMLDivElement} Group of style actions and their help.
+     */
+    #buildStyleActions(layer, accessibleName, stylePreview, focusTargets) {
+        const style = this.#button(
+            "Style", `Style ${accessibleName}`, layer.key, "style",
+            () => this.handlers?.onStyle(layer.key), focusTargets
+        );
+        style.classList.add("map-layer-style-action");
+        if (stylePreview) style.prepend(stylePreview);
+        if (layer.stylePanelId) style.setAttribute("aria-controls", layer.stylePanelId);
+        else if (!layer.controls) {
+            style.setAttribute("aria-haspopup", "dialog");
+            style.setAttribute("aria-controls", "layer-style-editor");
+        }
+        const clipboard = layer.styleClipboard ?? {
+            canCopy: false,
+            canPaste: false,
+            pasting: false,
+            sourceLabel: null,
+            pasteReason: "Pasting styles is unavailable for this layer.",
+        };
+        const copyStyle = this.#iconButton(
+            "copy",
+            `Copy style from ${accessibleName}`,
+            layer.key,
+            "copy-style",
+            () => { if (clipboard.canCopy) this.handlers?.onCopyStyle(layer.key); },
+            focusTargets
+        );
+        copyStyle.classList.add("map-layer-clipboard-action");
+        copyStyle.setAttribute("aria-disabled", String(!clipboard.canCopy));
+        const pasteStyle = this.#iconButton(
+            "paste",
+            `Paste style onto ${accessibleName}`,
+            layer.key,
+            "paste-style",
+            () => { if (clipboard.canPaste && !clipboard.pasting) this.handlers?.onPasteStyle(layer.key); },
+            focusTargets
+        );
+        pasteStyle.classList.add("map-layer-clipboard-action");
+        pasteStyle.setAttribute("aria-disabled", String(!clipboard.canPaste || clipboard.pasting));
+        pasteStyle.setAttribute("aria-busy", String(clipboard.pasting));
+        const styleActions = this.documentContext.createElement("div");
+        styleActions.className = "map-layer-style-actions";
+        styleActions.setAttribute("role", "group");
+        styleActions.setAttribute("aria-label", `Style controls for ${layer.label}`);
+        styleActions.append(
+            style, copyStyle, pasteStyle,
+            this.#buildActionTooltip(copyStyle, clipboard.canCopy
+                ? `Copy style and opacity from ${layer.label}.`
+                : "Copying styles is unavailable for this layer."),
+            this.#buildActionTooltip(pasteStyle, clipboard.pasteReason ??
+                (clipboard.canPaste ? `Paste style and opacity from ${clipboard.sourceLabel}.` : "Copy a style first.")),
+        );
+        return styleActions;
     }
 
     /**

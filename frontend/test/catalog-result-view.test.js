@@ -54,7 +54,7 @@ function fixture(presentation = {}) {
   const status = view.element.children.at(-1);
   const update = (state = {}) => view.update({ supported: true, retained: false,
     removalTarget: state.retained ? { key: "wind", label: "wind.tif", count: 1 } : null,
-    canZoom: true, pendingAction: null, feedback: null, ...state });
+    canZoom: true, canStyle: state.retained === true, pendingAction: null, feedback: null, ...state });
   update();
   return { view, item, document, calls, actions, controls, onMap, mapButton, zoomButton, styleButton, status, update };
 }

@@ -125,7 +125,9 @@ def select_area(
                 dataset, sampling_box, max_coordinates
             )
         if kind == "bounds":
-            return selected_raster_area_for_wgs84_bounds(dataset, bounds)
+            return selected_raster_area_for_wgs84_bounds(
+                dataset, bounds, maximum_output_coordinates=max_coordinates
+            )
         return selected_raster_area_for_wgs84_polygons(
             dataset, geometries, max_coordinates, selected_bounds=bounds
         )

@@ -5,7 +5,7 @@ const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 /** @typedef {{left:number,top:number,width:number,height:number}} ChartPlot */
 /** @typedef {{scale:import("d3").AxisScale<number>,values:number[],format:(value:number)=>string,rotation?:number,edgeLabels?:boolean}} ChartAxis */
-/** @typedef {{text:string,x:number,y:number,rotation?:number,anchor?:string}} ChartAxisTitle */
+/** @typedef {{text:string,x:number,y:number,rotation?:number,anchor?:string,tooltip?:string|null}} ChartAxisTitle Positioned title with optional full text for an abbreviated caption. */
 
 /** Create an SVG element with serialized attributes and optional text.
  * @param {Document} documentContext Owning document.
@@ -51,11 +51,15 @@ export function drawChartAxes(documentContext, chart, plot, horizontal, vertical
         .tickSize(-plot.width).tickSizeOuter(0).tickPadding(8));
     axes.append(xAxis, yAxis);
     if (fontSize !== null) select(axes).selectAll("text").style("font-size", `${fontSize}px`);
-    for (const title of titles) axes.append(createSvgElement(documentContext, "text", {
-        class: "series-chart-axis-title", x: title.x, y: title.y, "text-anchor": title.anchor ?? "middle",
-        ...(title.rotation ? {transform: `rotate(${title.rotation} ${title.x} ${title.y})`} : {}),
-        ...(fontSize === null ? {} : {style: `font-size: ${fontSize + 1}px`}),
-    }, title.text));
+    for (const title of titles) {
+        const label = createSvgElement(documentContext, "text", {
+            class: "series-chart-axis-title", x: title.x, y: title.y, "text-anchor": title.anchor ?? "middle",
+            ...(title.rotation ? {transform: `rotate(${title.rotation} ${title.x} ${title.y})`} : {}),
+            ...(fontSize === null ? {} : {style: `font-size: ${fontSize + 1}px`}),
+        }, title.text);
+        if (title.tooltip) label.append(createSvgElement(documentContext, "title", {}, title.tooltip));
+        axes.append(label);
+    }
     chart.append(axes);
     return axes;
 }

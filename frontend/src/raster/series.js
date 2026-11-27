@@ -4,6 +4,7 @@ import { samplingBoxFormula } from "../sampling-box-statistics.js";
 import { vectorSelectionsEqual } from "../selected-area.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
 import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
+import { observationLabel } from "../observation-period.js";
 import { csvParse, csvFormat } from "d3";
 
 const SERIES_STATISTICS = Object.freeze({
@@ -111,6 +112,7 @@ export class RasterSeriesController {
     /**
      * Connect the plot to Processing calculations and its own view.
      * @param {Object} options Collaborators.
+     * @param {()=>boolean} [options.canEditStyle] Whether chart colors and symbol or axis appearance are editable.
      * @param {import("./series-view.js").RasterSeriesView} options.view Plot controls.
      * @param {import("../processing/raster-series-calculations.js").RasterSeriesCalculations} options.areaStatistics Area formulas and Processing client.
      * @param {()=>void} options.onClose Request that composition close this tool.
@@ -118,8 +120,9 @@ export class RasterSeriesController {
      * @param {(choice:"selection"|"vector"|"whole")=>void} [options.onAreaChoice] Start or cancel polygon selection after an explicit area choice.
      * @param {(source:Object)=>Promise<Object>} options.getTemporalItem Read Catalog metadata for a selected dataset.
      */
-    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, onOpenArea = () => {}, getTemporalItem }) {
+    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, onOpenArea = () => {}, getTemporalItem, canEditStyle = () => true }) {
         this.view = view;
+        this.canEditStyle = canEditStyle;
         this.getTemporalItem = getTemporalItem;
         this.areaStatistics = areaStatistics;
         this.onAreaChoice = onAreaChoice;
@@ -180,7 +183,11 @@ export class RasterSeriesController {
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
             },
-            onChartType: type => { this.chartType = type; this.render(); },
+            onChartType: type => {
+                if (!this.canEditStyle()) return;
+                this.chartType = type;
+                this.render();
+            },
             onDownload: () => view.downloadCsv(this.exportCsv()),
         });
         this.render();
@@ -409,7 +416,8 @@ export class RasterSeriesController {
             variable: reference?.variable ?? (sameDataset ? this.temporal.variable : ""),
             loading: false, error: ""});
         this.updateAreaInputs();
-        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal, getTemporalMonthBoundaries(reference.time.slice(0, 7)));
+        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal,
+            snapshot.observationPeriod ?? getTemporalMonthBoundaries(reference.time.slice(0, 7)));
         if (!sameDataset || !this.temporal.item) await this.loadTemporalItem();
         else this.updateAreaInputs();
     }
@@ -711,10 +719,11 @@ export class RasterSeriesController {
 
     /** Change only where a statistic is displayed, without requesting calculations.
      * @param {number} id Statistic identity.
-     * @param {{visible?:boolean,plotId?:number}} change Visibility, destination plot or user-selected color.
+     * @param {{visible?:boolean,plotId?:number,color?:string}} change Visibility, destination plot or user-selected color.
      * @return {void}
      */
     changeStatisticDisplay(id, change) {
+        if (change.color !== undefined && !this.canEditStyle()) return;
         const display = this.statisticDisplay.get(id);
         if (!display || (change.plotId !== undefined && !this.plots.some(plot => plot.id === change.plotId))) return;
         Object.assign(display, change);
@@ -748,7 +757,12 @@ export class RasterSeriesController {
      */
     setPlotOptions(id, change) {
         const plot = this.plots.find(item => item.id === id);
-        Object.assign(plot, change);
+        if (this.canEditStyle()) Object.assign(plot, change);
+        else {
+            for (const option of ["scale", "bounds", "xBounds"]) {
+                if (Object.hasOwn(change, option)) plot[option] = change[option];
+            }
+        }
         this.render();
     }
 
@@ -781,7 +795,8 @@ export class RasterSeriesController {
         const showingPrevious = !!(area.busy && !rows.some(row => row.state === "value") && area.previousResults);
         for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
-            active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
+            active: this.active, styleEditingEnabled: this.canEditStyle(),
+            area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
                 results: area.results, hasPendingVectorArea: this.hasPendingVectorArea,
                 canCalculateExactStatistics: area.previewFormulas.length > 0 && [...area.results.values()].some(({boxPreview}) =>
@@ -806,18 +821,26 @@ export class RasterSeriesController {
     renderTemporalResults() {
         const area = this.areaStatistics, showingPrevious = !!(area.busy && !area.temporalResult && area.previousTemporalResult);
         const result = area.temporalResult ?? (showingPrevious ? area.previousTemporalResult : null);
-        const observations = result?.observations ?? [];
-        const statistics = this.formulas.map(formula => ({...formula, ...this.statisticDisplay.get(formula.id), previousRows: null,
-            rows: observations.map(({time, rows}) => {
-                const capturedLabel = getCapturedStatisticLabel(result, formula);
+        const observations = (result?.observations ?? []).map(({time, start, period, rows}) => {
+            const end = new Date(time), position = start ? new Date(start) : end;
+            const utc = end.toISOString();
+            const label = observationLabel(utc, period, period === "explicit" && start ? position.toISOString() : undefined) ??
+                utc.replace("T", " ").replace(/(\.000)?Z$/, " UTC");
+            return {key: time, xValue: position.getTime(), label, rows};
+        });
+        const statistics = this.formulas.map(formula => {
+            const capturedLabel = getCapturedStatisticLabel(result, formula);
+            const matches = capturedLabel !== undefined;
+            const seriesRows = observations.map(({key, xValue, label, rows}) => {
                 const row = rows.find(value => value.label === capturedLabel);
-                const matches = capturedLabel !== undefined;
-                return {key: time, xValue: Date.parse(time), label: new Date(time).toISOString().replace("T", " ").replace(/(\.000)?Z$/, " UTC"),
+                return {key, xValue, label,
                     statisticId: formula.id, statisticLabel: formula.label || formula.expression, state: !matches ? "waiting" : row?.state === "ok" ? "value" : row?.state ?? "waiting",
                     value: !matches || row?.value == null ? null : Number(row.value), rawValue: matches ? row?.value : null, unit: row?.unit ?? ""};
-            })}));
+            });
+            return {...formula, ...this.statisticDisplay.get(formula.id), previousRows: null, rows: seriesRows};
+        });
         if (showingPrevious) for (const statistic of statistics) {statistic.previousRows = statistic.rows; statistic.rows = [];}
-        this.view.render({active: this.active, temporal: {...this.temporal,
+        this.view.render({active: this.active, styleEditingEnabled: this.canEditStyle(), temporal: {...this.temporal,
             variableBound: this.sources.some(source => source.key === this.temporal.viewKey), selectionError: this.temporalSelectionError()},
             area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: this.getSelectedArea(),
                 areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,

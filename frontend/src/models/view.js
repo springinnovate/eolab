@@ -4,7 +4,7 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
-import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer } from "./inputs.js";
+import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer, isModelSpatialInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
@@ -231,20 +231,23 @@ export class ModelsView {
     }
 
     /** Construct editable inputs and recipe parameters, retaining their DOM identities.
-     * Choice parameters use the recipe's option labels and preserve their string values.
+     * Choice parameters preserve string values and checkboxes preserve boolean values.
      * Registered setup integrations own any specialized input controls and readiness.
      * @param {Object} draft New draft with validated recipe settings and current parameter values.
      * @return {void}
      */
     buildSetup(draft) {
+        for (const controls of Object.values(this.setup?.inputs ?? {})) controls.dispose?.();
         const form = this.element("form", "", "models-form");
         const fields = this.element("fieldset"); fields.setAttribute("aria-labelledby", "models-setup-heading");
         const description = this.element("p", draft.model.description, "models-help"); fields.append(description);
         const label = this.element("input"); label.type = "text"; label.required = true;
         label.addEventListener("input", () => this.handlers.onEdit({label: label.value}));
         fields.append(this.field("models-run-label", "Run name", label));
-        const nameHelp = this.element("p", "Date and time are added automatically.", "models-help");
-        nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
+        if (draft.integration?.showRunNameHelp !== false) {
+            const nameHelp = this.element("p", "Date and time are added automatically.", "models-help");
+            nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
+        }
         const temporal = draft.temporal ? new TemporalModelInputsView({element: this.element.bind(this), field: this.field.bind(this),
             button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers,
             Object.values(draft.model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type)).label) : null;
@@ -267,11 +270,23 @@ export class ModelsView {
                 fields.append(inputs[name].root);
             }
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
-            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
+            else if (isModelSpatialInput(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
         }
         if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
+            if (parameter.type === "boolean") {
+                const input = this.element("input");
+                input.type = "checkbox";
+                input.addEventListener("change", () => this.handlers.onEdit({parameters: {
+                    ...this.state.draft.parameters, [name]: input.checked,
+                }}));
+                parameters[name] = input;
+                const field = this.field("models-parameter-" + name, parameter.label, input);
+                field.classList.add("models-boolean");
+                fields.append(field);
+                continue;
+            }
             const choice = parameter.type === "choice";
             const input = this.element(choice ? "select" : parameter.type === "summary_expression" ? "textarea" : "input");
             if (choice) { input.required = true; this.options(input, parameter.choices, draft.parameters[name]); }
@@ -334,7 +349,7 @@ export class ModelsView {
             controls.reason.textContent = [value.raster.kind === "uploadedRaster" ? "Uploaded by you · Raster mask" : "",
                 value.copiedFromRun ? "Copied from the original run; choose another raster to change it." : ""].filter(Boolean).join(". ");
         } else {
-            controls.reason.textContent = optional ? "Leave None selected to run without this optional input." : acceptsResults
+            controls.reason.textContent = optional ? "" : acceptsResults
                 ? "Choose a raster from Map contents or a completed run. Results do not need to be shown on the map."
                 : sources.length ? "Choose a raster from Map contents." : "Add a raster to Map contents to use this tool.";
         }
@@ -373,7 +388,7 @@ export class ModelsView {
             areaChoices.push(...value.polygonGroups.map(group => ({value: `polygonGroup:${group.id}`,
                 label: group.name, group: "Polygon groups"})));
         }
-        if (references || input.type === "summary_area") {
+        if (modelSupportsArea(input.type, {kind: "polygonArea"})) {
             areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
         if (usesRasterOrVector) {
@@ -446,11 +461,12 @@ export class ModelsView {
         controls.vectorStatus.textContent = value.selecting ? "You can edit the filter while this check runs." : value.selectionError || "";
         controls.mapFilterStatus.textContent = value.mapFilterMessage ?? "";
         const wholeRaster = value.areaMode === "whole" && value.area?.kind === "wholeRaster";
-        controls.areaDescription.hidden = value.areaMode === "vector" && Boolean(vectorSource) || usesRasterOrVector && value.areaMode === "raster" ||
-            wholeRaster && !value.selectionError;
-        controls.areaDescription.textContent = value.selectionError || (value.areaMode === "vector" && !vectorSource
-            ? references ? "Choose reference sites above." : input.type === "mask_source" ? "Choose a starting area above." : "Choose an analysis area above." : "") ||
-            `${describeModelArea(value.area)}${value.areaMode === "captured" ? ` · ${value.areaDescription}` : ""}`;
+        const needsVector = value.areaMode === "vector" && !vectorSource;
+        controls.areaDescription.textContent = value.selectionError || (needsVector
+            ? references ? "" : input.type === "mask_source" ? "Choose a starting area above." : "Choose an analysis area above."
+            : `${describeModelArea(value.area)}${value.areaMode === "captured" ? ` · ${value.areaDescription}` : ""}`);
+        controls.areaDescription.hidden = !controls.areaDescription.textContent || value.areaMode === "vector" && Boolean(vectorSource) ||
+            usesRasterOrVector && value.areaMode === "raster" || wholeRaster && !value.selectionError;
         const areaReady = usesRasterOrVector && value.areaMode === "raster" ? rasterReady : Boolean(value.area);
         return areaReady && !value.selecting && !value.filterEditing;
     }
@@ -460,7 +476,12 @@ export class ModelsView {
      * @return {void}
      */
     renderSetup(state) {
-        const draft = state.draft; if (!draft) return;
+        const draft = state.draft;
+        if (!draft) {
+            if (this.setup) this.elements.setup.replaceChildren();
+            this.setup = null;
+            return;
+        }
         if (this.setup?.id !== draft.id) this.buildSetup(draft);
         const setupControls = this.setup;
         const temporalError = setupControls.temporal?.render(draft.temporal, draft.reduction) ?? "";
@@ -472,9 +493,12 @@ export class ModelsView {
             if (setupControls.inputs[name]?.renderModelInput) inputsReady = setupControls.inputs[name].renderModelInput(draft, state) && inputsReady;
             else if (getModelInputHandler(input.type)) inputsReady = setupControls.inputs[name].render(draft.inputs[name]) && inputsReady;
             else if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
-            else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
+            else if (isModelSpatialInput(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
         }
-        for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
+        for (const [name, input] of Object.entries(setupControls.parameters)) {
+            if (input.type === "checkbox") input.checked = draft.parameters[name];
+            else if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
+        }
         const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
         setupControls.run.disabled = state.submitting || Boolean(state.pending) || !inputsReady || !supported;
         setupControls.run.textContent = state.submitting ? "Starting run…" : runLabel;
@@ -591,7 +615,8 @@ export class ModelsView {
         r.status.textContent = job ? describeModelProgress(job) : "Reading run…";
         r.error.textContent = state.invocationError || job?.error?.message || job?.error?.detail || ""; r.error.hidden = !r.error.textContent;
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
-        r.duplicate.disabled = !state.invocation || Boolean(state.actionBusy);
+        r.duplicate.hidden = Boolean(state.duplicateRestricted);
+        r.duplicate.disabled = !state.invocation || r.duplicate.hidden || Boolean(state.loading || state.libraryError || state.actionBusy);
         r.progress.hidden = job?.status !== "running";
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
@@ -666,7 +691,8 @@ export class ModelsView {
             }
             for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) {
                 const value = invocation.parameters[name];
-                const description = parameter.type === "choice" ? parameter.choices.find(choice => choice.value === value).label
+                const description = parameter.type === "boolean" ? (value ? "On" : "Off")
+                    : parameter.type === "choice" ? parameter.choices.find(choice => choice.value === value).label
                     : value === null ? "Not set" : `${value}${parameter.unit ? ` ${parameter.unit}` : ""}`;
                 list.append(this.element("dt", parameter.label), this.element("dd", description));
             }
@@ -712,6 +738,30 @@ export class ModelsView {
         }
     }
 
+    /** Update the picker only when the offered recipes or search change. Keep its
+     * existing buttons and keyboard focus when discovery returns equivalent recipes.
+     * @param {Object[]} library Recipes offered by the controller.
+     * @param {string} query Current search text.
+     * @return {void}
+     */
+    renderLibraryItems(library, query) {
+        const search = query.toLowerCase();
+        if (library === this.pickerLibrary && search === this.pickerSearch) return;
+        this.pickerLibrary = library;
+        this.pickerSearch = search;
+        const filtered = library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(search));
+        const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
+        if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
+        const signature = JSON.stringify(filtered);
+        if (signature === this.librarySignature) return;
+        this.librarySignature = signature;
+        this.elements["library-items"].replaceChildren(...filtered.map(model => {
+            const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
+            open.setAttribute("aria-label", `Set up ${model.title}`);
+            return open;
+        }));
+    }
+
     /** Present the selected Data tools page, listing raster creation first when it matches the search.
      * Update run history only while the Runs list is visible.
      * Preserve keyboard focus on a run button when other runs are added or removed.
@@ -732,7 +782,8 @@ export class ModelsView {
         });
         this.elements["setup-heading"].hidden = state.page !== "setup";
         this.elements["setup-heading"].textContent = setupTitle;
-        const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
+        const pageError = state.page === "runs" ? state.historyError : state.libraryError;
+        const error = state.error || (state.page === "setup" ? "" : pageError || state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
         this.elements.recovery.hidden = !state.pending;
@@ -741,19 +792,11 @@ export class ModelsView {
         const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
             : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs.`;
         if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
-        const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
-        const rasterCreationIndex = filtered.findIndex(model => model.id === "temporal-period-map");
-        if (rasterCreationIndex > 0) filtered.unshift(...filtered.splice(rasterCreationIndex, 1));
-        const signature = JSON.stringify(filtered);
-        if (signature !== this.librarySignature) {
-            this.librarySignature = signature;
-            this.elements["library-items"].replaceChildren(...filtered.map(model => {
-                const open = this.button(model.title, () => this.handlers.onChoose(model), "models-tool");
-                open.setAttribute("aria-label", `Set up ${model.title}`);
-                return open;
-            }));
-        }
-        this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : filtered.length ? "" : "No matching tools.";
+        this.renderLibraryItems(state.library, state.query);
+        let libraryStatus = this.elements["library-items"].children.length || state.libraryError ? "" : "No matching tools.";
+        if (state.noModelsSelected) libraryStatus = "This map offers no models for new runs. Choose Runs to view earlier work.";
+        if (state.missingModels) libraryStatus = "A model selected for this map is unavailable on this site. Ask the map publisher to review the choices.";
+        this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : libraryStatus;
         this.renderSetup(state); this.renderRun(state);
         if (state.active && state.page === "runs") this.renderRunHistory(state);
         this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
@@ -792,6 +835,7 @@ export class ModelsView {
      * @return {void}
      */
     destroy() {
+        for (const controls of Object.values(this.setup?.inputs ?? {})) controls.dispose?.();
         this.tabStrip.destroy();
         for (const [node, event, callback] of this.listeners) node.removeEventListener(event, callback);
     }

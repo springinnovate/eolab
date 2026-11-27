@@ -21,6 +21,7 @@ from eolab_app.processing.aggregate_models import (
     PixelPoint,
 )
 from eolab_app.polygon_areas import PolygonAreaReference
+from eolab_app.processing.temporal_coverage import OptionalObservationLabels
 from eolab_app.processing.temporal_grid import TemporalReadGrid
 from eolab_app.sampling_box import Wgs84SamplingBox
 from eolab_app.raster.models import Wgs84Bounds
@@ -114,3 +115,4 @@ class TemporalStackSpec(BaseModel):
     observationCount: int
     firstObservation: datetime
     lastObservation: datetime
+    observationLabels: OptionalObservationLabels = None

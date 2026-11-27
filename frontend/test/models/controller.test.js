@@ -15,9 +15,10 @@ import { model, raster, area, invocation, selection, job, clipModel, seriesModel
 /** Compose the real controller and observer with controllable boundary responses.
  * @param {Object} [overrides={}] API behavior replacements.
  * @param {Object|null} [viewOverride=null] Optional real view for boundary tests.
+ * @param {Object} [visitorOptions={}] Published-map model choices and tab recovery scope.
  * @return {Object} Component and recorded user-visible effects.
  */
-function fixture(overrides = {}, viewOverride = null) {
+function fixture(overrides = {}, viewOverride = null, visitorOptions = {}) {
     const values = new Map(); const submitted = []; const cancelled = []; const filterRequests = []; const mapFilters = [];
     const api = {discoverModels: async () => [model], listModelRuns: async () => ({jobs: [], nextCursor: null}),
         getJob: async () => job(), readModelInvocation: async () => structuredClone(invocation),
@@ -31,7 +32,7 @@ function fixture(overrides = {}, viewOverride = null) {
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusPage: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const tabContext = { label: "" };
-    const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
+    const controller = new ModelsController({api, jobs, view, storage, clock, ...visitorOptions, getContext: () => context,
         onViewLabel: label => { tabContext.label = label; },
         getCatalogItem: source => api.getCatalogItem(source),
         loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
@@ -82,6 +83,132 @@ test("Raster clip captures every polygon group member and its own filter", async
         kind: "polygonGroup", name: "River basins",
         members: [north, south].map(({label, selection}) => ({label, selection})),
     });
+});
+
+test("published model choices govern search, retained setup and duplication while accepted runs stay accessible", async t => {
+    const newer = {...model, version: "2.0.0", title: "New summary", definitionSha256: "b".repeat(64)};
+    const recipes = [model, clipModel, newer];
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => recipes}, view, {allowedModelIds: [model.id], recoveryScope: "survey"});
+    t.after(() => h.controller.destroy());
+    let finishDiscovery;
+    h.api.discoverModels = () => new Promise(resolve => { finishDiscovery = resolve; });
+    const opening = h.controller.open();
+    await h.controller.showRun(job().jobId);
+    assert.equal(view.run.duplicate.disabled, true, "a linked run must wait for its recipe to be checked");
+    await h.controller.duplicateRun();
+    assert.equal(view.elements.error.textContent, "");
+    finishDiscovery(recipes);
+    await opening;
+    assert.equal(view.run.duplicate.disabled, false);
+    h.controller.navigate("library");
+    h.api.discoverModels = async () => recipes;
+    const libraryTitles = () => view.elements["library-items"].children.map(button => button.textContent);
+    assert.deepEqual(libraryTitles(), [model.title, newer.title]);
+    recipes.push(seriesModel);
+    await h.controller.loadLibrary();
+    view.elements.query.value = clipModel.title;
+    view.elements.query.dispatchEvent(new Event("input"));
+    assert.deepEqual(libraryTitles(), []);
+    view.elements.query.value = "";
+    view.elements.query.dispatchEvent(new Event("input"));
+    assert.deepEqual(libraryTitles(), [model.title, newer.title]);
+    view.elements["library-items"].children[1].dispatchEvent(new Event("click"));
+    const previousRunButton = view.setup.run;
+    h.controller.setAllowedModelIds([]);
+    assert.equal(h.controller.state.page, "library");
+    assert.equal(view.navigation.setup.disabled, true);
+    assert.equal(view.document.activeElement, view.navigation.library);
+    assert.match(view.elements["library-status"].textContent, /no models for new runs/);
+    previousRunButton.dispatchEvent(new Event("click"));
+    h.controller.chooseModel(newer);
+    h.controller.navigate("setup");
+    await h.controller.submit();
+    assert.equal(h.submitted.length, 0);
+    const openingRun = h.controller.showRun(job().jobId);
+    assert.equal(view.run.duplicate.hidden, true, "a restricted map waits for the run's identity before offering duplication");
+    await openingRun;
+    assert.equal(view.run.title.textContent, job().label);
+    assert.equal(view.run.duplicate.hidden, true);
+    await h.controller.duplicateRun();
+    assert.equal(h.controller.state.page, "run");
+    await h.controller.cancelRun();
+    assert.deepEqual(h.cancelled, [job().jobId]);
+    h.controller.setAllowedModelIds([model.id, "retired-tool"]);
+    assert.match(view.elements["library-status"].textContent, /unavailable.*publisher/);
+    assert.equal(view.run.duplicate.hidden, false);
+    await h.controller.duplicateRun();
+    assert.equal(h.controller.state.draft.model.version, model.version);
+    await h.controller.submit();
+    assert.deepEqual(h.submitted.map(request => request.model.id), [model.id]);
+
+    h.controller.navigate("library");
+    const previousVersionButton = view.elements["library-items"].children[1];
+    previousVersionButton.dispatchEvent(new Event("click"));
+    h.controller.setActive(false);
+    recipes.splice(recipes.indexOf(newer), 1);
+    await h.controller.open();
+    assert.equal(h.controller.state.page, "library", "reopening Data tools leaves setup for a version the site removed");
+    assert.match(view.elements.error.textContent, /no longer available/i);
+    previousVersionButton.dispatchEvent(new Event("click"));
+    await h.controller.submit();
+    assert.equal(view.navigation.setup.disabled, true);
+    assert.equal(h.submitted.length, 1);
+});
+
+test("reopening Data tools clears recovered discovery and history errors on their respective pages", async t => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => { throw new Error("Service offline"); },
+        listModelRuns: async () => { throw new Error("History offline"); }}, view, {allowedModelIds: [model.id]});
+    t.after(() => h.controller.destroy());
+    await h.controller.open();
+    assert.match(view.elements.error.textContent, /Service offline/);
+    h.controller.setActive(false);
+    h.api.discoverModels = async () => [model];
+    await h.controller.open();
+    assert.equal(view.elements["library-items"].children[0].textContent, model.title);
+    assert.equal(view.elements.error.textContent, "");
+    h.controller.navigate("runs");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(view.elements.error.textContent, /History offline/);
+    h.api.listModelRuns = async () => ({jobs: [job()], nextCursor: null});
+    await h.controller.loadRuns();
+    assert.equal(view.elements["runs-list"].children.length, 1);
+    assert.equal(view.elements.error.textContent, "");
+});
+
+test("a map recovers only eligible retries and other maps can submit independently in the same tab", async t => {
+    const options = {allowedModelIds: [model.id], recoveryScope: "survey"};
+    const first = fixture({submitModelRun: async () => { throw new TypeError("Connection lost"); }}, null, options);
+    t.after(() => first.controller.destroy());
+    first.controller.chooseModel(model);
+    await first.controller.submit();
+    const captured = structuredClone(first.controller.state.pending);
+    const view = new ModelsView(new SummaryControlDocument());
+    const second = fixture({}, view, {allowedModelIds: [model.id], recoveryScope: "field-trip"});
+    t.after(() => second.controller.destroy());
+    second.controller.storage = first.storage;
+    second.controller.start();
+    assert.equal(view.elements.recovery.hidden, true);
+    await second.controller.submit(true);
+    assert.equal(second.submitted.length, 0);
+    second.controller.chooseModel(model);
+    await second.controller.submit();
+    assert.equal(second.submitted.length, 1);
+    const reopened = fixture({}, null, {...options, allowedModelIds: [clipModel.id]});
+    t.after(() => reopened.controller.destroy());
+    reopened.controller.storage = first.storage;
+    reopened.controller.start();
+    await reopened.controller.submit(true);
+    assert.deepEqual(reopened.submitted, []);
+    reopened.controller.chooseModel(clipModel);
+    await reopened.controller.submit();
+    first.storage.setItem(`eolab.models.pending.v1.survey.${clipModel.id}`, "{");
+    reopened.controller.setAllowedModelIds([clipModel.id, model.id]);
+    assert.deepEqual(reopened.controller.state.pending, captured, "an unreadable retry must not hide the next model's request");
+    await reopened.controller.submit(true);
+    assert.equal(reopened.submitted[0].model.id, clipModel.id);
+    assert.deepEqual(reopened.submitted[1], captured);
 });
 
 test("Models navigation retains an unfinished setup and focuses actual model and run names", async t => {
@@ -136,6 +263,93 @@ test("Models navigation retains an unfinished setup and focuses actual model and
     assert.equal(draft.label, "My unfinished analysis");
     assert.equal(draft.parameters.summary, "mean(a)");
     assert.equal(h.submitted.length, 0);
+});
+
+test("Raster calculator keeps formula aliases and captures the chosen output grid", async t => {
+    const calculator = {...model, id: "raster-calculator", title: "Raster calculator", parameters: {}, inputs: {
+        calculation: {type: "raster_formula", label: "Input rasters"},
+        area: {type: "explicit_area", label: "Analysis area"},
+    }};
+    const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+    const h = fixture({discoverModels: async () => [calculator]}, view);
+    t.after(() => h.controller.destroy());
+    const second = {...raster, itemId: "canopy-2020", label: "Canopy cover 2020"};
+    h.context.rasters.push(second);
+    await h.controller.open();
+    h.controller.chooseModel(calculator);
+    const editor = view.setup.inputs.calculation;
+    const change = (control, value, event = "change") => {
+        control.value = value;
+        control.dispatchEvent(new Event(event));
+    };
+    change(editor.rows.get("a").source, modelSourceKey(raster));
+    editor.add.dispatchEvent(new Event("click"));
+    change(editor.rows.get("b").source, modelSourceKey(second));
+    change(editor.rows.get("b").method, "mean");
+    change(editor.formula, "max(0, b - a)", "input");
+    const capture = () => captureModelSubmission(h.controller.state.draft, "calculator-request").inputs.calculation;
+    assert.deepEqual(capture().grid, {kind: "match", alias: "a"});
+    assert.deepEqual(capture().layers.map(({alias, resampling}) => [alias, resampling]), [["a", "nearest"], ["b", "mean"]]);
+    const normalizedDifference = "a/area_max(a) - b/area_max(b)";
+    change(editor.formula, normalizedDifference, "input");
+    assert.equal(capture().expression, normalizedDifference);
+    const differenceOfRanges = "(area_max(a) - area_min(a)) - (area_max(b) - area_min(b))";
+    change(editor.formula, differenceOfRanges, "input");
+    assert.equal(capture().expression, differenceOfRanges);
+    const standardized = "(a - area_mean(a)) / area_stdev(a) + area_sum(b) / area_count(b)";
+    change(editor.formula, standardized, "input");
+    assert.equal(capture().expression, standardized);
+    change(editor.grid, "custom-grid");
+    change(editor.crs, "EPSG:6933", "input");
+    change(editor.cellWidth, "30", "input");
+    change(editor.cellHeight, "60", "input");
+    assert.deepEqual(capture().grid, {kind: "custom", crs: "EPSG:6933", pixelSize: [30, 60]});
+    editor.rows.get("b").remove.dispatchEvent(new Event("click"));
+    assert.match(editor.status.textContent, /unknown variable, b/);
+    assert.equal(view.setup.run.disabled, true);
+    editor.add.dispatchEvent(new Event("click"));
+    assert.deepEqual([...editor.rows.keys()], ["a", "c"]);
+    change(editor.rows.get("c").source, modelSourceKey(second));
+    change(editor.formula, "min(a, c)^2", "input");
+    assert.equal(view.setup.run.disabled, false);
+    await h.controller.submit();
+    assert.equal(h.submitted[0].inputs.calculation.expression, "min(a, c)^2");
+    assert.deepEqual(h.submitted[0].inputs.calculation.layers.map(row => row.alias), ["a", "c"]);
+});
+
+for (const type of ["raster", "raster_formula"]) test(`${type} observes deletion of a selected completed-run input`, async t => {
+    const recipe = {...model, parameters: {}, inputs: {
+        source: {type, label: "Input raster"}, area: {type: "explicit_area", label: "Analysis area"},
+    }};
+    const completed = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", artifacts: fileManifest()});
+    const selected = {kind: "runArtifact", jobId: completed.jobId, artifactId: completed.artifacts.files[0].artifactId};
+    const deleted = {...completed, status: "deleted", updatedAt: "2098-01-01T00:00:00Z"};
+    const reads = [], view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({
+        listModelRuns: async () => ({jobs: [completed], nextCursor: null}),
+        readJobStatuses: async ids => { reads.push(ids); return {jobs: [deleted], unavailableJobIds: []}; },
+    }, view);
+    t.after(() => { h.controller.destroy(); h.jobs.destroy(); });
+    h.controller.setActive(true);
+    await h.controller.loadRuns();
+    h.controller.chooseModel(recipe);
+    const editor = view.setup.inputs.source;
+    const control = type === "raster_formula" ? editor.rows.get("a").source : editor.source;
+    const choose = source => { control.value = modelSourceKey(source); control.dispatchEvent(new Event("change")); };
+    choose(selected);
+    assert.equal(view.setup.run.disabled, false);
+    choose(raster);
+    assert.equal(h.jobs.tracked.has(completed.jobId), false, "available but unselected files need no observation");
+    choose(selected);
+    await h.jobs.refresh();
+    assert.deepEqual(reads, [[completed.jobId]], "the observer must request this run's authoritative status");
+    assert.equal(h.controller.runSnapshots.get(completed.jobId).status, "deleted");
+    assert.equal(view.setup.run.disabled, true);
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "deleted-input"), /unavailable|no longer available/);
+    if (type === "raster_formula") {
+        assert.match(editor.status.textContent, /Raster a is unavailable/);
+        assert.equal(editor.formula.value, "a", "status refresh preserves the formula");
+    }
 });
 
 const periodModel = {...model, id: "regional-period-statistic", parameters: {}, inputs: {
@@ -377,10 +591,15 @@ test("temporal setup captures typed inputs in UTC without raster publication or 
 
 test("refresh and map changes preserve the analysis interval; Use this month replaces it explicitly", async () => {
     let item = structuredClone(temporalItem), dates = structuredClone(temporalChoices);
-    const h = await periodFixture({getCatalogItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({getCatalogItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)}, view);
     await h.controller.chooseTemporalVariable("temperature");
     const draft = h.controller.state.draft;
-    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
+    const controls = view.setup.temporal;
+    controls.period.periodMode.value = "times";
+    controls.period.periodMode.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2000-01-01T01:15");
+    editExactTime(controls, "end", "2000-03-04T20:00");
     dates = {months: ["2000-03"], month: "2000-03", times: ["2000-03-12T00:00:00Z"]};
     h.context.temporalDatasets[0] = {...temporalDataset, variable: "rain", visible: false};
     h.controller.refreshMapLayers();
@@ -393,6 +612,35 @@ test("refresh and map changes preserve the analysis interval; Use this month rep
     assert.equal(draft.temporal.endTime, "2000-04-01T00:00");
     assert.equal(draft.temporal.periodMode, "month");
     assert.equal(h.submitted.length, 0);
+    const end = "2025-01-01T00:00:00.000Z";
+    item.properties["eolab:time_labels"] = "calendar_year";
+    dates = {months: ["2024-12"], month: "2024-12", times: [end]};
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(controls.coverage.textContent, "1 observation · 2024");
+    assert.equal(controls.useMonth.textContent, "Use this period");
+    controls.useMonth.dispatchEvent(new Event("click"));
+    assert.equal(draft.temporal.periodMode, "year");
+    let weather = captureModelSubmission(draft, "e".repeat(32)).inputs.weather;
+    assert.equal(weather.startTime, "2024-01-01T00:00:00.000Z");
+    assert.equal(weather.endTime, end);
+    item.properties["eolab:time_labels"] = "explicit";
+    dates.interval_starts = {[end]: "2024-10-12T06:30:07.000Z"};
+    await h.controller.loadTemporalDates(undefined, true);
+    h.controller.useTemporalMonth();
+    weather = captureModelSubmission(draft, "e".repeat(32)).inputs.weather;
+    assert.equal(weather.startTime, dates.interval_starts[end]);
+    assert.equal(weather.endTime, end);
+    Object.assign(item.properties["cube:variables"].temperature, {unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"});
+    await h.controller.loadTemporalDates(undefined, true);
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, false);
+    assert.equal(controls.useMonth.disabled, true);
+    assert.match(controls.availabilityHelp.textContent, /whole UTC hours/);
+    dates.interval_starts[end] = "2024-10-12T06:00:00.000Z";
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(controls.useMonth.disabled, false);
+    controls.useMonth.dispatchEvent(new Event("click"));
+    assert.equal(view.setup.run.disabled, false);
     delete item.properties["cube:variables"].temperature;
     await h.controller.loadTemporalDates(undefined, true);
     assert.equal(draft.temporal.variable, "temperature");
@@ -1256,6 +1504,12 @@ test("Runs history controls load result inputs while preserving unfinished setup
     assert.match(view.runCards.get(recent.jobId).status.textContent, /^Cancelled/);
     assert.deepEqual(Array.from(view.elements["runs-list"].querySelectorAll("button"), button => button.textContent),
         [recent.label, older.label, result.label]);
+    view.navigation.setup.dispatchEvent(new Event("click"));
+    view.setup.inputs.raster.source.value = modelSourceKey(source);
+    view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
+    assert.equal(h.jobs.tracked.has(result.jobId), true);
+    h.controller.setAllowedModelIds([]);
+    assert.deepEqual([...h.jobs.tracked], [older.jobId], "closing a restricted setup releases its finished input and keeps active runs");
     assert.equal(h.submitted.length, 0);
     h.controller.destroy();
 });

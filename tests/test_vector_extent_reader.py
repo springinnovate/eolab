@@ -1,19 +1,23 @@
 """Measure exact original-coordinate extents independently of app and rendering."""
 
+from dataclasses import replace
 from pathlib import Path
+from uuid import UUID
 from typing import Any
 
 import fiona
 import pytest
 from shapely.affinity import translate
-from shapely.geometry import mapping, shape
+from shapely.geometry import box, mapping, shape
 
 from eolab_app.attribute_filter import VectorFilter, ogr_predicate
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import VectorReadLimits
+from eolab_app.bounded_vector import VectorReadLimits, polygon_records
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from eolab_app.vector.extent_operation import FeatureExtent, SelectionExtentResult
 from eolab_app.vector.extents import read_selected_extent
+from eolab_app.feature_intersection import match_features
+from eolab_app.polygon_areas import SummaryPolygon
 
 
 @pytest.mark.parametrize(
@@ -192,3 +196,148 @@ def test_projected_line_extent_includes_curved_edge_between_stored_vertices(
     assert bbox[1] == pytest.approx(76.9988155)
     assert bbox[3] == pytest.approx(80.787813)
     assert bbox[3] > 80  # The two stored endpoints both lie below 77 degrees N.
+
+
+@pytest.mark.parametrize("selected_id", [1, 2**31, 2**32 + 1])
+@pytest.mark.parametrize("reader", ["extent", "polygons"])
+def test_spatial_matches_keep_colliding_native_ids_distinct(
+    tmp_path: Path, selected_id: int, reader: str
+) -> None:
+    """Read only the polygon whose exact native ID passed the spatial filter.
+
+    Args:
+        tmp_path: Isolated original GeoPackage directory.
+        selected_id: Native ID selected by geometry, including Windows collisions.
+        reader: Existing extent or polygon consumer of the exact spatial result.
+    """
+    from osgeo import gdal, ogr, osr
+
+    path = tmp_path / "native-ids.gpkg"
+    polygons = {
+        identifier: box(index * 2, 0, index * 2 + 1, 1)
+        for index, identifier in enumerate((1, 2**31, 2**32 + 1))
+    }
+    with (
+        gdal.ExceptionMgr(),
+        ogr.ExceptionMgr(),
+        osr.ExceptionMgr(),
+        ogr.GetDriverByName("GPKG").CreateDataSource(str(path)) as dataset,
+    ):
+        crs = osr.SpatialReference()
+        assert crs.ImportFromEPSG(4326) == 0
+        layer = dataset.CreateLayer("features", crs, ogr.wkbPolygon)
+        assert layer.CreateField(ogr.FieldDefn("label", ogr.OFTString)) == 0
+        for identifier, polygon in polygons.items():
+            feature = ogr.Feature(layer.GetLayerDefn())
+            feature.SetFID(identifier)
+            feature.SetField("label", str(identifier))
+            assert feature.SetGeometry(ogr.CreateGeometryFromWkt(polygon.wkt)) == 0
+            assert layer.CreateFeature(feature) == 0
+    selection = CatalogSelection(
+        collectionId="eolab-mounted-vectors",
+        itemId="native-ids",
+        assetKey="data",
+        layerName="features",
+        filter=VectorFilter(),
+    )
+    original = ResolvedCatalogSelection(selection, path, "GPKG", None)
+    predicate = VectorFilter.model_validate(
+        {
+            "rules": [
+                {
+                    "operator": "intersects",
+                    "layerId": str(UUID(int=1)),
+                    "source": {"kind": "drawing", "polygonArea": None},
+                }
+            ]
+        }
+    )
+    boundary = SummaryPolygon.model_validate(mapping(polygons[selected_id]))
+    matches = match_features(original, {str(UUID(int=1)): (boundary,)}, predicate)
+    assert matches.ids == {selected_id}
+    resolved = replace(
+        original,
+        matches=matches,
+        selection=selection.model_copy(update={"filter": predicate}),
+    )
+    if reader == "extent":
+        assert read_selected_extent(resolved) == {
+            "matched": 1,
+            "bbox": list(polygons[selected_id].bounds),
+        }
+    else:
+        with polygon_records(resolved, ("label",)) as records:
+            actual = list(records)
+        assert len(actual) == 1
+        geometry, properties = actual[0]
+        assert shape(geometry).equals(polygons[selected_id])
+        assert properties == {"label": str(selected_id)}
+
+
+@pytest.mark.parametrize("driver", ["GPKG", "ESRI Shapefile"])
+@pytest.mark.parametrize("reader", ["extent", "polygons"])
+def test_bound_spatial_read_keeps_fields_needed_for_native_predicate(
+    tmp_path: Path,
+    driver: str,
+    reader: str,
+) -> None:
+    """Keep the selected polygon when its driver's WHERE test needs an attribute.
+
+    Args:
+        tmp_path: Isolated mounted source directory.
+        driver: Supported driver whose native predicate implementation is used.
+        reader: Existing consumer of the bound spatial selection.
+    """
+    path = tmp_path / ("features.gpkg" if driver == "GPKG" else "features.shp")
+    with fiona.open(
+        path,
+        "w",
+        driver=driver,
+        layer="features",
+        crs="EPSG:4326",
+        schema={"geometry": "Polygon", "properties": {"score": "int"}},
+    ) as dataset:
+        for index, score in enumerate((10, 20)):
+            dataset.write(
+                {
+                    "geometry": mapping(box(index * 2, 0, index * 2 + 1, 1)),
+                    "properties": {"score": score},
+                }
+            )
+    selection = CatalogSelection(
+        collectionId="eolab-mounted-vectors",
+        itemId="features",
+        assetKey="data",
+        layerName="features",
+        filter=VectorFilter(),
+    )
+    original = ResolvedCatalogSelection(selection, path, driver, None)
+    predicate = VectorFilter.model_validate(
+        {
+            "rules": [
+                {
+                    "operator": "intersects",
+                    "layerId": str(UUID(int=1)),
+                    "source": {"kind": "drawing", "polygonArea": None},
+                },
+                {"field": "score", "operator": "ge", "value": 15},
+            ]
+        }
+    )
+    boundary = SummaryPolygon.model_validate(mapping(box(-1, -1, 4, 2)))
+    matches = match_features(original, {str(UUID(int=1)): (boundary,)}, predicate)
+    resolved = replace(
+        original,
+        matches=matches,
+        where=ogr_predicate(predicate),
+        selection=selection.model_copy(update={"filter": predicate}),
+    )
+    assert matches.counts == {"matched": 1, "total": 2}
+    if reader == "extent":
+        assert read_selected_extent(resolved) == {"matched": 1, "bbox": [2, 0, 3, 1]}
+    else:
+        with polygon_records(resolved, ("score",)) as records:
+            actual = list(records)
+        assert len(actual) == 1
+        assert shape(actual[0][0]).equals(box(2, 0, 3, 1))
+        assert actual[0][1] == {"score": 20}

@@ -154,6 +154,7 @@ export class CatalogMapActionRegistry {
  * @property {boolean} retained Whether the Item is in Map layers, even if hidden.
  * @property {{key:string,label:string,count:number}|null} removalTarget Topmost matching view and the number of matches.
  * @property {boolean} canZoom Whether the Item has usable map bounds.
+ * @property {boolean} canStyle Whether the visitor can edit this retained Item's appearance.
  * @property {{item:Object,key:string,buttonText:string,statusText:string}|null} pendingAction In-flight action for this composite identity.
  * @property {{message:string,isError:boolean,retained:boolean}|null} feedback Outcome matching current map membership.
  */
@@ -179,6 +180,7 @@ export class CatalogMapActions {
      * @param {(item:Object)=>void} commands.remove Remove with the existing Undo behavior.
      * @param {(item:Object|null)=>number[][]|null} commands.getBounds Read usable map corners.
      * @param {(key:string,item:Object)=>void} commands.openStyle Open the editor for a Catalog layer or the first temporal view.
+     * @param {()=>boolean} [commands.canEditStyle] Whether the map permits user style changes.
      * @param {(bounds:number[][])=>void} commands.zoomToBounds Fit the viewport using existing map options.
      * @param {(item:Object,visualization:{kind:"raster"|"vector",metadata:Object|undefined}|null)=>void} commands.onPrepared Refresh matching selected details after assessment, before publication.
      * @param {(item:Object,kind:"raster"|"vector")=>void} commands.onRemoved Preserve selected analysis after removal, before feedback.
@@ -209,6 +211,7 @@ export class CatalogMapActions {
         return {
             visualization, supported: visualization !== null, retained, removalTarget,
             canZoom: this.commands.getBounds(item) !== null,
+            canStyle: retained && (this.commands.canEditStyle?.() ?? true),
             pendingAction: item === null ? null : this.#pending.get(item),
             feedback,
         };
@@ -302,7 +305,7 @@ export class CatalogMapActions {
      * @return {void}
      */
     style(item) {
-        if (item === null || this.commands.removalTarget(item) === null ||
+        if (this.commands.canEditStyle?.() === false || item === null || this.commands.removalTarget(item) === null ||
             this.#pending.get(item) !== null) return;
         this.commands.openStyle(getCatalogItemKey(item), item);
     }

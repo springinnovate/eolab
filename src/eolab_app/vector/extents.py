@@ -1,14 +1,16 @@
 """Measure filtered vector bounds without retaining display geometry."""
 
 import math
+from contextlib import ExitStack
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import fiona
 from fiona.model import to_dict
 from rasterio.errors import RasterioError
 from rasterio.warp import transform_bounds
+from shapely.geometry import mapping
 
 from eolab_app.attribute_filter import matches_filter, validate_filter, ogr_predicate
 from eolab_app.calculated_fields import (
@@ -23,10 +25,18 @@ from eolab_app.bounded_geometry import (
     _iter_geometry_coordinates,
 )
 from eolab_app.bounded_vector import VectorReadLimits, _source_collection
+from eolab_app.native_vector import (
+    iter_native_features,
+    native_spatial_geometry,
+    open_native_vector_layer,
+)
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
+
+if TYPE_CHECKING:
+    from osgeo import ogr
 
 
 def read_selected_extent(
@@ -56,7 +66,18 @@ def read_selected_extent(
     """
     deadline = monotonic() + limits.seconds
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
-        with _source_collection(resolved) as dataset:
+        with ExitStack() as sources:
+            dataset = sources.enter_context(_source_collection(resolved))
+            native = (
+                sources.enter_context(
+                    open_native_vector_layer(
+                        resolved,
+                        where=resolved.where,
+                    )
+                )
+                if resolved.matches is not None
+                else None
+            )
             return _read_dataset_extent(
                 dataset,
                 resolved.selection.filter,
@@ -65,6 +86,7 @@ def read_selected_extent(
                 deadline,
                 resolved.calculated_fields,
                 resolved.matches.ids if resolved.matches is not None else None,
+                native_layer=native,
             )
 
 
@@ -121,6 +143,8 @@ def _read_dataset_extent(
     deadline: float,
     calculated_fields: tuple[CompiledCalculatedField, ...] = (),
     matched_ids: frozenset[int] | None = None,
+    *,
+    native_layer: "ogr.Layer | None" = None,
 ) -> dict[str, Any]:
     """Measure filtered feature envelopes from an already authorized open dataset.
 
@@ -132,6 +156,7 @@ def _read_dataset_extent(
         deadline: Monotonic deadline established before opening the original file.
         calculated_fields: Programs already validated against the original schema.
         matched_ids: Original IDs selected by the complete spatial filter, if present.
+        native_layer: Exact-ID geometry scan when matched_ids is supplied; otherwise None.
 
     Returns:
         Matching count and transformed bounds without source geometry.
@@ -155,7 +180,12 @@ def _read_dataset_extent(
             "The selected vector has no coordinate reference system"
         )
     options = {"where": where} if where else {}
-    for count, feature in enumerate(dataset.filter(**options), 1):
+    features = (
+        iter_native_features(native_layer)
+        if native_layer is not None
+        else dataset.filter(**options)
+    )
+    for count, feature in enumerate(features, 1):
         if count > limits.features:
             raise GeometryValidationError(
                 f"Vector reading exceeded its {limits.features:,}-feature budget"
@@ -164,14 +194,24 @@ def _read_dataset_extent(
             raise GeometryValidationError(
                 "Vector extent reading exceeded its time budget"
             )
-        properties = dict(feature.properties)
-        properties.update(evaluate_calculated_fields(calculated_fields, properties))
-        if not (int(feature.id) in matched_ids if matched_ids is not None else matches_filter(candidate, properties)):
-            continue
+        if native_layer is not None:
+            if feature.GetFID() not in matched_ids:
+                continue
+            geometry = feature.GetGeometryRef()
+        else:
+            properties = dict(feature.properties)
+            properties.update(evaluate_calculated_fields(calculated_fields, properties))
+            if not matches_filter(candidate, properties):
+                continue
+            geometry = feature.geometry
         matched += 1
-        if feature.geometry is None:
+        if geometry is None:
             continue
-        raw = to_dict(feature.geometry)
+        raw = (
+            mapping(native_spatial_geometry(geometry))
+            if native_layer is not None
+            else to_dict(geometry)
+        )
         native_bounds = None
         for positions, (x, y) in enumerate(
             _iter_geometry_coordinates(raw, validate_wgs84_bounds=False), 1

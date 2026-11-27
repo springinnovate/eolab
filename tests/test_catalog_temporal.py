@@ -330,27 +330,22 @@ def test_scan_admits_partial_months_without_reading_weather_pixels(
         "not a separate raster", encoding="utf-8"
     )
     opened: list[Path] = []
-    native_open = rasterio.open
+    initialize_reader = rasterio.io.DatasetReader.__init__
 
-    def record_open(path: Path, *args: Any, **kwargs: Any) -> rasterio.io.DatasetReader:
-        """Read the ordinary TIFF; admission must not open observation files.
+    def record_open(
+        reader: rasterio.io.DatasetReader, *args: Any, **kwargs: Any
+    ) -> None:
+        """Record the actual file opened by Rasterio or its GeoTIFF reader subclass.
 
         Args:
-            path: Source requested by the admission handler.
-            *args: Native positional open arguments.
+            reader: Native dataset reader under construction.
+            *args: Native file and positional open arguments.
             **kwargs: Native keyword open arguments.
-
-        Returns:
-            Rasterio's real dataset reader.
-
-        Raises:
-            AssertionError: If admission attempts to open a weather array.
         """
-        assert Path(path) == tmp_path / "ordinary.tif"
-        opened.append(Path(path))
-        return native_open(path, *args, **kwargs)
+        initialize_reader(reader, *args, **kwargs)
+        opened.append(Path(reader.name))
 
-    monkeypatch.setattr(rasterio, "open", record_open)
+    monkeypatch.setattr(rasterio.io.DatasetReader, "__init__", record_open)
     manager, writer = create_scanner(tmp_path)
     status = asyncio.run(scan(manager))
     assert status["failed"] == 0
@@ -675,6 +670,7 @@ def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     "failure, message",
     [
         ("grid", "Unsupported raster grid"),
+        ("off-pole", "positive height"),
         ("catalog-escape", "escapes its directory"),
         ("interval", "Invalid time or interval"),
         ("duplicate", "Duplicate observation"),
@@ -702,6 +698,7 @@ def test_invalid_external_metadata_is_reported_without_publishing_an_item(
         with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
             updates = {
                 "grid": "UPDATE coverage SET width = 0",
+                "off-pole": "UPDATE coverage SET transform = '[0, 0.25, 0, 99, 0, -0.001]'",
                 "interval": "UPDATE coverage SET interval_start = interval_end WHERE temporal_type = 'mean'",
                 "duplicate": "INSERT INTO coverage SELECT * FROM coverage LIMIT 1",
                 "variable": "UPDATE coverage SET units = 'different' WHERE rowid = 1",

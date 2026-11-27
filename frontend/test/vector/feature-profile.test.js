@@ -111,6 +111,7 @@ test("one-feature pickers open above the result and exact values follow the insp
   const next=observation({featureId:"other",properties:{name:"Site B",flow:0}});
   controller.setFeatureChoices([first,next]);
   controller.setCurrentObservation(first);
+  controller.open();
   const trigger=doc.querySelector("#vector-feature-profile-fields-button");
   trigger.dispatchEvent(new Event("click"));
   assert.equal(trigger.getAttribute("aria-expanded"),"true");
@@ -126,6 +127,13 @@ test("one-feature pickers open above the result and exact values follow the insp
   assert.equal(table.children[0].children[2].textContent,"0");
   table.children[0].children[0].children[0].dispatchEvent(new Event("click"));
   assert.equal(doc.querySelector("#vector-feature-profile-selection-text").textContent,"flow · 0");
+  const choices = [...Array(1000).fill(first), next];
+  controller.setFeatureChoices(choices);
+  doc.querySelector("#vector-feature-profile-features-button").dispatchEvent(new Event("click"));
+  controller.setCurrentObservation(next,{position:1001,total:1001,canPrevious:true,canNext:false});
+  assert.equal(doc.querySelector("#vector-feature-profile-feature-range").value,"1000");
+  assert.equal(doc.querySelector("#vector-feature-profile-feature-list").children.length,1);
+  assert.equal(doc.querySelector("#vector-feature-profile-feature-list").value,"1000");
   controller.destroy();
 });
 
@@ -195,6 +203,7 @@ test("numeric families retain year and decimal coordinates around shared text", 
 test("CO2 fields render distinct chart positions and complete axis and table labels", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation({ properties: { CO2_total: 3, CO2_mean: 2 } }));
+  h.controller.open();
   const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
   const points = chart.querySelectorAll(".series-chart-point");
   assert.equal(points.length, 2);
@@ -204,6 +213,7 @@ test("CO2 fields render distinct chart positions and complete axis and table lab
   assert.equal(labels.includes("CO2_total"), true);
   assert.equal(labels.includes("Field"), true);
   assert.equal(labels.includes("Number in field name"), false);
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   const rows = h.documentContext.querySelector("#vector-feature-profile-table-body").children;
   assert.deepEqual(rows.map(row => [row.children[0].children[0].textContent, row.children[1].textContent]), [
     ["CO2_mean", "CO2_mean"], ["CO2_total", "CO2_total"],
@@ -231,14 +241,17 @@ test("mixed field names have one natural order for every selection permutation",
 test("checkbox selection history does not change mixed profile chart or table order", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation({ properties: { A2: 2, M: 3, Z1: 1 } }));
+  h.controller.open();
   const rows = h.documentContext.querySelector("#vector-feature-profile-field-list");
   for (const name of ["M", "Z1", "A2"]) {
     const checkbox = rows.children.find(row => row.children[0].value === name).children[0];
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change"));
   }
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
   assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["A2", "M", "Z1"]);
+  h.documentContext.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
   const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
   assert.deepEqual(chart.querySelectorAll(".series-chart-point")
     .map(element => element.getAttribute("aria-label")), ["A2: 2", "M: 3", "Z1: 1"]);
@@ -247,6 +260,7 @@ test("checkbox selection history does not change mixed profile chart or table or
 test("field selection, search and bulk actions retain focused checkbox controls", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
+  h.controller.open();
   const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
   const originalRows = [...list.children];
   const checkbox = originalRows.find(row => row.children[0].value === "R2000").children[0];
@@ -256,6 +270,7 @@ test("field selection, search and bulk actions retain focused checkbox controls"
   assert.equal(list.contains(checkbox), true);
   assert.ok(h.documentContext.activeElement === checkbox);
   assert.ok(list.children.every((row, index) => row === originalRows[index]));
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
   assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["R1999", "R2001"]);
 
@@ -289,6 +304,7 @@ test("field selection, search and bulk actions retain focused checkbox controls"
 test("retained field controls follow current feature values and source selections", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
+  h.controller.open();
   const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
   const r2000 = list.children.find(row => row.children[0].value === "R2000");
   h.controller.setCurrentObservation(observation({ properties: { R2000: null, R2001: 8, A2: 2 } }));
@@ -302,6 +318,7 @@ test("retained field controls follow current feature values and source selection
   assert.equal(r2000.children[2].textContent, "20");
   r2000.children[0].checked = false;
   r2000.children[0].dispatchEvent(new Event("change"));
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
   assert.deepEqual(table.children.map(row => row.children[0].children[0].textContent), ["R2002"]);
   h.controller.setCurrentObservation(observation());
@@ -317,6 +334,7 @@ test("retained field controls follow current feature values and source selection
 test("removing focused missing fields moves to a visible neighbor, then Find fields", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation({ properties: { R1999: 1, R2000: 2, R2001: 3 } }));
+  h.controller.open();
   h.controller.setCurrentObservation(observation({ properties: {} }));
   const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
   const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
@@ -344,6 +362,7 @@ test("removing focused missing fields moves to a visible neighbor, then Find fie
 test("removing a focused missing field never focuses a filtered-out neighbor", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation({ properties: { R1999: 1, R2000: 2 } }));
+  h.controller.open();
   h.controller.setCurrentObservation(observation({ properties: { R2000: 3 } }));
   const list = h.documentContext.querySelector("#vector-feature-profile-field-list");
   const search = h.documentContext.querySelector("#vector-feature-profile-field-search");
@@ -428,6 +447,7 @@ test("controller plots suggested fields and updates from partial search actions"
     .dispatchEvent(new Event("click"));
   assert.match(chart.getAttribute("aria-label"), /1 numeric fields/);
   assert.equal(chart.querySelectorAll(".series-chart-bar").length, 1);
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-table-body")
       .children.length,
@@ -462,6 +482,7 @@ test("one feature stacks the checked fields and keeps their exact readings", () 
   assert.deepEqual(doc.querySelector("#vector-feature-profile-table-body").children.map(row => row.children[2].textContent),
     ["10.5", "0", "3"]);
 
+  doc.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
   search.value = "forest";
   doc.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
   assert.deepEqual(legend.children.map(item => item.textContent), ["areaForest"]);
@@ -542,6 +563,7 @@ test("numeric field-name spacing is reflected on the horizontal axis", () => {
     R2001: 2,
     R2004: 3,
   } }));
+  h.controller.open();
   const chart = h.documentContext.querySelector("#vector-feature-profile-chart");
   const bars = chart.querySelectorAll(".series-chart-bar");
   assert.equal(bars.length, 3);
@@ -555,11 +577,22 @@ test("numeric field-name spacing is reflected on the horizontal axis", () => {
   assert.equal(circles.length, bars.length);
   const positions = circles.map(circle => Number(circle.getAttribute("cx")));
   assert.ok(positions[2] - positions[1] > 2 * (positions[1] - positions[0]));
+  const xHeading = h.documentContext.querySelector("#vector-feature-profile-x-heading");
+  const table = h.documentContext.querySelector("#vector-feature-profile-table-body");
+  h.documentContext.querySelector("#vector-feature-profile-values-button").click();
+  for (const [style, hideX] of [["stacked", true], ["bar", false]]) {
+    chartType.value = style;
+    chartType.dispatchEvent(new Event("change"));
+    assert.equal(xHeading.hidden, hideX);
+    assert.deepEqual(table.children.map(row => row.children[1].hidden), [hideX, hideX, hideX]);
+    assert.deepEqual(table.children.map(row => row.children[2].textContent), ["1", "2", "3"]);
+  }
 });
 
 test("per-source rules survive feature navigation and missing values break lines", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
+  h.controller.open();
   const chartType = h.documentContext.querySelector("#vector-feature-profile-chart-type");
   chartType.value = "line";
   chartType.dispatchEvent(new Event("change"));
@@ -580,6 +613,7 @@ test("per-source rules survive feature navigation and missing values break lines
       other_7: 2,
     },
   }));
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   const tableBody = h.documentContext.querySelector(
     "#vector-feature-profile-table-body",
   );
@@ -589,10 +623,20 @@ test("per-source rules survive feature navigation and missing values break lines
     h.documentContext.querySelector("#vector-feature-profile-status").textContent,
     /One field has no numeric value/,
   );
+  h.documentContext.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
   const path = h.documentContext.querySelector("#vector-feature-profile-chart")
     .children.find((element) => element.getAttribute("class") === "series-chart-line");
   assert.match(path.getAttribute("d"), /^M/);
   assert.doesNotMatch(path.getAttribute("d"), /L/);
+
+  const missing = observation({ featureId: "corridors.3", properties: { R2000: null, R2001: null } });
+  h.controller.setCurrentObservation(missing);
+  h.documentContext.querySelector("#vector-feature-profile-values-button").click();
+  tableBody.children[0].children[0].children[0].click();
+  h.controller.setCurrentObservation({...missing, layerLabel: "Renamed corridors"}, null, "labels");
+  assert.equal(tableBody.children[0].children[0].children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-selection").hidden, false);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-selection-text").textContent, "R2000 · No value");
 
   h.controller.setCurrentObservation(observation({ sourceId: "catalog|other-corridors" }));
   assert.equal(chartType.value, "bar");
@@ -632,6 +676,7 @@ test("active mode survives empty clicks, reopens, and ends on explicit close", (
       .textContent,
     "Southern corridor",
   );
+  h.documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-table-body")
       .children.length,
@@ -649,17 +694,20 @@ test("active mode survives empty clicks, reopens, and ends on explicit close", (
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-table-body")
       .children.length,
-    2,
+    0,
   );
+  h.controller.open();
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-table-body").children.length, 2);
 });
 
 
 test("unavailable feature location leaves the chart usable with a readable explanation", () => {
   const h = fixture();
   h.controller.onFeatureZoom = () => false;
-  h.controller.setCurrentObservation(observation({
+  const missingBounds = observation({
     focus: Object.freeze({ center: [20, 10], bounds: null }),
-  }));
+  });
+  h.controller.setCurrentObservation(missingBounds);
   h.controller.open();
   const zoom = h.documentContext.querySelector("#zoom-vector-feature-profile-feature");
   zoom.dispatchEvent(new Event("click"));
@@ -667,5 +715,20 @@ test("unavailable feature location leaves the chart usable with a readable expla
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
     "Feature location is unavailable. The map has not moved.");
   assert.equal(h.documentContext.querySelector("#vector-feature-profile-chart").hidden, false);
+  h.controller.setCurrentObservation({...missingBounds, layerLabel: "New layer name"}, null, "labels");
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-profile-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
+  h.documentContext.querySelector("#vector-feature-profile-clear-fields").click();
+  const status = h.documentContext.querySelector("#vector-feature-profile-status");
+  const selectFields = "Select numeric fields to plot from this feature.";
+  const unavailable = "Feature location is unavailable. The map has not moved.";
+  assert.equal(status.textContent, selectFields + " " + unavailable);
+  assert.equal(zoom.disabled, true);
+  h.controller.setCurrentObservation(observation({featureId: "corridors.7"}));
+  assert.equal(zoom.disabled, false);
+  assert.equal(status.textContent, selectFields);
+  zoom.click();
+  assert.equal(status.textContent, selectFields + " " + unavailable);
   h.controller.destroy();
 });

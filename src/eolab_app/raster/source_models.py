@@ -94,15 +94,17 @@ class TemporalTimeChoices:
     """Describe available months and exact observation labels for one variable.
 
     Attributes:
-        months: Published UTC months containing this variable, in increasing order.
+        months: Populated UTC months in order. Prepared intervals use their last covered second.
         month: Requested month, or the latest available month when none was supplied.
         times: Actual UTC labels within month, preserving gaps, in ISO format
             with milliseconds and a trailing Z.
+        interval_starts: For explicit ranges, the inclusive start for each exact end key.
     """
 
     months: tuple[str, ...]
     month: str
     times: tuple[str, ...]
+    interval_starts: dict[str, str] | None = None
 
 
 class TemporalRasterSelection(TemporalVariableSelection):

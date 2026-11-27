@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from importlib.resources import files
 import time
 from typing import Any
 from uuid import uuid4
@@ -10,6 +11,7 @@ import psycopg
 import pytest
 
 import eolab_app.processing.job_store as job_store_module
+from eolab_jobs.worker_claim import JOB_QUEUE_LOCK_ID
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import (
     Artifact,
@@ -100,7 +102,7 @@ def test_twelve_sessions_and_full_stack_wait_then_take_turns(
     expected = {
         owner: sorted(
             (job for job in jobs if job["owner"] == owner),
-            key=lambda job: (job["created_at"], job["id"]),
+            key=lambda job: (job["subscribed_at"], job["id"]),
         )
         for owner in owners
     }
@@ -288,7 +290,7 @@ def test_admission_returns_after_commit_and_lock_release(
     with psycopg.connect(store.conninfo) as connection:
         assert connection.execute(
             "SELECT pg_try_advisory_xact_lock(%s)",
-            (job_store_module.PROCESSING_ADVISORY_LOCK_ID,),
+            (JOB_QUEUE_LOCK_ID,),
         ).fetchone() == (True,)
         assert connection.execute(
             "SELECT id FROM processing.job_subscribers "
@@ -468,6 +470,59 @@ def test_concurrent_maintenance_and_submission_preserve_record_limit(
     assert admit(store, "owner", plan)["status"] == "queued"
 
 
+def test_version_22_upgrade_retains_known_turns_until_job_cleanup(
+    store: PostgresJobStore,
+) -> None:
+    """Upgrade an existing job and preserve only evidenced service history.
+
+    Args:
+        store: Migrated disposable database with no active workers.
+    """
+    with psycopg.connect(store.conninfo, autocommit=True) as connection:
+        connection.execute(
+            "ALTER SCHEMA processing RENAME TO processing_before_upgrade"
+        )
+        try:
+            connection.execute(files("eolab_jobs").joinpath("schema.sql").read_text())
+            connection.execute(
+                "INSERT INTO processing.jobs(id,status,operation,reserved_bytes,expires_at,started_at) "
+                "VALUES ('shared','ready','test',0,now(),now())"
+            )
+            connection.execute(
+                """INSERT INTO processing.job_subscribers(id,job_id,owner,request_key,created_at,status)
+                   VALUES ('one','shared','served','one',now()-interval '1 day',NULL),
+                          ('two','shared','served','two',now()-interval '1 day',NULL),
+                          ('three','shared','late','three',now()+interval '1 day',NULL),
+                          ('four','shared','unknown','four',now()-interval '1 day','cancelled')"""
+            )
+            connection.execute(
+                "ALTER TABLE processing.jobs DISABLE TRIGGER processing_release_inputs"
+            )
+            with pytest.raises(job_store_module.UnsupportedProcessingSchemaError):
+                store.migrate()
+            assert connection.execute(
+                "SELECT to_regclass('processing.job_turns')"
+            ).fetchone() == (None,)
+            connection.execute(
+                "ALTER TABLE processing.jobs ENABLE TRIGGER processing_release_inputs"
+            )
+            store.migrate()
+            store.migrate()
+            assert connection.execute(
+                "SELECT owner FROM processing.job_turns WHERE job_id='shared'"
+            ).fetchall() == [("served",)]
+            connection.execute("DELETE FROM processing.jobs WHERE id='shared'")
+            assert connection.execute(
+                "SELECT count(*) FROM processing.job_turns"
+            ).fetchone() == (0,)
+        finally:
+            with connection.transaction():
+                connection.execute("DROP SCHEMA IF EXISTS processing CASCADE")
+                connection.execute(
+                    "ALTER SCHEMA processing_before_upgrade RENAME TO processing"
+                )
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -477,6 +532,7 @@ def test_concurrent_maintenance_and_submission_preserve_record_limit(
         "ON processing.habitat_preparation_selections USING btree (selection)",
         "ALTER TABLE processing.jobs DROP COLUMN input_uploads",
         "DROP TRIGGER processing_release_inputs ON processing.jobs",
+        "DROP TRIGGER record_job_turns ON processing.jobs",
         "ALTER TABLE processing.transfers DROP CONSTRAINT transfers_job_id_fkey",
         "DELETE FROM processing.schema_version; INSERT INTO processing.schema_version VALUES (1)",
     ],
@@ -488,7 +544,7 @@ def test_schema_startup_leaves_partial_or_historical_layout_untouched(
 
     Args:
         store: Guarded disposable PostgreSQL store.
-        change: Historical registry or incompatible structure retaining marker 22.
+        change: Unsupported version history or damaged structure in the current schema.
     """
     with psycopg.connect(store.conninfo, autocommit=True) as connection:
         connection.execute(
@@ -497,8 +553,8 @@ def test_schema_startup_leaves_partial_or_historical_layout_untouched(
         try:
             store.migrate()
             assert connection.execute(
-                "SELECT version FROM processing.schema_version"
-            ).fetchall() == [(22,)]
+                "SELECT version FROM processing.schema_version ORDER BY version"
+            ).fetchall() == [(22,), (23,)]
             assert (
                 connection.execute(
                     "SELECT column_name FROM information_schema.columns "

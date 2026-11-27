@@ -1,4 +1,5 @@
 /** Browse and play the published observations of one visible map layer. */
+import { hasExclusiveEnd, observationDate, observationLabel, observationMonthLabel } from "../observation-period.js";
 
 /** @typedef {{key:string,visible:boolean,opacity:number,timeline?:import("./raster-viewer.js").TemporalMapTimeline|null}} TimelineLayer */
 /** @typedef {{time?:string,month?:string,edge?:"first"|"last"|"firstOfLastDay"}} Destination */
@@ -137,7 +138,7 @@ export class TemporalScrubber {
         this.root.hidden = true;
     }
 
-    /** Adopt a backing view, clearing obsolete playback after external changes to the layer or its dates.
+    /** Show the selected layer's dates and update navigation when its layer or dates change.
      * @param {string|undefined} key Preferred visible view key.
      * @return {void}
      */
@@ -155,11 +156,26 @@ export class TemporalScrubber {
         setOptions(this.controls.layer, this.layers.map((item, i) => [item.key,
             (this.layers.length > 1 ? (i + 1) + ". " : "") + item.timeline.name + " · " + item.timeline.variableLabel]));
         this.controls.layer.value = layer.key;
-        if (next.months !== before?.months) setOptions(this.controls.month, next.months.map(month => [month, month]));
+        this.controls.monthCaption.textContent = ["year", "calendar_year"].includes(next.period) ? "Year" : "Month";
+        const availableMonthsChanged = next.months !== before?.months;
+        if (availableMonthsChanged || next.period !== before?.period) {
+            setOptions(this.controls.month, next.months.map(month => [month, observationMonthLabel(month, next.period)]));
+        }
+        if (availableMonthsChanged || next.month !== before?.month) {
+            this.previousMonth = next.months.findLast(month => month < next.month);
+            this.nextMonth = next.months.find(month => month > next.month);
+        }
         this.controls.month.value = next.month;
-        if (next.times !== before?.times) {
-            this.days = next.times.filter((time, index, times) => !index || time.slice(0, 10) !== times[index - 1].slice(0, 10));
+        if (next.times !== before?.times || next.period !== before?.period) {
             this.epochs = next.times.map(Date.parse);
+            const offset = hasExclusiveEnd(next.period) ? 1 : 0;
+            let previousDay;
+            this.days = next.times.filter((_, index) => {
+                const day = Math.floor((this.epochs[index] - offset) / 86400000);
+                const first = day !== previousDay;
+                previousDay = day;
+                return first;
+            });
             this.controls.time.min = this.epochs[0] ?? 0;
             this.controls.time.max = this.epochs.at(-1) ?? 0;
             this.ticks.replaceChildren(...(next.times.length <= 31 ? next.times : this.days).map(time => {
@@ -182,21 +198,21 @@ export class TemporalScrubber {
         return this.layer.timeline.times[index];
     }
 
-    /** Find a real neighboring observation, crossing gaps via the next populated month.
+    /** Find the next or previous observation even when the selected month is missing.
      * @param {-1|1} direction Backward or forward.
      * @param {string} [from] Starting UTC label, defaulting to the selected observation.
      * @return {Destination|null} Time, populated month and edge, or end of coverage.
      */
     #neighbor(direction, from = this.layer.timeline.time) {
-        const {times, months, month} = this.layer.timeline;
+        const {times, period} = this.layer.timeline;
         const daily = this.controls.stride.value === "day";
         const candidates = daily ? this.days : times;
-        const coordinate = daily ? from.slice(0, 10) : from;
-        const time = direction > 0 ? candidates.find(t => (daily ? t.slice(0, 10) : t) > coordinate)
-            : candidates.findLast(t => (daily ? t.slice(0, 10) : t) < coordinate);
+        const coordinate = t => daily ? observationDate(t, period) : t;
+        const origin = coordinate(from);
+        const time = direction > 0 ? candidates.find(t => coordinate(t) > origin)
+            : candidates.findLast(t => coordinate(t) < origin);
         if (time) return {time};
-        const index = months.indexOf(month);
-        const adjacent = index < 0 ? null : months[index + direction];
+        const adjacent = direction > 0 ? this.nextMonth : this.previousMonth;
         return adjacent ? {month: adjacent, edge: direction > 0 ? "first" : daily ? "firstOfLastDay" : "last"} : null;
     }
 
@@ -229,7 +245,7 @@ export class TemporalScrubber {
         this.#render();
     }
 
-    /** Show loading progress and label the on-map time only after its raster has drawn.
+    /** Update timeline navigation, loading progress and the time shown on the map after its raster has drawn.
      * @return {void}
      */
     #render() {
@@ -244,17 +260,17 @@ export class TemporalScrubber {
         if (failed && this.playing) this.pause();
         const target = this.dragTime ?? t.time;
         if (t.times.length) c.time.value = Date.parse(target);
-        c.time.setAttribute("aria-valuetext", utcLabel(target));
-        c.time.disabled = t.times.length < 2 && t.months.length < 2;
+        c.time.setAttribute("aria-valuetext", observationLabel(target, t.period, t.intervalStarts?.[target]) ?? utcLabel(target));
         c.month.disabled = !t.months.length;
         const next = this.#neighbor(1), previous = this.#neighbor(-1);
+        c.time.disabled = t.times.length < 2 && !next && !previous;
         c.back.disabled = !previous;
         c.forward.disabled = !next;
         c.play.disabled = !this.playing && (!next || !painted || Boolean(failed));
         c.play.textContent = this.playing ? "Pause" : "Play";
-        c.display.textContent = painted ? "On map · " + utcLabel(t.time) : "";
+        c.display.textContent = painted ? "On map · " + (observationLabel(t.time, t.period, t.intervalStarts?.[t.time]) ?? utcLabel(t.time)) : "";
         const pending = this.dragTime ?? this.action?.time ?? t.time;
-        const dateStatus = t.month ? "Loading dates for " + t.month : "Loading available dates…";
+        const dateStatus = t.month ? "Loading dates for " + observationMonthLabel(t.month, t.period) : "Loading available dates…";
         const message = t.error || (failed ? "This observation could not be drawn. Retry the map or choose another time." :
             t.loading && !t.times.length ? dateStatus :
                 (!painted || pending !== t.time) ? "Loading raster…" : "");
@@ -265,7 +281,8 @@ export class TemporalScrubber {
                 seconds % 60 === 0 ? ["minute", 60] : ["second", 1];
             const count = seconds / unit[1];
             c.gap.textContent = "Next · " + count + " " + unit[0] + (count === 1 ? "" : "s") + " later";
-        } else c.gap.textContent = next ? "Next month · " + next.month : "End of available dates";
+        } else c.gap.textContent = next ? (t.period ? "Next · " : "Next month · ") +
+            observationMonthLabel(next.month, t.period) : "End of available dates";
         if (!this.playing || this.action || !painted) return;
         if (!next) { this.pause(); c.play.textContent = "Play"; c.play.disabled = true; return; }
         if (next.time) {

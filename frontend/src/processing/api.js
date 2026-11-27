@@ -6,6 +6,16 @@ import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./cal
 import { csvParse } from "d3";
 import { rasterSourceReference } from "../raster-source.js";
 
+/** A prepared Earth Engine dataset offered in Ecosystem Condition setup.
+ * @typedef {Object} HabitatDatasetSource
+ * @property {string} id Dataset identifier submitted with the model.
+ * @property {string} label Human-readable dataset name.
+ * @property {string} url Catalog entry for the configured source.
+ * @property {Array<"predictor"|"response">} roles Roles served by the dataset.
+ * @property {Array<"predictor"|"response">} requiredRoles Roles requiring this dataset.
+ * @property {Record<string,Array<{variable:string,bands:string[],requiredDatasets:string[],periods:Record<string,string>}>>} inputsByRole Prepared variable names, source bands, dependencies and time periods for the calculations in each role.
+ */
+
 /** Serialize one raster identity without carrying display state or file paths.
  * @param {Object} source Catalog item, exact temporal observation, uploaded raster or owned run-file source.
  * @return {Object} Path-free source accepted by Processing operations.
@@ -432,9 +442,9 @@ export class ProcessingApiClient {
         return response.models.map(validateAvailableModel);
     }
 
-    /** Read Habitat's years, acquisition grid and selectable input datasets.
+    /** Read Habitat's assessment years, grid and source details for each dataset.
      * @param {AbortSignal} [signal] Cancel choices for an abandoned model draft.
-     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:Array<{id:string,label:string,url:string,roles:Array<"predictor"|"response">,requiredRoles:Array<"predictor"|"response">}>}>} Stable dataset aliases, source links and required roles without connection credentials.
+     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object,datasets:HabitatDatasetSource[]}>} Configured input choices, bands and observation years.
      * @throws {Error} If the configuration request fails.
      */
     async getHabitatEarthEngineOptions(signal) {
@@ -506,7 +516,7 @@ export class ProcessingApiClient {
      * The current writer supplies chronological observations and named formula rows.
      * @param {Object} job Completed, validated temporal stack job.
      * @param {AbortSignal} [signal] Cancellation when the requested plot changes.
-     * @return {Promise<{csv:string, observations:{time:string,rows:Object[]}[]}>} Original download and plot rows grouped by observation.
+     * @return {Promise<{csv:string, observations:{time:string,period?:string,start?:string,rows:Object[]}[]}>} Original download and grouped rows with prepared-stack coverage.
      * @throws {ProcessingRequestError|Error} If the owned download is unavailable, expired, cancelled or unreadable.
      */
     async readTemporalStackRows(job, signal) {
@@ -517,7 +527,8 @@ export class ProcessingApiClient {
         const observations = new Map();
         const expressions = new Map(job.result.calculations.map(value => [value.label, value.expression]));
         for (const row of csvParse(csv)) {
-            if (!observations.has(row.time_utc)) observations.set(row.time_utc, {time: row.time_utc, rows: []});
+            if (!observations.has(row.time_utc)) observations.set(row.time_utc, {time: row.time_utc, rows: [],
+                ...(row.time_labels ? {period: row.time_labels, start: row.interval_start_utc} : {})});
             observations.get(row.time_utc).rows.push({label: row.calculation, expression: expressions.get(row.calculation),
                 value: row.value === "" ? null : row.value, valueType: row.value_type, unit: row.unit,
                 state: row.state, aggregates: JSON.parse(row.aggregates)});

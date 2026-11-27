@@ -1,8 +1,10 @@
 """Concurrent workers share durable admission without sharing native processes."""
 
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import replace
+from datetime import timedelta
+import hashlib
 from multiprocessing import active_children, get_context
 import os
 from threading import Event
@@ -11,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 import psycopg
+from psycopg.rows import dict_row
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
@@ -23,27 +26,51 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.worker import ProcessingWorker
+from eolab_app.routes.processing import COOKIE
 from eolab_app.execution.reusable_process import ReusableProcess
-from test_processing_jobs import boundary, store, HEADERS, _paused_clip, clip_inputs
+from eolab_jobs.worker_claim import (
+    acknowledge_stopped_attempt,
+    claim_next_job,
+    renew_job_lease,
+)
+from raster_source_support import SOURCE
+from test_processing_jobs import (
+    boundary,
+    store,
+    HEADERS,
+    _paused_clip,
+    clip_inputs,
+    submitted,
+)
 from test_processing_calculations import ENDPOINT, request_body
 
 
 def claim_from_process(
-    arguments: tuple[str, ProcessingLimits],
+    arguments: tuple[str, ProcessingLimits, bool],
 ) -> dict[str, Any] | None:
     """Claim through an independent Python process and database connection.
 
     Args:
-        arguments: Disposable database address and common capacity settings.
+        arguments: Database address, shared limits and whether to call the shared
+            claim directly instead of using the Processing adapter.
 
     Returns:
         The claimed row, or None when other processes consumed capacity.
     """
-    dsn, limits = arguments
+    dsn, limits, direct = arguments
+    if direct:
+        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                return claim_next_job(
+                    cursor,
+                    worker_count=limits.worker_count,
+                    lease_seconds=limits.lease_seconds,
+                    supported_operations=["test.v1"],
+                )
     jobs = PostgresJobStore(limits, dsn)
     try:
         jobs.open()
-        return jobs.claim_next_job()
+        return jobs.claim_next_job(supported_operations=["test.v1"])
     finally:
         jobs.close()
 
@@ -69,13 +96,24 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     )
     with ProcessPoolExecutor(max_workers=4, mp_context=get_context("spawn")) as workers:
         claims = list(
-            workers.map(claim_from_process, [(store.conninfo, store.limits)] * 8)
+            workers.map(
+                claim_from_process,
+                [
+                    (store.conninfo, store.limits, direct)
+                    for direct in (True, False) * 4
+                ],
+            )
         )
     active = [row for row in claims if row]
     assert len(active) == 2
     assert {row["owner"] for row in active} == {"stack", "visitor"}
     assert visitor["job_id"] in {row["id"] for row in active}
-    assert store.claim_next_job() is None
+    # A full pool can answer even while the subscriber table is unavailable.
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "LOCK TABLE processing.job_subscribers IN ACCESS EXCLUSIVE MODE"
+        )
+        assert store.claim_next_job() is None
     # Cancellation and an expired heartbeat do not release native capacity.
     row = active[0]
     store.cancel(row["id"], row["owner"])
@@ -87,6 +125,175 @@ def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     assert store.claim_next_job() is None
     assert store.finish(row["id"], row["attempt_id"], None)
     assert store.claim_next_job() is not None
+
+
+def test_rolled_back_shared_claim_is_available_to_processing(
+    store: PostgresJobStore,
+) -> None:
+    """Release the slot and fair turn when a caller rolls back its outer transaction.
+
+    Args:
+        store: Disposable PostgreSQL queue shared by both claim paths.
+    """
+    queued = store.submit(
+        "owner", "request", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
+    )
+    with psycopg.connect(
+        store.conninfo, autocommit=True, row_factory=dict_row
+    ) as connection:
+        with connection.transaction(force_rollback=True), connection.cursor() as cursor:
+            claim = claim_next_job(
+                cursor,
+                worker_count=1,
+                lease_seconds=20,
+                supported_operations=["test.v1"],
+            )
+            assert claim["id"] == queued["job_id"]
+            assert renew_job_lease(
+                cursor,
+                job_id=claim["id"],
+                attempt_id=claim["attempt_id"],
+                lease_seconds=20,
+                progress={"phase": "reading"},
+            )
+            # Earlier worker releases use this same database-wide lock key.
+            with psycopg.connect(store.conninfo) as observer:
+                assert observer.execute(
+                    "SELECT pg_try_advisory_xact_lock(7610329)"
+                ).fetchone() == (False,)
+        turns = connection.execute("SELECT owner FROM processing.job_turns").fetchall()
+        assert turns == []
+    retried = store.claim_next_job()
+    assert retried["id"] == claim["id"] and retried["attempt_id"] != claim["attempt_id"]
+    assert retried["progress"] == {}
+
+
+def test_workers_claim_compatible_requests_under_one_slot_limit(
+    boundary: Any, store: PostgresJobStore
+) -> None:
+    """Share one slot between a native clip worker and an independent Jobs claimant.
+
+    Args:
+        boundary: Processing HTTP client and real native clip worker.
+        store: Disposable PostgreSQL queue with one global slot.
+    """
+    client, worker, _, _, _ = boundary
+    client.get("/api/processing/jobs").raise_for_status()
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    operation = "diagnostic.v1"
+    plan = PreparedJobPlan(
+        {"operation": operation, "inputs": {}}, {}, operation=operation
+    )
+    diagnostic = store.submit(owner, "diagnostic", plan, "hash")
+    clip = submitted(client, clip_inputs(client))
+    assert asyncio.run(worker.run_once())
+    result = client.get(f"/api/processing/jobs/{clip['jobId']}").json()
+    assert result["status"] == "ready", result
+    assert result["result"]["validPixels"] == 6_400
+    assert store.get(diagnostic["id"], owner)["status"] == "queued"
+    assert not asyncio.run(worker.run_once())
+    assert store.claim_next_job(supported_operations=[]) is None
+
+    progress = {"phase": "checking"}
+    with psycopg.connect(
+        store.conninfo, autocommit=True, row_factory=dict_row
+    ) as connection:
+        with connection.cursor() as cursor:
+            active = claim_next_job(
+                cursor,
+                worker_count=1,
+                lease_seconds=20,
+                supported_operations=[operation],
+            )
+            assert active["id"] == diagnostic["job_id"]
+            assert renew_job_lease(
+                cursor,
+                job_id=active["id"],
+                attempt_id=active["attempt_id"],
+                lease_seconds=20,
+                progress=progress,
+            )
+    assert store.heartbeat(active["id"], active["attempt_id"], {})
+    assert store.get(diagnostic["id"], owner)["progress"] == progress
+    next_clip = submitted(client, {**SOURCE, "wholeRaster": True})
+    assert not asyncio.run(worker.run_once())
+    assert store.cancel(diagnostic["id"], owner)["status"] == "cancelling"
+    assert not store.heartbeat(active["id"], active["attempt_id"], {})
+    assert not store.finish(active["id"], "stale-token", None)
+    assert not asyncio.run(worker.run_once())
+    with psycopg.connect(store.conninfo, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            assert acknowledge_stopped_attempt(
+                cursor,
+                job_id=active["id"],
+                attempt_id=active["attempt_id"],
+                error={"code": "interrupted", "detail": "Worker stopped."},
+            )
+            # A cancelled subscriber sees "cancelled" for any terminal job outcome.
+            assert cursor.execute(
+                "SELECT status FROM processing.jobs WHERE id=%s", (active["id"],)
+            ).fetchone() == ("cancelled",)
+    assert store.get(diagnostic["id"], owner)["status"] == "cancelled"
+    assert not store.finish(active["id"], active["attempt_id"], None)
+    assert store.claim_next_job(supported_operations=[operation]) is None
+    assert asyncio.run(worker.run_once())
+    result = client.get(f"/api/processing/jobs/{next_clip['jobId']}").json()
+    assert result["status"] == "ready", result
+    assert result["result"]["validPixels"] == 10_000
+
+
+@pytest.mark.parametrize("expires", [False, True], ids=["live", "expired"])
+def test_heartbeat_checks_the_lease_after_waiting_for_its_job(
+    store: PostgresJobStore, expires: bool
+) -> None:
+    """Check the full renewal or rejection after a competing writer releases the row.
+
+    Args:
+        store: Disposable PostgreSQL queue in which to claim an attempt.
+        expires: End the lease while the heartbeat is blocked on the job.
+    """
+    store.submit(
+        "owner", "request", PreparedJobPlan({}, {}, operation="test.v1"), "hash"
+    )
+    job = store.claim_next_job()
+    progress = {"phase": "reading"}
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        with psycopg.connect(store.conninfo) as blocker:
+            blocker.execute(
+                "SELECT id FROM processing.jobs WHERE id=%s FOR UPDATE", (job["id"],)
+            )
+            renewal = worker.submit(
+                store.heartbeat, job["id"], job["attempt_id"], progress
+            )
+            deadline = time.monotonic() + 5
+            while not blocker.execute(
+                "SELECT EXISTS (SELECT FROM pg_locks WHERE NOT granted "
+                "AND pg_backend_pid()=ANY(pg_blocking_pids(pid)))"
+            ).fetchone()[0]:
+                assert time.monotonic() < deadline, "Heartbeat never waited on the job"
+                time.sleep(0.01)
+            before_release = blocker.execute("SELECT clock_timestamp()").fetchone()[0]
+            if expires:
+                blocker.execute(
+                    "UPDATE processing.jobs SET lease_until=%s WHERE id=%s",
+                    (before_release, job["id"]),
+                )
+        assert renewal.result(timeout=5) is (not expires)
+    with psycopg.connect(store.conninfo) as reader:
+        updated, lease_until, saved = reader.execute(
+            "SELECT updated_at,lease_until,progress FROM processing.jobs WHERE id=%s",
+            (job["id"],),
+        ).fetchone()
+    if expires:
+        assert (updated, lease_until, saved) == (
+            job["updated_at"],
+            before_release,
+            job["progress"],
+        )
+    else:
+        assert updated >= before_release
+        assert lease_until == updated + timedelta(seconds=store.limits.lease_seconds)
+        assert saved == progress
 
 
 def test_prepared_job_keeps_its_attempt_without_disk_admission(
@@ -135,10 +342,24 @@ def test_release_wakes_idle_workers_before_fallback(store: PostgresJobStore) -> 
             await wakeup.arm()
             assert store.claim_next_job() is None
             waiter = asyncio.create_task(wakeup.wait(10))
-            await asyncio.to_thread(
-                store.finish, active["id"], active["attempt_id"], None
+            error = {"code": "read_failed", "detail": "The input could not be read."}
+            with psycopg.connect(store.conninfo) as connection:
+                with connection.cursor() as cursor:
+                    assert acknowledge_stopped_attempt(
+                        cursor,
+                        job_id=active["id"],
+                        attempt_id=active["attempt_id"],
+                        error=error,
+                    )
+                connection.rollback()
+            assert store.get(active["id"], "one")["status"] == "running"
+            assert store.claim_next_job() is None
+            assert await asyncio.to_thread(
+                store.finish, active["id"], active["attempt_id"], None, error
             )
             assert await asyncio.wait_for(waiter, 1)
+            failed = store.get(active["id"], "one")
+            assert (failed["status"], failed["error"]) == ("failed", error)
             assert store.claim_next_job() is not None
         finally:
             await wakeup.close()

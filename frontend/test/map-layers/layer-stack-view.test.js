@@ -383,6 +383,11 @@ test("shared viewer omits removal but retains included-layer interaction tools",
   }
   documentContext.querySelector("#map-layers-hide-all").dispatchEvent(new Event("click"));
   assert.deepEqual(calls, [LAYERS[0].key, false]);
+  view.render(LAYERS.map(layer => ({ ...layer, styleEditingEnabled: false })), LAYERS[0].key);
+  for (const action of ["style", "copy-style", "paste-style"]) {
+    assert.throws(() => actionControl(list.children[0], action), /expected one/);
+  }
+  for (const action of ["visibility", "zoom", "legend"]) actionControl(list.children[0], action);
   view.showRemoval({ label: "Old removal", index: 0 }, false, null);
   assert.equal(documentContext.querySelector("#map-layer-removal").hidden, true);
 });

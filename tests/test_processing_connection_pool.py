@@ -6,8 +6,9 @@ from threading import Barrier
 import psycopg
 import pytest
 
-from eolab_app.processing.job_store import PostgresJobStore, PROCESSING_ADVISORY_LOCK_ID
+from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import ProcessingError
+from eolab_jobs.worker_claim import JOB_QUEUE_LOCK_ID
 from test_processing_jobs import store
 
 
@@ -41,7 +42,7 @@ def test_reuses_connections_and_rolls_back_before_return(
         assert cursor.fetchone()["count"] == 0
     with psycopg.connect(store.conninfo) as connection:
         assert connection.execute(
-            "SELECT pg_try_advisory_xact_lock(%s)", (PROCESSING_ADVISORY_LOCK_ID,)
+            "SELECT pg_try_advisory_xact_lock(%s)", (JOB_QUEUE_LOCK_ID,)
         ).fetchone()[0]
 
 
