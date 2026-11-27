@@ -237,7 +237,7 @@ test('losing native pointer capture cancels the draft and preserves the last com
 
 test('selection transport preserves native IDs and sends both private owner headers',async t=>{
     const featureIds=['-9007199254740993','9007199254740993'];
-    let request;t.mock.method(globalThis,'fetch',async(url,options)=>{request={url,options};return Response.json({matched:2,featureIds,geometry:null});});
+    let request;t.mock.method(globalThis,'fetch',async(url,options)=>{request={url,options};return Response.json({matched:2,featureIds,geometry:null,features:featureIds.map(id=>({id,properties:{}}))});});
     const h=fixture(),source=h.getTargets()[0].selection,abort=new AbortController();
     const result=await selectLassoFeatures(source,polygon,abort.signal);
     assert.equal(request.url,'/api/vector-sampling/lasso');assert.deepEqual(JSON.parse(request.options.body),{selection:source,polygon});

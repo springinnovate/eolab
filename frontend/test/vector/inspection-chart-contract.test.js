@@ -241,12 +241,9 @@ test("Lasso attributes feed real scatterplots and remain available after closing
     {id: "2147483648", properties: {name: "Second CO2", x: 2.5, y: null}},
     {id: "9007199254740993", properties: {name: "Café", x: -3, y: 0.5}},
   ];
-  const {inspector, profile, series, documentContext: doc, status, mapActions} = composition(async (url, options) => {
-    const request = JSON.parse(options.body);
-    if (url.endsWith("/lasso")) return Response.json({matched: 3, featureIds: rows.map(row => row.id), geometry: null});
-    assert.equal(url, "/api/vector-sampling/features");
-    assert.deepEqual(request.featureIds, rows.map(row => row.id));
-    return Response.json({selection: request.selection, features: rows});
+  const {inspector, profile, series, documentContext: doc, status, mapActions} = composition(async url => {
+    assert.equal(url, "/api/vector-sampling/lasso");
+    return Response.json({matched: 3, featureIds: rows.map(row => row.id), geometry: null, features: rows});
   });
   t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
   inspector.setPickingEnabled(false);
@@ -307,9 +304,8 @@ test("Lasso attributes feed real scatterplots and remain available after closing
 for (const action of ["rename", "restore"]) {
   test(`Compare keeps the correct feature on its sorted page after a layer ${action}`, async t => {
     let rows = Array.from({length:1002}, (_, i) => ({id:String(i + 1), properties:{x:1002 - i, y:i + 10}}));
-    const {inspector, profile, series, records, documentContext:doc} = composition(async (url, options) =>
-      Response.json(url.endsWith("/lasso") ? {matched:rows.length, featureIds:rows.map(row => row.id), geometry:null} :
-        {selection:JSON.parse(options.body).selection, features:rows}));
+    const {inspector, profile, series, records, documentContext:doc} = composition(async () =>
+      Response.json({matched:rows.length, featureIds:rows.map(row => row.id), geometry:null, features:rows}));
     t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
     const lasso = () => inspector.inspectLasso(inspector.getSelectionTargets()[0],
       {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);
@@ -351,9 +347,8 @@ for (const plotName of ["Compare features", "One feature"]) {
   test(`${plotName} rendering errors preserve the completed Lasso selection in Features and history`, async t => {
     const rows = [{id:"19", properties:{x:3}}, {id:"23", properties:{x:8}}];
     let matches = rows;
-    const {inspector, profile, series, documentContext:doc, status} = composition(async (url, options) =>
-      Response.json(url.endsWith("/lasso") ? {matched:matches.length, featureIds:matches.map(row => row.id), geometry:null} :
-        {selection:JSON.parse(options.body).selection, features:matches}));
+    const {inspector, profile, series, documentContext:doc, status} = composition(async () =>
+      Response.json({matched:matches.length, featureIds:matches.map(row => row.id), geometry:null, features:matches}));
     t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
     const renderProfile = profile.render.bind(profile);
     const plot = plotName === "Compare features" ? t.mock.method(series, "setSample", sample => {
@@ -385,9 +380,8 @@ test("oversized JSON integers keep exact Values and explain unavailable absolute
     opposite:{integer:String(index ? -base : base)}, mixed:index ? 0.5 : {integer:String(base)},
     zFar:index ? {integer:String(15n * 10n ** 307n)} : 0,
   }}));
-  const {inspector, profile, series, documentContext:doc} = composition(async (url, options) =>
-    Response.json(url.endsWith("/lasso") ? {matched:2, featureIds:["1","2"], geometry:null} :
-      {selection:JSON.parse(options.body).selection, features:rows}));
+  const {inspector, profile, series, documentContext:doc} = composition(async () =>
+    Response.json({matched:2, featureIds:["1","2"], geometry:null, features:rows}));
   t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
   await inspector.inspectLasso(inspector.getSelectionTargets()[0],
     {type:"Polygon", coordinates:[[[0,0],[3,0],[3,1],[0,0]]]}, new AbortController().signal);
@@ -502,9 +496,8 @@ test("wide parcel attributes keep their exact values and numeric spacing in both
     x:{integer:String(base + offset)}, y:{integer:String(-base - 4n + offset)}, code:"9007199254740993",
     signedCode:{integer:String(minimumInt64 + offset)},
   }}));
-  const {inspector, profile, series, documentContext:doc} = composition(async (url, options) =>
-    Response.json(url.endsWith("/lasso") ? {matched:3, featureIds:rows.map(row => row.id), geometry:null} :
-      {selection:JSON.parse(options.body).selection, features:rows}));
+  const {inspector, profile, series, documentContext:doc} = composition(async () =>
+    Response.json({matched:3, featureIds:rows.map(row => row.id), geometry:null, features:rows}));
   t.after(() => {inspector.destroy(); profile.destroy(); series.destroy();});
   await inspector.inspectLasso(inspector.getSelectionTargets()[0],
     {type:"Polygon", coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}, new AbortController().signal);

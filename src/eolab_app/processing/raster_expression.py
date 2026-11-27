@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.raster_sample_statistics import RasterSampleStatistics
 
 FUNCTIONS = frozenset(
     {"count", "sum", "mean", "stdev", "min", "max", "areaha", "pixelValue"}
@@ -34,6 +35,9 @@ PRECEDENCE = {
     "/": 6,
 }
 PIXEL_FUNCTIONS = frozenset({"min", "max"})
+AREA_FUNCTIONS = {
+    f"area_{name}": name for name in ("min", "max", "mean", "stdev", "sum", "count")
+}
 
 
 @dataclass(frozen=True)
@@ -43,8 +47,8 @@ class Node:
     Attributes:
         op: Source, literal, operator or statistic name.
         args: Child expressions supplying this node's operands or arguments.
-        value: Numeric literal for "number", or the binding name for "source"
-            in a pixel formula.
+        value: Numeric literal for "number", or the raster variable for "source"
+            and selected-area functions in a pixel formula.
         boolean: Whether the expression produces a true/false condition.
         scalar: Whether the expression produces one value rather than pixel values.
         depth: Number of levels from this node to its deepest child.
@@ -263,7 +267,7 @@ class Parser:
 
 
 class PixelExpressionParser(Parser):
-    """Parse numerical formulas over named rasters without scalar reductions."""
+    """Parse cell arithmetic and selected-area statistics over named rasters."""
 
     precedence: Mapping[str, int] = {"+": 5, "-": 5, "*": 6, "/": 6, "^": 7}
 
@@ -278,15 +282,24 @@ class PixelExpressionParser(Parser):
         self.aliases = aliases
 
     def read_operand(self, token: str) -> Node:
-        """Return a named raster, two-argument function or number.
+        """Return a raster variable, calculator function call or number.
 
         Args:
             token: First token of the operand.
         Returns:
             Parsed numerical operand.
         Raises:
-            ProcessingError: If a name is unknown or a call lacks two arguments.
+            ProcessingError: If a variable, function or argument list is invalid.
         """
+        if token in AREA_FUNCTIONS and self.tokens[self.index][0] == "(":
+            self.take("(")
+            alias = self.take()
+            if alias not in self.aliases:
+                raise self.error(
+                    f"{token} requires one raster variable, for example {token}(a)"
+                )
+            self.take(")")
+            return self.node(token, value=alias)
         if token in self.aliases:
             return self.node("source", value=token)
         if token in PIXEL_FUNCTIONS:
@@ -425,13 +438,17 @@ def apply_operator(node: Node, values: list[Any]) -> Any:
 
 
 def evaluate_pixel_expression(
-    root: Node, samples: Mapping[str, NDArray[np.float64]]
+    root: Node,
+    samples: Mapping[str, NDArray[np.float64]],
+    area_statistics: Mapping[str, Mapping[str, int | float]],
 ) -> NDArray[np.float64]:
     """Calculate a tile, preserving missing samples and undefined arithmetic.
 
     Args:
         root: Parsed pixel formula referencing one or more rasters.
         samples: Equally shaped tiles keyed by raster name, with NaN for NoData.
+        area_statistics: Completed statistics keyed by raster name and statistic,
+            for example area_statistics["a"]["mean"] for area_mean(a).
     Returns:
         Float64 tile with NaN wherever an input or intermediate value is invalid.
     """
@@ -440,6 +457,10 @@ def evaluate_pixel_expression(
         """Evaluate one formula node against the supplied tile samples."""
         if node.op == "source":
             return samples[cast(str, node.value)]
+        if node.op in AREA_FUNCTIONS:
+            return np.float64(
+                area_statistics[cast(str, node.value)][AREA_FUNCTIONS[node.op]]
+            )
         if node.op == "number":
             return np.float64(cast(float, node.value))
         operands = [evaluate(child) for child in node.args]
@@ -450,23 +471,23 @@ def evaluate_pixel_expression(
         return np.where(valid, value, np.nan)
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        return cast(NDArray[np.float64], evaluate(root))
+        result = evaluate(root)
+        # Area calls can supply scalars throughout the formula. Apply their
+        # rasters' cell coverage once, including when the entire result is scalar.
+        for alias in area_statistics:
+            result = np.where(np.isfinite(samples[alias]), result, np.nan)
+        return cast(NDArray[np.float64], result)
 
 
 class Reduction:
     """Accumulate one raster statistic across successive pixel tiles.
-
-    stdev uses population moments of matching valid values, with a fixed origin
-    to retain precision for small spreads around large offsets. Only scalar
-    moments survive between tiles; source and expression validity are shared
-    with the other numeric aggregates.
 
     Counts distinguish valid source pixels, pixels matching the expression's
     conditions, and source pixels whose expressions produce invalid arithmetic.
     """
 
     def __init__(self, node: Node, pixel_value: float | None = None) -> None:
-        """Initialize an aggregate.
+        """Set up one summary over the cells matching a parsed aggregate.
 
         Args:
             node: Validated aggregate node.
@@ -475,28 +496,27 @@ class Reduction:
         """
         self.node = node
         self.valid_pixel_count = 0
-        self.matched_pixel_count = 0
         self.invalid_arithmetic_pixel_count = 0
-        self.total = self.compensation = self.mean = 0.0
-        self.origin: float | None = None
-        self.deviation: float = 0.0
-        self.deviation_scale: float = 1.0
-        self.minimum = math.inf
-        self.maximum = -math.inf
-        self.overflow = False
+        self.statistic = node.op
+        if node.op == "areaha":
+            self.statistic = "sum"
+        elif node.args[0].boolean or node.op == "pixelValue":
+            self.statistic = "count"
+        self.samples = RasterSampleStatistics(frozenset({self.statistic}))
+        self.point_value: float | None = None
         if (
             node.op == "pixelValue"
             and pixel_value is not None
             and math.isfinite(pixel_value)
         ):
-            self.valid_pixel_count = self.matched_pixel_count = 1
-            self.total = float(pixel_value)
+            self.valid_pixel_count = self.samples.count = 1
+            self.point_value = float(pixel_value)
 
     def update(
         self,
-        data: np.ndarray,
-        valid_source_pixels: np.ndarray,
-        hectares: np.ndarray | None = None,
+        data: NDArray[np.float64],
+        valid_source_pixels: NDArray[np.bool_],
+        hectares: NDArray[np.float64] | None = None,
     ) -> None:
         """Accumulate one tile's values that pass source validity and expression filters.
 
@@ -548,85 +568,12 @@ class Reduction:
         )
         if self.node.args[0].boolean:
             eligible = eligible & values
-        selected = (
-            hectares[eligible]
+        samples = (
+            cast(NDArray[np.float64], hectares)
             if self.node.op == "areaha"
-            else np.broadcast_to(values, data.shape)[eligible]
+            else np.broadcast_to(values, data.shape)
         )
-        count = selected.size
-        prior_count = self.matched_pixel_count
-        self.matched_pixel_count += count
-        if (
-            not count
-            or self.node.op == "count"
-            or (self.node.args[0].boolean and self.node.op != "areaha")
-        ):
-            return
-        self.minimum = min(self.minimum, float(np.min(selected)))
-        self.maximum = max(self.maximum, float(np.max(selected)))
-        if self.node.op == "stdev":
-            self.update_stdev(selected, prior_count)
-        if self.node.op == "mean":
-            scale = float(np.max(np.abs(selected)))
-            block_mean = (
-                0.0 if scale == 0 else float(np.sum(selected / scale) / count * scale)
-            )
-            self.mean = self.mean * (
-                prior_count / self.matched_pixel_count
-            ) + block_mean * (count / self.matched_pixel_count)
-        if self.node.op in {"sum", "areaha"}:
-            with np.errstate(over="ignore", invalid="ignore"):
-                partial = float(np.sum(selected, dtype=np.float64))
-            corrected = partial - self.compensation
-            total = self.total + corrected
-            self.compensation = (total - self.total) - corrected
-            self.total = total
-            self.overflow |= not math.isfinite(total)
-
-    def update_stdev(self, selected: np.ndarray, prior_count: int) -> None:
-        """Merge one nonempty tile's centered population moments.
-
-        A fixed origin avoids subtracting squared raw values or repeatedly
-        rounding a large absolute mean. Scaled centered differences and hypot
-        avoid squaring huge/tiny values. Halving extreme inputs also keeps
-        differences of opposite finite float64 values representable.
-
-        Args:
-            selected: Nonempty finite float64 values after the owning validity
-                and selection boundary has filtered this tile.
-            prior_count: Matched count before this tile; self.matched_pixel_count already
-                includes its values.
-        """
-        if (
-            self.deviation_scale == 1.0
-            and max(abs(self.minimum), abs(self.maximum)) > np.finfo(np.float64).max / 4
-        ):
-            self.deviation_scale = 2.0
-            if self.origin is not None:
-                self.origin /= 2
-                self.mean /= 2
-                self.deviation /= 2
-        if self.origin is None:
-            self.origin = float(selected[0]) / self.deviation_scale
-        shifted = selected / self.deviation_scale - self.origin
-        scale = float(np.max(np.abs(shifted)))
-        block_mean = 0.0 if scale == 0 else float(np.mean(shifted / scale)) * scale
-        centered = shifted - block_mean
-        scale = float(np.max(np.abs(centered)))
-        block_deviation = (
-            0.0
-            if scale == 0
-            else math.sqrt(float(np.mean(np.square(centered / scale)))) * scale
-        )
-        prior_weight = prior_count / self.matched_pixel_count
-        block_weight = selected.size / self.matched_pixel_count
-        delta = block_mean - self.mean
-        self.deviation = math.hypot(
-            self.deviation * math.sqrt(prior_weight),
-            block_deviation * math.sqrt(block_weight),
-            delta * math.sqrt(prior_weight * block_weight),
-        )
-        self.mean += delta * block_weight
+        self.samples.add_block(samples, eligible)
 
     def result(self) -> tuple[int | float | None, str]:
         """Return the aggregate value and explicit empty/error classification.
@@ -640,29 +587,17 @@ class Reduction:
             return None, "no_valid_data"
         if self.invalid_arithmetic_pixel_count == self.valid_pixel_count:
             return None, "invalid_arithmetic"
-        if self.overflow:
-            return None, "overflow"
-        if self.node.op == "count" or (
-            self.node.args[0].boolean and self.node.op != "areaha"
-        ):
-            return self.matched_pixel_count, (
-                "ok" if self.matched_pixel_count else "no_matches"
-            )
-        if self.matched_pixel_count == 0:
+        if self.node.op == "pixelValue":
+            return self.point_value, "ok"
+        if self.statistic == "count":
+            return self.samples.count, "ok" if self.samples.count else "no_matches"
+        if self.samples.count == 0:
             return (
                 0.0
                 if self.node.op == "areaha"
                 else 0 if self.node.op == "sum" else None
             ), "no_matches"
-        value = {
-            "sum": self.total,
-            "mean": self.mean,
-            "stdev": self.deviation * self.deviation_scale,
-            "min": self.minimum,
-            "max": self.maximum,
-            "areaha": self.total,
-            "pixelValue": self.total,
-        }[self.node.op]
+        value = self.samples.value(self.statistic)
         return (value, "ok") if math.isfinite(value) else (None, "overflow")
 
 
@@ -770,7 +705,7 @@ class Calculation:
                 {
                     "function": node.op,
                     "validPixels": item.valid_pixel_count,
-                    "matchedPixels": item.matched_pixel_count,
+                    "matchedPixels": item.samples.count,
                     "invalidArithmeticPixels": item.invalid_arithmetic_pixel_count,
                     **({"unit": "ha"} if node.op == "areaha" else {}),
                 }

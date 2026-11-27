@@ -130,6 +130,10 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 Open **Tools → Data tools → Raster calculator**. Add rasters from Map contents or completed runs and use the assigned variables in a formula such as `max(0, b - a)`. Choose a resampling method for each input, an analysis area, and an output grid. Matching a raster uses its projection, cell size, and grid alignment. Custom cell sizes use the chosen projection’s units.
 
+Area functions use the valid cells of each raster inside the selected area after resampling to the output grid. Use `a / area_max(a) - b / area_max(b)` to divide each raster by its own maximum and subtract the results, or `(a - area_min(a)) / (area_max(a) - area_min(a))` to scale one raster from 0 to 1.
+
+Use `(a - area_mean(a)) / area_stdev(a)` to express each cell's difference from the area average in population standard deviations. `area_sum(a)` adds the valid cell values, and `area_count(a)` counts those cells, including zeros. Cells missing a referenced raster value or dividing by zero produce NoData.
+
 The calculator includes cells whose centers fall inside the analysis area. Cells with missing formula inputs or undefined arithmetic are blank. In **Runs**, select **Show on map** or **Download** to use the GeoTIFF.
 
 ### Run environmental models
@@ -158,6 +162,8 @@ remains NoData.
 <summary>Choose reference sites and prepare Ecosystem Condition inputs</summary>
 
 Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. After choosing a prepared area, select **Show analysis area on map** to zoom to its polygon and see the boundary while choosing reference sites. With the prepared inputs you can select datasets separately for each role. Select at least one predictor and one observed response. SRTM landforms are optional. For custom rasters, leave the categorical predictor set to **None** to treat all predictors as continuous. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
+
+To inspect a published input, choose an **Assessment year** and expand the predictor or response group. Under the dataset, choose the variable if it has several, then select **Add to map**. You can inspect a layer even when its dataset is unchecked for the model.
 
 For reference sites, select saved polygons or a raster mask. With a Catalog raster mask, valid finite nonzero values inside the area designate reference sites. For an uploaded mask, use a single-band Byte GeoTIFF with its own coordinate system, `1` for reference sites and `0` elsewhere. NoData is excluded. The output uses the equal-area EPSG:6933 grid.
 
@@ -240,6 +246,26 @@ Back up the Docker volumes and keep their names and the database password. Let a
 </details>
 
 ### Prepare data for the Catalog
+
+#### Publish prepared Ecosystem Condition inputs
+
+From an environment with GDAL's Python bindings and the scientific package in
+[`deployment/application-habitat-requirements.txt`](deployment/application-habitat-requirements.txt),
+run the [cache publisher](scripts/publish_habitat_cache.py) on the extracted
+`habitat-cache` folder. Give it a separate output folder on the instance's
+catalog data mount. Keep the raw tiles outside the configured scan directories.
+
+```sh
+python scripts/publish_habitat_cache.py habitat-cache catalog/condition-inputs
+```
+
+The command discovers the assessment years and writes one named Cloud Optimized
+GeoTIFF per available variable per year. The assessment year identifies the
+model inputs; some variables use observations from other periods. Each map
+covers the cached tiles, with uncached areas marked as missing. Rerun the same
+command on the same extracted snapshot to resume. Use a new output folder if
+the snapshot's tile coverage changes. In **Status**, choose **Scan directories**.
+Search **Catalog** for the variable or assessment year and choose **Add to map**.
 
 #### Make a temporal layer from GeoTIFFs
 

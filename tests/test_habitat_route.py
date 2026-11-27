@@ -125,6 +125,12 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
     assert set(soil["periods"].values()) == {"Fixed map for every assessment year"}
     assert len({source["id"] for source in datasets}) == 18
     assert sources_by_label["Landsat NDVI composites"]["roles"] == ["response"]
+    assert {
+        (entry["variable"], tuple(entry["bands"]))
+        for entry in sources_by_label["Landsat NDVI composites"]["inputsByRole"][
+            "response"
+        ]
+    } == {("NDVI 95th percentile", ("NDVI",)), ("NDVI median", ("NDVI",))}
     assert sources_by_label["ERA5 daily aggregates"]["roles"] == ["predictor"]
     assert sources_by_label["SoilGrids organic carbon"]["url"] == (
         "https://gee-community-catalog.org/projects/isric/"

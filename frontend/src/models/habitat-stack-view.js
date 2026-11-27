@@ -34,7 +34,7 @@ export class HabitatStackView {
      * @param {Document} helpers.document Owning document, used to preserve focused edits.
      * @param {(host:HTMLElement,id:string,input:Object,onChange:(raster:Object|null)=>void,onResampling:(method:string)=>void)=>Object} helpers.buildRasterInput Build the ordinary raster chooser with row-specific source and method callbacks.
      * @param {(controls:Object,input:Object,value:Object,state:Object)=>boolean} helpers.renderRasterInput Update that chooser using current source availability.
-     * @param {{onInput:(name:string,change:Object)=>void,onRefreshHabitat:(name:string)=>void}} handlers Input edits and Earth Engine configuration retry.
+     * @param {{onInput:(name:string,change:Object)=>void,onRefreshHabitat:(name:string)=>void,onRefreshMaps:()=>void}} handlers Input edits and retries for configuration or published map choices.
      * @param {string} name Recipe input name for this stack.
      * @param {{label:string}} input Declared stack input.
      */
@@ -76,6 +76,8 @@ export class HabitatStackView {
             this.datasetGroups[role] = {root, summary, list, title, fieldName, controls: new Map()};
         }
         this.automatic.append(this.datasetSources);
+        this.mapRetry = button("Retry catalog lookup", () => handlers.onRefreshMaps(), "models-action");
+        this.automatic.append(this.mapRetry);
         this.acquisitionStatus = element("p", "", "models-help"); this.acquisitionStatus.setAttribute("role", "status");
         this.retry = button("Retry Earth Engine year choices", () => handlers.onRefreshHabitat(name), "models-action");
         this.automatic.append(this.acquisitionStatus, this.retry);
@@ -115,7 +117,7 @@ export class HabitatStackView {
     /** Create one stable checkbox for a dataset's use as predictor or response.
      * @param {"predictor"|"response"} role Scientific role controlled by this checkbox.
      * @param {import("../processing/api.js").HabitatDatasetSource} dataset Configured source and role requirements.
-     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,link:HTMLAnchorElement,details:HTMLElement}} Dataset row and its analysis inputs.
+     * @return {{root:HTMLElement,checkbox:HTMLInputElement,label:HTMLElement,link:HTMLAnchorElement,details:HTMLElement,maps:HTMLElement,mapLabel:HTMLElement,variable:HTMLSelectElement,add:HTMLButtonElement,message:HTMLElement}} Stable analysis and map controls.
      */
     buildDatasetChoice(role, dataset) {
         const root = this.element("li"), label = this.element("label", "", "models-habitat-dataset-choice");
@@ -128,12 +130,52 @@ export class HabitatStackView {
         details.id = `models-${this.inputName}-${role}-${dataset.id}-details`;
         checkbox.setAttribute("aria-describedby", details.id);
         root.append(label, link, details);
+        const maps = this.element("div", "", "models-habitat-map-choice");
+        const mapLabel = this.element("span");
+        const variable = this.element("select");
+        variable.setAttribute("aria-label", `Map layer for ${dataset.label} (${role})`);
+        variable.addEventListener("change", () => this.renderDatasetChoices(this.value.configuration));
+        const add = this.button("Add to map", () => {
+            const matches = this.mapLayers?.matches.get(variable.value);
+            if (matches?.length === 1) void this.catalogRasters.add(matches[0]);
+        }, "models-action");
+        const message = this.element("span", "", "models-help");
+        message.setAttribute("role", "status");
+        maps.append(mapLabel, variable, add, message); root.append(maps);
         checkbox.addEventListener("change", () => {
             const {fieldName} = this.datasetGroups[role];
             const selected = this.value[fieldName];
             this.handlers.onInput(this.inputName, {[fieldName]: checkbox.checked ? [...selected, dataset.id] : selected.filter(id => id !== dataset.id)});
         });
-        return {root, checkbox, label: name, link, details};
+        return {root, checkbox, label: name, link, details, maps, mapLabel, variable, add, message};
+    }
+
+    /** Show the published variable for this row and its current map membership.
+     * @param {Object} controls Dataset row's stable controls.
+     * @param {Array<{variable:string}>} inputs Prepared variables produced from this source in this role.
+     * @return {void}
+     */
+    renderMapChoice(controls, inputs) {
+        const {maps, mapLabel, variable, add, message} = controls;
+        maps.hidden = !this.catalogRasters;
+        if (maps.hidden) return;
+        const labels = inputs.map(input => input.variable);
+        const selected = labels.includes(variable.value) ? variable.value : labels[0];
+        this.options(variable, labels.map(label => ({value: label, label})), selected);
+        variable.hidden = labels.length === 1;
+        mapLabel.textContent = variable.hidden ? selected : "Map layer";
+        const matches = this.mapLayers?.matches.get(selected) ?? [];
+        const state = matches.length === 1 ? this.catalogRasters.state(matches[0]) : null;
+        add.textContent = state?.busy ? "Adding…" : state?.onMap ? "On map" : "Add to map";
+        add.setAttribute("aria-label", `${add.textContent} · ${selected} (${this.value.year})`);
+        add.disabled = !state || state.busy || state.onMap;
+        let status = state?.error ?? "";
+        if (this.mapLayers?.loading) status = "Checking catalog…";
+        else if (this.mapLayers?.error) status = this.mapLayers.error;
+        else if (!matches.length) status = `Unavailable for ${this.value.year}`;
+        else if (matches.length > 1) status = "Multiple layers match. Choose one in the Catalog.";
+        message.textContent = status;
+        message.hidden = !status;
     }
 
     /** Refresh dataset choices in place so selection, focus and disclosures survive updates.
@@ -155,6 +197,7 @@ export class HabitatStackView {
                 }
                 controls.label.textContent = dataset.label;
                 controls.details.textContent = describeSelectedBands(dataset, role, selected, this.value.year);
+                this.renderMapChoice(controls, dataset.inputsByRole[role]);
                 controls.checkbox.checked = selected.includes(dataset.id);
                 controls.link.href = dataset.url;
                 controls.link.setAttribute("aria-label", `Source information for ${dataset.label}`);
@@ -237,7 +280,10 @@ export class HabitatStackView {
         this.manual.hidden = this.manual.disabled = automatic;
         this.automatic.hidden = this.automatic.disabled = !automatic;
         this.datasetSources.hidden = !configuration;
-        if (configuration) this.renderDatasetChoices(configuration);
+        this.catalogRasters = state.catalogRasters;
+        this.mapLayers = draft.setupState.mapLayers;
+        this.mapRetry.hidden = !this.mapLayers?.error;
+        if (automatic && configuration) this.renderDatasetChoices(configuration);
         this.year.required = automatic;
         this.options(this.year, configuration ? Array.from({length: configuration.maximumYear - configuration.minimumYear + 1},
             (_, index) => ({value: String(configuration.minimumYear + index), label: String(configuration.minimumYear + index)})) :

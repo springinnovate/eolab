@@ -7,7 +7,9 @@ const RESAMPLING = [
     {value: "mode", label: "Mode"}, {value: "min", label: "Minimum"},
     {value: "max", label: "Maximum"}, {value: "mean", label: "Mean"},
 ];
-const OPERATORS = ["+", "-", "*", "/", "^", "min", "max"];
+const AREA_FUNCTIONS = ["area_min", "area_max", "area_mean", "area_stdev", "area_sum", "area_count"];
+const FUNCTIONS = ["min", "max", ...AREA_FUNCTIONS];
+const OPERATORS = ["+", "-", "*", "/", "^"];
 const EPSG = /^EPSG:[1-9][0-9]{0,8}$/;
 const CUSTOM_GRID = "custom-grid";
 
@@ -67,8 +69,8 @@ function captureDraft(state) {
         return {alias, source: captureModelRaster(raster, state.sources), resampling};
     });
     const aliases = new Set(layers.map(row => row.alias));
-    const tokens = state.expression.matchAll(/(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?|([a-zA-Z][a-zA-Z0-9_]*)/g);
-    const names = [...tokens].flatMap(match => match[1] && !["min", "max"].includes(match[1]) ? [match[1]] : []);
+    const tokens = state.expression.matchAll(/(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?|([a-zA-Z][a-zA-Z0-9_]*)(\s*\()?/g);
+    const names = [...tokens].flatMap(match => match[1] && !(match[2] && FUNCTIONS.includes(match[1])) ? [match[1]] : []);
     if (!names.length) throw new Error("Use at least one raster variable in the formula.");
     const unknown = names.find(name => !aliases.has(name));
     if (unknown) throw new Error("The formula uses an unknown variable, " + unknown + ".");
@@ -137,9 +139,11 @@ class RasterFormulaView {
         this.variables = ui.element("div", "", "models-formula-insert");
         this.variableNames = "";
         const operators = ui.element("div", "", "models-formula-insert");
-        operators.append(...OPERATORS.map(token => this.button(
-            token.length > 1 ? token + "(…)" : token, () => this.insert(token)
-        )));
+        operators.append(...OPERATORS.map(token => this.button(token, () => this.insert(" " + token + " "))));
+        for (const name of FUNCTIONS) {
+            const suffix = AREA_FUNCTIONS.includes(name) ? ")" : ", )";
+            operators.append(this.button(name + "(…)", () => this.insert(name + "(", suffix)));
+        }
         this.grid = ui.element("select");
         this.grid.addEventListener("change", () => this.change({grid: this.grid.value}));
         this.custom = ui.element("div", "", "models-formula-grid");
@@ -156,7 +160,7 @@ class RasterFormulaView {
         this.gridInfo = ui.element("p", "", "models-help");
         this.status = ui.element("p", "", "models-help"); this.status.setAttribute("aria-live", "polite");
         this.root.append(this.layers, this.add, ui.field("models-" + name + "-expression", "Formula", this.formula),
-            this.variables, operators, ui.element("p", "Uses the values stored in each raster.", "models-help"),
+            this.variables, operators, ui.element("p", "Area functions use the raster’s stored values after resampling to the output grid. area_count(a) counts valid cells inside the selected area, including zeros. area_stdev(a) gives their population standard deviation.", "models-help"),
             ui.field("models-" + name + "-grid", "Output grid", this.grid), this.custom, this.gridInfo, this.status);
     }
 
@@ -183,17 +187,16 @@ class RasterFormulaView {
         this.rows.get(alias)?.source.focus();
     }
 
-    /** Insert an alias, operator or two-argument function at the current selection.
-     * @param {string} token Formula text to insert.
+    /** Insert a variable or operator, or wrap the selected text in a function call.
+     * @param {string} token Variable, spaced operator or opening function call.
+     * @param {string} [suffix] Text to insert after the selected function argument.
      * @return {void}
      */
-    insert(token) {
+    insert(token, suffix = "") {
         const start = this.formula.selectionStart, end = this.formula.selectionEnd;
-        const isFunction = token === "min" || token === "max";
-        const prefix = isFunction ? token + "(" + this.formula.value.slice(start, end) : token;
-        const text = isFunction ? prefix + ", )" : OPERATORS.includes(token) ? " " + token + " " : token;
-        this.formula.setRangeText(text, start, end, "end");
-        if (isFunction) this.formula.setSelectionRange(start + prefix.length, start + prefix.length);
+        const prefix = suffix ? token + this.formula.value.slice(start, end) : token;
+        this.formula.setRangeText(prefix + suffix, start, end, "end");
+        if (suffix) this.formula.setSelectionRange(start + prefix.length, start + prefix.length);
         this.formula.focus();
         this.change({expression: this.formula.value});
     }

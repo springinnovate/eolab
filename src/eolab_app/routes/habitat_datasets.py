@@ -187,11 +187,13 @@ class HabitatBandUse(BaseModel):
     """Identify the source bands and time period used by one model calculation.
 
     Attributes:
+        variable: Display name of the prepared raster produced by this computation.
         bands: Earth Engine band names read from this dataset.
         requiredDatasets: Dataset choices that must all be selected in this role.
         periods: Time period used from this source for each allowed assessment year.
     """
 
+    variable: str
     bands: tuple[str, ...]
     requiredDatasets: tuple[str, ...]
     periods: dict[int, str]
@@ -272,6 +274,7 @@ def describe_habitat_datasets(
         inputs_by_role = {
             role: [
                 HabitatBandUse(
+                    variable=band.display_name,
                     bands=source.computation_bands[band.computation],
                     requiredDatasets=band.source_dataset_keys,
                     periods={

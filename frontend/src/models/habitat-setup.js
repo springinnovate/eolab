@@ -108,13 +108,14 @@ class HabitatSetupSession {
      * @param {Object} draft Editable Habitat inputs and model-owned setup state.
      * @param {import("./model-setup.js").ModelSetupDependencies} dependencies Explicit transport and UI callbacks.
      * @param {Object} dependencies.api Processing transport for Habitat metadata and coverage.
+     * @param {import("./model-setup.js").ModelCatalogRasters["findByTitles"]} [dependencies.findCatalogRasterTitles] Look up already published mosaics for display.
      * @param {(selection:Object,signal:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read display metadata for an exact Item.
      * @param {import("./model-setup.js").ModelSetupDependencies["showAreaOutline"]} dependencies.showAreaOutline Display the prepared polygon until its signal is aborted.
      * @param {()=>void} dependencies.render Notify the host that draft presentation changed.
      * @param {()=>void} dependencies.closeInputEditor Close an active editor before mode changes.
      */
-    constructor(draft, {api, getCatalogItem, showAreaOutline, render, closeInputEditor}) {
-        Object.assign(this, {draft, api, getCatalogItem, showAreaOutline, render, closeInputEditor});
+    constructor(draft, {api, getCatalogItem, findCatalogRasterTitles, showAreaOutline, render, closeInputEditor}) {
+        Object.assign(this, {draft, api, getCatalogItem, findCatalogRasterTitles, showAreaOutline, render, closeInputEditor});
         this.disposed = false;
     }
 
@@ -133,6 +134,7 @@ class HabitatSetupSession {
      */
     inputChanged(name, change) {
         if (this.draft.model.inputs[name].type !== "habitat_stack") return;
+        if (change.kind || "year" in change) void this.loadMapLayers();
         if (change.kind) {
             for (const [key, definition] of Object.entries(this.draft.model.inputs)) {
                 if (definition.type === "summary_area" && this.draft.inputs[key].filterEditing) this.closeInputEditor();
@@ -149,6 +151,7 @@ class HabitatSetupSession {
      * @return {Promise<void>|void} Completion for reads, or immediate selection change.
      */
     action(action, value) {
+        if (action === "refresh-map-layers") return this.loadMapLayers();
         if (action === "refresh-options") return this.loadOptions(this.draft, value);
         if (action === "select-preparation") return this.chooseSelection(value);
         if (action === "show-outline") return this.setOutlineVisible(value);
@@ -160,6 +163,7 @@ class HabitatSetupSession {
     dispose() {
         this.disposed = true;
         this.optionsAbort?.abort();
+        this.mapLookup?.abort();
         this.cancelPreparationReads();
     }
 
@@ -182,6 +186,7 @@ class HabitatSetupSession {
             input.configuration = options; input.year ??= options.defaultYear;
             for (const [role, field] of [["predictor", "predictorDatasets"], ["response", "responseDatasets"]])
                 input[field] ??= options.datasets.filter(dataset => dataset.roles.includes(role)).map(dataset => dataset.id);
+            void this.loadMapLayers();
         } catch (error) {
             if (abort.signal.aborted || this.disposed) return;
             input.error = `Could not load Earth Engine choices: ${error.message}`;
@@ -190,6 +195,48 @@ class HabitatSetupSession {
             if (!abort.signal.aborted && !this.disposed) {
                 void this.refreshCoverage(); this.render();
             }
+        }
+    }
+
+    /** Find the selected year's published mosaics independently of checkbox choices.
+     * Each title and band description must match the exporter. Multiple Items for the same
+     * variable remain ambiguous. Results from another year or abandoned draft are ignored.
+     * @return {Promise<void>} Resolves after matches or a retryable lookup error are displayed.
+     */
+    async loadMapLayers() {
+        this.mapLookup?.abort();
+        const stack = getHabitatEarthEngineInput(this.draft);
+        const state = this.draft.setupState;
+        state.mapLayers = null;
+        if (!this.findCatalogRasterTitles || !stack?.configuration) return;
+        const {year, configuration} = stack;
+        const variables = new Map();
+        for (const dataset of configuration.datasets) {
+            for (const [role, inputs] of Object.entries(dataset.inputsByRole)) {
+                for (const {variable} of inputs) variables.set(`${variable} (assessment year ${year})`, {variable, role});
+            }
+        }
+        const lookup = {loading: true, error: "", matches: new Map()};
+        state.mapLayers = lookup;
+        const abort = new AbortController(); this.mapLookup = abort;
+        this.render();
+        try {
+            const items = await this.findCatalogRasterTitles([...variables.keys()], abort.signal);
+            if (abort.signal.aborted) return;
+            for (const item of items) {
+                const expected = variables.get(item.properties.title);
+                const bands = item.assets.data?.["raster:bands"];
+                if (!expected || bands?.length !== 1 || bands[0].description !== expected.variable ||
+                    !item.properties.description?.startsWith(`Prepared Ecosystem Condition ${expected.role} for assessment year ${year}.`)) continue;
+                const matches = lookup.matches.get(expected.variable) ?? [];
+                if (!matches.some(match => match.id === item.id && match.collection === item.collection)) matches.push(item);
+                lookup.matches.set(expected.variable, matches);
+            }
+        } catch {
+            if (!abort.signal.aborted) lookup.error = "Could not check the Catalog for map layers.";
+        } finally {
+            lookup.loading = false;
+            if (!abort.signal.aborted) this.render();
         }
     }
 
@@ -504,7 +551,8 @@ function buildInput(ui, handlers, name, definition, draft) {
             buildRasterInput: (fields, id, input, onChange, onResampling) => buildRasterInput(ui, fields, id, input, onChange, onResampling),
             renderRasterInput: (raster, input, value, state) => renderRasterInput(ui, raster, input, value, state),
             captureStack: (value, sources) => captureHabitatStack(value, sources, ui.captureRaster)}, {onInput: handlers.onInput,
-            onRefreshHabitat: inputName => handlers.onSetupAction("refresh-options", inputName)}, name, definition);
+            onRefreshHabitat: inputName => handlers.onSetupAction("refresh-options", inputName),
+            onRefreshMaps: () => handlers.onSetupAction("refresh-map-layers")}, name, definition);
         ui.append(controls.root);
         controls.renderModelInput = (value, state) => controls.render(value, state);
         return controls;

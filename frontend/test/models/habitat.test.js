@@ -40,17 +40,17 @@ const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2
     grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}, datasets: [
         {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"],
             inputsByRole: {predictor: [
-                {bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: annual},
-                {bands: ["mean_2m_air_temperature", "total_precipitation"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: growingSeason},
-                {bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: rainfallWindow},
+                {variable: "Annual precipitation", bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: annual},
+                {variable: "Growing season climate", bands: ["mean_2m_air_temperature", "total_precipitation"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: growingSeason},
+                {variable: "Rainfall variability", bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: rainfallWindow},
             ]}},
         {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"],
-            inputsByRole: {predictor: [{bands: ["Greenup_1", "Senescence_1"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: annual}],
-                response: [{bands: ["NumCycles"], requiredDatasets: ["modis_phenology"], periods: annual}]}},
+            inputsByRole: {predictor: [{variable: "Growing season climate", bands: ["Greenup_1", "Senescence_1"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: annual}],
+                response: [{variable: "Growing cycles", bands: ["NumCycles"], requiredDatasets: ["modis_phenology"], periods: annual}]}},
         {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"],
-            inputsByRole: {response: [{bands: ["NDVI"], requiredDatasets: ["landsat_ndvi"], periods: annual}]}},
+            inputsByRole: {response: ["NDVI 95th percentile", "NDVI median"].map(variable => ({variable, bands: ["NDVI"], requiredDatasets: ["landsat_ndvi"], periods: annual}))}},
         {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"],
-            inputsByRole: {predictor: [{bands: ["constant"], requiredDatasets: ["srtm_landforms"],
+            inputsByRole: {predictor: [{variable: "Landform class", bands: ["constant"], requiredDatasets: ["srtm_landforms"],
                 periods: Object.fromEntries(years.map(year => [year, "Fixed map for every assessment year"]))}]}},
     ]};
 
@@ -92,9 +92,10 @@ function setCheckbox(checkbox, checked) {
 /** Open Habitat setup with real Models components and explicit API boundaries.
  * @param {Object} [contextOverrides={}] Map choices to replace in the starting context.
  * @param {import("../../src/models/model-setup.js").ModelSetupDependencies["showAreaOutline"]} [showAreaOutline] Display the selected Catalog polygons for the lifetime of a signal.
+ * @param {import("../../src/models/model-setup.js").ModelCatalogRasters} [catalogRasters] Catalog lookup and map actions for published variables.
  * @return {Promise<Object>} Controller, view, source choices and captured API requests.
  */
-async function fixture(contextOverrides = {}, showAreaOutline = async () => true) {
+async function fixture(contextOverrides = {}, showAreaOutline = async () => true, catalogRasters) {
     const requests = [], filters = [], values = new Map();
     const uploads = [], released = [];
     const context = {
@@ -122,7 +123,7 @@ async function fixture(contextOverrides = {}, showAreaOutline = async () => true
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
     const jobs = {subscribe: () => () => {}, tracked: new Set(), schedule() {}, accept() {}};
     let id = 0;
-    const controller = new ModelsController({api, jobs, view, getContext: () => context, showAreaOutline,
+    const controller = new ModelsController({api, jobs, view, getContext: () => context, showAreaOutline, catalogRasters,
         getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
         prepareVector: async source => ({selection: source.uploadId
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}
@@ -173,6 +174,62 @@ function chooseStack(harness) {
     edit(controls.responses[0].source, modelSourceKey(harness.context.rasters[2]));
     edit(controls.categorical, "habitat_type");
 }
+
+test("Map choices use the published variable and year independently of the analysis checkboxes", async () => {
+    const searches = [], additions = [], retained = new Set(["median-2019"]);
+    const h = await fixture({}, undefined, {
+        findByTitles: (titles, signal) => new Promise((resolve, reject) => searches.push({titles, signal, resolve, reject})),
+        state: item => ({onMap: retained.has(item.id), busy: false, error: ""}),
+        add: async item => { additions.push(item.id); retained.add(item.id); },
+    });
+    const stack = h.view.setup.inputs.stack;
+    const landsat = stack.datasetGroups.response.controls.get("landsat_ndvi");
+    const cycles = stack.datasetGroups.response.controls.get("modis_phenology");
+    assert.equal(searches.length, 1);
+    assert.deepEqual(landsat.variable.children.map(option => option.textContent), ["NDVI 95th percentile", "NDVI median"]);
+    assert.equal(cycles.variable.hidden, true);
+    assert.equal(cycles.mapLabel.textContent, "Growing cycles");
+    assert.equal(landsat.add.disabled, true);
+    setCheckbox(landsat.checkbox, false);
+    edit(landsat.variable, "NDVI median");
+    edit(stack.year, "2019");
+    assert.equal(searches.length, 2);
+    assert.equal(searches[0].signal.aborted, true);
+    assert.ok(searches[1].titles.includes("NDVI median (assessment year 2019)"));
+    assert.equal(new Set(searches[1].titles).size, searches[1].titles.length);
+    const median = {id: "median-2019", collection: "eolab-mounted-geotiffs",
+        properties: {title: "NDVI median (assessment year 2019)", description: "Prepared Ecosystem Condition response for assessment year 2019."},
+        assets: {data: {"raster:bands": [{description: "NDVI median"}]}}};
+    const percentile = {...median, id: "p95", properties: {...median.properties, title: "NDVI 95th percentile (assessment year 2019)"},
+        assets: {data: {"raster:bands": [{description: "NDVI 95th percentile"}]}}};
+    searches[1].resolve([median, {...median, id: "unrelated", properties: {...median.properties, description: "Other survey"}},
+        percentile, {...percentile, id: "another-p95"}]);
+    await settle();
+    searches[0].resolve([]); await settle();
+    assert.equal(landsat.add.textContent, "On map", "Recognizes a layer already added through the Catalog");
+    assert.equal(landsat.add.disabled, true);
+    assert.deepEqual(additions, []);
+    retained.delete(median.id); h.controller.refreshMapLayers();
+    assert.equal(landsat.add.disabled, false);
+    landsat.add.dispatchEvent(new Event("click")); h.controller.render();
+    assert.deepEqual(additions, ["median-2019"]);
+    assert.equal(landsat.checkbox.checked, false);
+    assert.equal(landsat.add.textContent, "On map");
+    assert.equal(landsat.add.disabled, true);
+    assert.equal(cycles.add.disabled, true);
+    assert.match(cycles.message.textContent, /Unavailable for 2019/);
+    edit(landsat.variable, "NDVI 95th percentile");
+    assert.equal(landsat.add.disabled, true);
+    assert.match(landsat.message.textContent, /Multiple layers match/);
+    edit(stack.year, "2017");
+    searches[2].reject(new Error("Catalog offline")); await settle();
+    assert.equal(stack.mapRetry.hidden, false);
+    stack.mapRetry.dispatchEvent(new Event("click"));
+    searches[3].resolve([]); await settle();
+    assert.equal(stack.mapRetry.hidden, true);
+    assert.match(landsat.message.textContent, /Unavailable for 2017/);
+    assert.equal(h.requests.length, 0);
+});
 
 test("Habitat starts with all datasets selected in collapsed role groups", async () => {
     const h = await fixture(), stack = h.view.setup.inputs.stack;
