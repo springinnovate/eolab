@@ -152,7 +152,7 @@ def test_jobs_client_has_no_application_server_or_operation_dependencies() -> No
             "httpx2", "pydantic", "eolab_jobs",
         }
         if path.name == "worker_claim.py":
-            allowed.add("psycopg")
+            allowed.update({"contextlib", "psycopg"})
         assert roots <= allowed
         assert not reads_process_environment(path)
     assert "eolab_jobs.client" in imported_modules(

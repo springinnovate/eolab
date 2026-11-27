@@ -28,7 +28,12 @@ from eolab_app.processing.models import (
     ProcessingLimits,
     JobInputFile,
 )
-from eolab_jobs.worker_claim import claim_next_job, lock_job_queue, renew_job_lease
+from eolab_jobs.worker_claim import (
+    acknowledge_stopped_attempt,
+    claim_next_job,
+    lock_job_queue,
+    renew_job_lease,
+)
 
 UNFINISHED = ("queued", "running", "cancelling")
 
@@ -1180,7 +1185,7 @@ class PostgresJobStore:
         error: dict[str, str] | None = None,
         reusable_results: dict[str, dict[str, object]] | None = None,
     ) -> bool:
-        """Publish completed work and cache values only while this attempt owns the job.
+        """Publish the result or record why the worker stopped without one.
 
         Results use the lifetime captured by the operation at admission, when
         supplied; ordinary jobs retain the deployment's result lifetime. Captured
@@ -1189,7 +1194,8 @@ class PostgresJobStore:
         Args:
             identifier: Running job.
             attempt: Execution fencing token.
-            artifact: Atomically published immutable result, or None on failure.
+            artifact: Atomically published immutable result, or None after native
+                exit on failure, interruption or cancellation.
                 Manifest-backed results record the retained bytes of every file and the inventory.
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
@@ -1202,15 +1208,15 @@ class PostgresJobStore:
             ProcessingError: If durable storage is unavailable.
             ValidationError: If the supplied manifest violates its storage contract.
         """
-        with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute(
-                "SELECT * FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status IN ('running','cancelling') FOR UPDATE",
-                (identifier, attempt),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return False
-            if artifact is not None:
+        if artifact is not None:
+            with self._transaction(acquire_lock=True) as cursor:
+                cursor.execute(
+                    "SELECT * FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status IN ('running','cancelling') FOR UPDATE",
+                    (identifier, attempt),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return False
                 retained_bytes = artifact.size
                 if artifact.manifest is not None:
                     retained_bytes = read_artifact_manifest(
@@ -1258,20 +1264,10 @@ class PostgresJobStore:
                         (self.limits.calculation_cache_capacity,),
                     )
                 return completed
-            status = (
-                "cancelled"
-                if row["status"] == "cancelling"
-                else (
-                    "interrupted"
-                    if error and error.get("code") == "interrupted"
-                    else "failed"
-                )
+        with self._transaction() as cursor:
+            return acknowledge_stopped_attempt(
+                cursor, job_id=identifier, attempt_id=attempt, error=error
             )
-            cursor.execute(
-                "UPDATE processing.jobs SET status=%s,error=%s,updated_at=now() WHERE id=%s",
-                (status, Jsonb(error), identifier),
-            )
-            return True
 
     def get_cached_calculation_results(
         self, keys: list[str]
