@@ -130,6 +130,10 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 Open **Tools → Data tools → Raster calculator**. Add rasters from Map contents or completed runs and use the assigned variables in a formula such as `max(0, b - a)`. Choose a resampling method for each input, an analysis area, and an output grid. Matching a raster uses its projection, cell size, and grid alignment. Custom cell sizes use the chosen projection’s units.
 
+Area functions use the valid cells of each raster inside the selected area after resampling to the output grid. Use `a / area_max(a) - b / area_max(b)` to divide each raster by its own maximum and subtract the results, or `(a - area_min(a)) / (area_max(a) - area_min(a))` to scale one raster from 0 to 1.
+
+Use `(a - area_mean(a)) / area_stdev(a)` to express each cell's difference from the area average in population standard deviations. `area_sum(a)` adds the valid cell values, and `area_count(a)` counts those cells, including zeros. Cells missing a referenced raster value or dividing by zero produce NoData.
+
 The calculator includes cells whose centers fall inside the analysis area. Cells with missing formula inputs or undefined arithmetic are blank. In **Runs**, select **Show on map** or **Download** to use the GeoTIFF.
 
 ### Run environmental models

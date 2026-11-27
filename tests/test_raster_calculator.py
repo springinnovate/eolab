@@ -1,8 +1,11 @@
 """Check raster calculator values, source alignment, and output masks with real TIFFs."""
 
+from collections import Counter, defaultdict
 import json
 import math
 from pathlib import Path
+import statistics
+from unittest.mock import patch
 
 from affine import Affine
 import fiona
@@ -15,6 +18,7 @@ from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from rasterio.transform import from_bounds, from_origin
 from rasterio.warp import transform_bounds
+from rasterio.windows import Window
 from shapely import contains_xy
 from shapely.geometry import MultiPolygon, Point, Polygon, box, mapping
 
@@ -39,6 +43,7 @@ from eolab_app.processing.raster_expression import (
     compile_pixel_expression,
     evaluate_pixel_expression,
 )
+from eolab_app.processing.raster_preparation import read_warped_tile
 from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.paired_statistics import read_raster_paired_statistics
 from eolab_app.raster.pixel import read_raster_pixel
@@ -57,18 +62,39 @@ def test_pixel_formula_keeps_power_precedence_and_undefined_intermediates() -> N
     }
     root = compile_pixel_expression("max(-a^2 + 2^3^2, min(b^2, 10)) / 2", aliases)
     np.testing.assert_array_equal(
-        evaluate_pixel_expression(root, samples), [254, 254, 256, np.nan]
+        evaluate_pixel_expression(root, samples, {}), [254, 254, 256, np.nan]
     )
     invalid = compile_pixel_expression("(a / (b - b)) ^ 0", aliases)
-    assert np.isnan(evaluate_pixel_expression(invalid, samples)).all()
+    assert np.isnan(evaluate_pixel_expression(invalid, samples, {})).all()
     fractional = compile_pixel_expression("min(10, a^0.5)", aliases)
     np.testing.assert_allclose(
-        evaluate_pixel_expression(fractional, samples), [2**0.5, np.nan, 0, np.nan]
+        evaluate_pixel_expression(fractional, samples, {}), [2**0.5, np.nan, 0, np.nan]
     )
 
 
 @pytest.mark.parametrize(
-    "expression", ["a + missing", "mean(a)", "a >= 2", "min(a)", "max(a, 1, 2)", "42"]
+    "expression",
+    [
+        "a + missing",
+        "mean(a)",
+        "a >= 2",
+        "min(a)",
+        "max(a, 1, 2)",
+        "area_max()",
+        "area_max(1)",
+        "area_max(a + 1)",
+        "area_max(b)",
+        "area_max(a, a)",
+        "area_min()",
+        "area_min(a + 1)",
+        "area_min(b)",
+        "area_min(a, a)",
+        "area_mean()",
+        "area_stdev(a + 1)",
+        "area_sum(b)",
+        "area_count(a, a)",
+        "42",
+    ],
 )
 def test_calculator_rejects_names_and_operators_outside_its_grammar(
     expression: str,
@@ -177,6 +203,196 @@ def test_match_grid_warps_shifted_projection_and_keeps_polygon_hole(
     assert sorted(raster_writes) == ["calculated.tif", "polygon-mask.tif"]
     assert not list(tmp_path.rglob("*.vrt"))
     assert not list(tmp_path.rglob("polygon-mask.tif"))
+
+
+@pytest.mark.parametrize(
+    ("sign", "formula", "typical", "corner"),
+    [
+        (1, "a/area_max(a) - b/area_max(b)", -8 / -2 - 2 / 6, -4 / -2 - 2 / 6),
+        # Of 1,548 output cells, two lie in the hole and one lacks B.
+        # B has one valid resampled 6 and otherwise contains 2.
+        (1, "a + area_mean(b)", -8 + 2 + 4 / 1545, -4 + 2 + 4 / 1545),
+        (
+            -1,
+            "(a-area_min(a))/(area_max(a)-area_min(a))"
+            " - (b-area_min(b))/(area_max(b)-area_min(b))",
+            1.0 - 1.0,
+            (4 - 2) / (8 - 2) - 1.0,
+        ),
+    ],
+)
+def test_area_statistics_use_each_rasters_valid_cells_on_the_output_grid(
+    tmp_path: Path, sign: int, formula: str, typical: float, corner: float
+) -> None:
+    """Check published formulas over a polygon with a hole and two different grids.
+
+    Args:
+        tmp_path: Directory for the input rasters, polygon and output.
+        sign: Reverse valid values to put the selected minima at the isolated peaks.
+        formula: Expression combining cells with a selected-area statistic.
+        typical: Expected difference for the uniform shared cells.
+        corner: Expected difference for the distinct top-left cell.
+    """
+    transform = from_origin(0, 3, 0.125, 1)
+    a = np.full((3, 516), -8, dtype="int16")
+    b = np.full((6, 1032), 2, dtype="int16")
+    # The largest A and B samples occur in different tiles where the other is missing.
+    a[0, 514] = -2
+    b[:2, 1028:1030] = -9999
+    a[2, 0] = -9999
+    b[4:, :2] = [[2, 6], [6, 10]]  # The maximum after mean resampling is 6.
+    a[0, 0] = -4
+    a[1, 4:6] = 300
+    b[2:4, 8:12] = 500
+    a[a != -9999] *= sign
+    b[b != -9999] *= sign
+    polygon = Polygon(
+        box(0, 0, 64.5, 3).exterior.coords, [box(0.5, 1, 0.75, 2).exterior.coords]
+    )
+    area = write_selection(tmp_path / "area.gpkg", [mapping(polygon)])
+    sources = RasterCalculatorSources(
+        {
+            "a": write_source(tmp_path / "a.tif", a, -9999, transform),
+            "b": write_source(
+                tmp_path / "b.tif", b, -9999, from_origin(0, 3, 0.0625, 0.5)
+            ),
+        },
+        area,
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+                RasterFormulaLayer(alias="b", source=SOURCE, resampling="mean"),
+            ),
+            expression=formula,
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        catalogSelection=area.selection,
+    )
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    expected = np.full(a.shape, typical)
+    expected[0, 0] = corner
+    expected[1, 4:6] = np.nan
+    expected[2, 0] = np.nan
+    expected[0, 514] = np.nan
+    with rasterio.open(tmp_path / "result.tif") as output:
+        np.testing.assert_allclose(output.read(1), expected)
+    assert result.valid_pixels == np.isfinite(expected).sum()
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected_cells", "passes_per_raster"),
+    [
+        ("a + b", [1, np.nan, 5, 7], [1, 1]),
+        ("a + b + (area_max(a) - area_min(a))", [7, np.nan, 11, 13], [1, 2]),
+        ("area_count(a)", [4] * 4, [2]),
+        ("area_sum(a)", [12] * 4, [2]),
+        ("area_mean(a)", [3] * 4, [2]),
+        ("area_stdev(a)", [math.sqrt(5)] * 4, [2]),
+        (
+            "b + area_min(a) + area_max(a) + area_count(a) + area_sum(a)"
+            " + area_mean(a) + area_stdev(a) + area_mean(a)",
+            [29 + math.sqrt(5), np.nan, 29 + math.sqrt(5), 29 + math.sqrt(5)],
+            [1, 2],
+        ),
+        ("area_count(b) - area_count(a)", [511, np.nan, 511, 511], [2, 2]),
+    ],
+)
+def test_area_functions_share_block_reads(
+    tmp_path: Path,
+    formula: str,
+    expected_cells: list[float],
+    passes_per_raster: list[int],
+) -> None:
+    """Check output values and count actual warped block reads for each input.
+
+    Args:
+        tmp_path: Working directory for real GeoTIFF inputs and the published output.
+        formula: Calculator expression submitted to the worker.
+        expected_cells: Published values at the four positions where A has data.
+        passes_per_raster: Sorted read counts per referenced input for each block.
+    """
+    a = np.full((1, 516), -9999, dtype="float64")
+    a[0, [0, 2, 511, 512]] = [0, 2, 4, 6]
+    b = np.ones_like(a)
+    b[0, 2] = -9999
+    transform = from_origin(0, 1, 1 / 64, 1)
+    sources = RasterCalculatorSources(
+        {
+            "a": write_source(tmp_path / "a.tif", a, -9999, transform),
+            "b": write_source(tmp_path / "b.tif", b, -9999, transform),
+        },
+        None,
+    )
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=tuple(
+                RasterFormulaLayer(alias=alias, source=SOURCE, resampling="nearest")
+                for alias in sources.rasters
+            ),
+            expression=formula,
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(west=0, south=0, east=516 / 64, north=1),
+    )
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    with patch(
+        "eolab_app.processing.raster_calculator.read_warped_tile",
+        wraps=read_warped_tile,
+    ) as read:
+        result = calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    reads: dict[Window, Counter[str]] = defaultdict(Counter)
+    for call in read.call_args_list:
+        raster, window, _ = call.args
+        reads[window][raster.name] += 1
+    assert {window: sorted(counts.values()) for window, counts in reads.items()} == {
+        Window(0, 0, 512, 1): passes_per_raster,
+        Window(512, 0, 4, 1): passes_per_raster,
+    }
+    expected = np.full(a.shape, np.nan)
+    expected[0, [0, 2, 511, 512]] = expected_cells
+    with rasterio.open(tmp_path / "result.tif") as output:
+        np.testing.assert_allclose(output.read(1), expected)
+    assert result.valid_pixels == np.isfinite(expected_cells).sum()
+
+
+def test_area_standardization_preserves_small_spread_across_uneven_blocks(
+    tmp_path: Path,
+) -> None:
+    """Check published z-scores against the population at a large numeric offset.
+
+    Args:
+        tmp_path: Working directory for the input and calculated GeoTIFF.
+    """
+    values = 1e15 + np.resize([0.0, 0.125, 0.25, 0.375], (1, 514))
+    source = write_source(
+        tmp_path / "offset.tif", values, transform=from_origin(0, 1, 1 / 64, 1)
+    )
+    sources = RasterCalculatorSources({"a": source}, None)
+    request = RasterCalculatorRequest(
+        calculation=RasterFormulaInput(
+            layers=(
+                RasterFormulaLayer(alias="a", source=SOURCE, resampling="nearest"),
+            ),
+            expression="(a - area_mean(a)) / area_stdev(a)",
+            grid=MatchRasterGrid(kind="match", alias="a"),
+        ),
+        selectedBounds=Wgs84Bounds(west=0, south=0, east=514 / 64, north=1),
+    )
+    plan = plan_calculator_grid(
+        sources, QueuedRasterCalculator(request=request, polygonArea=None)
+    )
+    calculate_raster(sources, plan, tmp_path, RasterAggregateLimits())
+    population = values[0].tolist()
+    expected = (values - statistics.mean(population)) / statistics.pstdev(population)
+    with rasterio.open(tmp_path / "result.tif") as output:
+        np.testing.assert_allclose(output.read(1), expected, rtol=1e-14, atol=0)
 
 
 def test_match_grid_preserves_native_polygon_edges(tmp_path: Path) -> None:
@@ -2038,6 +2254,16 @@ def test_bilinear_uses_source_neighbours_at_the_area_edge(tmp_path: Path) -> Non
     [
         (-9999, "a", "no_shared_raster_coverage"),
         (1, "a / 0", "no_valid_calculator_values"),
+        (-9999, "area_max(a)", "no_shared_raster_coverage"),
+        (-9999, "area_min(a)", "no_shared_raster_coverage"),
+        (-9999, "area_count(a)", "no_shared_raster_coverage"),
+        (7, "(a - area_mean(a)) / area_stdev(a)", "no_valid_calculator_values"),
+        (0, "a / area_max(a)", "no_valid_calculator_values"),
+        (
+            7,
+            "(a - area_min(a)) / (area_max(a) - area_min(a))",
+            "no_valid_calculator_values",
+        ),
     ],
 )
 def test_calculator_distinguishes_missing_coverage_from_invalid_arithmetic(
