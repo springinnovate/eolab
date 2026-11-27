@@ -253,7 +253,10 @@ class PostgresJobStore:
         Raises:
             ProcessingError: If the input or shared storage capacity is exceeded.
         """
-        size = len(json.dumps(payload, allow_nan=False).encode("utf-8"))
+        document = json.dumps(
+            payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        )
+        size = len(document.encode("utf-8"))
         if size > 8 * 1024**2:
             raise ProcessingError(
                 "input_size",
@@ -279,8 +282,8 @@ class PostgresJobStore:
                 )
             identifier = uuid4().hex
             cursor.execute(
-                "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at,media_type) VALUES (%s,%s,%s,%s,%s,now()+interval '1 day',%s)",
-                (identifier, owner, checksum, Jsonb(payload), size, media_type),
+                "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at,media_type) VALUES (%s,%s,%s,%s::jsonb,%s,now()+interval '1 day',%s)",
+                (identifier, owner, checksum, document, size, media_type),
             )
             return identifier
 

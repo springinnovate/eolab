@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import closing
+import json
 from pathlib import Path
 from uuid import uuid4
 from typing import Any
@@ -20,6 +21,48 @@ from raster_source_support import SOURCE
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import calculation_inputs, submit_calculation
 from test_polygon_summary_areas import rectangle
+
+
+def test_vector_input_accounts_for_multilingual_notes_in_utf8(
+    boundary: Any, store: PostgresJobStore
+) -> None:
+    """Stage editor-valid notes using the same compact UTF-8 size as the source document.
+
+    Args:
+        boundary: Real Processing HTTP routes.
+        store: Disposable database holding the staged input.
+    """
+    client = boundary[0]
+    note = "森" * 8000
+    collection = {
+        "type": "FeatureCollection",
+        "name": "Sites",
+        "features": [
+            {
+                "type": "Feature",
+                "id": str(index),
+                "properties": {"name": "Site", "note": note},
+                "geometry": rectangle(0.1, 9.1, 0.3, 9.3),
+            }
+            for index in range(200)
+        ],
+    }
+    response = client.post(
+        "/api/processing/vector-inputs", json=collection, headers=HEADERS
+    )
+    assert response.status_code == 200, response.text
+    with store._transaction() as cursor:
+        cursor.execute(
+            "SELECT bytes, payload FROM processing.inputs WHERE id=%s",
+            (response.json()["id"],),
+        )
+        saved = cursor.fetchone()
+    assert saved["payload"] == collection
+    assert saved["bytes"] == len(
+        json.dumps(collection, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
 
 
 def test_drawn_polygon_histograms_authorize_before_serving_cached_results(
