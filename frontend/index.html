@@ -156,13 +156,15 @@
               <span class="panel-header-action-label">Status</span>
             </button>
             <button
-              class="map-panel-toggle map-panel-collapse"
+              class="map-panel-close"
               id="collapse-panel"
               type="button"
               aria-label="Collapse Catalog and map contents"
               aria-controls="control-panel"
               aria-expanded="true"
-            ><span aria-hidden="true">×</span></button>
+            >
+              <svg aria-hidden="true" viewBox="0 0 26 26"><path d="M8 8l10 10m0-10L8 18"/></svg>
+            </button>
           </div>
         </header>
         </div>
@@ -740,9 +742,11 @@
             </p>
         </section>
         <header class="map-panel-header map-tools-header" data-pixel-picker-obstacle>
-          <button id="toggle-map-inspection-dock" class="map-panel-toggle map-panel-collapse"
+          <button id="toggle-map-inspection-dock" class="map-panel-close"
             type="button" aria-controls="map-tools-toolbar map-inspection" aria-expanded="true"
-            aria-label="Collapse map tools" title="Collapse map tools"></button>
+            aria-label="Collapse map tools" title="Collapse map tools">
+            <svg aria-hidden="true" viewBox="0 0 26 26"><path d="M8 8l10 10m0-10L8 18"/></svg>
+          </button>
           <button id="map-tool-chooser" class="map-tool-chooser" type="button"
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             title="Choose a map tool"><span id="map-tool-name">Choose a tool</span><span aria-hidden="true">▾</span></button>

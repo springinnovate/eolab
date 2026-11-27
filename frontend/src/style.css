@@ -334,8 +334,35 @@ h5 {
   line-height: 1;
 }
 
-.map-panel-opener::before,
-#toggle-map-inspection-dock::before {
+.map-panel-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: var(--panel-toggle-size);
+  block-size: var(--panel-toggle-size);
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.map-panel-close[hidden] { display: none; }
+.map-panel-close svg {
+  inline-size: 26px;
+  block-size: 26px;
+  border-radius: inherit;
+  background: var(--surface-3);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.map-panel-close:is(:hover, :focus-visible) svg { background: var(--surface-4); color: var(--text-1); }
+.map-panel-close:active svg { background: var(--surface-selected); }
+
+.map-panel-opener::before {
   content: "";
   inline-size: 7px;
   block-size: 7px;
