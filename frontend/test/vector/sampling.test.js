@@ -174,11 +174,12 @@ test("run-result polygon pickers and Models retain the native layer, formulas an
     )(layers, adapter, createVectorSamplingArea);
     const modelOptionsSource = main.slice(main.indexOf("getContext: () => {", main.indexOf("models = new ModelsController({")),
         main.indexOf("/** Open the existing rule editor inside setup"));
-    const modelOptions = new Function("getVectorTargets", "modelVectorSources", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", `
+    const drawingChoices = {describeVectorLayers: () => [], summaryTargets: () => { throw new Error("Model setup copied drawing coordinates"); }};
+    const modelOptions = new Function("getVectorTargets", "modelVectorSources", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", "annotations", `
         const leafletMap = {getBounds: () => ({getWest: () => -1, getSouth: () => -1, getEast: () => 1, getNorth: () => 1})};
-        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "", polygonGroups = null, annotations = null;
+        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "", polygonGroups = null;
         return {${modelOptionsSource}};
-    `)(getVectorTargets, modelVectorSources, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER);
+    `)(getVectorTargets, modelVectorSources, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER, drawingChoices);
     const requests = [];
     t.mock.method(globalThis, "fetch", async (url, options) => {
         requests.push({url, options});

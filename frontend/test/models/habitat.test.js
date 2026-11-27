@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { bindModelVectorInputs, modelVectorSources } from "../../src/model-vector-sources.js";
+import { describeDrawingVectorLayer } from "../../src/annotations/summary-area.js";
 import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { ModelsController } from "../../src/models/controller.js";
 import { ModelsView } from "../../src/models/view.js";
@@ -126,9 +127,12 @@ async function fixture(contextOverrides = {}, showAreaOutline = async () => true
     const jobs = {subscribe: () => () => {}, tracked: new Set(), schedule() {}, accept() {}};
     let id = 0;
     const controller = new ModelsController({api, jobs, view, getContext: () => ({...context,
-        vectors: [...context.vectors.map(value => ({geometryKind: "polygon", ...value})), ...modelVectorSources([], context.drawings ?? [])]}), showAreaOutline, catalogRasters,
-        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, () => context.drawings ?? [],
-            collection => api.captureVectorInput(collection), acquired, isCurrent),
+        vectors: [...context.vectors.map(value => ({geometryKind: "polygon", ...value})),
+            ...modelVectorSources([], (context.drawings ?? []).map(target => describeDrawingVectorLayer(target)))]}), showAreaOutline, catalogRasters,
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, key => {
+            const target = context.drawings?.find(value => value.key === key);
+            return target && exportAnnotationGeoJSON({name: target.label, polygons: target.polygons});
+        }, collection => api.captureVectorInput(collection), acquired, isCurrent),
         getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
         prepareVector: async source => ({selection: source.uploadId
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}

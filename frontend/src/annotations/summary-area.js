@@ -43,6 +43,19 @@ export function filterAnnotationPolygons(polygons, filter) {
     });
 }
 
+/** Count committed features for a picker without reading or copying vertices.
+ * @param {{key:string,label:string,filter:Object,polygons:Object[]}} target Local contribution and applied map filter.
+ * @param {Object[]} [contributors] Other contributors' committed polygons in a shared layer.
+ * @return {{key:string,label:string,filter:Object,featureCounts:{matched:number,total:number}}} Layer metadata and exact selection counts.
+ */
+export function describeDrawingVectorLayer({key, label, filter, polygons}, contributors = []) {
+    const {matchingIds, ...conditions} = filter;
+    return {key, label, filter: structuredClone(conditions), featureCounts: {
+        matched: filterAnnotationPolygons(polygons, filter).length + filterAnnotationPolygons(contributors, filter).length,
+        total: polygons.length + contributors.length,
+    }};
+}
+
 /** Copy just the matched polygon coordinates, closing each GeoJSON ring.
  * @param {Object[]} polygons Committed annotation polygons.
  * @param {Object} filter Field conditions from the summary controls.

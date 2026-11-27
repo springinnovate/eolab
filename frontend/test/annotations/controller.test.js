@@ -520,6 +520,13 @@ test("combined shared polygons are filterable summary inputs but never become ed
     assert.equal(annotations.sharableLayers()[0].collection.features.length, 1);
     layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "contains", value: "Maria" }] };
     assert.match(annotations.filterTarget(`local:annotation:${layer.id}`).status, /1 of 2/);
+    const key = `local:annotation:${layer.id}`;
+    assert.equal(annotations.exportVectorLayer(key).features.length, 2);
+    Object.defineProperty(layer.polygons[0], "vertices", {get() { throw Error("Picker read drawing geometry"); }});
+    const [description] = annotations.describeVectorLayers();
+    assert.equal(description.key, key);
+    assert.deepEqual(description.featureCounts, {matched: 1, total: 2});
+    assert.equal("polygons" in description, false);
 });
 
 test("rejoining restores own polygons with safe local identities without retaining supplied IDs", async () => {

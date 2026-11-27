@@ -1,5 +1,5 @@
 /** Connect polygon drawing, editing and local storage to the map's layer list. */
-import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
+import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget, describeDrawingVectorLayer } from "./summary-area.js";
 import { exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
@@ -551,6 +551,24 @@ export class AnnotationController {
     summaryTargets() {
         return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(
             `local:annotation:${layer.id}`, this.displayLayer(layer), this.shared.has(layer.id) ? null : layer.drawingSource));
+    }
+
+    /** Describe eligible map drawings and their filtered counts without copying coordinates.
+     * @return {ReturnType<typeof describeDrawingVectorLayer>[]} Metadata for attached drawings, including hidden layers.
+     */
+    describeVectorLayers() {
+        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => describeDrawingVectorLayer({
+            key: `local:annotation:${layer.id}`, label: layer.name, filter: layer.filter, polygons: layer.polygons,
+        }, this.shared.get(layer.id)?.polygons));
+    }
+
+    /** Export one attached drawing's committed features from every contributor.
+     * @param {string} key Map-layer identity chosen for calculation.
+     * @return {Object|null} Detached GeoJSON source, or null if the layer has been removed.
+     */
+    exportVectorLayer(key) {
+        const layer = this.model.layers.find(value => `local:annotation:${value.id}` === key);
+        return layer && this.layers.has(layer.id) ? exportAnnotationGeoJSON(this.displayLayer(layer)) : null;
     }
 
     /** Return annotation fields and callbacks for the existing filter dialog.

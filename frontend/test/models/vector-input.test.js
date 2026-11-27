@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {modelVectorSources, bindModelVectorInputs} from "../../src/model-vector-sources.js";
+import {describeDrawingVectorLayer} from "../../src/annotations/summary-area.js";
+import {exportAnnotationGeoJSON} from "../../src/annotations/geojson.js";
 import {ModelsController} from "../../src/models/controller.js";
 import {ModelsView} from "../../src/models/view.js";
 import {ProcessingJobs} from "../../src/processing/jobs.js";
@@ -47,7 +49,7 @@ function recipeFor(input = definition) {
  */
 function setup(recipe = recipeFor(), drawings = []) {
     const doc = new SummaryControlDocument(), view = new ModelsView(doc), submitted = [], saved = new Map();
-    const context = {vectors: [structuredClone(source), ...modelVectorSources([], drawings)], rasters: []};
+    const context = {vectors: [structuredClone(source), ...modelVectorSources([], drawings.map(target => describeDrawingVectorLayer(target)))], rasters: []};
     const api = {discoverModels: async () => [recipe],
         submitModelRun: async value => { submitted.push(value); return job({model: recipe}); },
         getJob: async () => job({model: recipe}), readModelInvocation: async () => ({model: {...recipe, definition: recipe},
@@ -55,7 +57,10 @@ function setup(recipe = recipeFor(), drawings = []) {
     const clock = {setTimeout() {}, clearTimeout() {}}, jobs = new ProcessingJobs(api, clock);
     const controller = new ModelsController({api, jobs, view, clock, getContext: () => context,
         storage: {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)},
-        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, () => drawings, collection => api.captureVectorInput(collection), acquired, isCurrent),
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, key => {
+            const target = drawings.find(value => value.key === key);
+            return target && exportAnnotationGeoJSON({name: target.label, polygons: target.polygons});
+        }, collection => api.captureVectorInput(collection), acquired, isCurrent),
         prepareVector: () => { throw Error("Configured vector inputs must not preflight scan features"); },
         closeVectorFilter() {}, onOpen() {}, onClose() {}, newId: () => "d".repeat(32)});
     controller.chooseModel(recipe);

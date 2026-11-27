@@ -1746,14 +1746,14 @@ async function initializeCatalog(
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: modelVectorSources(getVectorTargets(), annotations?.summaryTargets() ?? []),
+                vectors: modelVectorSources(getVectorTargets(), annotations?.describeVectorLayers() ?? []),
                 polygonGroups: polygonGroups?.snapshot() ?? [],
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
         },
         bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs,
-            () => annotations?.summaryTargets() ?? [], collection => processingApi.captureVectorInput(collection), acquired, isCurrent),
+            key => annotations?.exportVectorLayer(key), collection => processingApi.captureVectorInput(collection), acquired, isCurrent),
         /** Read selected features without requiring a display layer.
          * @param {import("./vector/sampling.js").VectorSamplingSource & {filter:Object}} source Original vector identity and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
