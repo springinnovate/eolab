@@ -10,6 +10,9 @@ from eolab_app.processing.artifact_manifest import ArtifactManifest, ProducedFil
 
 OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 
+MAX_STAGED_INPUT_BYTES = 64 * 1024**2
+"""Total compact UTF-8 bytes available to private inputs awaiting admission."""
+
 
 @dataclass(frozen=True)
 class JobInputFile:

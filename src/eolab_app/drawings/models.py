@@ -84,30 +84,44 @@ class DrawingFeature(DrawingDocumentPart):
     properties: DrawingProperties
 
 
-class DrawingCollection(DrawingDocumentPart):
-    """Store all committed polygons, including ones hidden by map-view filters.
-
-    The source contains no appearance or filter settings. Its original IDs remain
-    unique across the whole collection and never depend on feature order.
-    """
+class DrawingFeatureCollection(DrawingDocumentPart):
+    """All committed polygons in a layer, including those from other contributors."""
 
     type: Literal["FeatureCollection"] = "FeatureCollection"
     name: DrawingName
-    features: Annotated[list[DrawingFeature], Field(max_length=500)]
+    features: list[DrawingFeature]
 
     @model_validator(mode="after")
-    def validate_source(self) -> Self:
-        """Require unique IDs and a source document no larger than eight MiB.
+    def validate_feature_ids(self) -> Self:
+        """Require a unique ID for each polygon across the complete layer.
 
         Returns:
             This validated full-source collection.
 
         Raises:
-            ValueError: Polygon IDs repeat or serialized source data exceeds eight MiB.
+            ValueError: Two polygons have the same ID.
         """
         identifiers = [feature.id for feature in self.features]
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("Drawing polygon IDs must be unique across the layer.")
+        return self
+
+
+class DrawingCollection(DrawingFeatureCollection):
+    """A single contributor's editable source of at most 500 polygons and eight MiB."""
+
+    features: Annotated[list[DrawingFeature], Field(max_length=500)]
+
+    @model_validator(mode="after")
+    def validate_document_size(self) -> Self:
+        """Require the serialized source to fit within the editor's storage limit.
+
+        Returns:
+            The validated editable collection.
+
+        Raises:
+            ValueError: The source document exceeds eight MiB.
+        """
         if len(self.model_dump_json().encode("utf-8")) > MAX_DRAWING_BYTES:
             raise ValueError("A drawing layer must fit within 8 MiB.")
         return self

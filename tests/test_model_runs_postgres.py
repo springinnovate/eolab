@@ -782,12 +782,20 @@ def test_model_worker_rejects_changed_routing_dependencies(
         model_runs.compute_implementation_checksum.cache_clear()
 
 
-def capture_drawing(client: TestClient, geometry: dict[str, Any]) -> dict[str, Any]:
-    """Capture two named polygons and select the requested geometry by its note.
+def capture_drawing(
+    client: TestClient,
+    geometry: dict[str, Any],
+    *,
+    excluded: int = 1,
+    note: str = "omit",
+) -> dict[str, Any]:
+    """Capture a drawing and select the requested geometry by its note.
 
     Args:
         client: Browser owning the temporary input and subsequent calculation.
         geometry: WGS84 polygon that should be used in the calculation.
+        excluded: Number of additional features excluded by the filter.
+        note: Text retained on each excluded feature.
 
     Returns:
         Path-free selection with its attribute predicate.
@@ -802,12 +810,15 @@ def capture_drawing(client: TestClient, geometry: dict[str, Any]) -> dict[str, A
                 "properties": {"name": "Chosen", "note": "include"},
                 "geometry": geometry,
             },
+        ]
+        + [
             {
                 "type": "Feature",
-                "id": "other",
-                "properties": {"name": "Other", "note": "omit"},
+                "id": f"other-{index}",
+                "properties": {"name": "Other", "note": note},
                 "geometry": rectangle(0, 0, 1, 1),
-            },
+            }
+            for index in range(excluded)
         ],
     }
     response = client.post(
@@ -826,7 +837,7 @@ def capture_drawing(client: TestClient, geometry: dict[str, Any]) -> dict[str, A
     }
 
 
-@pytest.mark.parametrize("source_origin", ["catalog", "drawing"])
+@pytest.mark.parametrize("source_origin", ["catalog", "drawing", "collaborative"])
 def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
     model_boundary: Any, boundary: Any, source_origin: str
 ) -> None:
@@ -836,7 +847,7 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         model_boundary: Real model HTTP routes, worker and publication service.
         boundary: Catalog raster with elevations increasing east and south, plus
             the vector selection API.
-        source_origin: Supply the same seed polygon from the catalog or the drawing editor.
+        source_origin: Supply the seed from the catalog, a drawing, or a filtered layer with several contributors.
     """
     vector_client, _, dem_path, _, _ = boundary
     client, worker, service = model_boundary
@@ -852,11 +863,15 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         geometry=rectangle(x - radius, y - radius, x + radius, y + radius),
     )
     selection = register_selection(vector_client, path)
-    if source_origin == "drawing":
+    if source_origin != "catalog":
         geometry = rasterio.warp.transform_geom(
             crs, "EPSG:4326", rectangle(x - radius, y - radius, x + radius, y + radius)
         )
-        selection = capture_drawing(client, geometry)
+        selection = (
+            capture_drawing(client, geometry, excluded=500, note="é" * 9000)
+            if source_origin == "collaborative"
+            else capture_drawing(client, geometry)
+        )
     body = model_request(
         client,
         "polygon-flow-area",
@@ -881,7 +896,7 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_model_inputs"
     run = submit(client, body)
-    if source_origin == "drawing":
+    if source_origin != "catalog":
         assert (
             client.delete(
                 "/api/processing/vector-inputs/" + selection["reference"]["id"],

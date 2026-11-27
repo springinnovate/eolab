@@ -16,6 +16,7 @@ from eolab_app.processing.shared_calculations import (
 )
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
+    MAX_STAGED_INPUT_BYTES,
     ArtifactDownload,
     JobInputFile,
     JobInputReference,
@@ -1461,6 +1462,7 @@ class ProcessingService:
             checksum,
             collection,
             media_type="application/geo+json",
+            maximum_bytes=MAX_STAGED_INPUT_BYTES,
         )
         return ProcessingInputReference(id=identifier, sha256=checksum)
 

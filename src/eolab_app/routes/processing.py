@@ -20,6 +20,7 @@ from pydantic import Field, ValidationError
 from starlette.responses import FileResponse, StreamingResponse
 
 from eolab_app.processing.models import (
+    MAX_STAGED_INPUT_BYTES,
     ArtifactDownload,
     JobListResponse,
     JobStatusRequest,
@@ -36,7 +37,7 @@ from eolab_app.processing.aggregate_models import (
     MAX_CALCULATION_BATCH_BYTES,
     MAX_CALCULATION_ITEM_BYTES,
 )
-from eolab_app.drawings.models import DrawingCollection
+from eolab_app.drawings.models import DrawingFeatureCollection
 from eolab_app.polygon_areas import (
     ProcessingInputReference,
     MAX_POLYGON_AREA_BYTES,
@@ -110,16 +111,11 @@ class RequestSizeLimitedRoute(APIRoute):
             """
             if request.method not in {"POST", "PATCH"}:
                 return await handler(request)
-            limit = (
-                MAX_POLYGON_AREA_BYTES
-                if request.url.path
-                in {"/api/processing/polygon-areas", "/api/processing/vector-inputs"}
-                else (
-                    MAX_CALCULATION_BATCH_BYTES
-                    if request.url.path == "/api/processing/raster-calculations/batch"
-                    else 16 * 1024
-                )
-            )
+            limit = {
+                "/api/processing/polygon-areas": MAX_POLYGON_AREA_BYTES,
+                "/api/processing/vector-inputs": MAX_STAGED_INPUT_BYTES,
+                "/api/processing/raster-calculations/batch": MAX_CALCULATION_BATCH_BYTES,
+            }.get(request.url.path, 16 * 1024)
             body = bytearray()
             async for chunk in request.stream():
                 if len(body) + len(chunk) > limit:
@@ -638,7 +634,7 @@ def create_processing_router(
         openapi_extra=MUTATION_SCHEMA,
     )
     async def capture_vector_input(
-        body: DrawingCollection, request: Request, response: Response
+        body: DrawingFeatureCollection, request: Request, response: Response
     ) -> ProcessingInputReference:
         """Save committed drawing features for this browser's model submissions.
 

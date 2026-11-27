@@ -21,6 +21,7 @@ from psycopg_pool import ConnectionPool
 from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
 
 from eolab_app.processing.models import (
+    MAX_STAGED_INPUT_BYTES,
     Artifact,
     PreparedJobPlan,
     JobSubmission,
@@ -238,6 +239,7 @@ class PostgresJobStore:
         payload: dict[str, Any],
         *,
         media_type: str = "application/json",
+        maximum_bytes: int = 8 * 1024**2,
     ) -> str:
         """Stage a private input for one day. A job can take ownership at admission.
 
@@ -246,6 +248,7 @@ class PostgresJobStore:
             checksum: Operation-owned content identity.
             payload: Validated JSON input without filesystem paths or credentials.
             media_type: Format established by its producer for checked admission.
+            maximum_bytes: Largest compact UTF-8 document accepted by this producer.
 
         Returns:
             Opaque identifier usable only by the same owner.
@@ -257,10 +260,10 @@ class PostgresJobStore:
             payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
         )
         size = len(document.encode("utf-8"))
-        if size > 8 * 1024**2:
+        if size > maximum_bytes:
             raise ProcessingError(
                 "input_size",
-                "This processing input exceeds the 8 MiB storage limit.",
+                f"This processing input exceeds the {maximum_bytes:,}-byte storage limit.",
                 413,
             )
         with self._transaction(acquire_lock=True) as cursor:
@@ -273,7 +276,7 @@ class PostgresJobStore:
             if (
                 count["total"] >= 128
                 or count["owned"] >= 32
-                or count["bytes"] + size > 64 * 1024**2
+                or count["bytes"] + size > MAX_STAGED_INPUT_BYTES
             ):
                 raise ProcessingError(
                     "input_capacity",
